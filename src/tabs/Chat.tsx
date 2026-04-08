@@ -3,12 +3,14 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { Send, Square } from 'lucide-react'
 import MessageBubble    from '../components/chat/MessageBubble'
 import PermissionDialog from '../components/chat/PermissionDialog'
 import { useAgentStore }    from '../stores/agentStore'
 import { useSessionStore }  from '../stores/sessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
+import { useCostStore }     from '../stores/costStore'
 
 export default function ChatTab() {
   const messages      = useAgentStore(s => s.messages)
@@ -66,6 +68,14 @@ export default function ChatTab() {
       // Tear down any previous listeners, then register fresh ones BEFORE invoking backend
       unlistenersRef.current.forEach(fn => fn())
       unlistenersRef.current = await useAgentStore.getState().setupListeners(sessionId)
+
+      // Add cost store listener for agent:done event
+      const costListener = await listen<{ session_id: string; tokens_in: number; tokens_out: number; cost_usd: number }>('agent:done', ({ payload }) => {
+        if (payload.session_id === sessionId) {
+          useCostStore.getState().addCost(payload.cost_usd, payload.tokens_in, payload.tokens_out)
+        }
+      })
+      unlistenersRef.current.push(costListener)
 
       useAgentStore.getState().addUserMessage(text)
       useAgentStore.getState().startStreaming(sessionId)
