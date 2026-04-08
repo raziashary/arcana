@@ -1,6 +1,8 @@
 [submodule "submodules/core-orchestrator"]
 	path = submodules/core-orchestrator
 	url = https://github.com/AIRS-Foundry/core-orchestrator.git
+	branch = main
 [submodule "submodules/memory-mcp-server"]
 	path = submodules/memory-mcp-server
 	url = https://github.com/AIRS-Foundry/memory-mcp-server.git
+	branch = main
