@@ -72,6 +72,12 @@ pub async fn send_message(
 
     let pending_clone = pending_perms.inner().clone();
 
+    // Capture system prompt override before spawning
+    let system_prompt_override = {
+        let s = state.lock().unwrap();
+        s.system_prompt_override.clone()
+    };
+
     tokio::spawn(async move {
         let provider = Arc::new(AnthropicProvider::new(api_key));
         let engine   = AgentEngine::new(
@@ -88,6 +94,7 @@ pub async fn send_message(
             &model_c,
             history,
             &user_msg_c,
+            system_prompt_override.as_deref(),
         ).await;
 
         // Clear running flag
