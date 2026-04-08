@@ -15,8 +15,10 @@ impl ContextBuilder {
     }
 
     /// Build the full system prompt including CLAUDE.md contents.
-    pub fn build_system_prompt(&self) -> String {
-        let mut parts = vec![BASE_SYSTEM_PROMPT.to_string()];
+    /// If override is provided, it replaces BASE_SYSTEM_PROMPT entirely.
+    pub fn build_system_prompt(&self, override_prompt: Option<&str>) -> String {
+        let base = override_prompt.unwrap_or(BASE_SYSTEM_PROMPT);
+        let mut parts = vec![base.to_string()];
 
         // ~/.airs/CLAUDE.md — user global instructions
         if let Some(home) = home_dir() {
@@ -48,6 +50,11 @@ impl ContextBuilder {
         }
 
         parts.join("\n\n---\n\n")
+    }
+
+    /// Returns the default base system prompt (for display in settings).
+    pub fn default_system_prompt() -> &'static str {
+        BASE_SYSTEM_PROMPT
     }
 }
 
