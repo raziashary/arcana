@@ -28,11 +28,17 @@ pub struct AppState {
     // Today's cumulative token counts
     pub tokens_in_today:  u64,
     pub tokens_out_today: u64,
+
+    // Custom system prompt override (if set, replaces BASE_SYSTEM_PROMPT)
+    pub system_prompt_override: Option<String>,
 }
 
 impl AppState {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            system_prompt_override: None,
+            ..Self::default()
+        }
     }
 
     pub fn cancel_agent(&mut self, session_id: &str) {
