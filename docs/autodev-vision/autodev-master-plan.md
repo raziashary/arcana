@@ -312,49 +312,240 @@ This ensures `git submodule update --remote` always pulls the latest `main` of b
                      Unified Tool Registry
 ```
 
+### Tool Flow: Tauri → Core Orchestrator → LivingAgent → Execution
+
+> **Complete data flow**: How AutoDev tools pass from Tauri to worker agents and execute
+
+#### Step 1: Tool Definition in Tauri (PA Mode)
+
+**PA mode tools** are defined in Rust and executed locally:
+```rust
+// src-tauri/src/agent/builtin_tools/
+├── read_file.rs       → ToolSpec { name: "read_file", ... }
+├── write_file.rs      → ToolSpec { name: "write_file", ... }
+├── bash.rs            → ToolSpec { name: "bash", ... }
+└── git.rs             → ToolSpec { name: "git_status", "git_commit", ... }
+
+// These are passed directly to LLM in PA mode
+llm.chat(messages, tools=[read_file, write_file, bash, git_status, ...])
+```
+
+#### Step 2: Tool Registration in Core Orchestrator (Worker Mode)
+
+**Worker mode tools** come from three sources:
+
+**A. Internal Tools** (defined in core-orchestrator):
+```python
+# src/internal_tools/__init__.py (import time)
+from src.internal_tools.web import WEB_TOOLS
+from src.internal_tools.flora import FLORA_TOOLS
+
+_bridge = InternalToolBridge()
+for _tool in [*WEB_TOOLS, *FLORA_TOOLS, ...]:
+    _bridge.register(_tool)  # Stores by tool.name
+```
+
+**B. MCP Tools** (from external MCP servers):
+```python
+# src/airs/bridges/mcp_bridge.py
+mcp_client.list_tools()  # Discover tools from GitHub MCP, Slack MCP, etc.
+# Returns: [ToolSpec { name: "github_create_issue", ... }, ...]
+```
+
+**C. AutoDev Tools** (from Tauri via HTTP):
+```python
+# When Tauri sends POST /api/v1/agent/invoke
+# Payload includes (with __autodev suffix for collision-free routing):
+{
+    "tools": [
+        {"name": "read_file__autodev", "description": "...", "inputSchema": {...}},
+        {"name": "write_file__autodev", "description": "...", "inputSchema": {...}},
+        {"name": "bash__autodev", "description": "...", "inputSchema": {...}},
+        {"name": "git_status__autodev", "description": "...", "inputSchema": {...}},
+        ...
+    ]
+}
+```
+
+#### Step 3: Tool Registration in LivingAgent
+
+**When worker recipe triggers:**
+```python
+# src/airs/agent/living_agent.py
+
+class LivingAgent:
+    def __init__(self, config: AgentConfig):
+        # 1. Get internal tools from config
+        internal_tool_ids = config.internal_tools  # ["web_search", "flora_tools"]
+        internal_specs = internal_bridge.get_tools(internal_tool_ids)
+        
+        # 2. Get MCP tools from bridge
+        mcp_specs = mcp_bridge.get_tools()
+        
+        # 3. Get AutoDev tools from request
+        autodev_specs = request.tools  # Passed from Tauri
+        
+        # 4. Combine all tools
+        all_tools = internal_specs + mcp_specs + autodev_specs
+        
+        # 5. Register with LLM
+        self.llm.add_tools(all_tools)
+        
+        # 6. Register handlers with UnifiedToolHandler
+        unified_handler.register_internal_handler(
+            self.internal_bridge.handle_tool_call,
+            tools=internal_specs
+        )
+        unified_handler.register_mcp_handler(
+            self.mcp_bridge.handle_tool_call,
+            tools=mcp_specs
+        )
+        unified_handler.register_autodev_handler(
+            self.autodev_handler.handle_tool_call,
+            tools=autodev_specs
+        )
+```
+
+#### Step 4: LLM Calls Tool
+
+```python
+# LivingAgent.process_message()
+response = await self.llm.complete(
+    messages=conversation,
+    tools=all_tools  # Includes internal + MCP + AutoDev
+)
+
+# LLM returns:
+# {
+#     "type": "tool_use",
+#     "name": "read_file",  # or "web_search__internal" or "github_create_issue"
+#     "arguments": {"path": "/src/main.py"}
+# }
+```
+
+#### Step 5: Tool Execution via UnifiedToolHandler
+
+```python
+# src/airs/bridges/unified_tool_handler.py
+
+class UnifiedToolHandler:
+    async def handle_tool_call(self, tool_call: ToolCall) -> Dict[str, Any]:
+        tool_name = tool_call.name
+        
+        # Route based on tool name suffix/prefix pattern
+        if tool_name.endswith("__internal"):
+            # Internal tool (e.g., "web_search__internal")
+            return await self.internal_handler(tool_call)
+        
+        elif tool_name.endswith("__autodev"):
+            # AutoDev tool (e.g., "read_file__autodev", "write_file__autodev")
+            return await self.autodev_handler(tool_call)
+        
+        elif tool_name.startswith("github_") or tool_name.startswith("slack_"):
+            # MCP tool (e.g., "github_create_issue", "slack_send_message")
+            return await self.mcp_handler(tool_call)
+        
+        else:
+            # Unknown tool
+            return {"error": f"Unknown tool: {tool_name}"}
+```
+
+#### Step 6: Tool Execution Tracking
+
+```python
+# src/airs/execution/tool_executor.py
+
+class MemoryAwareToolExecutor:
+    async def execute(self, tool_call: ToolCall) -> Dict[str, Any]:
+        # 1. Create FSM for this execution
+        fsm = ToolExecutionFSM(tool_name=tool_call.name)
+        
+        # 2. Register in global registry (for observability)
+        registry = ToolExecutionRegistry()
+        registry.register(fsm, ToolExecutionInfo(...))
+        
+        # 3. Check memory: has this tool failed before?
+        past_failures = await memory.retrieve(
+            f"tool_failures:{tool_call.name}"
+        )
+        
+        # 4. Execute via appropriate handler
+        result = await unified_handler.handle_tool_call(tool_call)
+        
+        # 5. Store outcome in memory
+        await memory.store(
+            f"tool_execution:{tool_call.name}",
+            {"success": result.get("error") is None, "result": result}
+        )
+        
+        # 6. Update FSM state
+        fsm.mark_complete()
+        
+        return result
+```
+
+#### Step 7: Result Back to LLM
+
+```python
+# LivingAgent continues conversation
+messages.append({
+    "role": "assistant",
+    "content": [{"type": "tool_use", "name": "read_file", ...}]
+})
+
+messages.append({
+    "role": "user",
+    "content": [{"type": "tool_result", "tool_use_id": "...", "content": "file contents..."}]
+})
+
+# LLM sees the result and decides next action
+response = await self.llm.complete(messages, tools=all_tools)
+```
+
+---
+
 **Tool Routing Logic:**
 
-- **Local tools** (fast path, Tauri Rust native):
-  - `edit_file`, `read_file`, `apply_diff`, `grep_search`, `run_command`
+- **Local tools** (PA mode, Tauri Rust native):
+  - `edit_file`, `read_file`, `apply_diff`, `grep_search`, `run_command`, `git_*`
   - No HTTP overhead, direct filesystem access (Tauri sandboxed)
 
-- **Orchestrator tools** (stateful path, proxy to Core Orch):
-  - `create_agent`, `send_a2a_message`, `update_fsm_state`
-  - Routed via HTTP to `localhost:8765/api/tools/{tool_name}`
+- **Internal tools** (Worker mode, in core-orchestrator):
+  - `web_search__internal`, `flora_tools__internal`, etc.
+  - Registered at import time, routed by `__internal` suffix
+  - Opt-in per agent via YAML `internal_tools: [web_search]`
 
-- **Memory tools** (via Core Orch's MCP client):
-  - `store_memory`, `retrieve_context`, `update_synopsis`
-  - Core Orchestrator proxies these to Memory MCP Server on `localhost:8766`
+- **MCP tools** (Worker mode, external servers):
+  - `github_create_issue`, `slack_send_message`, etc.
+  - Discovered via MCP client, routed by prefix (github_, slack_)
+  - Pooled connections, cached capabilities
 
-**Agent execution loop** (Rust pseudocode):
+- **AutoDev tools** (Worker mode, from Tauri):
+  - `read_file__autodev`, `write_file__autodev`, `bash__autodev`, `git_status__autodev`, etc.
+  - Passed via HTTP POST from Tauri to core-orchestrator with `__autodev` suffix
+  - Routed by suffix, executed locally in core-orchestrator (not proxied back to Tauri)
 
-```rust
-loop {
-    let response = llm_client.chat(messages, tools).await?;
+**Agent execution loop** (Python pseudocode):
+
+```python
+async def process_message(self, user_message: str):
+    # 1. Add user message to conversation
+    messages.append({"role": "user", "content": user_message})
     
-    for tool_call in response.tool_calls {
-        let result = match tool_call.name.as_str() {
-            // Local tools (fast path)
-            "edit_file" | "read_file" | "grep_search" => {
-                tauri_tools::execute(tool_call).await?
-            },
-            
-            // Orchestrator tools (stateful path)
-            "create_agent" | "send_a2a_message" | "update_fsm" => {
-                orchestrator_proxy::execute(tool_call).await?
-            },
-            
-            // Memory tools (via orchestrator's MCP client)
-            "store_memory" | "retrieve_context" => {
-                orchestrator_proxy::mcp_call("memory", tool_call).await?
-            },
-            
-            _ => return Err("Unknown tool")
-        };
-        
-        messages.push(tool_result_message(result));
-    }
-}
+    # 2. Call LLM with all tools (internal + MCP + AutoDev)
+    response = await llm.complete(messages, tools=all_tools)
+    
+    # 3. Stream response to UI via SSE
+    for chunk in response.stream():
+        await sse_broker.emit("agent:stream-token", chunk)
+    
+    # 4. If tool_use in response, execute it
+    for tool_call in response.tool_calls:
+        result = await tool_executor.execute(tool_call)
+        messages.append({"role": "user", "content": [{"type": "tool_result", "content": result}]})
+    
+    # 5. Continue until no more tool calls
+    # 6. Store final message in memory + SQLite
 ```
 
 #### Editing Submodule Code
