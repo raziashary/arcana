@@ -1347,6 +1347,46 @@ pub trait Tool: Send + Sync {
 - **GitHub Client**: Issues API (list, create, label, comment)
 - **Task Board Widget**: Kanban-style view of GitHub issues
 
+### Phase 2 Submodule Changes (core-orchestrator)
+
+**Required modifications to core-orchestrator for AutoDev tool integration:**
+
+#### File 1: `src/airs/bridges/unified_tool_handler.py`
+- Add `register_autodev_handler()` method (mirrors `register_internal_handler()`)
+- Update `handle_tool_call()` routing logic:
+  - Check `if tool_name.endswith("__autodev")` → route to `autodev_handler`
+  - Order: `__internal` → `__autodev` → MCP prefix → error
+
+#### File 2: `src/airs/bridges/autodev_handler.py` (NEW)
+- Create new file: `AutoDevToolHandler` class
+- Implement `async def handle_tool_call(tool_call: ToolCall) -> Dict[str, Any]`
+- Strip `__autodev` suffix from tool name
+- Route to appropriate executor:
+  - `read_file__autodev` → file system read
+  - `write_file__autodev` → file system write
+  - `bash__autodev` → shell execution
+  - `git_*__autodev` → git operations (via git2-rs equivalent in Python)
+- Error handling: return `{"error": "..."}` on failure
+
+#### File 3: `src/airs/agent/living_agent.py`
+- In `initialize_bridges()` method:
+  - Add: `unified_handler.register_autodev_handler(self.autodev_handler.handle_tool_call, tools=[t.name for t in self.autodev_tools])`
+  - Store `self.autodev_tools` from request payload
+
+#### File 4: `src/airs/execution/tool_executor.py`
+- Update `MemoryAwareToolExecutor.execute()` to handle `__autodev` suffix
+- Strip suffix before logging/memory storage
+- Example: `read_file__autodev` → log as `read_file`
+
+**Naming Convention:**
+- All AutoDev tools from Tauri must have `__autodev` suffix
+- Example: `read_file__autodev`, `write_file__autodev`, `bash__autodev`, `git_status__autodev`
+- This prevents collisions with internal tools (`__internal`) and MCP tools (`github_`, `slack_`)
+
+**Testing in Phase 2:**
+- Unit test: `test_autodev_handler_routing()` — verify suffix-based routing
+- Integration test: `test_worker_recipe_with_autodev_tools()` — end-to-end flow
+
 ### Phase 2 Deliverables Checklist
 
 - [ ] YAML recipe parser with validation
@@ -1358,6 +1398,12 @@ pub trait Tool: Send + Sync {
 - [ ] GitHub PAT storage in vault
 - [ ] GitHub Issues: list, create, label, assign
 - [ ] Additional providers: OpenAI, Gemini
+- [ ] **[SUBMODULE]** `unified_tool_handler.py`: Add `register_autodev_handler()` + routing logic
+- [ ] **[SUBMODULE]** `autodev_handler.py`: New file with AutoDevToolHandler class
+- [ ] **[SUBMODULE]** `living_agent.py`: Wire up autodev_handler in `initialize_bridges()`
+- [ ] **[SUBMODULE]** `tool_executor.py`: Handle `__autodev` suffix in execution tracking
+- [ ] **[SUBMODULE]** Unit tests for autodev tool routing
+- [ ] **[SUBMODULE]** Integration tests for worker recipes with AutoDev tools
 
 ---
 
