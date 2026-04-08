@@ -63,6 +63,7 @@ impl AgentEngine {
         model:       &str,
         mut history: Vec<RequestMessage>,
         user_message: &str,
+        system_prompt_override: Option<&str>,
     ) -> Result<Vec<RequestMessage>> {
         // Check for cancellation before starting
         if self.state.lock().unwrap().is_cancelled(session_id) {
@@ -70,7 +71,7 @@ impl AgentEngine {
         }
 
         let context_builder = ContextBuilder::new(working_dir);
-        let system_prompt   = context_builder.build_system_prompt();
+        let system_prompt   = context_builder.build_system_prompt(system_prompt_override);
         let tool_defs       = self.registry.to_definitions();
 
         // Add user message to history
