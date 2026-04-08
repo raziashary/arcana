@@ -90,3 +90,21 @@ pub fn get_cost_today(
     let s = state.lock().unwrap();
     Ok((s.cost_today_usd, s.tokens_in_today, s.tokens_out_today))
 }
+
+#[tauri::command]
+pub fn get_system_prompt(
+    state: State<'_, Arc<Mutex<AppState>>>,
+) -> Result<Option<String>> {
+    let s = state.lock().unwrap();
+    Ok(s.system_prompt_override.clone())
+}
+
+#[tauri::command]
+pub fn set_system_prompt(
+    prompt: Option<String>,
+    state: State<'_, Arc<Mutex<AppState>>>,
+) -> Result<()> {
+    let mut s = state.lock().unwrap();
+    s.system_prompt_override = prompt.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+    Ok(())
+}
