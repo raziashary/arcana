@@ -1,0 +1,392 @@
+
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500&display=swap');
+  *{box-sizing:border-box;margin:0;padding:0}
+  .app{background:#0A0A0A;border-radius:10px;overflow:hidden;font-family:'IBM Plex Sans',sans-serif;min-height:660px;border:1px solid #222;display:flex;flex-direction:column}
+  .titlebar{background:#0D0D0D;border-bottom:1px solid #1a1a1a;padding:10px 14px;display:flex;align-items:center;justify-content:space-between}
+  .dots{display:flex;gap:7px}
+  .dot{width:12px;height:12px;border-radius:50%}
+  .d-red{background:#FF5F57}.d-yellow{background:#FEBC2E}.d-green{background:#28C840}
+  .titlebar-center{font-family:'IBM Plex Mono',monospace;font-size:12px;color:#555;letter-spacing:0.05em}
+  .titlebar-right{font-family:'IBM Plex Mono',monospace;font-size:11px;color:#333}
+  .tabbar{background:#0D0D0D;border-bottom:1px solid #1a1a1a;padding:0 14px;display:flex;align-items:center;justify-content:space-between}
+  .tabs{display:flex}
+  .tab{padding:10px 16px;font-size:12px;color:#555;cursor:pointer;border-bottom:2px solid transparent;font-family:'IBM Plex Mono',monospace;letter-spacing:0.03em;transition:color .15s}
+  .tab:hover{color:#999}
+  .tab.active{color:#00FF88;border-bottom-color:#00FF88}
+  .status-chip{font-family:'IBM Plex Mono',monospace;font-size:11px;color:#444;display:flex;align-items:center;gap:8px}
+  .model-badge{background:#111;border:1px solid #222;border-radius:2px;padding:3px 8px;color:#666;font-size:10px}
+  .cost-badge{color:#00FF88;font-size:10px}
+  .body{display:flex;flex:1;overflow:hidden}
+  .main{flex:1;overflow:hidden;display:flex;flex-direction:column}
+  .sidebar{width:176px;border-left:1px solid #1a1a1a;background:#0D0D0D;padding:12px;display:flex;flex-direction:column;gap:14px;flex-shrink:0}
+  .sb-section{font-family:'IBM Plex Mono',monospace;font-size:10px;color:#333;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:6px}
+  .sb-item{font-size:11px;color:#555;padding:4px 0;display:flex;align-items:center;gap:6px;font-family:'IBM Plex Mono',monospace}
+  .sb-dot{width:5px;height:5px;border-radius:50%;background:#00FF88;flex-shrink:0}
+  .sb-dot.off{background:#2a2a2a}
+
+  /* AUTODEV TAB */
+  .autodev{padding:14px;flex:1;overflow-y:auto}
+  .panel-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+  .panel-title{font-family:'IBM Plex Mono',monospace;font-size:11px;color:#555;letter-spacing:0.1em;text-transform:uppercase}
+  .btn-sm{background:#111;border:1px solid #222;border-radius:2px;padding:4px 10px;color:#666;font-size:10px;font-family:'IBM Plex Mono',monospace;cursor:pointer}
+  .btn-accent{background:#00FF8812;border-color:#00FF8840;color:#00FF88}
+  .roster{border:1px solid #1a1a1a;border-radius:2px;margin-bottom:14px;overflow:hidden}
+  .roster-row{display:flex;align-items:center;gap:10px;padding:7px 10px;border-bottom:1px solid #111;font-size:11px;font-family:'IBM Plex Mono',monospace}
+  .roster-row:last-child{border-bottom:none}
+  .roster-row:hover{background:#111}
+  .status-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+  .s-green{background:#00FF88}.s-yellow{background:#FFAA00}.s-blue{background:#4477FF}.s-red{background:#FF4444}
+  .agent-name{color:#888;width:140px;flex-shrink:0}
+  .agent-task{color:#444;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .agent-elapsed{color:#333;font-size:10px;width:70px;text-align:right}
+  .board{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:14px}
+  .board-col{background:#0D0D0D;border:1px solid #1a1a1a;border-radius:2px;padding:8px;min-height:120px}
+  .col-header{font-family:'IBM Plex Mono',monospace;font-size:10px;color:#444;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:8px;display:flex;justify-content:space-between}
+  .col-count{color:#333}
+  .task-card{background:#111;border:1px solid #1d1d1d;border-radius:2px;padding:6px 8px;margin-bottom:6px;cursor:pointer}
+  .task-card:hover{border-color:#2a2a2a}
+  .task-num{font-family:'IBM Plex Mono',monospace;font-size:10px;color:#444}
+  .task-title{font-size:11px;color:#777;margin:2px 0}
+  .task-worker{font-size:10px;color:#333;font-family:'IBM Plex Mono',monospace}
+  .progress-bar{height:2px;background:#1a1a1a;border-radius:1px;margin-top:5px;overflow:hidden}
+  .progress-fill{height:100%;background:#00FF88;border-radius:1px}
+  .metrics-row{display:flex;gap:8px}
+  .metric-card{flex:1;background:#0D0D0D;border:1px solid #1a1a1a;border-radius:2px;padding:8px 10px}
+  .metric-label{font-family:'IBM Plex Mono',monospace;font-size:9px;color:#333;letter-spacing:0.08em;text-transform:uppercase}
+  .metric-val{font-family:'IBM Plex Mono',monospace;font-size:16px;color:#888;margin-top:2px}
+  .metric-val.green{color:#00FF88}
+  .metric-val.yellow{color:#FFAA00}
+
+  /* CHAT TAB */
+  .chat-area{flex:1;padding:14px;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
+  .chat-header{background:#0D0D0D;border:1px solid #1a1a1a;border-radius:2px;padding:8px 12px;margin-bottom:4px}
+  .chat-header-row{display:flex;gap:12px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#444}
+  .chat-header-item span{color:#666}
+  .msg{max-width:78%;padding:8px 12px;border-radius:2px;font-size:13px;line-height:1.5}
+  .msg-agent{background:#111;border:1px solid #1a1a1a;color:#888;align-self:flex-start}
+  .msg-user{background:#00FF8812;border:1px solid #00FF8825;color:#aaa;align-self:flex-end}
+  .tool-block{background:#0D0D0D;border:1px solid #1d1d1d;border-radius:2px;padding:8px 10px;margin:4px 0;font-family:'IBM Plex Mono',monospace;font-size:11px;align-self:flex-start;max-width:80%}
+  .tool-name{color:#4477FF;margin-bottom:4px}
+  .tool-arg{color:#555;padding-left:10px}
+  .tool-result{color:#00FF88;margin-top:4px;padding-left:10px}
+  .input-bar{background:#0D0D0D;border-top:1px solid #1a1a1a;padding:10px 14px;display:flex;align-items:center;gap:8px}
+  .input-box{flex:1;background:#111;border:1px solid #1d1d1d;border-radius:2px;padding:8px 12px;color:#888;font-size:13px;font-family:'IBM Plex Sans',sans-serif;outline:none}
+  .input-box::placeholder{color:#333}
+  .send-btn{background:#00FF8820;border:1px solid #00FF8840;border-radius:2px;padding:7px 14px;color:#00FF88;font-size:12px;font-family:'IBM Plex Mono',monospace;cursor:pointer}
+  .input-meta{display:flex;justify-content:space-between;padding:4px 14px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#333}
+
+  /* TAB CONTENT */
+  .tab-content{display:none;flex:1;flex-direction:column;overflow:hidden}
+  .tab-content.active{display:flex}
+</style>
+
+<div class="app">
+  <div class="titlebar">
+    <div class="dots">
+      <div class="dot d-red"></div>
+      <div class="dot d-yellow"></div>
+      <div class="dot d-green"></div>
+    </div>
+    <div class="titlebar-center">AIRS Code — v1.0.0</div>
+    <div class="titlebar-right">[ _ ] [ □ ] [ × ]</div>
+  </div>
+
+  <div class="tabbar">
+    <div class="tabs">
+      <div class="tab active" onclick="switchTab('chat',this)">Chat</div>
+      <div class="tab" onclick="switchTab('autodev',this)">AutoDev</div>
+      <div class="tab" onclick="switchTab('ide',this)">IDE</div>
+      <div class="tab" onclick="switchTab('recipes',this)">Recipes</div>
+      <div class="tab" onclick="switchTab('settings',this)">Settings</div>
+    </div>
+    <div class="status-chip">
+      <div class="model-badge">claude-opus-4-6</div>
+      <div class="cost-badge">$2.14 today</div>
+    </div>
+  </div>
+
+  <div class="body">
+    <div class="main">
+
+      <!-- CHAT TAB -->
+      <div class="tab-content active" id="tab-chat">
+        <div class="chat-area">
+          <div class="chat-header">
+            <div class="chat-header-row">
+              <div class="chat-header-item">Mode: <span>Personal Assistant (PA)</span></div>
+              <div class="chat-header-item">MCP: <span>github · slack</span></div>
+              <div class="chat-header-item">Skills: <span>4 loaded</span></div>
+              <div class="chat-header-item">CLAUDE.md: <span>active</span></div>
+            </div>
+          </div>
+          <div class="msg msg-user">Add a /health endpoint to the orchestrator that returns agent status, last active time, and memory usage. Read-only, no auth required.</div>
+          <div class="tool-block">
+            <div class="tool-name">▶ github_create_issue</div>
+            <div class="tool-arg">title: "Add GET /agents/health endpoint"</div>
+            <div class="tool-arg">labels: worker-backend, p2-medium, feature, status-ready</div>
+            <div class="tool-arg">repo: core-orchestrator</div>
+            <div class="tool-result">✓ Issue #142 created → airs-task-board</div>
+          </div>
+          <div class="msg msg-agent">Issue #142 created with acceptance criteria and the correct labels. The Supervisor will pick it up on its next poll cycle. Want me to also write a dispatch signal to fast-track it to Worker Backend now?</div>
+          <div class="msg msg-user">Yes, dispatch it immediately.</div>
+          <div class="tool-block">
+            <div class="tool-name">▶ airs_dispatch_signal</div>
+            <div class="tool-arg">worker: worker-backend</div>
+            <div class="tool-arg">issue: 142</div>
+            <div class="tool-result">✓ dispatch/worker-backend-20260408-1042.signal written</div>
+          </div>
+          <div class="msg msg-agent">Dispatch signal sent. Worker Backend will pick up Issue #142 on its next poll in under 2 minutes.</div>
+        </div>
+        <div class="input-bar">
+          <input class="input-box" placeholder="What do you want to build today?" />
+          <div class="send-btn">⏎ Send</div>
+        </div>
+        <div class="input-meta">
+          <span>Attach · /skill · @agent · #recipe</span>
+          <span>Tokens: 12,450 · $0.04</span>
+        </div>
+      </div>
+
+      <!-- AUTODEV TAB -->
+      <div class="tab-content" id="tab-autodev">
+        <div class="autodev">
+          <div class="panel-header">
+            <div class="panel-title">Agent Roster</div>
+            <div style="display:flex;gap:6px">
+              <div class="btn-sm">Refresh</div>
+              <div class="btn-sm btn-accent">+ New Task</div>
+            </div>
+          </div>
+          <div class="roster">
+            <div class="roster-row"><div class="status-dot s-green"></div><div class="agent-name">SUPERVISOR</div><div class="agent-task">Polling · 0 tasks queued</div><div class="agent-elapsed">—</div></div>
+            <div class="roster-row"><div class="status-dot s-yellow"></div><div class="agent-name">WORKER-BACKEND</div><div class="agent-task">Issue #142 — /agents/health endpoint</div><div class="agent-elapsed">00:14</div></div>
+            <div class="roster-row"><div class="status-dot s-blue"></div><div class="agent-name">WORKER-FRONTEND</div><div class="agent-task">Idle — awaiting tasks</div><div class="agent-elapsed">—</div></div>
+            <div class="roster-row"><div class="status-dot s-blue"></div><div class="agent-name">WORKER-PLATFORM</div><div class="agent-task">Idle — awaiting tasks</div><div class="agent-elapsed">—</div></div>
+            <div class="roster-row"><div class="status-dot s-blue"></div><div class="agent-name">WORKER-MCP</div><div class="agent-task">Idle — awaiting tasks</div><div class="agent-elapsed">—</div></div>
+            <div class="roster-row"><div class="status-dot s-yellow"></div><div class="agent-name">WORKER-CLEANUP</div><div class="agent-task">Issue #138 — dead code removal</div><div class="agent-elapsed">01:42</div></div>
+            <div class="roster-row"><div class="status-dot s-yellow"></div><div class="agent-name">QC AGENT</div><div class="agent-task">Reviewing PR #87</div><div class="agent-elapsed">00:06</div></div>
+          </div>
+
+          <div class="panel-header">
+            <div class="panel-title">Task Board</div>
+          </div>
+          <div class="board">
+            <div class="board-col">
+              <div class="col-header">Ready <span class="col-count">3</span></div>
+              <div class="task-card"><div class="task-num">#145 · p1</div><div class="task-title">Fix SSE hook disconnect</div><div class="task-worker">worker-frontend</div></div>
+              <div class="task-card"><div class="task-num">#146 · p2</div><div class="task-title">Add docstrings to agents/</div><div class="task-worker">worker-cleanup</div></div>
+              <div class="task-card"><div class="task-num">#147 · p3</div><div class="task-title">Update deps audit</div><div class="task-worker">worker-cleanup</div></div>
+            </div>
+            <div class="board-col">
+              <div class="col-header">In Progress <span class="col-count">2</span></div>
+              <div class="task-card"><div class="task-num">#142 · p2</div><div class="task-title">/agents/health endpoint</div><div class="task-worker">worker-backend</div><div class="progress-bar"><div class="progress-fill" style="width:60%"></div></div></div>
+              <div class="task-card"><div class="task-num">#138 · p3</div><div class="task-title">Dead code removal pass</div><div class="task-worker">worker-cleanup</div><div class="progress-bar"><div class="progress-fill" style="width:82%"></div></div></div>
+            </div>
+            <div class="board-col">
+              <div class="col-header">QC Review <span class="col-count">1</span></div>
+              <div class="task-card"><div class="task-num">PR #87</div><div class="task-title">health endpoint — QC pending</div><div class="task-worker" style="color:#FFAA00">qc-agent · reviewing</div></div>
+            </div>
+            <div class="board-col">
+              <div class="col-header">Done Today <span class="col-count">5</span></div>
+              <div class="task-card"><div class="task-num">#135</div><div class="task-title">Fix auth header bug</div><div class="task-worker" style="color:#00FF88">✓ merged</div></div>
+              <div class="task-card"><div class="task-num">#136</div><div class="task-title">Add memory MCP endpoint</div><div class="task-worker" style="color:#00FF88">✓ merged</div></div>
+            </div>
+          </div>
+
+          <div class="metrics-row">
+            <div class="metric-card"><div class="metric-label">Cost Today</div><div class="metric-val green">$2.14</div></div>
+            <div class="metric-card"><div class="metric-label">Tokens</div><div class="metric-val">1.2M</div></div>
+            <div class="metric-card"><div class="metric-label">Closed</div><div class="metric-val">5</div></div>
+            <div class="metric-card"><div class="metric-label">QC Pass Rate</div><div class="metric-val yellow">80%</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- IDE TAB -->
+      <div class="tab-content" id="tab-ide" style="flex-direction:row">
+        <div style="width:180px;border-right:1px solid #1a1a1a;background:#0D0D0D;padding:10px;overflow-y:auto;font-family:'IBM Plex Mono',monospace;font-size:11px">
+          <div style="color:#444;font-size:10px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px">core-orchestrator</div>
+          <div style="color:#00FF88;padding:2px 0">▼ 📁 src/</div>
+          <div style="color:#555;padding:2px 0 2px 14px">▼ 📁 api/</div>
+          <div style="color:#888;padding:2px 0 2px 28px;background:#111;border-radius:1px">📄 health.py</div>
+          <div style="color:#555;padding:2px 0 2px 28px">📄 routes.py</div>
+          <div style="color:#555;padding:2px 0 2px 14px">▶ 📁 agents/</div>
+          <div style="color:#555;padding:2px 0 2px 14px">▶ 📁 services/</div>
+          <div style="color:#555;padding:2px 0 2px 14px">📄 main.py</div>
+          <div style="color:#444;padding:2px 0">▶ 📁 tests/</div>
+          <div style="color:#00FF88;padding:2px 0">📄 CLAUDE.md</div>
+          <div style="color:#555;padding:2px 0">📄 pyproject.toml</div>
+        </div>
+        <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+          <div style="background:#0D0D0D;border-bottom:1px solid #1a1a1a;padding:6px 14px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#444;display:flex;justify-content:space-between">
+            <span>src/api/<span style="color:#888">health.py</span></span>
+            <span style="color:#333">worker/backend/142 · 3 changes</span>
+          </div>
+          <div style="flex:1;overflow-y:auto;padding:12px 14px;font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:1.7">
+            <div style="display:flex;gap:16px"><span style="color:#2a2a2a;min-width:24px;text-align:right">1</span><span style="color:#4477FF">from</span><span style="color:#777"> fastapi </span><span style="color:#4477FF">import</span><span style="color:#777"> APIRouter</span></div>
+            <div style="display:flex;gap:16px"><span style="color:#2a2a2a;min-width:24px;text-align:right">2</span><span style="color:#4477FF">from</span><span style="color:#777"> ..services.agent_service </span><span style="color:#4477FF">import</span><span style="color:#777"> get_agent_service</span></div>
+            <div style="display:flex;gap:16px"><span style="color:#2a2a2a;min-width:24px;text-align:right">3</span><span style="color:#777"></span></div>
+            <div style="display:flex;gap:16px"><span style="color:#2a2a2a;min-width:24px;text-align:right">4</span><span style="color:#777">router = APIRouter()</span></div>
+            <div style="display:flex;gap:16px"><span style="color:#2a2a2a;min-width:24px;text-align:right">5</span><span style="color:#777"></span></div>
+            <div style="display:flex;gap:16px;background:#00FF8808;border-left:2px solid #00FF88;padding-left:4px"><span style="color:#2a2a2a;min-width:24px;text-align:right">6</span><span style="color:#777">@router.get(<span style="color:#00FF88">"/agents/health"</span>)</span></div>
+            <div style="display:flex;gap:16px;background:#00FF8808;border-left:2px solid #00FF88;padding-left:4px"><span style="color:#2a2a2a;min-width:24px;text-align:right">7</span><span style="color:#4477FF">async def</span><span style="color:#777"> agents_health():</span></div>
+            <div style="display:flex;gap:16px;background:#00FF8808;border-left:2px solid #00FF88;padding-left:4px"><span style="color:#2a2a2a;min-width:24px;text-align:right">8</span><span style="color:#777">    <span style="color:#00FF88">"""Return health status of all agents."""</span></span></div>
+            <div style="display:flex;gap:16px;background:#00FF8808;border-left:2px solid #00FF88;padding-left:4px"><span style="color:#2a2a2a;min-width:24px;text-align:right">9</span><span style="color:#777">    svc = get_agent_service()</span></div>
+            <div style="display:flex;gap:16px;background:#00FF8808;border-left:2px solid #00FF88;padding-left:4px"><span style="color:#2a2a2a;min-width:24px;text-align:right">10</span><span style="color:#4477FF">    return await</span><span style="color:#777"> svc.get_health_status()</span></div>
+          </div>
+          <div style="background:#0D0D0D;border-top:1px solid #1a1a1a;padding:5px 14px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#333;display:flex;gap:16px">
+            <span>pytest: <span style="color:#00FF88">142✅ 0❌</span></span>
+            <span>mypy: <span style="color:#00FF88">clean</span></span>
+            <span>branch: <span style="color:#888">worker/backend/142</span></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- RECIPES TAB -->
+      <div class="tab-content" id="tab-recipes" style="flex-direction:row">
+        <div style="width:220px;border-right:1px solid #1a1a1a;padding:10px;overflow-y:auto">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#333;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px">AIRS Library</div>
+          <div style="background:#111;border:1px solid #00FF8830;border-radius:2px;padding:8px;margin-bottom:6px">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#00FF88">worker-backend-poll</div>
+            <div style="font-size:11px;color:#555;margin:3px 0">Backend polling loop</div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#333">*/2 * * * *</div>
+          </div>
+          <div style="border:1px solid #1a1a1a;border-radius:2px;padding:8px;margin-bottom:6px">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#777">supervisor-dispatch</div>
+            <div style="font-size:11px;color:#555;margin:3px 0">Supervisor routing loop</div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#333">*/2 * * * *</div>
+          </div>
+          <div style="border:1px solid #1a1a1a;border-radius:2px;padding:8px;margin-bottom:6px">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#777">qc-review-cycle</div>
+            <div style="font-size:11px;color:#555;margin:3px 0">QC agent PR review</div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#333">*/3 * * * *</div>
+          </div>
+          <div style="border:1px solid #1a1a1a;border-radius:2px;padding:8px">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#777">create-task-from-spec</div>
+            <div style="font-size:11px;color:#555;margin:3px 0">PA → GitHub Issue</div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#333">manual only</div>
+          </div>
+        </div>
+        <div style="flex:1;padding:14px">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#888;margin-bottom:10px">worker-backend-poll.yaml</div>
+          <div style="background:#0D0D0D;border:1px solid #1a1a1a;border-radius:2px;padding:12px;font-family:'IBM Plex Mono',monospace;font-size:11px;line-height:1.8;color:#555;margin-bottom:12px">
+            <div><span style="color:#4477FF">version:</span> <span style="color:#00FF88">"1.0.0"</span></div>
+            <div><span style="color:#4477FF">title:</span> Worker Backend — Polling Loop</div>
+            <div><span style="color:#4477FF">schedule:</span> <span style="color:#00FF88">"*/2 * * * *"</span></div>
+            <div><span style="color:#4477FF">permission_mode:</span> autonomous</div>
+            <div style="margin-top:6px"><span style="color:#4477FF">extensions:</span></div>
+            <div style="padding-left:12px">- github-mcp</div>
+            <div style="padding-left:12px">- developer</div>
+            <div style="margin-top:6px"><span style="color:#4477FF">parameters:</span></div>
+            <div style="padding-left:12px"><span style="color:#4477FF">- name:</span> repo</div>
+            <div style="padding-left:20px"><span style="color:#4477FF">default:</span> <span style="color:#00FF88">"core-orchestrator"</span></div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <div class="btn-sm btn-accent">▶ Run Now</div>
+            <div class="btn-sm">Schedule</div>
+            <div class="btn-sm">Edit YAML</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SETTINGS TAB -->
+      <div class="tab-content" id="tab-settings">
+        <div style="padding:14px;overflow-y:auto">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#333;letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px">Providers</div>
+          <div style="border:1px solid #1a1a1a;border-radius:2px;overflow:hidden;margin-bottom:14px">
+            <div style="display:grid;grid-template-columns:120px 1fr 160px 80px;gap:10px;padding:7px 10px;border-bottom:1px solid #111;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#333;letter-spacing:.05em">
+              <span>PROVIDER</span><span>API KEY</span><span>MODEL</span><span>STATUS</span>
+            </div>
+            <div style="display:grid;grid-template-columns:120px 1fr 160px 80px;gap:10px;padding:8px 10px;border-bottom:1px solid #111;font-size:11px;font-family:'IBM Plex Mono',monospace;align-items:center">
+              <span style="color:#888">Anthropic</span>
+              <span style="color:#444">sk-ant-●●●●●●●●●●●●</span>
+              <span style="color:#666">claude-opus-4-6</span>
+              <span style="color:#00FF88">● Active</span>
+            </div>
+            <div style="display:grid;grid-template-columns:120px 1fr 160px 80px;gap:10px;padding:8px 10px;border-bottom:1px solid #111;font-size:11px;font-family:'IBM Plex Mono',monospace;align-items:center">
+              <span style="color:#555">OpenAI</span>
+              <span style="color:#333">[Add key...]</span>
+              <span style="color:#333">—</span>
+              <span style="color:#333">○ Off</span>
+            </div>
+            <div style="display:grid;grid-template-columns:120px 1fr 160px 80px;gap:10px;padding:8px 10px;font-size:11px;font-family:'IBM Plex Mono',monospace;align-items:center">
+              <span style="color:#555">Ollama</span>
+              <span style="color:#333">localhost:11434</span>
+              <span style="color:#333">—</span>
+              <span style="color:#333">○ Off</span>
+            </div>
+          </div>
+
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#333;letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px">Model Router</div>
+          <div style="border:1px solid #1a1a1a;border-radius:2px;overflow:hidden;margin-bottom:14px">
+            <div style="display:grid;grid-template-columns:160px 1fr 1fr;gap:10px;padding:7px 10px;border-bottom:1px solid #111;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#333;letter-spacing:.05em">
+              <span>AGENT ROLE</span><span>MODEL</span><span>REASON</span>
+            </div>
+            <div style="display:grid;grid-template-columns:160px 1fr 1fr;gap:10px;padding:7px 10px;border-bottom:1px solid #111;font-size:11px;font-family:'IBM Plex Mono',monospace;color:#666">
+              <span>Supervisor</span><span style="color:#888">claude-opus-4-6</span><span style="color:#444">Complex routing logic</span>
+            </div>
+            <div style="display:grid;grid-template-columns:160px 1fr 1fr;gap:10px;padding:7px 10px;border-bottom:1px solid #111;font-size:11px;font-family:'IBM Plex Mono',monospace;color:#666">
+              <span>Worker Backend</span><span style="color:#888">claude-sonnet-4-6</span><span style="color:#444">Balanced quality/cost</span>
+            </div>
+            <div style="display:grid;grid-template-columns:160px 1fr 1fr;gap:10px;padding:7px 10px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:#666">
+              <span>Worker Cleanup</span><span style="color:#888">claude-haiku-4-5</span><span style="color:#444">Simple refactors, cheapest</span>
+            </div>
+          </div>
+
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#333;letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px">AIRS AutoDev</div>
+          <div style="border:1px solid #1a1a1a;border-radius:2px;padding:12px;display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:11px;font-family:'IBM Plex Mono',monospace">
+            <div><div style="color:#333;margin-bottom:4px">GitHub Org</div><div style="color:#777">AIRS-Foundry</div></div>
+            <div><div style="color:#333;margin-bottom:4px">Task Board Repo</div><div style="color:#777">airs-task-board</div></div>
+            <div><div style="color:#333;margin-bottom:4px">Agent Identity</div><div style="color:#00FF88">Personal Assistant (PA)</div></div>
+            <div><div style="color:#333;margin-bottom:4px">GitHub PAT</div><div style="color:#777">ghp_●●●●●●●● <span style="color:#FFAA00;font-size:10px">expires 89d</span></div></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="sidebar">
+      <div>
+        <div class="sb-section">Context</div>
+        <div class="sb-item"><div class="sb-dot"></div>CLAUDE.md</div>
+        <div class="sb-item"><div class="sb-dot"></div>.goosehints</div>
+        <div class="sb-item" style="color:#2a2a2a"><div class="sb-dot off"></div>user-prefs</div>
+      </div>
+      <div>
+        <div class="sb-section">MCP Active</div>
+        <div class="sb-item"><div class="sb-dot"></div>github-mcp</div>
+        <div class="sb-item"><div class="sb-dot"></div>slack-mcp</div>
+        <div class="sb-item" style="color:#2a2a2a"><div class="sb-dot off"></div>sentry-mcp</div>
+      </div>
+      <div>
+        <div class="sb-section">Skills</div>
+        <div class="sb-item"><div class="sb-dot"></div>/review-pr</div>
+        <div class="sb-item"><div class="sb-dot"></div>/run-tests</div>
+        <div class="sb-item"><div class="sb-dot"></div>/claim-issue</div>
+        <div class="sb-item"><div class="sb-dot"></div>/open-pr</div>
+      </div>
+      <div>
+        <div class="sb-section">Hooks</div>
+        <div class="sb-item"><div class="sb-dot"></div>post-write:lint</div>
+        <div class="sb-item"><div class="sb-dot"></div>pre-bash:guard</div>
+        <div class="sb-item"><div class="sb-dot"></div>session:telemetry</div>
+      </div>
+      <div style="margin-top:auto">
+        <div class="sb-section">Session</div>
+        <div class="sb-item" style="color:#444">12,450 tokens</div>
+        <div class="sb-item" style="color:#444">$0.04 this session</div>
+        <div class="sb-item" style="color:#00FF88;cursor:pointer">⊕ /clear context</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function switchTab(name, el) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('tab-' + name).classList.add('active');
+}
+</script>
