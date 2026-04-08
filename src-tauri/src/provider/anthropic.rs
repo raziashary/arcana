@@ -157,13 +157,22 @@ impl Provider for AnthropicProvider {
         }
 
         let byte_stream = resp.bytes_stream();
+        // Buffer accumulates raw bytes across TCP chunk boundaries so SSE
+        // data lines are never parsed mid-line (fixes "EOF while parsing" crash
+        // that occurs when a long tool response is split across two HTTP chunks).
+        let buffer = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
         let chunk_stream = byte_stream
-            .map(|bytes_result| -> Result<Vec<StreamChunk>> {
+            .map(move |bytes_result| -> Result<Vec<StreamChunk>> {
                 let bytes = bytes_result.map_err(AutoDevError::Http)?;
                 let text  = String::from_utf8_lossy(&bytes);
+                let mut buf = buffer.lock().unwrap();
+                buf.push_str(&text);
                 let mut chunks = Vec::new();
-                for line in text.lines() {
-                    if let Some(chunk) = parse_sse_line(line)? {
+                // Only parse complete lines — leave any trailing partial line in the buffer.
+                while let Some(pos) = buf.find('\n') {
+                    let line = buf[..pos].trim_end_matches('\r').to_string();
+                    *buf = buf[pos + 1..].to_string();
+                    if let Some(chunk) = parse_sse_line(&line)? {
                         chunks.push(chunk);
                     }
                 }
