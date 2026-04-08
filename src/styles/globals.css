@@ -1,0 +1,109 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── CSS Custom Properties (from autodevmockup.html) ─────────────────────── */
+:root {
+  --bg-app:           #0A0A0A;
+  --bg-surface:       #0D0D0D;
+  --bg-card:          #111111;
+  --border-1:         #1a1a1a;
+  --border-2:         #222222;
+  --accent:           #00FF88;
+  --accent-muted:     #00FF8812;
+  --accent-border:    #00FF8825;
+  --accent-dim:       #00FF8840;
+  --danger:           #FF4444;
+  --warning:          #FFAA00;
+  --info:             #4477FF;
+  --text-1:           #888888;
+  --text-2:           #555555;
+  --text-3:           #444444;
+  --text-4:           #333333;
+  --font-mono:        'IBM Plex Mono', monospace;
+  --font-sans:        'IBM Plex Sans', sans-serif;
+  --radius:           2px;
+}
+
+/* ── Base Reset ──────────────────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-app);
+  color: var(--text-1);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Scrollbar ───────────────────────────────────────────────────────────── */
+::-webkit-scrollbar         { width: 4px; height: 4px; }
+::-webkit-scrollbar-track   { background: transparent; }
+::-webkit-scrollbar-thumb   { background: #2a2a2a; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #3a3a3a; }
+
+/* ── Focus outline ───────────────────────────────────────────────────────── */
+:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ── Typography utilities ─────────────────────────────────────────────────── */
+.font-mono  { font-family: var(--font-mono); }
+.font-sans  { font-family: var(--font-sans); }
+
+/* ── Status dot colours ──────────────────────────────────────────────────── */
+.dot-green  { background: var(--accent); }
+.dot-yellow { background: var(--warning); }
+.dot-blue   { background: var(--info); }
+.dot-red    { background: var(--danger); }
+.dot-dim    { background: #2a2a2a; }
+
+/* ── Selection ───────────────────────────────────────────────────────────── */
+::selection {
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+
+/* ── App layout ──────────────────────────────────────────────────────────── */
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg-app);
+  overflow: hidden;
+}
+
+.app-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.app-main {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Input base ──────────────────────────────────────────────────────────── */
+input, textarea {
+  background: var(--bg-card);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  color: var(--text-1);
+  font-family: var(--font-sans);
+}
+input:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent-dim);
+}
