@@ -1,4 +1,4 @@
-# Git Submodule Setup Guide for AIRS Code
+# Git Submodule Setup Guide for AutoDev
 ## Step-by-Step Instructions
 
 ### Prerequisites
@@ -10,10 +10,10 @@
 
 ## Step 1: Initialize Git Repository
 
-If `airs-code` isn't already a git repo:
+If `autodev` isn't already a git repo:
 
 ```bash
-cd "c:\AIRS Foundry\airs-code"
+cd "c:\AIRS Foundry\autodev"
 git init
 git branch -M main
 ```
@@ -21,7 +21,7 @@ git branch -M main
 If you want to connect to a remote:
 
 ```bash
-git remote add origin https://github.com/AIRS-Foundry/airs-code.git
+git remote add origin https://github.com/AIRS-Foundry/autodev.git
 ```
 
 ---
@@ -84,12 +84,12 @@ git commit -m "feat: add core-orchestrator and memory-mcp-server as submodules"
 
 ## Step 5: When Someone Else Clones Your Repo
 
-When another developer clones `airs-code`, they need to initialize submodules:
+When another developer clones `autodev`, they need to initialize submodules:
 
 ```bash
 # Clone the main repo
-git clone https://github.com/AIRS-Foundry/airs-code.git
-cd airs-code
+git clone https://github.com/AIRS-Foundry/autodev.git
+cd autodev
 
 # Initialize and fetch submodules
 git submodule init
@@ -102,7 +102,7 @@ git submodule update --init --recursive
 **Even easier:** Clone with submodules in one command:
 
 ```bash
-git clone --recurse-submodules https://github.com/AIRS-Foundry/airs-code.git
+git clone --recurse-submodules https://github.com/AIRS-Foundry/autodev.git
 ```
 
 ---
@@ -168,7 +168,7 @@ git commit -m "chore: update core-orchestrator to latest"
 
 8. Return to parent repo and update the submodule pointer:
    ```bash
-   cd ../..  # back to airs-code root
+   cd ../..  # back to autodev root
    git add submodules/core-orchestrator
    git commit -m "chore: bump core-orchestrator (stdio fix included)"
    git push
@@ -192,7 +192,7 @@ git submodule foreach git status
 
 ### Detailed Explanation:
 
-1. **In the parent repo (`airs-code/`):**
+1. **In the parent repo (`autodev/`):**
    - **No** — you don't run `uv venv` or `uv sync` here
    - The submodules are just tracked as git references
    - You won't run Python code directly from the parent repo during development
@@ -242,7 +242,7 @@ git submodule foreach git status
 
 | Context | Run `uv venv`/`uv sync`? | Why? |
 |---------|--------------------------|------|
-| Parent repo (`airs-code/`) | ❌ No | Submodules are just git pointers, no Python execution here |
+| Parent repo (`autodev/`) | ❌ No | Submodules are just git pointers, no Python execution here |
 | Inside submodule for development | ✅ Yes | To test the Python code locally before bundling |
 | During CI/CD build | ❌ No (use pip) | PyInstaller scripts handle dependencies |
 
@@ -347,7 +347,7 @@ git submodule foreach git status
 3. **Test the submodule workflow:**
    - Make a small change in `core-orchestrator`
    - Commit and push
-   - Update the submodule pointer in `airs-code`
+   - Update the submodule pointer in `autodev`
    - Verify another team member can pull and get the update
 
 4. **Configure Tauri sidecar management:**
