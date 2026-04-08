@@ -1320,17 +1320,19 @@ pub trait Tool: Send + Sync {
 
 ### 9.5 Phase 1 Deliverables Checklist
 
-- [ ] Tauri app opens with 5-tab layout (Chat / AutoDev / IDE / Recipes / Settings)
-- [ ] Dark theme with design tokens applied
-- [ ] Settings tab: add/test/save Anthropic API key via OS keychain
-- [ ] Chat tab: send a message, get a streaming response
-- [ ] Tool call display: collapsible blocks showing name, args, result
-- [ ] Tool execution: `read_file`, `write_file`, `bash`, `list_directory`
-- [ ] Permission dialog for `bash` and `write_file` in ManualApproval mode
-- [ ] CLAUDE.md injection: read `~/.airs/CLAUDE.md` + `{cwd}/CLAUDE.md` into system prompt
-- [ ] Status bar: active model name + today's cost
-- [ ] Session persistence: conversations saved in SQLite
-- [ ] Cost tracking: tokens in/out per message, stored in SQLite
+- [x] Tauri app opens with 5-tab layout (Chat / AutoDev / IDE / Recipes / Settings)
+- [x] Dark theme with design tokens applied
+- [x] Settings tab: add/test/save Anthropic API key via OS keychain
+- [x] Chat tab: send a message, get a streaming response
+- [x] Tool call display: collapsible blocks showing name, args, result
+- [x] Tool execution: `read_file`, `write_file`, `bash`, `list_directory`
+- [x] Permission dialog for `bash` and `write_file` in ManualApproval mode
+- [x] CLAUDE.md injection: read `~/.airs/CLAUDE.md` + `{cwd}/CLAUDE.md` into system prompt
+- [x] Status bar: active model name + today's cost
+- [x] Session persistence: conversations saved in SQLite
+- [x] Cost tracking: tokens in/out per message, stored in SQLite
+
+> **Completed**: All Phase 1 React + Rust modules implemented and Vite build passes (0 TS errors, 0 build errors). Node.js version pinned to v22.1.0 — Vite downgraded to v6.3.x, @vitejs/plugin-react to v4.x, TypeScript to v5.7.x for compatibility.
 
 ---
 
