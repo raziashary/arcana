@@ -1,4 +1,4 @@
-# AIRS Code — Product Specification & Build Prompt
+# AutoDev — Product Specification & Build Prompt
 ### A Custom Desktop AI Agent Platform for AIRS Foundry
 
 **Document Status:** Draft v1.0
@@ -12,7 +12,7 @@
 
 1. [Vision](#1-vision)
 2. [Why Build This](#2-why-build-this)
-3. [Feature Inventory — Claude Code vs Goose vs AIRS Code](#3-feature-inventory)
+3. [Feature Inventory — Claude Code vs Goose vs AutoDev](#3-feature-inventory)
 4. [Architecture Overview](#4-architecture-overview)
 5. [UI/UX Design Spec](#5-uiux-design-spec)
 6. [Core Features — Deep Spec](#6-core-features-deep-spec)
@@ -26,7 +26,7 @@
 
 ## 1. Vision
 
-**AIRS Code** is a downloadable desktop + CLI application — purpose-built for AIRS Foundry — that combines the best capabilities of Claude Code and Goose into a single, branded, model-agnostic AI developer agent platform.
+**AutoDev** is a downloadable desktop + CLI application — purpose-built for AIRS Foundry — that combines the best capabilities of Claude Code and Goose into a single, branded, model-agnostic AI developer agent platform.
 
 Any AIRS team member or AutoDev worker agent can:
 - Download one binary
@@ -51,7 +51,7 @@ Any AIRS team member or AutoDev worker agent can:
 - Not tailored to AutoDev's Supervisor → Worker → QC pipeline
 - Generic tool — no AIRS-specific automation, no built-in task board awareness
 
-### The Case for AIRS Code
+### The Case for AutoDev
 - **Model-agnostic by design**: use Anthropic API directly (no rate-limited subscriptions), or OpenAI, Gemini, or local Ollama on DGX Sparks in Year 2
 - **CLAUDE.md-compatible**: workers keep their existing instruction files — zero migration cost
 - **AutoDev-native**: the app understands AIRS's GitHub Issues board, dispatch signals, and lock file patterns natively — no extra scripting
@@ -78,7 +78,7 @@ Any AIRS team member or AutoDev worker agent can:
 | **Plugins** | Bundle Skills + MCP servers + Hooks into installable packages | AIRS plugin = one install to configure any worker PC |
 | **Context compaction** | Auto-compress stale context to prevent context window overflow | Essential for long-running worker sessions |
 | **Plan mode** | Agent maps the work before executing — halves token waste | Used by Supervisor when breaking down epics |
-| **Git worktree integration** | Each task gets an isolated git worktree branch | The `worker/backend/<issue>` branching pattern |
+| **Git worktree integration** | Each task gets an isolated git worktree branch via `git2-rs`; file checkpointing per message (undo support); commit attribution trailers | The `worker/backend/<issue>` branching pattern; agents work in isolation without polluting main |
 | **`@mention` subagents** | Reference specific subagents by name in conversation | Supervisor can address workers by name |
 | **HTTP hooks** | POST JSON to external services on lifecycle events | Send task completion events to AIRS dashboard |
 | **`defer` permission** | Pause headless session, wait for external signal to resume | Multi-agent coordination between Supervisor and Workers |
@@ -96,12 +96,12 @@ Any AIRS team member or AutoDev worker agent can:
 | **Approval modes** | Autonomous / Manual Approval / Smart Approval / Chat Only | Workers run Autonomous; Supervisor uses Smart Approval for destructive ops |
 | **`.goosehints`** | Per-directory instruction injection (like CLAUDE.md but directory-scoped) | Complementary to CLAUDE.md for fine-grained per-path context |
 | **OS-level sandbox** | `sandbox-exec` restricts file and network access per session | Security boundary around worker agents — prevent scope creep |
-| **Custom distributions** | Build your own branded Goose distro with preconfigured providers and branding | AIRS Code IS a custom distribution — this is the build model |
+| **Custom distributions** | Build your own branded Goose distro with preconfigured providers and branding | AutoDev IS a custom distribution — this is the build model |
 | **ACP (Agent Client Protocol)** | Connect to IDE plugins — JetBrains, VS Code, Cursor | AIRS developers use the IDE panel while workers use CLI/headless mode |
 | **Per-session cost audit** | Token usage, cache hits, model config all logged per session | Feed directly into AutoDev cost dashboard |
 | **Headless recipe runner** | Run recipes as CLI one-shots — `airsctl run recipe worker-backend` | The worker polling pattern as a first-class CLI command |
 
-### What AIRS Code Adds Natively (New)
+### What AutoDev Adds Natively (New)
 
 | Feature | Description |
 |---|---|
@@ -111,7 +111,8 @@ Any AIRS team member or AutoDev worker agent can:
 | **Model Router** | Route different task types to different models (Opus for Supervisor/QC, Sonnet for Workers, Haiku for Cleanup) |
 | **AIRS Plugin** | One-click plugin that pre-configures any worker PC with the right CLAUDE.md, MCP servers, GitHub PAT scopes, and recipe set for their role |
 | **Cost Meter** | Real-time token spend display per agent per session, with 30-day rolling totals |
-| **IDE Tab** | Built-in file tree and code viewer — read-only for workers, edit mode for Razi |
+| **IDE Tab** | Built-in file tree, code viewer, and **git sub-panel** — read-only for workers, edit mode for Razi |
+| **Git Sub-Panel** | Embedded in IDE tab: repo selector, clone AIRS repos, branch switcher, staged/unstaged view, commit/push/PR, worktree manager |
 | **Dispatch Signal UI** | Visual button to send a dispatch signal to any worker immediately from the UI |
 
 ---
@@ -120,7 +121,7 @@ Any AIRS team member or AutoDev worker agent can:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                          AIRS CODE DESKTOP APP                          │
+│                          AutoDev DESKTOP APP                          │
 │                                                                         │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────┐  │
 │  │  Chat    │  │  AutoDev │  │  IDE     │  │ Recipes  │  │Settings │  │
@@ -158,13 +159,13 @@ Any AIRS team member or AutoDev worker agent can:
 
 ### 4.1 Sidecar Architecture & Submodule Integration Strategy
 
-AIRS Code bundles **Core Orchestrator** and **Memory MCP Server** as managed sidecars rather than rebuilding their capabilities. This preserves upstream updates while delivering a single-installer desktop experience.
+AutoDev bundles **Core Orchestrator** and **Memory MCP Server** as managed sidecars rather than rebuilding their capabilities. This preserves upstream updates while delivering a single-installer desktop experience.
 
 #### The Sidecar Pattern
 
 ```
-AIRS Code.app (or .exe)
-├── airs-code (Tauri/Rust binary)         ← UI + agent runtime
+AutoDev.app (or .exe)
+├── autodev (Tauri/Rust binary)         ← UI + agent runtime
 ├── sidecars/
 │   ├── core-orchestrator                  ← PyInstaller bundle of FastAPI orchestrator
 │   ├── memory-mcp-server                  ← PyInstaller bundle of Memory MCP
@@ -177,7 +178,7 @@ Tauri manages all sidecar lifecycles — the user never touches Python, Redis, o
 
 #### Startup Sequence
 
-When AIRS Code launches:
+When AutoDev launches:
 
 1. **Check Redis** on `localhost:6379` → if not running, launch `sidecars/redis-server`
 2. **Wait for Redis ready** (ping loop, max 3s timeout)
@@ -195,7 +196,7 @@ The user sees a 2-3 second loading screen on first launch. Subsequent launches a
 **Keep (the intelligence):**
 - 21 finite state machines governing agent lifecycle
 - A2A (Agent-to-Agent) protocol implementation
-- SSE streaming engine → pipes to AIRS Code chat UI
+- SSE streaming engine → pipes to AutoDev chat UI
 - MCP client manager with connection pooling
 - Tool execution FSM tracking
 - 3-tier memory system (hot/warm/cold)
@@ -203,7 +204,7 @@ The user sees a 2-3 second loading screen on first launch. Subsequent launches a
 - Context scoring and relevance ranking
 - Memory algorithm system
 - Feedback-driven synopsis evolution
-- MCP Wizard logic (UI provided by AIRS Code)
+- MCP Wizard logic (UI provided by AutoDev)
 
 **Strip (server infrastructure, not needed locally):**
 - Nginx reverse proxy
@@ -215,17 +216,35 @@ The user sees a 2-3 second loading screen on first launch. Subsequent launches a
 
 **Adapt:**
 - **Redis:** Ship as sidecar binary, runs on `localhost:6379`, zero config
-- **FastAPI:** Runs on `localhost:8765`, AIRS Code Tauri backend talks HTTP to it
+- **FastAPI:** Runs on `localhost:8765`, AutoDev Tauri backend talks HTTP to it
 - **mem0 graph store:** Requires local-only mode (verify no cloud dependency)
+
+#### Dual-Mode Execution: When to Use Rust vs Core Orchestrator
+
+> **Critical architectural pattern**: AutoDev has TWO execution modes. This explains why the Rust codebase implements provider abstraction and MCP client capabilities even though core-orchestrator already has these via `litellm` and `airs_mcp`.
+
+**Mode 1: PA (Personal Assistant)** — Rust-native, lightweight
+- **Who uses it:** Razi, team members, developers using the desktop app interactively
+- **Execution:** Tauri Rust → Direct LLM API → Built-in tools (file I/O, git, MCP via `rmcp`)
+- **Why NOT delegate:** Lower latency (no HTTP round-trip), works offline with Ollama, simpler deployment
+- **Tradeoffs:** No A2A, no mem0 semantic memory, no 21 FSMs — intentionally simple
+
+**Mode 2: Worker Agent** — Orchestrated via core-orchestrator
+- **Who uses it:** Worker agents (backend, frontend, cleanup), Supervisor, QC running recipes
+- **Execution:** Tauri → HTTP POST to core-orchestrator → LivingAgent (21 FSMs) → litellm → airs_mcp → mem0 → A2A
+- **Why delegate:** Needs full intelligence layer (FSMs, memory, context scoring, A2A protocol)
+- **When:** Recipe execution, multi-agent coordination, long-running autonomous tasks
+
+**Result:** Zero duplication — PA mode uses lightweight Rust implementations; Worker mode leverages the full Python intelligence stack.
 
 #### Git Submodule Strategy
 
 Core Orchestrator and Memory MCP Server are tracked as **git submodules**, not copied code:
 
 ```
-airs-code/
+autodev/
 ├── src-tauri/                    ← Rust/Tauri desktop shell
-├── src/                          ← React frontend (AIRS Code UI)
+├── src/                          ← React frontend (AutoDev UI)
 ├── submodules/
 │   ├── core-orchestrator/        ← git submodule (AIRS-Foundry/core-orchestrator)
 │   └── memory-mcp-server/        ← git submodule (AIRS-Foundry/memory-mcp-server)
@@ -260,7 +279,7 @@ This ensures `git submodule update --remote` always pulls the latest `main` of b
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│         AIRS Code (Tauri Frontend/UI)               │
+│         AutoDev (Tauri Frontend/UI)               │
 └─────────────────────┬───────────────────────────────┘
                       │
         ┌─────────────┴─────────────┐
@@ -367,7 +386,7 @@ The parent repo tracks the **commit SHA** of the submodule. When you update and 
 
 **Local development:**
 1. Work in submodule → commit → push to upstream
-2. Bump submodule pointer in `airs-code`
+2. Bump submodule pointer in `autodev`
 3. Run `build/bundle-core.sh` → regenerates `sidecars/core-orchestrator`
 4. Test locally
 
@@ -380,8 +399,8 @@ PyInstaller bundles are OS-specific and can't cross-compile. This is standard �
 
 **Update story:**
 - New release → new PyInstaller build of updated submodule → bundled in Tauri update
-- User clicks "Update AIRS Code" → entire package updates (UI + sidecars)
-- The submodule pin in `airs-code` controls which commit of `core-orchestrator` each release ships
+- User clicks "Update AutoDev" → entire package updates (UI + sidecars)
+- The submodule pin in `autodev` controls which commit of `core-orchestrator` each release ships
 
 #### Tradeoffs & Constraints
 
@@ -423,7 +442,7 @@ PyInstaller bundles are OS-specific and can't cross-compile. This is standard �
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  ● ● ●  AIRS Code  v1.0.0                              [_] [□] [×]      │
+│  ● ● ●  AutoDev  v1.0.0                              [_] [□] [×]      │
 ├─────────────────────────────────────────────────────────────────────────┤
 │ [Chat] [AutoDev] [IDE] [Recipes] [Settings]          🟢 claude-sonnet-4 │
 │          [active tab underlined]                     $0.47 today        │
@@ -450,14 +469,14 @@ The main conversational interface for Razi (PA mode) or any team member.
 ```
 ┌─── Chat ─────────────────────────────────────────────────────────────────┐
 │                                                                            │
-│  ┌─ AIRS Code ─────────────────────────────────────────────────────────┐  │
+│  ┌─ AutoDev ─────────────────────────────────────────────────────────┐  │
 │  │ Running as: Personal Assistant (PA) mode                            │  │
 │  │ Model: claude-opus-4-6  |  MCP: github, slack  |  Skills: 4 loaded │  │
 │  └─────────────────────────────────────────────────────────────────────┘  │
 │                                                                            │
 │  [Message bubbles — user right, agent left]                               │
 │                                                                            │
-│  ┌─ AIRS Code ───────────────────────────────────────────────────────┐    │
+│  ┌─ AutoDev ───────────────────────────────────────────────────────┐    │
 │  │ 🔧 Using tool: github_create_issue                                │    │
 │  │ ├── title: "Add GET /agents/health endpoint"                      │    │
 │  │ ├── labels: worker-backend, p2-medium, feature, status-ready      │    │
@@ -510,29 +529,40 @@ Live view of the entire AutoDev pipeline. The "mission control" tab.
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Tab 3 — IDE
+### Tab 3 — IDE (with Git Sub-Panel)
 
-A lightweight read/edit view of the active codebase.
+A lightweight read/edit view of the active codebase with integrated git operations.
 
 ```
 ┌─── IDE ──────────────────────────────────────────────────────────────────┐
-│  [core-orchestrator ▼]   /src/api/health.py          [Edit] [Open Ext.]  │
+│  [core-orchestrator ▼] [Clone Repo]  /src/api/health.py  [Edit] [Git ▼] │
 │  ─────────────────────────────────────────────────────────────────────   │
-│  ├─ 📁 src/                                                               │
-│  │  ├─ 📁 api/           1 │ from fastapi import APIRouter                │
-│  │  │  ├─ health.py      2 │ from ..services.agent_service import ...     │
-│  │  │  └─ routes.py      3 │                                              │
-│  │  ├─ 📁 agents/        4 │ router = APIRouter()                         │
-│  │  ├─ 📁 services/      5 │                                              │
-│  │  └─ main.py           6 │ @router.get("/agents/health")                │
-│  ├─ 📁 tests/            7 │ async def agents_health():                   │
-│  ├─ CLAUDE.md            8 │     """Return status of each agent."""       │
-│  └─ pyproject.toml       9 │     return await agent_service.health()     │
-│                          10 │                                             │
+│  ├─ 📁 src/                    │  1 │ from fastapi import APIRouter      │
+│  │  ├─ 📁 api/                 │  2 │ from ..services import ...         │
+│  │  │  ├─ health.py  M         │  3 │                                    │
+│  │  │  └─ routes.py            │  4 │ router = APIRouter()               │
+│  │  ├─ 📁 agents/              │  5 │                                    │
+│  │  ├─ 📁 services/            │  6 │+ @router.get("/agents/health")    │
+│  │  └─ main.py                 │  7 │+ async def agents_health():       │
+│  ├─ 📁 tests/                  │  8 │+     """Return agent status."""   │
+│  ├─ CLAUDE.md                  │  9 │+     svc = get_agent_service()    │
+│  └─ pyproject.toml             │ 10 │+     return await svc.health()   │
+│                                ├────┴──────────────────────────────────┤
+│                                │ GIT PANEL (toggle via [Git ▼])        │
+│                                │ Branch: worker/backend/142             │
+│                                │ ┌ Staged ───────────────────────────┐ │
+│                                │ │ (none)                             │ │
+│                                │ ├ Unstaged ─────────────────────────┤ │
+│                                │ │  M  src/api/health.py  (+5 -0)    │ │
+│                                │ │  ?  src/api/new_file.py            │ │
+│                                │ └───────────────────────────────────┘ │
+│                                │ [Stage All] [Commit] [Push] [PR]     │
 │  ─────────────────────────────────────────────────────────────────────   │
-│  GIT: worker/backend/142  |  Branch: 3 changes  |  Tests: 142✅ 0❌       │
-└────────────────────────────────────────────────────────────────────────────┘
+│  pytest: 142✅ 0❌  · mypy: clean · worktree: worker/backend/142         │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
+
+Git is integrated as a **sub-panel within the IDE tab**, not a separate tab. The repo selector + "Clone Repo" button enables cloning AIRS Foundry repos directly, making AutoDev a complete single pane of glass.
 
 ### Tab 4 — Recipes
 
@@ -611,11 +641,37 @@ Create, browse, and run YAML workflow recipes.
 ### 6.1 Agent Engine
 
 The core execution loop. Implements:
-- **Tool system:** Bash, ReadFile, WriteFile, Glob, Grep, LSP, WebFetch, GitWorktree
+- **Tool system:** Bash, ReadFile, WriteFile, EditFile, Glob, Grep, ListDirectory, LSP, WebFetch, GitWorktree
 - **Context management:** CLAUDE.md injection on session start; auto-compaction at 80% context fill
 - **Headless mode:** `airsctl -p "..." --skip-permissions` — drop-in replacement for `claude -p`
 - **Permission modes:** Autonomous / SmartApproval / ManualApproval / ChatOnly
 - **Checkpoint system:** Save/restore agent state mid-session
+- **Working directory:** Per-session `working_dir` stored in SQLite; all tools resolve relative paths against it; changes when entering a git worktree
+
+#### How Workers Modify the Codebase
+
+Workers (and the PA) modify repos through **direct local filesystem writes + git worktree isolation**:
+
+1. **File tools run in Rust natively** — `write_file`, `edit_file`, `read_file`, `bash`, `grep`, `glob`, `list_directory`. No subprocess overhead, direct filesystem access via Tauri sandbox.
+
+2. **Git operations via `git2-rs`** (libgit2 bindings) — not shell-based like Claude Code/Goose. Provides:
+   - Structured diff output (feeds IDE tab's syntax-highlighted diff view)
+   - Branch/status/commit without subprocess overhead
+   - Worktree lifecycle as first-class operations
+   - Commit attribution: auto-appends `Generated-by: AutoDev/<agent-role>` trailer
+
+3. **Worktree isolation per task** — the `worker/backend/<issue>` branching pattern maps to git worktrees:
+   ```
+   Agent claims task #142
+     → git2::worktree::create("worker/backend/142")
+     → Working copy at .autodev/worktrees/worker+backend+142/
+     → Session working_dir switches to worktree path
+     → Agent writes, tests, commits, pushes within isolation
+     → Agent creates PR via GitHub MCP
+     → On complete: worktree removed or kept for review
+   ```
+
+4. **File checkpointing** — snapshots of file state per message boundary (like Claude Code). Enables undo/redo and per-turn diff visualization in the IDE tab. Capped at 100 checkpoints per session.
 
 ### 6.2 CLAUDE.md / AGENTS.md Support
 
@@ -677,7 +733,7 @@ AIRS-specific hooks shipped by default:
 ### 6.5 Subagents + Agent Teams
 
 - **Subagents:** Spawn isolated context loops, return summary. Used by Supervisor for epic decomposition.
-- **Agent Teams:** Multiple AIRS Code instances coordinate via GitHub Issues + dispatch signals (the existing AutoDev protocol maps directly to Agent Teams semantics)
+- **Agent Teams:** Multiple AutoDev instances coordinate via GitHub Issues + dispatch signals (the existing AutoDev protocol maps directly to Agent Teams semantics)
 - **@mention syntax:** In Supervisor sessions, `@worker-backend` sends a dispatch signal to Worker 1's recipe loop
 - **Concurrency:** Up to 10 parallel subagents per session
 
@@ -718,7 +774,7 @@ sub_recipes:
 ### 6.7 MCP Client + Server
 
 - **Client:** Connect to any MCP server (GitHub, Slack, Sentry, custom)
-- **Server:** AIRS Code can itself act as an MCP server, exposing AIRS-specific tools to other agents
+- **Server:** AutoDev can itself act as an MCP server, exposing AIRS-specific tools to other agents
 - **AIRS MCP Tools (built-in server):**
   - `airs_get_tasks(worker, status)` → Current GitHub Issues filtered by worker
   - `airs_claim_task(issue_number, worker)` → Write lock file + update label
@@ -752,13 +808,26 @@ Budget: any
 - Rotation reminders: 90-day PAT expiry warning in UI
 - Keys are scoped: GitHub PAT per agent role, API key per provider
 
-### 6.10 IDE Tab
+### 6.10 IDE Tab (with Git Sub-Panel)
 
 - **File tree:** Browse any repo cloned on this machine
 - **Code viewer:** Syntax highlighting, monospace, read-only by default
 - **Edit mode:** Toggle for Razi's PA machine — full edit with save + auto-commit option
 - **Git status:** Show branch, changed files, test status inline
 - **Worker context:** When a worker has a task active, IDE auto-opens the relevant branch and files being modified
+- **Repo selector:** Dropdown of locally cloned repos; switch between multiple AIRS Foundry repos
+- **Clone Repo button:** Lists repos from AIRS-Foundry GitHub org (using PAT from Settings), clone with one click
+- **Git sub-panel** (togglable): Embedded in the IDE tab, provides:
+  - Branch switcher (view, switch, create)
+  - Staged/unstaged changes view with inline diff stats
+  - Stage/unstage individual files or all
+  - Commit with message (auto-attribution trailer: `Generated-by: AutoDev/<agent-role>`)
+  - Push current branch to origin
+  - Create PR via GitHub MCP (one-click)
+  - Worktree manager: list active worktrees, which agent owns them, navigate
+  - Full file diff viewer with syntax highlighting
+
+> **Design decision**: Git is integrated as a sub-panel within the IDE tab, NOT as a separate 6th tab. The 5-tab structure (Chat, AutoDev, IDE, Recipes, Settings) maps to distinct workflows. Git is part of the IDE workflow. VS Code, JetBrains, and all major IDEs integrate git this way. The "Clone Repo" capability makes AutoDev a complete "single pane of glass" — clone, browse, edit, commit, push, PR — without leaving the app.
 
 ---
 
@@ -783,7 +852,7 @@ Budget: any
 
 ```
 ~/.airs/
-├── config.yaml              # Global AIRS Code config (providers, model router rules)
+├── config.yaml              # Global AutoDev config (providers, model router rules)
 ├── CLAUDE.md                # System-level CLAUDE.md (applied to all sessions)
 ├── skills/                  # Global skills library
 │   ├── review-pr/
@@ -805,7 +874,7 @@ Budget: any
 ├── sessions/                # Session history (SQLite)
 │   └── sessions.db
 └── logs/
-    └── airs-code.log
+    └── autodev.log
 ```
 
 **Per-repo (in addition to existing CLAUDE.md):**
@@ -826,20 +895,20 @@ Budget: any
 
 ## 9. AutoDev Integration Layer
 
-AIRS Code is not just a generic agent tool — it has native AutoDev support baked into the core:
+AutoDev is not just a generic agent tool — it has native AutoDev support baked into the core:
 
 ### AutoDev Mode
 
-When a machine is configured as an AutoDev agent (Settings → AIRS AutoDev → Agent identity), AIRS Code:
+When a machine is configured as an AutoDev agent (Settings → AIRS AutoDev → Agent identity), AutoDev:
 1. **Auto-starts** the appropriate recipe on boot
 2. **Watches** the dispatch directory for signal files in real time (inotify/FSEvents, not polling)
-3. **Displays** its current task in the Agent Roster on all other AIRS Code instances connected to the same org
+3. **Displays** its current task in the Agent Roster on all other AutoDev instances connected to the same org
 4. **Reports** heartbeats every 5 minutes to a shared GitHub status file (or lightweight AIRS status endpoint)
 5. **Auto-resets** stale lock files after 4 hours (Supervisor behavior)
 
 ### GitHub Issues as the Command Layer
 
-AIRS Code has a native GitHub Issues widget in the AutoDev Panel that:
+AutoDev has a native GitHub Issues widget in the AutoDev Panel that:
 - Reads issues without leaving the app
 - Creates new issues via the PA interface
 - Displays the full kanban board live
@@ -857,22 +926,22 @@ Every session logs:
 
 ## 10. Build Prompt — Start Coding
 
-Copy this prompt into your AIRS Code session (ironic, building AIRS Code with AIRS Code) or any capable coding agent to begin the build:
+Copy this prompt into your AutoDev session (ironic, building AutoDev with AutoDev) or any capable coding agent to begin the build:
 
 ---
 
 ```
-You are building AIRS Code — a cross-platform desktop + CLI AI agent application 
+You are building AutoDev — a cross-platform desktop + CLI AI agent application 
 for AIRS Foundry. This is a Tauri v2 application (Rust backend, React/TypeScript 
 frontend) that combines the best features of Anthropic's Claude Code and Block's 
 Goose into a branded, model-agnostic AI developer agent platform.
 
 ## Repository Setup
-Create a new repository called `airs-code` under the AIRS-Foundry GitHub org with 
+Create a new repository called `autodev` under the AIRS-Foundry GitHub org with 
 the following structure:
 
 ```
-airs-code/
+autodev/
 ├── src-tauri/           # Rust Tauri backend
 │   ├── src/
 │   │   ├── main.rs      # Tauri entry point
@@ -880,7 +949,7 @@ airs-code/
 │   │   ├── mcp/         # MCP client + AIRS MCP server
 │   │   ├── recipes/     # YAML recipe engine + cron scheduler
 │   │   ├── vault/       # OS keychain integration
-│   │   ├── git/         # git2-rs worktree + branch management
+│   │   ├── git/         # git2-rs: clone, branch, diff, status, commit, push, worktree, checkpoint
 │   │   ├── github/      # GitHub Issues + labels + PRs integration
 │   │   └── autodev/     # AutoDev-specific logic (lock files, dispatch, heartbeat)
 ├── src/                 # React/TypeScript frontend
@@ -888,7 +957,7 @@ airs-code/
 │   ├── tabs/
 │   │   ├── Chat.tsx         # Main chat interface
 │   │   ├── AutoDevPanel.tsx # Agent roster + task board
-│   │   ├── IDE.tsx          # File tree + code viewer
+│   │   ├── IDE.tsx          # File tree + code viewer + git sub-panel
 │   │   ├── Recipes.tsx      # Recipe browser + runner
 │   │   └── Settings.tsx     # Provider + model router + AutoDev config
 │   ├── components/
@@ -973,7 +1042,7 @@ Fields:
 - Tailwind for all styling, no CSS-in-JS
 
 ### Design System
-Apply the AIRS Code design language:
+Apply the AutoDev design language:
 - Background: #0A0A0A
 - Surface: #111111  
 - Border: #222222
@@ -992,7 +1061,7 @@ Apply the AIRS Code design language:
 - Do not hardcode model names — always read from the provider config
 - Do not build the IDE tab yet (Phase 2)
 - Do not build the Recipes engine yet (Phase 2)
-- Do not add authentication — AIRS Code is a local app, no cloud login
+- Do not add authentication — AutoDev is a local app, no cloud login
 
 ## Deliverables for Phase 1
 1. Working Tauri app that opens with the 5-tab layout
@@ -1019,7 +1088,7 @@ the React shell. Build the Provider layer before the Chat tab.
 | **Phase 5** | Days 13–14 | AIRS Plugin (one-click worker PC configuration), Headless CLI (`airsctl`), installers for Windows/Mac/Linux, IT staff runbook |
 
 ### Definition of Done
-AIRS Code is production-ready when:
+AutoDev is production-ready when:
 - Any AIRS worker PC can be configured by IT staff in under 10 minutes by installing the app and entering a GitHub PAT
 - The AutoDev polling loops run as Recipes with zero external scripting
 - All API keys are stored in the OS keychain — no `.env` files on worker machines
@@ -1028,4 +1097,4 @@ AIRS Code is production-ready when:
 
 ---
 
-*This document is the ground truth for AIRS Code. Update after each phase completes.*
+*This document is the ground truth for AutoDev. Update after each phase completes.*
