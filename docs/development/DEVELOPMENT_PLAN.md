@@ -1442,12 +1442,15 @@ pub trait Provider: Send + Sync {
 
 | Tool | Read-Only | Description |
 |---|---|---|
-| `read_file` | ✅ | Read file contents at path |
+| `read_file` | ✅ | Read file contents at path with line numbers |
 | `write_file` | ❌ | Write content to file at path |
+| `edit_file` | ❌ | **NEW** — Edit file by replacing specific strings (safer than write_file) |
 | `bash` | ❌ | Execute shell command, capture stdout/stderr |
 | `list_directory` | ✅ | List files and subdirectories |
-| `grep` | ✅ | Search files for pattern, return list of matches with line numbers |
-| `glob` | ✅ | Find files matching pattern, return list of file paths |
+| `grep` | ✅ | **NEW** — Search files for regex pattern, return structured JSON with matches + context |
+| `glob` | ✅ | **NEW** — Find files matching glob pattern, return structured JSON with metadata |
+
+**Total:** 7 builtin tools (3 new in Phase 1: edit_file, grep, glob)
 
 **Tool trait (Rust):**
 ```rust
@@ -1474,9 +1477,9 @@ pub trait Tool: Send + Sync {
 - [x] Status bar: active model name + today's cost
 - [x] Session persistence: conversations saved in SQLite
 - [x] Cost tracking: tokens in/out per message, stored in SQLite
-- [ ] Multiple Chat Sessions UI (NEW)
-- [ ] Rich Tool Display UI with Line Changes (NEW)
-- [ ] Grep & Glob File List Results (NEW)
+- [x] Multiple Chat Sessions UI (NEW)
+- [x] Rich Tool Display UI with Line Changes (NEW)
+- [x] Grep & Glob File List Results (NEW)
 
 > **Completed**: All Phase 1 React + Rust modules implemented and Vite build passes (0 TS errors, 0 build errors). Node.js version pinned to v22.1.0 — Vite downgraded to v6.3.x, @vitejs/plugin-react to v4.x, TypeScript to v5.7.x for compatibility.
 
