@@ -48,17 +48,19 @@ Implemented 7 built-in tools for PA mode, reaching feature parity with Claude Co
 
 ---
 
-### 2. `grep` — Search File Contents (ripgrep)
+### 2. `grep` — Search File Contents (Regex)
 
 **Why Critical:** Agent needs to **find** code before modifying it. `list_directory` only shows file names.
 
 **Features:**
-- Powered by ripgrep (fast, respects .gitignore)
+- Built-in regex search (no external dependencies)
+- Cross-platform (Windows, macOS, Linux)
 - Regex pattern support
 - Context lines (default: 2 before/after)
 - Case-sensitive or case-insensitive search
 - Glob filtering (e.g., `*.rs`)
 - Pagination (default max: 100 results)
+- Auto-skips noise directories (node_modules, .git, target, etc.)
 
 **Input Schema:**
 ```json
@@ -83,7 +85,7 @@ src/agent/builtin_tools/grep.rs:89:    async fn execute(&self, input: serde_json
 
 **Implementation:** `src-tauri/src/agent/builtin_tools/grep.rs`
 
-**Requires:** `rg` (ripgrep) installed on system
+**No external dependencies** — uses Rust's `regex` crate
 
 ---
 
@@ -193,7 +195,10 @@ Updated `src-tauri/Cargo.toml`:
 # File operations (for new tools)
 glob     = "0.3"
 walkdir  = "2"
+regex    = "1"
 ```
+
+**Note:** No external command-line tools required. All tools use pure Rust implementations for maximum portability.
 
 ---
 
@@ -238,10 +243,10 @@ walkdir  = "2"
 
 ## Known Limitations
 
-1. **ripgrep dependency** — `grep` requires `rg` to be installed on the system. If not found, returns clear error message.
-2. **Windows path handling** — All tools normalize paths with `PathBuf`, should work cross-platform.
-3. **Large file handling** — `read_file` loads entire file into memory. Consider streaming for files >10MB (future enhancement).
-4. **No undo yet** — File checkpointing/undo is planned for Phase 3 (git integration).
+1. **Regex performance** — For very large files (>100MB), regex matching may be slow. Consider using `edit_file` with exact strings for better performance.
+2. **Large file handling** — `read_file` loads entire file into memory. Consider streaming for files >10MB (future enhancement).
+3. **No undo yet** — File checkpointing/undo is planned for Phase 3 (git integration).
+4. **Bash tool on Windows** — Paths with spaces must be properly quoted by the LLM. The tool uses `cmd /C` which handles most cases.
 
 ---
 
