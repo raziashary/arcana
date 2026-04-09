@@ -7,6 +7,7 @@ import { listen } from '@tauri-apps/api/event'
 import { Send, Square } from 'lucide-react'
 import MessageBubble    from '../components/chat/MessageBubble'
 import PermissionDialog from '../components/chat/PermissionDialog'
+import { SessionBar }   from '../components/chat/SessionBar'
 import { useAgentStore }    from '../stores/agentStore'
 import { useSessionStore }  from '../stores/sessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -41,13 +42,13 @@ export default function ChatTab() {
   }, [])
 
   const ensureSession = async (): Promise<string> => {
-    if (sessionStore.activeSession?.id) return sessionStore.activeSession.id
+    if (sessionStore.activeSessionId) return sessionStore.activeSessionId
 
     const provider = settingsStore.activeProvider ?? 'anthropic'
     const model    = settingsStore.activeModel    ?? 'claude-sonnet-4-5'
-    const session  = await sessionStore.createSession(localDir, provider, model)
-    setSessionId(session.id)
-    return session.id
+    const sessionId  = await sessionStore.createSession(localDir, provider, model)
+    setSessionId(sessionId)
+    return sessionId
   }
 
   const handleSend = async () => {
@@ -107,16 +108,33 @@ export default function ChatTab() {
   }
 
   return (
-    <div className="flex flex-col flex-1 overflow-hidden relative">
+    <div className="flex flex-row flex-1 overflow-hidden">
+      {/* Session sidebar */}
+      <SessionBar />
 
-      {/* Session header bar */}
-      <div
-        className="flex items-center gap-3 px-3.5 py-2 font-mono text-xs shrink-0"
-        style={{
-          background:   'var(--bg-surface)',
-          borderBottom: '1px solid var(--border-1)',
-        }}
-      >
+      {/* Main chat area or placeholder */}
+      {sessionStore.sessions.length === 0 ? (
+        <div className="flex flex-col flex-1 items-center justify-center" style={{ color: 'var(--text-2)' }}>
+          <div className="text-center">
+            <h1 className="font-mono text-4xl mb-4" style={{ color: '#1a73e8', letterSpacing: '0.05em' }}>
+              Oh My AIRS
+            </h1>
+            <p className="text-sm" style={{ color: 'var(--text-3)' }}>
+              Create a new session to get started
+            </p>
+          </div>
+        </div>
+      ) : (
+      <div className="flex flex-col flex-1 overflow-hidden relative">
+
+        {/* Session header bar */}
+        <div
+          className="flex items-center gap-3 px-3.5 py-2 font-mono text-xs shrink-0"
+          style={{
+            background:   'var(--bg-surface)',
+            borderBottom: '1px solid var(--border-1)',
+          }}
+        >
         <span style={{ color: 'var(--text-3)' }}>cwd:</span>
         <input
           className="flex-1 bg-transparent border-none outline-none font-mono text-xs"
@@ -237,6 +255,8 @@ export default function ChatTab() {
           </span>
         </div>
       </div>
+      </div>
+      )}
     </div>
   )
 }
