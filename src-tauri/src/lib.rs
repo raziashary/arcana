@@ -21,7 +21,7 @@ pub fn register_commands(
 ) -> tauri::Builder<tauri::Wry> {
     use commands::{
         agent_commands::{cancel_agent, respond_to_permission, send_message},
-        session_commands::{create_session, delete_session, get_session, list_sessions},
+        session_commands::{create_session, delete_session, get_session, get_session_messages, list_sessions, update_session_title},
         settings_commands::{
             get_active_provider, get_cost_today, get_system_prompt, list_providers,
             set_active_provider, set_system_prompt, test_provider_connection,
@@ -39,7 +39,9 @@ pub fn register_commands(
         // Sessions
         list_sessions,
         get_session,
+        get_session_messages,
         create_session,
+        update_session_title,
         delete_session,
         // Settings / providers
         list_providers,
