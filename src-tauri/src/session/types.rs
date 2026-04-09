@@ -2,6 +2,8 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::env;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -88,10 +90,14 @@ pub struct Session {
 impl Session {
     pub fn new(working_dir: &str, provider: &str, model: &str) -> Self {
         let now = Utc::now();
+        
+        // Resolve working_dir to absolute path
+        let resolved_dir = resolve_working_dir(working_dir);
+        
         Self {
             id:          Uuid::new_v4().to_string(),
             title:       "New Session".to_string(),
-            working_dir: working_dir.to_string(),
+            working_dir: resolved_dir,
             provider:    provider.to_string(),
             model:       model.to_string(),
             created_at:  now,
@@ -99,4 +105,28 @@ impl Session {
             messages:    vec![],
         }
     }
+}
+
+/// Resolve working directory to absolute path, handling empty, ".", and relative paths
+fn resolve_working_dir(working_dir: &str) -> String {
+    let path = if working_dir.is_empty() || working_dir == "." {
+        // Use current directory
+        env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    } else {
+        let p = Path::new(working_dir);
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            // Resolve relative path from current directory
+            env::current_dir()
+                .map(|cwd| cwd.join(p))
+                .unwrap_or_else(|_| p.to_path_buf())
+        }
+    };
+    
+    // Try to canonicalize (resolves .. and symlinks), fallback to as-is
+    path.canonicalize()
+        .unwrap_or(path)
+        .to_string_lossy()
+        .to_string()
 }

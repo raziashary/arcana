@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use serde_json::json;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
@@ -98,7 +99,10 @@ async fn run_command(
     mut cmd: Command,
     working_dir: &str,
 ) -> std::io::Result<(String, String, i32)> {
-    cmd.current_dir(working_dir)
+    // Normalize the path to handle spaces and special characters on Windows
+    let normalized_path = PathBuf::from(working_dir);
+    
+    cmd.current_dir(&normalized_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
