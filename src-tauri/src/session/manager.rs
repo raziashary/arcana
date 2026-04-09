@@ -38,6 +38,13 @@ impl SessionManager {
         self.storage.lock().unwrap().get_session_with_messages(session_id)
     }
 
+    pub fn get_session_messages(&self, session_id: &str) -> Result<Vec<Message>> {
+        match self.storage.lock().unwrap().get_session_with_messages(session_id)? {
+            Some(session) => Ok(session.messages),
+            None => Ok(vec![]),
+        }
+    }
+
     pub fn delete_session(&self, session_id: &str) -> Result<()> {
         self.storage.lock().unwrap().delete_session(session_id)
     }
