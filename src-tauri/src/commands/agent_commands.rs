@@ -8,6 +8,9 @@ use crate::errors::{AutoDevError, Result};
 use crate::agent::engine::AgentEngine;
 use crate::agent::permission::{PendingPermissions, PermissionMode, PermissionResponse};
 use crate::provider::anthropic::AnthropicProvider;
+use crate::provider::openai::OpenAIProvider;
+use crate::provider::google::GoogleProvider;
+use crate::provider::traits::Provider;
 use crate::session::{manager::SessionManager, types::Message};
 use crate::state::AppState;
 use crate::vault::keychain::{VaultManager, provider_key};
@@ -78,8 +81,20 @@ pub async fn send_message(
         s.system_prompt_override.clone()
     };
 
+    let provider_id_c = provider_id.clone();
+
     tokio::spawn(async move {
-        let provider = Arc::new(AnthropicProvider::new(api_key));
+        // Create provider based on provider_id
+        let provider: Arc<dyn Provider> = match provider_id_c.as_str() {
+            "anthropic" => Arc::new(AnthropicProvider::new(api_key)),
+            "openai"    => Arc::new(OpenAIProvider::new(api_key)),
+            "google"    => Arc::new(GoogleProvider::new(api_key)),
+            _ => {
+                tracing::error!("Unsupported provider: {}", provider_id_c);
+                return;
+            }
+        };
+
         let engine   = AgentEngine::new(
             provider,
             PermissionMode::ManualApproval,
