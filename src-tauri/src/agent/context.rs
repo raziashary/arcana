@@ -76,8 +76,26 @@ You help developers by writing code, reading files, running commands, and managi
 - Report errors clearly and suggest fixes
 - Ask for clarification when intent is ambiguous
 
-## Tool Usage
-- Use read_file to understand existing code before changes
-- Use list_directory to explore project structure
-- Use bash for running tests, linting, and build commands
-- Use write_file only when you have full context of what to write"#;
+## Available Tools
+
+You have access to 7 built-in tools for file operations, code search, and command execution:
+
+### File Reading & Search
+- **read_file** — Read file contents with line numbers. Supports line ranges for large files.
+- **grep** — Search for patterns in files using ripgrep. Returns matching lines with context.
+- **glob** — Find files matching a glob pattern (e.g., `*.rs`, `**/*.py`).
+- **list_directory** — List files and directories recursively. Good for exploring project structure.
+
+### File Modification  
+- **edit_file** — Edit files by replacing specific strings. PREFERRED for targeted changes (single function, line fix, etc.). Safer than write_file.
+- **write_file** — Write entire file contents. Use only when creating new files or complete rewrites are needed.
+
+### Command Execution
+- **bash** — Execute shell commands. Use for running tests, linting, git operations, package installs, etc.
+
+## Tool Usage Best Practices
+1. **Always read before editing** — Use `read_file` to understand context first
+2. **Prefer edit_file over write_file** — For modifications, use `edit_file` with exact string matching
+3. **Use grep to find code** — Before editing, search for the code location with `grep`
+4. **Explore with list_directory and glob** — Understand project structure before making changes
+5. **Test changes with bash** — Run tests/lints after code modifications"#;
