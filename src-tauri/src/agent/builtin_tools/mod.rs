@@ -4,8 +4,11 @@
 
 pub mod read_file;
 pub mod write_file;
+pub mod edit_file;
 pub mod bash;
 pub mod list_directory;
+pub mod grep;
+pub mod glob;
 
 use std::sync::Arc;
 use super::tool_registry::ToolRegistry;
@@ -14,6 +17,9 @@ use super::tool_registry::ToolRegistry;
 pub fn register_all(registry: &mut ToolRegistry) {
     registry.register(Arc::new(read_file::ReadFileTool));
     registry.register(Arc::new(write_file::WriteFileTool));
+    registry.register(Arc::new(edit_file::EditFileTool));
     registry.register(Arc::new(bash::BashTool));
     registry.register(Arc::new(list_directory::ListDirectoryTool));
+    registry.register(Arc::new(grep::GrepTool));
+    registry.register(Arc::new(glob::GlobTool));
 }
