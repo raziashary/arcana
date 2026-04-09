@@ -6,6 +6,8 @@ pub mod traits;
 pub mod types;
 pub mod streaming;
 pub mod anthropic;
+pub mod openai;
+pub mod google;
 
 pub use traits::Provider;
 pub use types::{CompletionRequest, CompletionResponse, StreamChunk, ModelInfo, ProviderStatus};
