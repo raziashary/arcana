@@ -4,6 +4,11 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, Terminal, Loader } from 'lucide-react'
 import type { ToolCallDisplay as ToolCallData } from '../../stores/agentStore'
+import { parseToolOutput } from '../../utils/toolOutputParser'
+import { GrepResultsDisplay } from './GrepResultsDisplay'
+import { GlobResultsDisplay } from './GlobResultsDisplay'
+import { FileContentDisplay } from './FileContentDisplay'
+import { BashOutputDisplay } from './BashOutputDisplay'
 
 interface Props {
   toolCall: ToolCallData
@@ -62,24 +67,66 @@ export default function ToolCallDisplay({ toolCall }: Props) {
 
           {/* Output */}
           {toolCall.output !== null && (
-            <div
-              className="mt-1.5 pl-3 whitespace-pre-wrap break-all"
-              style={{
-                color:      toolCall.isError ? 'var(--danger)' : 'var(--accent)',
-                borderLeft: `2px solid ${toolCall.isError ? 'var(--danger)' : 'var(--accent)'}`,
-                paddingLeft: '8px',
-                maxHeight:   '200px',
-                overflowY:   'auto',
-                fontSize:    '11px',
-              }}
-            >
-              {truncate(toolCall.output, 2000)}
+            <div className="mt-2 pl-3">
+              {renderToolOutput(toolCall)}
             </div>
           )}
         </div>
       )}
     </div>
   )
+}
+
+function renderToolOutput(toolCall: ToolCallData) {
+  if (toolCall.isError) {
+    return (
+      <div
+        className="whitespace-pre-wrap break-all p-2 rounded"
+        style={{
+          color: 'var(--danger)',
+          borderLeft: `2px solid var(--danger)`,
+          backgroundColor: '#FF006610',
+          fontSize: '11px',
+        }}
+      >
+        {toolCall.output}
+      </div>
+    )
+  }
+
+  const parsed = parseToolOutput(toolCall.toolName, toolCall.output || '')
+
+  switch (parsed.type) {
+    case 'grep':
+      return <GrepResultsDisplay data={parsed.data} />
+    
+    case 'glob':
+      return <GlobResultsDisplay data={parsed.data} />
+    
+    case 'file_content':
+      return <FileContentDisplay data={parsed.data} />
+    
+    case 'bash':
+      return <BashOutputDisplay data={parsed.data} />
+    
+    case 'text':
+    default:
+      return (
+        <div
+          className="whitespace-pre-wrap break-all p-2 rounded font-mono"
+          style={{
+            color: 'var(--accent)',
+            borderLeft: `2px solid var(--accent)`,
+            backgroundColor: 'var(--surface-bg)',
+            fontSize: '11px',
+            maxHeight: '300px',
+            overflowY: 'auto',
+          }}
+        >
+          {truncate(parsed.data, 2000)}
+        </div>
+      )
+  }
 }
 
 function truncate(s: string, max: number): string {
