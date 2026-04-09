@@ -11,7 +11,8 @@ impl Tool for ReadFileTool {
     fn name(&self) -> &str { "read_file" }
 
     fn description(&self) -> &str {
-        "Read the contents of a file at the given path. Returns the full file content as a string."
+        "Read the contents of a file at the given path. Returns the file content with line numbers. \
+         Use start_line and end_line to read specific portions of large files."
     }
 
     fn input_schema(&self) -> serde_json::Value {
@@ -51,14 +52,19 @@ impl Tool for ReadFileTool {
                 let start = input["start_line"].as_u64().map(|n| n as usize);
                 let end   = input["end_line"].as_u64().map(|n| n as usize);
 
-                let output = if start.is_some() || end.is_some() {
-                    let lines: Vec<&str> = content.lines().collect();
-                    let from = start.unwrap_or(1).saturating_sub(1);
-                    let to   = end.unwrap_or(lines.len()).min(lines.len());
-                    lines[from..to].join("\n")
-                } else {
-                    content
-                };
+                let lines: Vec<&str> = content.lines().collect();
+                let from = start.map(|n| n.saturating_sub(1)).unwrap_or(0);
+                let to   = end.unwrap_or(lines.len()).min(lines.len());
+                
+                let selected_lines = &lines[from..to];
+                let start_line_num = from + 1;
+                
+                let output = selected_lines
+                    .iter()
+                    .enumerate()
+                    .map(|(i, line)| format!("{:>4} | {}", start_line_num + i, line))
+                    .collect::<Vec<_>>()
+                    .join("\n");
 
                 ToolResult::success(output)
             }
