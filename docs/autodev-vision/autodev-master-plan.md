@@ -114,6 +114,7 @@ Any AIRS team member or AutoDev worker agent can:
 | **IDE Tab** | Built-in file tree, code viewer, and **git sub-panel** — read-only for workers, edit mode for Razi |
 | **Git Sub-Panel** | Embedded in IDE tab: repo selector, clone AIRS repos, branch switcher, staged/unstaged view, commit/push/PR, worktree manager |
 | **Dispatch Signal UI** | Visual button to send a dispatch signal to any worker immediately from the UI |
+| **PA Mode Toggle** | Fast Development ↔ Delegate Mode switch in Chat tab. Fast = full tools; Delegate = creates GitHub issues + dispatches to workers, zero file tools |
 
 ---
 
@@ -228,6 +229,25 @@ The user sees a 2-3 second loading screen on first launch. Subsequent launches a
 - **Execution:** Tauri Rust → Direct LLM API → Built-in tools (file I/O, git, MCP via `rmcp`)
 - **Why NOT delegate:** Lower latency (no HTTP round-trip), works offline with Ollama, simpler deployment
 - **Tradeoffs:** No A2A, no mem0 semantic memory, no 21 FSMs — intentionally simple
+
+**PA Mode Toggle** (UI dropdown in ChatHeader):
+PA mode has three sub-modes that control tool availability:
+
+| Mode | Tools Available | Use Case |
+|------|----------------|----------|
+| **🔧 Fast Development** | Full suite: read_file, write_file, edit_file, bash, grep, glob, git | Razi doing direct coding, quick fixes, exploring code |
+| **✋ Review Mode** | Same tools, but permission prompt before any write operation | Reviewing changes, cautious editing |
+| **📋 Delegate Mode** | **Zero file tools**. Only: github_create_issue, airs_dispatch_signal | Workers are live — PA creates tasks and dispatches, doesn't touch files |
+
+In **Delegate Mode**, the PA acts as a task creator:
+1. User: "Add /health endpoint to orchestrator"
+2. PA: Creates GitHub issue #142 with acceptance criteria via `github_create_issue`
+3. PA: "Issue created. Dispatch to Worker Backend?"
+4. User: "Yes"
+5. PA: Writes `.autodev/dispatch/worker_backend_20260409_1642.signal` via `airs_dispatch_signal`
+6. Worker Backend picks up signal and executes
+
+This prevents the PA from accidentally editing files while workers are processing the task queue.
 
 **Mode 2: Worker Agent** — Orchestrated via core-orchestrator
 - **Who uses it:** Worker agents (backend, frontend, cleanup), Supervisor, QC running recipes

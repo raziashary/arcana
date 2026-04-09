@@ -331,7 +331,11 @@ Pydantic models for all memory operations:
 ### 3.2 Tab: Chat
 
 **Components**:
-- **ChatHeader** — Mode indicator (e.g., "Personal Assistant (PA)"), MCP servers, Skills count, CLAUDE.md status
+- **ChatHeader** — Mode indicator with PA Mode Toggle dropdown:
+  - **🔧 Fast Development**: PA has full builtin_tools (read_file, write_file, edit_file, bash, grep, glob) for direct file editing
+  - **✋ Review Mode**: PA has tools but asks permission before any write operation
+  - **📋 Delegate Mode**: PA has **zero file tools**, only `github_create_issue` + `airs_dispatch_signal`. Creates tasks, dispatches to workers
+  - Also shows: MCP servers count, Skills count, CLAUDE.md status
 - **MessageList** — Scrollable area with alternating message types:
   - `msg-user` — Right-aligned, green-tinted background (`#00FF8812`), green border
   - `msg-agent` — Left-aligned, dark surface background (`#111`), gray border
@@ -339,12 +343,19 @@ Pydantic models for all memory operations:
 - **InputBar** — Text input with send button (green accent)
 - **InputMeta** — Below input: "Attach · /skill · @agent · #recipe" | "Tokens: 12,450 · $0.04"
 
-**Interaction flow from mockup**:
+**Interaction flow - Fast Development Mode**:
 1. User sends natural language request
-2. Agent creates GitHub issue via `github_create_issue` tool
-3. Agent confirms and asks about dispatch
-4. User confirms dispatch
-5. Agent sends `airs_dispatch_signal` to worker
+2. PA executes tools directly (read_file, edit_file, bash) to complete task
+3. PA reports completion with file changes summary
+
+**Interaction flow - Delegate Mode (from mockup)**:
+1. User sends natural language request (e.g., "Add /health endpoint")
+2. PA creates GitHub issue via `github_create_issue` tool with acceptance criteria
+3. PA confirms: "Issue #142 created. Want me to dispatch to worker?"
+4. User confirms: "Yes, dispatch immediately"
+5. PA writes dispatch signal via `airs_dispatch_signal` to `.autodev/dispatch/worker_backend_20260409_1642.signal`
+6. Worker Backend picks up signal on next poll and executes task
+7. PA shows confirmation: "Dispatched to Worker Backend. ETA: under 2 minutes."
 
 ### 3.3 Tab: AutoDev
 
@@ -574,15 +585,27 @@ Recipe trigger → Tauri → HTTP POST /api/v1/agent/invoke → core-orchestrato
 - **Feedback-driven synopsis** — conversation evolution
 - Too complex to reimplement in Rust; Python ecosystem advantage
 
-#### Mode Selection Logic
+#### PA Mode Toggle (Phase 2 Enhancement)
+
+Within **Mode 1: PA**, the ChatHeader provides a dropdown to switch between three sub-modes that control tool availability:
 
 ```rust
-// In agent/engine.rs
+// In agent/engine.rs - PA mode with sub-mode handling
 match session.mode {
     SessionMode::PersonalAssistant => {
-        // PA mode: Rust-native execution
         let provider = get_provider(&config.active_provider)?;
-        let response = provider.stream(request).await?;
+        
+        // Filter tools based on PA sub-mode
+        let available_tools = match session.pa_sub_mode {
+            PAMode::FastDevelopment => registry.get_all_tools(),
+            PAMode::Review => registry.get_all_tools(), // With permission checks
+            PAMode::Delegate => vec![
+                github_create_issue_tool,
+                airs_dispatch_signal_tool
+            ], // Zero file tools
+        };
+        
+        let response = provider.stream_with_tools(request, available_tools).await?;
         // ... execute tools locally via agent::builtin_tools
     }
     SessionMode::WorkerAgent => {
@@ -596,6 +619,24 @@ match session.mode {
     }
 }
 ```
+
+**PA Sub-Mode Details:**
+
+| Mode | Enum Variant | Tool Registry | System Prompt |
+|------|---------------|---------------|---------------|
+| 🔧 Fast Development | `PAMode::FastDevelopment` | All builtin_tools | Standard CLAUDE.md |
+| ✋ Review Mode | `PAMode::Review` | All builtin_tools + permission_check | Standard CLAUDE.md + caution |
+| 📋 Delegate Mode | `PAMode::Delegate` | Only `github_create_issue`, `airs_dispatch_signal` | Delegate-focused CLAUDE.md variant |
+
+**Delegate Mode Interaction Flow:**
+1. User: "Add /health endpoint to orchestrator"
+2. PA creates GitHub issue with acceptance criteria
+3. PA asks: "Issue #142 created. Dispatch to Worker Backend?"
+4. On confirmation, PA writes signal file to `.autodev/dispatch/`
+5. Worker Backend polls and picks up task
+6. PA shows: "Dispatched. Worker Backend ETA: under 2 minutes."
+
+This prevents accidental file edits when workers are live and processing the task queue.
 
 **Result:** No code duplication — each mode uses the right layer of abstraction for its complexity needs.
 
@@ -1400,6 +1441,12 @@ pub trait Tool: Send + Sync {
 - [ ] GitHub PAT storage in vault
 - [ ] GitHub Issues: list, create, label, assign
 - [ ] Additional providers: OpenAI, Gemini
+- [ ] **PA Mode Toggle**: ChatHeader dropdown with 3 modes:
+  - Fast Development (full builtin_tools: read_file, write_file, edit_file, bash, grep, glob)
+  - Review Mode (tools with permission prompts)
+  - Delegate Mode (zero file tools, only github_create_issue + airs_dispatch_signal)
+- [ ] Tool registry filtering: register tools conditionally based on PA mode
+- [ ] System prompt injection: CLAUDE.md variants per PA mode (fast vs delegate instructions)
 - [ ] **[SUBMODULE]** `unified_tool_handler.py`: Add `register_autodev_handler()` + routing logic
 - [ ] **[SUBMODULE]** `autodev_handler.py`: New file with AutoDevToolHandler class
 - [ ] **[SUBMODULE]** `living_agent.py`: Wire up autodev_handler in `initialize_bridges()`
