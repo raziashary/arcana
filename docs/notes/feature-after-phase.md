@@ -36,7 +36,8 @@ Collect and display metrics including:
 - And more
 
 ## 4. Graphify Integration
-Recreate the Graphify tool (it's small in scope) so that AutoDev agent workers can invoke it. This can be used as a **graph-based tool for codebase dissection**.
+- Recreate the Graphify tool (it's small in scope) so that AutoDev agent workers can invoke it. This can be used as a **graph-based tool for codebase dissection**.
+- Make a new tab for Graphify visualization that will run visualization on the codebase and display it as a graph itself with color coded connection
 
 ## 5. Feature Comparison — AutoDev vs. Windsurf
 List current AutoDev features, compare them against Windsurf, and identify what can be implemented.
