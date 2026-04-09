@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
@@ -7,6 +7,27 @@ use tracing::debug;
 use walkdir::WalkDir;
 
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
+
+#[derive(Debug, Serialize)]
+struct GrepMatch {
+    line_number: usize,
+    line_content: String,
+    match_positions: Vec<(usize, usize)>,
+}
+
+#[derive(Debug, Serialize)]
+struct GrepFileResult {
+    file: String,
+    matches: Vec<GrepMatch>,
+}
+
+#[derive(Debug, Serialize)]
+struct GrepOutput {
+    pattern: String,
+    total_matches: usize,
+    files_matched: usize,
+    results: Vec<GrepFileResult>,
+}
 
 pub struct GrepTool;
 
@@ -106,7 +127,8 @@ impl Tool for GrepTool {
             Err(e) => return ToolResult::error(format!("Invalid regex pattern: {e}")),
         };
 
-        let mut matches = Vec::new();
+        let mut file_results: Vec<GrepFileResult> = Vec::new();
+        let mut total_matches = 0;
         let skip_dirs = ["node_modules", ".git", "target", "dist", "build", ".next", ".cache"];
 
         // Walk directory tree
@@ -154,58 +176,61 @@ impl Tool for GrepTool {
                 .to_string_lossy()
                 .replace('\\', "/");
 
+            let mut file_matches: Vec<GrepMatch> = Vec::new();
+
             for (line_num, line) in content.lines().enumerate() {
                 let line_number = line_num + 1;
-                let matches_pattern = if params.case_insensitive {
-                    regex.is_match(&line.to_lowercase())
+                let search_line = if params.case_insensitive {
+                    line.to_lowercase()
                 } else {
-                    regex.is_match(line)
+                    line.to_string()
                 };
 
-                if matches_pattern {
-                    // Collect context lines
-                    let lines: Vec<&str> = content.lines().collect();
-                    let context_start = line_num.saturating_sub(params.context_lines as usize);
-                    let context_end = (line_num + params.context_lines as usize + 1).min(lines.len());
+                if let Some(mat) = regex.find(&search_line) {
+                    let match_positions = vec![(mat.start(), mat.end())];
+                    
+                    file_matches.push(GrepMatch {
+                        line_number,
+                        line_content: line.to_string(),
+                        match_positions,
+                    });
 
-                    let mut context_block = String::new();
-                    for (i, ctx_line) in lines[context_start..context_end].iter().enumerate() {
-                        let actual_line_num = context_start + i + 1;
-                        let prefix = if actual_line_num == line_number { ">" } else { " " };
-                        context_block.push_str(&format!("{} {:>5} | {}\n", prefix, actual_line_num, ctx_line));
-                    }
+                    total_matches += 1;
 
-                    matches.push(format!(
-                        "{}:{}\n{}",
-                        relative_path, line_number, context_block
-                    ));
-
-                    if matches.len() >= params.max_results as usize {
+                    if total_matches >= params.max_results as usize {
                         break;
                     }
                 }
             }
 
-            if matches.len() >= params.max_results as usize {
+            if !file_matches.is_empty() {
+                file_results.push(GrepFileResult {
+                    file: relative_path,
+                    matches: file_matches,
+                });
+            }
+
+            if total_matches >= params.max_results as usize {
                 break;
             }
         }
 
-        if matches.is_empty() {
+        let output = GrepOutput {
+            pattern: params.pattern.clone(),
+            total_matches,
+            files_matched: file_results.len(),
+            results: file_results,
+        };
+
+        let json_output = match serde_json::to_string_pretty(&output) {
+            Ok(j) => j,
+            Err(e) => return ToolResult::error(format!("Failed to serialize results: {e}")),
+        };
+
+        if total_matches == 0 {
             ToolResult::success(format!("No matches found for pattern '{}'", params.pattern))
         } else {
-            let truncated = if matches.len() >= params.max_results as usize {
-                format!("\n\n... truncated ({} total matches, showing first {})", matches.len(), params.max_results)
-            } else {
-                String::new()
-            };
-            ToolResult::success(format!(
-                "Found {} match{}:\n\n{}{}",
-                matches.len(),
-                if matches.len() == 1 { "" } else { "es" },
-                matches.join("\n"),
-                truncated
-            ))
+            ToolResult::success(json_output)
         }
     }
 }

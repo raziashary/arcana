@@ -1,11 +1,27 @@
 use async_trait::async_trait;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::fs;
 use std::path::PathBuf;
 use tracing::debug;
 use walkdir::WalkDir;
 
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
+
+#[derive(Debug, Serialize)]
+struct GlobFileEntry {
+    path: String,
+    size_bytes: u64,
+    modified_at: String,
+    is_directory: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct GlobOutput {
+    pattern: String,
+    total_files: usize,
+    files: Vec<GlobFileEntry>,
+}
 
 pub struct GlobTool;
 
@@ -83,7 +99,7 @@ impl Tool for GlobTool {
             Err(e) => return ToolResult::error(format!("Invalid glob pattern: {e}")),
         };
 
-        let mut matches = Vec::new();
+        let mut file_entries = Vec::new();
         let skip_dirs = ["node_modules", ".git", "target", "dist", "build", ".next", ".cache"];
 
         for entry in WalkDir::new(&search_path)
@@ -102,40 +118,62 @@ impl Tool for GlobTool {
                 Err(_) => continue,
             };
 
-            if !entry.file_type().is_file() {
-                continue;
-            }
-
             let relative_path = entry.path().strip_prefix(&search_path)
                 .unwrap_or(entry.path())
                 .to_string_lossy()
                 .replace('\\', "/");
 
-            if pattern.matches(&relative_path) || pattern.matches(entry.file_name().to_string_lossy().as_ref()) {
-                matches.push(relative_path.to_string());
-                if matches.len() >= params.max_results {
+            let is_match = pattern.matches(&relative_path) || 
+                           pattern.matches(entry.file_name().to_string_lossy().as_ref());
+
+            if is_match {
+                let metadata = match fs::metadata(entry.path()) {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+
+                let size_bytes = metadata.len();
+                let modified_at = metadata.modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| {
+                        let secs = d.as_secs();
+                        chrono::DateTime::from_timestamp(secs as i64, 0)
+                            .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+                            .unwrap_or_else(|| "unknown".to_string())
+                    })
+                    .unwrap_or_else(|| "unknown".to_string());
+
+                file_entries.push(GlobFileEntry {
+                    path: relative_path,
+                    size_bytes,
+                    modified_at,
+                    is_directory: metadata.is_dir(),
+                });
+
+                if file_entries.len() >= params.max_results {
                     break;
                 }
             }
         }
 
-        matches.sort();
+        file_entries.sort_by(|a, b| a.path.cmp(&b.path));
 
-        if matches.is_empty() {
+        let output = GlobOutput {
+            pattern: params.pattern.clone(),
+            total_files: file_entries.len(),
+            files: file_entries,
+        };
+
+        let json_output = match serde_json::to_string_pretty(&output) {
+            Ok(j) => j,
+            Err(e) => return ToolResult::error(format!("Failed to serialize results: {e}")),
+        };
+
+        if output.total_files == 0 {
             ToolResult::success(format!("No files found matching pattern '{}'", params.pattern))
         } else {
-            let truncated = if matches.len() >= params.max_results {
-                format!("\n\n(Truncated at {} results)", params.max_results)
-            } else {
-                String::new()
-            };
-            ToolResult::success(format!(
-                "Found {} file{}:\n\n{}{}",
-                matches.len(),
-                if matches.len() == 1 { "" } else { "s" },
-                matches.join("\n"),
-                truncated
-            ))
+            ToolResult::success(json_output)
         }
     }
 }
