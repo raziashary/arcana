@@ -332,10 +332,10 @@ Pydantic models for all memory operations:
 
 **Components**:
 - **ChatHeader** — Mode indicator with PA Mode Toggle dropdown:
-  - **🔧 Fast Development**: PA has full builtin_tools (read_file, write_file, edit_file, bash, grep, glob) for direct file editing
-  - **✋ Review Mode**: PA has tools but asks permission before any write operation
-  - **📋 Delegate Mode**: PA has **zero file tools**, only `github_create_issue` + `airs_dispatch_signal`. Creates tasks, dispatches to workers
-  - Also shows: MCP servers count, Skills count, CLAUDE.md status
+  - **🔧 Fast Development**: PA has full builtin_tools (read_file, write_file, edit_file, bash, grep, glob) for direct file editing. Uses standard system prompt.
+  - **✋ Review Mode**: PA has tools but asks permission before any write operation. Uses standard system prompt + caution mode.
+  - **📋 Delegate Mode**: PA has **zero file tools**, only `create_task` tool. Creates tasks on internal board for Supervisor to assign. Uses delegate-focused system prompt variant.
+  - Also shows: MCP servers count, Skills count, CLAUDE.md status, current PA mode with colored indicator
 - **MessageList** — Scrollable area with alternating message types:
   - `msg-user` — Right-aligned, green-tinted background (`#00FF8812`), green border
   - `msg-agent` — Left-aligned, dark surface background (`#111`), gray border
@@ -348,23 +348,42 @@ Pydantic models for all memory operations:
 2. PA executes tools directly (read_file, edit_file, bash) to complete task
 3. PA reports completion with file changes summary
 
-**Interaction flow - Delegate Mode (from mockup)**:
-1. User sends natural language request (e.g., "Add /health endpoint")
-2. PA creates GitHub issue via `github_create_issue` tool with acceptance criteria
-3. PA confirms: "Issue #142 created. Want me to dispatch to worker?"
-4. User confirms: "Yes, dispatch immediately"
-5. PA writes dispatch signal via `airs_dispatch_signal` to `.autodev/dispatch/worker_backend_20260409_1642.signal`
-6. Worker Backend picks up signal on next poll and executes task
-7. PA shows confirmation: "Dispatched to Worker Backend. ETA: under 2 minutes."
+**Interaction flow - Delegate Mode** (matches `old-multiple-fleet.md` architecture):
+1. User sends natural language request (e.g., "Add /health endpoint to orchestrator")
+2. PA creates task on **internal AutoDev board** via `create_task` tool:
+   - Title: "Add GET /agents/health endpoint"
+   - Priority: p2-medium, Type: feature, Status: ready
+   - Acceptance criteria: detailed spec
+   - Stored in local SQLite database (`~/.autodev/tasks.db`)
+3. PA confirms: "Task #142 created on board. Supervisor will assign to Worker Backend on next poll cycle."
+4. **Supervisor recipe** (polls every 2 min): Detects new task #142, determines it's atomic, assigns to Worker Backend recipe with recipe payload
+5. **Worker Backend recipe**: Executes via core-orchestrator, implements endpoint, opens PR on GitHub, updates task status to "in-review"
+6. **QC Agent recipe**: Reviews PR, posts QC report, updates task status to "qc-approved" or "qc-rejected"
+7. **Supervisor**: Sees QC approval, instructs Worker Backend to merge PR, closes task #142
+8. PA (if still monitoring): Shows task completion notification in AutoDev Panel
+
+**Key difference from old multi-PC system**:
+- **Old**: PA → GitHub Issues (external board) → Supervisor PC polls GitHub → Worker PCs poll GitHub
+- **New**: PA → Internal SQLite board → Supervisor recipe polls internal DB → Worker recipes execute
+- **Why**: Single app = no need for external coordination. Faster, more control, better offline support.
 
 ### 3.3 Tab: AutoDev
 
 **Components**:
-- **AgentRoster** — Table showing all agents with:
-  - Status dot: green (active/polling), yellow (working), blue (idle), red (error)
-  - Agent name: SUPERVISOR, WORKER-BACKEND, WORKER-FRONTEND, WORKER-PLATFORM, WORKER-MCP, WORKER-CLEANUP, QC AGENT
-  - Current task description
-  - Elapsed time (MM:SS format)
+- **AgentRoster** — Dynamic table showing all agents (system-defined + user-created):
+  - **System Agents** (locked, cannot delete):
+    - SUPERVISOR (always ONE instance)
+    - QC AGENT (always ONE instance)
+  - **Pre-Defined Workers** (can customize):
+    - WORKER-BACKEND, WORKER-FRONTEND, WORKER-PLATFORM, WORKER-MCP, WORKER-CLEANUP
+  - **Custom Workers** (user-created via Settings → Workers panel):
+    - WORKER-DOCS, WORKER-TESTING, etc. (appears dynamically)
+  - Each row shows:
+    - Status dot: 🟢 active (polling), 🟡 working (executing task), 🔵 idle (created but not started), 🔴 error
+    - Agent name (e.g., "WORKER-BACKEND")
+    - Current task description (e.g., "Issue #142 — /agents/health endpoint")
+    - Elapsed time (MM:SS format)
+    - Actions: Start/Stop/Pause/Delete (system agents cannot be deleted)
 - **TaskBoard** — 4-column kanban:
   - **Ready** — Tasks assigned but not started (shows issue #, priority, title, assigned worker)
   - **In Progress** — Active tasks with progress bar (percentage fill)
@@ -622,21 +641,70 @@ match session.mode {
 
 **PA Sub-Mode Details:**
 
-| Mode | Enum Variant | Tool Registry | System Prompt |
-|------|---------------|---------------|---------------|
-| 🔧 Fast Development | `PAMode::FastDevelopment` | All builtin_tools | Standard CLAUDE.md |
-| ✋ Review Mode | `PAMode::Review` | All builtin_tools + permission_check | Standard CLAUDE.md + caution |
-| 📋 Delegate Mode | `PAMode::Delegate` | Only `github_create_issue`, `airs_dispatch_signal` | Delegate-focused CLAUDE.md variant |
+| Mode | Enum Variant | Tool Registry | System Prompt Source | Use Case |
+|------|---------------|---------------|---------------------|----------|
+| 🔧 Fast Development | `PAMode::FastDevelopment` | All builtin_tools (read_file, write_file, edit_file, bash, grep, glob, git) + All MCP tools | `BASE_SYSTEM_PROMPT` in `context.rs` | Razi coding directly, quick fixes |
+| ✋ Review Mode | `PAMode::Review` | All builtin_tools + permission_check wrapper + All MCP tools | `BASE_SYSTEM_PROMPT` + caution instructions | Reviewing changes, cautious editing |
+| 📋 Delegate Mode | `PAMode::Delegate` | Only `create_task` tool + **MCP tools (read-only)** | `DELEGATE_SYSTEM_PROMPT` in `context.rs` | Workers are live, PA delegates work |
 
-**Delegate Mode Interaction Flow:**
+**Delegate Mode Interaction Flow** (matches `old-multiple-fleet.md` org chart):
 1. User: "Add /health endpoint to orchestrator"
-2. PA creates GitHub issue with acceptance criteria
-3. PA asks: "Issue #142 created. Dispatch to Worker Backend?"
-4. On confirmation, PA writes signal file to `.autodev/dispatch/`
-5. Worker Backend polls and picks up task
-6. PA shows: "Dispatched. Worker Backend ETA: under 2 minutes."
+2. PA creates task on **internal AutoDev board** (SQLite) via `create_task` tool:
+   ```rust
+   create_task({
+     title: "Add GET /agents/health endpoint",
+     priority: "p2-medium",
+     type: "feature",
+     acceptance_criteria: "...",
+     status: "ready"
+   })
+   ```
+3. PA confirms: "Task #142 created on board. Supervisor will assign to Worker Backend on next poll."
+4. **Supervisor recipe** (polls `~/.autodev/tasks.db` every 2 min): Sees task #142, determines it's atomic, assigns to Worker Backend recipe
+5. **Worker Backend recipe**: Executes via core-orchestrator, implements endpoint, opens PR on GitHub
+6. **QC Agent recipe**: Reviews PR, updates task status to "qc-approved"
+7. **Supervisor**: Sees QC approval, instructs worker to merge, closes task #142
+8. PA (if monitoring AutoDev Panel): Shows task completion notification
+
+**Internal Board Storage:**
+- **Database**: SQLite at `~/.autodev/tasks.db`
+- **Schema**: tasks table with comprehensive fields:
+  ```sql
+  CREATE TABLE tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    description TEXT,
+    priority TEXT NOT NULL CHECK(priority IN ('p0-critical', 'p1-high', 'p2-medium', 'p3-low')),
+    type TEXT NOT NULL CHECK(type IN ('epic', 'feature', 'bug', 'refactor', 'docs', 'infra')),
+    status TEXT NOT NULL CHECK(status IN ('ready', 'assigned', 'in-progress', 'in-review', 'qc-approved', 'qc-rejected', 'blocked', 'completed')),
+    acceptance_criteria TEXT,
+    assigned_worker TEXT,           -- References workers.slug (e.g., 'worker-backend')
+    created_by TEXT DEFAULT 'PA',   -- Who created this task (PA or Supervisor)
+    repo TEXT,                       -- Primary repo for this task (e.g., 'core-orchestrator')
+    labels TEXT,                     -- JSON array of labels for filtering
+    parent_task_id INTEGER,          -- For epic → subtask hierarchy
+    estimated_tokens INTEGER,        -- Estimated token cost
+    actual_tokens INTEGER,           -- Actual token cost after completion
+    github_pr_url TEXT,              -- Link to PR if created
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    completed_at DATETIME,
+    FOREIGN KEY (parent_task_id) REFERENCES tasks(id)
+  );
+  ```
+- **Access**: Rust code in `src-tauri/src/db/tasks.rs` with `rusqlite` crate
+- **UI**: AutoDev Panel TaskBoard component reads from DB via Tauri commands
 
 This prevents accidental file edits when workers are live and processing the task queue.
+
+**System Prompt Switching Implementation:**
+- `context.rs` defines three system prompt constants:
+  - `BASE_SYSTEM_PROMPT` — Full tool descriptions, encourages direct file editing
+  - `REVIEW_SYSTEM_PROMPT` — Adds permission-checking instructions, emphasizes caution
+  - `DELEGATE_SYSTEM_PROMPT` — Removes all file tool descriptions, focuses on task decomposition and structured task creation
+- Settings panel allows viewing/editing each variant
+- PA mode selection in ChatHeader dropdown triggers system prompt reload
+- Tool registry filters tools based on mode before passing to LLM
 
 **Result:** No code duplication — each mode uses the right layer of abstraction for its complexity needs.
 
@@ -1059,10 +1127,12 @@ src-tauri/src/
 │   │   ├── mod.rs
 │   │   ├── read_file.rs
 │   │   ├── write_file.rs
+│   │   ├── edit_file.rs     # String replacement editor (Phase 1)
 │   │   ├── bash.rs
 │   │   ├── list_directory.rs
 │   │   ├── glob.rs
-│   │   └── grep.rs
+│   │   ├── grep.rs
+│   │   └── create_task.rs   # Create task on internal board (Delegate Mode only, Phase 2)
 │   ├── permission.rs        # Permission system (ManualApproval, Autonomous, SmartApprove)
 │   └── compaction.rs        # Conversation compaction when context fills
 ├── provider/                # LLM provider abstraction (PA mode only; see Section 4.1)
@@ -1106,9 +1176,39 @@ src-tauri/src/
 │   ├── remote.rs            # Push, pull, fetch operations
 │   ├── checkpoint.rs        # File checkpointing per message (undo support)
 │   └── types.rs             # GitRepo, GitStatus, GitDiff, WorktreeSession types
+├── db/                      # Internal databases (Phase 2) — Task Board + Worker Management
+│   ├── mod.rs               # Public API: task ops, worker ops, migrations
+│   ├── tasks.rs             # Task CRUD operations via rusqlite
+│   │   # Functions: create_task, list_tasks, update_status, get_task, assign_worker, complete_task
+│   ├── workers.rs           # Worker CRUD operations via rusqlite
+│   │   # Functions: create_worker, list_workers, update_worker_status, delete_worker, get_worker_by_slug
+│   ├── schema.rs            # SQLite schema definitions + migrations for both DBs
+│   └── types.rs             # Task, Worker, Priority, TaskType, TaskStatus, WorkerStatus types
+│   # Database locations:
+│   #   ~/.autodev/tasks.db   - Internal task board (Supervisor manages, PA creates)
+│   #   ~/.autodev/workers.db - Worker registry (user-created + pre-defined workers)
+│   # Worker schema:
+│   #   CREATE TABLE workers (
+│   #     id INTEGER PRIMARY KEY AUTOINCREMENT,
+│   #     name TEXT NOT NULL,              -- Display name: "WORKER-BACKEND"
+│   #     slug TEXT UNIQUE NOT NULL,        -- URL-safe: "worker-backend"
+│   #     type TEXT NOT NULL,               -- Template type: backend, frontend, platform, mcp, cleanup, custom
+│   #     primary_repos TEXT,               -- JSON array of repo names
+│   #     model TEXT NOT NULL,              -- Model identifier: "claude-sonnet-4-6"
+│   #     recipe_path TEXT NOT NULL,        -- Path to recipe YAML: "~/.autodev/recipes/worker-backend-poll.yaml"
+│   #     status TEXT NOT NULL,             -- created, active, working, queued, error, paused, deleted
+│   #     polling_interval INTEGER DEFAULT 120, -- Seconds between polls (default 2 min)
+│   #     current_task_id INTEGER,          -- FK to tasks.id (NULL if idle)
+│   #     queue_count INTEGER DEFAULT 0,    -- Number of queued tasks
+│   #     is_system_defined BOOLEAN DEFAULT 0, -- 1 for Supervisor/QC (locked), 0 for workers
+│   #     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+│   #     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+│   #     last_poll_at DATETIME,
+│   #     FOREIGN KEY (current_task_id) REFERENCES tasks(id)
+│   #   );
 ├── github/                  # GitHub integration (Phase 2)
 │   ├── mod.rs
-│   ├── issues.rs            # GitHub Issues API
+│   ├── issues.rs            # GitHub Issues API (workers use for PR creation, not task assignment)
 │   └── labels.rs            # Label management
 ├── autodev/                 # AutoDev-specific logic (Phase 2+)
 │   ├── mod.rs
@@ -1346,6 +1446,8 @@ pub trait Provider: Send + Sync {
 | `write_file` | ❌ | Write content to file at path |
 | `bash` | ❌ | Execute shell command, capture stdout/stderr |
 | `list_directory` | ✅ | List files and subdirectories |
+| `grep` | ✅ | Search files for pattern, return list of matches with line numbers |
+| `glob` | ✅ | Find files matching pattern, return list of file paths |
 
 **Tool trait (Rust):**
 ```rust
@@ -1372,8 +1474,228 @@ pub trait Tool: Send + Sync {
 - [x] Status bar: active model name + today's cost
 - [x] Session persistence: conversations saved in SQLite
 - [x] Cost tracking: tokens in/out per message, stored in SQLite
+- [ ] Multiple Chat Sessions UI (NEW)
+- [ ] Rich Tool Display UI with Line Changes (NEW)
+- [ ] Grep & Glob File List Results (NEW)
 
 > **Completed**: All Phase 1 React + Rust modules implemented and Vite build passes (0 TS errors, 0 build errors). Node.js version pinned to v22.1.0 — Vite downgraded to v6.3.x, @vitejs/plugin-react to v4.x, TypeScript to v5.7.x for compatibility.
+
+---
+
+### 9.6 Phase 1 Extensions: Multiple Sessions + Rich Tool Display
+
+#### A. Multiple Chat Sessions UI
+
+**Layout Changes (Chat.tsx):**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  TitleBar                                                   │
+├──────────────┬──────────────────────────────────────────────┤
+│ SessionBar   │  ChatMessages                                │
+│ (200px)      │  (flex-grow)                                 │
+│              │                                              │
+│ [+ New]      │  User: "Read file X"                         │
+│              │  ┌─────────────────────────────────────────┐ │
+│ Session 1    │  │ Tool: read_file                         │ │
+│ 2 min ago    │  │ Path: /src/main.rs                      │ │
+│ ✓ 2 msgs     │  │ ┌─────────────────────────────────────┐ │ │
+│              │  │ │ /src/main.rs:1-50                   │ │ │
+│ Session 2    │  │ │ [Copy] [Open in IDE]                │ │ │
+│ 1 hour ago   │  │ │ ─────────────────────────────────── │ │ │
+│ ✓ 5 msgs     │  │ │ 1 | fn main() {                     │ │ │
+│              │  │ │ 2 |     println!("Hello");          │ │ │
+│ Session 3    │  │ │ 3 | }                               │ │ │
+│ Yesterday    │  │ │ ─────────────────────────────────── │ │ │
+│ ✓ 12 msgs    │  │ └─────────────────────────────────────┘ │ │
+│              │  └─────────────────────────────────────────┘ │
+│ [⋮ Delete]   │                                              │
+│              │  Input: [Type message...] [Send]             │
+└──────────────┴──────────────────────────────────────────────┘
+```
+
+**SessionBar Component (`src/components/chat/SessionBar.tsx`):**
+- Left sidebar (200px width) showing all sessions
+- Session list with: title, timestamp (relative), message count
+- Active session highlighted with blue border
+- "New Session" button at top
+- Delete button at bottom (context menu)
+- Click session → loads messages from SQLite via `switch_session(id)` Tauri command
+
+**Database Schema (already exists):**
+```sql
+CREATE TABLE sessions (
+  id TEXT PRIMARY KEY,
+  title TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  message_count INTEGER DEFAULT 0
+);
+```
+
+**Tauri Commands Needed:**
+- ✅ `list_sessions()` — Already exists
+- ✅ `create_session()` — Already exists
+- ✅ `delete_session(id)` — Already exists
+- ⚠️ NEW: `switch_session(id)` — Load all messages for session from SQLite
+- ⚠️ NEW: `get_session_messages(session_id)` — Fetch messages + tool results
+
+**Store Updates (settingsStore.ts):**
+- Add session switching logic to `useSessionStore`
+- Load messages when switching sessions
+- Persist active session ID in localStorage
+
+---
+
+#### B. Rich Tool Display UI with Line Changes
+
+**Enhanced ToolCallDisplay.tsx Component:**
+
+Shows tool results with context-specific formatting:
+
+1. **FileContentDisplay** (for `read_file`):
+   - File path with clickable link
+   - Line numbers on left (color-coded for changes)
+   - Syntax-highlighted code via `prism-react-renderer`
+   - Green highlight for modified lines (from `write_file` results)
+   - Yellow highlight for diff lines
+   - Copy button for code block
+   - "Open in IDE" button (Phase 3 integration)
+
+2. **GrepResultsDisplay** (for `grep` tool):
+   - Pattern and match count summary
+   - Collapsible file list
+   - For each file: line number + line content
+   - **Match text highlighted in yellow** within line content
+   - Sortable/filterable by filename
+   - Shows total matches and files matched
+
+3. **GlobResultsDisplay** (for `glob` tool):
+   - Pattern summary
+   - **Sortable table**: Name | Size | Modified Date
+   - **Filterable** by file extension (.rs, .ts, etc.)
+   - Directory icon (📁) vs file icon (📄)
+   - File size formatted (KB, MB)
+   - Modified date as relative time (2 hours ago)
+   - Shows total files matched
+
+4. **BashOutputDisplay** (for `bash` tool):
+   - Command displayed
+   - Exit code badge (green for 0, red for non-zero)
+   - Stdout in monospace (scrollable, max 48 lines)
+   - Stderr collapsible tab (red background)
+   - ANSI color codes rendered via `ansi-to-react`
+   - Execution time
+
+5. **DirectoryListingDisplay** (for `list_directory`):
+   - Directory path
+   - Sortable table: Name | Type | Size
+   - Directory vs file icons
+   - Hover effect for interactivity
+
+**Tool Output Parsing (`src/utils/toolOutputParser.ts`):**
+- Detects tool type from tool name
+- Parses JSON output into structured format
+- Handles errors gracefully (fallback to raw text)
+- Language detection for syntax highlighting (by file extension)
+
+---
+
+#### C. Grep & Glob Tools with Structured Output
+
+**Grep Tool (`grep` builtin tool):**
+
+Returns structured JSON:
+```json
+{
+  "pattern": "fn main",
+  "total_matches": 3,
+  "files_matched": 2,
+  "results": [
+    {
+      "file": "/src/main.rs",
+      "matches": [
+        {
+          "line_number": 1,
+          "line_content": "fn main() {",
+          "match_positions": [[0, 8]]
+        }
+      ]
+    },
+    {
+      "file": "/src/lib.rs",
+      "matches": [...]
+    }
+  ]
+}
+```
+
+**Glob Tool (`glob` builtin tool):**
+
+Returns structured JSON:
+```json
+{
+  "pattern": "src/**/*.rs",
+  "total_files": 15,
+  "files": [
+    {
+      "path": "src/main.rs",
+      "size_bytes": 2048,
+      "modified_at": "2026-04-09T12:30:00Z",
+      "is_directory": false
+    },
+    {
+      "path": "src/utils/",
+      "size_bytes": 0,
+      "modified_at": "2026-04-08T10:00:00Z",
+      "is_directory": true
+    }
+  ]
+}
+```
+
+**Rust Implementations:**
+- `src-tauri/src/agent/builtin_tools/grep.rs` — Pattern matching with line numbers
+- `src-tauri/src/agent/builtin_tools/glob.rs` — File globbing with metadata
+- Both use standard crates: `regex`, `walkdir`, `glob`
+- Return JSON-serializable output for React parsing
+
+---
+
+### 9.7 Phase 1 Extensions Deliverables Checklist
+
+**Multiple Chat Sessions UI:**
+- [ ] SessionBar component (200px left sidebar)
+- [ ] Session list with title, timestamp, message count
+- [ ] "New Session" button
+- [ ] Session switching via `switch_session(id)` Tauri command
+- [ ] Load messages from SQLite when switching
+- [ ] Delete session with confirmation
+- [ ] Active session highlighted with blue border
+- [ ] Keyboard shortcuts: Cmd/Ctrl+T (new), Cmd/Ctrl+W (close)
+
+**Rich Tool Display UI:**
+- [ ] Enhanced ToolCallDisplay with tool-specific rendering
+- [ ] FileContentDisplay: syntax highlighting + line numbers + copy button
+- [ ] GrepResultsDisplay: collapsible files + highlighted matches
+- [ ] GlobResultsDisplay: sortable/filterable file table
+- [ ] BashOutputDisplay: stdout/stderr tabs + ANSI colors
+- [ ] DirectoryListingDisplay: sortable file table
+- [ ] Tool output parser (`toolOutputParser.ts`)
+- [ ] Language detection for syntax highlighting
+
+**Grep & Glob Tools:**
+- [ ] Grep tool: structured output (file, line number, match positions)
+- [ ] Glob tool: structured output (path, size, modified date, is_directory)
+- [ ] Both tools return JSON for React parsing
+- [ ] Rust implementations with error handling
+
+**Dependencies:**
+- [ ] `prism-react-renderer` — Syntax highlighting
+- [ ] `ansi-to-react` — Terminal ANSI color codes
+- [ ] `walkdir` — Directory traversal for grep
+- [ ] `glob` — Glob pattern matching
+- [ ] `regex` — Pattern matching
 
 ---
 
@@ -1432,21 +1754,154 @@ pub trait Tool: Send + Sync {
 
 ### Phase 2 Deliverables Checklist
 
+**Recipes System:**
 - [ ] YAML recipe parser with validation
 - [ ] Recipe browser UI in Recipes tab
 - [ ] Recipe execution engine (run recipe steps as agent messages)
 - [ ] Cron scheduler for recurring recipes
-- [ ] AutoDev Panel: agent roster showing connected agents
-- [ ] AutoDev Panel: task board (GitHub Issues kanban)
+
+**AutoDev Panel & Internal Board:**
+- [ ] AutoDev Panel: agent roster showing connected agents (status, current task, elapsed time)
+- [ ] AutoDev Panel: task board (4-column kanban: Ready, In Progress, QC Review, Done Today)
+- [ ] Internal Task Board database:
+  - SQLite database at `~/.autodev/tasks.db`
+  - Schema: tasks table with id, title, priority, type, status, acceptance_criteria, assigned_worker, timestamps
+  - Rust module: `src-tauri/src/db/tasks.rs` with `rusqlite` crate
+  - Tauri commands: `create_task`, `list_tasks`, `update_task_status`, `get_task_by_id`
+- [ ] TaskBoard component reads from SQLite via Tauri commands
+- [ ] Task status updates propagate to UI in real-time
+
+**GitHub Integration:**
 - [ ] GitHub PAT storage in vault
-- [ ] GitHub Issues: list, create, label, assign
+- [ ] GitHub MCP integration: list repos, create PR, review PR (workers use this, not for task assignment)
+
+**Provider Support:**
 - [ ] Additional providers: OpenAI, Gemini
-- [ ] **PA Mode Toggle**: ChatHeader dropdown with 3 modes:
-  - Fast Development (full builtin_tools: read_file, write_file, edit_file, bash, grep, glob)
-  - Review Mode (tools with permission prompts)
-  - Delegate Mode (zero file tools, only github_create_issue + airs_dispatch_signal)
-- [ ] Tool registry filtering: register tools conditionally based on PA mode
-- [ ] System prompt injection: CLAUDE.md variants per PA mode (fast vs delegate instructions)
+
+**PA Mode Toggle (Core Feature):**
+- [ ] **UI Components:**
+  - ChatHeader dropdown with 3 modes: 🔧 Fast Development, ✋ Review Mode, 📋 Delegate Mode
+  - Mode indicator with colored dot (green/yellow/blue)
+  - Mode state persisted in `settingsStore.ts`
+  - Mode selection triggers system prompt reload + tool registry rebuild
+- [ ] **Backend - System Prompt Variants:**
+  - `src-tauri/src/agent/context.rs`: Define 3 system prompt constants:
+    - `BASE_SYSTEM_PROMPT` (current, for Fast Development)
+    - `REVIEW_SYSTEM_PROMPT` (adds permission-checking instructions)
+    - `DELEGATE_SYSTEM_PROMPT` (removes file tool descriptions, adds task decomposition guidance)
+  - `ContextBuilder::build_system_prompt()` accepts `PAMode` enum, selects appropriate prompt
+  - Settings panel: add "System Prompts" section with 3 text areas for editing each variant
+  - Tauri commands: `get_system_prompt_variant(mode)`, `set_system_prompt_variant(mode, content)`
+- [ ] **Backend - Tool Registry Filtering:**
+  - `src-tauri/src/agent/tools/mod.rs`: Add `filter_tools_by_mode(tools, mode) -> Vec<Tool>`
+  - Fast Development: all builtin_tools (read_file, write_file, edit_file, bash, grep, glob, git)
+  - Review Mode: all builtin_tools + wrap write operations with permission_check
+  - Delegate Mode: only `create_task` tool (zero file tools)
+  - Tool registry built conditionally before LLM call based on current PA mode
+- [ ] **Backend - create_task Tool:**
+  - New builtin tool: `src-tauri/src/agent/builtin_tools/create_task.rs`
+  - Input schema: title (string), priority (enum: p0/p1/p2/p3), type (enum: feature/bug/refactor/docs), acceptance_criteria (string)
+  - Writes to `~/.autodev/tasks.db` with status="ready"
+  - Returns task ID and confirmation message
+  - Only registered in Delegate Mode
+
+**Worker Management System (New Major Feature):**
+- [ ] **Workers Database:**
+  - SQLite database at `~/.autodev/workers.db`
+  - Schema: workers table (see Module Breakdown § 8 for full schema)
+  - Rust module: `src-tauri/src/db/workers.rs` with `rusqlite` crate
+  - Tauri commands:
+    - `create_worker(name, type, primary_repos, model, polling_interval)` → Returns worker_id
+    - `list_workers()` → Returns all workers (system + user-created)
+    - `update_worker_status(worker_id, status)` → Updates worker state
+    - `delete_worker(worker_id)` → Soft delete (sets status='deleted')
+    - `get_worker_by_slug(slug)` → Retrieves worker config
+    - `start_worker_recipe(worker_id)` → Starts recipe cron job
+    - `stop_worker_recipe(worker_id)` → Stops recipe cron job
+- [ ] **Pre-Defined Workers Seeded on First Launch:**
+  - On app first run, seed `workers.db` with 5 pre-defined workers:
+    - `worker-backend` (type: backend, model: claude-sonnet-4-6, status: created)
+    - `worker-frontend` (type: frontend, model: claude-sonnet-4-6, status: created)
+    - `worker-platform` (type: platform, model: claude-sonnet-4-6, status: created)
+    - `worker-mcp` (type: mcp, model: claude-opus-4-6, status: created)
+    - `worker-cleanup` (type: cleanup, model: claude-haiku-4-5, status: created)
+  - Also seed system agents:
+    - `supervisor` (is_system_defined: 1, cannot delete)
+    - `qc-agent` (is_system_defined: 1, cannot delete)
+- [ ] **Worker Creation UI (Settings → Workers Tab):**
+  - "Create Worker" button → Opens modal
+  - Worker creation form fields:
+    - Worker Name (auto-generates slug from name)
+    - Worker Type dropdown (Backend, Frontend, Platform, MCP Builder, Cleanup, Custom)
+    - Primary Repos multi-select (fetches from GitHub org via PAT)
+    - Model dropdown (lists available models from providers)
+    - Polling Interval slider (30s - 10min, default 2min)
+    - Recipe Template: Auto-generate or Custom YAML
+  - On submit:
+    - Creates worker in `workers.db`
+    - Generates recipe YAML at `~/.autodev/recipes/worker-{slug}-poll.yaml`
+    - Updates Agent Roster dynamically
+  - Validation:
+    - Worker name must be unique
+    - Slug must be unique (auto-sanitized from name)
+    - Primary repos must exist in GitHub org
+- [ ] **Worker Management UI (Settings → Workers Tab):**
+  - Table showing all workers:
+    - Columns: Name, Type, Status, Model, Primary Repos, Actions
+    - System agents (Supervisor, QC) shown with 🔒 lock icon, cannot delete
+    - Pre-defined workers can be edited/deleted
+    - Custom workers can be edited/deleted
+  - Worker row actions:
+    - Start/Stop/Pause (toggles recipe execution)
+    - Edit (opens edit modal)
+    - Delete (soft delete, confirms first)
+  - Worker status indicators:
+    - 🟢 Active (recipe running, polling)
+    - 🟡 Working (executing task)
+    - 🔵 Idle (created but not started)
+    - 🔴 Error (recipe crashed)
+    - ⏸️ Paused (user paused)
+- [ ] **Agent Roster Dynamic Updates:**
+  - Agent Roster reads from `workers.db` instead of hardcoded list
+  - Real-time updates when worker status changes
+  - Shows queue count for workers in 'queued' state
+- [ ] **Recipe Auto-Generation:**
+  - Template system for worker recipes
+  - Generates YAML with appropriate instructions per worker type:
+    ```yaml
+    version: "1.0.0"
+    title: Worker {NAME} — Polling Loop
+    schedule: "*/{polling_interval_seconds} * * * *"
+    permission_mode: autonomous
+    parameters:
+      - name: worker_slug
+        type: string
+        default: "{slug}"
+    instructions: |
+      You are the AIRS {TYPE} Worker ({NAME}).
+      1. Poll internal task board for tasks assigned to '{slug}'
+      2. If found: claim via lock file, create worktree, execute, test, PR
+      3. If nothing: exit cleanly
+    extensions:
+      - github-mcp
+      - developer
+    ```
+- [ ] **Supervisor Recipe Logic:**
+  - `supervisor-poll.yaml` recipe (system-defined, locked):
+    - Polls `~/.autodev/tasks.db` every 2 min for tasks with status='ready'
+    - For each ready task:
+      - Determines if epic (needs breaking down) or atomic
+      - If epic: spawns subagents to break into subtasks, creates child tasks
+      - If atomic: assigns to appropriate worker based on:
+        - Task `repo` field → matches worker's `primary_repos`
+        - Task `type` field → matches worker type (e.g., 'bug' → backend worker)
+        - Worker availability (not in 'working' state)
+      - Updates task: `assigned_worker = worker.slug`, `status = 'assigned'`
+      - Optionally: creates dispatch signal file for urgent tasks
+  - Supervisor recipe uses **Mode 2: Worker Agent** (core-orchestrator)
+  - Has access to all workers via `list_workers()` Tauri command (exposed to core-orchestrator as AutoDev tool)
+
+**Submodule Changes (core-orchestrator):**
 - [ ] **[SUBMODULE]** `unified_tool_handler.py`: Add `register_autodev_handler()` + routing logic
 - [ ] **[SUBMODULE]** `autodev_handler.py`: New file with AutoDevToolHandler class
 - [ ] **[SUBMODULE]** `living_agent.py`: Wire up autodev_handler in `initialize_bridges()`

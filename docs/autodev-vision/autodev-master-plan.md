@@ -105,16 +105,18 @@ Any AIRS team member or AutoDev worker agent can:
 
 | Feature | Description |
 |---|---|
-| **AutoDev Panel** | Built-in tab showing live GitHub Issues board, agent status, QC queue, and token costs |
-| **Agent Roster** | UI view of all 7 agents (Supervisor, 5 Workers, QC) with their current task, status, and last heartbeat |
+| **AutoDev Panel** | Built-in tab showing live internal task board, agent status, QC queue, and token costs |
+| **Agent Roster** | Dynamic UI view of Supervisor, pre-defined workers, custom workers, and QC with their current task, status, and last heartbeat |
+| **Worker Management** | Create, configure, and manage worker agents through Settings UI. Pre-defined templates (Backend, Frontend, Platform, MCP, Cleanup) + custom workers |
+| **Internal Task Board** | SQLite-based task management (no GitHub API limits, 10-100x faster, offline capable). Supervisor controls task lifecycle. |
 | **Key Vault** | Secure local storage for API keys — per-provider, encrypted, never transmitted |
 | **Model Router** | Route different task types to different models (Opus for Supervisor/QC, Sonnet for Workers, Haiku for Cleanup) |
 | **AIRS Plugin** | One-click plugin that pre-configures any worker PC with the right CLAUDE.md, MCP servers, GitHub PAT scopes, and recipe set for their role |
 | **Cost Meter** | Real-time token spend display per agent per session, with 30-day rolling totals |
 | **IDE Tab** | Built-in file tree, code viewer, and **git sub-panel** — read-only for workers, edit mode for Razi |
 | **Git Sub-Panel** | Embedded in IDE tab: repo selector, clone AIRS repos, branch switcher, staged/unstaged view, commit/push/PR, worktree manager |
-| **Dispatch Signal UI** | Visual button to send a dispatch signal to any worker immediately from the UI |
-| **PA Mode Toggle** | Fast Development ↔ Delegate Mode switch in Chat tab. Fast = full tools; Delegate = creates GitHub issues + dispatches to workers, zero file tools |
+| **Dispatch Signal UI** | Visual indicator when Supervisor assigns tasks to workers |
+| **PA Mode Toggle** | Fast Development ↔ Review ↔ Delegate Mode switch in Chat tab. Fast = full tools; Review = permissions; Delegate = create_task + MCP tools (view-only), zero file tools |
 
 ---
 
@@ -231,21 +233,63 @@ The user sees a 2-3 second loading screen on first launch. Subsequent launches a
 - **Tradeoffs:** No A2A, no mem0 semantic memory, no 21 FSMs — intentionally simple
 
 **PA Mode Toggle** (UI dropdown in ChatHeader):
-PA mode has three sub-modes that control tool availability:
+PA mode has three sub-modes that control tool availability and system prompt:
 
-| Mode | Tools Available | Use Case |
-|------|----------------|----------|
-| **🔧 Fast Development** | Full suite: read_file, write_file, edit_file, bash, grep, glob, git | Razi doing direct coding, quick fixes, exploring code |
-| **✋ Review Mode** | Same tools, but permission prompt before any write operation | Reviewing changes, cautious editing |
-| **📋 Delegate Mode** | **Zero file tools**. Only: github_create_issue, airs_dispatch_signal | Workers are live — PA creates tasks and dispatches, doesn't touch files |
+| Mode | Tools Available | System Prompt | Use Case |
+|------|----------------|---------------|----------|
+| **🔧 Fast Development** | Full suite: read_file, write_file, edit_file, bash, grep, glob, git + All MCP tools | Standard CLAUDE.md | Razi doing direct coding, quick fixes, exploring code |
+| **✋ Review Mode** | Same tools as Fast Development, but permission prompt before any write operation | Standard CLAUDE.md + caution mode | Reviewing changes, cautious editing |
+| **📋 Delegate Mode** | **Zero file tools**. Only: `create_task` + **MCP tools (read-only)** for viewing repos/PRs | Delegate-focused CLAUDE.md variant | Workers are live — PA creates tasks for Supervisor to assign |
 
-In **Delegate Mode**, the PA acts as a task creator:
+**Delegate Mode Flow** (matches `old-multiple-fleet.md` architecture):
+
+In Delegate Mode, the PA **never directly assigns work to workers**. Instead, it follows the classic org chart:
+
+```
+Razi speaks → PA (creates structured task) → Internal AutoDev Board
+                                                         ↓
+                                          Supervisor polls board every 2 min
+                                                         ↓
+                                          Supervisor breaks down epic tasks
+                                                         ↓
+                                          Supervisor assigns to workers
+                                                         ↓
+                                    Workers execute via core-orchestrator
+                                                         ↓
+                                          QC reviews PRs → Supervisor merges
+```
+
+**Example Delegate Mode interaction**:
 1. User: "Add /health endpoint to orchestrator"
-2. PA: Creates GitHub issue #142 with acceptance criteria via `github_create_issue`
-3. PA: "Issue created. Dispatch to Worker Backend?"
-4. User: "Yes"
-5. PA: Writes `.autodev/dispatch/worker_backend_20260409_1642.signal` via `airs_dispatch_signal`
-6. Worker Backend picks up signal and executes
+2. PA: Creates task on **internal AutoDev board** via `create_task` tool:
+   - Title: "Add GET /agents/health endpoint"
+   - Priority: p2-medium
+   - Type: feature
+   - Acceptance criteria: detailed spec
+   - Status: ready
+3. PA: "Task #142 created on board. Supervisor will assign to Worker Backend."
+4. **Supervisor** (polls every 2 min): Sees task #142, determines it's atomic, assigns to Worker Backend recipe
+5. **Worker Backend** (via recipe): Picks up task, implements endpoint, opens PR on GitHub
+6. **QC Agent**: Reviews PR, approves/rejects
+7. **Supervisor**: Sees QC approval, instructs worker to merge, closes task #142
+
+**Internal Board vs GitHub**:
+- **Old system** (`old-multiple-fleet.md`): Used GitHub Issues as external board (necessary for coordinating 8 separate Claude Code instances on different PCs across different networks)
+- **New system** (AutoDev): Uses **internal Task Board** in AutoDev Panel (stored in local SQLite database `~/.autodev/tasks.db`)
+- **Why internal**: 
+  - Single app on one machine — no need for external coordination
+  - ⚡ **10-100x faster** (no API latency, direct SQLite reads)
+  - 🔒 **No rate limits** (GitHub limits 5000 API calls/hour — workers polling every 2 min would hit limits)
+  - 📴 **Offline capable** (works without internet for local repos)
+  - 🎛️ **Full control** (custom statuses, priorities, real-time updates)
+- **GitHub still used**: Workers create PRs on GitHub repos for code review, but task assignment/tracking happens internally
+
+**System Prompt Switching**:
+- Each PA mode loads a different system prompt variant via `context.rs`
+- **Fast Development**: Full tool descriptions, encourages direct file editing
+- **Review Mode**: Adds permission-checking instructions, emphasizes caution
+- **Delegate Mode**: Removes all file tool descriptions, focuses on task decomposition, structured task creation, and delegation language
+- Settings panel allows viewing/editing system prompt variants
 
 This prevents the PA from accidentally editing files while workers are processing the task queue.
 
@@ -256,6 +300,166 @@ This prevents the PA from accidentally editing files while workers are processin
 - **When:** Recipe execution, multi-agent coordination, long-running autonomous tasks
 
 **Result:** Zero duplication — PA mode uses lightweight Rust implementations; Worker mode leverages the full Python intelligence stack.
+
+#### Worker Management & Agent Hierarchy
+
+AutoDev operates as a **single-instance multi-agent system** where one AutoDev app runs multiple worker agents as parallel recipe tasks. This replaces the old-fleet architecture (8 separate PCs) with a more efficient design.
+
+**Agent Hierarchy:**
+
+```
+┌────────────────────────────────────────────────────┐
+│  PA (Personal Assistant)                           │
+│  • User's interface                                │
+│  • Three modes: Fast Dev, Review, Delegate         │
+│  • Cannot spawn subagents                          │
+└─────────────────┬──────────────────────────────────┘
+                  │ (creates tasks in Delegate Mode)
+                  ▼
+┌────────────────────────────────────────────────────┐
+│  SUPERVISOR (System-Defined, Locked)               │
+│  • Exactly ONE supervisor                          │
+│  • Cannot be created/deleted by users              │
+│  • Polls internal board every 2 min                │
+│  • Breaks down epic tasks                          │
+│  • Assigns tasks to workers                        │
+│  • Cannot spawn subagents (only delegates)         │
+└─────────────────┬──────────────────────────────────┘
+                  │ (assigns tasks)
+                  ▼
+┌────────────────────────────────────────────────────┐
+│  WORKERS (User-Created + Pre-Defined Templates)    │
+│  • 5 pre-defined: Backend, Frontend, Platform,     │
+│    MCP Builder, Cleanup                            │
+│  • Users can create custom workers via Settings UI │
+│  • Run as recipes (cron-triggered every 2 min)     │
+│  • ✅ CAN spawn subagents (up to 10 parallel)      │
+│  • Use git locking to prevent conflicts            │
+└─────────────────┬──────────────────────────────────┘
+                  │ (creates PRs)
+                  ▼
+┌────────────────────────────────────────────────────┐
+│  QC AGENT (System-Defined, Locked)                 │
+│  • Exactly ONE QC agent                            │
+│  • Cannot be created/deleted by users              │
+│  • Reviews PRs, runs tests, approves/rejects       │
+│  • ✅ CAN spawn subagents (for different test types)│
+└────────────────────────────────────────────────────┘
+```
+
+**Worker Creation Flow:**
+
+Users create custom workers through Settings → Workers panel:
+
+1. **User clicks "Create Worker"**
+   - Modal opens with worker configuration form
+   
+2. **Worker Configuration:**
+   ```
+   Worker Name:       [WORKER-DOCS_______] (unique slug)
+   Worker Type:       [Backend ▼]         (selects from pre-defined templates)
+   Primary Repos:     [☑ core-orchestrator ☑ memory-mcp-server]
+   Model:             [claude-sonnet-4-6 ▼]
+   Polling Interval:  [2 minutes ▼]
+   Recipe Template:   [✅ Auto-generate from template] or [Custom YAML]
+   ```
+
+3. **AutoDev Creates:**
+   - Recipe file: `~/.autodev/recipes/worker-docs-poll.yaml`
+   - Database entry in `~/.autodev/workers.db`:
+     ```sql
+     INSERT INTO workers (
+       id, name, slug, type, primary_repos, model, 
+       recipe_path, status, polling_interval, created_at
+     ) VALUES (...)
+     ```
+   - Agent Roster UI updates dynamically
+   - Worker appears in Supervisor's assignment pool
+
+4. **Worker appears in Agent Roster:**
+   - Status: 🔵 Idle (recipe created but not started)
+   - User clicks "Start Recipe" → Status: 🟢 Active (polling)
+
+**Worker Lifecycle States:**
+
+| State | Description | UI Indicator | Can Receive Tasks? |
+|-------|-------------|--------------|-------------------|
+| `created` | Recipe exists but not running | 🔵 Idle | ❌ No |
+| `active` | Recipe running, polling for tasks | 🟢 Active | ✅ Yes |
+| `working` | Executing a task | 🟡 Working | ❌ No (busy) |
+| `queued` | Task assigned but worker busy | 🟡 Queued (N tasks) | ✅ Yes (queues tasks) |
+| `error` | Recipe crashed or task failed | 🔴 Error | ❌ No |
+| `paused` | User manually paused | ⏸️ Paused | ❌ No |
+| `deleted` | Soft delete (keeps history) | — | ❌ No |
+
+**Subagent Spawning Rules:**
+
+| Agent Type | Can Spawn Subagents? | Max Parallel | Use Case |
+|------------|---------------------|--------------|----------|
+| **PA** | ❌ No | — | PA delegates to workers, doesn't spawn subagents |
+| **Supervisor** | ❌ No | — | Supervisor delegates work, doesn't execute |
+| **Workers** | ✅ **YES** | 10 per worker | Complex tasks requiring parallel work streams |
+| **QC** | ✅ **YES** | 10 | Different test types (unit, integration, e2e) run in parallel |
+| **Subagents** | ❌ No | — | Prevents recursive spawning |
+
+**Example Worker Subagent Flow:**
+```
+Task: "Implement /health endpoint with metrics dashboard"
+  ↓
+Worker Backend executes:
+  1. Spawns Subagent 1: "Implement GET /agents/health API endpoint"
+  2. Spawns Subagent 2: "Create metrics dashboard React component"
+  3. Waits for both to complete (parallel execution)
+  4. Integrates both results
+  5. Runs tests on integrated code
+  6. Opens single PR with both changes
+  7. Updates task status to "in-review"
+```
+
+**Worker Storage:**
+
+```
+~/.autodev/
+├── tasks.db              # Internal task board (Supervisor manages)
+├── workers.db            # Worker registry (user-created + pre-defined)
+├── recipes/
+│   ├── supervisor-poll.yaml         # System recipe (locked)
+│   ├── qc-review-cycle.yaml         # System recipe (locked)
+│   ├── worker-backend-poll.yaml     # Pre-defined (can customize)
+│   ├── worker-frontend-poll.yaml    # Pre-defined (can customize)
+│   ├── worker-platform-poll.yaml    # Pre-defined (can customize)
+│   ├── worker-mcp-poll.yaml         # Pre-defined (can customize)
+│   ├── worker-cleanup-poll.yaml     # Pre-defined (can customize)
+│   └── worker-docs-poll.yaml        # User-created custom worker
+└── worktrees/
+    ├── worker+backend+142/          # Git worktree for task #142
+    └── worker+frontend+145/         # Git worktree for task #145
+```
+
+**Conflict Resolution via Git Locking:**
+
+Following the old-fleet pattern, workers use git-based locking to prevent conflicts:
+
+1. Worker claims task #142
+2. Creates lock file: `{repo}/current_tasks/worker-backend-142.lock`
+3. Git commits lock file to branch
+4. Other workers poll and skip locked tasks
+5. On task completion: lock file deleted + committed
+
+This works even though it's a single app because:
+- Each worker runs as a separate Tokio task
+- Each worker operates in its own git worktree
+- Lock files in git prevent race conditions across recipe polls
+
+**Pre-Defined Worker Templates:**
+
+| Template | Type | Primary Repos | Model Default | Description |
+|----------|------|---------------|--------------|-------------|
+| **Backend** | `backend` | core-orchestrator, main-infrastructure | claude-sonnet-4-6 | API features, agent logic, MCP client updates |
+| **Frontend** | `frontend` | main-frontend | claude-sonnet-4-6 | React components, UI/UX, state management |
+| **Platform** | `platform` | main-infrastructure, core-orchestrator | claude-sonnet-4-6 | DevOps, deployment, infrastructure as code |
+| **MCP Builder** | `mcp` | memory-mcp-server, custom MCP repos | claude-opus-4-6 | New MCP server scaffolding, protocol updates |
+| **Cleanup** | `cleanup` | All repos | claude-haiku-4-5 | Dead code removal, dependency updates, refactoring |
 
 #### Git Submodule Strategy
 
