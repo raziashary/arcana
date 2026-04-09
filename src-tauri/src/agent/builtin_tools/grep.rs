@@ -1,10 +1,10 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::json;
+use std::fs;
 use std::path::PathBuf;
-use std::process::Stdio;
-use tokio::process::Command;
 use tracing::debug;
+use walkdir::WalkDir;
 
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
 
@@ -100,54 +100,112 @@ impl Tool for GrepTool {
 
         debug!("Grepping pattern '{}' in {:?}", params.pattern, search_path);
 
-        let mut cmd = Command::new("rg");
-        cmd.arg(&params.pattern);
-        cmd.arg(&search_path);
-        
-        cmd.arg("--context").arg(params.context_lines.to_string());
-        cmd.arg("--max-count").arg(params.max_results.to_string());
-        cmd.arg("--line-number");
-        cmd.arg("--color").arg("never");
-        cmd.arg("--no-heading");
-        cmd.arg("--with-filename");
-
-        if params.case_insensitive {
-            cmd.arg("--ignore-case");
-        }
-
-        if let Some(glob) = &params.glob {
-            cmd.arg("--glob").arg(glob);
-        }
-
-        cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::piped());
-
-        let output = match cmd.output().await {
-            Ok(o) => o,
-            Err(e) => return ToolResult::error(format!("Failed to execute ripgrep. Is 'rg' installed? Error: {e}")),
+        // Compile regex pattern
+        let regex = match regex::Regex::new(&params.pattern) {
+            Ok(r) => r,
+            Err(e) => return ToolResult::error(format!("Invalid regex pattern: {e}")),
         };
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if stderr.contains("No matches found") || output.status.code() == Some(1) {
-                return ToolResult::success(format!("No matches found for pattern '{}'", params.pattern));
+        let mut matches = Vec::new();
+        let skip_dirs = ["node_modules", ".git", "target", "dist", "build", ".next", ".cache"];
+
+        // Walk directory tree
+        for entry in WalkDir::new(&search_path)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|e| {
+                if e.file_type().is_dir() {
+                    !skip_dirs.contains(&e.file_name().to_string_lossy().as_ref())
+                } else {
+                    true
+                }
+            })
+        {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            if !entry.file_type().is_file() {
+                continue;
             }
-            return ToolResult::error(format!("ripgrep error: {stderr}"));
+
+            // Check glob filter if provided
+            if let Some(glob_pattern) = &params.glob {
+                let file_name = entry.file_name().to_string_lossy();
+                if !glob::Pattern::new(glob_pattern)
+                    .ok()
+                    .map(|p| p.matches(&file_name))
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+            }
+
+            // Read file and search for pattern
+            let content = match fs::read_to_string(entry.path()) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let relative_path = entry.path()
+                .strip_prefix(&search_path)
+                .unwrap_or(entry.path())
+                .to_string_lossy()
+                .replace('\\', "/");
+
+            for (line_num, line) in content.lines().enumerate() {
+                let line_number = line_num + 1;
+                let matches_pattern = if params.case_insensitive {
+                    regex.is_match(&line.to_lowercase())
+                } else {
+                    regex.is_match(line)
+                };
+
+                if matches_pattern {
+                    // Collect context lines
+                    let lines: Vec<&str> = content.lines().collect();
+                    let context_start = line_num.saturating_sub(params.context_lines as usize);
+                    let context_end = (line_num + params.context_lines as usize + 1).min(lines.len());
+
+                    let mut context_block = String::new();
+                    for (i, ctx_line) in lines[context_start..context_end].iter().enumerate() {
+                        let actual_line_num = context_start + i + 1;
+                        let prefix = if actual_line_num == line_number { ">" } else { " " };
+                        context_block.push_str(&format!("{} {:>5} | {}\n", prefix, actual_line_num, ctx_line));
+                    }
+
+                    matches.push(format!(
+                        "{}:{}\n{}",
+                        relative_path, line_number, context_block
+                    ));
+
+                    if matches.len() >= params.max_results as usize {
+                        break;
+                    }
+                }
+            }
+
+            if matches.len() >= params.max_results as usize {
+                break;
+            }
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let result = if stdout.is_empty() {
-            format!("No matches found for pattern '{}'", params.pattern)
+        if matches.is_empty() {
+            ToolResult::success(format!("No matches found for pattern '{}'", params.pattern))
         } else {
-            let lines: Vec<&str> = stdout.lines().collect();
-            let truncated = if lines.len() > params.max_results as usize {
-                format!("\n\n... truncated ({} total matches, showing first {})", lines.len(), params.max_results)
+            let truncated = if matches.len() >= params.max_results as usize {
+                format!("\n\n... truncated ({} total matches, showing first {})", matches.len(), params.max_results)
             } else {
                 String::new()
             };
-            format!("Found {} matches:\n\n{}{}", lines.len(), stdout, truncated)
-        };
-
-        ToolResult::success(result)
+            ToolResult::success(format!(
+                "Found {} match{}:\n\n{}{}",
+                matches.len(),
+                if matches.len() == 1 { "" } else { "es" },
+                matches.join("\n"),
+                truncated
+            ))
+        }
     }
 }
