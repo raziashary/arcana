@@ -19,6 +19,9 @@ This notes contain notes of Razi for developing AutoDev such as rule and extra n
 ### Phase 2 Development Notes
 
 1. Ensure the movement of `__autodev` tools to the `submodules/core-orchestrator` is properly created especially the pathway and architecture compliance to the submodule
+2. Both `submodules/` are already in a branch called `autodev`, and we will continue developing there for submodules changes, but we need to make sure that it is in the `autodev` branch before developing and update from the main branch if needed.
+3. Both `submodules/` needs an API key in a .env, ensure a way to manage the .env for each submodule, either traverse it from `src-tauri` or create a separate .env for each submodule.
+4. I have created a more tools in `src-tauri/builtin_tools`, please check the tools once more and see if there are any issues or improvements needed or more tools needs to be added.
 
 
 ### Current `submodules/` branch
