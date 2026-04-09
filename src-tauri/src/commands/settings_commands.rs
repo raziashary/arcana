@@ -5,6 +5,8 @@ use tauri::State;
 use crate::errors::{AutoDevError, Result};
 use crate::provider::types::{ModelInfo, ProviderStatus};
 use crate::provider::anthropic::AnthropicProvider;
+use crate::provider::openai::OpenAIProvider;
+use crate::provider::google::GoogleProvider;
 use crate::provider::traits::Provider;
 use crate::state::AppState;
 use crate::vault::keychain::{VaultManager, provider_key};
@@ -26,6 +28,7 @@ pub async fn list_providers(
     let providers = vec![
         build_provider_info("anthropic", "Anthropic")?,
         build_provider_info("openai", "OpenAI")?,
+        build_provider_info("google", "Google")?,
         build_provider_info("ollama", "Ollama (Local)")?,
     ];
     Ok(providers)
@@ -35,6 +38,8 @@ fn build_provider_info(id: &str, name: &str) -> Result<ProviderInfo> {
     let has_key = VaultManager::get(&provider_key(id))?.is_some();
     let models = match id {
         "anthropic" => AnthropicProvider::new(String::new()).models(),
+        "openai"    => OpenAIProvider::new(String::new()).models(),
+        "google"    => GoogleProvider::new(String::new()).models(),
         _ => vec![],
     };
     Ok(ProviderInfo {
@@ -54,6 +59,14 @@ pub async fn test_provider_connection(provider: String) -> Result<ProviderStatus
     match provider.as_str() {
         "anthropic" => {
             let p = AnthropicProvider::new(key);
+            p.test_connection().await
+        }
+        "openai" => {
+            let p = OpenAIProvider::new(key);
+            p.test_connection().await
+        }
+        "google" => {
+            let p = GoogleProvider::new(key);
             p.test_connection().await
         }
         _ => Err(AutoDevError::Provider(format!("Provider '{}' not yet implemented", provider))),
