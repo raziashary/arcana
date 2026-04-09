@@ -49,6 +49,7 @@ interface AgentState {
   addUserMessage:  (text: string) => ChatMessage
   startStreaming:  (sessionId: string) => void
   stopStreaming:   () => void
+  setMessages:    (messages: ChatMessage[]) => void
   clearMessages:  () => void
   setupListeners: (sessionId: string) => Promise<UnlistenFn[]>
 }
@@ -103,6 +104,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   },
 
   stopStreaming: () => set({ isStreaming: false, streamingText: '' }),
+
+  setMessages: (messages) => set({ messages }),
 
   clearMessages: () => set({ messages: [], isStreaming: false, streamingText: '' }),
 
