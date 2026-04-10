@@ -60,29 +60,44 @@ Based on your [DEVELOPMENT_PLAN.md](cci:7://file:///c:/AIRS%20Foundry/autodev/au
 
 ### Phase 1 — App Shell + Provider + Chat ✅ **DONE**
 
-**Milestone:** Working desktop chat app with streaming LLM responses
+**Milestone:** Working desktop chat app with streaming LLM responses + PA Mode Toggle (UI only)
 
 | Deliverable | What "Done" Means |
 |-------------|-----------------|
 | **PA Mode Chat** | User can send messages, see streaming tokens, tool calls execute |
+| **PA Mode Toggle (UI)** | Fast Development ↔ Review ↔ Delegate Mode switchable in Chat header |
+| **Delegate Mode (UI only)** | UI shows Delegate Mode, but no `create_task` tool yet (Phase 2) |
 | **Provider System** | Multiple LLM providers (OpenAI, Anthropic, local) selectable in UI |
 | **Session Management** | Conversations persist to SQLite, can switch between sessions |
+| **Built-in Tools** | read_file, write_file, edit_file, bash, grep, glob, list_directory all working |
 | **Cost Tracking** | Real-time token/cost display in status bar |
 | **Build Passes** | `npx tsc --noEmit = 0 errors`, `vite build` succeeds |
+| **Phase 1 Extensions** | Multiple Chat Sessions UI + Rich Tool Display + Grep/Glob tools — all completed |
 
 ---
 
-### Phase 2 — Recipes + AutoDev Panel + GitHub
+### Phase 2 — Recipes + AutoDev Panel + GitHub 
 
-**Milestone:** YAML recipe engine running + GitHub integration visible
+**Milestone:** PA → Board → Supervisor → Worker workflow FULLY FUNCTIONAL
+
+**The Vision Lives Here:**
+```
+PA (Delegate Mode) → Internal Board (SQLite) → Supervisor (polls every 2 min) 
+→ Assigns to Worker recipe → Worker executes via core-orchestrator 
+→ QC reviews → Supervisor merges → Task closed
+```
 
 | Deliverable | What "Done" Means |
 |-------------|-----------------|
+| **Internal Task Board** | SQLite-based board with tasks table (ready/in-progress/qc-review/done) |
+| **Supervisor Recipe** | Polls board every 2 min, assigns tasks to appropriate workers |
+| **Worker Recipes** | Backend/Frontend/Cleanup workers execute tasks via core-orchestrator |
+| **QC Agent Recipe** | Reviews worker output, approves/rejects with feedback |
+| **Agent Roster UI** | Live view of Supervisor + Workers + QC with status and current task |
+| **Task Board UI** | Kanban view showing tasks flowing through columns |
 | **Recipe Parser** | YAML recipes parse correctly with steps/triggers/schedules |
-| **Recipe Runner** | Can execute recipe steps, agent processes them |
-| **Cron Scheduler** | `tokio-cron-scheduler` runs recurring recipes automatically |
-| **AutoDev Panel UI** | Tab shows agent roster, task board, dispatch signals |
-| **GitHub Client** | Can list/create/label/comment on issues from within AutoDev |
+| **Cron Scheduler** | `tokio-cron-scheduler` runs Supervisor/Worker/QC recipes automatically |
+| **GitHub Integration** | Workers can create PRs, QC posts reviews, Supervisor merges |
 | **Submodule Bridge** | `__autodev` tools route properly to core-orchestrator |
 
 ---
@@ -102,16 +117,23 @@ Based on your [DEVELOPMENT_PLAN.md](cci:7://file:///c:/AIRS%20Foundry/autodev/au
 
 ---
 
-### Phase 4 — Subagents + Model Router + Dispatch
+### Phase 4 — Subagents + Model Router + Dispatch 
 
-**Milestone:** Multi-agent orchestration actually working
+**Milestone:** Workers can spawn subagents — Full multi-agent orchestration
+
+**Final Vision Piece:**
+```
+Worker Backend (assigned by Supervisor) → Spawns subagents for parallel tasks
+→ Subagents execute with isolated tools/context → Results aggregated 
+→ Worker reports back to Supervisor → QC reviews → Complete
+```
 
 | Deliverable | What "Done" Means |
 |-------------|-----------------|
-| **Subagent Spawning** | Can spawn child agents with isolated tools/context |
-| **Model Router** | Role-based routing (e.g., "reviewer" → GPT-4, "coder" → Claude) |
+| **Subagent Spawning** | Workers can spawn child agents with isolated tools/context (up to 10 parallel) |
+| **Agent Teams** | Full Supervisor → Worker → Subagent hierarchy works end-to-end |
+| **Model Router** | Role-based routing (Supervisor → Opus, Workers → Sonnet, Cleanup → Haiku) |
 | **Dispatch Signals** | Filesystem watcher detects `.autodev/dispatch/` signals |
-| **Agent Teams** | Supervisor → worker coordination pattern works |
 | **Lock/Heartbeat** | Task claiming via lock files, 5-min heartbeat reporting |
 | **Azure OpenAI** | Additional provider support |
 
@@ -132,10 +154,10 @@ Based on your [DEVELOPMENT_PLAN.md](cci:7://file:///c:/AIRS%20Foundry/autodev/au
 
 ### Summary Progress
 
-| Phase | Status | Key Signifier of Completion |
-|-------|--------|----------------------------|
-| 1 | ✅ Done | You can chat with LLM, see streaming, costs tracked |
-| 2 | 🔲 Not started | First recipe runs end-to-end |
-| 3 | 🔲 Not started | Edit a file in the IDE tab |
-| 4 | 🔲 Not started | Two agents coordinate on a task |
-| 5 | 🔲 Not started | Install on fresh machine without dev tools |
+| Phase | Status | Key Signifier of Completion | Vision Status |
+|-------|--------|----------------------------|---------------|
+| 1 |  Done | You can chat with LLM, see streaming, costs tracked | Foundation: Chat works, tools work, PA Mode Toggle UI ready |
+| 2 |  **IN PROGRESS** | **PA creates tasks → Board → Supervisor → Worker → QC workflow LIVE** | **Vision Comes Alive** |
+| 3 |  Not started | Edit a file in the IDE tab | Enhancement |
+| 4 |  Not started | Worker spawns subagents, full hierarchy works | Vision Complete |
+| 5 |  Not started | Install on fresh machine without dev tools | Distribution |
