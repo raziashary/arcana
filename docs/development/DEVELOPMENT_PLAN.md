@@ -1755,33 +1755,56 @@ Returns structured JSON:
 - Unit test: `test_autodev_handler_routing()` — verify suffix-based routing
 - Integration test: `test_worker_recipe_with_autodev_tools()` — end-to-end flow
 
-### Phase 2 Deliverables Checklist
+### Phase 2 Deliverables — Split into 2.1 (Vision Core) and 2.2 (Production Scale)
 
-**Recipes System:**
-- [ ] YAML recipe parser with validation
-- [ ] Recipe browser UI in Recipes tab
-- [ ] Recipe execution engine (run recipe steps as agent messages)
-- [ ] Cron scheduler for recurring recipes
+Phase 2 remains the **grandiose vision**: PA delegates → Board → Supervisor assigns → Workers execute → QC reviews. The development is split into two milestones for focused delivery.
 
-**AutoDev Panel & Internal Board:**
-- [ ] AutoDev Panel: agent roster showing connected agents (status, current task, elapsed time)
-- [ ] AutoDev Panel: task board (4-column kanban: Ready, In Progress, QC Review, Done Today)
+---
+
+#### Phase 2.1 — "The Vision Core" ⭐ **PA Creates Tasks → They Actually Get Done**
+
+**Goal:** First end-to-end workflow. Razi can say "add /health endpoint" in Delegate Mode and see it happen.
+
+**Recipes System (Minimal):**
+- [ ] YAML recipe parser with validation — Parse recipe YAML into Recipe struct
+- [ ] Recipe execution engine (run recipe steps as agent messages) — Core engine
+- [ ] Cron scheduler for recurring recipes — `tokio-cron-scheduler` to poll every 2 min
+- [ ] Hardcoded Supervisor recipe (`~/.autodev/recipes/supervisor-poll.yaml`):
+  - Polls `~/.autodev/tasks.db` every 2 min for tasks with status='ready'
+  - Assigns to hardcoded `worker-backend` (single worker for 2.1)
+  - Updates task: `assigned_worker = 'worker-backend'`, `status = 'assigned'`
+- [ ] Hardcoded Worker recipe (`~/.autodev/recipes/worker-backend-poll.yaml`):
+  - Polls for tasks assigned to 'worker-backend'
+  - Claims task via lock file, executes (bash/write_file), marks 'done'
+  ```yaml
+  version: "1.0.0"
+  title: Worker Backend — Polling Loop
+  schedule: "*/120 * * * *"
+  permission_mode: autonomous
+  instructions: |
+    You are the AIRS Backend Worker.
+    1. Poll internal task board for tasks assigned to 'worker-backend'
+    2. If found: claim via lock file, execute task, test, mark done
+    3. If nothing: exit cleanly
+  ```
+- [ ] Recipe browser UI (read-only for 2.1) — List and view recipe YAML
+
+**AutoDev Panel & Internal Board (Minimal Viable):**
 - [ ] Internal Task Board database:
   - SQLite database at `~/.autodev/tasks.db`
   - Schema: tasks table with id, title, priority, type, status, acceptance_criteria, assigned_worker, timestamps
   - Rust module: `src-tauri/src/db/tasks.rs` with `rusqlite` crate
   - Tauri commands: `create_task`, `list_tasks`, `update_task_status`, `get_task_by_id`
+- [ ] AutoDev Panel: **View-only** task board (4-column kanban: Ready, In Progress, QC Review, Done Today)
 - [ ] TaskBoard component reads from SQLite via Tauri commands
-- [ ] Task status updates propagate to UI in real-time
+- [ ] Task status updates propagate to UI in real-time via Tauri events
+- [ ] AutoDev Panel: **Hardcoded** agent roster showing:
+  - Supervisor (always present, shows status)
+  - worker-backend (hardcoded for 2.1, shows status: Active/Working/Idle)
+  - QC Agent (optional for 2.1, can defer to 2.2)
+  - Status indicator: 🟢 Active / 🟡 Working / 🔵 Idle (no Error/Paused states for 2.1)
 
-**GitHub Integration:**
-- [ ] GitHub PAT storage in vault
-- [ ] GitHub MCP integration: list repos, create PR, review PR (workers use this, not for task assignment)
-
-**Provider Support:**
-- [ ] Additional providers: OpenAI, Gemini
-
-**PA Mode Toggle (Core Feature):**
+**PA Mode Toggle (Full Implementation):**
 - [ ] **UI Components:**
   - ChatHeader dropdown with 3 modes: 🔧 Fast Development, ✋ Review Mode, 📋 Delegate Mode
   - Mode indicator with colored dot (green/yellow/blue)
@@ -1797,7 +1820,7 @@ Returns structured JSON:
   - Tauri commands: `get_system_prompt_variant(mode)`, `set_system_prompt_variant(mode, content)`
 - [ ] **Backend - Tool Registry Filtering:**
   - `src-tauri/src/agent/tools/mod.rs`: Add `filter_tools_by_mode(tools, mode) -> Vec<Tool>`
-  - Fast Development: all builtin_tools (read_file, write_file, edit_file, bash, grep, glob, git)
+  - Fast Development: all builtin_tools (read_file, write_file, edit_file, bash, grep, glob)
   - Review Mode: all builtin_tools + wrap write operations with permission_check
   - Delegate Mode: only `create_task` tool (zero file tools)
   - Tool registry built conditionally before LLM call based on current PA mode
@@ -1808,7 +1831,16 @@ Returns structured JSON:
   - Returns task ID and confirmation message
   - Only registered in Delegate Mode
 
-**Worker Management System (New Major Feature):**
+**2.1 Success Criteria:**
+> Razi switches to Delegate Mode → says "add /health endpoint to orchestrator" → PA creates task #1 → Supervisor assigns to worker-backend → Worker executes → Task moves to Done column in AutoDev Panel
+
+---
+
+#### Phase 2.2 — "Production Worker Orchestration" 🚀 **Scale to Multiple Workers + GitHub**
+
+**Goal:** Production-grade worker management, multiple worker types, GitHub integration, full submodule bridge.
+
+**Worker Management System (Full Implementation):**
 - [ ] **Workers Database:**
   - SQLite database at `~/.autodev/workers.db`
   - Schema: workers table (see Module Breakdown § 8 for full schema)
@@ -1858,7 +1890,7 @@ Returns structured JSON:
     - Start/Stop/Pause (toggles recipe execution)
     - Edit (opens edit modal)
     - Delete (soft delete, confirms first)
-  - Worker status indicators:
+  - Worker status indicators (full set):
     - 🟢 Active (recipe running, polling)
     - 🟡 Working (executing task)
     - 🔵 Idle (created but not started)
@@ -1889,8 +1921,10 @@ Returns structured JSON:
       - github-mcp
       - developer
     ```
-- [ ] **Supervisor Recipe Logic:**
-  - `supervisor-poll.yaml` recipe (system-defined, locked):
+
+**Enhanced Supervisor Logic (Full Implementation):**
+- [ ] **Supervisor Recipe Logic (Production):**
+  - `supervisor-poll.yaml` recipe (system-defined, locked, reads from workers.db):
     - Polls `~/.autodev/tasks.db` every 2 min for tasks with status='ready'
     - For each ready task:
       - Determines if epic (needs breaking down) or atomic
@@ -1904,13 +1938,39 @@ Returns structured JSON:
   - Supervisor recipe uses **Mode 2: Worker Agent** (core-orchestrator)
   - Has access to all workers via `list_workers()` Tauri command (exposed to core-orchestrator as AutoDev tool)
 
-**Submodule Changes (core-orchestrator):**
+**GitHub Integration:**
+- [ ] GitHub PAT storage in vault — Secure keychain storage
+- [ ] GitHub MCP integration: list repos, create PR, review PR — Workers use this to create PRs after completing tasks
+
+**Provider Support:**
+- [ ] Additional providers: OpenAI, Gemini — Extend beyond Anthropic
+
+**Submodule Bridge (core-orchestrator integration):**
 - [ ] **[SUBMODULE]** `unified_tool_handler.py`: Add `register_autodev_handler()` + routing logic
 - [ ] **[SUBMODULE]** `autodev_handler.py`: New file with AutoDevToolHandler class
 - [ ] **[SUBMODULE]** `living_agent.py`: Wire up autodev_handler in `initialize_bridges()`
 - [ ] **[SUBMODULE]** `tool_executor.py`: Handle `__autodev` suffix in execution tracking
 - [ ] **[SUBMODULE]** Unit tests for autodev tool routing
 - [ ] **[SUBMODULE]** Integration tests for worker recipes with AutoDev tools
+
+**2.2 Success Criteria:**
+> Create custom worker "worker-api" via UI → Assign it specific repos → Task routes to it → Worker creates PR on GitHub → QC reviews → Supervisor merges
+
+---
+
+### Phase 2 Dependency Graph
+
+```
+Phase 2.1 Dependencies:
+  create_task tool → tasks.db → TaskBoard UI
+  PA Mode Toggle → System Prompt Variants → Tool Registry Filtering
+  Cron Scheduler → Hardcoded Supervisor Recipe → Hardcoded Worker Recipe
+
+Phase 2.2 Dependencies (requires 2.1):
+  workers.db → Worker Management UI → Recipe Auto-Generation
+  GitHub PAT → GitHub MCP → Workers create PRs
+  Submodule Bridge → core-orchestrator integration
+```
 
 ---
 
