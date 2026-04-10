@@ -27,11 +27,12 @@ const TABS: { id: TabId; label: string }[] = [
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>('chat')
-  const { loadProviders } = useSettingsStore()
+  const { loadProviders, loadDefaultSystemPrompt } = useSettingsStore()
   const { loadFromBackend } = useCostStore()
 
   useEffect(() => {
     loadProviders()
+    loadDefaultSystemPrompt()
     loadFromBackend()
   }, [])
 

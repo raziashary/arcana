@@ -10,6 +10,7 @@ use crate::provider::google::GoogleProvider;
 use crate::provider::traits::Provider;
 use crate::state::AppState;
 use crate::vault::keychain::{VaultManager, provider_key};
+use crate::agent::context::ContextBuilder;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -120,4 +121,9 @@ pub fn set_system_prompt(
     let mut s = state.lock().unwrap();
     s.system_prompt_override = prompt.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
     Ok(())
+}
+
+#[tauri::command]
+pub fn get_default_system_prompt() -> Result<String> {
+    Ok(ContextBuilder::default_system_prompt().to_string())
 }

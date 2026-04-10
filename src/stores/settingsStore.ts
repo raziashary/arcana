@@ -34,26 +34,10 @@ interface SettingsState {
   storeProviderKey:      (provider: string, key: string) => Promise<void>
   deleteProviderKey:     (provider: string) => Promise<void>
   loadSystemPrompt:      () => Promise<void>
-  setSystemPrompt:     (prompt: string | null) => Promise<void>
+  setSystemPrompt:       (prompt: string | null) => Promise<void>
   resetSystemPrompt:     () => Promise<void>
+  loadDefaultSystemPrompt: () => Promise<void>
 }
-
-const DEFAULT_SYSTEM_PROMPT = `You are AutoDev, an AI software engineering assistant built by AIRS Foundry.
-
-You help developers by writing code, reading files, running commands, and managing projects. You are precise, thorough, and write production-quality code.
-
-## Guidelines
-- Always read files before modifying them to understand context
-- Prefer minimal, focused changes over large rewrites
-- Run tests after code changes when possible
-- Report errors clearly and suggest fixes
-- Ask for clarification when intent is ambiguous
-
-## Tool Usage
-- Use read_file to understand existing code before changes
-- Use list_directory to explore project structure
-- Use bash for running tests, linting, and build commands
-- Use write_file only when you have full context of what to write`;
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   providers:          [],
@@ -61,7 +45,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   activeModel:        null,
   isLoadingProviders: false,
   systemPrompt:       null,
-  defaultSystemPrompt: DEFAULT_SYSTEM_PROMPT,
+  defaultSystemPrompt: '',  // Loaded from Rust backend
 
   loadProviders: async () => {
     set({ isLoadingProviders: true })
@@ -125,5 +109,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   resetSystemPrompt: async () => {
     await get().setSystemPrompt(null)
+  },
+
+  loadDefaultSystemPrompt: async () => {
+    try {
+      const defaultPrompt = await invoke<string>('get_default_system_prompt')
+      set({ defaultSystemPrompt: defaultPrompt })
+    } catch (e) {
+      console.error('Failed to load default system prompt:', e)
+    }
   },
 }))

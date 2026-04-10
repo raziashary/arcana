@@ -23,8 +23,8 @@ pub fn register_commands(
         agent_commands::{cancel_agent, respond_to_permission, send_message},
         session_commands::{create_session, delete_session, get_session, get_session_messages, list_sessions, update_session_title},
         settings_commands::{
-            get_active_provider, get_cost_today, get_system_prompt, list_providers,
-            set_active_provider, set_system_prompt, test_provider_connection,
+            get_active_provider, get_cost_today, get_default_system_prompt, get_system_prompt,
+            list_providers, set_active_provider, set_system_prompt, test_provider_connection,
         },
         vault_commands::{
             delete_github_pat, delete_provider_key, get_github_pat, get_provider_key,
@@ -51,6 +51,7 @@ pub fn register_commands(
         get_cost_today,
         get_system_prompt,
         set_system_prompt,
+        get_default_system_prompt,
         // Vault
         store_provider_key,
         get_provider_key,
