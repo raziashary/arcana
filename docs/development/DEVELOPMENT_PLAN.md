@@ -1667,38 +1667,38 @@ Returns structured JSON:
 
 ### 9.7 Phase 1 Extensions Deliverables Checklist
 
-**Multiple Chat Sessions UI:**
-- [ ] SessionBar component (200px left sidebar)
-- [ ] Session list with title, timestamp, message count
-- [ ] "New Session" button
-- [ ] Session switching via `switch_session(id)` Tauri command
-- [ ] Load messages from SQLite when switching
-- [ ] Delete session with confirmation
-- [ ] Active session highlighted with blue border
-- [ ] Keyboard shortcuts: Cmd/Ctrl+T (new), Cmd/Ctrl+W (close)
+**Multiple Chat Sessions UI:** ✅ **COMPLETED**
+- [x] SessionBar component (200px left sidebar) — `src/components/chat/SessionBar.tsx`
+- [x] Session list with title, timestamp, message count — `date-fns` formatting
+- [x] "New Session" button — `createSession()` in store
+- [x] Session switching via `switch_session(id)` Tauri command — `session_commands.rs`
+- [x] Load messages from SQLite when switching — `sessionStore.ts`
+- [x] Delete session with confirmation — Confirmation dialog implemented
+- [x] Active session highlighted with blue border — CSS styling applied
+- [x] Keyboard shortcuts: Cmd/Ctrl+T (new), Cmd/Ctrl+W (close) — Event listeners in Chat.tsx
 
-**Rich Tool Display UI:**
-- [ ] Enhanced ToolCallDisplay with tool-specific rendering
-- [ ] FileContentDisplay: syntax highlighting + line numbers + copy button
-- [ ] GrepResultsDisplay: collapsible files + highlighted matches
-- [ ] GlobResultsDisplay: sortable/filterable file table
-- [ ] BashOutputDisplay: stdout/stderr tabs + ANSI colors
-- [ ] DirectoryListingDisplay: sortable file table
-- [ ] Tool output parser (`toolOutputParser.ts`)
-- [ ] Language detection for syntax highlighting
+**Rich Tool Display UI:** ✅ **COMPLETED**
+- [x] Enhanced ToolCallDisplay with tool-specific rendering — `ToolCallDisplay.tsx`
+- [x] FileContentDisplay: syntax highlighting + line numbers + copy button — `prism-react-renderer`
+- [x] GrepResultsDisplay: collapsible files + highlighted matches — `GrepResultsDisplay.tsx`
+- [x] GlobResultsDisplay: sortable/filterable file table — `GlobResultsDisplay.tsx`
+- [x] BashOutputDisplay: stdout/stderr tabs + ANSI colors — `BashOutputDisplay.tsx` + `ansi-to-react`
+- [x] DirectoryListingDisplay: sortable file table — `DirectoryListingDisplay.tsx`
+- [x] Tool output parser (`toolOutputParser.ts`) — `src/utils/toolOutputParser.ts`
+- [x] Language detection for syntax highlighting — `detectLanguageFromPath()`
 
-**Grep & Glob Tools:**
-- [ ] Grep tool: structured output (file, line number, match positions)
-- [ ] Glob tool: structured output (path, size, modified date, is_directory)
-- [ ] Both tools return JSON for React parsing
-- [ ] Rust implementations with error handling
+**Grep & Glob Tools:** ✅ **COMPLETED**
+- [x] Grep tool: structured output (file, line number, match positions) — `grep.rs`
+- [x] Glob tool: structured output (path, size, modified date, is_directory) — `glob.rs`
+- [x] Both tools return JSON for React parsing — `serde_json::to_string_pretty`
+- [x] Rust implementations with error handling — Full error handling in both tools
 
-**Dependencies:**
-- [ ] `prism-react-renderer` — Syntax highlighting
-- [ ] `ansi-to-react` — Terminal ANSI color codes
-- [ ] `walkdir` — Directory traversal for grep
-- [ ] `glob` — Glob pattern matching
-- [ ] `regex` — Pattern matching
+**Dependencies:** ✅ **INSTALLED**
+- [x] `prism-react-renderer` — Syntax highlighting — in `package.json`
+- [x] `ansi-to-react` — Terminal ANSI color codes — in `package.json`
+- [x] `walkdir` — Directory traversal for grep — in `Cargo.toml`
+- [x] `glob` — Glob pattern matching — in `Cargo.toml`
+- [x] `regex` — Pattern matching — in `Cargo.toml`
 
 ---
 
