@@ -1,9 +1,13 @@
 // Context builder — constructs the system prompt for PA mode.
-// Injects CLAUDE.md content from ~/.airs/CLAUDE.md and {cwd}/CLAUDE.md.
-// Pattern from Claude Code's context injection system.
+// Injects AUTODEV.md content from SQLite database (proprietary AIRS system).
+// NOT file-based like Claude Code — this is UI-managed, stored in ~/.autodev/config.db
+// See: docs/autodev-vision/AUTODEV.md-deep-spec.md
 
 use std::path::Path;
 use tracing::debug;
+
+// TODO: Import DB module when implemented
+// use crate::db::autodev_instructions;
 
 pub struct ContextBuilder {
     working_dir: String,
@@ -14,42 +18,66 @@ impl ContextBuilder {
         Self { working_dir: working_dir.into() }
     }
 
-    /// Build the full system prompt including CLAUDE.md contents.
+    /// Build the full system prompt including AUTODEV.md contents.
     /// If override is provided, it replaces BASE_SYSTEM_PROMPT entirely.
+    /// 
+    /// TODO: Phase 2.5 — Replace filesystem-based injection with SQLite DB
+    /// Current implementation uses legacy file-based approach as placeholder.
+    /// Final implementation will query `autodev_instructions` table.
     pub fn build_system_prompt(&self, override_prompt: Option<&str>) -> String {
         let base = override_prompt.unwrap_or(BASE_SYSTEM_PROMPT);
         let mut parts = vec![base.to_string()];
 
-        // ~/.airs/CLAUDE.md — user global instructions
+        // LEGACY: ~/.airs/CLAUDE.md — will be replaced with SQLite query
+        // TODO: Query SQLite for global AUTODEV.md
+        // let global_content = autodev_instructions::get("global", None);
         if let Some(home) = home_dir() {
-            let global_claude = home.join(".airs").join("CLAUDE.md");
-            if let Ok(content) = std::fs::read_to_string(&global_claude) {
+            let global_autodev = home.join(".autodev").join("config").join("autodev_global.md");
+            if let Ok(content) = std::fs::read_to_string(&global_autodev) {
                 if !content.trim().is_empty() {
-                    debug!("Injecting global CLAUDE.md from {:?}", global_claude);
-                    parts.push(format!("## Global Instructions (CLAUDE.md)\n\n{content}"));
+                    debug!("Injecting global AUTODEV.md from {:?}", global_autodev);
+                    parts.push(format!("## Global Instructions (AUTODEV.md)\n\n{content}"));
                 }
             }
         }
 
-        // {cwd}/CLAUDE.md — project-specific instructions
-        let cwd_claude = Path::new(&self.working_dir).join("CLAUDE.md");
-        if let Ok(content) = std::fs::read_to_string(&cwd_claude) {
+        // LEGACY: {cwd}/CLAUDE.md — will be replaced with SQLite query
+        // TODO: Query SQLite for repo-specific AUTODEV.md
+        // let repo_content = autodev_instructions::get("repo", Some(&self.working_dir));
+        let cwd_autodev = Path::new(&self.working_dir).join(".autodev").join("autodev.md");
+        if let Ok(content) = std::fs::read_to_string(&cwd_autodev) {
             if !content.trim().is_empty() {
-                debug!("Injecting project CLAUDE.md from {:?}", cwd_claude);
-                parts.push(format!("## Project Instructions (CLAUDE.md)\n\n{content}"));
+                debug!("Injecting project AUTODEV.md from {:?}", cwd_autodev);
+                parts.push(format!("## Project Instructions (AUTODEV.md)\n\n{content}"));
             }
         }
 
-        // Also check AGENTS.md (Goose-style)
-        let agents_md = Path::new(&self.working_dir).join("AGENTS.md");
-        if let Ok(content) = std::fs::read_to_string(&agents_md) {
-            if !content.trim().is_empty() {
-                debug!("Injecting AGENTS.md from {:?}", agents_md);
-                parts.push(format!("## Agent Instructions (AGENTS.md)\n\n{content}"));
-            }
-        }
+        // REMOVED: AGENTS.md fallback — AutoDev is AUTODEV.md only
+        // No CLAUDE.md compatibility — this is proprietary AIRS system
 
         parts.join("\n\n---\n\n")
+    }
+
+    /// Build system prompt with PAMode selection (Phase 2)
+    /// 
+    /// TODO: Implement when PA Mode Toggle is built
+    pub fn build_system_prompt_with_mode(
+        &self,
+        mode: super::PAMode,  // TODO: Create this enum
+        repo_path: &str,
+    ) -> String {
+        let base = match mode {
+            // super::PAMode::FastDevelopment => BASE_SYSTEM_PROMPT,
+            // super::PAMode::Review => REVIEW_SYSTEM_PROMPT,      // TODO: Define
+            // super::PAMode::Delegate => DELEGATE_SYSTEM_PROMPT,  // TODO: Define
+            _ => BASE_SYSTEM_PROMPT,
+        };
+
+        // TODO: Fetch from SQLite
+        // let global = autodev_instructions::get("global", None);
+        // let repo = autodev_instructions::get("repo", Some(repo_path));
+
+        base.to_string()
     }
 
     /// Returns the default base system prompt (for display in settings).
