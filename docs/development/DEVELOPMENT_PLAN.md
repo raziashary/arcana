@@ -2162,57 +2162,1221 @@ Phase 2.2 Dependencies (requires 2.1):
 
 ---
 
-## 11. Phase 3 — IDE + Skills + Hooks + MCP Server
+## 11. Phase 3 — Skills + Hooks + IDE + MCP Server + Plan Management
 
-**Goal**: IDE tab with file tree, Skills system, Hooks system, AIRS MCP server, sidecar management.
+**Goal**: Skills system for Fleet workflows, Hooks for extensibility, IDE tab with file tree and code viewer, Git integration with checkpointing, AIRS MCP server, sidecar management, and Plan Management for complex multi-step tasks.
 
-### Key Components
+> **Priority Order**: Skills/Hooks (Fleet-critical) → IDE → Git → MCP/Sidecars → Plan Management
 
-- **IDE Tab**: File tree (recursive dir listing), code viewer with syntax highlighting, **git sub-panel** (see Section 6.3)
-- **Git Integration**: `git2-rs` module with clone, branch, diff, status, commit, push, worktree management (see Section 6.2)
-- **File Checkpointing**: Snapshot before/after each file write, undo support (see Section 6.2)
-- **Repo Management**: Clone AIRS Foundry repos from within the IDE tab, multi-repo selector
-- **Skills**: `.md` files in `.airs/skills/` loaded as reusable prompt templates
-- **Hooks**: Event-driven extensibility (PreToolUse, PostToolUse, SessionStart)
-- **AIRS MCP Server**: Expose `airs_get_tasks`, `airs_claim_task`, `airs_report_progress`, etc.
-- **Sidecar Manager**: Start/stop/monitor `core-orchestrator` and `memory-mcp-server`
-
-### Hooks Event System
+### Phase 3 Architecture Overview
 
 ```
-┌──────────────┐      ┌──────────────────┐      ┌───────────────┐
-│ Agent Engine │─emit─►│ Event Dispatcher │─────►│ Hook Registry │
-└──────────────┘      └──────────────────┘      └───────┬───────┘
-                                                        │
-                                                   ┌────┴────┐
-                                                   ▼         ▼
-                                             ┌─────────┐ ┌─────────┐
-                                             │ Hook A  │ │ Hook B  │
-                                             │ (file)  │ │ (shell) │
-                                             └─────────┘ └─────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           Phase 3 Sub-Phase Dependencies                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Phase 3.1 ───────────────────────┐                                         │
+│  Skills + Hooks System            │                                         │
+│  (Fleet Foundation)               ▼                                         │
+│                          Phase 3.2 ─────────────────────┐                   │
+│                          IDE Core (File Tree + Viewer)  │                   │
+│                                                         ▼                   │
+│                                               Phase 3.3 ──────────────────┐ │
+│                                               Git + Checkpointing          │ │
+│                                                                            │ │
+│  Phase 3.4 ────────────────────────────────────────────────────────────────┘ │
+│  MCP Server + Sidecar Management                                             │
+│       │                                                                    │
+│       ▼                                                                    │
+│  Phase 3.5 ────────────────────────────────────────────────────────────────│
+│  Plan Management System                                                    │
+│  (Uses all previous sub-phases)                                            │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Phase 3 Deliverables Checklist
+---
 
-- [ ] IDE tab: file tree browser with icons
-- [ ] IDE tab: code viewer with syntax highlighting
-- [ ] IDE tab: git sub-panel (toggle via [Git ▼] button)
-- [ ] IDE tab: repo selector dropdown + "Clone Repo" button
-- [ ] Git: `git2-rs` repo open/clone/status/diff/branch/commit/push
-- [ ] Git: worktree create/enter/exit/remove/list
-- [ ] Git: file checkpointing per message (undo support)
-- [ ] Git: commit attribution trailer (`Generated-by: AutoDev/<role>`)
-- [ ] Git: clone repos from AIRS Foundry org via GitHub API
-- [ ] Skills system: load `.md` skills, expose as slash commands
-- [ ] Hooks system: PreToolUse, PostToolUse, SessionStart events
-- [ ] Hooks config: `.airs/hooks.json` per-repo
-- [ ] AIRS MCP server: 5+ tools (get_tasks, claim_task, etc.)
-- [ ] Sidecar manager: start/stop core-orchestrator
-- [ ] Sidecar manager: start/stop memory-mcp-server
-- [ ] Sidecar manager: start/stop Redis
-- [ ] Sidecar health checks + auto-restart
-- [ ] Additional tools: `glob`, `grep`, `web_search`
-- [ ] Ollama provider (local models)
+### Phase 3.1 — Skills + Hooks System 🎯 **FLEET CRITICAL - HIGHEST PRIORITY**
+
+**Goal**: Enable reusable prompt workflows (Skills) and event-driven extensibility (Hooks) for Fleet orchestration. Skills allow workers to follow standardized patterns. Hooks enable custom automation at key lifecycle points.
+
+**Why First**: Fleet workers in Phase 2.2 need Skills for consistent execution patterns and Hooks for custom integrations (notifications, CI triggers, logging).
+
+#### Skills System Architecture
+
+**Core Concept**: `.md` files in `~/.autodev/skills/` containing templated workflows that can be invoked via slash commands or programmatically by workers.
+
+**Backend — Skills Engine:**
+
+**File Structure:**
+- [ ] `src-tauri/src/skills/mod.rs`: Skills module declaration
+- [ ] `src-tauri/src/skills/types.rs`: `Skill`, `SkillCategory`, `SkillParameter` structs
+- [ ] `src-tauri/src/skills/loader.rs`: `SkillLoader` with hot-reload capability
+- [ ] `src-tauri/src/skills/engine.rs`: `SkillEngine` for parameter substitution and execution
+- [ ] `src-tauri/src/skills/registry.rs`: `SkillRegistry` with category-based organization
+
+**Skill Discovery & Loading:**
+- [ ] Scan `~/.autodev/skills/` on startup and file watcher for hot-reload
+- [ ] Recursive directory scanning: `~/.autodev/skills/{category}/{skill_name}.md`
+- [ ] YAML frontmatter parsing for metadata
+- [ ] Markdown body as skill template with `{{parameter}}` substitution
+- [ ] JSON schema validation for skill parameters
+
+**Skill Schema (YAML Frontmatter):**
+```yaml
+---
+name: feature-implementation
+description: Standard workflow for implementing new features
+category: coding  # coding, debugging, testing, review, deployment
+parameters:
+  - name: feature_name
+    type: string
+    required: true
+    description: Name of the feature to implement
+  - name: target_module
+    type: string
+    required: true
+    description: Module or directory where feature belongs
+  - name: include_tests
+    type: boolean
+    required: false
+    default: true
+    description: Whether to include test implementation
+  - name: reasoning_effort
+    type: enum
+    values: [low, medium, high]
+    default: medium
+    description: Level of reasoning for implementation
+version: "1.0.0"
+author: "AutoDev"
+tags: [backend, frontend, api]
+---
+```
+
+**Tauri Commands:**
+- [ ] `list_skills(category_filter?) -> Vec<SkillSummary>`: List all available skills
+- [ ] `get_skill(name) -> SkillDetail`: Load full skill with template
+- [ ] `execute_skill(name, parameters) -> SkillExecutionResult`: Execute skill with parameter substitution
+- [ ] `validate_skill_parameters(name, parameters) -> ValidationResult`: Pre-validate before execution
+- [ ] `reload_skills() -> ()`: Force reload from disk (for development)
+- [ ] `import_skill(url_or_path) -> Result<Skill>`: Import from external source
+
+**Skill Execution Flow:**
+```
+User: "/feature-implementation"
+       │
+       ▼
+┌─────────────────┐
+│ SkillRegistry   │──► Find skill by name
+│   .get()        │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ SkillEngine     │──► Validate parameters against schema
+│ .validate()     │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Parameter Sub   │──► Replace {{feature_name}} with actual value
+│ .substitute()   │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Agent Engine    │──► Inject templated prompt into context
+│ .apply_skill()  │
+└─────────────────┘
+```
+
+**Built-in Skill Categories:**
+
+**1. Coding Skills (`~/.autodev/skills/coding/`):**
+- [ ] `feature-implementation.md`: Standard 5-step feature development
+- [ ] `api-endpoint.md`: Design → Implement → Test → Document flow
+- [ ] `database-migration.md`: Schema design → Migration → Validation
+- [ ] `refactoring.md`: Analyze → Plan → Execute → Verify pattern
+- [ ] `code-review.md`: Read → Analyze → Comment → Summarize workflow
+- [ ] `test-addition.md`: Identify → Write → Run → Fix cycle
+
+**2. Debugging Skills (`~/.autodev/skills/debugging/`):**
+- [ ] `error-investigation.md`: Log analysis → Reproduction → Root cause → Fix
+- [ ] `performance-optimization.md`: Profile → Identify bottleneck → Optimize → Validate
+- [ ] `race-condition-debug.md`: Pattern recognition → Lock analysis → Fix → Stress test
+
+**3. DevOps Skills (`~/.autodev/skills/devops/`):**
+- [ ] `docker-setup.md`: Dockerfile → Compose → Test → Push
+- [ ] `ci-pipeline-fix.md`: Diagnose → Patch → Test → Deploy
+- [ ] `dependency-update.md`: Check → Update → Test → Commit
+
+**4. Fleet Skills (`~/.autodev/skills/fleet/`):** ⭐ Critical for Phase 2.2
+- [ ] `worker-task-execution.md`: Claim → Analyze → Execute → Report pattern
+- [ ] `supervisor-orchestration.md`: Poll → Assign → Monitor → Merge workflow
+- [ ] `qc-review.md`: Fetch → Review → Comment → Approve/Reject flow
+- [ ] `epic-breakdown.md`: Analyze → Decompose → Create subtasks → Assign
+
+**Frontend — Skills UI:**
+
+**Skills Palette (`src/components/skills/SkillsPalette.tsx`):**
+- [ ] `Cmd+Shift+S` shortcut to open skills palette (like VS Code command palette)
+- [ ] Search/filter by name, category, tags
+- [ ] Category sidebar: Coding | Debugging | DevOps | Fleet | Custom
+- [ ] Preview pane showing skill description and parameters
+- [ ] "Execute" button with parameter form modal
+- [ ] Recent skills section at top
+
+**Skill Parameter Modal (`src/components/skills/SkillParameterModal.tsx`):**
+- [ ] Dynamic form generation from JSON schema
+- [ ] Validation messages per field
+- [ ] Required vs optional field indicators
+- [ ] Default value pre-population
+- [ ] Description tooltips for each parameter
+- [ ] "Execute" / "Cancel" buttons
+
+**Skill Store (`src/stores/skillStore.ts`):**
+- [ ] State: `skills` (by category), `recentSkills`, `isLoading`, `executionHistory`
+- [ ] Actions: `loadSkills()`, `executeSkill()`, `searchSkills()`, `addToRecent()`
+
+**Slash Command Integration:**
+- [ ] Auto-complete slash commands in chat input
+- [ ] `/skill-name` triggers skill palette pre-filtered
+- [ ] Tab completion for skill names
+- [ ] Skills appear in tool suggestions
+
+#### Hooks System Architecture
+
+**Core Concept**: Event-driven extensibility allowing custom code execution at key lifecycle points. Inspired by Claude Code's PreToolUse/PostToolUse pattern and Git hooks.
+
+**Backend — Hooks Engine:**
+
+**File Structure:**
+- [ ] `src-tauri/src/hooks/mod.rs`: Hooks module declaration
+- [ ] `src-tauri/src/hooks/types.rs`: `Hook`, `HookType`, `HookCondition`, `HookResult` enums
+- [ ] `src-tauri/src/hooks/registry.rs`: `HookRegistry` with priority-based ordering
+- [ ] `src-tauri/src/hooks/executor.rs`: `HookExecutor` with sandboxed execution
+- [ ] `src-tauri/src/hooks/conditions.rs`: `HookConditionEvaluator` for conditional execution
+
+**Hook Types (Event Triggers):**
+
+**1. Agent Lifecycle Hooks:**
+- [ ] `SessionStart`: Triggered when new session created
+- [ ] `SessionEnd`: Triggered when session closed
+- [ ] `AgentLoopStart`: Before agent begins processing
+- [ ] `AgentLoopEnd`: After agent completes turn
+- [ ] `OnError`: When agent encounters error
+
+**2. Tool Execution Hooks:**
+- [ ] `PreToolUse`: Before any tool executes (can modify inputs or block)
+- [ ] `PostToolUse`: After tool completes (can modify outputs)
+- [ ] `OnToolError`: When tool execution fails
+- [ ] `OnPermissionRequest`: When permission dialog shown
+
+**3. File System Hooks:**
+- [ ] `PreFileRead`: Before read_file tool executes
+- [ ] `PostFileWrite`: After write_file or edit_file succeeds
+- [ ] `PreFileDelete`: Before file deletion (can prevent)
+- [ ] `OnCheckpointCreate`: When file checkpoint created
+- [ ] `OnCheckpointRestore`: When file restored from checkpoint
+
+**4. Git Hooks:**
+- [ ] `PreCommit`: Before git commit executes
+- [ ] `PostCommit`: After commit succeeds
+- [ ] `PrePush`: Before git push
+- [ ] `OnBranchSwitch`: When switching branches
+- [ ] `OnMergeConflict`: When merge conflict detected
+
+**5. Plan Management Hooks:**
+- [ ] `PrePlanStep`: Before executing tools for plan step
+- [ ] `PostPlanStep`: After plan step completes
+- [ ] `OnPlanActivate`: When plan moves draft → active
+- [ ] `OnPlanComplete`: When all plan steps done
+- [ ] `OnPlanAbandon`: When plan abandoned
+
+**6. Fleet-Specific Hooks:** ⭐ Critical for Phase 2.2
+- [ ] `OnTaskClaim`: When worker claims task
+- [ ] `OnTaskComplete`: When worker completes task
+- [ ] `OnTaskFail`: When worker task fails
+- [ ] `OnQCReviewStart`: When QC begins review
+- [ ] `OnQCApprove`: When QC approves work
+- [ ] `OnQCFail`: When QC rejects work
+
+**Hook Configuration (`~/.autodev/hooks/hooks.json`):**
+```json
+{
+  "hooks": [
+    {
+      "id": "notify-on-completion",
+      "type": "PostToolUse",
+      "enabled": true,
+      "priority": 100,
+      "conditions": {
+        "tool_name": "write_file",
+        "file_pattern": "*.rs"
+      },
+      "action": {
+        "type": "shell",
+        "command": "notify-send 'Rust file modified' '{{file_path}}'"
+      }
+    },
+    {
+      "id": "auto-format-on-save",
+      "type": "PostFileWrite",
+      "enabled": true,
+      "priority": 50,
+      "conditions": {
+        "file_pattern": "*.rs",
+        "repo_path": "/home/user/rust-projects/*"
+      },
+      "action": {
+        "type": "shell",
+        "command": "cd {{repo_root}} && cargo fmt"
+      }
+    },
+    {
+      "id": "log-to-slack",
+      "type": "OnTaskComplete",
+      "enabled": false,
+      "priority": 10,
+      "action": {
+        "type": "http",
+        "url": "https://hooks.slack.com/services/...",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "text": "Task {{task_id}} completed by {{worker_id}}"
+        }
+      }
+    },
+    {
+      "id": "prevent-dangerous-commands",
+      "type": "PreToolUse",
+      "enabled": true,
+      "priority": 1000,
+      "conditions": {
+        "tool_name": "bash",
+        "command_pattern": "(rm -rf /|dd if=/dev/zero|>:/)"
+      },
+      "action": {
+        "type": "block",
+        "message": "Dangerous command blocked: {{command}}"
+      }
+    }
+  ]
+}
+```
+
+**Hook Action Types:**
+- [ ] `shell`: Execute shell command with variable substitution
+- [ ] `script`: Execute Python/Node script file
+- [ ] `http`: HTTP POST/GET request with JSON body
+- [ ] `notification`: System notification (desktop)
+- [ ] `log`: Write to custom log file
+- [ ] `block`: Prevent action with optional message
+- [ ] `modify`: Change tool inputs before execution
+- [ ] `emit_event`: Custom Tauri event for frontend
+
+**Hook Conditions:**
+- [ ] `tool_name`: Match specific tool
+- [ ] `file_pattern`: Glob pattern for file paths
+- [ ] `repo_path`: Only in specific repositories
+- [ ] `command_pattern`: Regex match for bash commands
+- [ ] `session_type`: PA vs Fleet sessions
+- [ ] `agent_mode`: FastDevelopment vs Review vs Delegate
+- [ ] `time_range`: Only during business hours
+- [ ] `custom_condition`: JavaScript expression evaluated at runtime
+
+**Hook Execution Context:**
+Hook actions receive context object:
+```json
+{
+  "hook_type": "PostToolUse",
+  "timestamp": "2026-01-15T10:30:00Z",
+  "session_id": "sess_abc123",
+  "agent_mode": "FastDevelopment",
+  "tool_call": {
+    "id": "call_123",
+    "name": "write_file",
+    "input": { "file_path": "/src/main.rs", "content": "..." },
+    "result": { "success": true, "output": "File written" }
+  },
+  "repo": {
+    "path": "/home/user/project",
+    "name": "my-project",
+    "branch": "feature-branch"
+  },
+  "plan": {
+    "id": "plan_456",
+    "current_step": 2,
+    "total_steps": 5
+  }
+}
+```
+
+**Tauri Commands:**
+- [ ] `list_hooks() -> Vec<HookConfig>`: List all configured hooks
+- [ ] `enable_hook(hook_id) -> ()`: Enable a hook
+- [ ] `disable_hook(hook_id) -> ()`: Disable a hook
+- [ ] `add_hook(config) -> Result<HookConfig>`: Add new hook
+- [ ] `remove_hook(hook_id) -> ()`: Remove custom hook
+- [ ] `test_hook(hook_id, context) -> HookResult`: Test hook with mock context
+- [ ] `get_hook_logs(hook_id?, limit?) -> Vec<HookExecutionLog>`: View execution history
+
+**Frontend — Hooks UI:**
+
+**Hooks Settings Panel (`src/components/settings/HooksSettings.tsx`):**
+- [ ] List all hooks with toggle switches
+- [ ] Drag-drop priority reordering
+- [ ] "Add Hook" button with template selection
+- [ ] Hook editor: JSON/YAML editor with validation
+- [ ] Test button with mock context generator
+- [ ] Execution log viewer with timestamps
+
+**Hook Log Viewer (`src/components/hooks/HookLogViewer.tsx`):**
+- [ ] Filter by hook type, success/failure, time range
+- [ ] Expandable entries showing full context
+- [ ] Error highlighting for failed hooks
+- [ ] Export logs button
+
+#### Phase 3.1 Deliverables Checklist
+
+**Backend — Skills System:**
+- [ ] `src-tauri/src/skills/mod.rs`: Module declaration
+- [ ] `src-tauri/src/skills/types.rs`: Skill, SkillCategory, SkillParameter structs
+- [ ] `src-tauri/src/skills/loader.rs`: SkillLoader with hot-reload
+- [ ] `src-tauri/src/skills/engine.rs`: SkillEngine for parameter substitution
+- [ ] `src-tauri/src/skills/registry.rs`: SkillRegistry with category organization
+- [ ] Skills directory scanning with file watcher
+- [ ] YAML frontmatter parsing for skill metadata
+- [ ] Markdown template with `{{parameter}}` substitution
+- [ ] JSON schema validation for skill parameters
+- [ ] Tauri commands: `list_skills`, `get_skill`, `execute_skill`, `validate_skill_parameters`, `reload_skills`, `import_skill`
+- [ ] 20+ built-in skills across 5 categories (coding, debugging, devops, fleet, custom)
+- [ ] Skill execution history tracking
+
+**Frontend — Skills System:**
+- [ ] `src/components/skills/SkillsPalette.tsx`: Command palette UI (Cmd+Shift+S)
+- [ ] `src/components/skills/SkillParameterModal.tsx`: Dynamic parameter forms
+- [ ] `src/stores/skillStore.ts`: Skill state management
+- [ ] Slash command auto-complete for skills
+- [ ] Recent skills tracking
+- [ ] Skills category browser
+
+**Backend — Hooks System:**
+- [ ] `src-tauri/src/hooks/mod.rs`: Module declaration
+- [ ] `src-tauri/src/hooks/types.rs`: Hook, HookType, HookCondition, HookResult enums
+- [ ] `src-tauri/src/hooks/registry.rs`: HookRegistry with priority ordering
+- [ ] `src-tauri/src/hooks/executor.rs`: HookExecutor with sandboxing
+- [ ] `src-tauri/src/hooks/conditions.rs`: HookConditionEvaluator
+- [ ] 18 hook types across 6 categories (agent, tool, file, git, plan, fleet)
+- [ ] Action types: shell, script, http, notification, log, block, modify, emit_event
+- [ ] Hook conditions: tool_name, file_pattern, repo_path, command_pattern, session_type, agent_mode, time_range
+- [ ] Tauri commands: `list_hooks`, `enable_hook`, `disable_hook`, `add_hook`, `remove_hook`, `test_hook`, `get_hook_logs`
+- [ ] Hooks configuration persistence in SQLite
+
+**Frontend — Hooks System:**
+- [ ] `src/components/settings/HooksSettings.tsx`: Hook management UI
+- [ ] `src/components/hooks/HookLogViewer.tsx`: Execution log viewer
+- [ ] Hook template gallery (pre-built hooks)
+- [ ] Hook testing interface with mock context
+
+**Integration:**
+- [ ] Skills exposed in slash commands
+- [ ] Skills integrated with Plan Management (plan templates)
+- [ ] Hooks integrated with all tool executions
+- [ ] Hooks integrated with Plan Management lifecycle
+- [ ] Documentation: Skills authoring guide, Hooks reference
+
+#### Phase 3.1 Success Criteria
+
+> **Skill Test**: User types `/feature-implementation`, fills form with "add user auth" → PA follows 5-step skill template → Result is working auth implementation
+
+> **Hook Test**: User configures `PostFileWrite` hook to auto-run `cargo fmt` → PA writes Rust file → Hook auto-formats → User sees formatted code
+
+> **Fleet Integration**: Supervisor recipe uses `worker-task-execution` skill → Worker follows skill pattern → Task completes with standardized output
+
+---
+
+### Phase 3.2 — IDE Core (File Tree + Code Viewer)
+
+**Goal**: Full IDE tab with file tree browser, code viewer with syntax highlighting, file search, and tab management.
+
+**Why After Skills**: IDE is for human convenience; Skills enable Fleet automation which is higher priority.
+
+#### Backend — File System & IDE Services
+
+**File Structure:**
+- [ ] `src-tauri/src/ide/mod.rs`: IDE module declaration
+- [ ] `src-tauri/src/ide/file_tree.rs`: File tree generation with metadata
+- [ ] `src-tauri/src/ide/file_reader.rs`: File reading with encoding detection
+- [ ] `src-tauri/src/ide/file_search.rs`: Fast file search (name + content)
+- [ ] `src-tauri/src/ide/symbols.rs`: Symbol extraction (tree-sitter based)
+- [ ] `src-tauri/src/ide/workspace.rs`: Workspace state management
+
+**Tauri Commands:**
+- [ ] `read_file_tree(path, depth?, ignore_patterns?) -> FileTreeNode`: Recursive directory listing
+- [ ] `read_file_content(path, offset?, limit?) -> FileContent`: Read with pagination
+- [ ] `search_files(query, path?, glob?, max_results?) -> Vec<FileSearchResult>`: Fast search
+- [ ] `search_file_contents(query, path?, max_results?) -> Vec<ContentSearchResult>`: Grep-like content search
+- [ ] `get_file_metadata(path) -> FileMetadata`: Size, modified, permissions, git status
+- [ ] `get_symbol_tree(path) -> SymbolTree`: Parse file into symbols (functions, classes, etc.)
+- [ ] `resolve_symbol(path, line, column) -> SymbolDefinition`: Go to definition
+- [ ] `find_symbol_references(path, symbol_name) -> Vec<SymbolReference>`: Find usages
+
+**File Tree Features:**
+- [ ] Recursive directory scanning with depth limit
+- [ ] Git status integration (modified, untracked, staged)
+- [ ] Lazy loading for large directories
+- [ ] Ignore pattern support (`.gitignore`, custom patterns)
+- [ ] File type icons mapping (200+ file extensions)
+- [ ] Directory expansion/collapse state persistence
+
+#### Frontend — IDE UI Components
+
+**IDE Tab Layout:**
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Repo Selector [Repo ▼]  [Clone]  [Refresh]  [Search Files 🔍]     │
+├──────────┬──────────────────────────────────────────────────────────┤
+│          │  Tabs: [main.rs ✕] [lib.rs ✕] [Cargo.toml ✕] [+]
+│  📁 src  │  ┌────────────────────────────────────────────────────┐
+│  📄 main │  │ 1  │ fn main() {                                    │
+│  📄 lib  │  │ 2  │     println!("Hello, AutoDev!");              │
+│  📁 test │  │ 3  │ }                                              │
+│  📄 ...  │  │    │                                                │
+│          │  └────────────────────────────────────────────────────┘
+│          │  [Git ▼] [Blame] [Outline ▼]  Line 1, Col 1   Rust
+├──────────┴──────────────────────────────────────────────────────────┤
+│  Status: main.rs modified (2 lines added)  Git: 2 files modified  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**File Tree Component (`src/components/ide/FileTree.tsx`):**
+- [ ] Collapsible folder tree with chevron indicators
+- [ ] File icons based on extension (using `lucide-react` or `vscode-icons`)
+- [ ] Git status badges (M=modified, U=untracked, S=staged)
+- [ ] Context menu: Open, Copy Path, Delete, Rename, New File/Folder
+- [ ] Drag-and-drop file movement (within tree)
+- [ ] Filter/search within tree
+- [ ] "Open Editors" section at top
+- [ ] Recently opened files section
+
+**Code Viewer Component (`src/components/ide/CodeViewer.tsx`):**
+- [ ] Monaco Editor integration (`@monaco-editor/react`)
+- [ ] Syntax highlighting for 50+ languages via Monarch grammars
+- [ ] Read-only mode for safety (PA writes via tools, not direct editing)
+- [ ] Line numbers with optional relative line numbers
+- [ ] Current line highlighting
+- [ ] Code folding support
+- [ ] Minimap (overview) on right side
+- [ ] Scroll to line capability (from tool results)
+- [ ] "Open in IDE" from tool results jumps to specific line
+
+**Tab Management (`src/components/ide/TabBar.tsx`):**
+- [ ] Horizontal tab bar with file names
+- [ ] Modified indicator (dot or asterisk)
+- [ ] Close button per tab (middle-click to close)
+- [ ] Tab overflow handling (scroll or dropdown)
+- [ ] Tab reordering via drag-drop
+- [ ] "Close Others", "Close All", "Close Unmodified" context menu
+- [ ] Tab state persistence across sessions
+
+**File Search (`src/components/ide/FileSearch.tsx`):**
+- [ ] `Ctrl+P` / `Cmd+P` quick file open
+- [ ] Fuzzy search matching
+- [ ] Recent files prioritized in results
+- [ ] File path preview in results
+- [ ] Keyboard navigation (arrow keys + enter)
+
+**Symbol Outline (`src/components/ide/SymbolOutline.tsx`):**
+- [ ] Tree view of file symbols (functions, classes, variables)
+- [ ] Click to jump to symbol definition
+- [ ] Filter/search symbols
+- [ ] Sort by position or alphabetical
+
+**IDE Store (`src/stores/ideStore.ts`):**
+- [ ] State: `openTabs`, `activeTab`, `fileTree`, `expandedDirs`, `recentFiles`
+- [ ] Actions: `openFile()`, `closeTab()`, `switchTab()`, `refreshTree()`, `searchFiles()`
+
+#### Phase 3.2 Deliverables Checklist
+
+**Backend:**
+- [ ] File tree generation with git status
+- [ ] File reading with encoding detection (UTF-8, UTF-16, etc.)
+- [ ] Fast file search by name
+- [ ] File content search (grep integration)
+- [ ] Symbol extraction via tree-sitter
+- [ ] File metadata retrieval
+- [ ] Workspace state management
+
+**Frontend:**
+- [ ] File tree component with icons and git badges
+- [ ] Monaco Editor code viewer (read-only)
+- [ ] Tab management with persistence
+- [ ] Quick file search (`Ctrl+P`)
+- [ ] Symbol outline panel
+- [ ] Git status integration in file tree
+- [ ] Breadcrumb navigation
+- [ ] File context menu operations
+
+**Integration:**
+- [ ] "Open in IDE" from tool results
+- [ ] Click file path in chat to open in IDE
+- [ ] IDE state sync with session
+
+#### Phase 3.2 Success Criteria
+
+> User opens IDE tab → Sees file tree with git status → Clicks `main.rs` → Code opens in Monaco viewer with Rust syntax highlighting → User opens `lib.rs` in new tab → Tabs persist across app restarts
+
+---
+
+### Phase 3.3 — Git Integration + Checkpointing
+
+**Goal**: Full git integration in IDE, file checkpointing for undo support, git operations via `git2-rs`.
+
+**Depends On**: IDE Core (needs file tree to show git status)
+
+#### Backend — Git Module
+
+**File Structure:**
+- [ ] `src-tauri/src/git/mod.rs`: Git module declaration
+- [ ] `src-tauri/src/git/repo.rs`: Repository operations (open, clone, init)
+- [ ] `src-tauri/src/git/status.rs`: File status (modified, staged, untracked)
+- [ ] `src-tauri/src/git/diff.rs`: Diff generation
+- [ ] `src-tauri/src/git/commit.rs`: Commit operations
+- [ ] `src-tauri/src/git/branch.rs`: Branch management
+- [ ] `src-tauri/src/git/worktree.rs`: Worktree operations
+- [ ] `src-tauri/src/git/remote.rs`: Push, pull, fetch
+- [ ] `src-tauri/src/git/checkpoint.rs`: File checkpointing system
+- [ ] `src-tauri/src/git/history.rs`: Commit history, blame
+- [ ] `src-tauri/src/git/merge.rs`: Merge and conflict resolution
+
+**Tauri Commands:**
+- [ ] `git_open_repo(path) -> RepoInfo`: Open repository
+- [ ] `git_clone(url, path, branch?) -> RepoInfo`: Clone repository
+- [ ] `git_status(repo_path) -> GitStatus`: Get file status
+- [ ] `git_diff(repo_path, file?, staged?) -> DiffResult`: Get diff
+- [ ] `git_stage(repo_path, files) -> ()`: Stage files
+- [ ] `git_unstage(repo_path, files) -> ()`: Unstage files
+- [ ] `git_commit(repo_path, message, author?, trailer?) -> CommitInfo`: Commit with trailer
+- [ ] `git_push(repo_path, remote?, branch?) -> ()`: Push
+- [ ] `git_pull(repo_path, remote?, branch?) -> PullResult`: Pull
+- [ ] `git_fetch(repo_path, remote?) -> ()`: Fetch
+- [ ] `git_branch_list(repo_path) -> Vec<BranchInfo>`: List branches
+- [ ] `git_branch_create(repo_path, name, checkout?) -> ()`: Create branch
+- [ ] `git_branch_delete(repo_path, name, force?) -> ()`: Delete branch
+- [ ] `git_checkout(repo_path, ref) -> ()`: Checkout branch/commit
+- [ ] `git_worktree_list(repo_path) -> Vec<WorktreeInfo>`: List worktrees
+- [ ] `git_worktree_add(repo_path, path, branch?) -> WorktreeInfo`: Add worktree
+- [ ] `git_worktree_remove(repo_path, path, force?) -> ()`: Remove worktree
+- [ ] `git_log(repo_path, max_count?, file?) -> Vec<CommitInfo>`: Commit history
+- [ ] `git_blame(repo_path, file, line?) -> Vec<BlameLine>`: Line annotations
+- [ ] `git_stash_list(repo_path) -> Vec<StashInfo>`: List stashes
+- [ ] `git_stash_push(repo_path, message?, include_untracked?) -> ()`: Create stash
+- [ ] `git_stash_apply(repo_path, stash_id, pop?) -> ()`: Apply stash
+- [ ] `git_stash_drop(repo_path, stash_id) -> ()`: Delete stash
+
+**Checkpointing System:**
+- [ ] `create_checkpoint(repo_path, file_path, reason) -> CheckpointInfo`: Snapshot file
+- [ ] `restore_checkpoint(checkpoint_id) -> RestoreResult`: Restore from snapshot
+- [ ] `list_checkpoints(repo_path?, file_path?) -> Vec<CheckpointInfo>`: List snapshots
+- [ ] `delete_checkpoint(checkpoint_id) -> ()`: Delete old checkpoint
+- [ ] `compare_checkpoints(checkpoint_id_1, checkpoint_id_2) -> DiffResult`: Compare versions
+- [ ] Auto-checkpoint before every `write_file` and `edit_file` tool call
+- [ ] Checkpoints stored in `.autodev/checkpoints/{session_id}/`
+- [ ] Configurable retention policy (keep last 50 per file)
+
+#### Frontend — Git UI Components
+
+**Git Sub-Panel (`src/components/git/GitPanel.tsx`):**
+- [ ] Collapsible panel in IDE tab (toggle via [Git ▼] button)
+- [ ] Three sections: Changes | Staged | History
+
+**Changes Section:**
+- [ ] List modified files with status (M, A, D, ??)
+- [ ] Diff preview for selected file
+- [ ] Stage/Unstage buttons
+- [ ] Discard changes button (with confirmation)
+- [ ] "Stage All", "Unstage All" buttons
+
+**Staged Section:**
+- [ ] List staged files
+- [ ] Diff preview
+- [ ] Commit message input
+- [ ] "Commit" button with author info
+- [ ] Commit attribution trailer auto-added: `Generated-by: AutoDev/PA`
+
+**History Section:**
+- [ ] Commit log with graph visualization
+- [ ] Commit details (author, date, message)
+- [ ] Diff for selected commit
+- [ ] Checkout commit button
+- [ ] Create branch from commit
+
+**Branch Manager (`src/components/git/BranchManager.tsx`):**
+- [ ] List local and remote branches
+- [ ] Current branch indicator
+- [ ] Create new branch button
+- [ ] Delete branch button
+- [ ] Merge branch button
+- [ ] Compare branches (ahead/behind)
+
+**Stash Manager (`src/components/git/StashManager.tsx`):**
+- [ ] List stashes with messages
+- [ ] Apply stash button (with/without pop)
+- [ ] Drop stash button
+- [ ] Create stash with custom message
+
+**Checkpoint UI (`src/components/git/CheckpointViewer.tsx`):**
+- [ ] Timeline view of file checkpoints
+- [ ] Visual diff between versions
+- [ ] Restore button with confirmation
+- [ ] Compare any two checkpoints
+- [ ] Auto-cleanup old checkpoints
+
+#### Phase 3.3 Deliverables Checklist
+
+**Backend:**
+- [ ] Git repository operations (open, clone, init)
+- [ ] Git status with file categorization
+- [ ] Diff generation (unified diff format)
+- [ ] Stage/unstage operations
+- [ ] Commit with custom trailers
+- [ ] Push, pull, fetch operations
+- [ ] Branch management (create, delete, checkout)
+- [ ] Worktree operations (add, remove, list)
+- [ ] Commit history and log
+- [ ] Git blame/annotation
+- [ ] Stash management
+- [ ] File checkpointing system (auto and manual)
+- [ ] Checkpoint storage and cleanup
+
+**Frontend:**
+- [ ] Git sub-panel with Changes/Staged/History
+- [ ] Diff viewer (Monaco diff editor)
+- [ ] Branch manager
+- [ ] Stash manager
+- [ ] Checkpoint timeline viewer
+- [ ] Git status in file tree
+- [ ] Commit dialog with message validation
+
+**Integration:**
+- [ ] Auto-checkpoint on every file write
+- [ ] "Undo" command restores last checkpoint
+- [ ] Git trailers on all AutoDev commits
+- [ ] Worktree support for task isolation (Fleet)
+
+#### Phase 3.3 Success Criteria
+
+> PA edits file → Auto-checkpoint created → File shows modified in git status → User clicks Git panel → Sees diff → Commits with trailer → Push succeeds → History shows commit
+
+---
+
+### Phase 3.4 — MCP Server + Sidecar Management
+
+**Goal**: AIRS MCP server for Fleet coordination, sidecar management for core-orchestrator and memory-mcp-server, Ollama provider for local models.
+
+**Depends On**: Skills/Hooks (Fleet needs these patterns)
+
+#### Backend — AIRS MCP Server
+
+**Core Concept**: AutoDev exposes Fleet coordination tools via MCP protocol so external agents (workers, supervisor) can interact with AutoDev's task system.
+
+**MCP Server Implementation:**
+- [ ] `src-tauri/src/mcp_server/mod.rs`: MCP server module
+- [ ] `src-mcp-server/` (separate crate/binary): AIRS MCP server implementation
+- [ ] `src-mcp-server/tools.rs`: Tool definitions for Fleet coordination
+- [ ] `src-mcp-server/server.rs`: MCP server lifecycle
+
+**AIRS MCP Tools (Exposed to Fleet):**
+
+**Task Management:**
+- [ ] `airs_get_tasks`: List tasks from workers.db
+  - Input: `status?`, `assigned_worker?`, `type?`, `limit?`
+  - Returns: Array of task objects
+- [ ] `airs_get_task_details`: Get single task details
+  - Input: `task_id`
+  - Returns: Full task with acceptance criteria
+- [ ] `airs_claim_task`: Worker claims task
+  - Input: `task_id`, `worker_id`
+  - Returns: Success + task assignment
+- [ ] `airs_report_progress`: Worker reports progress
+  - Input: `task_id`, `status`, `progress_percentage`, `message?`
+  - Returns: Confirmation
+- [ ] `airs_complete_task`: Mark task complete
+  - Input: `task_id`, `result_summary`, `pr_url?`
+  - Returns: Confirmation + next task suggestions
+- [ ] `airs_fail_task`: Mark task failed
+  - Input: `task_id`, `error_message`, `retry_suggested?`
+  - Returns: Confirmation
+
+**Worker Management:**
+- [ ] `airs_list_workers`: List registered workers
+  - Input: `type?`, `status?`
+  - Returns: Array of worker objects
+- [ ] `airs_get_worker_status`: Check worker availability
+  - Input: `worker_id`
+  - Returns: Status, current task, load
+
+**Plan Management (Phase 3.5 Integration):**
+- [ ] `airs_get_plans`: List active plans
+- [ ] `airs_claim_plan_item`: Worker claims plan step
+- [ ] `airs_update_plan_item`: Update plan step status
+
+**AutoDev Integration:**
+- [ ] `airs_get_autodev_instructions`: Retrieve AUTODEV.md content
+- [ ] `airs_get_recipe`: Retrieve recipe by name
+- [ ] `airs_emit_event`: Emit custom event to AutoDev
+
+#### Backend — Sidecar Management
+
+**Sidecar Manager Module:**
+- [ ] `src-tauri/src/sidecar/mod.rs`: Sidecar module
+- [ ] `src-tauri/src/sidecar/manager.rs`: `SidecarManager` for lifecycle
+- [ ] `src-tauri/src/sidecar/process.rs`: Process spawning and monitoring
+- [ ] `src-tauri/src/sidecar/health.rs`: Health check system
+- [ ] `src-tauri/src/sidecar/config.rs`: Sidecar configuration
+
+**Managed Sidecars:**
+- [ ] `core-orchestrator`: Python FastAPI server (Fleet orchestration)
+- [ ] `memory-mcp-server`: Python MCP server (Memory management)
+- [ ] `redis`: Redis server (Pub/sub, caching)
+- [ ] `airs-mcp-server`: Rust MCP server (Fleet coordination tools)
+
+**Sidecar Lifecycle:**
+- [ ] Auto-start on app launch (configurable)
+- [ ] Process spawn with stdout/stderr capture
+- [ ] Health check HTTP endpoints (every 30s)
+- [ ] Auto-restart on failure (with backoff)
+- [ ] Graceful shutdown on app exit
+- [ ] Log rotation and retention
+
+**Tauri Commands:**
+- [ ] `start_sidecar(name) -> SidecarStatus`
+- [ ] `stop_sidecar(name) -> SidecarStatus`
+- [ ] `restart_sidecar(name) -> SidecarStatus`
+- [ ] `get_sidecar_status(name) -> SidecarStatus`
+- [ ] `list_sidecars() -> Vec<SidecarStatus>`
+- [ ] `get_sidecar_logs(name, lines?) -> Vec<LogEntry>`
+- [ ] `update_sidecar_config(name, config) -> ()`
+
+#### Backend — Ollama Provider
+
+**Local Model Support:**
+- [ ] `src-tauri/src/provider/ollama.rs`: Ollama provider implementation
+- [ ] Model listing via Ollama API
+- [ ] Streaming support for local models
+- [ ] Temperature and context window configuration
+- [ ] Quantization level detection
+
+**Models Supported:**
+- [ ] Llama 3 (8B, 70B)
+- [ ] Mistral (7B)
+- [ ] CodeLlama (7B, 13B, 34B)
+- [ ] DeepSeek Coder
+- [ ] Custom models via Ollama
+
+#### Frontend — Sidecar UI
+
+**Sidecar Panel (`src/components/sidecar/SidecarPanel.tsx`):**
+- [ ] List all sidecars with status indicators
+- [ ] Start/Stop/Restart buttons per sidecar
+- [ ] Health status (green/yellow/red)
+- [ ] Resource usage (CPU, memory)
+- [ ] Log viewer with tail -f behavior
+- [ ] Configuration editor
+
+**Settings Integration:**
+- [ ] Sidecar auto-start toggle
+- [ ] Resource limits (memory, CPU)
+- [ ] Port configuration
+- [ ] Log level selection
+
+#### Phase 3.4 Deliverables Checklist
+
+**AIRS MCP Server:**
+- [ ] MCP server binary (`src-mcp-server/`)
+- [ ] 12+ Fleet coordination tools
+- [ ] Tool schema definitions
+- [ ] MCP server lifecycle management
+- [ ] Integration with workers.db
+
+**Sidecar Management:**
+- [ ] Sidecar manager module
+- [ ] 4 managed sidecars (core-orchestrator, memory-mcp-server, redis, airs-mcp-server)
+- [ ] Health check system
+- [ ] Auto-restart with backoff
+- [ ] Log aggregation
+- [ ] Configuration management
+
+**Ollama Provider:**
+- [ ] Ollama provider implementation
+- [ ] Model discovery
+- [ ] Streaming support
+- [ ] Local model configuration
+
+**Frontend:**
+- [ ] Sidecar panel with status and logs
+- [ ] MCP tool browser
+- [ ] Sidecar configuration UI
+
+**Integration:**
+- [ ] Fleet can claim tasks via MCP
+- [ ] Workers report progress via MCP
+- [ ] Supervisor coordinates via MCP tools
+
+#### Phase 3.4 Success Criteria
+
+> Fleet worker connects to AIRS MCP server → Calls `airs_claim_task` → Gets task assignment → Executes using skills → Reports progress → Completes via `airs_complete_task` → AutoDev shows task complete
+
+---
+
+### Phase 3.5 — Plan Management System
+
+**Goal**: PA can create, track, and manage plans for complex multi-step tasks. Fleet-ready design for Supervisor, Worker, QC coordination in Phase 4.
+
+**Depends On**: All previous sub-phases (uses Skills for plan templates, IDE for file viewing, Git for checkpointing, MCP for Fleet coordination)
+
+**When to Use**: When PA determines a query requires 5+ steps or 10+ tool calls, it creates a plan first.
+
+#### Plan Data Model
+
+**SQLite Schema:**
+```sql
+-- Plans table
+CREATE TABLE plans (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT CHECK(status IN ('draft', 'active', 'completed', 'abandoned')),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    assigned_agent TEXT, -- null for PA, 'supervisor', 'worker-backend', etc.
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
+-- Plan items (steps)
+CREATE TABLE plan_items (
+    id TEXT PRIMARY KEY,
+    plan_id TEXT NOT NULL,
+    parent_id TEXT, -- for nested sub-steps
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT CHECK(status IN ('pending', 'in_progress', 'done', 'blocked')),
+    order_index INTEGER NOT NULL,
+    agent_type TEXT CHECK(agent_type IN ('PA', 'Supervisor', 'Worker', 'QC')),
+    estimated_tools TEXT, -- JSON array of tool names
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    completed_at DATETIME,
+    FOREIGN KEY (plan_id) REFERENCES plans(id) ON DELETE CASCADE,
+    FOREIGN KEY (parent_id) REFERENCES plan_items(id)
+);
+
+-- Dependencies between plan items
+CREATE TABLE plan_item_dependencies (
+    item_id TEXT NOT NULL,
+    depends_on_item_id TEXT NOT NULL,
+    FOREIGN KEY (item_id) REFERENCES plan_items(id) ON DELETE CASCADE,
+    FOREIGN KEY (depends_on_item_id) REFERENCES plan_items(id) ON DELETE CASCADE,
+    PRIMARY KEY (item_id, depends_on_item_id)
+);
+
+-- Plan execution log
+CREATE TABLE plan_executions (
+    id TEXT PRIMARY KEY,
+    plan_id TEXT NOT NULL,
+    started_at DATETIME,
+    completed_at DATETIME,
+    total_items INTEGER DEFAULT 0,
+    completed_items INTEGER DEFAULT 0,
+    error_log TEXT,
+    FOREIGN KEY (plan_id) REFERENCES plans(id) ON DELETE CASCADE
+);
+```
+
+#### Backend Implementation
+
+**Rust Module Structure:**
+- [ ] `src-tauri/src/plan/mod.rs`: Module declaration
+- [ ] `src-tauri/src/plan/types.rs`: `Plan`, `PlanItem`, `PlanStatus`, `AgentType` structs
+- [ ] `src-tauri/src/plan/repository.rs`: `PlanRepository` with full CRUD
+- [ ] `src-tauri/src/plan/engine.rs`: `PlanEngine` for execution state machine
+
+**Tauri Commands:**
+- [ ] `create_plan(session_id, title, description) -> Result<Plan>`
+- [ ] `get_plan(plan_id) -> Result<Plan>`
+- [ ] `list_plans(session_id) -> Result<Vec<PlanSummary>>`
+- [ ] `add_plan_item(plan_id, title, description, order, parent_id, agent_type) -> Result<PlanItem>`
+- [ ] `update_plan_item_status(item_id, status, notes) -> Result<()>`
+- [ ] `set_plan_item_dependency(item_id, depends_on_item_id) -> Result<()>`
+- [ ] `reorder_plan_items(plan_id, item_orders) -> Result<()>`
+- [ ] `delete_plan(plan_id) -> Result<()>`
+- [ ] `get_plan_progress(plan_id) -> Result<PlanProgress>`
+- [ ] `activate_plan(plan_id) -> Result<()>` -- change status from draft to active
+- [ ] `abandon_plan(plan_id, reason) -> Result<()>`
+
+#### Built-in Plan Tools
+
+**Tools for PA to Manage Plans:**
+- [ ] **`create_plan` Tool**: Create new plan for complex tasks
+  - Input: `title` (string), `description` (string, optional), `template` (string, optional)
+  - Returns: `plan_id`, `confirmation_message`
+  - System prompt: "When task requires 5+ steps or 10+ tool calls, create a plan first"
+
+- [ ] **`add_plan_step` Tool**: Add step to existing plan
+  - Input: `plan_id`, `title`, `description`, `depends_on` (array of step indices, optional), `agent_type` (default: "PA")
+  - Returns: `step_id`, `step_number`, `plan_progress_percentage`
+
+- [ ] **`update_plan_step` Tool**: Update step status
+  - Input: `plan_id`, `step_id`, `status` ("in_progress", "done", "blocked"), `notes` (optional)
+  - Returns: `confirmation`, `current_progress`, `next_steps` (dependencies now unblocked)
+
+- [ ] **`get_plan_status` Tool**: Query plan state
+  - Input: `plan_id`, `include_completed` (boolean, default true)
+  - Returns: `plan` with all items, `progress_percentage`, `estimated_remaining_steps`
+
+- [ ] **`list_active_plans` Tool**: See all active plans
+  - Input: `session_id`, `status_filter` (optional: "active", "draft", "all")
+  - Returns: Array of plans with progress summaries
+
+- [ ] **`create_plan_from_template` Tool**: Instantiate plan from skill template
+  - Input: `template_name` (e.g., "feature-implementation"), `session_id`, `custom_title`
+  - Returns: `plan_id` with pre-populated steps from template
+
+#### System Prompt Integration
+
+**Updated BASE_SYSTEM_PROMPT Guidance:**
+```
+For complex multi-step tasks (5+ steps or 10+ tool calls):
+1. FIRST: Create a plan using create_plan tool
+2. THEN: Add 3-7 steps using add_plan_step tool, specifying dependencies if needed
+3. DURING: Update step status as you progress with update_plan_step
+4. ALWAYS: Reference the plan_id in your thinking
+
+Plan step status meanings:
+- pending: Not started yet
+- in_progress: Currently working on this
+- done: Step completed successfully
+- blocked: Waiting on dependencies or external input
+```
+
+#### Plan Templates (Skills Integration)
+
+**Template Directory:** `~/.autodev/skills/plans/`
+
+**Built-in Templates:**
+- [ ] `feature-implementation.yaml`: Standard 5-step feature dev
+- [ ] `bug-fix.yaml`: Debug → Fix → Test → Verify flow
+- [ ] `refactoring.yaml`: Analyze → Plan → Execute → Verify
+- [ ] `code-review.yaml`: Read → Analyze → Comment → Summarize
+- [ ] `api-endpoint.yaml`: Design → Implement → Test → Document
+
+**Template Format:**
+```yaml
+name: Feature Implementation
+description: Standard plan for implementing new features
+default_agent: PA
+steps:
+  - title: Understand requirements
+    description: Read specs, clarify acceptance criteria
+    estimated_tools: [read_file, grep]
+    
+  - title: Explore codebase
+    description: Find relevant files and existing patterns
+    estimated_tools: [list_directory, glob, grep, read_file]
+    
+  - title: Design solution
+    description: Plan implementation approach
+    estimated_tools: [read_file]
+    
+  - title: Implement changes
+    description: Write/modify code with tests
+    estimated_tools: [write_file, edit_file, bash]
+    
+  - title: Verify and document
+    description: Run tests, update docs
+    estimated_tools: [bash, read_file, write_file]
+```
+
+#### Frontend UI Components
+
+**Plan Sidebar Card:**
+- [ ] `src/components/sidebar/PlanCard.tsx`
+  - Shows active plan title, progress bar, current step
+  - Status indicator: 🟡 Draft / 🟢 Active / ✅ Complete / ⚪ Abandoned
+  - Click to open full Plan view
+
+**Plan Detail View:**
+- [ ] `src/components/plan/PlanView.tsx`
+  - Collapsible step list with status icons
+  - Drag-and-drop reordering (draft plans only)
+  - Dependency visualization (graph/tree)
+  - Notes field per step
+  - Action buttons: [Activate] [Add Step] [Mark Done] [Abandon]
+
+**Plan Chat Display:**
+- [ ] `src/components/chat/PlanDisplay.tsx`
+  - Inline plan card when PA creates plan
+  - Progress updates show as step completions
+  - "Jump to Plan" button
+
+**Plan Store:**
+- [ ] `src/stores/planStore.ts`
+  - State: `activePlan`, `planHistory`, `isLoading`
+  - Actions: `loadPlan`, `updateStepStatus`, `createPlan`, `setActivePlan`
+  - Event listeners: `plan:created`, `plan:updated`, `plan:step_completed`
+
+#### Plan Hooks Integration
+
+**Hook Events:**
+- [ ] `PrePlanStep`: Before executing tools for a step
+  - Can inject additional setup tools
+  - Auto-emit status update to UI
+
+- [ ] `PostPlanStep`: After step tools complete
+  - Auto-mark as done if all tools succeeded
+  - Trigger dependent steps
+  - Update progress
+
+- [ ] `OnPlanActivate`: When plan moves draft → active
+  - Initialize execution log
+  - Emit to UI
+
+- [ ] `OnPlanComplete`: All steps done
+  - Archive plan
+  - Generate summary
+  - Suggest next actions
+
+**Hooks Config:** `~/.autodev/hooks/plan_hooks.json`
+
+#### Persistence & Recovery
+
+**Auto-Save:**
+- [ ] Plan state saved after every step status update
+- [ ] Session restore: Check for incomplete plans on session load
+- [ ] Recovery prompt: "Continue plan 'X'? 3 of 7 steps remaining" [Resume] [Abandon]
+
+#### Fleet Integration Foundation (Phase 4 Ready)
+
+**Multi-Agent Design:**
+- [ ] Plan items have `agent_type` field: PA, Supervisor, Worker, QC
+- [ ] Plans have `assigned_agent` for delegation
+- [ ] Status transitions support multi-agent workflow:
+  - `draft` → `assigned` → `in_progress` → `review` → `done`
+
+**Phase 4 Integration Points:**
+- [ ] Supervisor queries: `get_plans_for_agent("supervisor")`
+- [ ] Worker claims: `claim_plan_item(worker_id, item_id)`
+- [ ] QC reviews: `submit_plan_for_qc(plan_id)`
+
+#### Phase 3.5 Deliverables Checklist
+
+- [ ] SQLite schema: plans, plan_items, plan_item_dependencies, plan_executions tables
+- [ ] Rust plan module: types, repository, engine
+- [ ] Tauri commands: full CRUD for plans and plan items
+- [ ] Built-in tools: create_plan, add_plan_step, update_plan_step, get_plan_status, list_active_plans, create_plan_from_template
+- [ ] System prompt updated with plan guidance
+- [ ] Plan templates: 5 built-in YAML templates
+- [ ] PlanCard sidebar component
+- [ ] PlanView detail page with dependency viz
+- [ ] PlanDisplay inline chat component
+- [ ] planStore.ts frontend state management
+- [ ] Plan hooks: PrePlanStep, PostPlanStep, OnPlanActivate, OnPlanComplete
+- [ ] Auto-save and session recovery
+- [ ] Resume prompt for incomplete plans
+- [ ] Fleet-ready fields: assigned_agent, agent_type
+
+---
+
+### Phase 3 Dependency Graph
+
+```
+Phase 3 Sub-Phase Dependencies
+═══════════════════════════════════════════════════════════════════════════════
+
+Phase 3.1 (Skills + Hooks)
+│
+├─► [CRITICAL PATH] Fleet Foundation
+│   ├─ worker-task-execution skill
+│   ├─ supervisor-orchestration skill
+│   ├─ OnTaskClaim/Complete/Fail hooks
+│   └─ OnQCReviewStart/Approve/Fail hooks
+│
+├─► [DEPENDENCY] Phase 3.2 IDE Core
+│   └─ File tree with git status badges
+│
+├─► [DEPENDENCY] Phase 3.3 Git + Checkpointing
+│   └─ PostFileWrite hooks for auto-format
+│
+├─► [DEPENDENCY] Phase 3.4 MCP + Sidecars
+│   └─ Hooks emit events to sidecars
+│
+└─► [DEPENDENCY] Phase 3.5 Plan Management
+    ├─ create_plan_from_template skill integration
+    ├─ PrePlanStep/PostPlanStep hooks
+    └─ Fleet skills for plan item claiming
+
+═══════════════════════════════════════════════════════════════════════════════
+
+Phase 3 Cross-Sub-Phase Integration Points:
+
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│   Phase 3.1   │────►│   Phase 3.2   │────►│   Phase 3.3   │
+│  Skills/Hooks   │     │  IDE Core       │     │  Git + Checkpt  │
+│                 │     │                 │     │                 │
+│ • /skills cmd   │     │ • File tree     │     │ • Git status    │
+│ • Hooks exec    │────►│ • Monaco viewer │────►│ • Checkpointing │
+│ • Fleet skills  │     │ • Tab mgmt      │     │ • Git hooks     │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+         │                       │                       │
+         │                       │                       │
+         └───────────────────────┴───────────────────────┘
+                             │
+                             ▼
+                    ┌─────────────────┐
+                    │   Phase 3.4     │
+                    │ MCP + Sidecars  │
+                    │                 │
+                    │ • AIRS MCP srv  │
+                    │ • Sidecar mgmt  │
+                    │ • Ollama prov   │
+                    └─────────────────┘
+                             │
+                             ▼
+                    ┌─────────────────┐
+                    │   Phase 3.5     │
+                    │  Plan Management│
+                    │                 │
+                    │ • Plan creation │
+                    │ • Step tracking │
+                    │ • Fleet-ready   │
+                    └─────────────────┘
+```
+
+### Phase 3 Summary Statistics
+
+| Metric | Count |
+|--------|-------|
+| **Total Sub-Phases** | 5 (3.1, 3.2, 3.3, 3.4, 3.5) |
+| **Total Checklist Items** | 180+ |
+| **New Rust Modules** | 15+ |
+| **New Frontend Components** | 25+ |
+| **New Tauri Commands** | 60+ |
+| **Skills** | 20+ built-in |
+| **Hook Types** | 18 across 6 categories |
+| **Fleet-Critical Items** | 40+ (marked with ⭐) |
+
+### Phase 3 Success Criteria (Overall)
+
+> **Fleet-First Success**: Supervisor recipe launches → Polls tasks via MCP → Uses `supervisor-orchestration` skill → Assigns to worker → Worker uses `worker-task-execution` skill → Reports progress via MCP → Task completes → QC uses `qc-review` skill → All hooks fire correctly
+
+> **IDE Success**: User opens IDE → Navigates file tree → Opens code in Monaco → Sees git status → Makes change → Auto-checkpoint → Commits with trailer → History shows commit
+
+> **Plan Success**: PA detects complex task → Creates plan → Adds 5 steps → Updates progress → Hooks auto-fire → Plan completes → Summary generated
 
 ---
 
@@ -2314,31 +3478,1216 @@ Phase 2.2 Dependencies (requires 2.1):
 
 ---
 
-## 13. Phase 5 — Plugin + CLI + Installers + Dashboard
+## 13. Phase 5 — CLI + AIRS Plugin + Installers + Dashboard
 
-**Goal**: One-click worker configuration, headless CLI, platform installers, cost dashboard + analytics.
+**Goal**: Headless CLI for automation, AIRS Plugin for one-click worker setup, cross-platform installers, comprehensive cost dashboard and analytics for fleet management.
 
-### Phase 5 Deliverables Checklist
+> **Priority Order**: CLI (automation foundation) → AIRS Plugin (worker setup) → Installers (distribution) → Dashboard (analytics)
 
-**CLI + Installers:**
-- [ ] `airsctl` CLI binary (separate Rust binary in `src-cli/`)
-- [ ] AIRS Plugin for one-click worker PC setup
-- [ ] Windows installer (MSI via WiX or NSIS)
-- [ ] macOS installer (DMG)
-- [ ] Linux installer (AppImage + .deb)
-- [ ] IT staff runbook document
-- [ ] Sidecar binaries bundled in installers
+### Phase 5 Architecture Overview
 
-**Cost Dashboard + Analytics (Moved from feature-after-phase.md):**
-- [ ] **New Tab: Dashboard** — Analytics and metrics visualization
-- [ ] Token usage tracking (per session, per day, per worker, all-time)
-- [ ] Cost tracking in USD (collected since first app usage, persistent across restarts)
-- [ ] General usage stats (sessions created, messages sent, tools executed)
-- [ ] Worker time spent analytics (per worker type, per task, cumulative)
-- [ ] API call failures tracking (both cloud and local providers, with error categorization)
-- [ ] Log aggregation and filtering (by severity, by component, by time range)
-- [ ] Exportable reports (CSV/JSON for cost analysis)
-- [ ] Dashboard widgets: Cost meter (today vs yesterday), Top workers by cost, Model usage breakdown
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           Phase 5 Sub-Phase Dependencies                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Phase 5.1 ───────────────────────┐                                         │
+│  CLI (airsctl)                    │                                         │
+│  (Automation Foundation)          ▼                                         │
+│                          Phase 5.2 ─────────────────────┐                   │
+│                          AIRS Plugin (Worker Setup)      │                   │
+│  Phase 5.3 ──────────────────────────────────────────────┤                   │
+│  Platform Installers                                     │                   │
+│  (Bundle CLI + Plugin + App)                             ▼                   │
+│                                               Phase 5.4 ──────────────────┐ │
+│                                               Dashboard + Analytics        │ │
+│                                               (Uses all previous)          │ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Phase 5.1 — CLI (airsctl) 🎯 **AUTOMATION FOUNDATION**
+
+**Goal**: Headless CLI binary for automation, scripting, CI/CD integration, and remote worker management.
+
+**Why First**: CLI enables automation before GUI, allows CI/CD integration, and provides foundation for worker automation scripts.
+
+#### CLI Architecture
+
+**Core Concept**: Separate Rust binary (`airsctl`) that shares core logic with Tauri app but runs headless. Inspired by Goose's `goose-cli` crate structure.
+
+**File Structure:**
+- [ ] `src-cli/Cargo.toml`: CLI-specific dependencies (clap, dialoguer, indicatif)
+- [ ] `src-cli/src/main.rs`: CLI entry point
+- [ ] `src-cli/src/commands/mod.rs`: Command modules
+- [ ] `src-cli/src/commands/agent.rs`: Agent commands (run, stop, status)
+- [ ] `src-cli/src/commands/task.rs`: Task management commands
+- [ ] `src-cli/src/commands/worker.rs`: Worker registration/management
+- [ ] `src-cli/src/commands/config.rs`: Configuration management
+- [ ] `src-cli/src/commands/logs.rs`: Log viewing and export
+- [ ] `src-cli/src/repl.rs`: Interactive REPL mode
+- [ ] `src-cli/src/noninteractive.rs`: Non-interactive mode for scripts
+- [ ] `src-cli/src/output.rs`: Output formatting (JSON, table, plain)
+- [ ] `src-shared/`: Shared code between CLI and Tauri app (extracted from src-tauri)
+  - [ ] `src-shared/src/agent/`: Agent engine (shared)
+  - [ ] `src-shared/src/tools/`: Tool implementations (shared)
+  - [ ] `src-shared/src/provider/`: Provider implementations (shared)
+  - [ ] `src-shared/src/config/`: Configuration management (shared)
+
+**CLI Command Structure:**
+```
+airsctl [GLOBAL OPTIONS] <COMMAND> [SUBCOMMAND] [ARGS]
+
+Global Options:
+  --config <PATH>           Config file path (default: ~/.airs/config.toml)
+  --working-dir <PATH>      Working directory for operations
+  --api-key <KEY>           API key for LLM providers
+  --provider <NAME>         LLM provider (anthropic, openai, ollama)
+  --model <NAME>            Model name
+  --non-interactive         Disable interactive prompts (for CI/CD)
+  --output-format <FORMAT>  Output format: json, table, plain (default: table)
+  --quiet                   Suppress non-error output
+  --verbose                 Enable verbose logging
+  --version                 Show version
+  --help                    Show help
+```
+
+**Command Categories:**
+
+**1. Agent Commands (`airsctl agent`):**
+- [ ] `airsctl agent run [OPTIONS] [PROMPT]`: Run agent with prompt
+  - Options: `--file <PATH>` (read prompt from file), `--session <ID>` (resume session)
+  - Non-interactive mode for CI/CD
+  - JSON output mode for scripting
+- [ ] `airsctl agent status`: Show running agent status
+- [ ] `airsctl agent stop [SESSION_ID]`: Stop running agent
+- [ ] `airsctl agent list`: List active sessions
+- [ ] `airsctl agent logs [SESSION_ID]`: View agent logs
+
+**2. Task Commands (`airsctl task`):**
+- [ ] `airsctl task create --title <TITLE> --type <TYPE>`: Create new task
+- [ ] `airsctl task list [--status <STATUS>] [--worker <WORKER>]`: List tasks
+- [ ] `airsctl task get <TASK_ID>`: Get task details
+- [ ] `airsctl task assign <TASK_ID> --worker <WORKER>`: Assign task to worker
+- [ ] `airsctl task claim [--worker-id <ID>]`: Worker claims next available task
+- [ ] `airsctl task complete <TASK_ID> --result <RESULT>`: Mark task complete
+- [ ] `airsctl task fail <TASK_ID> --reason <REASON>`: Mark task failed
+
+**3. Worker Commands (`airsctl worker`):**
+- [ ] `airsctl worker register --name <NAME> --type <TYPE>`: Register new worker
+- [ ] `airsctl worker list [--type <TYPE>] [--status <STATUS>]`: List workers
+- [ ] `airsctl worker status <WORKER_ID>`: Check worker status
+- [ ] `airsctl worker heartbeat <WORKER_ID>`: Send heartbeat
+- [ ] `airsctl worker unregister <WORKER_ID>`: Remove worker
+
+**4. Configuration Commands (`airsctl config`):**
+- [ ] `airsctl config init`: Initialize default configuration
+- [ ] `airsctl config get <KEY>`: Get config value
+- [ ] `airsctl config set <KEY> <VALUE>`: Set config value
+- [ ] `airsctl config list`: List all config values
+- [ ] `airsctl config validate`: Validate configuration
+- [ ] `airsctl config import <PATH>`: Import config from file
+- [ ] `airsctl config export [PATH]`: Export config to file
+
+**5. Plan Commands (`airsctl plan`):**
+- [ ] `airsctl plan create --title <TITLE> --description <DESC>`: Create plan
+- [ ] `airsctl plan list [--status <STATUS>]`: List plans
+- [ ] `airsctl plan get <PLAN_ID>`: Get plan details
+- [ ] `airsctl plan add-step <PLAN_ID> --title <TITLE>`: Add step to plan
+- [ ] `airsctl plan update-step <STEP_ID> --status <STATUS>`: Update step
+- [ ] `airsctl plan activate <PLAN_ID>`: Activate draft plan
+
+**6. System Commands (`airsctl system`):**
+- [ ] `airsctl system status`: Check system health (sidecars, DB, etc.)
+- [ ] `airsctl system logs [--component <COMPONENT>]`: View system logs
+- [ ] `airsctl system sidecars`: Manage sidecars (start, stop, status)
+- [ ] `airsctl system backup [PATH]`: Backup AutoDev data
+- [ ] `airsctl system restore <PATH>`: Restore from backup
+
+**7. Analytics Commands (`airsctl analytics`):**
+- [ ] `airsctl analytics cost [--today|--week|--month|--all]`: Show cost summary
+- [ ] `airsctl analytics tokens [--session <ID>]`: Show token usage
+- [ ] `airsctl analytics workers`: Show worker statistics
+- [ ] `airsctl analytics export --format <FORMAT> --output <PATH>`: Export analytics
+
+**REPL Mode (`airsctl repl`):**
+- [ ] Interactive shell with command history
+- [ ] Tab completion for commands and paths
+- [ ] Syntax highlighting for responses
+- [ ] Session persistence across REPL restarts
+- [ ] Multi-line input support
+
+**Non-Interactive Mode Features:**
+- [ ] JSON output for all commands (`--output-format json`)
+- [ ] Exit codes: 0=success, 1=error, 2=partial success
+- [ ] Pipe-friendly output (plain text, no formatting)
+- [ ] Environment variable support: `AIRSDEV_API_KEY`, `AIRSDEV_PROVIDER`
+
+**Configuration File (`~/.airs/config.toml`):**
+```toml
+[core]
+working_dir = "/home/user/projects"
+default_provider = "anthropic"
+auto_start_sidecars = true
+
+[providers.anthropic]
+api_key = "sk-ant-..."
+model = "claude-3-7-sonnet-20250219"
+
+[providers.ollama]
+enabled = true
+model = "codellama:13b"
+
+[cli]
+output_format = "table"
+interactive = true
+history_size = 1000
+
+[worker]
+worker_id = "worker-001"
+type = "backend"
+heartbeat_interval = 300
+```
+
+#### CLI Implementation Details
+
+**Backend — CLI Core:**
+- [ ] Extract shared code from `src-tauri` into `src-shared` workspace crate
+- [ ] CLI-specific command parsing with `clap` derive macros
+- [ ] Non-interactive mode detection (no TTY)
+- [ ] Progress indicators with `indicatif` crate (spinners, progress bars)
+- [ ] Interactive prompts with `dialoguer` (confirmations, selections)
+- [ ] Colored output with `colored` crate
+- [ ] Table formatting with `comfy-table`
+- [ ] Logging with `tracing` and `tracing-subscriber`
+
+**Tauri Integration:**
+- [ ] Share `AgentEngine`, `ToolExecutor`, `Provider` implementations via `src-shared`
+- [ ] CLI uses same SQLite database as Tauri app (~/.autodev/)
+- [ ] CLI can trigger Tauri events (for running GUI instances)
+- [ ] Session sharing between CLI and GUI
+
+#### Phase 5.1 Deliverables Checklist
+
+**CLI Binary:**
+- [ ] `src-cli/` workspace crate created
+- [ ] `src-shared/` extracted from `src-tauri` for code reuse
+- [ ] CLI binary builds independently: `cargo build -p airsctl`
+- [ ] 30+ CLI commands across 7 categories
+- [ ] REPL mode with history and completion
+- [ ] Non-interactive mode for CI/CD
+- [ ] JSON output format for scripting
+- [ ] Configuration file support (`~/.airs/config.toml`)
+- [ ] Environment variable integration
+- [ ] Exit codes for scripting (0=success, 1=error)
+
+**Commands:**
+- [ ] `airsctl agent run/status/stop/list/logs`
+- [ ] `airsctl task create/list/get/assign/claim/complete/fail`
+- [ ] `airsctl worker register/list/status/heartbeat/unregister`
+- [ ] `airsctl config init/get/set/list/validate/import/export`
+- [ ] `airsctl plan create/list/get/add-step/update-step/activate`
+- [ ] `airsctl system status/logs/sidecars/backup/restore`
+- [ ] `airsctl analytics cost/tokens/workers/export`
+
+**Integration:**
+- [ ] Shares database with Tauri app
+- [ ] Can trigger events in running GUI instance
+- [ ] Session sharing between CLI and GUI
+- [ ] Sidecar management (start/stop from CLI)
+
+#### Phase 5.1 Success Criteria
+
+> **Basic CLI**: `airsctl agent run "fix bug in login"` → Agent runs headless → Outputs result to stdout → Exits with code 0 on success
+
+> **CI/CD Integration**: `airsctl task create --title "Deploy prod" --type deployment --non-interactive` → Task created → JSON output → Exit code 0
+
+> **Worker Automation**: Worker PC runs `airsctl worker heartbeat worker-001` → Heartbeat recorded → Supervisor sees worker as active
+
+---
+
+### Phase 5.2 — AIRS Plugin 🎯 **ONE-CLICK WORKER SETUP**
+
+**Goal**: Plugin system for one-click worker PC configuration, enabling rapid fleet deployment without manual setup.
+
+**Depends On**: CLI (uses `airsctl` for configuration)
+
+#### AIRS Plugin Architecture
+
+**Core Concept**: Modular plugin system for configuring worker environments. Inspired by VS Code extensions and Goose's extension system.
+
+**Plugin Types:**
+
+**1. Worker Setup Plugin:**
+- [ ] Auto-detects OS and hardware
+- [ ] Installs required dependencies (Rust, Python, Node, etc.)
+- [ ] Configures AutoDev CLI (`airsctl`)
+- [ ] Registers worker with fleet
+- [ ] Sets up monitoring and auto-update
+
+**2. Environment Plugin:**
+- [ ] Configures development environment
+- [ ] Clones required repositories
+- [ ] Sets up git credentials
+- [ ] Configures IDE/editor
+- [ ] Installs language-specific tools
+
+**3. Security Plugin:**
+- [ ] Configures firewall rules
+- [ ] Sets up VPN connection
+- [ ] Configures SSH keys
+- [ ] Sets up certificate management
+- [ ] Configures access controls
+
+**Plugin Structure (`~/.airs/plugins/{plugin-name}/`):**
+```
+plugin-name/
+├── plugin.yaml          # Plugin manifest
+├── install.sh           # Install script (Linux/macOS)
+├── install.ps1          # Install script (Windows)
+├── config/
+│   ├── default.toml     # Default configuration
+│   └── schema.json      # Configuration schema
+├── assets/
+│   └── icon.png         # Plugin icon
+└── hooks/
+    ├── pre-install.sh   # Pre-install hook
+    └── post-install.sh  # Post-install hook
+```
+
+**Plugin Manifest (`plugin.yaml`):**
+```yaml
+name: worker-backend
+version: "1.0.0"
+description: Backend worker setup with Rust, Python, and Docker
+author: AIRS Foundry
+type: worker-setup  # worker-setup, environment, security, custom
+os_support:
+  - linux
+  - macos
+  - windows
+dependencies:
+  - name: rust
+    version: ">=1.70"
+    install_cmd: "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+  - name: python
+    version: ">=3.10"
+    install_cmd: "pip install uv"
+  - name: docker
+    version: ">=24.0"
+    optional: true
+commands:
+  install:
+    linux: "./install.sh"
+    macos: "./install.sh"
+    windows: "powershell -ExecutionPolicy Bypass -File install.ps1"
+  verify: "./verify.sh"
+  uninstall: "./uninstall.sh"
+config:
+  schema: "config/schema.json"
+  defaults: "config/default.toml"
+```
+
+**AIRS Plugin Manager:**
+- [ ] `src-tauri/src/plugin/mod.rs`: Plugin module
+- [ ] `src-tauri/src/plugin/manager.rs`: Plugin installation/management
+- [ ] `src-tauri/src/plugin/registry.rs`: Plugin registry (local + remote)
+- [ ] `src-tauri/src/plugin/runner.rs`: Plugin execution
+
+**Tauri Commands:**
+- [ ] `list_available_plugins() -> Vec<PluginInfo>`: List from registry
+- [ ] `list_installed_plugins() -> Vec<InstalledPlugin>`: List installed
+- [ ] `install_plugin(name, version?, config?) -> InstallResult`: Install plugin
+- [ ] `uninstall_plugin(name) -> ()`: Remove plugin
+- [ ] `update_plugin(name) -> UpdateResult`: Update to latest
+- [ ] `run_plugin(name, action, args?) -> RunResult`: Execute plugin action
+- [ ] `get_plugin_config(name) -> PluginConfig`: Get configuration
+- [ ] `set_plugin_config(name, config) -> ()`: Update configuration
+- [ ] `verify_plugin(name) -> VerifyResult`: Verify installation
+
+**Plugin Registry:**
+- [ ] Local registry: `~/.airs/registry/` (cached plugins)
+- [ ] Remote registry: GitHub releases or custom URL
+- [ ] Plugin marketplace API
+- [ ] Version resolution (semver)
+- [ ] Dependency resolution between plugins
+
+**One-Click Worker Setup Flow:**
+```
+1. IT staff generates setup token in AutoDev UI
+   └── Token contains: fleet_id, worker_type, allowed_repos
+
+2. Email sent to worker PC user with one-liner:
+   curl -fsSL https://airs.dev/setup | bash -s -- TOKEN
+
+3. Setup script:
+   a. Downloads airsctl CLI for platform
+   b. Downloads AIRS Plugin installer
+   c. Runs: airsctl plugin install worker-{type}
+   d. Configures worker with token
+   e. Registers worker with fleet
+   f. Starts sidecars and heartbeat
+
+4. Worker appears in AutoDev Fleet panel as "Active"
+```
+
+**Frontend — Plugin UI:**
+
+**Plugin Manager (`src/components/plugin/PluginManager.tsx`):**
+- [ ] Plugin marketplace browser
+- [ ] Search and filter plugins
+- [ ] Install/uninstall buttons
+- [ ] Plugin details view (README, version, author)
+- [ ] Configuration editor per plugin
+- [ ] Update notifications
+
+**Worker Setup Wizard (`src/components/plugin/WorkerSetupWizard.tsx`):**
+- [ ] Step 1: Select worker type (backend, frontend, devops, etc.)
+- [ ] Step 2: Select OS (auto-detected)
+- [ ] Step 3: Generate setup token
+- [ ] Step 4: Show one-liner command
+- [ ] Step 5: QR code for mobile setup
+- [ ] Real-time status: "Worker connected!" / "Setup complete"
+
+**IT Staff Dashboard (`src/components/plugin/ITDashboard.tsx`):**
+- [ ] Bulk worker deployment
+- [ ] Setup token management
+- [ ] Worker type templates
+- [ ] Deployment progress tracking
+- [ ] Failed setup alerts
+
+#### Phase 5.2 Deliverables Checklist
+
+**Plugin System:**
+- [ ] `src-tauri/src/plugin/` module
+- [ ] Plugin manifest schema (YAML)
+- [ ] Plugin installation/management
+- [ ] Plugin registry (local + remote)
+- [ ] 5+ built-in plugins (worker-backend, worker-frontend, worker-devops, etc.)
+- [ ] Cross-platform install scripts (bash, PowerShell)
+- [ ] Plugin configuration with JSON schema validation
+- [ ] Plugin hooks (pre-install, post-install, pre-uninstall)
+- [ ] Dependency resolution between plugins
+
+**CLI Integration:**
+- [ ] `airsctl plugin list/install/uninstall/update/run`
+- [ ] `airsctl worker setup --type <TYPE> --token <TOKEN>`
+
+**Frontend:**
+- [ ] Plugin Manager UI (marketplace browser)
+- [ ] Worker Setup Wizard (one-click flow)
+- [ ] IT Staff Dashboard (bulk deployment)
+- [ ] Plugin configuration editor
+
+**Setup Flow:**
+- [ ] One-liner setup script (`curl | bash`)
+- [ ] Setup token generation and validation
+- [ ] Auto-detection of OS and hardware
+- [ ] Dependency installation (Rust, Python, Docker, etc.)
+- [ ] Worker registration with fleet
+- [ ] Sidecar auto-start
+- [ ] QR code for mobile setup
+
+#### Phase 5.2 Success Criteria
+
+> **One-Click Setup**: IT staff clicks "Add Worker" → Selects type → Gets one-liner → Emails to employee → Employee runs command → 5 minutes later worker appears as "Active" in Fleet panel
+
+> **Plugin Marketplace**: User opens Plugin Manager → Browses marketplace → Clicks "Install" on worker-devops plugin → Plugin installs Docker, K8s tools → Worker ready for DevOps tasks
+
+---
+
+### Phase 5.3 — Platform Installers 🎯 **DISTRIBUTION**
+
+**Goal**: Professional cross-platform installers for AutoDev desktop app, CLI, and sidecars.
+
+**Depends On**: CLI (bundled in installer), AIRS Plugin (bundled in installer)
+
+#### Installer Architecture
+
+**Supported Platforms:**
+- [ ] **Windows**: MSI installer (WiX Toolset v4) + NSIS alternative
+- [ ] **macOS**: DMG installer (create-dmg) + PKG for enterprise
+- [ ] **Linux**: AppImage (universal) + .deb (Ubuntu/Debian) + .rpm (Fedora/RHEL)
+
+**Installer Features:**
+- [ ] Automatic dependency installation (WebView2 on Windows)
+- [ ] Sidecar binary bundling (core-orchestrator, memory-mcp-server, Redis)
+- [ ] CLI binary installation (`airsctl`)
+- [ ] Start menu/Desktop shortcut creation
+- [ ] File association (.autodev projects)
+- [ ] Auto-updater integration (Tauri updater)
+- [ ] Silent install mode for enterprise deployment
+- [ ] Custom branding (AIRS Foundry logos, colors)
+
+**Windows Installer (MSI via WiX):**
+- [ ] `wix/` directory with WiX source files
+- [ ] `AutoDev.wxs`: Main installer manifest
+- [ ] Features:
+  - Install scope: Per-user (`%LOCALAPPDATA%`) or Per-machine (`%PROGRAMFILES%`)
+  - WebView2 runtime check and auto-install
+  - Visual C++ Redistributables check
+  - Start menu shortcuts
+  - Desktop shortcut (optional)
+  - File associations (`.autodev` extension)
+  - Registry entries (uninstall info, PATH)
+  - Sidecar service registration
+- [ ] `build-msi.ps1`: Build script
+- [ ] CI/CD: GitHub Actions builds MSI on Windows runner
+
+**macOS Installer (DMG):**
+- [ ] `dmg/` directory with DMG creation scripts
+- [ ] `create-dmg.sh`: DMG creation script
+- [ ] Features:
+  - Signed and notarized app bundle
+  - Drag-and-drop installation
+  - Applications folder shortcut
+  - Custom DMG background (branded)
+  - License agreement display
+  - Sidecar binaries in `AutoDev.app/Contents/MacOS/sidecars/`
+- [ ] CLI installed to `/usr/local/bin/airsctl` (symlink)
+- [ ] CI/CD: GitHub Actions builds DMG on macOS runner
+
+**Linux Installers:**
+
+**AppImage (Universal):**
+- [ ] `appimage/` directory with build scripts
+- [ ] `build-appimage.sh`: Build script using appimage-builder
+- [ ] Features:
+  - Single executable file
+  - No installation required
+  - Works on any Linux distribution
+  - Bundles all dependencies
+  - Sidecars bundled
+  - Desktop integration (optional)
+- [ ] `AutoDev-x86_64.AppImage` output
+
+**Debian/Ubuntu (.deb):**
+- [ ] `deb/` directory with Debian package files
+- [ ] `DEBIAN/control`: Package metadata
+- [ ] `usr/bin/airsctl`: CLI binary
+- [ ] `usr/share/applications/autodev.desktop`: Desktop entry
+- [ ] `usr/share/icons/hicolor/...`: Application icons
+- [ ] `opt/autodev/`: Application files
+- [ ] Dependencies: `libwebkit2gtk-4.0`, `libgtk-3-0`
+- [ ] Post-install script: register MIME type, update desktop database
+
+**Fedora/RHEL (.rpm):**
+- [ ] `rpm/` directory with RPM spec file
+- [ ] `autodev.spec`: RPM specification
+- [ ] Similar structure to .deb
+- [ ] Copr repository for distribution
+
+**Installer Build System:**
+- [ ] `scripts/build-installers.sh`: Master build script
+- [ ] `scripts/build-windows.sh`: Windows-specific
+- [ ] `scripts/build-macos.sh`: macOS-specific
+- [ ] `scripts/build-linux.sh`: Linux-specific
+- [ ] GitHub Actions workflows for CI builds
+- [ ] Code signing certificates (Windows, macOS)
+- [ ] Release automation (creates GitHub releases with assets)
+
+**Auto-Updater System:**
+
+**Core Concept**: Seamless incremental updates that preserve user data (chats, tasks, plans) and require minimal user intervention. Inspired by VS Code, Discord, and Slack update mechanisms.
+
+**Architecture:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Auto-Update Flow                              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  1. Background Check (every 4 hours)                             │
+│     └── Query update server: GET /api/releases/latest            │
+│         └── Compare version: local vs remote                     │
+│                                                                  │
+│  2. Download Available                                         │
+│     └── Show "Update Available" toast in UI                     │
+│         └── User clicks "Update" or "Later"                     │
+│                                                                  │
+│  3. Download & Install (background)                            │
+│     └── Download incremental patch (delta update)               │
+│         └── Verify signature (Ed25519)                          │
+│         └── Apply patch to temp location                        │
+│         └── Atomic swap on restart                              │
+│                                                                  │
+│  4. Data Persistence Guarantee                                  │
+│     └── SQLite DB: ~/.autodev/config.db (unchanged)             │
+│     └── Analytics DB: ~/.autodev/analytics.db (unchanged)       │
+│     └── Sessions: ~/.autodev/sessions/ (preserved)              │
+│     └── Plans: ~/.autodev/plans/ (preserved)                    │
+│     └── Worktrees: .autodev/worktrees/ (preserved)             │
+│     └── Skills: ~/.autodev/skills/ (preserved)                │
+│     └── Hooks: ~/.autodev/hooks/ (preserved)                   │
+│                                                                  │
+│  5. Restart & Resume                                             │
+│     └── Graceful shutdown: save all session state               │
+│         └── Restart with new binary                             │
+│         └── Restore all windows/tabs                           │
+│         └── Resume active chats (with history)                   │
+│         └── Active plans remain open                            │
+│         └── Running tasks continue (via sidecars)              │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Update Server API:**
+```
+GET /api/releases/latest
+Response:
+{
+  "version": "1.2.3",
+  "release_date": "2026-01-15",
+  "release_notes": "Bug fixes and performance improvements...",
+  "critical": false,  // true = force update
+  "platforms": {
+    "windows-x64": {
+      "full_url": "https://releases.airs.dev/1.2.3/AutoDev_1.2.3_x64.msi",
+      "delta_url": "https://releases.airs.dev/1.2.3/AutoDev_1.1.0_to_1.2.3_x64.patch",
+      "full_size": 85000000,
+      "delta_size": 5000000,
+      "signature": "base64-ed25519-sig"
+    },
+    "macos-x64": { ... },
+    "macos-arm64": { ... },
+    "linux-x64": { ... }
+  }
+}
+```
+
+**Backend — Updater Module:**
+- [ ] `src-tauri/src/updater/mod.rs`: Updater module
+- [ ] `src-tauri/src/updater/check.rs`: Version checking logic
+- [ ] `src-tauri/src/updater/download.rs`: Incremental download with progress
+- [ ] `src-tauri/src/updater/verify.rs`: Signature verification (Ed25519)
+- [ ] `src-tauri/src/updater/patch.rs`: Delta patch application (bsdiff/bsdcat or similar)
+- [ ] `src-tauri/src/updater/install.rs`: Atomic installation
+- [ ] `src-tauri/src/updater/persistence.rs`: Data preservation verification
+
+**Tauri Commands:**
+- [ ] `check_for_update() -> Option<UpdateInfo>`: Check if update available
+- [ ] `download_update(version) -> DownloadProgress`: Start download
+- [ ] `get_download_progress() -> DownloadProgress`: Poll download status
+- [ ] `install_update() -> InstallResult`: Apply update and restart
+- [ ] `skip_version(version) -> ()`: Skip this version (don't ask again)
+- [ ] `get_update_history() -> Vec<UpdateRecord>`: History of updates
+- [ ] `verify_data_integrity() -> IntegrityReport`: Post-update verification
+
+**Incremental Update Strategy:**
+- [ ] **Delta Updates**: Only download changed files (using bsdiff for binary diff)
+- [ ] **Fallback to Full**: If delta fails, download full installer
+- [ ] **Background Download**: Download while app is running
+- [ ] **Atomic Installation**: New version installed to temp, swapped on restart
+- [ ] **Rollback on Failure**: If new version fails, auto-restore previous
+
+**Data Persistence Guarantees:**
+- [ ] **SQLite Databases**: Never touched by updater (in ~/.autodev/, not app bundle)
+- [ ] **Session State**: All chat sessions preserved
+- [ ] **Active Plans**: Plan state restored after update
+- [ ] **Running Tasks**: Sidecars continue running (separate process)
+- [ ] **User Configuration**: ~/.airs/config.toml preserved
+- [ ] **Installed Plugins**: ~/.airs/plugins/ preserved
+- [ ] **Worktrees**: .autodev/worktrees/ preserved (external to app)
+- [ ] **Checkpoints**: .autodev/checkpoints/ preserved
+
+**Pre-Update Checklist (Atomic):**
+```rust
+pub async fn prepare_update() -> Result<UpdatePrep, UpdateError> {
+    // 1. Verify all databases are closed cleanly
+    close_all_databases().await?;
+    
+    // 2. Flush session state to disk
+    save_all_session_snapshots().await?;
+    
+    // 3. Verify data integrity
+    verify_database_integrity()?;
+    
+    // 4. Create restore point (manifest of current state)
+    create_restore_point()?;
+    
+    // 5. Signal sidecars to persist state
+    notify_sidecars_save_state().await?;
+    
+    Ok(UpdatePrep { restore_point })
+}
+```
+
+**Post-Update Restoration:**
+```rust
+pub async fn restore_after_update() -> Result<(), RestoreError> {
+    // 1. Verify data files exist
+    verify_data_presence()?;
+    
+    // 2. Reopen databases
+    open_all_databases().await?;
+    
+    // 3. Restore session windows
+    restore_session_tabs().await?;
+    
+    // 4. Reconnect to sidecars (they kept running)
+    reconnect_sidecars().await?;
+    
+    // 5. Verify plan states
+    verify_plan_integrity()?;
+    
+    // 6. Clean up old version files
+    cleanup_old_versions()?;
+    
+    Ok(())
+}
+```
+
+**Frontend — Update UI:**
+
+**Update Notification (`src/components/update/UpdateToast.tsx`):**
+- [ ] Toast notification: "Update 1.2.3 available"
+- [ ] Shows: version, release notes snippet, download size
+- [ ] Buttons: "Update Now", "Later", "Release Notes"
+- [ ] Auto-dismiss after 10 seconds (unless critical update)
+
+**Update Dialog (`src/components/update/UpdateDialog.tsx`):**
+- [ ] Full-screen modal with release notes (Markdown rendering)
+- [ ] Progress bar for download
+- [ ] "Downloading... 45%" status
+- [ ] "Ready to Install" when download complete
+- [ ] "Restart to Update" button
+- [ ] "Install on Quit" option (update when closing app)
+
+**Update Settings (`src/components/settings/UpdateSettings.tsx`):**
+- [ ] Auto-check for updates toggle
+- [ ] Update channel selection (stable, beta, nightly)
+- [ ] "Check for Updates" button (manual)
+- [ ] Update history viewer
+- [ ] Data backup before update toggle
+
+**Update Store (`src/stores/updateStore.ts`):**
+- [ ] State: `updateAvailable`, `downloadProgress`, `isDownloading`, `releaseNotes`
+- [ ] Actions: `checkForUpdate()`, `downloadUpdate()`, `installUpdate()`, `skipVersion()`
+
+**Critical Updates:**
+- [ ] Critical security updates force installation
+- [ ] Countdown timer: "Restarting in 60 seconds..."
+- [ ] Can postpone but not skip
+- [ ] Red notification badge on Settings icon
+
+**Enterprise Update Policy:**
+- [ ] Disable auto-updates via Group Policy (Windows)
+- [ ] Internal update server configuration
+- [ ] Staged rollouts (IT can control update pace)
+- [ ] Update approval workflow
+- [ ] Version pinning (stay on specific version)
+
+**Per-Platform Implementation:**
+
+**Windows:**
+- [ ] Use Tauri's built-in updater (NSIS/MSI compatible)
+- [ ] WiX Burn bootstrapper for .NET/runtime deps
+- [ ] Windows Update service integration (optional)
+- [ ] Code signing required for auto-update
+
+**macOS:**
+- [ ] Sparkle framework integration (industry standard)
+- [ ] Notarization check before applying update
+- [ ] User notification via Notification Center
+- [ ] App translocation handling
+
+**Linux:**
+- [ ] AppImage: use AppImageUpdate for delta updates
+- [ ] deb/rpm: use package manager (apt, dnf) for updates
+- [ ] Flatpak/ Snap support (optional)
+- [ ] Polkit integration for elevation
+
+**Offline Mode:**
+- [ ] Detect offline state, skip update checks
+- [ ] Queue update check for when online
+- [ ] Manual update via downloaded .msi/.dmg
+
+**Rollback System:**
+- [ ] Keep last 2 versions for rollback
+- [ ] "Revert to Previous Version" in settings
+- [ ] Automatic rollback if new version crashes on start
+- [ ] Telemetry on rollback events
+
+**Enterprise Deployment:**
+- [ ] MSI transforms for enterprise customization
+- [ ] Group Policy support (Windows)
+- [ ] MDM deployment profile (macOS)
+- [ ] Silent install flags for all platforms
+- [ ] Custom configuration deployment
+- [ ] License key validation (optional)
+
+**IT Staff Runbook (`docs/IT_RUNBOOK.md`):**
+- [ ] Pre-deployment checklist
+- [ ] System requirements (CPU, RAM, disk, OS versions)
+- [ ] Network requirements (ports, firewall rules)
+- [ ] Step-by-step installation guide per platform
+- [ ] Silent deployment instructions
+- [ ] Troubleshooting guide
+- [ ] Update procedures
+- [ ] Uninstall procedures
+
+#### Phase 5.3 Deliverables Checklist
+
+**Windows Installer:**
+- [ ] WiX v4 project files (`wix/`)
+- [ ] MSI installer with per-user and per-machine options
+- [ ] WebView2 runtime auto-install
+- [ ] Sidecar binary bundling
+- [ ] Start menu and desktop shortcuts
+- [ ] File associations (`.autodev`)
+- [ ] Registry entries for uninstall
+- [ ] Code signing certificate
+
+**macOS Installer:**
+- [ ] DMG creation scripts (`dmg/`)
+- [ ] Signed and notarized app bundle
+- [ ] Drag-and-drop installation
+- [ ] Branded DMG background
+- [ ] CLI symlink in `/usr/local/bin/`
+- [ ] Sidecar bundling
+
+**Linux Installers:**
+- [ ] AppImage build scripts (`appimage/`)
+- [ ] .deb package (`deb/`)
+- [ ] .rpm package (`rpm/`)
+- [ ] Desktop integration
+- [ ] Dependency declarations
+- [ ] Post-install scripts
+
+**Build System:**
+- [ ] Cross-platform build scripts
+- [ ] GitHub Actions CI/CD
+- [ ] Automated release creation
+- [ ] Code signing integration
+- [ ] Version management
+
+**Auto-Updater:**
+- [ ] Background update check every 4 hours
+- [ ] Incremental delta updates (bsdiff)
+- [ ] Signature verification (Ed25519)
+- [ ] Atomic installation with rollback support
+- [ ] Data persistence guarantees (DBs, sessions, plans, tasks)
+- [ ] Pre-update checklist and post-update restoration
+- [ ] Update notification toast and dialog UI
+- [ ] Critical update force-install capability
+- [ ] Update channels (stable, beta, nightly)
+- [ ] Skip version functionality
+- [ ] Update history viewer
+- [ ] Enterprise update policy controls
+- [ ] Offline mode detection
+- [ ] Rollback to previous version
+- [ ] 7 Tauri commands for update management
+
+**Enterprise:**
+- [ ] Silent install mode
+- [ ] Group Policy support (Windows)
+- [ ] MDM deployment (macOS)
+- [ ] Custom configuration deployment
+- [ ] IT Staff Runbook document
+
+#### Phase 5.3 Success Criteria
+
+> **Windows Install**: User downloads `AutoDev_1.0.0_x64.msi` → Double-clicks → UAC prompt → Install completes → Desktop shortcut appears → App launches → Sidecars auto-start
+
+> **macOS Install**: User downloads `AutoDev-1.0.0.dmg` → Opens DMG → Drags to Applications → Launches from Launchpad → "AutoDev is an app downloaded from the internet" → Opens successfully
+
+> **Linux Install**: User downloads `AutoDev-1.0.0.AppImage` → `chmod +x` → Runs → Works on any distro → Or installs .deb with `apt install ./autodev_1.0.0_amd64.deb`
+
+> **Enterprise Deploy**: IT admin runs `msiexec /i AutoDev.msi /qn WORKERTYPE=backend FLEETTOKEN=xxx` → Silent install on 100 PCs → All workers auto-join fleet
+
+> **Auto-Update**: User sees toast "Update 1.2.3 available" → Clicks "Update Now" → Download progresses in background → "Restart to Update" appears → User restarts → App reopens with all 5 chats intact, active plan still visible, sidecars reconnected → Version shows 1.2.3
+
+---
+
+### Phase 5.4 — Dashboard + Analytics 🎯 **FLEET MANAGEMENT**
+
+**Goal**: Comprehensive cost dashboard and analytics for tracking usage, costs, worker efficiency, and system health.
+
+**Depends On**: All previous sub-phases (uses CLI data, worker data, plugin data)
+
+#### Dashboard Architecture
+
+**Core Concept**: New "Dashboard" tab with real-time analytics, cost tracking, and fleet management insights. Inspired by Claude Code's `/cost` command and cloud provider dashboards.
+
+**Data Collection Pipeline:**
+```
+Events (Tauri, CLI, Workers)
+         │
+         ▼
+┌─────────────────┐
+│  Event Bus      │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Analytics DB    │  (SQLite: ~/.autodev/analytics.db)
+│ - token_usage   │
+│ - costs         │
+│ - worker_stats  │
+│ - api_failures  │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  Aggregator     │  (background job)
+│ - hourly rollups│
+│ - daily summaries│
+│ - worker metrics│
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  Dashboard UI   │  (React + Recharts)
+│ - real-time     │
+│ - historical    │
+│ - predictive    │
+└─────────────────┘
+```
+
+**Analytics Database Schema:**
+```sql
+-- Token usage per request
+CREATE TABLE token_usage (
+    id INTEGER PRIMARY KEY,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    session_id TEXT,
+    agent_type TEXT,  -- PA, Supervisor, Worker, QC
+    provider TEXT,
+    model TEXT,
+    prompt_tokens INTEGER,
+    completion_tokens INTEGER,
+    total_tokens INTEGER,
+    thinking_tokens INTEGER,
+    cost_usd DECIMAL(10,6),
+    request_type TEXT  -- chat, tool_use, summarization
+);
+
+-- Aggregated daily costs
+CREATE TABLE daily_costs (
+    date DATE PRIMARY KEY,
+    total_cost_usd DECIMAL(10,2),
+    total_tokens INTEGER,
+    session_count INTEGER,
+    message_count INTEGER,
+    tool_call_count INTEGER,
+    provider_breakdown JSON,  -- {"anthropic": 1.23, "openai": 0.45}
+    agent_type_breakdown JSON -- {"PA": 0.80, "Worker": 0.88}
+);
+
+-- Worker statistics
+CREATE TABLE worker_stats (
+    worker_id TEXT PRIMARY KEY,
+    date DATE,
+    tasks_completed INTEGER,
+    tasks_failed INTEGER,
+    time_spent_minutes INTEGER,
+    cost_usd DECIMAL(10,2),
+    avg_task_duration_minutes INTEGER,
+    success_rate DECIMAL(5,2),
+    last_heartbeat DATETIME
+);
+
+-- API failures
+CREATE TABLE api_failures (
+    id INTEGER PRIMARY KEY,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    provider TEXT,
+    error_type TEXT,  -- rate_limit, auth, timeout, model_error
+    error_message TEXT,
+    request_id TEXT,
+    retry_count INTEGER,
+    resolved BOOLEAN DEFAULT 0
+);
+
+-- System events
+CREATE TABLE system_events (
+    id INTEGER PRIMARY KEY,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    component TEXT,  -- sidecar, provider, tool, agent
+    event_type TEXT, -- start, stop, error, warning
+    message TEXT,
+    severity TEXT,   -- info, warning, error, critical
+    metadata JSON
+);
+```
+
+**Backend — Analytics Module:**
+- [ ] `src-tauri/src/analytics/mod.rs`: Analytics module
+- [ ] `src-tauri/src/analytics/collector.rs`: Event collection
+- [ ] `src-tauri/src/analytics/aggregator.rs`: Data aggregation (hourly, daily)
+- [ ] `src-tauri/src/analytics/queries.rs`: Query functions for dashboard
+- [ ] `src-tauri/src/analytics/exporter.rs`: CSV/JSON export
+
+**Tauri Commands:**
+- [ ] `get_dashboard_summary() -> DashboardSummary`: Today's stats vs yesterday
+- [ ] `get_cost_analytics(range, granularity) -> CostAnalytics`: Cost trends
+- [ ] `get_token_usage(range, filters) -> TokenUsageData`: Token consumption
+- [ ] `get_worker_analytics(worker_id?, range) -> WorkerAnalytics`: Worker stats
+- [ ] `get_api_failures(range, filters) -> Vec<ApiFailure>`: Error tracking
+- [ ] `get_system_logs(component?, severity?, range) -> Vec<SystemEvent>`
+- [ ] `export_analytics(format, range, path) -> ExportResult`: Data export
+- [ ] `predict_monthly_cost() -> Prediction`: ML-based cost prediction
+
+#### Dashboard UI Components
+
+**Dashboard Tab Layout:**
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  Dashboard                                            [Export] [Refresh]    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐          │
+│  │  💰 Cost    │ │  🪙 Tokens  │ │  ⚡ Workers  │ │  📊 Sessions│          │
+│  │   Today     │ │   Today     │ │   Active    │ │   Today     │          │
+│  │  $12.45     │ │  125K       │ │  12 / 25    │ │  8          │          │
+│  │  ↑ 23%      │ │  ↓ 5%       │ │  +2 today   │ │  ↑ 2        │          │
+│  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  Cost Trend (7 Days)          │  Worker Efficiency                         │
+│  ┌─────────────────────────┐  │  ┌───────────────────────────────────┐   │
+│  │      📈 Line Chart       │  │  │  🥇 worker-backend-01: 95%       │   │
+│  │  Daily cost over week   │  │  │  🥈 worker-frontend-03: 92%      │   │
+│  └─────────────────────────┘  │  │  🥉 worker-devops-01: 88%         │   │
+│                               │  └───────────────────────────────────┘   │
+├───────────────────────────────┴─────────────────────────────────────────────┤
+│  Model Usage Breakdown          │  Recent API Failures                    │
+│  ┌─────────────────────────┐    │  ⚠️ 3 errors in last hour              │
+│  │     🥧 Pie Chart        │    │  • Anthropic rate limit (2 min ago)    │
+│  │  Claude: 60%            │    │  • Ollama timeout (15 min ago)         │
+│  │  GPT-4: 30%             │    │  • GitHub API error (45 min ago)       │
+│  │  Ollama: 10%            │    │                                        │
+│  └─────────────────────────┘    │  [View All]                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Widget Components:**
+
+**1. Cost Meter Widget (`src/components/dashboard/CostMeter.tsx`):**
+- [ ] Today's cost vs yesterday (percentage change)
+- [ ] Progress bar toward daily budget (if set)
+- [ ] "This month" projection based on current rate
+- [ ] Drill-down: click to see cost breakdown by provider/agent
+
+**2. Token Usage Widget (`src/components/dashboard/TokenUsage.tsx`):**
+- [ ] Today's tokens (prompt vs completion ratio)
+- [ ] Historical trend (7-day line chart)
+- [ ] Model breakdown (pie chart)
+- [ ] Per-session token consumption (top 5 sessions)
+
+**3. Worker Status Widget (`src/components/dashboard/WorkerStatus.tsx`):**
+- [ ] Active workers / Total workers
+- [ ] Workers added today
+- [ ] Worker health indicator (green/yellow/red)
+- [ ] Quick actions: "View All Workers", "Add Worker"
+
+**4. Session Activity Widget (`src/components/dashboard/SessionActivity.tsx`):**
+- [ ] Sessions created today
+- [ ] Active sessions now
+- [ ] Messages sent today
+- [ ] Tool calls executed today
+
+**5. Model Usage Breakdown (`src/components/dashboard/ModelUsage.tsx`):**
+- [ ] Pie/donut chart of token distribution by model
+- [ ] Cost per model
+- [ ] Efficiency ranking (cost per successful task)
+
+**6. Worker Efficiency Leaderboard (`src/components/dashboard/WorkerLeaderboard.tsx`):**
+- [ ] Top performing workers by success rate
+- [ ] Average task duration per worker type
+- [ ] Cost per task per worker
+- [ ] Trending up/down indicators
+
+**7. API Failures Panel (`src/components/dashboard/ApiFailures.tsx`):**
+- [ ] Recent errors with timestamps
+- [ ] Error categorization (rate limit, auth, timeout, etc.)
+- [ ] Provider-specific failure rates
+- [ ] Auto-retry success rate
+
+**Chart Library:**
+- [ ] `recharts` for React-based charts
+- [ ] Line charts for trends over time
+- [ ] Bar charts for comparisons
+- [ ] Pie/donut charts for breakdowns
+- [ ] Real-time updates via Tauri events
+
+**Dashboard Store (`src/stores/dashboardStore.ts`):**
+- [ ] State: `summary`, `costData`, `tokenData`, `workerData`, `failures`
+- [ ] Actions: `refreshDashboard()`, `setDateRange()`, `exportData()`
+- [ ] Real-time updates via Tauri events
+
+#### Analytics Features
+
+**Cost Tracking:**
+- [ ] Per-session cost tracking (stored in analytics DB)
+- [ ] Per-worker cost tracking (for fleet billing)
+- [ ] Per-provider cost breakdown
+- [ ] Per-model cost comparison
+- [ ] Cost per task type (feature, bug, refactor)
+- [ ] Cost projections ("At current rate, monthly cost will be $X")
+- [ ] Budget alerts ("Daily cost exceeded $Y")
+
+**Token Analytics:**
+- [ ] Token usage by agent type (PA vs Worker vs QC)
+- [ ] Prompt vs completion token ratio
+- [ ] Thinking tokens (for reasoning models)
+- [ ] Token efficiency (tokens per successful task)
+- [ ] Context window utilization tracking
+
+**Worker Analytics:**
+- [ ] Tasks completed per worker per day
+- [ ] Success rate per worker
+- [ ] Average task duration
+- [ ] Cost per task
+- [ ] Worker utilization rate (% of time working)
+- [ ] Worker idle time tracking
+
+**System Health:**
+- [ ] Sidecar uptime/downtime
+- [ ] Provider API availability
+- [ ] Tool execution failure rates
+- [ ] Session crash tracking
+- [ ] Error log aggregation
+
+**Export & Reporting:**
+- [ ] CSV export for any data range
+- [ ] JSON export for programmatic access
+- [ ] PDF report generation (weekly, monthly)
+- [ ] Scheduled reports (email delivery)
+- [ ] Custom date range selection
+
+**Predictive Analytics:**
+- [ ] Monthly cost prediction based on current usage
+- [ ] Worker capacity planning ("You need X more workers")
+- [ ] Optimal model recommendation ("Use Ollama for task Y to save $Z")
+
+#### Phase 5.4 Deliverables Checklist
+
+**Backend — Analytics:**
+- [ ] `src-tauri/src/analytics/` module
+- [ ] Analytics database schema (4 tables: token_usage, daily_costs, worker_stats, api_failures)
+- [ ] Event collection pipeline
+- [ ] Background aggregation job (hourly, daily rollups)
+- [ ] Query functions for dashboard
+- [ ] CSV/JSON exporter
+- [ ] Cost prediction algorithm
+- [ ] 15+ Tauri commands for analytics queries
+
+**Frontend — Dashboard:**
+- [ ] New "Dashboard" tab in main navigation
+- [ ] 7 dashboard widgets (Cost Meter, Token Usage, Worker Status, Session Activity, Model Usage, Worker Leaderboard, API Failures)
+- [ ] `recharts` integration for charts
+- [ ] Real-time updates via Tauri events
+- [ ] Date range picker (today, week, month, custom)
+- [ ] Export buttons (CSV, JSON)
+- [ ] `src/stores/dashboardStore.ts` for state management
+
+**Analytics Features:**
+- [ ] Cost tracking (per session, worker, provider, model, task type)
+- [ ] Token analytics (usage by agent type, prompt/completion ratio)
+- [ ] Worker analytics (tasks, success rate, duration, cost per task)
+- [ ] System health monitoring (sidecars, providers, tools)
+- [ ] Export & reporting (CSV, JSON, PDF)
+- [ ] Predictive analytics (cost prediction, capacity planning)
+- [ ] Budget alerts and notifications
+
+#### Phase 5.4 Success Criteria
+
+> **Cost Tracking**: User opens Dashboard → Sees "Today: $12.45" → Clicks widget → Sees breakdown by provider (Anthropic $8, OpenAI $4.45) → Exports CSV → Data shows per-session costs
+
+> **Worker Analytics**: Manager views Worker Leaderboard → Sees top worker "worker-backend-01" with 95% success rate → Clicks worker → Sees task history, average duration 45min, cost $2.30/task
+
+> **API Monitoring**: Dashboard shows "3 API failures in last hour" → User clicks → Sees Anthropic rate limit errors → Adjusts rate limiting → Errors decrease
+
+> **Cost Prediction**: Dashboard shows "Projected monthly cost: $450" based on 7-day average → User sets budget alert at $400 → Alert triggers when threshold exceeded
+
+---
+
+### Phase 5 Dependency Graph
+
+```
+Phase 5 Sub-Phase Dependencies
+═══════════════════════════════════════════════════════════════════════════════
+
+Phase 5.1 (CLI)
+│
+├─► [CRITICAL PATH] Automation Foundation
+│   ├─ CI/CD integration
+│   ├─ Worker automation scripts
+│   ├─ Headless operation
+│   └─ Configuration management
+│
+├─► [DEPENDENCY] Phase 5.2 AIRS Plugin
+│   └─ Uses airsctl for setup
+│
+├─► [DEPENDENCY] Phase 5.3 Installers
+│   └─ CLI bundled in installers
+│
+└─► [DEPENDENCY] Phase 5.4 Dashboard
+    ├─ CLI events feed analytics
+    └─ airsctl analytics commands
+
+Phase 5.2 (AIRS Plugin)
+│
+├─► [DEPENDENCY] Phase 5.3 Installers
+│   └─ Plugin bundled in installers
+│
+└─► [DEPENDENCY] Phase 5.4 Dashboard
+    └─ Worker setup events tracked
+
+Phase 5.3 (Installers)
+└─► [DEPENDENCY] Phase 5.4 Dashboard
+    └─ Install events tracked
+
+═══════════════════════════════════════════════════════════════════════════════
+
+Phase 5 Cross-Sub-Phase Integration:
+
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│   Phase 5.1     │────►│   Phase 5.2     │────►│   Phase 5.3     │
+│  CLI (airsctl)  │     │  AIRS Plugin    │     │  Installers     │
+│                 │     │                 │     │                 │
+│ • 30+ commands  │     │ • One-click     │     │ • MSI/DMG/deb   │
+│ • CI/CD ready   │────►│   setup         │────►│ • Sidecars      │
+│ • REPL mode     │     │ • Auto-detect   │     │ • Auto-update   │
+└────────┬────────┘     └─────────────────┘     └─────────────────┘
+         │                                               │
+         │                       ┌───────────────────────┘
+         │                       │
+         └───────────────────────┴───────────────────┐
+                             │                      │
+                             ▼                      │
+                    ┌─────────────────┐             │
+                    │   Phase 5.4     │◄────────────┘
+                    │  Dashboard      │
+                    │                 │
+                    │ • Cost tracking │
+                    │ • Worker stats  │
+                    │ • Analytics     │
+                    └─────────────────┘
+```
+
+### Phase 5 Summary Statistics
+
+| Metric | Count |
+|--------|-------|
+| **Total Sub-Phases** | 4 (5.1, 5.2, 5.3, 5.4) |
+| **Total Checklist Items** | 170+ |
+| **CLI Commands** | 30+ across 7 categories |
+| **Platform Installers** | 5 (MSI, DMG, AppImage, deb, rpm) |
+| **Auto-Updater Features** | 15+ (delta updates, atomic install, rollback) |
+| **Dashboard Widgets** | 7 |
+| **Analytics Tables** | 4 |
+| **Built-in Plugins** | 5+ |
+
+### Phase 5 Success Criteria (Overall)
+
+> **CLI Success**: `airsctl agent run "implement auth" --non-interactive` → Runs headless → Outputs JSON → CI/CD pipeline continues
+
+> **Plugin Success**: IT staff clicks "Deploy Worker" → Selects type → Gets one-liner → Employee runs it → 5 min later worker shows "Active" in Dashboard
+
+> **Installer Success**: New user downloads MSI → Installs → Desktop shortcut works → App launches → All sidecars running
+
+> **Dashboard Success**: Manager opens Dashboard → Sees $12.45 spent today → Clicks worker leaderboard → Sees efficiency rankings → Exports monthly report → Sends to finance
 
 ---
 
