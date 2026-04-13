@@ -4,13 +4,58 @@ This notes contain notes of Razi for developing AutoDev such as rule and extra n
 
 ---
 
-## Development Rule
+# AutoDev Development Rule
 
-> Every AutoDev development needs to reference `@DEVELOPMENT_PLAN.md` phase development section, while also referencing the entire (related part in the development step) `@DEVELOPMENT_PLAN.md` and `@autodev-master-plan.md` to ensure full context, information, and knowledge in developing.
->
-> Every development that has finished needs to be updated in `@DEVELOPMENT_PLAN.md`. If there are major architectural or decision changes that need to be made, list them in a document in `@autodev/docs/development` and let me decide what to do about that.
->
-> Every development step should also refer to the related part in `@claude-code-source-main` and `@goose-main` as the source of reference. You also need to take a look at `@autodev/submodules/core-orchestrator` and `@autodev/submodules/memory-mcp-server` submodules to ensure the architecture flow.
+## 1. Context & Planning Reference
+
+Before starting any development task, always reference the relevant phase in `@DEVELOPMENT_PLAN.md`. In addition to the specific phase, read the **entire related section** of both:
+
+- `@DEVELOPMENT_PLAN.md` — for current scope, task breakdown, and progress tracking
+- `@autodev-master-plan.md` — for overarching architecture decisions, goals, and design intent
+
+This ensures every development step is grounded in full context and aligned with the project's direction.
+
+---
+
+## 2. Progress Updates
+
+Upon completing any development step, **update `@DEVELOPMENT_PLAN.md`** to reflect what was done.
+
+If the implementation introduces significant architectural changes or requires a decision that deviates from the existing plan, do the following:
+
+1. Document the change or decision in a new file under `@autodev/docs/development/`
+2. Clearly describe the trade-offs, implications, and available options
+3. **Do not proceed** — present it for review and wait for a decision before continuing
+
+---
+
+## 3. Source Reference
+
+For every development step, cross-reference the relevant portions of the following source codebases:
+
+- `@claude-code-source-main` — Claude Code source reference
+- `@goose-main` — Goose source reference
+
+Additionally, always inspect the following submodules to validate alignment with the architecture flow:
+
+- `@autodev/submodules/core-orchestrator`
+- `@autodev/submodules/memory-mcp-server`
+
+---
+
+## 4. Codebase Documentation
+
+All codebase documentation lives under `autodev/codebase/`, organized into three directories:
+
+| Directory | Contents |
+|---|---|
+| `autodev/` | AutoDev codebase — `.md` for narrative explanation, `.json` for graph-based structure |
+| `claude-code/` | Claude Code source — `.md` for narrative explanation, `.json` for graph-based structure |
+| `goose/` | Goose source — `.md` for narrative explanation, `.json` for graph-based structure |
+
+**Read the relevant documentation before writing or modifying any code.** Use it to understand how the codebase is organized and how components interact architecturally, so you can precisely locate the files and modules you need to work with.
+
+Since we are developing `autodev`, naturally the Codebase will grow, and we need to make sure that the documentation is updated accordingly to reflect the current state of the codebase
 
 ---
 
@@ -22,7 +67,8 @@ This notes contain notes of Razi for developing AutoDev such as rule and extra n
 1. Ensure the movement of `__autodev` tools to the `submodules/core-orchestrator` is properly created especially the pathway and architecture compliance to the submodule and there is a docs on tool tarversal in @TOOL_FLOW_ARCHITECTURE.md
 2. Both `submodules/` are already in a branch called `autodev`, and we will continue developing there for submodules changes, but we need to make sure that it is in the `autodev` branch before developing and update from the main branch if needed.
 3. Both `submodules/` needs an API key in a .env, ensure a way to manage the .env for each submodule, either traverse it from `src-tauri` or create a separate .env for each submodule.
-4. I have created several more tools and refined some current tools in `src-tauri/builtin_tools`, so take note of that
+4. I have created several more tools and refined some current tools in `src-tauri/builtin_tools`, so take note of that, the `create_task` tool have not been defined as it will be created in phase 2
+5. In `src-tauri/src/agent/compaction.rs` there was a note to add summary compaction, make sure to check and implement it
 
 
 
