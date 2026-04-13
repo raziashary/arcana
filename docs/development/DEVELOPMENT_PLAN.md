@@ -2105,8 +2105,23 @@ Phase 2 remains the **grandiose vision**: PA delegates → Board → Supervisor 
 - [ ] GitHub PAT storage in vault — Secure keychain storage
 - [ ] GitHub MCP integration: list repos, create PR, review PR — Workers use this to create PRs after completing tasks
 
-**Provider Support:**
+**Provider Support & Model Enhancements:**
 - [ ] Additional providers: OpenAI, Gemini — Extend beyond Anthropic
+- [ ] **Thinking Models + Reasoning Effort:**
+  - Support models with reasoning capabilities (o1, o3, Claude 3.7 Sonnet with extended thinking)
+  - Reasoning effort slider in Settings: Low / Medium / High
+  - Store reasoning preference per model in `model_registry.py` equivalent
+  - Display reasoning tokens separately in cost tracking
+- [ ] **Temperature + Top-P Parameters:**
+  - Per-model configuration for temperature (0.0 - 2.0) and top-p (0.0 - 1.0)
+  - UI in Settings → Models with sliders + reset to defaults
+  - Store in `~/.autodev/model_configs.db` (SQLite)
+  - Default presets: Creative (temp 1.0), Balanced (temp 0.7), Precise (temp 0.3)
+- [ ] **Model Context Window Validation:**
+  - Store max context window per model in registry (4k, 8k, 128k, 200k)
+  - Pre-flight check: warn if prompt + estimated response exceeds 80% of context window
+  - Context meter in UI showing current / max tokens
+  - Auto-suggestion to compact or summarize when nearing limit
 
 **Submodule Bridge (core-orchestrator integration):**
 - [ ] **[SUBMODULE]** `unified_tool_handler.py`: Add `register_autodev_handler()` + routing logic
@@ -2191,12 +2206,13 @@ Phase 2.2 Dependencies (requires 2.1):
 
 ---
 
-## 12. Phase 4 — Subagents + Model Router + Dispatch
+## 12. Phase 4 — Agent Memory + Subagents + Model Router
 
-**Goal**: Multi-agent orchestration, intelligent model routing, AutoDev dispatch signal handling.
+**Goal**: PA memory system (episodic, semantic, procedural), multi-agent orchestration, intelligent model routing, AutoDev dispatch signal handling.
 
 ### Key Components
 
+- **PA Memory System**: Three-layer memory replacing compaction (episodic, semantic, procedural)
 - **Subagents**: Spawn child agents with isolated tool sets and context
 - **Model Router**: Map agent roles to specific provider/model pairs
 - **Dispatch Signals**: Watch filesystem for dispatch signal files
@@ -2204,24 +2220,44 @@ Phase 2.2 Dependencies (requires 2.1):
 
 ### Phase 4 Deliverables Checklist
 
+**PA Memory System (Replaces Compaction):**
+- [ ] Three-layer memory architecture from core-orchestrator:
+  - **Episodic memory**: Session summaries, what happened when
+  - **Semantic memory**: Learned facts, project conventions, user preferences
+  - **Procedural memory**: How the PA approaches tasks, learned workflows
+- [ ] MEMORY.md UI in sidebar (similar to AUTODEV.md):
+  - Monaco editor for viewing/editing procedural memory
+  - SQLite-backed storage (`~/.autodev/memory.db`)
+  - Integration with core-orchestrator memory endpoints
+- [ ] Memory injection into system prompt (context.rs)
+- [ ] Auto-summarization for episodic memory (post-session)
+- [ ] Memory search/retrieval tools for the PA
+
+**Subagents + Multi-Agent:**
 - [ ] Subagent spawning with isolated context
+- [ ] Agent team coordination (supervisor → workers pattern)
+- [ ] Lock file management for task claiming
+- [ ] Heartbeat reporting (every 5 min to status file)
+
+**Model Router + Dispatch:**
 - [ ] Model Router: configurable role → model mapping
 - [ ] Model Router UI in Settings tab
 - [ ] Dispatch signal watch (FSEvents/inotify via `notify` crate)
 - [ ] Dispatch signal UI in AutoDev Panel
-- [ ] Agent team coordination (supervisor → workers pattern)
-- [ ] Lock file management for task claiming
-- [ ] Heartbeat reporting (every 5 min to status file)
+
+**Providers:**
 - [ ] Azure OpenAI provider
+- [ ] Prompt caching for all cloud providers (cost optimization)
 
 ---
 
-## 13. Phase 5 — Plugin + CLI + Installers
+## 13. Phase 5 — Plugin + CLI + Installers + Dashboard
 
-**Goal**: One-click worker configuration, headless CLI, platform installers.
+**Goal**: One-click worker configuration, headless CLI, platform installers, cost dashboard + analytics.
 
 ### Phase 5 Deliverables Checklist
 
+**CLI + Installers:**
 - [ ] `airsctl` CLI binary (separate Rust binary in `src-cli/`)
 - [ ] AIRS Plugin for one-click worker PC setup
 - [ ] Windows installer (MSI via WiX or NSIS)
@@ -2230,9 +2266,56 @@ Phase 2.2 Dependencies (requires 2.1):
 - [ ] IT staff runbook document
 - [ ] Sidecar binaries bundled in installers
 
+**Cost Dashboard + Analytics (Moved from feature-after-phase.md):**
+- [ ] **New Tab: Dashboard** — Analytics and metrics visualization
+- [ ] Token usage tracking (per session, per day, per worker, all-time)
+- [ ] Cost tracking in USD (collected since first app usage, persistent across restarts)
+- [ ] General usage stats (sessions created, messages sent, tools executed)
+- [ ] Worker time spent analytics (per worker type, per task, cumulative)
+- [ ] API call failures tracking (both cloud and local providers, with error categorization)
+- [ ] Log aggregation and filtering (by severity, by component, by time range)
+- [ ] Exportable reports (CSV/JSON for cost analysis)
+- [ ] Dashboard widgets: Cost meter (today vs yesterday), Top workers by cost, Model usage breakdown
+
 ---
 
-## 14. State Machine & Event System Design
+## 14. Phase 6 — Advanced Developer Tools
+
+**Goal**: Graphify integration, advanced code analysis, experimental features.
+
+> **Note**: This phase is for advanced features that go beyond core AutoDev functionality. These enhance developer productivity but are not required for the core PA + Fleet orchestration vision.
+
+### Phase 6 Deliverables Checklist
+
+**Graphify Integration (Codebase Visualization):**
+- [ ] Recreate the Graphify tool for codebase dissection
+- [ ] Graph-based code analysis without LLM/AI assistance:
+  - Parse functions, classes, variables from source files (tree-sitter)
+  - Extract docstrings, type hints, signatures
+  - Generate structured markdown similar to `autodev/docs/codebase/` format
+- [ ] **New Tab: Graphify** — Codebase visualization
+  - Interactive graph display of code relationships
+  - Color-coded connections (imports, calls, inheritance)
+  - Zoom, pan, filter by file type or module
+  - Click node → jump to file/line in IDE tab
+- [ ] Graphify tool available to worker agents for codebase analysis
+- [ ] Export graph as PNG/SVG or interactive HTML
+
+**Advanced IDE Features:**
+- [ ] Symbol search across all cloned repos (go to definition, find references)
+- [ ] Code refactoring tools (rename symbol, extract function)
+- [ ] Advanced diff viewer (side-by-side, inline, three-way merge)
+- [ ] Code bookmarks and annotations
+
+**Experimental Features:**
+- [ ] Voice input for chat (speech-to-text)
+- [ ] Custom themes and UI customization
+- [ ] Plugin marketplace for community extensions
+- [ ] A/B testing framework for prompt variants
+
+---
+
+## 15. State Machine & Event System Design
 
 ### Dual-Layer State Management
 
