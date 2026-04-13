@@ -1,0 +1,1227 @@
+{
+  "metadata": {
+    "project": "claude-code-source-main",
+    "type": "Node.js/TypeScript CLI Application",
+    "ui_framework": "Ink (React for CLI)",
+    "bundler": "Bun",
+    "generated_at": "2025-01-15",
+    "total_files": 1902,
+    "source_files": 1850,
+    "test_files": 52
+  },
+  "nodes": {
+    "entry_points": {
+      "files": [
+        {
+          "id": "main.tsx",
+          "path": "src/main.tsx",
+          "size_bytes": 803924,
+          "type": "main_entry",
+          "purpose": "Main application entry point - bootstraps React with Ink, initializes state, loads plugins, starts REPL",
+          "key_functions": [
+            "bootstrap application",
+            "setup React with Ink renderer",
+            "initialize AppStateProvider",
+            "load plugins if --plugin-dir specified",
+            "handle trust dialog",
+            "start main REPL or run initial command"
+          ],
+          "dependencies": [
+            "init.ts",
+            "AppStateProvider",
+            "MailboxProvider",
+            "VoiceProvider"
+          ],
+          "imports_count": 150
+        },
+        {
+          "id": "cli.tsx",
+          "path": "src/entrypoints/cli.tsx",
+          "size_bytes": 39275,
+          "type": "cli_entry",
+          "purpose": "CLI bootstrap entrypoint - checks for special flags before loading full CLI",
+          "key_features": [
+            "Fast-path for --version (zero imports)",
+            "Fast-path for --dump-system-prompt",
+            "Entry mode handlers",
+            "Dynamic imports for fast paths"
+          ],
+          "entry_modes": [
+            "--claude-in-chrome-mcp",
+            "--chrome-native-host",
+            "--computer-use-mcp",
+            "--daemon-worker",
+            "remote-control / bridge",
+            "daemon",
+            "ps|logs|attach|kill (background sessions)"
+          ],
+          "dependencies": [
+            "utils/config.js",
+            "utils/startupProfiler.js",
+            "daemon/workerRegistry.js",
+            "bridge/bridgeMain.js"
+          ]
+        },
+        {
+          "id": "init.ts",
+          "path": "src/entrypoints/init.ts",
+          "size_bytes": 13780,
+          "type": "initialization",
+          "purpose": "Application initialization with memoization - one-time setup",
+          "initialization_steps": [
+            "Enable configs",
+            "Apply safe environment variables",
+            "Setup graceful shutdown",
+            "Initialize 1P event logging",
+            "Configure global mTLS",
+            "Configure global HTTP agents (proxy)",
+            "Preconnect to Anthropic API",
+            "Setup git-bash for Windows",
+            "Register cleanup handlers"
+          ],
+          "key_exports": ["init"],
+          "is_memoized": true,
+          "dependencies": [
+            "services/analytics/firstPartyEventLogger.js",
+            "services/analytics/growthbook.js",
+            "services/lsp/manager.js",
+            "services/oauth/client.js",
+            "services/policyLimits/index.js",
+            "services/remoteManagedSettings/index.js",
+            "utils/apiPreconnect.js",
+            "utils/config.js",
+            "utils/gracefulShutdown.js",
+            "utils/mtls.js",
+            "utils/proxy.js"
+          ]
+        },
+        {
+          "id": "mcp.ts",
+          "path": "src/entrypoints/mcp.ts",
+          "size_bytes": 6270,
+          "type": "mcp_entry",
+          "purpose": "MCP server entry points",
+          "key_exports": [
+            "runClaudeInChromeMcpServer",
+            "runComputerUseMcpServer"
+          ]
+        },
+        {
+          "id": "agentSdkTypes.ts",
+          "path": "src/entrypoints/agentSdkTypes.ts",
+          "size_bytes": 13076,
+          "type": "types",
+          "purpose": "Agent SDK type definitions"
+        },
+        {
+          "id": "sandboxTypes.ts",
+          "path": "src/entrypoints/sandboxTypes.ts",
+          "size_bytes": 5735,
+          "type": "types",
+          "purpose": "Sandbox type definitions"
+        }
+      ]
+    },
+    "core_systems": {
+      "files": [
+        {
+          "id": "query.ts",
+          "path": "src/query.ts",
+          "size_bytes": 68683,
+          "type": "core_engine",
+          "purpose": "Core agentic loop - sends messages to LLM and processes tool calls",
+          "key_functions": [
+            "query() - Main generator function",
+            "send messages to LLM",
+            "stream response chunks",
+            "detect tool_use blocks",
+            "partition tool calls",
+            "execute tools",
+            "yield results"
+          ],
+          "key_types": [
+            "QueryOptions",
+            "QueryResult",
+            "Message",
+            "ToolUseBlock",
+            "ToolResult"
+          ],
+          "dependencies": [
+            "QueryEngine.ts",
+            "services/api/anthropic.js",
+            "tools.ts",
+            "utils/toolOrchestration.js"
+          ],
+          "connected_tools": [
+            "StreamingToolExecutor",
+            "runTools"
+          ]
+        },
+        {
+          "id": "QueryEngine.ts",
+          "path": "src/QueryEngine.ts",
+          "size_bytes": 46630,
+          "type": "query_engine",
+          "purpose": "Query execution engine - handles LLM API interaction and streaming",
+          "key_class": "QueryEngine",
+          "methods": [
+            "executeQuery()",
+            "streamQuery()",
+            "handleToolUse()"
+          ],
+          "features": [
+            "Streaming from Anthropic API",
+            "Tool use detection and routing",
+            "Message history management",
+            "Context window management",
+            "Cost tracking integration"
+          ],
+          "dependencies": [
+            "services/api/",
+            "state/AppStateStore.js"
+          ]
+        },
+        {
+          "id": "commands.ts",
+          "path": "src/commands.ts",
+          "size_bytes": 25185,
+          "type": "command_system",
+          "purpose": "Slash command definitions for REPL",
+          "key_interface": "Command",
+          "commands": [
+            "/clear - Clear conversation",
+            "/cost - Show cost summary",
+            "/debug - Toggle debug mode",
+            "/compact - Compact conversation history",
+            "/model - Switch models",
+            "/mcp - MCP server management",
+            "/agent - Agent management",
+            "/exit or /quit - Exit"
+          ],
+          "dependencies": [
+            "query.ts",
+            "state/AppStateStore.js"
+          ]
+        },
+        {
+          "id": "tools.ts",
+          "path": "src/tools.ts",
+          "size_bytes": 17294,
+          "type": "tool_registry",
+          "purpose": "Tool registry and lookup functions",
+          "key_exports": [
+            "findToolByName()",
+            "registerTool()",
+            "getAllTools()",
+            "TOOLS"
+          ],
+          "tool_categories": [
+            "File Tools",
+            "Agent Tools",
+            "MCP Tools",
+            "Web Tools",
+            "Task Tools",
+            "Team Tools",
+            "Utility Tools",
+            "Mode Tools",
+            "REPL Tools",
+            "Config Tools"
+          ],
+          "registered_tools_count": 40,
+          "dependencies": [
+            "tools/*/"
+          ]
+        },
+        {
+          "id": "Tool.ts",
+          "path": "src/Tool.ts",
+          "size_bytes": 29516,
+          "type": "tool_types",
+          "purpose": "Core Tool type definitions and interfaces",
+          "key_types": [
+            "ToolInputJSONSchema",
+            "ToolPermissionContext",
+            "ToolUseContext",
+            "QueryChainTracking",
+            "ValidationResult",
+            "SetToolJSXFn",
+            "CompactProgressEvent"
+          ],
+          "progress_types": [
+            "AgentToolProgress",
+            "BashProgress",
+            "MCPProgress",
+            "REPLToolProgress",
+            "SkillToolProgress",
+            "TaskOutputProgress",
+            "WebSearchProgress"
+          ],
+          "dependencies": [
+            "@anthropic-ai/sdk",
+            "@modelcontextprotocol/sdk",
+            "services/mcp/types.js",
+            "types/message.js",
+            "types/permissions.js",
+            "state/AppState.js"
+          ]
+        },
+        {
+          "id": "Task.ts",
+          "path": "src/Task.ts",
+          "size_bytes": 3152,
+          "type": "task_types",
+          "purpose": "Task type definitions"
+        },
+        {
+          "id": "tasks.ts",
+          "path": "src/tasks.ts",
+          "size_bytes": 1355,
+          "type": "task_registry",
+          "purpose": "Task registry functions"
+        }
+      ]
+    },
+    "tool_system": {
+      "bash_tool": {
+        "directory": "src/tools/BashTool",
+        "files": [
+          {
+            "id": "BashTool.tsx",
+            "path": "src/tools/BashTool/BashTool.tsx",
+            "size_bytes": 160530,
+            "type": "tool_impl",
+            "purpose": "Main Bash tool implementation"
+          },
+          {
+            "id": "bashSecurity.ts",
+            "path": "src/tools/BashTool/bashSecurity.ts",
+            "size_bytes": 102561,
+            "type": "security",
+            "purpose": "Bash command security validation"
+          },
+          {
+            "id": "bashPermissions.ts",
+            "path": "src/tools/BashTool/bashPermissions.ts",
+            "size_bytes": 98756,
+            "type": "permissions",
+            "purpose": "Bash permission checking"
+          },
+          {
+            "id": "pathValidation.ts",
+            "path": "src/tools/BashTool/pathValidation.ts",
+            "size_bytes": 43679,
+            "type": "validation",
+            "purpose": "Path security validation"
+          },
+          {
+            "id": "readOnlyValidation.ts",
+            "path": "src/tools/BashTool/readOnlyValidation.ts",
+            "size_bytes": 68322,
+            "type": "validation",
+            "purpose": "Read-only command detection"
+          },
+          {
+            "id": "bashCommandHelpers.ts",
+            "path": "src/tools/BashTool/bashCommandHelpers.ts",
+            "size_bytes": 8589,
+            "type": "utility",
+            "purpose": "Bash command utilities"
+          },
+          {
+            "id": "commandSemantics.ts",
+            "path": "src/tools/BashTool/commandSemantics.ts",
+            "size_bytes": 3658,
+            "type": "analysis",
+            "purpose": "Command semantic analysis"
+          },
+          {
+            "id": "sedEditParser.ts",
+            "path": "src/tools/BashTool/sedEditParser.ts",
+            "size_bytes": 9562,
+            "type": "parser",
+            "purpose": "Sed command parsing"
+          },
+          {
+            "id": "sedValidation.ts",
+            "path": "src/tools/BashTool/sedValidation.ts",
+            "size_bytes": 21518,
+            "type": "validation",
+            "purpose": "Sed command validation"
+          },
+          {
+            "id": "shouldUseSandbox.ts",
+            "path": "src/tools/BashTool/shouldUseSandbox.ts",
+            "size_bytes": 5185,
+            "type": "security",
+            "purpose": "Sandbox decision logic"
+          },
+          {
+            "id": "destructiveCommandWarning.ts",
+            "path": "src/tools/BashTool/destructiveCommandWarning.ts",
+            "size_bytes": 2935,
+            "type": "ui",
+            "purpose": "Destructive command warnings"
+          },
+          {
+            "id": "prompt.ts",
+            "path": "src/tools/BashTool/prompt.ts",
+            "size_bytes": 21130,
+            "type": "prompt",
+            "purpose": "Bash tool prompts"
+          },
+          {
+            "id": "UI.tsx",
+            "path": "src/tools/BashTool/UI.tsx",
+            "size_bytes": 25213,
+            "type": "ui",
+            "purpose": "Bash tool UI components"
+          },
+          {
+            "id": "BashToolResultMessage.tsx",
+            "path": "src/tools/BashTool/BashToolResultMessage.tsx",
+            "size_bytes": 19215,
+            "type": "ui",
+            "purpose": "Bash result message display"
+          }
+        ],
+        "total_size_bytes": 573550,
+        "tool_name": "bash",
+        "is_concurrency_safe": false,
+        "requires_permissions": true
+      },
+      "agent_tool": {
+        "directory": "src/tools/AgentTool",
+        "files": [
+          {
+            "id": "AgentTool.tsx",
+            "path": "src/tools/AgentTool/AgentTool.tsx",
+            "type": "tool_impl"
+          },
+          {
+            "id": "runAgent.ts",
+            "path": "src/tools/AgentTool/runAgent.ts",
+            "type": "core",
+            "purpose": "Main subagent runner"
+          },
+          {
+            "id": "createSubagentContext.ts",
+            "path": "src/tools/AgentTool/createSubagentContext.ts",
+            "type": "context",
+            "purpose": "Subagent context creation"
+          },
+          {
+            "id": "loadAgentsDir.ts",
+            "path": "src/tools/AgentTool/loadAgentsDir.ts",
+            "type": "loader",
+            "purpose": "Load agent definitions"
+          },
+          {
+            "id": "agentPrompt.tsx",
+            "path": "src/tools/AgentTool/agentPrompt.tsx",
+            "type": "prompt",
+            "purpose": "Agent prompt template"
+          },
+          {
+            "id": "types.ts",
+            "path": "src/tools/AgentTool/types.ts",
+            "type": "types"
+          },
+          {
+            "id": "parseAgentSyntax.ts",
+            "path": "src/tools/AgentTool/parseAgentSyntax.ts",
+            "type": "parser"
+          },
+          {
+            "id": "resolveAgent.ts",
+            "path": "src/tools/AgentTool/resolveAgent.ts",
+            "type": "resolver"
+          },
+          {
+            "id": "agentToolParam.ts",
+            "path": "src/tools/AgentTool/agentToolParam.ts",
+            "type": "params"
+          },
+          {
+            "id": "AgentToolResult.tsx",
+            "path": "src/tools/AgentTool/AgentToolResult.tsx",
+            "type": "ui"
+          }
+        ],
+        "tool_name": "agent",
+        "purpose": "Create and manage subagents",
+        "supports_nesting": true
+      },
+      "file_tools": {
+        "read": {
+          "directory": "src/tools/FileReadTool",
+          "files": 5,
+          "tool_name": "read"
+        },
+        "write": {
+          "directory": "src/tools/FileWriteTool",
+          "files": 3,
+          "tool_name": "write"
+        },
+        "edit": {
+          "directory": "src/tools/FileEditTool",
+          "files": 6,
+          "tool_name": "edit"
+        }
+      },
+      "search_tools": {
+        "glob": {
+          "directory": "src/tools/GlobTool",
+          "files": 3,
+          "tool_name": "glob"
+        },
+        "grep": {
+          "directory": "src/tools/GrepTool",
+          "files": 3,
+          "tool_name": "grep"
+        }
+      },
+      "mcp_tool": {
+        "directory": "src/tools/MCPTool",
+        "files": 4,
+        "tool_name": "mcp",
+        "purpose": "Call MCP server tools"
+      },
+      "web_tools": {
+        "search": {
+          "directory": "src/tools/WebSearchTool",
+          "files": 3,
+          "tool_name": "web_search"
+        },
+        "fetch": {
+          "directory": "src/tools/WebFetchTool",
+          "files": 5,
+          "tool_name": "web_fetch"
+        }
+      },
+      "task_tools": {
+        "create": {
+          "directory": "src/tools/TaskCreateTool",
+          "files": 3,
+          "tool_name": "task_create"
+        },
+        "get": {
+          "directory": "src/tools/TaskGetTool",
+          "files": 3,
+          "tool_name": "task_get"
+        },
+        "list": {
+          "directory": "src/tools/TaskListTool",
+          "files": 3,
+          "tool_name": "task_list"
+        },
+        "output": {
+          "directory": "src/tools/TaskOutputTool",
+          "files": 2,
+          "tool_name": "task_output"
+        },
+        "stop": {
+          "directory": "src/tools/TaskStopTool",
+          "files": 3,
+          "tool_name": "task_stop"
+        },
+        "update": {
+          "directory": "src/tools/TaskUpdateTool",
+          "files": 3,
+          "tool_name": "task_update"
+        }
+      },
+      "team_tools": {
+        "create": {
+          "directory": "src/tools/TeamCreateTool",
+          "files": 4,
+          "tool_name": "team_create"
+        },
+        "delete": {
+          "directory": "src/tools/TeamDeleteTool",
+          "files": 4,
+          "tool_name": "team_delete"
+        }
+      },
+      "other_tools": [
+        {
+          "id": "PowerShellTool",
+          "directory": "src/tools/PowerShellTool",
+          "files": 14,
+          "tool_name": "powershell"
+        },
+        {
+          "id": "LSPTool",
+          "directory": "src/tools/LSPTool",
+          "files": 6,
+          "tool_name": "lsp"
+        },
+        {
+          "id": "NotebookEditTool",
+          "directory": "src/tools/NotebookEditTool",
+          "files": 4,
+          "tool_name": "notebook_edit"
+        },
+        {
+          "id": "REPLTool",
+          "directory": "src/tools/REPLTool",
+          "files": 2,
+          "tool_name": "repl"
+        },
+        {
+          "id": "SkillTool",
+          "directory": "src/tools/SkillTool",
+          "files": 4,
+          "tool_name": "skill"
+        },
+        {
+          "id": "TodoWriteTool",
+          "directory": "src/tools/TodoWriteTool",
+          "files": 3,
+          "tool_name": "todo_write"
+        },
+        {
+          "id": "AskUserQuestionTool",
+          "directory": "src/tools/AskUserQuestionTool",
+          "files": 2,
+          "tool_name": "ask_user"
+        },
+        {
+          "id": "ScheduleCronTool",
+          "directory": "src/tools/ScheduleCronTool",
+          "files": 5,
+          "tool_name": "schedule_cron"
+        },
+        {
+          "id": "SendMessageTool",
+          "directory": "src/tools/SendMessageTool",
+          "files": 4,
+          "tool_name": "send_message"
+        },
+        {
+          "id": "BriefTool",
+          "directory": "src/tools/BriefTool",
+          "files": 5,
+          "tool_name": "brief"
+        },
+        {
+          "id": "ConfigTool",
+          "directory": "src/tools/ConfigTool",
+          "files": 5,
+          "tool_name": "config"
+        }
+      ]
+    },
+    "mcp_integration": {
+      "directory": "src/services/mcp",
+      "files_count": 23,
+      "key_files": [
+        {
+          "id": "types.ts",
+          "path": "src/services/mcp/types.ts",
+          "size_bytes": 25900,
+          "type": "types",
+          "purpose": "MCP type definitions",
+          "config_scopes": ["local", "user", "project", "dynamic", "enterprise", "claudeai", "managed"],
+          "transport_types": ["stdio", "sse", "sse-ide", "http", "ws", "sdk"]
+        },
+        {
+          "id": "client.ts",
+          "path": "src/services/mcp/client.ts",
+          "type": "client",
+          "purpose": "MCP client implementation"
+        }
+      ],
+      "transports": ["stdio", "sse", "http", "ws", "sdk"],
+      "features": [
+        "Multiple server configs",
+        "OAuth authentication",
+        "Tool discovery",
+        "Resource management",
+        "Prompt management"
+      ]
+    },
+    "state_management": {
+      "directory": "src/state",
+      "files_count": 6,
+      "files": [
+        {
+          "id": "store.ts",
+          "path": "src/state/store.ts",
+          "size_bytes": 836,
+          "type": "store_factory",
+          "purpose": "Generic store factory (Zustand-like)",
+          "exports": ["createStore", "Store"],
+          "methods": ["getState", "setState", "subscribe"]
+        },
+        {
+          "id": "AppStateStore.ts",
+          "path": "src/state/AppStateStore.ts",
+          "size_bytes": 21847,
+          "type": "state_types",
+          "purpose": "AppState type definitions and initial state",
+          "exports": ["AppState", "AppStateStore", "getDefaultAppState"],
+          "state_sections": [
+            "messages",
+            "toolUse",
+            "permissions",
+            "configuration",
+            "mcpState",
+            "agentState",
+            "uiState",
+            "sessionHooks",
+            "backgroundTasks"
+          ]
+        },
+        {
+          "id": "AppState.tsx",
+          "path": "src/state/AppState.tsx",
+          "size_bytes": 23480,
+          "type": "provider",
+          "purpose": "React provider component for state",
+          "exports": ["AppStateProvider", "useAppState", "useSetAppState"],
+          "features": [
+            "React Context integration",
+            "VoiceProvider integration",
+            "MailboxProvider integration",
+            "Settings change handling"
+          ]
+        },
+        {
+          "id": "onChangeAppState.ts",
+          "path": "src/state/onChangeAppState.ts",
+          "size_bytes": 6197,
+          "type": "handler",
+          "purpose": "State change side effect handler"
+        },
+        {
+          "id": "selectors.ts",
+          "path": "src/state/selectors.ts",
+          "size_bytes": 2240,
+          "type": "selectors",
+          "purpose": "Memoized state selectors"
+        },
+        {
+          "id": "teammateViewHelpers.ts",
+          "path": "src/state/teammateViewHelpers.ts",
+          "size_bytes": 4399,
+          "type": "helpers",
+          "purpose": "Teammate view utilities"
+        }
+      ],
+      "pattern": "Custom Zustand-like store",
+      "features": [
+        "Functional updates",
+        "Subscriber pattern",
+        "Selector-based subscriptions",
+        "React Context integration"
+      ]
+    },
+    "services": {
+      "api": {
+        "directory": "src/services/api",
+        "files_count": 20,
+        "purpose": "Anthropic API client",
+        "key_files": ["anthropic.ts", "streaming.ts", "types.ts", "cache.ts"]
+      },
+      "compact": {
+        "directory": "src/services/compact",
+        "files_count": 11,
+        "purpose": "Context window compaction",
+        "strategies": ["summarize", "truncate", "selective_keep"]
+      },
+      "analytics": {
+        "directory": "src/services/analytics",
+        "files_count": 9,
+        "purpose": "Telemetry and analytics"
+      },
+      "lsp": {
+        "directory": "src/services/lsp",
+        "files_count": 7,
+        "purpose": "Language Server Protocol"
+      },
+      "oauth": {
+        "directory": "src/services/oauth",
+        "files_count": 5,
+        "purpose": "OAuth authentication"
+      },
+      "policyLimits": {
+        "directory": "src/services/policyLimits",
+        "files_count": 2,
+        "purpose": "Organization policy limits"
+      },
+      "remoteManagedSettings": {
+        "directory": "src/services/remoteManagedSettings",
+        "files_count": 5,
+        "purpose": "Remote configuration"
+      }
+    },
+    "components": {
+      "directory": "src/components",
+      "files_count": 389,
+      "categories": [
+        {
+          "name": "chat",
+          "count": 50,
+          "purpose": "Chat UI components"
+        },
+        {
+          "name": "sidebar",
+          "count": 30,
+          "purpose": "Sidebar components"
+        },
+        {
+          "name": "permissions",
+          "count": 20,
+          "purpose": "Permission dialogs"
+        },
+        {
+          "name": "tool",
+          "count": 40,
+          "purpose": "Tool output displays"
+        },
+        {
+          "name": "mcp",
+          "count": 15,
+          "purpose": "MCP-related UI"
+        },
+        {
+          "name": "agent",
+          "count": 25,
+          "purpose": "Agent/subagent UI"
+        },
+        {
+          "name": "input",
+          "count": 20,
+          "purpose": "Input handling"
+        },
+        {
+          "name": "modals",
+          "count": 15,
+          "purpose": "Modal dialogs"
+        },
+        {
+          "name": "toasts",
+          "count": 10,
+          "purpose": "Toast notifications"
+        }
+      ],
+      "key_components": [
+        {
+          "id": "Spinner.tsx",
+          "purpose": "Loading indicator",
+          "modes": ["dots", "line", "arrow"]
+        }
+      ]
+    },
+    "utilities": {
+      "directory": "src/utils",
+      "files_count": 564,
+      "categories": [
+        {
+          "name": "permissions",
+          "count": 50,
+          "purpose": "Permission checking"
+        },
+        {
+          "name": "config",
+          "count": 30,
+          "purpose": "Configuration management"
+        },
+        {
+          "name": "files",
+          "count": 40,
+          "purpose": "File operations"
+        },
+        {
+          "name": "git",
+          "count": 30,
+          "purpose": "Git operations"
+        },
+        {
+          "name": "markdown",
+          "count": 20,
+          "purpose": "Markdown processing"
+        },
+        {
+          "name": "shell",
+          "count": 25,
+          "purpose": "Shell command handling"
+        },
+        {
+          "name": "errors",
+          "count": 15,
+          "purpose": "Error handling"
+        },
+        {
+          "name": "debug",
+          "count": 10,
+          "purpose": "Debugging utilities"
+        },
+        {
+          "name": "types",
+          "count": 15,
+          "purpose": "Type utilities"
+        },
+        {
+          "name": "testing",
+          "count": 20,
+          "purpose": "Test utilities"
+        }
+      ],
+      "key_utilities": [
+        {
+          "id": "debug.ts",
+          "exports": ["logForDebugging", "logForDiagnosticsNoPII"]
+        },
+        {
+          "id": "errors.ts",
+          "exports": ["errorMessage", "isFatalError"]
+        },
+        {
+          "id": "config.ts",
+          "exports": ["enableConfigs", "getConfig", "setConfig"]
+        }
+      ]
+    },
+    "hooks": {
+      "directory": "src/hooks",
+      "files_count": 104,
+      "purpose": "React hooks for state and side effects",
+      "key_hooks": [
+        "useAppState",
+        "useSetAppState",
+        "useCanUseTool",
+        "useSettingsChange"
+      ]
+    },
+    "types": {
+      "directory": "src/types",
+      "files_count": 11,
+      "purpose": "Shared type definitions",
+      "key_files": [
+        "message.ts",
+        "permissions.ts",
+        "hooks.ts",
+        "tools.ts",
+        "ids.ts"
+      ]
+    },
+    "constants": {
+      "directory": "src/constants",
+      "files_count": 21,
+      "purpose": "Application constants",
+      "key_files": ["prompts.ts", "querySource.ts"]
+    },
+    "commands_directory": {
+      "directory": "src/commands",
+      "files_count": 207,
+      "purpose": "Slash command implementations"
+    },
+    "ink_renderer": {
+      "directory": "src/ink",
+      "files_count": 96,
+      "purpose": "Ink (React for CLI) components and utilities"
+    }
+  },
+  "edges": {
+    "dependency_graph": [
+      {
+        "from": "cli.tsx",
+        "to": "init.ts",
+        "type": "calls",
+        "relationship": "initialization"
+      },
+      {
+        "from": "main.tsx",
+        "to": "init.ts",
+        "type": "calls",
+        "relationship": "initialization"
+      },
+      {
+        "from": "main.tsx",
+        "to": "AppStateProvider",
+        "type": "uses",
+        "relationship": "state_management"
+      },
+      {
+        "from": "main.tsx",
+        "to": "query.ts",
+        "type": "calls",
+        "relationship": "core_loop"
+      },
+      {
+        "from": "query.ts",
+        "to": "QueryEngine.ts",
+        "type": "uses",
+        "relationship": "query_execution"
+      },
+      {
+        "from": "query.ts",
+        "to": "tools.ts",
+        "type": "uses",
+        "relationship": "tool_lookup"
+      },
+      {
+        "from": "query.ts",
+        "to": "services/api/anthropic",
+        "type": "calls",
+        "relationship": "llm_api"
+      },
+      {
+        "from": "tools.ts",
+        "to": "tools/*",
+        "type": "registers",
+        "relationship": "tool_registration"
+      },
+      {
+        "from": "tools/BashTool",
+        "to": "Tool.ts",
+        "type": "implements",
+        "relationship": "tool_interface"
+      },
+      {
+        "from": "tools/AgentTool",
+        "to": "Tool.ts",
+        "type": "implements",
+        "relationship": "tool_interface"
+      },
+      {
+        "from": "tools/MCPTool",
+        "to": "services/mcp/client",
+        "type": "uses",
+        "relationship": "mcp_client"
+      },
+      {
+        "from": "QueryEngine.ts",
+        "to": "services/api",
+        "type": "uses",
+        "relationship": "api_client"
+      },
+      {
+        "from": "QueryEngine.ts",
+        "to": "state/AppStateStore",
+        "type": "uses",
+        "relationship": "state_access"
+      },
+      {
+        "from": "commands.ts",
+        "to": "query.ts",
+        "type": "calls",
+        "relationship": "command_execution"
+      },
+      {
+        "from": "commands.ts",
+        "to": "state/AppStateStore",
+        "type": "uses",
+        "relationship": "state_access"
+      },
+      {
+        "from": "services/compact",
+        "to": "query.ts",
+        "type": "called_by",
+        "relationship": "context_compaction"
+      },
+      {
+        "from": "services/mcp",
+        "to": "tools/MCPTool",
+        "type": "consumed_by",
+        "relationship": "mcp_tools"
+      },
+      {
+        "from": "state/AppStateProvider",
+        "to": "state/store",
+        "type": "uses",
+        "relationship": "store_factory"
+      },
+      {
+        "from": "components/*",
+        "to": "state/useAppState",
+        "type": "uses",
+        "relationship": "state_subscription"
+      },
+      {
+        "from": "hooks/*",
+        "to": "state/AppState",
+        "type": "uses",
+        "relationship": "state_access"
+      },
+      {
+        "from": "utils/permissions",
+        "to": "tools/*",
+        "type": "used_by",
+        "relationship": "permission_checking"
+      },
+      {
+        "from": "utils/config",
+        "to": "init.ts",
+        "type": "called_by",
+        "relationship": "configuration"
+      },
+      {
+        "from": "services/analytics",
+        "to": "init.ts",
+        "type": "initialized_by",
+        "relationship": "analytics_setup"
+      }
+    ],
+    "data_flow": [
+      {
+        "flow": "User Input",
+        "path": ["main.tsx", "query.ts", "QueryEngine.ts", "services/api", "LLM"],
+        "type": "request"
+      },
+      {
+        "flow": "LLM Response",
+        "path": ["LLM", "services/api", "QueryEngine.ts", "query.ts", "components/chat"],
+        "type": "response"
+      },
+      {
+        "flow": "Tool Execution",
+        "path": ["query.ts", "tools.ts", "tools/BashTool", "BashTool.call()", "ToolResult"],
+        "type": "tool_use"
+      },
+      {
+        "flow": "Subagent Creation",
+        "path": ["tools/AgentTool", "createSubagentContext.ts", "runAgent.ts", "query.ts"],
+        "type": "subagent"
+      },
+      {
+        "flow": "State Update",
+        "path": ["ToolResult", "setAppState()", "store.ts", "Listeners", "components/*"],
+        "type": "state_update"
+      }
+    ]
+  },
+  "architecture_patterns": {
+    "tool_system": {
+      "description": "Tools implement standardized Tool interface",
+      "interface": {
+        "name": "string",
+        "description": "string",
+        "inputSchema": "JSONSchema",
+        "call": "async function",
+        "checkPermissions": "async function",
+        "isConcurrencySafe": "boolean function"
+      },
+      "concurrency": {
+        "read_only": "Run concurrently (max 10)",
+        "write": "Run serially"
+      }
+    },
+    "agent_loop": {
+      "description": "query.ts drives the LLM interaction",
+      "flow": [
+        "Send message to LLM",
+        "Stream response",
+        "Detect tool_use blocks",
+        "Partition tool calls",
+        "Execute tools",
+        "Yield results",
+        "Continue loop"
+      ]
+    },
+    "state_management": {
+      "description": "Custom Zustand-like store pattern",
+      "features": [
+        "Functional updates",
+        "Subscriber pattern",
+        "Selector-based subscriptions",
+        "React Context integration"
+      ],
+      "comparison": "Similar to Zustand but custom implementation"
+    },
+    "mcp_integration": {
+      "description": "Full MCP client with multiple transports",
+      "transports": ["stdio", "sse", "http", "ws", "sdk"],
+      "features": [
+        "Multiple server configs",
+        "OAuth support",
+        "Tool discovery",
+        "Resource management"
+      ]
+    },
+    "subagent_system": {
+      "description": "Hierarchical agents with isolated contexts",
+      "features": [
+        "Isolated message history",
+        "Own tool sets",
+        "Own MCP servers",
+        "Shared state access",
+        "Nesting support"
+      ]
+    },
+    "hook_system": {
+      "description": "Extensibility via hooks",
+      "hook_types": [
+        "PreToolUse",
+        "PostToolUse",
+        "SessionStart",
+        "SubagentStart"
+      ]
+    }
+  },
+  "file_statistics": {
+    "by_type": {
+      "typescript": 1750,
+      "tsx": 100,
+      "javascript": 40,
+      "json": 12
+    },
+    "by_category": {
+      "entry_points": 5,
+      "core_systems": 7,
+      "tools": 184,
+      "commands": 207,
+      "services": 130,
+      "components": 389,
+      "state": 6,
+      "hooks": 104,
+      "utils": 564,
+      "types": 11,
+      "constants": 21,
+      "ink": 96,
+      "tests": 52,
+      "other": 126
+    },
+    "largest_files": [
+      {
+        "path": "src/main.tsx",
+        "size_kb": 785
+      },
+      {
+        "path": "src/tools/BashTool/BashTool.tsx",
+        "size_kb": 157
+      },
+      {
+        "path": "src/query.ts",
+        "size_kb": 67
+      },
+      {
+        "path": "src/QueryEngine.ts",
+        "size_kb": 46
+      },
+      {
+        "path": "src/Tool.ts",
+        "size_kb": 29
+      }
+    ]
+  },
+  "external_dependencies": {
+    "core": [
+      "@anthropic-ai/sdk",
+      "@modelcontextprotocol/sdk",
+      "react",
+      "ink"
+    ],
+    "build": [
+      "bun",
+      "typescript"
+    ],
+    "utilities": [
+      "lodash-es",
+      "zod",
+      "chalk",
+      "glob"
+    ]
+  }
+}
