@@ -32,7 +32,7 @@ Any AIRS team member or AutoDev worker agent can:
 - Download one binary
 - Enter their LLM API key (any provider)
 - Select their model
-- Start executing agentic development tasks with the full capability stack: CLAUDE.md/AGENTS.md, Skills, Recipes, Subagents, MCP servers, Hooks, and the AutoDev worker pipeline
+- Start executing agentic development tasks with the full capability stack: AUTODEV.md, Skills, Recipes, Subagents, MCP servers, Hooks, and the AutoDev worker pipeline
 
 **The tagline:** *One app. Any model. Full autonomy.*
 
@@ -47,13 +47,13 @@ Any AIRS team member or AutoDev worker agent can:
 - Proprietary — cannot audit, fork, or adapt the harness for AIRS-specific needs
 
 ### The Problem with Goose Alone
-- AGENTS.md ecosystem is newer and less mature than CLAUDE.md
+- AGENTS.md ecosystem is newer and less mature than instruction file systems
 - Not tailored to AutoDev's Supervisor → Worker → QC pipeline
 - Generic tool — no AIRS-specific automation, no built-in task board awareness
 
 ### The Case for AutoDev
 - **Model-agnostic by design**: use Anthropic API directly (no rate-limited subscriptions), or OpenAI, Gemini, or local Ollama on DGX Sparks in Year 2
-- **CLAUDE.md-compatible**: workers keep their existing instruction files — zero migration cost
+- **AUTODEV.md-native**: A proprietary AIRS instruction system, editable from the UI, stored in SQLite with optional filesystem sync — no manual file editing required
 - **AutoDev-native**: the app understands AIRS's GitHub Issues board, dispatch signals, and lock file patterns natively — no extra scripting
 - **Secure and auditable**: AIRS controls the harness, not a third-party binary from npm
 - **Downloadable and distributable**: IT staff provisions worker PCs by installing one `.exe` / `.AppImage` / `.dmg`
@@ -66,7 +66,7 @@ Any AIRS team member or AutoDev worker agent can:
 
 | Feature | Description | Why We Keep It |
 |---|---|---|
-| **CLAUDE.md** | Per-repo instruction files that define agent behavior, domain, constraints | The entire AutoDev system is built around this — core primitive |
+| **AUTODEV.md** | Per-repo instruction files stored in SQLite, editable from UI, injected into system prompt | The entire AutoDev system is built around this — core primitive, proprietary to AIRS |
 | **Headless `-p` mode** | Run agent from CLI with a single prompt, no interactive session | The polling scripts (`poll-worker-backend.sh`) depend on this exactly |
 | **`--dangerously-skip-permissions`** | Allow agent to take actions without per-step confirmation | Required for 24/7 unattended worker operation |
 | **Subagents** | Spawn isolated sub-agents for specialized tasks; results returned as summary | Up to 10 parallel subagents — critical for Supervisor breaking down epics |
@@ -94,7 +94,7 @@ Any AIRS team member or AutoDev worker agent can:
 | **MCP-UI components** | Extensions render interactive UI widgets, not just text | AIRS dashboard panels inside the app — agent status, token costs, PR queue |
 | **Session export (JSON)** | Export sessions with full token usage, model config, timestamps | Cost tracking per worker, per task — feeds into AutoDev financial model |
 | **Approval modes** | Autonomous / Manual Approval / Smart Approval / Chat Only | Workers run Autonomous; Supervisor uses Smart Approval for destructive ops |
-| **`.goosehints`** | Per-directory instruction injection (like CLAUDE.md but directory-scoped) | Complementary to CLAUDE.md for fine-grained per-path context |
+| **`.autodevhints`** | Per-directory instruction injection (like AUTODEV.md but directory-scoped) | Complementary to AUTODEV.md for fine-grained per-path context |
 | **OS-level sandbox** | `sandbox-exec` restricts file and network access per session | Security boundary around worker agents — prevent scope creep |
 | **Custom distributions** | Build your own branded Goose distro with preconfigured providers and branding | AutoDev IS a custom distribution — this is the build model |
 | **ACP (Agent Client Protocol)** | Connect to IDE plugins — JetBrains, VS Code, Cursor | AIRS developers use the IDE panel while workers use CLI/headless mode |
@@ -111,7 +111,7 @@ Any AIRS team member or AutoDev worker agent can:
 | **Internal Task Board** | SQLite-based task management (no GitHub API limits, 10-100x faster, offline capable). Supervisor controls task lifecycle. |
 | **Key Vault** | Secure local storage for API keys — per-provider, encrypted, never transmitted |
 | **Model Router** | Route different task types to different models (Opus for Supervisor/QC, Sonnet for Workers, Haiku for Cleanup) |
-| **AIRS Plugin** | One-click plugin that pre-configures any worker PC with the right CLAUDE.md, MCP servers, GitHub PAT scopes, and recipe set for their role |
+| **AIRS Plugin** | One-click plugin that pre-configures any worker PC with the right AUTODEV.md config, MCP servers, GitHub PAT scopes, and recipe set for their role |
 | **Cost Meter** | Real-time token spend display per agent per session, with 30-day rolling totals |
 | **IDE Tab** | Built-in file tree, code viewer, and **git sub-panel** — read-only for workers, edit mode for Razi |
 | **Git Sub-Panel** | Embedded in IDE tab: repo selector, clone AIRS repos, branch switcher, staged/unstaged view, commit/push/PR, worktree manager |
@@ -154,7 +154,7 @@ Any AIRS team member or AutoDev worker agent can:
 │                                                                           │
 │         ┌──────────────────────────────────────────────────────┐         │
 │         │                   AIRS FEATURES                       │         │
-│         │  CLAUDE.md · Skills · Hooks · Subagents · Plugins   │         │
+│         │  AUTODEV.md · Skills · Hooks · Subagents · Plugins   │         │
 │         │  Key Vault · Model Router · Cost Meter · Sandbox     │         │
 │         └──────────────────────────────────────────────────────┘         │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -237,9 +237,9 @@ PA mode has three sub-modes that control tool availability and system prompt:
 
 | Mode | Tools Available | System Prompt | Use Case |
 |------|----------------|---------------|----------|
-| **🔧 Fast Development** | Full suite: read_file, write_file, edit_file, bash, grep, glob, git + All MCP tools | Standard CLAUDE.md | Razi doing direct coding, quick fixes, exploring code |
-| **✋ Review Mode** | Same tools as Fast Development, but permission prompt before any write operation | Standard CLAUDE.md + caution mode | Reviewing changes, cautious editing |
-| **📋 Delegate Mode** | **Zero file tools**. Only: `create_task` + **MCP tools (read-only)** for viewing repos/PRs | Delegate-focused CLAUDE.md variant | Workers are live — PA creates tasks for Supervisor to assign |
+| **🔧 Fast Development** | Full suite: read_file, write_file, edit_file, bash, grep, glob, git + All MCP tools | Standard AUTODEV.md | Razi doing direct coding, quick fixes, exploring code |
+| **✋ Review Mode** | Same tools as Fast Development, but permission prompt before any write operation | Standard AUTODEV.md + caution mode | Reviewing changes, cautious editing |
+| **📋 Delegate Mode** | **Zero file tools**. Only: `create_task` + **MCP tools (read-only)** for viewing repos/PRs | Delegate-focused AUTODEV.md variant | Workers are live — PA creates tasks for Supervisor to assign |
 
 **Delegate Mode Flow** (matches `old-multiple-fleet.md` architecture):
 
@@ -866,7 +866,7 @@ PyInstaller bundles are OS-specific and can't cross-compile. This is standard �
 │                   MAIN CONTENT AREA                        │  CONTEXT   │
 │                   (changes per tab)                        │  SIDEBAR   │
 │                                                             │            │
-│                                                             │ CLAUDE.md  │
+│                                                             │ AUTODEV.md │
 │                                                             │ Active MCP │
 │                                                             │ Skills     │
 │                                                             │ Hooks      │
@@ -958,10 +958,9 @@ A lightweight read/edit view of the active codebase with integrated git operatio
 │  │  │  └─ routes.py            │  4 │ router = APIRouter()               │
 │  │  ├─ 📁 agents/              │  5 │                                    │
 │  │  ├─ 📁 services/            │  6 │+ @router.get("/agents/health")    │
-│  │  └─ main.py                 │  7 │+ async def agents_health():       │
+│  │  ├─ AUTODEV.md                 │  9 │+ async def agents_health():       │
 │  ├─ 📁 tests/                  │  8 │+     """Return agent status."""   │
-│  ├─ CLAUDE.md                  │  9 │+     svc = get_agent_service()    │
-│  └─ pyproject.toml             │ 10 │+     return await svc.health()   │
+│  └─ pyproject.toml             │ 10 │+     svc = get_agent_service()    │
 │                                ├────┴──────────────────────────────────┤
 │                                │ GIT PANEL (toggle via [Git ▼])        │
 │                                │ Branch: worker/backend/142             │
@@ -1057,7 +1056,7 @@ Create, browse, and run YAML workflow recipes.
 
 The core execution loop. Implements:
 - **Tool system:** Bash, ReadFile, WriteFile, EditFile, Glob, Grep, ListDirectory, LSP, WebFetch, GitWorktree
-- **Context management:** CLAUDE.md injection on session start; auto-compaction at 80% context fill
+- **Context management:** AUTODEV.md injection on session start; auto-compaction at 80% context fill
 - **Headless mode:** `airsctl -p "..." --skip-permissions` — drop-in replacement for `claude -p`
 - **Permission modes:** Autonomous / SmartApproval / ManualApproval / ChatOnly
 - **Checkpoint system:** Save/restore agent state mid-session
@@ -1088,14 +1087,130 @@ Workers (and the PA) modify repos through **direct local filesystem writes + git
 
 4. **File checkpointing** — snapshots of file state per message boundary (like Claude Code). Enables undo/redo and per-turn diff visualization in the IDE tab. Capped at 100 checkpoints per session.
 
-### 6.2 CLAUDE.md / AGENTS.md Support
+### 6.2 AUTODEV.md — Proprietary AIRS Instruction System
 
-- Parse and inject CLAUDE.md from the following scopes (Claude Code precedence order):
-  1. System-level (`~/.airs/CLAUDE.md`) — global AIRS conventions
-  2. Repo-level (`{repo}/CLAUDE.md`) — per-repo agent instructions
-  3. Directory-level (`.claude/CLAUDE.md`) — subdirectory-specific context
-- Also parse `.goosehints` for Goose-compatible deployments
-- **Live edit:** Changes to CLAUDE.md take effect on next session start without restart
+**Not CLAUDE.md. Not AGENTS.md. AUTODEV.md.**
+
+A first-class UI-managed instruction system, proprietary to AIRS:
+- **No manual file editing** — Create and edit entirely from the sidebar UI
+- **SQLite-backed** — Content stored in `~/.autodev/config.db`, not scattered across repos
+- **Optional filesystem sync** — Can sync to `{repo}/.autodev/autodev.md` for version control
+- **2-tier hierarchy only** — Global (personal) + Repo (project), no complexity
+- **Live Monaco editor** — VS Code-quality editing in the sidebar
+- **40,000 character limit** — Enforced at the UI level
+- **Instant reload** — Changes take effect immediately (no session restart)
+
+**The Philosophy:** Claude Code and Goose treat instruction files as "text files in repos." AutoDev treats them as "app configuration" — because this is a desktop application, not a CLI tool. The PA (Razi) never touches the filesystem to configure behavior.
+
+#### The Two-Tier Hierarchy
+
+```
+LOAD ORDER (lowest → highest priority)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[1] GLOBAL / USER (lowest)
+    ~/.autodev/config/autodev_global.md
+    Your personal preferences across ALL projects.
+    Private, never synced to git.
+    Editable from: Settings → AUTODEV.md → Global tab
+
+[2] REPO / PROJECT (highest)
+    {repo_path}/.autodev/autodev.md  (synced to filesystem)
+    Team-shared conventions for this specific repo.
+    Auto-created when you first open a folder in AutoDev.
+    Editable from: Sidebar → AUTODEV.md button → Repo tab
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Precedence: Repo > Global
+```
+
+**Why only 2 tiers?** Because AutoDev is designed for AIRS's specific workflow — we don't need enterprise system-level configs or complex subdirectory scoping. Every repo gets exactly one AUTODEV.md, and every user has exactly one global config.
+
+#### UI/UX: The AUTODEV.md Editor
+
+**Location:** Sidebar → "AUTODEV.md" section (collapsible card)
+
+**Interface:**
+```
+┌─ AUTODEV.md ─────────────────────────────────────────┐
+│ [Global] [This Repo]                                 │
+│ ─────────────────────────────────────────────────  │
+│ ┌─ Editor ──────────────────────────────────────┐  │
+│ │ # core-orchestrator                            │  │
+│ │                                                │  │
+│ │ ## Stack                                       │  │
+│ │ - Python 3.11 + FastAPI                        │  │
+│ │ - uv for package management                    │  │
+│ │                                                │  │
+│ │ ## Commands                                    │  │
+│ │ - uv run pytest: Run tests                     │  │
+│ │ - uv run ruff check .: Lint                    │  │
+│ └────────────────────────────────────────────────┘  │
+│ [Save] [Reset] [Preview System Prompt]              │
+│ Characters: 1,247 / 40,000 limit                   │
+└────────────────────────────────────────────────────┘
+```
+
+**Features:**
+- **Monaco editor** (VS Code's editor) with Markdown syntax highlighting
+- **Live character counter** with 40,000 limit warning (Claude Code's max)
+- **Tab switching**: Global ↔ Repo contexts
+- **Preview button**: See the full system prompt that will be injected
+- **Auto-save toggle**: Save on every keystroke or manual only
+- **Status indicator**: 🟢 Active (content loaded) / 🟡 Modified (unsaved) / ⚪ Empty (no content)
+
+#### Content Best Practices for AIRS
+
+**Global AUTODEV.md (Razi's personal preferences):**
+```markdown
+# Razi's AutoDev Preferences
+
+## Communication Style
+- Be direct and technical — I'm a senior engineer
+- Skip the "fluff" and get to implementation
+- Use bullet points, not paragraphs
+
+## Code Conventions (All Projects)
+- Prefer explicit types over inferred
+- Use conventional commits format
+- Always include error handling
+
+## AutoDev Patterns
+- Create tasks via internal board, not GitHub directly
+- Use Delegate Mode when workers are active
+```
+
+**Repo AUTODEV.md (Project-specific):**
+```markdown
+# core-orchestrator
+
+## Stack
+- Python 3.11 + FastAPI
+- uv for package management
+- pytest for testing
+- ruff for linting
+
+## Commands
+- `uv run pytest`: Run tests
+- `uv run ruff check .`: Lint
+- `uv run mypy src/`: Type check
+
+## Architecture
+- `/src/api`: FastAPI routes
+- `/src/services`: Business logic
+- `/src/models`: Pydantic models
+
+## Worker Patterns
+- Never edit files outside the orchestrator
+- Always run tests before claiming completion
+- Lock files go in `current_tasks/issue-{N}.lock`
+```
+
+**Key UI Components:**
+- Sidebar AUTODEV.md card with status indicator (🟢/🟡/⚪)
+- Monaco editor with tab switching (Global ↔ Repo)
+- Character counter with limit enforcement
+- "Preview System Prompt" button
+- Settings toggle for filesystem sync
 
 ### 6.3 Skills System
 

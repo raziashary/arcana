@@ -464,7 +464,7 @@ Pydantic models for all memory operations:
 ### 3.7 Sidebar (Persistent)
 
 Always visible regardless of active tab. Shows:
-- **Context files**: CLAUDE.md, .goosehints, user-prefs (with active/inactive dots)
+- **Context files**: AUTODEV.md, .autodevhints, user-prefs (with active/inactive dots) — ALL editable from UI, stored in SQLite, synced to ~/.autodev/
 - **MCP Active**: github-mcp, slack-mcp, sentry-mcp (with connection status dots)
 - **Skills**: /review-pr, /run-tests, /claim-issue, /open-pr (slash commands)
 - **Hooks**: post-write:lint, pre-bash:guard, session:telemetry
@@ -1473,7 +1473,7 @@ pub trait Tool: Send + Sync {
 - [x] Tool call display: collapsible blocks showing name, args, result
 - [x] Tool execution: `read_file`, `write_file`, `bash`, `list_directory`
 - [x] Permission dialog for `bash` and `write_file` in ManualApproval mode
-- [x] CLAUDE.md injection: read `~/.airs/CLAUDE.md` + `{cwd}/CLAUDE.md` into system prompt
+- [x] AUTODEV.md injection: read from SQLite (`~/.autodev/config/autodev_global.md` + per-repo entries) into system prompt
 - [x] Status bar: active model name + today's cost
 - [x] Session persistence: conversations saved in SQLite
 - [x] Cost tracking: tokens in/out per message, stored in SQLite
@@ -1816,6 +1816,7 @@ Phase 2 remains the **grandiose vision**: PA delegates → Board → Supervisor 
     - `REVIEW_SYSTEM_PROMPT` (adds permission-checking instructions)
     - `DELEGATE_SYSTEM_PROMPT` (removes file tool descriptions, adds task decomposition guidance)
   - `ContextBuilder::build_system_prompt()` accepts `PAMode` enum, selects appropriate prompt
+  - `AUTODEV.md` is stored in SQLite (`~/.autodev/config/autodev_global.md` + per-repo entries), editable from UI sidebar
   - Settings panel: add "System Prompts" section with 3 text areas for editing each variant
   - Tauri commands: `get_system_prompt_variant(mode)`, `set_system_prompt_variant(mode, content)`
 - [ ] **Backend - Tool Registry Filtering:**
@@ -1830,6 +1831,114 @@ Phase 2 remains the **grandiose vision**: PA delegates → Board → Supervisor 
   - Writes to `~/.autodev/tasks.db` with status="ready"
   - Returns task ID and confirmation message
   - Only registered in Delegate Mode
+
+**AUTODEV.md UI-Managed Instruction System (Phase 2.1.2):**
+
+> **Core Principle**: AUTODEV.md is NOT a file you manually create. It is a first-class UI feature — created, edited, and stored entirely within the AutoDev app. SQLite-backed, not filesystem-scattered.
+
+**Backend — Database Layer:**
+- [ ] **SQLite Schema** (`src-tauri/src/db/schema.sql`):
+  ```sql
+  CREATE TABLE autodev_instructions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      scope TEXT NOT NULL CHECK (scope IN ('global', 'repo')),
+      repo_path TEXT,  -- NULL for global, absolute path for repos
+      content TEXT NOT NULL DEFAULT '',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      is_active BOOLEAN DEFAULT 1,
+      CONSTRAINT repo_path_required CHECK (
+          (scope = 'global' AND repo_path IS NULL) OR
+          (scope = 'repo' AND repo_path IS NOT NULL)
+      )
+  );
+  CREATE INDEX idx_autodev_instructions_scope_repo ON autodev_instructions(scope, repo_path);
+  CREATE TRIGGER update_autodev_instructions_timestamp 
+  AFTER UPDATE ON autodev_instructions
+  BEGIN
+      UPDATE autodev_instructions SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+  END;
+  ```
+- [ ] **Rust Repository Module** (`src-tauri/src/db/autodev_instructions.rs`):
+  - `AutodevInstructionsRepo::get(conn, scope, repo_path) -> Result<Option<String>>`
+  - `AutodevInstructionsRepo::set(conn, scope, repo_path, content) -> Result<()>`
+  - `AutodevInstructionsRepo::delete(conn, repo_path) -> Result<()>`
+  - `AutodevInstructionsRepo::exists(conn, scope, repo_path) -> Result<bool>`
+  - `AutodevInstructionsRepo::char_count(conn, scope, repo_path) -> Result<usize>`
+- [ ] **Tauri Commands** (`src-tauri/src/commands/autodev_instructions.rs`):
+  - `get_autodev_instructions(scope, repo_path) -> Result<String, String>` — Returns content or empty string
+  - `set_autodev_instructions(scope, repo_path, content) -> Result<(), String>` — Insert/update with 40,000 char limit validation
+  - `delete_autodev_instructions(repo_path) -> Result<(), String>` — Soft delete for repo scope
+  - `check_autodev_instructions_exists(scope, repo_path) -> Result<bool, String>`
+  - `get_autodev_instructions_char_count(scope, repo_path) -> Result<usize, String>`
+
+**Frontend — UI Components:**
+- [ ] **Sidebar Card** (`src/components/sidebar/AutodevMdCard.tsx`):
+  - Shows "AUTODEV.md" header with status indicator (🟢 Active / 🟡 Modified / ⚪ Empty)
+  - Quick action buttons: "Edit Global" | "Edit This Repo"
+  - Character count preview: "1,247 / 40,000"
+  - "Create" button if doesn't exist yet
+  - Collapsible section in persistent sidebar
+- [ ] **Editor Component** (`src/components/autodev/AutodevMdEditor.tsx`):
+  - Monaco Editor (@monaco-editor/react) with Markdown syntax highlighting
+  - Tab switching: [Global] [This Repo]
+  - Live character counter with 40,000 limit warning (enforce at save)
+  - Auto-save toggle (default: ON)
+  - Manual Save / Reset buttons
+  - "Preview System Prompt" button — shows full prompt that will be injected
+  - Close confirmation if unsaved changes
+- [ ] **Zustand Store** (`src/store/autodevMdStore.ts`):
+  - State: `globalContent`, `repoContents` (Map), `modifiedScopes` (Set), `charCounts` (Map)
+  - Actions: `loadGlobal()`, `loadRepo(repoPath)`, `saveGlobal(content)`, `saveRepo(repoPath, content)`, `setModified(scope, isModified)`
+- [ ] **Settings Panel Section** (`src/components/settings/AutodevMdSettings.tsx`):
+  - "Filesystem Sync" toggle (default: OFF) — when ON, syncs to `{repo}/.autodev/autodev.md`
+  - "Auto-save" toggle (default: ON)
+  - Display global path: `~/.autodev/config/autodev_global.md` (read-only)
+  - "Import from CLAUDE.md" migration button
+
+**Integration:**
+- [ ] **ContextBuilder Integration** (`src-tauri/src/agent/context.rs`):
+  - Replace legacy file-reading with `AutodevInstructionsRepo::get()` calls
+  - `build_system_prompt(mode, repo_path)` fetches both global and repo content from SQLite
+  - Remove all CLAUDE.md and AGENTS.md fallbacks (proprietary system only)
+- [ ] **Filesystem Sync** (optional feature):
+  - When "Filesystem Sync" is enabled in settings:
+    - On `set_autodev_instructions`: also write to `{repo_path}/.autodev/autodev.md`
+    - On load: check if file exists and import if DB is empty
+  - Create `.autodev/` directory if doesn't exist when syncing
+- [ ] **Migration Tool**:
+  - `migrate_from_claude_md(repo_path)` command:
+    - Check `~/.claude/CLAUDE.md` → import as Global AUTODEV.md
+    - Check `{repo}/CLAUDE.md` → import as Repo AUTODEV.md
+    - Check `{repo}/.claude/CLAUDE.md` → import as Repo AUTODEV.md
+    - Check `{repo}/AGENTS.md` → import as Repo AUTODEV.md (Goose compatibility)
+  - UI: Settings → "Import from Claude Code/Goose"
+
+**AUTODEV.md Content Structure:**
+```markdown
+# {project-name}
+
+## Stack
+- Language/framework versions
+- Package managers
+- Key dependencies
+
+## Commands
+- `test`: How to run tests
+- `lint`: How to lint
+- `typecheck`: How to type check
+- `dev`: How to start dev server
+
+## Architecture
+- Directory structure explanation
+- Where different types of code live
+- Key abstractions
+
+## Patterns
+- Coding conventions specific to this project
+- Testing patterns
+- Error handling approach
+```
 
 **2.1 Success Criteria:**
 > Razi switches to Delegate Mode → says "add /health endpoint to orchestrator" → PA creates task #1 → Supervisor assigns to worker-backend → Worker executes → Task moves to Done column in AutoDev Panel
