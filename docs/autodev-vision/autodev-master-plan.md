@@ -867,6 +867,7 @@ PyInstaller bundles are OS-specific and can't cross-compile. This is standard �
 │                   (changes per tab)                        │  SIDEBAR   │
 │                                                             │            │
 │                                                             │ AUTODEV.md │
+│                                                             │ MEMORY.md  │
 │                                                             │ Active MCP │
 │                                                             │ Skills     │
 │                                                             │ Hooks      │
@@ -1212,7 +1213,121 @@ Precedence: Repo > Global
 - "Preview System Prompt" button
 - Settings toggle for filesystem sync
 
-### 6.3 Skills System
+### 6.3 PA Memory System — Three-Tier Persistent Memory
+
+**Replaces message compaction. The PA never forgets.**
+
+The PA Memory System is AutoDev's three-tier persistent memory architecture inspired by Claude Code's Auto Memory + Mem0's tiered architecture + Core Orchestrator's living agent memory. Instead of truncating old messages (compaction), the PA remembers everything across all conversations.
+
+**The Three Memory Tiers:**
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    PA MEMORY ARCHITECTURE                                │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐         │
+│  │  EPISODIC       │  │   SEMANTIC      │  │  PROCEDURAL     │         │
+│  │  (What happened)│  │  (What I know)  │  │ (What I learned)│         │
+│  │                 │  │                 │  │                 │         │
+│  │ "User asked me  │  │ "User prefers   │  │ "When Firebase  │         │
+│  │  to refactor    │  │  early returns  │  │  rate limits,   │         │
+│  │  auth on Jan 15"│  │  over nesting"  │  │  reduce batch   │         │
+│  │                 │  │                 │  │  size"          │         │
+│  │ • Raw sessions  │  │ • User prefs    │  │ • Skills        │         │
+│  │ • Chronological │  │ • Facts         │  │ • Patterns      │         │
+│  │ • Searchable    │  │ • Relationships │  │ • Corrections   │         │
+│  │                 │  │                 │  │                 │         │
+│  │ Stored: SQLite  │  │ Stored: SQLite  │  │ Stored: SQLite  │         │
+│  │ + mem0 vector │  │ + mem0 vector │  │  (~/.autodev/   │         │
+│  │  (memory.db)    │  │  (memory.db)    │  │   memory.db)    │         │
+│  └─────────────────┘  └─────────────────┘  └─────────────────┘         │
+│           │                    │                    │                 │
+│           └────────────────────┼────────────────────┘                 │
+│                                ▼                                        │
+│                    ┌─────────────────────┐                              │
+│                    │   SYSTEM PROMPT     │                              │
+│                    │   INJECTION         │                              │
+│                    │                     │                              │
+│                    │ Relevant memories   │                              │
+│                    │ loaded per query    │                              │
+│                    └─────────────────────┘                              │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Tier 1: Episodic Memory (Raw Experience)**
+- Raw record of all PA experiences — the "autobiography" of the agent
+- Stores every user message, agent response, tool call, and session metadata
+- Chronological with turn indexing (1, 2, 3...) for ordinal queries ("third interaction")
+- Searchable by timeline, semantic similarity, or session ID
+- Auto-summarization generates session summaries every 20 turns
+
+**Tier 2: Semantic Memory (Facts & Knowledge)**
+- Extracted facts and knowledge about the user and projects
+- LLM-powered extraction from user messages only (prevents circular reasoning)
+- Categories: Project patterns, user preferences, architecture decisions, reference locations
+- Confidence threshold: 0.7+ for auto-storage, lower for suggestions
+- Contradiction handling: Tracks fact evolution and corrections
+
+**Tier 3: Procedural Memory (Skills & Learnings)**
+- Skills, workflows, and accumulated wisdom — how the PA approaches tasks
+- **Hybrid storage**: `~/.autodev/memory/MEMORY.md` file (UI-editable) + SQLite mirror for search
+- Topic files: `debugging.md`, `workflow-patterns.md`, `tool-preferences.md`, etc.
+- Auto-populated from session summaries; user-editable via Monaco editor
+- First 200 lines load at startup; topic files loaded on demand
+
+**MEMORY.md Format (Editable by User):**
+```markdown
+# PA Memory Index
+
+## Project Patterns
+- Build: `pnpm build`, dev server: `pnpm dev` (port 3000)
+- Tests: `pnpm test` (Vitest + happy-dom)
+
+## User Preferences
+- Prefers early returns over nested if/else
+- Commit format: `type(scope): desc`
+
+## Tool Learnings
+- **Gemini Path Issue**: Don't use Gemini for files outside working dir
+- **Refactoring Pattern**: Always grep first, then read, then edit
+
+## Recent Learnings
+- E2E tests require local Redis instance on port 6379
+```
+
+**Memory Injection into System Prompt:**
+The `context.rs` `build_system_prompt()` function assembles context by:
+1. Loading base system prompt (per PA mode)
+2. Injecting AUTODEV.md (user instructions)
+3. Loading MEMORY.md index (procedural memory — first 200 lines)
+4. Querying relevant memories from all tiers based on current user query
+5. Adding recent session context (last 10 messages)
+
+**Memory Tools for PA:**
+- `search_memory` — PA queries its own memory for relevant information
+- `remember_this` — Explicit storage when user says "remember that I prefer X"
+
+**UI Components:**
+- MEMORY.md sidebar tab (similar to AUTODEV.md) with Monaco editor
+- Topic file browser with create/edit/delete
+- Memory search input with filters by tier
+- Stats display: fact count, skill count, last updated
+
+**Storage:**
+- SQLite: `~/.autodev/memory.db` (episodic, semantic, procedural tables)
+- Files: `~/.autodev/memory/MEMORY.md` + topic files
+- Vector embeddings for semantic search (via core-orchestrator memory-mcp-server)
+
+**Integration:**
+- Core orchestrator ContextService provides memory endpoints
+- Rust Tauri backend provides memory service wrapper
+- Sidecar bridge enables Rust → Python memory communication
+
+See full specification: `docs/development/PA_MEMORY_SYSTEM_SPEC.md`
+
+### 6.4 Skills System
 
 - Skills stored in `.airs/skills/` or `.claude/skills/` (both paths supported)
 - Each skill = a directory with `SKILL.md` + optional helper scripts
@@ -1225,7 +1340,7 @@ Precedence: Repo > Global
   - `/open-pr` — Create PR with standard AutoDev description template
   - `/check-dispatch` — Scan dispatch directory for signal files
 
-### 6.4 Hooks System
+### 6.5 Hooks System
 
 Hooks fire at lifecycle events. Defined in `settings.json`:
 

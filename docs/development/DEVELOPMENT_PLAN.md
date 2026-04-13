@@ -2220,18 +2220,71 @@ Phase 2.2 Dependencies (requires 2.1):
 
 ### Phase 4 Deliverables Checklist
 
-**PA Memory System (Replaces Compaction):**
-- [ ] Three-layer memory architecture from core-orchestrator:
-  - **Episodic memory**: Session summaries, what happened when
-  - **Semantic memory**: Learned facts, project conventions, user preferences
-  - **Procedural memory**: How the PA approaches tasks, learned workflows
-- [ ] MEMORY.md UI in sidebar (similar to AUTODEV.md):
-  - Monaco editor for viewing/editing procedural memory
-  - SQLite-backed storage (`~/.autodev/memory.db`)
-  - Integration with core-orchestrator memory endpoints
-- [ ] Memory injection into system prompt (context.rs)
-- [ ] Auto-summarization for episodic memory (post-session)
-- [ ] Memory search/retrieval tools for the PA
+**PA Memory System (Replaces Compaction) — See Full Spec: `PA_MEMORY_SYSTEM_SPEC.md`:**
+
+**Phase 4.1 — Episodic Memory (Raw Experience):**
+- [ ] **SQLite Schema**: `episodic_memories` table with session_id, turn_index, content, metadata JSON, embeddings
+- [ ] **Storage Pipeline**: Every user message and agent response stored to episodic memory
+- [ ] **Turn Tracking**: 1-indexed turn counter per session for ordinal queries ("third interaction")
+- [ ] **Metadata Capture**: Model used, cost, thinking content, tool calls, working directory
+- [ ] **Tauri Commands**: `store_user_message()`, `store_agent_response()`, `get_session_timeline()`
+- [ ] **Rust Memory Service**: `src-tauri/src/memory/episodic.rs` wrapper module
+- [ ] **Core Orchestrator Bridge**: HTTP endpoints for episodic storage and retrieval
+
+**Phase 4.2 — Semantic Memory (Facts & Knowledge):**
+- [ ] **SQLite Schema**: `semantic_memories` table with fact_text, category, confidence, source tracking
+- [ ] **Fact Extraction**: LLM-powered extraction from user messages only (not agent responses)
+- [ ] **Categories**: Project patterns, user preferences, architecture decisions, reference locations
+- [ ] **Contradiction Handling**: `fact_history` table tracks corrections and updates
+- [ ] **Background Extraction**: Triggered automatically on user messages via core-orchestrator
+- [ ] **Tauri Commands**: `recall_facts()`, `update_fact()`, `get_user_preferences()`
+- [ ] **Confidence Threshold**: 0.7+ for auto-storage, lower for suggestions
+
+**Phase 4.3 — Procedural Memory (Skills & Learnings):**
+- [ ] **File-Based Storage**: `~/.autodev/memory/MEMORY.md` index + topic files
+- [ ] **SQLite Mirror**: `procedural_memories` table for search/indexing
+- [ ] **MEMORY.md Sidebar UI** (similar to AUTODEV.md):
+  - Monaco editor for viewing/editing
+  - Topic file browser (debugging.md, workflow-patterns.md, etc.)
+  - Search memories input box
+  - Stats display (fact count, skill count, last updated)
+- [ ] **Auto-Generation**: Session summaries automatically added to MEMORY.md
+- [ ] **User Editing**: Full CRUD via UI with save/reset/export buttons
+- [ ] **Loading Rules**: First 200 lines load at startup, topic files on demand
+
+**Phase 4.4 — Memory Injection & Context Assembly:**
+- [ ] **Context.rs Updates**: `build_system_prompt()` loads relevant memories per query
+- [ ] **Recall API**: `/memory/recall` endpoint in core-orchestrator combines all tiers
+- [ ] **Relevance Scoring**: Hybrid semantic + chronological retrieval
+- [ ] **Injection Format**: Structured memory sections in system prompt
+- [ ] **Limits**: Episodic (5), Semantic (10), Procedural (3) per query
+
+**Phase 4.5 — Auto-Summarization:**
+- [ ] **Session Summary**: Generate after every session ends (or every 20 turns)
+- [ ] **Summary Content**: Key actions, files touched, decisions made, learnings
+- [ ] **Storage**: Saved as episodic memory with type "session_summary"
+- [ ] **Background Task**: Non-blocking, runs after response is sent
+
+**Phase 4.6 — Memory Tools for PA:**
+- [ ] **`search_memory` Tool**: PA can query its own memory
+  - Parameters: query, tier filter, time range, limit
+  - Returns: Relevant memories with timestamps and confidence
+- [ ] **`remember_this` Tool**: Explicit memory storage
+  - User says "remember that I prefer X" → stored to semantic memory
+- [ ] **Tool Registration**: Add to builtin_tools registry
+
+**Phase 4.7 — Core Orchestrator Integration:**
+- [ ] **Submodule Updates**: `context_service.py` expose memory endpoints
+- [ ] **Memory MCP Connection**: Ensure memory-mcp-server connectivity
+- [ ] **API Gateway Routes**: `/memory/*` endpoints
+- [ ] **Sidecar Bridge**: Rust → Python memory service communication
+- [ ] **Testing**: Unit tests for each memory tier, integration tests for recall
+
+**Phase 4.8 — Migration from Compaction:**
+- [ ] **Migration Script**: Convert old session messages to episodic memories
+- [ ] **Session Summaries**: Generate for all historical sessions >5 messages
+- [ ] **Data Integrity**: Preserve original timestamps, mark as migrated
+- [ ] **Rollback Plan**: Keep original sessions table until migration verified
 
 **Subagents + Multi-Agent:**
 - [ ] Subagent spawning with isolated context
