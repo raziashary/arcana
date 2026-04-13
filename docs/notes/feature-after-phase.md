@@ -1,50 +1,61 @@
+# Post-Phase 6 Features & Refinements
 
-# Extra Features & Refinements
+**THIS SHOULD BE DONE AFTER PHASE 1 - 6 IS FINISHED**
 
-**THIS SHOULD BE DONE AFTER PHASE 1 - 5 IS FINISHED**
+> **Note**: Most features from the original list have been moved into DEVELOPMENT_PLAN.md phases:
+> - PA Memory → **Phase 4**
+> - Model enhancements (thinking, temperature, context window) → **Phase 2**
+> - Dashboard → **Phase 5**
+> - Graphify → **Phase 6**
 
-## 0 (VERY IMPORTANT DO FIRST)
+---
+
+## Documentation Tasks (Do First)
+
+### Developer Guide
 Create a `developer-guide.md` file that documents the project structure, first time installation steps, key components, and how to contribute.
 
-## 1. Main Agent Improvements
-- Replace compaction with a **proper memory system** referencing from `core-orchestrator` with three layer of memory system:
-  - Episodic memory
-  - Semantic memory
-  - Procedural memory
-- Specifically when using Google models, it always fails on reading file outside where the agent sits (claude or gpt works fine), need to:
-    - Investigate the source of the issue
-    - Refine the agent so gemini can works fine
-    - Test with a smaller model like gemini-2.0-flash-lite
+---
 
-## 2. Main Agent LLM Provider Extra Features
-1. Update pricing constants with actual values and ensue `cost today` is stored per day not when the app closes it resets back to 0.
-2. Update the chat down right area that we can select model from there
-3. Add thinking models and support with reasoning effort tunable from the settings
-4. Add temperature and top-p parameters and each model can have an area we can select the values and saved properly in a configuration file similar to `model_registry.py`
-5. Create a proper Ollama setup with local LLM providers using Ollama
-6. Implement prompt caching for all LLM providers in Cloud mode
-7. Add more models (o1, o3, gemini-2.0-flash, etc.)
-8. Add model-specific context window validation
+## Post-Phase 6: True Extras
 
-## 3. General Feature Improvements
-1. `errors.rs` and its UI:
-  - Improve the error categories, add more depth and details in error catching
-  - Add a better UI error display, since this is proprietary by AIRS and for AIRS we can display the direct error message but make it more user-friendly
+These are features that don't fit into the core 6-phase roadmap:
 
-## 3. Dashboard Tab
-Collect and display metrics including:
-- Token usage
-- Cost (in USD) collected since first usage
-- General usage stats
-- Worker time spent
-- API call failures (both cloud and local)
-- Logs
-- And more
+### Bug Fixes & Provider-Specific Issues
+- **Google Gemini Path Handling**: Investigate and fix Gemini's failure on reading files outside agent's working directory
+  - Test with gemini-2.0-flash-lite
+  - Refine agent behavior for Gemini compatibility
 
-## 4. Graphify Integration
-- Recreate the Graphify tool (it's small in scope) so that AutoDev agent workers can invoke it. This can be used as a **graph-based tool for codebase dissection**.
-- The same tool itself needs to be able to make a markdown similar to the one i make on `autodev/docs/codebase/` that can list all the functions inside a single file and the description of each functions and the variable. We can do this by listing all the functions inside a file similar to how IDE does it, then list all the inputs, variables, and get the Dostring if exists. Essentially trying to create a comprehensive documentation of every file in a codebase without any LLM or AI assistance.
-- Make a new tab for Graphify visualization that will run visualization on the codebase and display it as a graph itself with color coded connection
+### Ongoing Maintenance (Not Phase-Specific)
+- Add more models as they become available (o1, o3, gemini-2.0-flash, etc.)
+- Error handling improvements (ongoing as system matures)
+- UI polish based on user feedback
 
-## 5. Feature Comparison — AutoDev vs. Windsurf
-List current AutoDev features, compare them against Windsurf, and identify what can be implemented.
+### Research & Analysis (Documentation Only)
+- **Feature Comparison — AutoDev vs. Windsurf**: Analyze competitive landscape, identify gaps
+
+### Future Experimental Ideas
+- Voice input for chat (speech-to-text)
+- Custom themes and deep UI customization
+- Plugin marketplace for community extensions
+- A/B testing framework for prompt variants
+- Mobile companion app (view-only)
+- Browser extension for context capture
+
+---
+
+## Summary: What Went Where
+
+| Original Item | New Location |
+|---------------|--------------|
+| PA Memory System | **Phase 4** — Agent Memory + Subagents + Model Router |
+| Thinking models + reasoning effort | **Phase 2** — Provider Support & Model Enhancements |
+| Temperature + top-p parameters | **Phase 2** — Provider Support & Model Enhancements |
+| Model context window validation | **Phase 2** — Provider Support & Model Enhancements |
+| Prompt caching | **Phase 4** — Providers (cost optimization) |
+| Ollama setup | **Phase 3** — Ollama provider (local models) |
+| Dashboard Tab | **Phase 5** — Cost Dashboard + Analytics |
+| Graphify Integration | **Phase 6** — Advanced Developer Tools |
+| Developer guide | **Post-Phase 6** (documentation task) |
+| Gemini path bug | **Post-Phase 6** (provider-specific fix) |
+| Feature comparison | **Post-Phase 6** (documentation/analysis) |
