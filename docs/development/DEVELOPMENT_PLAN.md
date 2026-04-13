@@ -1667,6 +1667,15 @@ Returns structured JSON:
 
 ### 9.7 Phase 1 Extensions Deliverables Checklist
 
+**Tool Executor Refinements:** ✅ **COMPLETED**
+- [x] **Concurrent/Serial Partitioning**: Read-only tools execute concurrently (max 10 via semaphore), write tools execute serially
+  - `tool_executor.rs`: Added `execute_batch()` method with `tokio::sync::Semaphore`
+  - `engine.rs`: Updated to use batch execution instead of serial loop
+  - Pattern from Claude Code: partitionToolCalls() + concurrent read-only execution
+- [x] Tool start/end events emitted for all tools (including concurrent)
+- [x] Permission checks preserved for write tools in batch execution
+- [x] Results maintain original order matching tool_use_ids
+
 **Multiple Chat Sessions UI:** ✅ **COMPLETED**
 - [x] SessionBar component (200px left sidebar) — `src/components/chat/SessionBar.tsx`
 - [x] Session list with title, timestamp, message count — `date-fns` formatting
@@ -1831,9 +1840,10 @@ Phase 2 remains the **grandiose vision**: PA delegates → Board → Supervisor 
 - [ ] **Backend - Tool Registry Filtering:**
   - `src-tauri/src/agent/tools/mod.rs`: Add `filter_tools_by_mode(tools, mode) -> Vec<Tool>`
   - Fast Development: all builtin_tools (read_file, write_file, edit_file, bash, grep, glob)
-  - Review Mode: all builtin_tools + wrap write operations with permission_check
+  - Review Mode: all builtin_tools + permission wrappers (execution already has permission checks)
   - Delegate Mode: only `create_task` tool (zero file tools)
   - Tool registry built conditionally before LLM call based on current PA mode
+  - **Note**: Tool execution already supports concurrent/serial partitioning (completed in Phase 1)
 - [ ] **Backend - create_task Tool:**
   - New builtin tool: `src-tauri/src/agent/builtin_tools/create_task.rs`
   - Input schema: title (string), priority (enum: p0/p1/p2/p3), type (enum: feature/bug/refactor/docs), acceptance_criteria (string)

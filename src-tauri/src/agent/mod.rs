@@ -17,3 +17,15 @@ pub use engine::AgentEngine;
 pub use tool_trait::{Tool, ToolResult as ToolOutput, ToolContext};
 pub use tool_registry::ToolRegistry;
 pub use permission::{PermissionMode, PermissionRequest, PermissionResponse};
+
+/// PA Mode variants for the Mode Toggle (Phase 2)
+/// Controls which tools are available and which system prompt is used
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PAMode {
+    /// Full tool access for direct coding (read_file, write_file, edit_file, bash, grep, glob)
+    FastDevelopment,
+    /// Same tools but with explicit permission prompts for write operations
+    Review,
+    /// No file tools, only create_task for delegating to workers
+    Delegate,
+}

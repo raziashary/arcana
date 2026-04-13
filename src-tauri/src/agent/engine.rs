@@ -26,6 +26,7 @@ use super::context::ContextBuilder;
 use super::permission::{PendingPermissions, PermissionMode};
 use super::tool_executor::ToolExecutor;
 use super::tool_registry::ToolRegistry;
+use super::tool_trait::Tool;
 use crate::provider::traits::Provider;
 
 const MAX_TOOL_TURNS: usize = 20;
@@ -163,31 +164,48 @@ impl AgentEngine {
                 break;
             }
 
-            // Execute all tool calls; collect results
-            let mut tool_results = Vec::new();
+            // Execute all tool calls with partitioned concurrency
+            // Read-only tools run concurrently (max 10), write tools run serially
+            let mut tool_batch: Vec<(Arc<dyn Tool>, serde_json::Value, String)> = Vec::new();
+            let mut unknown_tools: Vec<(String, String)> = Vec::new(); // (tool_use_id, name)
+
             for tc in &tool_calls {
                 if let MessageContent::ToolUse { id, name, input } = tc {
-                    let tool = match self.registry.get(name) {
-                        Some(t) => t,
-                        None    => {
-                            let result = MessageContent::ToolResult {
-                                tool_use_id: id.clone(),
-                                content:     format!("Unknown tool: {name}"),
-                                is_error:    true,
-                            };
-                            tool_results.push(result);
-                            continue;
+                    match self.registry.get(name) {
+                        Some(tool) => {
+                            tool_batch.push((tool, input.clone(), id.clone()));
+                        }
+                        None => {
+                            unknown_tools.push((id.clone(), name.clone()));
                         }
                     };
-
-                    let exec_result = tool_executor.execute(tool, input.clone()).await?;
-                    tool_results.push(MessageContent::ToolResult {
-                        tool_use_id: id.clone(),
-                        content:     exec_result.output,
-                        is_error:    exec_result.is_error,
-                    });
                 }
             }
+
+            // Execute batch with concurrency control
+            let batch_results = if !tool_batch.is_empty() {
+                tool_executor.execute_batch(tool_batch).await?
+            } else {
+                Vec::new()
+            };
+
+            // Assemble results in order (unknown tools first, then batch results)
+            let mut tool_results: Vec<MessageContent> = unknown_tools
+                .into_iter()
+                .map(|(tool_use_id, name)| MessageContent::ToolResult {
+                    tool_use_id,
+                    content: format!("Unknown tool: {name}"),
+                    is_error: true,
+                })
+                .collect();
+
+            tool_results.extend(batch_results.into_iter().map(|(tool_use_id, result)| {
+                MessageContent::ToolResult {
+                    tool_use_id,
+                    content: result.output,
+                    is_error: result.is_error,
+                }
+            }));
 
             // Add tool results as user message (Anthropic convention)
             history.push(RequestMessage {
