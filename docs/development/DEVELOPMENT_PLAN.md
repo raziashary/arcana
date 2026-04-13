@@ -1765,29 +1765,38 @@ Phase 2 remains the **grandiose vision**: PA delegates → Board → Supervisor 
 
 **Goal:** First end-to-end workflow. Razi can say "add /health endpoint" in Delegate Mode and see it happen.
 
-**Recipes System (Minimal):**
-- [ ] YAML recipe parser with validation — Parse recipe YAML into Recipe struct
-- [ ] Recipe execution engine (run recipe steps as agent messages) — Core engine
-- [ ] Cron scheduler for recurring recipes — `tokio-cron-scheduler` to poll every 2 min
-- [ ] Hardcoded Supervisor recipe (`~/.autodev/recipes/supervisor-poll.yaml`):
-  - Polls `~/.autodev/tasks.db` every 2 min for tasks with status='ready'
-  - Assigns to hardcoded `worker-backend` (single worker for 2.1)
-  - Updates task: `assigned_worker = 'worker-backend'`, `status = 'assigned'`
-- [ ] Hardcoded Worker recipe (`~/.autodev/recipes/worker-backend-poll.yaml`):
-  - Polls for tasks assigned to 'worker-backend'
-  - Claims task via lock file, executes (bash/write_file), marks 'done'
-  ```yaml
-  version: "1.0.0"
-  title: Worker Backend — Polling Loop
-  schedule: "*/120 * * * *"
-  permission_mode: autonomous
-  instructions: |
-    You are the AIRS Backend Worker.
-    1. Poll internal task board for tasks assigned to 'worker-backend'
-    2. If found: claim via lock file, execute task, test, mark done
-    3. If nothing: exit cleanly
-  ```
-- [ ] Recipe browser UI (read-only for 2.1) — List and view recipe YAML
+**RECIPES SYSTEM (Minimal) — For Fleet Instructions:**
+> **Distinction**: Recipes contain instructions for the **Fleet** (Workers, Supervisor, QC). AUTODEV.md contains instructions for the **PA (Razi)**. Two separate systems, two separate UIs.
+
+- [ ] **Backend — Recipe Parser & Engine:**
+  - YAML recipe parser with validation — Parse recipe YAML into Recipe struct
+  - Recipe execution engine (run recipe steps as agent messages) — Core engine
+  - Cron scheduler for recurring recipes — `tokio-cron-scheduler` to poll every 2 min
+- [ ] **Backend — Hardcoded System Recipes:**
+  - Supervisor recipe (`~/.autodev/recipes/supervisor-poll.yaml`):
+    - Polls `~/.autodev/tasks.db` every 2 min for tasks with status='ready'
+    - Assigns to hardcoded `worker-backend` (single worker for 2.1)
+    - Updates task: `assigned_worker = 'worker-backend'`, `status = 'assigned'`
+  - Worker recipe (`~/.autodev/recipes/worker-backend-poll.yaml`):
+    - Polls for tasks assigned to 'worker-backend'
+    - Claims task via lock file, executes (bash/write_file), marks 'done'
+    ```yaml
+    version: "1.0.0"
+    title: Worker Backend — Polling Loop
+    schedule: "*/120 * * * *"
+    permission_mode: autonomous
+    instructions: |
+      You are the AIRS Backend Worker.
+      1. Poll internal task board for tasks assigned to 'worker-backend'
+      2. If found: claim via lock file, execute task, test, mark done
+      3. If nothing: exit cleanly
+    ```
+- [ ] **Frontend — Recipes Tab (Read-Only for 2.1):**
+  - Recipe browser UI — List all recipes in `~/.autodev/recipes/`
+  - Recipe viewer — Display YAML with syntax highlighting (read-only for 2.1)
+  - Shows: title, schedule, permission_mode, instructions preview
+  - [Run Now] button to manually trigger a recipe
+  - **Note**: Full editing (Create/Edit/Delete) deferred to Phase 2.2 with Worker Management UI
 
 **AutoDev Panel & Internal Board (Minimal Viable):**
 - [ ] Internal Task Board database:
@@ -1832,8 +1841,9 @@ Phase 2 remains the **grandiose vision**: PA delegates → Board → Supervisor 
   - Returns task ID and confirmation message
   - Only registered in Delegate Mode
 
-**AUTODEV.md UI-Managed Instruction System (Phase 2.1.2):**
-
+**AUTODEV.md SYSTEM (Phase 2.1.2) — For PA Instructions:**
+> **Distinction**: AUTODEV.md contains instructions for **Razi (the PA)**. Recipes contain instructions for the **Fleet**. Different audiences, different storage, different UIs.
+>
 > **Core Principle**: AUTODEV.md is NOT a file you manually create. It is a first-class UI feature — created, edited, and stored entirely within the AutoDev app. SQLite-backed, not filesystem-scattered.
 
 **Backend — Database Layer:**
@@ -1943,6 +1953,20 @@ Phase 2 remains the **grandiose vision**: PA delegates → Board → Supervisor 
 **2.1 Success Criteria:**
 > Razi switches to Delegate Mode → says "add /health endpoint to orchestrator" → PA creates task #1 → Supervisor assigns to worker-backend → Worker executes → Task moves to Done column in AutoDev Panel
 
+**Phase 2.1: Two Instruction Systems — Frontend Capability Summary:**
+
+| Feature | AUTODEV.md (PA) | Recipes (Fleet) |
+|---------|-----------------|-----------------|
+| **Audience** | Razi (the human) | Workers, Supervisor, QC |
+| **Location** | Sidebar → AUTODEV.md | Recipes Tab |
+| **Phase** | 2.1.2 | 2.1 (read-only), 2.2 (full editing) |
+| **View** | ✅ Monaco editor with preview | ✅ YAML viewer with syntax highlighting |
+| **Create** | ✅ "Create" button in sidebar | ⏸️ Phase 2.2 (Worker Creation UI generates recipes) |
+| **Edit** | ✅ Full Monaco editing + Save/Reset | ⏸️ Phase 2.2 (YAML editor) |
+| **Delete** | ✅ Delete button (soft delete) | ⏸️ Phase 2.2 (with confirmation) |
+| **Storage** | SQLite `~/.autodev/config.db` | YAML files `~/.autodev/recipes/` |
+| **Content** | Personal preferences + conventions | Workflow definitions + agent instructions |
+
 ---
 
 #### Phase 2.2 — "Production Worker Orchestration" 🚀 **Scale to Multiple Workers + GitHub**
@@ -2030,6 +2054,36 @@ Phase 2 remains the **grandiose vision**: PA delegates → Board → Supervisor 
       - github-mcp
       - developer
     ```
+
+**RECIPES TAB UI (Full Editing — Completes Recipe System):**
+> **Note**: Phase 2.1 had read-only Recipes. Phase 2.2 adds full create/edit/delete UI.
+- [ ] **Recipe Editor (Monaco YAML Editor):**
+  - Full YAML editing with syntax highlighting and validation
+  - Schema validation against Recipe struct (version, title, schedule, etc.)
+  - Auto-complete for fields (schedule cron syntax, permission_mode enum)
+  - "Save" / "Reset" / "Validate" buttons
+  - Live preview of parsed Recipe struct
+  - Error highlighting for invalid YAML
+- [ ] **Recipe Create/Edit/Delete UI:**
+  - "New Recipe" button in Recipes Tab
+  - Recipe creation modal with template selection (Worker, Supervisor, QC, Custom)
+  - Template picker shows: Blank, Worker Backend, Worker Frontend, Supervisor Poll, QC Review, Custom
+  - Recipe deletion with confirmation (shows which workers use this recipe)
+  - Duplicate recipe button (clone existing as starting point)
+- [ ] **Recipe Browser Enhancements:**
+  - Filter by: System Recipes (locked), Pre-defined, Custom
+  - Search by name or content
+  - Sort by: Name, Last Modified, Schedule frequency
+  - Recipe status indicators: Active (running), Paused, Error, Draft (never run)
+  - Click recipe → Opens editor (if editable) or viewer (if locked)
+- [ ] **Recipe-Worker Binding UI:**
+  - In Worker Edit modal: dropdown to select which recipe this worker uses
+  - Shows recipe compatibility (Worker recipes vs Supervisor recipes)
+  - Warning if changing recipe while worker is Active
+- [ ] **Recipe Versioning (Basic):**
+  - On save: backup previous version to `~/.autodev/recipes/backups/`
+  - "View History" button shows last 5 versions with timestamps
+  - "Restore" button to revert to previous version
 
 **Enhanced Supervisor Logic (Full Implementation):**
 - [ ] **Supervisor Recipe Logic (Production):**

@@ -1267,6 +1267,42 @@ AIRS-specific hooks shipped by default:
 - **@mention syntax:** In Supervisor sessions, `@worker-backend` sends a dispatch signal to Worker 1's recipe loop
 - **Concurrency:** Up to 10 parallel subagents per session
 
+> **CRITICAL DISTINCTION: Two Instruction Systems**
+>
+> AutoDev has **two separate instruction mechanisms** for two different audiences:
+>
+> ```
+> ┌─────────────────────────────────────────────────────────────────┐
+> │  AUTODEV.md                    │  Recipes (YAML)                  │
+> │  ─────────────────────────    │  ──────────────────────────     │
+> │  For: The PA (Razi)            │  For: The Fleet (Workers,        │
+> │                                │       Supervisor, QC)            │
+> │  ─────────────────────────    │  ──────────────────────────     │
+> │  What: Personal preferences    │  What: Workflow definitions    │
+> │  + project conventions          │  + agent instructions            │
+> │                                │                                  │
+> │  Format: Markdown               │  Format: YAML with embedded     │
+> │                                │  instructions field              │
+> │  ─────────────────────────    │  ──────────────────────────     │
+> │  Storage: SQLite (UI-managed) │  Storage: YAML files in          │
+> │  ~/.autodev/config.db           │  ~/.autodev/recipes/             │
+> │                                │                                  │
+> │  Editable: Sidebar UI           │  Editable: Recipes Tab UI        │
+> │  (Monaco editor)               │  (YAML editor with templates)    │
+> │                                │                                  │
+> │  Injected: System prompt      │  Executed: As agent runtime      │
+> │  (every session)               │  (when recipe triggers)          │
+> └─────────────────────────────────────────────────────────────────┘
+> ```
+>
+> **Mental Model:**
+> - **AUTODEV.md** = "How Razi wants his PA to behave" (like CLAUDE.md for Claude Code)
+> - **Recipes** = "How the fleet agents should execute their tasks" (like skills/workflows)
+>
+> **Example:**
+> - AUTODEV.md: "Use Python 3.11, prefer explicit types, I'm a senior engineer"
+> - Worker Recipe: "You are the Backend Worker. Poll tasks.db every 2 min. Claim via lock file. Use bash/write_file tools. Test with pytest."
+
 ### 6.6 Recipes Engine
 
 YAML recipes are the primary workflow unit for AutoDev:
@@ -1286,10 +1322,10 @@ parameters:
     default: "core-orchestrator"
 
 instructions: |
-  You are the AIRS Backend Worker. Follow your CLAUDE.md exactly.
+  You are the AIRS Backend Worker.
   1. Check dispatch/ for signal files first.
-  2. Poll GitHub Issues: filter worker-backend + status-ready.
-  3. If found: claim, branch, implement, test, PR.
+  2. Poll internal task board for tasks assigned to 'worker-backend'.
+  3. If found: claim via lock file, create worktree, implement, test, PR.
   4. If nothing: exit cleanly.
 
 extensions:
