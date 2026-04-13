@@ -1,0 +1,999 @@
+{
+  "metadata": {
+    "project": "AutoDev",
+    "version": "1.0.0",
+    "generated_at": "2025-01-15",
+    "total_files": 67,
+    "backend_files": 46,
+    "frontend_files": 21
+  },
+  "nodes": {
+    "backend": {
+      "core": [
+        {
+          "id": "lib.rs",
+          "path": "src-tauri/src/lib.rs",
+          "type": "entry_point",
+          "purpose": "Main Tauri application setup and command registration",
+          "exports": ["run"],
+          "registers_commands": [
+            "send_message", "cancel_agent",
+            "list_sessions", "create_session", "delete_session", "get_session_messages", "update_session_title",
+            "list_providers", "set_active_provider", "get_active_provider", "get_active_model", "set_active_model",
+            "get_system_prompt", "set_system_prompt", "get_default_system_prompt",
+            "provider_test_connection", "get_provider_models",
+            "vault_get", "vault_set", "vault_delete", "vault_list",
+            "get_cost_today", "grant_permission", "deny_permission"
+          ],
+          "connections": [
+            "commands::agent_commands",
+            "commands::session_commands",
+            "commands::settings_commands",
+            "commands::vault_commands",
+            "state::AppState",
+            "logging"
+          ]
+        },
+        {
+          "id": "main.rs",
+          "path": "src-tauri/src/main.rs",
+          "type": "entry_point",
+          "purpose": "Application entry point - initializes logging and runs Tauri",
+          "exports": ["main"],
+          "connections": ["logging", "autodev_lib"]
+        },
+        {
+          "id": "errors.rs",
+          "path": "src-tauri/src/errors.rs",
+          "type": "shared_types",
+          "purpose": "Unified error type using thiserror for consistent error handling",
+          "exports": ["AutoDevError"],
+          "implements": ["Serialize", "Debug", "Error"],
+          "used_by": ["all_modules"]
+        },
+        {
+          "id": "events.rs",
+          "path": "src-tauri/src/events.rs",
+          "type": "shared_types",
+          "purpose": "Tauri event constants and emission helpers for frontend-backend communication",
+          "exports": [
+            "EVT_AGENT_TOKEN", "EVT_AGENT_THINKING", "EVT_AGENT_TOOL_START",
+            "EVT_AGENT_TOOL_END", "EVT_AGENT_PERMISSION", "EVT_AGENT_DONE",
+            "EVT_AGENT_ERROR", "EVT_COST_UPDATE"
+          ],
+          "exports_types": [
+            "TokenPayload", "ThinkingPayload", "ToolStartPayload",
+            "ToolEndPayload", "PermissionPayload", "DonePayload", "ErrorPayload"
+          ],
+          "exports_functions": [
+            "emit_token", "emit_thinking", "emit_tool_start", "emit_tool_end",
+            "emit_permission_request", "emit_done", "emit_error", "emit_cost_update"
+          ],
+          "connections": ["agent::engine", "frontend_stores"]
+        },
+        {
+          "id": "logging.rs",
+          "path": "src-tauri/src/logging.rs",
+          "type": "utility",
+          "purpose": "Structured logging initialization using tracing crate",
+          "exports": ["init"],
+          "connections": ["main.rs"]
+        }
+      ],
+      "agent": [
+        {
+          "id": "agent/mod.rs",
+          "path": "src-tauri/src/agent/mod.rs",
+          "type": "module",
+          "purpose": "Agent module declarations and re-exports",
+          "exports": [
+            "Tool", "ToolResult", "ToolContext",
+            "ToolRegistry", "ToolExecutor",
+            "PermissionMode", "PermissionRequest", "PermissionResponse", "PendingPermissions",
+            "ContextBuilder",
+            "AgentEngine",
+            "compact_messages",
+            "register_builtin_tools"
+          ],
+          "submodules": [
+            "tool_trait", "tool_registry", "tool_executor", "permission",
+            "context", "engine", "compaction", "builtin_tools"
+          ]
+        },
+        {
+          "id": "agent/tool_trait.rs",
+          "path": "src-tauri/src/agent/tool_trait.rs",
+          "type": "trait_definition",
+          "purpose": "Defines the Tool trait - uniform interface for all built-in tools",
+          "exports": ["Tool", "ToolResult", "ToolContext"],
+          "trait_methods": [
+            "name", "description", "input_schema", "is_read_only", "requires_permission", "execute"
+          ],
+          "implementors": [
+            "BashTool", "ReadFileTool", "WriteFileTool", "EditFileTool",
+            "ListDirectoryTool", "GrepTool", "GlobTool"
+          ],
+          "connections": ["tool_registry", "tool_executor", "builtin_tools"]
+        },
+        {
+          "id": "agent/tool_registry.rs",
+          "path": "src-tauri/src/agent/tool_registry.rs",
+          "type": "registry",
+          "purpose": "Manages registration and lookup of tool implementations",
+          "exports": ["ToolRegistry"],
+          "methods": ["new", "register", "get", "list", "definitions"],
+          "contains": ["Arc<dyn Tool>"],
+          "connections": ["engine", "builtin_tools::register_builtin_tools"]
+        },
+        {
+          "id": "agent/tool_executor.rs",
+          "path": "src-tauri/src/agent/tool_executor.rs",
+          "type": "executor",
+          "purpose": "Handles tool execution with permission checking and concurrency control",
+          "exports": ["ToolExecutor"],
+          "fields": [
+            "mode: PermissionMode",
+            "pending: PendingPermissions",
+            "app: AppHandle",
+            "session_id: String",
+            "working_dir: String",
+            "always_allow: HashSet<String>"
+          ],
+          "methods": ["execute_tool", "check_permission"],
+          "behavior": [
+            "Read-only tools run concurrently",
+            "Write tools run serially with permission checks"
+          ],
+          "connections": ["Tool", "PermissionMode", "events", "engine"]
+        },
+        {
+          "id": "agent/permission.rs",
+          "path": "src-tauri/src/agent/permission.rs",
+          "type": "shared_types",
+          "purpose": "Permission system for tool execution safety",
+          "exports": [
+            "PermissionMode (ManualApproval, Autonomous, SmartApprove)",
+            "PermissionRequest",
+            "PermissionResponse (AllowOnce, AllowAlways, Deny)",
+            "PendingPermissions"
+          ],
+          "connections": ["tool_executor", "engine", "commands::agent_commands"]
+        },
+        {
+          "id": "agent/context.rs",
+          "path": "src-tauri/src/agent/context.rs",
+          "type": "builder",
+          "purpose": "Builds the system prompt for LLM, injecting context from CLAUDE.md and AGENTS.md",
+          "exports": ["ContextBuilder", "BASE_SYSTEM_PROMPT"],
+          "methods": ["new", "build", "default_system_prompt"],
+          "context_injection": [
+            "~/.autodev/CLAUDE.md (global)",
+            "./CLAUDE.md (project)",
+            "./AGENTS.md (agents)"
+          ],
+          "connections": ["engine", "commands::settings_commands"]
+        },
+        {
+          "id": "agent/engine.rs",
+          "path": "src-tauri/src/agent/engine.rs",
+          "type": "core_engine",
+          "purpose": "Core agentic loop implementation - manages LLM streaming, tool calls, and context",
+          "exports": ["AgentEngine"],
+          "fields": [
+            "provider: Arc<dyn Provider>",
+            "registry: ToolRegistry",
+            "mode: PermissionMode",
+            "pending: PendingPermissions",
+            "app: AppHandle",
+            "state: Arc<Mutex<AppState>>"
+          ],
+          "methods": ["run", "stop"],
+          "behavior": [
+            "1. Streams LLM response",
+            "2. Detects tool_use blocks",
+            "3. Executes tools via ToolExecutor",
+            "4. Compacts context when needed",
+            "5. Emits events for frontend updates"
+          ],
+          "connections": [
+            "Provider",
+            "ToolRegistry",
+            "ToolExecutor",
+            "ContextBuilder",
+            "AppState",
+            "events"
+          ]
+        },
+        {
+          "id": "agent/compaction.rs",
+          "path": "src-tauri/src/agent/compaction.rs",
+          "type": "utility",
+          "purpose": "Context window management - compacts message history when approaching token limits",
+          "exports": ["compact_messages"],
+          "connections": ["engine"]
+        }
+      ],
+      "builtin_tools": [
+        {
+          "id": "builtin_tools/mod.rs",
+          "path": "src-tauri/src/agent/builtin_tools/mod.rs",
+          "type": "module",
+          "purpose": "Registers all built-in tools with the registry",
+          "exports": ["register_builtin_tools"],
+          "registers": [
+            "BashTool", "ReadFileTool", "WriteFileTool", "EditFileTool",
+            "ListDirectoryTool", "GrepTool", "GlobTool"
+          ],
+          "connections": ["ToolRegistry", "lib.rs"]
+        },
+        {
+          "id": "builtin_tools/bash.rs",
+          "path": "src-tauri/src/agent/builtin_tools/bash.rs",
+          "type": "tool",
+          "purpose": "Execute shell commands in the working directory",
+          "exports": ["BashTool"],
+          "implements": "Tool",
+          "name": "bash",
+          "is_read_only": false,
+          "input_schema": { "command": "string" },
+          "output": "JSON with stdout, stderr, exit_code, execution_time_ms",
+          "connections": ["tool_executor"]
+        },
+        {
+          "id": "builtin_tools/read_file.rs",
+          "path": "src-tauri/src/agent/builtin_tools/read_file.rs",
+          "type": "tool",
+          "purpose": "Read file contents with optional line range",
+          "exports": ["ReadFileTool"],
+          "implements": "Tool",
+          "name": "read_file",
+          "is_read_only": true,
+          "input_schema": {
+            "path": "string",
+            "start_line": "number (optional)",
+            "end_line": "number (optional)"
+          },
+          "connections": ["tool_executor"]
+        },
+        {
+          "id": "builtin_tools/write_file.rs",
+          "path": "src-tauri/src/agent/builtin_tools/write_file.rs",
+          "type": "tool",
+          "purpose": "Write content to a file (creates or overwrites)",
+          "exports": ["WriteFileTool"],
+          "implements": "Tool",
+          "name": "write_file",
+          "is_read_only": false,
+          "input_schema": { "path": "string", "content": "string" },
+          "connections": ["tool_executor"]
+        },
+        {
+          "id": "builtin_tools/edit_file.rs",
+          "path": "src-tauri/src/agent/builtin_tools/edit_file.rs",
+          "type": "tool",
+          "purpose": "Perform string replacement in a file",
+          "exports": ["EditFileTool"],
+          "implements": "Tool",
+          "name": "edit_file",
+          "is_read_only": false,
+          "input_schema": {
+            "path": "string",
+            "old_string": "string",
+            "new_string": "string"
+          },
+          "connections": ["tool_executor"]
+        },
+        {
+          "id": "builtin_tools/list_directory.rs",
+          "path": "src-tauri/src/agent/builtin_tools/list_directory.rs",
+          "type": "tool",
+          "purpose": "List directory contents, optionally recursively",
+          "exports": ["ListDirectoryTool"],
+          "implements": "Tool",
+          "name": "list_directory",
+          "is_read_only": true,
+          "input_schema": {
+            "path": "string",
+            "recursive": "boolean (default: false)"
+          },
+          "connections": ["tool_executor"]
+        },
+        {
+          "id": "builtin_tools/grep.rs",
+          "path": "src-tauri/src/agent/builtin_tools/grep.rs",
+          "type": "tool",
+          "purpose": "Search for patterns in files using ripgrep-style matching",
+          "exports": ["GrepTool"],
+          "implements": "Tool",
+          "name": "grep",
+          "is_read_only": true,
+          "input_schema": {
+            "pattern": "string",
+            "path": "string (optional)",
+            "file_pattern": "string (optional)"
+          },
+          "dependencies": ["walkdir", "regex"],
+          "connections": ["tool_executor"]
+        },
+        {
+          "id": "builtin_tools/glob.rs",
+          "path": "src-tauri/src/agent/builtin_tools/glob.rs",
+          "type": "tool",
+          "purpose": "Find files matching glob patterns",
+          "exports": ["GlobTool"],
+          "implements": "Tool",
+          "name": "glob",
+          "is_read_only": true,
+          "input_schema": { "pattern": "string (e.g., 'src/**/*.rs')" },
+          "output": "JSON with file paths, sizes, modification dates",
+          "dependencies": ["glob crate"],
+          "connections": ["tool_executor"]
+        }
+      ],
+      "commands": [
+        {
+          "id": "commands/mod.rs",
+          "path": "src-tauri/src/commands/mod.rs",
+          "type": "module",
+          "purpose": "Module declaration for commands",
+          "submodules": [
+            "agent_commands",
+            "session_commands",
+            "settings_commands",
+            "vault_commands"
+          ]
+        },
+        {
+          "id": "commands/agent_commands.rs",
+          "path": "src-tauri/src/commands/agent_commands.rs",
+          "type": "command_handler",
+          "purpose": "Agent execution commands",
+          "exports": [
+            "send_message",
+            "cancel_agent",
+            "grant_permission",
+            "deny_permission"
+          ],
+          "connections": ["AgentEngine", "AppState"]
+        },
+        {
+          "id": "commands/session_commands.rs",
+          "path": "src-tauri/src/commands/session_commands.rs",
+          "type": "command_handler",
+          "purpose": "Chat session management commands",
+          "exports": [
+            "list_sessions",
+            "create_session",
+            "delete_session",
+            "get_session_messages",
+            "update_session_title"
+          ],
+          "connections": ["SessionManager", "Storage"]
+        },
+        {
+          "id": "commands/settings_commands.rs",
+          "path": "src-tauri/src/commands/settings_commands.rs",
+          "type": "command_handler",
+          "purpose": "Settings and provider management commands",
+          "exports": [
+            "list_providers",
+            "set_active_provider",
+            "get_active_provider",
+            "get_active_model",
+            "set_active_model",
+            "get_system_prompt",
+            "set_system_prompt",
+            "get_default_system_prompt",
+            "provider_test_connection",
+            "get_provider_models"
+          ],
+          "connections": ["ProviderManager", "AppState", "ContextBuilder"]
+        },
+        {
+          "id": "commands/vault_commands.rs",
+          "path": "src-tauri/src/commands/vault_commands.rs",
+          "type": "command_handler",
+          "purpose": "Secure credential storage commands",
+          "exports": ["vault_get", "vault_set", "vault_delete", "vault_list"],
+          "connections": ["KeychainVault"]
+        }
+      ],
+      "provider": [
+        {
+          "id": "provider/mod.rs",
+          "path": "src-tauri/src/provider/mod.rs",
+          "type": "module",
+          "purpose": "LLM provider abstraction module re-exports",
+          "exports": [
+            "Provider", "ProviderManager", "ProviderConfig",
+            "Message", "ToolDefinition", "ToolCall", "ToolResult", "StreamingChunk"
+          ],
+          "submodules": ["types", "traits", "anthropic", "openai", "google", "streaming"]
+        },
+        {
+          "id": "provider/traits.rs",
+          "path": "src-tauri/src/provider/traits.rs",
+          "type": "trait_definition",
+          "purpose": "Provider trait definition",
+          "exports": ["Provider"],
+          "trait_methods": ["chat", "chat_stream", "test_connection", "list_models"],
+          "implementors": ["AnthropicProvider", "OpenAIProvider", "GoogleProvider", "OllamaProvider"],
+          "connections": ["engine", "ProviderManager"]
+        },
+        {
+          "id": "provider/types.rs",
+          "path": "src-tauri/src/provider/types.rs",
+          "type": "shared_types",
+          "purpose": "Shared types for provider communication",
+          "exports": ["Message", "ToolDefinition", "ToolCall", "ToolResult", "ProviderResponse"],
+          "used_by": ["all_provider_implementations", "AgentEngine"]
+        },
+        {
+          "id": "provider/anthropic.rs",
+          "path": "src-tauri/src/provider/anthropic.rs",
+          "type": "provider_impl",
+          "purpose": "Anthropic Claude API provider implementation",
+          "exports": ["AnthropicProvider"],
+          "implements": "Provider",
+          "features": ["Native streaming", "Tool use support", "Model selection"],
+          "connections": ["traits", "types", "streaming"]
+        },
+        {
+          "id": "provider/openai.rs",
+          "path": "src-tauri/src/provider/openai.rs",
+          "type": "provider_impl",
+          "purpose": "OpenAI API provider implementation",
+          "exports": ["OpenAIProvider"],
+          "implements": "Provider",
+          "features": ["OpenAI-compatible APIs support"],
+          "connections": ["traits", "types", "streaming"]
+        },
+        {
+          "id": "provider/google.rs",
+          "path": "src-tauri/src/provider/google.rs",
+          "type": "provider_impl",
+          "purpose": "Google Gemini API provider implementation",
+          "exports": ["GoogleProvider"],
+          "implements": "Provider",
+          "connections": ["traits", "types", "streaming"]
+        },
+        {
+          "id": "provider/streaming.rs",
+          "path": "src-tauri/src/provider/streaming.rs",
+          "type": "utility",
+          "purpose": "Streaming response utilities",
+          "exports": ["StreamReceiver", "StreamingChunk"],
+          "streaming_chunk_variants": ["Text", "ToolCall", "Done", "Error"],
+          "connections": ["all_provider_implementations"]
+        }
+      ],
+      "session": [
+        {
+          "id": "session/mod.rs",
+          "path": "src-tauri/src/session/mod.rs",
+          "type": "module",
+          "purpose": "Session persistence module re-exports",
+          "exports": ["SessionManager", "Session", "Message", "ToolCallRecord", "ToolResultRecord"],
+          "submodules": ["manager", "storage", "types"]
+        },
+        {
+          "id": "session/types.rs",
+          "path": "src-tauri/src/session/types.rs",
+          "type": "shared_types",
+          "purpose": "Session data types",
+          "exports": ["Session", "Message", "ToolCallRecord", "ToolResultRecord"],
+          "session_fields": [
+            "id", "title", "working_dir", "provider", "model",
+            "created_at", "updated_at", "message_count"
+          ],
+          "used_by": ["storage", "manager", "session_commands"]
+        },
+        {
+          "id": "session/storage.rs",
+          "path": "src-tauri/src/session/storage.rs",
+          "type": "persistence",
+          "purpose": "SQLite persistence layer",
+          "exports": ["Storage"],
+          "methods": [
+            "new",
+            "create_session",
+            "get_messages",
+            "save_message"
+          ],
+          "database_tables": ["sessions", "messages", "tool_calls", "tool_results"],
+          "connections": ["SessionManager"]
+        },
+        {
+          "id": "session/manager.rs",
+          "path": "src-tauri/src/session/manager.rs",
+          "type": "manager",
+          "purpose": "High-level session operations",
+          "exports": ["SessionManager"],
+          "methods": ["new", "list", "create", "delete", "get_messages", "add_message"],
+          "connections": ["Storage", "session_commands"]
+        }
+      ],
+      "state": [
+        {
+          "id": "state/mod.rs",
+          "path": "src-tauri/src/state/mod.rs",
+          "type": "module",
+          "purpose": "State module declaration",
+          "exports": ["AppState"]
+        },
+        {
+          "id": "state/app_state.rs",
+          "path": "src-tauri/src/state/app_state.rs",
+          "type": "state_container",
+          "purpose": "Central mutable application state",
+          "exports": ["AppState"],
+          "fields": [
+            "active_provider: Option<String>",
+            "active_model: Option<String>",
+            "cost_today_usd: f64",
+            "tokens_in_today: u64",
+            "tokens_out_today: u64",
+            "system_prompt_override: Option<String>",
+            "active_agents: HashMap<String, AgentHandle>"
+          ],
+          "methods": [
+            "new",
+            "get_agent",
+            "add_agent",
+            "remove_agent",
+            "update_cost"
+          ],
+          "thread_safety": "Wrapped in Arc<Mutex<>>",
+          "connections": ["all_command_handlers", "Tauri state system"]
+        }
+      ],
+      "vault": [
+        {
+          "id": "vault/mod.rs",
+          "path": "src-tauri/src/vault/mod.rs",
+          "type": "module",
+          "purpose": "Vault module re-exports",
+          "exports": ["KeychainVault", "VaultError"]
+        },
+        {
+          "id": "vault/keychain.rs",
+          "path": "src-tauri/src/vault/keychain.rs",
+          "type": "utility",
+          "purpose": "OS-native secure storage implementation",
+          "exports": ["KeychainVault"],
+          "methods": ["new", "get", "set", "delete", "list"],
+          "platform_support": ["macOS Keychain", "Windows Credential Manager", "Linux Secret Service"],
+          "connections": ["vault_commands"]
+        }
+      ],
+      "cost": [
+        {
+          "id": "cost/mod.rs",
+          "path": "src-tauri/src/cost/mod.rs",
+          "type": "module",
+          "purpose": "Cost module re-exports",
+          "exports": ["CostTracker"]
+        },
+        {
+          "id": "cost/tracker.rs",
+          "path": "src-tauri/src/cost/tracker.rs",
+          "type": "utility",
+          "purpose": "Token usage and cost tracking",
+          "exports": ["CostTracker"],
+          "methods": ["calculate", "get_today", "add_usage"],
+          "model_pricing": {
+            "claude_sonnet_4": { "input": "$3/mTok", "output": "$15/mTok" },
+            "claude_opus_4": { "input": "$15/mTok", "output": "$75/mTok" },
+            "gpt_4": { "input": "$30/mTok", "output": "$60/mTok" }
+          },
+          "connections": ["AppState", "get_cost_today command"]
+        }
+      ]
+    },
+    "frontend": {
+      "core": [
+        {
+          "id": "App.tsx",
+          "path": "src/App.tsx",
+          "type": "root_component",
+          "purpose": "Root React component - initializes stores and renders main layout",
+          "initialization_flow": [
+            "Load settings from backend",
+            "Load session list",
+            "Load default system prompt from Rust"
+          ],
+          "uses": ["useSettingsStore", "useSessionStore", "useCostStore"],
+          "renders": ["Sidebar", "ChatTab", "SettingsTab", "StatusBar"]
+        },
+        {
+          "id": "main.tsx",
+          "path": "src/main.tsx",
+          "type": "entry_point",
+          "purpose": "React application entry point",
+          "renders": ["App.tsx"]
+        }
+      ],
+      "stores": [
+        {
+          "id": "stores/agentStore.ts",
+          "path": "src/stores/agentStore.ts",
+          "type": "state_management",
+          "purpose": "Agent message state and streaming management",
+          "exports": ["useAgentStore"],
+          "state_fields": [
+            "messages: ChatMessage[]",
+            "isStreaming: boolean",
+            "streamingText: string",
+            "pendingPermission: PermissionRequest | null",
+            "sessionId: string | null",
+            "workingDir: string"
+          ],
+          "actions": [
+            "setSessionId",
+            "setWorkingDir",
+            "addUserMessage",
+            "startStreaming",
+            "stopStreaming",
+            "setMessages",
+            "clearMessages",
+            "setupListeners"
+          ],
+          "event_listeners": [
+            "agent:token",
+            "agent:tool-start",
+            "agent:tool-end",
+            "agent:permission-request",
+            "agent:done",
+            "agent:error"
+          ],
+          "connections": ["Chat.tsx", "MessageBubble.tsx", "ToolCallDisplay.tsx"]
+        },
+        {
+          "id": "stores/sessionStore.ts",
+          "path": "src/stores/sessionStore.ts",
+          "type": "state_management",
+          "purpose": "Session list and active session management",
+          "exports": ["useSessionStore"],
+          "state_fields": [
+            "sessions: Session[]",
+            "activeSession: Session | null",
+            "activeSessionId: string | null",
+            "isLoading: boolean"
+          ],
+          "actions": [
+            "loadSessions",
+            "createSession",
+            "switchSession",
+            "deleteSession",
+            "renameSession",
+            "setActive"
+          ],
+          "tauri_commands": [
+            "list_sessions",
+            "create_session",
+            "delete_session",
+            "get_session_messages",
+            "update_session_title"
+          ],
+          "connections": ["SessionBar.tsx", "Chat.tsx"]
+        },
+        {
+          "id": "stores/settingsStore.ts",
+          "path": "src/stores/settingsStore.ts",
+          "type": "state_management",
+          "purpose": "Provider configuration and system prompt management",
+          "exports": ["useSettingsStore"],
+          "state_fields": [
+            "providers: Provider[]",
+            "activeProvider: string | null",
+            "activeModel: string | null",
+            "systemPrompt: string | null",
+            "defaultSystemPrompt: string",
+            "isLoadingProviders: boolean"
+          ],
+          "actions": [
+            "loadProviders",
+            "setActiveProvider",
+            "setSystemPrompt",
+            "loadDefaultSystemPrompt",
+            "resetSystemPrompt"
+          ],
+          "tauri_commands": [
+            "list_providers",
+            "set_active_provider",
+            "get_system_prompt",
+            "set_system_prompt",
+            "get_default_system_prompt",
+            "vault_get",
+            "vault_set"
+          ],
+          "connections": ["Settings.tsx", "StatusBar.tsx"]
+        },
+        {
+          "id": "stores/costStore.ts",
+          "path": "src/stores/costStore.ts",
+          "type": "state_management",
+          "purpose": "Token usage and cost tracking",
+          "exports": ["useCostStore"],
+          "state_fields": [
+            "costTodayUsd: number",
+            "tokensInToday: number",
+            "tokensOutToday: number"
+          ],
+          "actions": ["loadFromBackend", "addCost"],
+          "connections": ["StatusBar.tsx", "agent:done event"]
+        }
+      ],
+      "tabs": [
+        {
+          "id": "tabs/Chat.tsx",
+          "path": "src/tabs/Chat.tsx",
+          "type": "view",
+          "purpose": "Main chat interface with streaming and tool display",
+          "key_functions": [
+            "handleSend() - Send message to agent",
+            "handleCancel() - Cancel running agent",
+            "ensureSession() - Create session if needed"
+          ],
+          "layout": [
+            "Left: SessionBar (200px)",
+            "Center: Message list",
+            "Bottom: Input area"
+          ],
+          "uses": ["useAgentStore", "useSessionStore", "useSettingsStore", "useCostStore"],
+          "tauri_commands": ["send_message", "cancel_agent"],
+          "renders": ["MessageBubble", "PermissionDialog", "SessionBar"]
+        },
+        {
+          "id": "tabs/Settings.tsx",
+          "path": "src/tabs/Settings.tsx",
+          "type": "view",
+          "purpose": "Provider configuration and system prompt editing",
+          "features": [
+            "Provider list with connection testing",
+            "API key input (masked)",
+            "Model selection dropdown",
+            "System prompt editor with save/reset"
+          ],
+          "uses": ["useSettingsStore"]
+        }
+      ],
+      "components": [
+        {
+          "id": "components/layout/StatusBar.tsx",
+          "path": "src/components/layout/StatusBar.tsx",
+          "type": "ui_component",
+          "purpose": "Bottom status bar showing active model and cost",
+          "displays": [
+            "activeProvider/activeModel",
+            "costTodayUsd",
+            "tokensInToday / tokensOutToday"
+          ],
+          "uses": ["useCostStore", "useSettingsStore"]
+        },
+        {
+          "id": "components/chat/MessageBubble.tsx",
+          "path": "src/components/chat/MessageBubble.tsx",
+          "type": "ui_component",
+          "purpose": "Renders individual chat messages with markdown and tool calls",
+          "features": [
+            "ReactMarkdown with remark-gfm",
+            "Syntax highlighting for code",
+            "User/assistant message styling",
+            "Tool call blocks via ToolCallDisplay"
+          ],
+          "dependencies": ["react-markdown", "remark-gfm"],
+          "renders": ["ToolCallDisplay"]
+        },
+        {
+          "id": "components/chat/ToolCallDisplay.tsx",
+          "path": "src/components/chat/ToolCallDisplay.tsx",
+          "type": "ui_component",
+          "purpose": "Renders tool call blocks with context-specific display",
+          "supported_tools": [
+            "read_file → FileContentDisplay",
+            "bash → BashOutputDisplay",
+            "grep → GrepResultsDisplay",
+            "glob → GlobResultsDisplay",
+            "list_directory → DirectoryListingDisplay"
+          ],
+          "uses": ["toolOutputParser.ts"]
+        },
+        {
+          "id": "components/chat/SessionBar.tsx",
+          "path": "src/components/chat/SessionBar.tsx",
+          "type": "ui_component",
+          "purpose": "Left sidebar showing chat sessions",
+          "features": [
+            "Session list with title, timestamp, message count",
+            "New Session button",
+            "Active session highlighting",
+            "Click to switch sessions",
+            "Delete and rename actions"
+          ],
+          "uses": ["useSessionStore"]
+        },
+        {
+          "id": "components/chat/PermissionDialog.tsx",
+          "path": "src/components/chat/PermissionDialog.tsx",
+          "type": "ui_component",
+          "purpose": "Modal for tool execution approval",
+          "features": [
+            "Shows tool name and input",
+            "Approve once / Approve always / Deny options"
+          ],
+          "uses": ["useAgentStore"],
+          "tauri_commands": ["grant_permission", "deny_permission"]
+        }
+      ],
+      "utils": [
+        {
+          "id": "utils/toolOutputParser.ts",
+          "path": "src/utils/toolOutputParser.ts",
+          "type": "utility",
+          "purpose": "Parse tool output strings into structured data for display",
+          "exports": [
+            "GrepOutput", "GrepFileResult", "GrepMatch",
+            "GlobOutput", "GlobFileEntry",
+            "BashOutput",
+            "FileContent",
+            "ToolOutputType"
+          ],
+          "functions": [
+            "parseToolOutput(toolName, output)",
+            "detectLanguageFromPath(path)",
+            "formatFileSize(bytes)"
+          ],
+          "connections": ["ToolCallDisplay.tsx"]
+        }
+      ]
+    }
+  },
+  "edges": {
+    "backend_dependencies": [
+      { "from": "lib.rs", "to": "commands::agent_commands", "type": "uses" },
+      { "from": "lib.rs", "to": "commands::session_commands", "type": "uses" },
+      { "from": "lib.rs", "to": "commands::settings_commands", "type": "uses" },
+      { "from": "lib.rs", "to": "commands::vault_commands", "type": "uses" },
+      { "from": "lib.rs", "to": "state::AppState", "type": "manages" },
+      { "from": "lib.rs", "to": "logging", "type": "uses" },
+      { "from": "main.rs", "to": "logging", "type": "uses" },
+      { "from": "main.rs", "to": "autodev_lib", "type": "calls" },
+      { "from": "events.rs", "to": "agent::engine", "type": "emits_to" },
+      { "from": "events.rs", "to": "frontend_stores", "type": "consumed_by" },
+      { "from": "agent::engine", "to": "provider::traits", "type": "uses" },
+      { "from": "agent::engine", "to": "agent::tool_executor", "type": "uses" },
+      { "from": "agent::engine", "to": "agent::context", "type": "uses" },
+      { "from": "agent::engine", "to": "state::AppState", "type": "uses" },
+      { "from": "agent::engine", "to": "events", "type": "emits" },
+      { "from": "agent::tool_executor", "to": "agent::tool_trait", "type": "uses" },
+      { "from": "agent::tool_executor", "to": "agent::permission", "type": "uses" },
+      { "from": "agent::tool_executor", "to": "events", "type": "emits" },
+      { "from": "agent::tool_registry", "to": "agent::tool_trait", "type": "contains" },
+      { "from": "agent::tool_registry", "to": "builtin_tools::register_builtin_tools", "type": "populated_by" },
+      { "from": "builtin_tools/mod.rs", "to": "builtin_tools/bash.rs", "type": "registers" },
+      { "from": "builtin_tools/mod.rs", "to": "builtin_tools/read_file.rs", "type": "registers" },
+      { "from": "builtin_tools/mod.rs", "to": "builtin_tools/write_file.rs", "type": "registers" },
+      { "from": "builtin_tools/mod.rs", "to": "builtin_tools/edit_file.rs", "type": "registers" },
+      { "from": "builtin_tools/mod.rs", "to": "builtin_tools/list_directory.rs", "type": "registers" },
+      { "from": "builtin_tools/mod.rs", "to": "builtin_tools/grep.rs", "type": "registers" },
+      { "from": "builtin_tools/mod.rs", "to": "builtin_tools/glob.rs", "type": "registers" },
+      { "from": "builtin_tools/*", "to": "agent::tool_trait", "type": "implements" },
+      { "from": "commands::agent_commands", "to": "agent::engine", "type": "uses" },
+      { "from": "commands::agent_commands", "to": "state::AppState", "type": "uses" },
+      { "from": "commands::session_commands", "to": "session::manager", "type": "uses" },
+      { "from": "commands::settings_commands", "to": "state::AppState", "type": "uses" },
+      { "from": "commands::settings_commands", "to": "agent::context", "type": "uses" },
+      { "from": "commands::vault_commands", "to": "vault::keychain", "type": "uses" },
+      { "from": "session::manager", "to": "session::storage", "type": "uses" },
+      { "from": "session::storage", "to": "session::types", "type": "uses" },
+      { "from": "provider::anthropic", "to": "provider::traits", "type": "implements" },
+      { "from": "provider::openai", "to": "provider::traits", "type": "implements" },
+      { "from": "provider::google", "to": "provider::traits", "type": "implements" },
+      { "from": "provider::*", "to": "provider::types", "type": "uses" },
+      { "from": "provider::*", "to": "provider::streaming", "type": "uses" },
+      { "from": "state::app_state", "to": "cost::tracker", "type": "uses" },
+      { "from": "errors.rs", "to": "all_modules", "type": "used_by" }
+    ],
+    "frontend_dependencies": [
+      { "from": "App.tsx", "to": "stores/settingsStore", "type": "uses" },
+      { "from": "App.tsx", "to": "stores/sessionStore", "type": "uses" },
+      { "from": "App.tsx", "to": "stores/costStore", "type": "uses" },
+      { "from": "App.tsx", "to": "tabs/Chat.tsx", "type": "renders" },
+      { "from": "App.tsx", "to": "tabs/Settings.tsx", "type": "renders" },
+      { "from": "App.tsx", "to": "components/layout/StatusBar.tsx", "type": "renders" },
+      { "from": "main.tsx", "to": "App.tsx", "type": "renders" },
+      { "from": "stores/agentStore", "to": "events.rs", "type": "listens_to" },
+      { "from": "stores/sessionStore", "to": "commands::session_commands", "type": "calls" },
+      { "from": "stores/settingsStore", "to": "commands::settings_commands", "type": "calls" },
+      { "from": "stores/settingsStore", "to": "commands::vault_commands", "type": "calls" },
+      { "from": "stores/costStore", "to": "events.rs", "type": "listens_to" },
+      { "from": "tabs/Chat.tsx", "to": "stores/agentStore", "type": "uses" },
+      { "from": "tabs/Chat.tsx", "to": "stores/sessionStore", "type": "uses" },
+      { "from": "tabs/Chat.tsx", "to": "stores/settingsStore", "type": "uses" },
+      { "from": "tabs/Chat.tsx", "to": "stores/costStore", "type": "uses" },
+      { "from": "tabs/Chat.tsx", "to": "commands::agent_commands", "type": "calls" },
+      { "from": "tabs/Chat.tsx", "to": "components/chat/MessageBubble.tsx", "type": "renders" },
+      { "from": "tabs/Chat.tsx", "to": "components/chat/SessionBar.tsx", "type": "renders" },
+      { "from": "tabs/Chat.tsx", "to": "components/chat/PermissionDialog.tsx", "type": "renders" },
+      { "from": "tabs/Settings.tsx", "to": "stores/settingsStore", "type": "uses" },
+      { "from": "components/layout/StatusBar.tsx", "to": "stores/costStore", "type": "uses" },
+      { "from": "components/layout/StatusBar.tsx", "to": "stores/settingsStore", "type": "uses" },
+      { "from": "components/chat/MessageBubble.tsx", "to": "stores/agentStore", "type": "uses" },
+      { "from": "components/chat/MessageBubble.tsx", "to": "components/chat/ToolCallDisplay.tsx", "type": "renders" },
+      { "from": "components/chat/ToolCallDisplay.tsx", "to": "utils/toolOutputParser.ts", "type": "uses" },
+      { "from": "components/chat/SessionBar.tsx", "to": "stores/sessionStore", "type": "uses" },
+      { "from": "components/chat/PermissionDialog.tsx", "to": "stores/agentStore", "type": "uses" },
+      { "from": "components/chat/PermissionDialog.tsx", "to": "commands::agent_commands", "type": "calls" }
+    ],
+    "cross_boundary": [
+      { "from": "stores/agentStore", "to": "events.rs", "type": "event_listener", "direction": "backend_to_frontend" },
+      { "from": "stores/costStore", "to": "events.rs", "type": "event_listener", "direction": "backend_to_frontend" },
+      { "from": "stores/sessionStore", "to": "commands::session_commands", "type": "rpc_call", "direction": "frontend_to_backend" },
+      { "from": "stores/settingsStore", "to": "commands::settings_commands", "type": "rpc_call", "direction": "frontend_to_backend" },
+      { "from": "tabs/Chat.tsx", "to": "commands::agent_commands", "type": "rpc_call", "direction": "frontend_to_backend" },
+      { "from": "components/chat/PermissionDialog.tsx", "to": "commands::agent_commands", "type": "rpc_call", "direction": "frontend_to_backend" }
+    ]
+  },
+  "architecture_patterns": {
+    "event_driven": {
+      "description": "Frontend and backend communicate via Tauri events",
+      "events": [
+        { "name": "agent:token", "direction": "backend_to_frontend", "purpose": "Streaming LLM tokens" },
+        { "name": "agent:tool-start", "direction": "backend_to_frontend", "purpose": "Tool execution started" },
+        { "name": "agent:tool-end", "direction": "backend_to_frontend", "purpose": "Tool execution completed" },
+        { "name": "agent:permission-request", "direction": "backend_to_frontend", "purpose": "User approval needed" },
+        { "name": "agent:done", "direction": "backend_to_frontend", "purpose": "Agent response complete" },
+        { "name": "agent:error", "direction": "backend_to_frontend", "purpose": "Error occurred" }
+      ]
+    },
+    "tool_system": {
+      "description": "Tools follow a standardized interface",
+      "trait": "Tool",
+      "methods": ["name", "description", "input_schema", "is_read_only", "requires_permission", "execute"],
+      "concurrency": "Read-only tools run concurrently, write tools run serially"
+    },
+    "state_management": {
+      "description": "Frontend state organized into focused Zustand stores",
+      "stores": [
+        { "name": "useAgentStore", "responsibility": "Messages, streaming state, tool calls" },
+        { "name": "useSessionStore", "responsibility": "Session list, active session management" },
+        { "name": "useSettingsStore", "responsibility": "Providers, models, system prompts" },
+        { "name": "useCostStore", "responsibility": "Token usage and cost tracking" }
+      ]
+    },
+    "dual_mode": {
+      "description": "PA mode runs natively in Rust, Worker mode delegates to Python sidecar",
+      "pa_mode": { "path": "Rust-native", "latency": "100-500ms lower", "offline": "Works with Ollama" },
+      "worker_mode": { "path": "core-orchestrator (Python)", "features": "21 FSMs, semantic memory, A2A" }
+    }
+  },
+  "file_counts": {
+    "total": 67,
+    "backend": {
+      "total": 46,
+      "by_category": {
+        "core": 5,
+        "agent": 9,
+        "builtin_tools": 8,
+        "commands": 5,
+        "provider": 7,
+        "session": 4,
+        "state": 2,
+        "vault": 2,
+        "cost": 2,
+        "tests": 2
+      }
+    },
+    "frontend": {
+      "total": 21,
+      "by_category": {
+        "core": 3,
+        "stores": 4,
+        "tabs": 3,
+        "components": 10,
+        "utils": 1
+      }
+    }
+  }
+}
