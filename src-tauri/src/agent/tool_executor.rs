@@ -106,7 +106,7 @@ impl ToolExecutor {
     }
 
     async fn request_permission(
-        &self,
+        &mut self,
         call_id:  &str,
         tool:     &Arc<dyn Tool>,
         input:    &serde_json::Value,
@@ -127,8 +127,13 @@ impl ToolExecutor {
 
         // Wait for the user to respond (frontend sends respond_to_permission)
         match rx.await {
-            Ok(PermissionResponse::Allow)      => Ok(true),
-            Ok(PermissionResponse::AllowAlways) => Ok(true),
+            Ok(PermissionResponse::Allow) => Ok(true),
+            Ok(PermissionResponse::AllowAlways) => {
+                // Add this tool to the always-allow set for this session
+                self.always_allow.insert(tool.name().to_string());
+                debug!("Tool '{}' added to always-allow for session {}", tool.name(), self.session_id);
+                Ok(true)
+            }
             Ok(PermissionResponse::Deny) | Err(_) => Ok(false),
         }
     }
