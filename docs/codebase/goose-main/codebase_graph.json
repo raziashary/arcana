@@ -1,0 +1,804 @@
+{
+  "metadata": {
+    "project": "goose-main",
+    "type": "Rust CLI Application (Workspace)",
+    "build_tool": "Cargo",
+    "generated_at": "2025-01-15",
+    "total_crates": 9,
+    "total_source_files": 487,
+    "workspace_root": "c:\\AIRS Foundry\\autodev\\goose-main"
+  },
+  "nodes": {
+    "workspace_crates": {
+      "goose": {
+        "name": "goose",
+        "path": "crates/goose",
+        "file_count": 287,
+        "type": "core_library",
+        "purpose": "Core library with agent, providers, and MCP integration",
+        "dependencies": ["goose-mcp"],
+        "key_modules": [
+          "agents",
+          "providers",
+          "config",
+          "mcp_utils",
+          "security",
+          "conversation",
+          "session"
+        ],
+        "largest_files": [
+          {
+            "path": "src/agents/agent.rs",
+            "size_bytes": 103269,
+            "purpose": "Main agent implementation"
+          },
+          {
+            "path": "src/config/base.rs",
+            "size_bytes": 69901,
+            "purpose": "Configuration system"
+          },
+          {
+            "path": "src/providers/codex.rs",
+            "size_bytes": 48247,
+            "purpose": "OpenAI Codex provider"
+          },
+          {
+            "path": "src/providers/claude_code.rs",
+            "size_bytes": 57402,
+            "purpose": "Claude Code provider"
+          },
+          {
+            "path": "src/providers/chatgpt_codex.rs",
+            "size_bytes": 43332,
+            "purpose": "ChatGPT Codex provider"
+          },
+          {
+            "path": "src/agents/extension_manager.rs",
+            "size_bytes": 83468,
+            "purpose": "Extension/tool management"
+          },
+          {
+            "path": "src/agents/reply_parts.rs",
+            "size_bytes": 29526,
+            "purpose": "Reply handling"
+          },
+          {
+            "path": "src/providers/openai.rs",
+            "size_bytes": 29731,
+            "purpose": "OpenAI provider"
+          }
+        ]
+      },
+      "goose-cli": {
+        "name": "goose-cli",
+        "path": "crates/goose-cli",
+        "file_count": 58,
+        "type": "cli_application",
+        "purpose": "Command-line interface for Goose",
+        "dependencies": ["goose"],
+        "key_modules": [
+          "cli",
+          "commands",
+          "session",
+          "recipes",
+          "logging"
+        ],
+        "largest_files": [
+          {
+            "path": "src/cli.rs",
+            "size_bytes": 63702,
+            "purpose": "CLI implementation with commands"
+          },
+          {
+            "path": "src/logging.rs",
+            "size_bytes": 7278,
+            "purpose": "Logging configuration"
+          },
+          {
+            "path": "src/session/mod.rs",
+            "size_bytes": 12000,
+            "purpose": "Session management for CLI"
+          }
+        ]
+      },
+      "goose-mcp": {
+        "name": "goose-mcp",
+        "path": "crates/goose-mcp",
+        "file_count": 40,
+        "type": "protocol_library",
+        "purpose": "Model Context Protocol implementation",
+        "dependencies": [],
+        "external_deps": ["rmcp"],
+        "key_modules": [
+          "client",
+          "server",
+          "transport",
+          "types"
+        ]
+      },
+      "goose-server": {
+        "name": "goose-server",
+        "path": "crates/goose-server",
+        "file_count": 46,
+        "type": "http_server",
+        "purpose": "HTTP API server for Goose",
+        "dependencies": ["goose", "goose-mcp"],
+        "key_modules": [
+          "routes",
+          "handlers",
+          "middleware",
+          "state"
+        ]
+      },
+      "goose-acp": {
+        "name": "goose-acp",
+        "path": "crates/goose-acp",
+        "file_count": 36,
+        "type": "protocol_library",
+        "purpose": "Agent Communication Protocol",
+        "dependencies": [],
+        "key_modules": [
+          "protocol",
+          "messages",
+          "transport"
+        ]
+      },
+      "goose-acp-macros": {
+        "name": "goose-acp-macros",
+        "path": "crates/goose-acp-macros",
+        "file_count": 2,
+        "type": "proc_macro",
+        "purpose": "Procedural macros for ACP",
+        "dependencies": []
+      },
+      "goose-sdk": {
+        "name": "goose-sdk",
+        "path": "crates/goose-sdk",
+        "file_count": 4,
+        "type": "sdk",
+        "purpose": "SDK for embedding Goose",
+        "dependencies": ["goose"]
+      },
+      "goose-test": {
+        "name": "goose-test",
+        "path": "crates/goose-test",
+        "file_count": 7,
+        "type": "test_crate",
+        "purpose": "Test utilities and integration tests",
+        "dependencies": ["goose", "goose-test-support"]
+      },
+      "goose-test-support": {
+        "name": "goose-test-support",
+        "path": "crates/goose-test-support",
+        "file_count": 7,
+        "type": "test_support",
+        "purpose": "Test support utilities",
+        "dependencies": ["goose"]
+      }
+    },
+    "core_modules": {
+      "agents": {
+        "directory": "crates/goose/src/agents",
+        "files_count": 25,
+        "purpose": "Agent loop and tool orchestration",
+        "key_files": [
+          {
+            "id": "agent.rs",
+            "path": "crates/goose/src/agents/agent.rs",
+            "size_bytes": 103269,
+            "type": "core",
+            "exports": ["Agent", "AgentConfig", "ReplyContext"],
+            "purpose": "Main agent implementation with reply loop"
+          },
+          {
+            "id": "extension_manager.rs",
+            "path": "crates/goose/src/agents/extension_manager.rs",
+            "size_bytes": 83468,
+            "type": "core",
+            "exports": ["ExtensionManager", "ExtensionClient"],
+            "purpose": "MCP extension management and tool execution"
+          },
+          {
+            "id": "mcp_client.rs",
+            "path": "crates/goose/src/agents/mcp_client.rs",
+            "size_bytes": 33828,
+            "type": "mcp",
+            "exports": ["MCPClient"],
+            "purpose": "MCP client wrapper for rmcp"
+          },
+          {
+            "id": "extension.rs",
+            "path": "crates/goose/src/agents/extension.rs",
+            "size_bytes": 28417,
+            "type": "types",
+            "exports": ["ExtensionConfig", "TransportType", "ExtensionType"],
+            "purpose": "Extension configuration types"
+          },
+          {
+            "id": "prompt_manager.rs",
+            "path": "crates/goose/src/agents/prompt_manager.rs",
+            "size_bytes": 15508,
+            "type": "support",
+            "exports": ["PromptManager"],
+            "purpose": "System prompt management"
+          },
+          {
+            "id": "reply_parts.rs",
+            "path": "crates/goose/src/agents/reply_parts.rs",
+            "size_bytes": 29526,
+            "type": "support",
+            "exports": ["ReplyParts"],
+            "purpose": "Reply message handling"
+          },
+          {
+            "id": "retry.rs",
+            "path": "crates/goose/src/agents/retry.rs",
+            "size_bytes": 16699,
+            "type": "support",
+            "exports": ["RetryManager", "RetryConfig"],
+            "purpose": "Retry logic for agent operations"
+          },
+          {
+            "id": "tool_execution.rs",
+            "path": "crates/goose/src/agents/tool_execution.rs",
+            "size_bytes": 8117,
+            "type": "support",
+            "exports": ["ToolCallContext"],
+            "purpose": "Tool call execution helpers"
+          }
+        ]
+      },
+      "providers": {
+        "directory": "crates/goose/src/providers",
+        "files_count": 50,
+        "purpose": "LLM provider implementations (50+ providers)",
+        "key_files": [
+          {
+            "id": "base.rs",
+            "path": "crates/goose/src/providers/base.rs",
+            "size_bytes": 38483,
+            "type": "core",
+            "exports": ["Provider", "ProviderResponse", "ProviderStreamChunk", "ModelInfo"],
+            "purpose": "Provider trait and types"
+          },
+          {
+            "id": "provider_registry.rs",
+            "path": "crates/goose/src/providers/provider_registry.rs",
+            "size_bytes": 6590,
+            "type": "registry",
+            "exports": ["ProviderRegistry"],
+            "purpose": "Provider registration and lookup"
+          },
+          {
+            "id": "codex.rs",
+            "path": "crates/goose/src/providers/codex.rs",
+            "size_bytes": 48247,
+            "type": "provider",
+            "exports": ["CodexProvider"],
+            "purpose": "OpenAI Codex provider"
+          },
+          {
+            "id": "chatgpt_codex.rs",
+            "path": "crates/goose/src/providers/chatgpt_codex.rs",
+            "size_bytes": 43332,
+            "type": "provider",
+            "exports": ["ChatGPTCodexProvider"],
+            "purpose": "ChatGPT Codex provider"
+          },
+          {
+            "id": "claude_code.rs",
+            "path": "crates/goose/src/providers/claude_code.rs",
+            "size_bytes": 57402,
+            "type": "provider",
+            "exports": ["ClaudeCodeProvider"],
+            "purpose": "Claude Code provider"
+          },
+          {
+            "id": "openai.rs",
+            "path": "crates/goose/src/providers/openai.rs",
+            "size_bytes": 29731,
+            "type": "provider",
+            "exports": ["OpenAiProvider"],
+            "purpose": "OpenAI GPT provider"
+          },
+          {
+            "id": "anthropic.rs",
+            "path": "crates/goose/src/providers/anthropic.rs",
+            "size_bytes": 10674,
+            "type": "provider",
+            "exports": ["AnthropicProvider"],
+            "purpose": "Anthropic Claude provider"
+          },
+          {
+            "id": "databricks.rs",
+            "path": "crates/goose/src/providers/databricks.rs",
+            "size_bytes": 19085,
+            "type": "provider",
+            "exports": ["DatabricksProvider"],
+            "purpose": "Databricks provider"
+          },
+          {
+            "id": "gcpvertexai.rs",
+            "path": "crates/goose/src/providers/gcpvertexai.rs",
+            "size_bytes": 27792,
+            "type": "provider",
+            "exports": ["VertexAIProvider"],
+            "purpose": "Google Cloud Vertex AI provider"
+          },
+          {
+            "id": "errors.rs",
+            "path": "crates/goose/src/providers/errors.rs",
+            "size_bytes": 5266,
+            "type": "types",
+            "exports": ["ProviderError"],
+            "purpose": "Provider error types"
+          },
+          {
+            "id": "retry.rs",
+            "path": "crates/goose/src/providers/retry.rs",
+            "size_bytes": 9685,
+            "type": "support",
+            "exports": ["retry_operation", "RetryConfig"],
+            "purpose": "Provider retry logic"
+          },
+          {
+            "id": "toolshim.rs",
+            "path": "crates/goose/src/providers/toolshim.rs",
+            "size_bytes": 16984,
+            "type": "support",
+            "exports": ["ToolShim"],
+            "purpose": "Tool compatibility shim for non-tool providers"
+          },
+          {
+            "id": "oauth.rs",
+            "path": "crates/goose/src/providers/oauth.rs",
+            "size_bytes": 21212,
+            "type": "auth",
+            "exports": ["OAuthHandler"],
+            "purpose": "OAuth authentication for providers"
+          }
+        ]
+      },
+      "config": {
+        "directory": "crates/goose/src/config",
+        "files_count": 12,
+        "purpose": "Configuration management",
+        "key_files": [
+          {
+            "id": "base.rs",
+            "path": "crates/goose/src/config/base.rs",
+            "size_bytes": 69901,
+            "type": "core",
+            "exports": ["Config", "ConfigError", "ConfigValue"],
+            "purpose": "Main configuration system"
+          },
+          {
+            "id": "permission.rs",
+            "path": "crates/goose/src/config/permission.rs",
+            "size_bytes": 15252,
+            "type": "security",
+            "exports": ["PermissionManager", "PermissionSettings"],
+            "purpose": "Permission configuration"
+          },
+          {
+            "id": "extensions.rs",
+            "path": "crates/goose/src/config/extensions.rs",
+            "size_bytes": 6278,
+            "type": "support",
+            "exports": ["ExtensionEntry"],
+            "purpose": "Extension configuration helpers"
+          },
+          {
+            "id": "declarative_providers.rs",
+            "path": "crates/goose/src/config/declarative_providers.rs",
+            "size_bytes": 21585,
+            "type": "support",
+            "exports": ["DeclarativeProviderConfig"],
+            "purpose": "Declarative provider configuration"
+          }
+        ]
+      },
+      "security": {
+        "directory": "crates/goose/src/security",
+        "files_count": 8,
+        "purpose": "Security inspectors and checks",
+        "key_files": [
+          {
+            "id": "security_inspector.rs",
+            "path": "crates/goose/src/security/security_inspector.rs",
+            "type": "trait",
+            "exports": ["SecurityInspector"],
+            "purpose": "Security inspector trait"
+          },
+          {
+            "id": "adversary_inspector.rs",
+            "path": "crates/goose/src/security/adversary_inspector.rs",
+            "type": "inspector",
+            "exports": ["AdversaryInspector"],
+            "purpose": "Detects malicious requests"
+          },
+          {
+            "id": "egress_inspector.rs",
+            "path": "crates/goose/src/security/egress_inspector.rs",
+            "type": "inspector",
+            "exports": ["EgressInspector"],
+            "purpose": "Network egress checking"
+          }
+        ]
+      },
+      "conversation": {
+        "directory": "crates/goose/src/conversation",
+        "files_count": 6,
+        "purpose": "Message and conversation handling",
+        "key_files": [
+          {
+            "id": "message.rs",
+            "path": "crates/goose/src/conversation/message.rs",
+            "type": "core",
+            "exports": ["Message", "MessageContent", "ToolRequest"],
+            "purpose": "Message types"
+          },
+          {
+            "id": "mod.rs",
+            "path": "crates/goose/src/conversation/mod.rs",
+            "type": "core",
+            "exports": ["Conversation"],
+            "purpose": "Conversation management"
+          }
+        ]
+      },
+      "session": {
+        "directory": "crates/goose/src/session",
+        "files_count": 5,
+        "purpose": "Session management",
+        "key_files": [
+          {
+            "id": "mod.rs",
+            "path": "crates/goose/src/session/mod.rs",
+            "type": "core",
+            "exports": ["Session", "SessionManager"],
+            "purpose": "Session management"
+          },
+          {
+            "id": "extension_data.rs",
+            "path": "crates/goose/src/session/extension_data.rs",
+            "type": "support",
+            "exports": ["EnabledExtensionsState"],
+            "purpose": "Extension state in sessions"
+          }
+        ]
+      }
+    },
+    "cli_modules": {
+      "cli": {
+        "directory": "crates/goose-cli/src",
+        "files_count": 58,
+        "purpose": "Command-line interface",
+        "key_files": [
+          {
+            "id": "cli.rs",
+            "path": "crates/goose-cli/src/cli.rs",
+            "size_bytes": 63702,
+            "type": "core",
+            "exports": ["Cli", "Commands"],
+            "purpose": "CLI command definitions and handling"
+          },
+          {
+            "id": "main.rs",
+            "path": "crates/goose-cli/src/main.rs",
+            "size_bytes": 478,
+            "type": "entry",
+            "exports": ["main"],
+            "purpose": "CLI entry point"
+          },
+          {
+            "id": "lib.rs",
+            "path": "crates/goose-cli/src/lib.rs",
+            "size_bytes": 525,
+            "type": "lib",
+            "exports": [],
+            "purpose": "CLI library exports"
+          },
+          {
+            "id": "logging.rs",
+            "path": "crates/goose-cli/src/logging.rs",
+            "size_bytes": 7278,
+            "type": "support",
+            "exports": ["init_logging"],
+            "purpose": "Logging initialization"
+          },
+          {
+            "id": "project_tracker.rs",
+            "path": "crates/goose-cli/src/project_tracker.rs",
+            "size_bytes": 4858,
+            "type": "support",
+            "exports": ["ProjectTracker"],
+            "purpose": "Project tracking"
+          }
+        ]
+      },
+      "commands": {
+        "directory": "crates/goose-cli/src/commands",
+        "files_count": 11,
+        "purpose": "CLI command implementations"
+      },
+      "session_cli": {
+        "directory": "crates/goose-cli/src/session",
+        "files_count": 12,
+        "purpose": "CLI session management"
+      },
+      "recipes": {
+        "directory": "crates/goose-cli/src/recipes",
+        "files_count": 7,
+        "purpose": "Recipe execution for CLI"
+      }
+    }
+  },
+  "edges": {
+    "crate_dependencies": [
+      {
+        "from": "goose-cli",
+        "to": "goose",
+        "type": "depends_on",
+        "relationship": "cli_uses_core"
+      },
+      {
+        "from": "goose-server",
+        "to": "goose",
+        "type": "depends_on",
+        "relationship": "server_uses_core"
+      },
+      {
+        "from": "goose-server",
+        "to": "goose-mcp",
+        "type": "depends_on",
+        "relationship": "server_uses_mcp"
+      },
+      {
+        "from": "goose",
+        "to": "goose-mcp",
+        "type": "depends_on",
+        "relationship": "core_uses_mcp"
+      },
+      {
+        "from": "goose-sdk",
+        "to": "goose",
+        "type": "depends_on",
+        "relationship": "sdk_uses_core"
+      },
+      {
+        "from": "goose-test",
+        "to": "goose",
+        "type": "depends_on",
+        "relationship": "tests_core"
+      },
+      {
+        "from": "goose-test",
+        "to": "goose-test-support",
+        "type": "depends_on",
+        "relationship": "tests_use_support"
+      },
+      {
+        "from": "goose-test-support",
+        "to": "goose",
+        "type": "depends_on",
+        "relationship": "support_uses_core"
+      },
+      {
+        "from": "goose-acp",
+        "to": "goose-acp-macros",
+        "type": "depends_on",
+        "relationship": "acp_uses_macros"
+      }
+    ],
+    "module_dependencies": [
+      {
+        "from": "agents/agent.rs",
+        "to": "providers/base.rs",
+        "type": "uses",
+        "relationship": "agent_uses_provider"
+      },
+      {
+        "from": "agents/agent.rs",
+        "to": "agents/extension_manager.rs",
+        "type": "uses",
+        "relationship": "agent_uses_extensions"
+      },
+      {
+        "from": "agents/extension_manager.rs",
+        "to": "agents/mcp_client.rs",
+        "type": "uses",
+        "relationship": "manager_uses_mcp"
+      },
+      {
+        "from": "agents/agent.rs",
+        "to": "security/security_inspector.rs",
+        "type": "uses",
+        "relationship": "agent_uses_security"
+      },
+      {
+        "from": "agents/agent.rs",
+        "to": "config/permission.rs",
+        "type": "uses",
+        "relationship": "agent_uses_permissions"
+      },
+      {
+        "from": "agents/agent.rs",
+        "to": "session/mod.rs",
+        "type": "uses",
+        "relationship": "agent_uses_session"
+      },
+      {
+        "from": "agents/agent.rs",
+        "to": "conversation/message.rs",
+        "type": "uses",
+        "relationship": "agent_uses_messages"
+      },
+      {
+        "from": "providers/base.rs",
+        "to": "conversation/message.rs",
+        "type": "uses",
+        "relationship": "provider_uses_messages"
+      }
+    ]
+  },
+  "architecture_patterns": {
+    "provider_trait": {
+      "description": "Provider trait for LLM abstraction",
+      "trait_name": "Provider",
+      "methods": [
+        "complete() - Non-streaming completion",
+        "stream_complete() - Streaming completion",
+        "supports_tool_shim() - Tool compatibility check"
+      ],
+      "implementations": 50,
+      "file": "crates/goose/src/providers/base.rs"
+    },
+    "extension_manager": {
+      "description": "MCP extension management for tools",
+      "struct_name": "ExtensionManager",
+      "features": [
+        "Dynamic extension loading/unloading",
+        "Tool discovery and caching",
+        "Multi-transport support (stdio, SSE, HTTP)",
+        "Permission-based access control"
+      ],
+      "file": "crates/goose/src/agents/extension_manager.rs"
+    },
+    "agent_loop": {
+      "description": "Core agent reply loop",
+      "entry_point": "Agent::reply()",
+      "flow": [
+        "Prepare reply context",
+        "Get available tools",
+        "Call provider with messages",
+        "Stream responses",
+        "Handle tool requests",
+        "Execute tools",
+        "Return results"
+      ],
+      "file": "crates/goose/src/agents/agent.rs"
+    },
+    "security_inspector": {
+      "description": "Security inspection trait",
+      "trait_name": "SecurityInspector",
+      "implementations": [
+        "AdversaryInspector - Detects malicious requests",
+        "EgressInspector - Network egress checking",
+        "PermissionInspector - Permission validation"
+      ],
+      "file": "crates/goose/src/security/"
+    },
+    "mcp_integration": {
+      "description": "Model Context Protocol integration",
+      "client": "MCPClient (wraps rmcp)",
+      "transports": ["stdio", "SSE", "HTTP"],
+      "features": [
+        "Tool discovery via tools/list",
+        "Tool execution via tools/call",
+        "Resource access",
+        "Prompt retrieval"
+      ],
+      "file": "crates/goose/src/agents/mcp_client.rs"
+    }
+  },
+  "file_statistics": {
+    "by_crate": {
+      "goose": 287,
+      "goose-cli": 58,
+      "goose-server": 46,
+      "goose-mcp": 40,
+      "goose-acp": 36,
+      "goose-acp-macros": 2,
+      "goose-sdk": 4,
+      "goose-test": 7,
+      "goose-test-support": 7,
+      "total": 487
+    },
+    "by_type": {
+      "rust_source": 450,
+      "toml": 9,
+      "test": 28
+    },
+    "largest_files": [
+      {
+        "path": "crates/goose/src/agents/agent.rs",
+        "size_kb": 101,
+        "lines_estimate": 2471
+      },
+      {
+        "path": "crates/goose/src/config/base.rs",
+        "size_kb": 68,
+        "lines_estimate": 1800
+      },
+      {
+        "path": "crates/goose/src/agents/extension_manager.rs",
+        "size_kb": 81,
+        "lines_estimate": 2100
+      },
+      {
+        "path": "crates/goose/src/providers/claude_code.rs",
+        "size_kb": 56,
+        "lines_estimate": 1600
+      },
+      {
+        "path": "crates/goose/src/providers/codex.rs",
+        "size_kb": 47,
+        "lines_estimate": 1400
+      },
+      {
+        "path": "crates/goose/src/providers/chatgpt_codex.rs",
+        "size_kb": 42,
+        "lines_estimate": 1200
+      },
+      {
+        "path": "crates/goose-cli/src/cli.rs",
+        "size_kb": 62,
+        "lines_estimate": 1900
+      },
+      {
+        "path": "crates/goose/src/agents/reply_parts.rs",
+        "size_kb": 29,
+        "lines_estimate": 850
+      },
+      {
+        "path": "crates/goose/src/providers/openai.rs",
+        "size_kb": 29,
+        "lines_estimate": 850
+      },
+      {
+        "path": "crates/goose/src/agents/mcp_client.rs",
+        "size_kb": 33,
+        "lines_estimate": 950
+      }
+    ]
+  },
+  "external_dependencies": {
+    "core": [
+      "rmcp",
+      "tokio",
+      "serde",
+      "serde_json",
+      "async-trait",
+      "reqwest",
+      "clap",
+      "anyhow",
+      "thiserror",
+      "futures",
+      "tracing"
+    ],
+    "auth": [
+      "oauth2",
+      "keyring"
+    ],
+    "server": [
+      "axum",
+      "tower",
+      "utoipa"
+    ],
+    "testing": [
+      "tokio-test",
+      "mockall"
+    ]
+  }
+}
