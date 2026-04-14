@@ -1709,6 +1709,27 @@ Returns structured JSON:
 - [x] `glob` — Glob pattern matching — in `Cargo.toml`
 - [x] `regex` — Pattern matching — in `Cargo.toml`
 
+**Tool Message Architecture (Proper Fix #2):** ✅ **COMPLETED**
+- [x] **Backend — Types Refactored**: `Message` struct now has `tool_name`, `tool_input`, `tool_call_id`, `is_error` fields instead of embedded `tool_calls`/`tool_results` arrays
+- [x] **Backend — Database Schema V2**: `messages` table updated with new columns: `tool_name`, `tool_input`, `tool_call_id`, `is_error`
+- [x] **Backend — `Message::new_tool()`**: Factory method for creating separate tool messages
+- [x] **Backend — `ToolExecutor` persistence**: Added `SessionManager` reference to save tool messages as they execute
+- [x] **Backend — `AgentEngine` wiring**: `with_session_manager()` builder method to pass persistence layer
+- [x] **Backend — Concurrent tool persistence**: Both serial and concurrent (batch) tool execution save to database
+- [x] **Frontend — `MessageRole` extended**: Added `'tool'` as valid role alongside `'user'` and `'assistant'`
+- [x] **Frontend — `ChatMessage` updated**: Supports optional `callId`, `toolName`, `toolInput`, `isError` fields
+- [x] **Frontend — `agentStore` tool-end handler**: Creates separate tool message after tool execution, maintains streaming UI in assistant message
+- [x] **Frontend — `sessionStore` transformation**: Properly converts backend tool messages with role='tool' to frontend format
+- [x] **Frontend — `MessageBubble` refactored**: Added `ToolMessageBubble` component for rendering tool messages as separate chat bubbles
+- [x] **Frontend — Tool messages rendered separately**: Chat stream now shows: Assistant bubble → Tool bubble → Assistant bubble (proper conversation flow)
+- [x] **Data Persistence Verified**: Tool calls now persist across app reloads and display correctly when session is loaded
+
+**Key Architecture Decisions:**
+- Tool messages stored as **separate database rows** (not embedded JSON arrays) — clean relational model
+- `tool_call_id` links tool results back to original LLM tool_use blocks — enables conversation reconstruction
+- **Dual UI approach**: Assistant message shows tool_calls during streaming (real-time feedback), persisted as separate tool messages (clean history)
+- **Separation of concerns**: `ToolExecutor` handles persistence, `AgentEngine` orchestrates, `MessageBubble` renders based on role
+
 ---
 
 ## 10. Phase 2 — Recipes + AutoDev Panel + GitHub
