@@ -1,13 +1,23 @@
 // Conversation compaction — prevents context window overflow.
 // Auto-compacts at 80% of the model's context window.
-// Strategy: summarise middle messages, keep first (system) and last N (recency).
+// Strategy:
+//   1. Keep the first message (context/system instructions)
+//   2. Summarize middle messages using the LLM (async variant)
+//   3. Insert summary as an assistant message
+//   4. Keep the last KEEP_RECENT_MESSAGES for recency
 // Pattern from Goose's check_if_compaction_needed() and Claude Code's context collapse.
 
-use crate::provider::types::RequestMessage;
+use crate::provider::types::{MessageContent, RequestMessage};
 use tracing::info;
 
 const COMPACTION_THRESHOLD: f32 = 0.80;
 const KEEP_RECENT_MESSAGES: usize = 10;
+
+/// Instruction injected before the messages being summarised
+const SUMMARIZE_INSTRUCTION: &str =
+    "Please provide a concise summary of the following conversation so far. \
+     Focus on: key decisions made, files edited, commands run, and current task status. \
+     This summary will replace the conversation history to save context space.";
 
 pub struct CompactionEngine;
 
@@ -30,26 +40,117 @@ impl CompactionEngine {
         (total_chars / 4) as u32
     }
 
-    /// Compact by keeping the first message (usually context) + last N messages.
-    /// Middle messages are dropped — a summary prompt should be inserted at Phase 2.
-    /// Returns the compacted message list.
-    pub fn compact(messages: Vec<RequestMessage>) -> Vec<RequestMessage> {
+    /// Synchronous fallback compact: keeps first + last N messages.
+    /// Used when the async LLM summary path is unavailable or fails.
+    pub fn compact_truncate(messages: Vec<RequestMessage>) -> Vec<RequestMessage> {
         if messages.len() <= KEEP_RECENT_MESSAGES + 1 {
             return messages;
         }
 
         info!(
-            "Compacting conversation: {} messages → {}",
+            "Compacting (truncate): {} → {} messages",
             messages.len(),
-            KEEP_RECENT_MESSAGES + 1
+            KEEP_RECENT_MESSAGES + 2
         );
 
         let mut compacted = Vec::new();
-        // Always keep the first message (may contain important context)
         compacted.push(messages[0].clone());
-        // Keep the most recent messages for continuity
+
+        // Insert a notice in place of dropped messages
+        let dropped = messages.len() - KEEP_RECENT_MESSAGES - 1;
+        compacted.push(RequestMessage {
+            role: "assistant".to_string(),
+            content: vec![MessageContent::Text {
+                text: format!(
+                    "[{dropped} earlier messages were truncated due to context limits. \
+                     Continuing from the most recent {KEEP_RECENT_MESSAGES} messages.]"
+                ),
+            }],
+        });
+
         let start = messages.len().saturating_sub(KEEP_RECENT_MESSAGES);
         compacted.extend_from_slice(&messages[start..]);
         compacted
+    }
+
+    /// Async LLM-based compaction — calls the provider to summarize middle messages.
+    /// Falls back to truncation if the LLM call fails.
+    pub async fn compact_with_summary(
+        messages: Vec<RequestMessage>,
+        provider: &dyn crate::provider::traits::Provider,
+        model: &str,
+    ) -> Vec<RequestMessage> {
+        if messages.len() <= KEEP_RECENT_MESSAGES + 1 {
+            return messages;
+        }
+
+        let total = messages.len();
+        let keep_tail_start = total.saturating_sub(KEEP_RECENT_MESSAGES);
+
+        // Messages to summarize: everything between [0] and the tail
+        let middle: Vec<&RequestMessage> = messages[1..keep_tail_start].iter().collect();
+
+        // Build summarization request
+        let mut summary_conversation = Vec::new();
+        summary_conversation.push(RequestMessage {
+            role: "user".to_string(),
+            content: vec![MessageContent::Text {
+                text: SUMMARIZE_INSTRUCTION.to_string(),
+            }],
+        });
+        for msg in &middle {
+            summary_conversation.push((*msg).clone());
+        }
+        summary_conversation.push(RequestMessage {
+            role: "user".to_string(),
+            content: vec![MessageContent::Text {
+                text: "Please write the summary now.".to_string(),
+            }],
+        });
+
+        let summary_request = crate::provider::types::CompletionRequest {
+            model:       model.to_string(),
+            messages:    summary_conversation,
+            system:      None,
+            tools:       vec![],
+            max_tokens:  1024,
+            temperature: Some(0.3),
+        };
+
+        // Try to get a summary from the LLM
+        let summary_text = match provider.complete(summary_request).await {
+            Ok(response) => {
+                response.content.into_iter().find_map(|block| {
+                    if let MessageContent::Text { text } = block { Some(text) } else { None }
+                }).unwrap_or_else(|| format!("[{} messages summarized — summary unavailable]", middle.len()))
+            }
+            Err(e) => {
+                info!("LLM summary failed ({e}), falling back to truncation");
+                return Self::compact_truncate(messages);
+            }
+        };
+
+        info!(
+            "Compacting (summarized): {} → {} messages + summary",
+            total,
+            KEEP_RECENT_MESSAGES + 2
+        );
+
+        // Reconstruct: first message + summary + tail
+        let mut compacted = Vec::new();
+        compacted.push(messages[0].clone());
+        compacted.push(RequestMessage {
+            role: "assistant".to_string(),
+            content: vec![MessageContent::Text {
+                text: format!("[Summary of earlier conversation]\n\n{summary_text}"),
+            }],
+        });
+        compacted.extend_from_slice(&messages[keep_tail_start..]);
+        compacted
+    }
+
+    /// Legacy alias — synchronous truncation only (used where async is unavailable).
+    pub fn compact(messages: Vec<RequestMessage>) -> Vec<RequestMessage> {
+        Self::compact_truncate(messages)
     }
 }

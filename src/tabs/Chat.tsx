@@ -12,6 +12,7 @@ import { useAgentStore }    from '../stores/agentStore'
 import { useSessionStore }  from '../stores/sessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useCostStore }     from '../stores/costStore'
+import PaModeToggle from '../components/chat/PaModeToggle'
 
 export default function ChatTab() {
   const messages      = useAgentStore(s => s.messages)
@@ -84,6 +85,7 @@ export default function ChatTab() {
       await invoke('send_message', {
         sessionId,
         userMessage: text,
+        paMode: settingsStore.paMode,
       })
     } catch (e) {
       console.error('send_message failed:', e)
@@ -148,6 +150,7 @@ export default function ChatTab() {
             ? `session: ${sessionStore.activeSession.id.slice(0, 8)}…`
             : 'no session'}
         </span>
+        <PaModeToggle />
       </div>
 
       {/* Messages list */}

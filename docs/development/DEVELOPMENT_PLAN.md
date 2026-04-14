@@ -1798,79 +1798,58 @@ Phase 2 remains the **grandiose vision**: PA delegates → Board → Supervisor 
 **RECIPES SYSTEM (Minimal) — For Fleet Instructions:**
 > **Distinction**: Recipes contain instructions for the **Fleet** (Workers, Supervisor, QC). AUTODEV.md contains instructions for the **PA (Razi)**. Two separate systems, two separate UIs.
 
-- [ ] **Backend — Recipe Parser & Engine:**
-  - YAML recipe parser with validation — Parse recipe YAML into Recipe struct
-  - Recipe execution engine (run recipe steps as agent messages) — Core engine
-  - Cron scheduler for recurring recipes — `tokio-cron-scheduler` to poll every 2 min
-- [ ] **Backend — Hardcoded System Recipes:**
-  - Supervisor recipe (`~/.autodev/recipes/supervisor-poll.yaml`):
-    - Polls `~/.autodev/tasks.db` every 2 min for tasks with status='ready'
-    - Assigns to hardcoded `worker-backend` (single worker for 2.1)
-    - Updates task: `assigned_worker = 'worker-backend'`, `status = 'assigned'`
-  - Worker recipe (`~/.autodev/recipes/worker-backend-poll.yaml`):
-    - Polls for tasks assigned to 'worker-backend'
-    - Claims task via lock file, executes (bash/write_file), marks 'done'
-    ```yaml
-    version: "1.0.0"
-    title: Worker Backend — Polling Loop
-    schedule: "*/120 * * * *"
-    permission_mode: autonomous
-    instructions: |
-      You are the AIRS Backend Worker.
-      1. Poll internal task board for tasks assigned to 'worker-backend'
-      2. If found: claim via lock file, execute task, test, mark done
-      3. If nothing: exit cleanly
-    ```
-- [ ] **Frontend — Recipes Tab (Read-Only for 2.1):**
-  - Recipe browser UI — List all recipes in `~/.autodev/recipes/`
-  - Recipe viewer — Display YAML with syntax highlighting (read-only for 2.1)
+- [x] **Backend — Recipe Parser & Engine:**
+  - YAML recipe parser with validation — Parse recipe YAML into Recipe struct (`src-tauri/src/recipes/parser.rs`)
+  - Recipe execution engine (run recipe steps as agent messages) — Core engine (`src-tauri/src/recipes/mod.rs`)
+  - ⏸️ Cron scheduler for recurring recipes — `tokio-cron-scheduler` **DEFERRED to Phase 2.2** (requires full execution engine)
+- [x] **Backend — Hardcoded System Recipes:**
+  - Supervisor recipe (`~/.autodev/recipes/supervisor-poll.yaml`) — written at startup via `src-tauri/src/recipes/defaults.rs`
+  - Worker recipe (`~/.autodev/recipes/worker-backend-poll.yaml`) — written at startup
+  - Both YAML files created on first run from `defaults.rs` via `ensure_default_recipes()`
+- [x] **Frontend — Recipes Tab (Read-Only for 2.1):**
+  - Recipe browser UI — `src/tabs/Recipes.tsx` lists all recipes from `~/.autodev/recipes/`
+  - Recipe viewer — expandable cards with instructions preview
   - Shows: title, schedule, permission_mode, instructions preview
-  - [Run Now] button to manually trigger a recipe
-  - **Note**: Full editing (Create/Edit/Delete) deferred to Phase 2.2 with Worker Management UI
+  - [Run Now] button present (disabled, tooltip: "coming Phase 2.2")
+  - Full editing (Create/Edit/Delete) deferred to Phase 2.2 with Worker Management UI
 
 **AutoDev Panel & Internal Board (Minimal Viable):**
-- [ ] Internal Task Board database:
-  - SQLite database at `~/.autodev/tasks.db`
-  - Schema: tasks table with id, title, priority, type, status, acceptance_criteria, assigned_worker, timestamps
-  - Rust module: `src-tauri/src/db/tasks.rs` with `rusqlite` crate
-  - Tauri commands: `create_task`, `list_tasks`, `update_task_status`, `get_task_by_id`
-- [ ] AutoDev Panel: **View-only** task board (4-column kanban: Ready, In Progress, QC Review, Done Today)
-- [ ] TaskBoard component reads from SQLite via Tauri commands
-- [ ] Task status updates propagate to UI in real-time via Tauri events
-- [ ] AutoDev Panel: **Hardcoded** agent roster showing:
-  - Supervisor (always present, shows status)
-  - worker-backend (hardcoded for 2.1, shows status: Active/Working/Idle)
-  - QC Agent (optional for 2.1, can defer to 2.2)
-  - Status indicator: 🟢 Active / 🟡 Working / 🔵 Idle (no Error/Paused states for 2.1)
+- [x] Internal Task Board database:
+  - SQLite database at `~/.autodev/tasks.db` — `src-tauri/src/db/tasks.rs`
+  - Schema: full tasks table with id, title, priority, type, status, acceptance_criteria, assigned_worker, timestamps
+  - Tauri commands: `list_tasks`, `update_task_status`, `get_task`, `delete_task` — `src-tauri/src/commands/task_commands.rs`
+- [x] AutoDev Panel: **View-only** 4-column kanban (Ready | In Progress | QC Review | Done Today) — `src/tabs/AutoDevPanel.tsx`
+  - Matches `autodevmockup.html` spec exactly: `#0A0A0A` background, `IBM Plex Mono`, monospace aesthetic
+  - `Ready` column merges `ready` + `assigned` status (both pre-work states)
+  - `Done Today` column filters by `completed_at` date (today only); failed tasks shown with `✗` marker
+  - In Progress cards show progress bar (visual indicator, static 60% pending live tracking in 2.2)
+  - Task cards: `#id · priority`, title, assigned_worker, expand to show acceptance_criteria + description
+- [x] Metrics footer row: Cost Today | Tokens | Closed | QC Pass Rate
+  - `Closed` and `QC Pass Rate` computed from today's task data; Cost/Tokens deferred to 2.2 (needs cost commands)
+- [x] TaskBoard component reads from SQLite via Tauri commands — `src/stores/taskStore.ts`
+- ⏸️ Task status real-time Tauri events **DEFERRED to Phase 2.2** — currently polling on tab open
+- [x] AutoDev Panel: **Hardcoded** agent roster showing 7 agents (Supervisor, Worker Backend, Worker Frontend, Worker Platform, Worker MCP, Worker Cleanup, QC Agent)
+  - Vertical table layout: status dot | AGENT-NAME | current task/idle message | elapsed time
+  - Status dots: 🟡 yellow = working (`in_progress`), 🔵 blue = idle
+  - Elapsed timer ticks live (1s `setInterval`) computed from task `updated_at`
 
 **PA Mode Toggle (Full Implementation):**
-- [ ] **UI Components:**
-  - ChatHeader dropdown with 3 modes: 🔧 Fast Development, ✋ Review Mode, 📋 Delegate Mode
-  - Mode indicator with colored dot (green/yellow/blue)
-  - Mode state persisted in `settingsStore.ts`
-  - Mode selection triggers system prompt reload + tool registry rebuild
-- [ ] **Backend - System Prompt Variants:**
-  - `src-tauri/src/agent/context.rs`: Define 3 system prompt constants:
-    - `BASE_SYSTEM_PROMPT` (current, for Fast Development)
-    - `REVIEW_SYSTEM_PROMPT` (adds permission-checking instructions)
-    - `DELEGATE_SYSTEM_PROMPT` (removes file tool descriptions, adds task decomposition guidance)
-  - `ContextBuilder::build_system_prompt()` accepts `PAMode` enum, selects appropriate prompt
-  - `AUTODEV.md` is stored in SQLite (`~/.autodev/config/autodev_global.md` + per-repo entries), editable from UI sidebar
-  - Settings panel: add "System Prompts" section with 3 text areas for editing each variant
-  - Tauri commands: `get_system_prompt_variant(mode)`, `set_system_prompt_variant(mode, content)`
-- [ ] **Backend - Tool Registry Filtering:**
-  - `src-tauri/src/agent/tools/mod.rs`: Add `filter_tools_by_mode(tools, mode) -> Vec<Tool>`
-  - Fast Development: all builtin_tools (read_file, write_file, edit_file, bash, grep, glob)
-  - Review Mode: all builtin_tools + permission wrappers (execution already has permission checks)
-  - Delegate Mode: only `create_task` tool (zero file tools)
-  - Tool registry built conditionally before LLM call based on current PA mode
-  - **Note**: Tool execution already supports concurrent/serial partitioning (completed in Phase 1)
-- [ ] **Backend - create_task Tool:**
-  - New builtin tool: `src-tauri/src/agent/builtin_tools/create_task.rs`
-  - Input schema: title (string), priority (enum: p0/p1/p2/p3), type (enum: feature/bug/refactor/docs), acceptance_criteria (string)
+- [x] **UI Components:**
+  - Segmented 3-button toggle in chat header: ⚡ Fast Development, 🔍 Review Mode, 📋 Delegate Mode — `src/components/chat/PaModeToggle.tsx`
+  - Mode state persisted in `settingsStore.ts` (localStorage key: `autodev:pa_mode`)
+  - Mode sent to backend on every `send_message` invoke
+- [x] **Backend - System Prompt Variants:**
+  - `src-tauri/src/agent/context.rs`: 3 prompt constants: `BASE_SYSTEM_PROMPT`, `REVIEW_SYSTEM_PROMPT`, `DELEGATE_SYSTEM_PROMPT`
+  - `ContextBuilder::build_system_prompt_with_mode()` selects prompt by PAMode and injects AUTODEV.md from SQLite
+  - ⏸️ Settings panel prompt editing (`get/set_system_prompt_variant`) **DEFERRED to Phase 2.2**
+- [x] **Backend - Tool Registry Filtering:**
+  - `src-tauri/src/agent/builtin_tools/mod.rs`: `register_for_mode()` filters by PAMode
+  - FastDevelopment: all 7 builtin tools | Review: all tools | Delegate: only `create_task`
+  - Tool registry rebuilt per-session based on PAMode sent from frontend
+- [x] **Backend - create_task Tool:**
+  - `src-tauri/src/agent/builtin_tools/create_task.rs` — input: title, priority, task_type, acceptance_criteria, description?
   - Writes to `~/.autodev/tasks.db` with status="ready"
-  - Returns task ID and confirmation message
-  - Only registered in Delegate Mode
+  - Returns task ID + confirmation message; only registered in Delegate Mode
 
 **AUTODEV.md SYSTEM (Phase 2.1.2) — For PA Instructions:**
 > **Distinction**: AUTODEV.md contains instructions for **Razi (the PA)**. Recipes contain instructions for the **Fleet**. Different audiences, different storage, different UIs.
@@ -1878,82 +1857,36 @@ Phase 2 remains the **grandiose vision**: PA delegates → Board → Supervisor 
 > **Core Principle**: AUTODEV.md is NOT a file you manually create. It is a first-class UI feature — created, edited, and stored entirely within the AutoDev app. SQLite-backed, not filesystem-scattered.
 
 **Backend — Database Layer:**
-- [ ] **SQLite Schema** (`src-tauri/src/db/schema.sql`):
-  ```sql
-  CREATE TABLE autodev_instructions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      scope TEXT NOT NULL CHECK (scope IN ('global', 'repo')),
-      repo_path TEXT,  -- NULL for global, absolute path for repos
-      content TEXT NOT NULL DEFAULT '',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      is_active BOOLEAN DEFAULT 1,
-      CONSTRAINT repo_path_required CHECK (
-          (scope = 'global' AND repo_path IS NULL) OR
-          (scope = 'repo' AND repo_path IS NOT NULL)
-      )
-  );
-  CREATE INDEX idx_autodev_instructions_scope_repo ON autodev_instructions(scope, repo_path);
-  CREATE TRIGGER update_autodev_instructions_timestamp 
-  AFTER UPDATE ON autodev_instructions
-  BEGIN
-      UPDATE autodev_instructions SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
-  END;
-  ```
-- [ ] **Rust Repository Module** (`src-tauri/src/db/autodev_instructions.rs`):
-  - `AutodevInstructionsRepo::get(conn, scope, repo_path) -> Result<Option<String>>`
-  - `AutodevInstructionsRepo::set(conn, scope, repo_path, content) -> Result<()>`
-  - `AutodevInstructionsRepo::delete(conn, repo_path) -> Result<()>`
-  - `AutodevInstructionsRepo::exists(conn, scope, repo_path) -> Result<bool>`
-  - `AutodevInstructionsRepo::char_count(conn, scope, repo_path) -> Result<usize>`
-- [ ] **Tauri Commands** (`src-tauri/src/commands/autodev_instructions.rs`):
-  - `get_autodev_instructions(scope, repo_path) -> Result<String, String>` — Returns content or empty string
-  - `set_autodev_instructions(scope, repo_path, content) -> Result<(), String>` — Insert/update with 40,000 char limit validation
-  - `delete_autodev_instructions(repo_path) -> Result<(), String>` — Soft delete for repo scope
-  - `check_autodev_instructions_exists(scope, repo_path) -> Result<bool, String>`
-  - `get_autodev_instructions_char_count(scope, repo_path) -> Result<usize, String>`
+- [x] **SQLite Schema** — implemented inline in `AutodevInstructionsDb::open()` in `src-tauri/src/db/autodev_instructions.rs`
+  - Table: `autodev_instructions(id, scope, repo_path, content, created_at, updated_at, is_active)` with CHECK constraints and index
+- [x] **Rust Repository Module** (`src-tauri/src/db/autodev_instructions.rs`):
+  - `AutodevInstructionsDb::get()`, `set()`, `delete()`, `exists()`, `char_count()` — all implemented
+- [x] **Tauri Commands** (`src-tauri/src/commands/autodev_instructions_commands.rs`):
+  - All 5 commands implemented: `get_autodev_instructions`, `set_autodev_instructions`, `delete_autodev_instructions`, `check_autodev_instructions_exists`, `get_autodev_instructions_char_count`
 
 **Frontend — UI Components:**
-- [ ] **Sidebar Card** (`src/components/sidebar/AutodevMdCard.tsx`):
-  - Shows "AUTODEV.md" header with status indicator (🟢 Active / 🟡 Modified / ⚪ Empty)
-  - Quick action buttons: "Edit Global" | "Edit This Repo"
-  - Character count preview: "1,247 / 40,000"
-  - "Create" button if doesn't exist yet
-  - Collapsible section in persistent sidebar
-- [ ] **Editor Component** (`src/components/autodev/AutodevMdEditor.tsx`):
-  - Monaco Editor (@monaco-editor/react) with Markdown syntax highlighting
-  - Tab switching: [Global] [This Repo]
-  - Live character counter with 40,000 limit warning (enforce at save)
-  - Auto-save toggle (default: ON)
-  - Manual Save / Reset buttons
-  - "Preview System Prompt" button — shows full prompt that will be injected
-  - Close confirmation if unsaved changes
-- [ ] **Zustand Store** (`src/store/autodevMdStore.ts`):
-  - State: `globalContent`, `repoContents` (Map), `modifiedScopes` (Set), `charCounts` (Map)
-  - Actions: `loadGlobal()`, `loadRepo(repoPath)`, `saveGlobal(content)`, `saveRepo(repoPath, content)`, `setModified(scope, isModified)`
-- [ ] **Settings Panel Section** (`src/components/settings/AutodevMdSettings.tsx`):
-  - "Filesystem Sync" toggle (default: OFF) — when ON, syncs to `{repo}/.autodev/autodev.md`
-  - "Auto-save" toggle (default: ON)
-  - Display global path: `~/.autodev/config/autodev_global.md` (read-only)
-  - "Import from CLAUDE.md" migration button
+- [x] **Sidebar Card** (`src/components/autodev/AutodevMdCard.tsx`):
+  - Status dots (green=active, dark=empty), char counts, Edit Global/Edit Repo buttons
+  - Integrated into `src/components/layout/Sidebar.tsx`
+- [x] **Editor Component** (`src/components/autodev/AutodevMdEditor.tsx`):
+  - Full-screen modal with scope tabs [Global] [This Repo]
+  - Textarea editor (Monaco deferred — not yet a dependency)
+  - Live character counter with 40,000 limit progress bar + color warning
+  - Save (Ctrl+S), Reset, Insert Template buttons
+  - ESC to close, click backdrop to close
+- [x] **Zustand Store** (`src/stores/autodevMdStore.ts`):
+  - State: `globalContent`, `repoContents`, `charCounts`, `modifiedScopes`, `isLoading`, `isSaving`, `error`
+  - Actions: `loadGlobal()`, `loadRepo()`, `saveGlobal()`, `saveRepo()`, `deleteRepo()`, `setModified()`, `getContent()`, `getCharCount()`
+- ⏸️ **Settings Panel Section** (`src/components/settings/AutodevMdSettings.tsx`) — **DEFERRED to Phase 2.2**
+  - Filesystem Sync toggle, auto-save toggle, import from CLAUDE.md migration
 
 **Integration:**
-- [ ] **ContextBuilder Integration** (`src-tauri/src/agent/context.rs`):
-  - Replace legacy file-reading with `AutodevInstructionsRepo::get()` calls
-  - `build_system_prompt(mode, repo_path)` fetches both global and repo content from SQLite
-  - Remove all CLAUDE.md and AGENTS.md fallbacks (proprietary system only)
-- [ ] **Filesystem Sync** (optional feature):
-  - When "Filesystem Sync" is enabled in settings:
-    - On `set_autodev_instructions`: also write to `{repo_path}/.autodev/autodev.md`
-    - On load: check if file exists and import if DB is empty
-  - Create `.autodev/` directory if doesn't exist when syncing
-- [ ] **Migration Tool**:
-  - `migrate_from_claude_md(repo_path)` command:
-    - Check `~/.claude/CLAUDE.md` → import as Global AUTODEV.md
-    - Check `{repo}/CLAUDE.md` → import as Repo AUTODEV.md
-    - Check `{repo}/.claude/CLAUDE.md` → import as Repo AUTODEV.md
-    - Check `{repo}/AGENTS.md` → import as Repo AUTODEV.md (Goose compatibility)
-  - UI: Settings → "Import from Claude Code/Goose"
+- [x] **ContextBuilder Integration** (`src-tauri/src/agent/context.rs`):
+  - `build_system_prompt_with_mode(mode, repo_path)` queries SQLite via `AutodevInstructionsDb::open()` for both global and repo scopes
+  - Falls back to filesystem paths only if SQLite is empty (migration path)
+  - No CLAUDE.md/AGENTS.md fallbacks — AUTODEV.md only
+- ⏸️ **Filesystem Sync** — **DEFERRED to Phase 2.2** (settings toggle needed first)
+- ⏸️ **Migration Tool** (`migrate_from_claude_md`) — **DEFERRED to Phase 2.2**
 
 **AUTODEV.md Content Structure:**
 ```markdown

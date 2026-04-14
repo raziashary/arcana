@@ -22,6 +22,7 @@ use crate::vault::keychain::{VaultManager, provider_key};
 pub async fn send_message(
     session_id:   String,
     user_message: String,
+    pa_mode:      Option<String>,  // "fast_development" | "review" | "delegate"
     app:          AppHandle,
     state:        State<'_, Arc<Mutex<AppState>>>,
     session_mgr:  State<'_, Arc<SessionManager>>,
@@ -83,6 +84,13 @@ pub async fn send_message(
 
     let provider_id_c = provider_id.clone();
 
+    // Parse PA mode (default: FastDevelopment)
+    let resolved_pa_mode = match pa_mode.as_deref().unwrap_or("fast_development") {
+        "review"   => crate::agent::PAMode::Review,
+        "delegate" => crate::agent::PAMode::Delegate,
+        _          => crate::agent::PAMode::FastDevelopment,
+    };
+
     tokio::spawn(async move {
         // Create provider based on provider_id
         let provider: Arc<dyn Provider> = match provider_id_c.as_str() {
@@ -98,6 +106,7 @@ pub async fn send_message(
         let engine   = AgentEngine::new(
             provider,
             PermissionMode::ManualApproval,
+            resolved_pa_mode,
             app_clone,
             state_clone.clone(),
             pending_clone,

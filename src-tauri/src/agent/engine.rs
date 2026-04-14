@@ -36,6 +36,7 @@ pub struct AgentEngine {
     provider:     Arc<dyn Provider>,
     registry:     ToolRegistry,
     mode:         PermissionMode,
+    pa_mode:      super::PAMode,
     pending:      PendingPermissions,
     app:          AppHandle,
     state:        Arc<Mutex<AppState>>,
@@ -46,14 +47,15 @@ impl AgentEngine {
     pub fn new(
         provider: Arc<dyn Provider>,
         mode:     PermissionMode,
+        pa_mode:  super::PAMode,
         app:      AppHandle,
         state:    Arc<Mutex<AppState>>,
         pending:  PendingPermissions,
     ) -> Self {
         let mut registry = ToolRegistry::new();
-        builtin_tools::register_all(&mut registry);
+        builtin_tools::register_for_mode(&mut registry, pa_mode);
 
-        Self { provider, registry, mode, pending, app, state, session_mgr: None }
+        Self { provider, registry, mode, pa_mode, pending, app, state, session_mgr: None }
     }
 
     /// Set the session manager for persisting messages
@@ -80,7 +82,11 @@ impl AgentEngine {
         }
 
         let context_builder = ContextBuilder::new(working_dir);
-        let system_prompt   = context_builder.build_system_prompt(system_prompt_override);
+        let system_prompt   = if let Some(override_str) = system_prompt_override {
+            override_str.to_string()
+        } else {
+            context_builder.build_system_prompt_with_mode(self.pa_mode, working_dir)
+        };
         let tool_defs       = self.registry.to_definitions();
 
         // Add user message to history
@@ -111,14 +117,18 @@ impl AgentEngine {
                 break;
             }
 
-            // Compact if context approaching limit
+            // Compact if context approaching limit — uses LLM summary when possible
             let model_context = 200_000u32;
             if CompactionEngine::needs_compaction(
                 CompactionEngine::estimate_tokens(&history),
                 model_context,
             ) {
                 info!("Compacting conversation for session {session_id}");
-                history = CompactionEngine::compact(history);
+                history = CompactionEngine::compact_with_summary(
+                    history,
+                    self.provider.as_ref(),
+                    model,
+                ).await;
             }
 
             // Cancel check

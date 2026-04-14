@@ -1,6 +1,8 @@
-// Sidebar — right sidebar showing MCP servers and sidecar status.
-// Phase 1: static status indicators. Dynamic in Phase 2.
+// Sidebar — right sidebar showing MCP servers, sidecar status, and AUTODEV.md editor.
+// Phase 2.1: Added AUTODEV.md card with edit buttons.
 // Design from autodevmockup.html .sidebar
+
+import AutodevMdCard from '../autodev/AutodevMdCard'
 
 export default function Sidebar() {
   return (
@@ -26,6 +28,9 @@ export default function Sidebar() {
       <SidebarSection title="Session">
         <SidebarItem label="PA mode" active />
       </SidebarSection>
+
+      {/* AUTODEV.md editor card */}
+      <AutodevMdCard />
     </div>
   )
 }

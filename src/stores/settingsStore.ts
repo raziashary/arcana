@@ -1,7 +1,30 @@
-// Settings store — provider config, active model, theme.
+// Settings store — provider config, active model, theme, PA mode.
 
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
+
+export type PAMode = 'fast_development' | 'review' | 'delegate'
+
+export const PA_MODES: { value: PAMode; label: string; description: string; icon: string }[] = [
+  {
+    value:       'fast_development',
+    label:       'Fast Development',
+    description: 'Full file + execution tools. Direct coding.',
+    icon:        '⚡',
+  },
+  {
+    value:       'review',
+    label:       'Review Mode',
+    description: 'Same tools, explicit reasoning before each write.',
+    icon:        '🔍',
+  },
+  {
+    value:       'delegate',
+    label:       'Delegate Mode',
+    description: 'Only create_task. Workers are live.',
+    icon:        '📋',
+  },
+]
 
 export interface ProviderInfo {
   id:      string
@@ -27,6 +50,7 @@ interface SettingsState {
   isLoadingProviders: boolean
   systemPrompt:    string | null  // null = use default
   defaultSystemPrompt: string   // for reference display
+  paMode:          PAMode         // PA mode toggle — persisted to localStorage
 
   loadProviders:         () => Promise<void>
   setActiveProvider:     (provider: string, model: string) => Promise<void>
@@ -37,7 +61,10 @@ interface SettingsState {
   setSystemPrompt:       (prompt: string | null) => Promise<void>
   resetSystemPrompt:     () => Promise<void>
   loadDefaultSystemPrompt: () => Promise<void>
+  setPAMode:             (mode: PAMode) => void
 }
+
+const storedPAMode = (localStorage.getItem('autodev:pa_mode') ?? 'fast_development') as PAMode
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   providers:          [],
@@ -46,6 +73,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   isLoadingProviders: false,
   systemPrompt:       null,
   defaultSystemPrompt: '',  // Loaded from Rust backend
+  paMode:             storedPAMode,
 
   loadProviders: async () => {
     set({ isLoadingProviders: true })
@@ -109,6 +137,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   resetSystemPrompt: async () => {
     await get().setSystemPrompt(null)
+  },
+
+  setPAMode: (mode) => {
+    localStorage.setItem('autodev:pa_mode', mode)
+    set({ paMode: mode })
   },
 
   loadDefaultSystemPrompt: async () => {

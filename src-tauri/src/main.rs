@@ -8,6 +8,11 @@ use autodev_lib::agent::permission::new_pending_permissions;
 fn main() {
     autodev_lib::logging::init();
 
+    // Initialise recipes (writes default system recipes if absent)
+    if let Err(e) = autodev_lib::recipes::init() {
+        eprintln!("Warning: Failed to initialise recipes: {e}");
+    }
+
     let app_state: Arc<Mutex<AppState>> = Arc::new(Mutex::new(AppState::new()));
 
     let session_mgr: Arc<SessionManager> = Arc::new(

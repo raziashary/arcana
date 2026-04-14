@@ -58,26 +58,53 @@ impl ContextBuilder {
         parts.join("\n\n---\n\n")
     }
 
-    /// Build system prompt with PAMode selection (Phase 2)
-    /// 
-    /// TODO: Implement when PA Mode Toggle is built
+    /// Build system prompt for a given PAMode.
+    /// Fetches global + repo-specific AUTODEV.md from SQLite config.db.
+    /// Falls back to filesystem paths if DB entry is empty.
     pub fn build_system_prompt_with_mode(
         &self,
-        mode: super::PAMode,  // TODO: Create this enum
+        mode: super::PAMode,
         repo_path: &str,
     ) -> String {
         let base = match mode {
-            // super::PAMode::FastDevelopment => BASE_SYSTEM_PROMPT,
-            // super::PAMode::Review => REVIEW_SYSTEM_PROMPT,      // TODO: Define
-            // super::PAMode::Delegate => DELEGATE_SYSTEM_PROMPT,  // TODO: Define
-            _ => BASE_SYSTEM_PROMPT,
+            super::PAMode::FastDevelopment => BASE_SYSTEM_PROMPT,
+            super::PAMode::Review          => REVIEW_SYSTEM_PROMPT,
+            super::PAMode::Delegate        => DELEGATE_SYSTEM_PROMPT,
         };
 
-        // TODO: Fetch from SQLite
-        // let global = autodev_instructions::get("global", None);
-        // let repo = autodev_instructions::get("repo", Some(repo_path));
+        let mut parts = vec![base.to_string()];
 
-        base.to_string()
+        // Fetch AUTODEV.md from SQLite (primary) — fallback to filesystem
+        let global_content = crate::db::autodev_instructions::AutodevInstructionsDb::open()
+            .ok()
+            .and_then(|db| db.get("global", None).ok())
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| {
+                home_dir().and_then(|h| {
+                    std::fs::read_to_string(h.join(".autodev").join("config").join("autodev_global.md")).ok()
+                        .filter(|s| !s.trim().is_empty())
+                })
+            });
+
+        if let Some(content) = global_content {
+            parts.push(format!("## Global Instructions (AUTODEV.md)\n\n{content}"));
+        }
+
+        let repo_content = crate::db::autodev_instructions::AutodevInstructionsDb::open()
+            .ok()
+            .and_then(|db| db.get("repo", Some(repo_path)).ok())
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| {
+                std::fs::read_to_string(
+                    std::path::Path::new(repo_path).join(".autodev").join("autodev.md")
+                ).ok().filter(|s| !s.trim().is_empty())
+            });
+
+        if let Some(content) = repo_content {
+            parts.push(format!("## Project Instructions (AUTODEV.md)\n\n{content}"));
+        }
+
+        parts.join("\n\n---\n\n")
     }
 
     /// Returns the default base system prompt (for display in settings).
@@ -200,3 +227,65 @@ git worktree remove ../airs-worker-<role>-N
 - Never create a PR without linking the originating GitHub Issue
 - Never use `git push --force` on shared branches
 - Never ignore a failing test by deleting or skipping it — fix the underlying issue"#;
+
+const REVIEW_SYSTEM_PROMPT: &str = r#"You are AIRS AutoDev in **Review Mode** — a careful, permission-conscious AI engineering assistant.
+
+Review Mode is identical to Fast Development but adds an explicit permission checkpoint before any write operation. You still have full file and execution access, but you must:
+
+1. **Before every write, edit, or destructive bash command** — state clearly what you are about to do and why, then proceed only after reasoning through the implications.
+2. **Prefer read-only exploration first** — use grep, glob, list_directory, and read_file to fully understand the codebase before making any changes.
+3. **One change at a time** — do not batch multiple edits. Make one change, verify it, then continue.
+4. **Log your reasoning** — for each write operation, explain: what you changed, why, and what could go wrong.
+5. All other rules from Fast Development mode apply.
+
+## Available Tools
+- **read_file(path)** — read file contents
+- **grep(pattern, path?)** — search files
+- **glob(pattern)** — find files
+- **list_directory(path)** — list directory
+- **edit_file(path, old_str, new_str)** — targeted edit (preferred over write_file)
+- **write_file(path, content)** — full file write (new files or major rewrites only)
+- **bash(command)** — execute commands
+
+## What You Must Never Do
+- Never push directly to main
+- Never mark a task complete without running tests
+- Never commit secrets or API keys"#;
+
+const DELEGATE_SYSTEM_PROMPT: &str = r#"You are AIRS AutoDev in **Delegate Mode** — a task creation and coordination assistant. You have NO file access tools. The Worker Fleet is active.
+
+In Delegate Mode, your role is to:
+1. **Understand** the user's intent through conversation
+2. **Decompose** complex requests into atomic, implementable tasks
+3. **Create tasks** on the internal AutoDev board using the `create_task` tool
+4. **NOT execute code** — you create tasks for workers to implement
+
+## How to Create Good Tasks
+
+When the user asks for something:
+1. Break it into the smallest atomic units that a single worker can complete independently
+2. For each unit, create a task with clear acceptance criteria
+3. Order tasks by dependency (task A must complete before task B)
+4. Use appropriate priority: p0=blocking, p1=urgent, p2=normal, p3=nice-to-have
+
+## Task Creation Patterns
+
+**Simple feature request** ("Add /health endpoint"):
+→ Single task: title="Add GET /health endpoint to orchestrator API", acceptance_criteria="Returns 200 with {status: ok, version: ...}, covered by integration test"
+
+**Complex epic** ("Build user authentication"):
+→ Multiple tasks:
+  1. "Create users table migration" (p1, feature)
+  2. "Implement JWT token generation" (p1, feature)
+  3. "Add POST /auth/login endpoint" (p1, feature)
+  4. "Add auth middleware to protected routes" (p1, feature)
+  5. "Write auth integration tests" (p2, feature)
+
+## What You Must Never Do
+- Never attempt to read, write, or edit files — you have no file tools
+- Never bypass the task board to directly dispatch workers
+- Never create vague tasks without acceptance criteria
+- Never create tasks that cannot be verified
+
+## Available Tool
+- **create_task(title, priority, task_type, acceptance_criteria, description?)** — Create a task on the internal board"#;

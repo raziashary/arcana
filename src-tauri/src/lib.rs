@@ -11,6 +11,8 @@ pub mod provider;
 pub mod cost;
 pub mod agent;
 pub mod commands;
+pub mod db;
+pub mod recipes;
 
 // Register all Tauri commands on the builder from within the lib crate.
 // generate_handler! must run here so the __cmd__* macros (produced by
@@ -30,6 +32,14 @@ pub fn register_commands(
             delete_github_pat, delete_provider_key, get_github_pat, get_provider_key,
             store_github_pat, store_provider_key,
         },
+        task_commands::{
+            list_tasks, get_task, update_task_status, delete_task,
+        },
+        autodev_instructions_commands::{
+            get_autodev_instructions, set_autodev_instructions, delete_autodev_instructions,
+            check_autodev_instructions_exists, get_autodev_instructions_char_count,
+        },
+        recipe_commands::{list_recipes, get_recipe},
     };
     builder.invoke_handler(tauri::generate_handler![
         // Agent
@@ -59,5 +69,19 @@ pub fn register_commands(
         store_github_pat,
         get_github_pat,
         delete_github_pat,
+        // Tasks (Internal Board)
+        list_tasks,
+        get_task,
+        update_task_status,
+        delete_task,
+        // AUTODEV.md Instructions
+        get_autodev_instructions,
+        set_autodev_instructions,
+        delete_autodev_instructions,
+        check_autodev_instructions_exists,
+        get_autodev_instructions_char_count,
+        // Recipes
+        list_recipes,
+        get_recipe,
     ])
 }

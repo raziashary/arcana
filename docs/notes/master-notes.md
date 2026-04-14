@@ -31,6 +31,8 @@ If the implementation introduces significant architectural changes or requires a
 
 ## 3. Source Reference
 
+Important: You need to reference @autodevmockup.html for UI reference and application design.
+
 For every development step, cross-reference the relevant portions of the following source codebases:
 
 - `@claude-code-source-main` — Claude Code source reference
@@ -65,7 +67,7 @@ Since we are developing `autodev`, naturally the Codebase will grow, and we need
 
 0. IMPORTANT, there are major changes of vision and development plan so read the markdown files first.
 1. Ensure the movement of `__autodev` tools to the `submodules/core-orchestrator` is properly created especially the pathway and architecture compliance to the submodule and there is a docs on tool tarversal in @TOOL_FLOW_ARCHITECTURE.md
-2. Both `submodules/` are already in a branch called `autodev`, and we will continue developing there for submodules changes, but we need to make sure that it is in the `autodev` branch before developing and update from the main branch if needed.
+2. Both `submodules/` are already in a branch called `autodev`, and we will continue developing there for submodules changes, but we need to make sure that it is in the `autodev` branch before developing and update from the main branch if needed. I have did the update from main using Github Desktop, you can safely modify if needed in the `submodules/`
 3. Both `submodules/` needs an API key in a .env, ensure a way to manage the .env for each submodule, either traverse it from `src-tauri` or create a separate .env for each submodule.
 4. I have created several more tools and refined some current tools in `src-tauri/builtin_tools`, so take note of that, the `create_task` tool have not been defined as it will be created in phase 2
 5. In `src-tauri/src/agent/compaction.rs` there was a note to add summary compaction, make sure to check and implement it
