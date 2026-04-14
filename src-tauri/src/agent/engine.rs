@@ -19,6 +19,7 @@ use crate::cost::tracker::CostTracker;
 use crate::provider::types::{
     CompletionRequest, MessageContent, RequestMessage, StreamChunk,
 };
+use crate::session::manager::SessionManager;
 use crate::state::AppState;
 use super::builtin_tools;
 use super::compaction::CompactionEngine;
@@ -32,12 +33,13 @@ use crate::provider::traits::Provider;
 const MAX_TOOL_TURNS: usize = 20;
 
 pub struct AgentEngine {
-    provider:    Arc<dyn Provider>,
-    registry:    ToolRegistry,
-    mode:        PermissionMode,
-    pending:     PendingPermissions,
-    app:         AppHandle,
-    state:       Arc<Mutex<AppState>>,
+    provider:     Arc<dyn Provider>,
+    registry:     ToolRegistry,
+    mode:         PermissionMode,
+    pending:      PendingPermissions,
+    app:          AppHandle,
+    state:        Arc<Mutex<AppState>>,
+    session_mgr:  Option<Arc<SessionManager>>,
 }
 
 impl AgentEngine {
@@ -51,7 +53,13 @@ impl AgentEngine {
         let mut registry = ToolRegistry::new();
         builtin_tools::register_all(&mut registry);
 
-        Self { provider, registry, mode, pending, app, state }
+        Self { provider, registry, mode, pending, app, state, session_mgr: None }
+    }
+
+    /// Set the session manager for persisting messages
+    pub fn with_session_manager(mut self, session_mgr: Arc<SessionManager>) -> Self {
+        self.session_mgr = Some(session_mgr);
+        self
     }
 
     /// Run the full agentic loop for a single user message.
@@ -81,13 +89,17 @@ impl AgentEngine {
             content: vec![MessageContent::Text { text: user_message.to_string() }],
         });
 
-        let mut tool_executor = ToolExecutor::new(
+        let tool_executor = ToolExecutor::new(
             self.mode.clone(),
             self.pending.clone(),
             self.app.clone(),
             session_id.to_string(),
             working_dir.to_string(),
         );
+        let mut tool_executor = match &self.session_mgr {
+            Some(sm) => tool_executor.with_session_manager(sm.clone()),
+            None => tool_executor,
+        };
 
         let mut turn = 0;
         let mut total_tokens_in:  u32 = 0;

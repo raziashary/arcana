@@ -5,7 +5,7 @@
 import { create } from 'zustand'
 import { listen, UnlistenFn } from '@tauri-apps/api/event'
 
-export type MessageRole = 'user' | 'assistant'
+export type MessageRole = 'user' | 'assistant' | 'tool'
 
 export interface ToolCallDisplay {
   callId:   string
@@ -16,12 +16,35 @@ export interface ToolCallDisplay {
   pending:  boolean
 }
 
+// Tool message as a separate chat message (for persistence)
+export interface ToolMessage {
+  id:        string
+  sessionId: string
+  role:      'tool'
+  content:   string  // Tool output
+  callId:    string
+  toolName:  string
+  toolInput: Record<string, unknown>
+  isError:   boolean
+  tokensIn:  number  // Always 0 for tool messages
+  tokensOut: number  // Always 0 for tool messages
+  costUsd:   number  // Always 0 for tool messages
+  createdAt: string
+}
+
+// Unified chat message type (user, assistant, or tool)
 export interface ChatMessage {
   id:        string
   sessionId: string
   role:      MessageRole
   content:   string
+  // For assistant messages: embedded tool calls during streaming
   toolCalls: ToolCallDisplay[]
+  // For tool messages: metadata
+  callId?:   string
+  toolName?: string
+  toolInput?: Record<string, unknown>
+  isError?:  boolean
   tokensIn:  number
   tokensOut: number
   costUsd:   number
@@ -119,13 +142,27 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         const msgs = [...s.messages]
         const last = msgs[msgs.length - 1]
         if (last?.role === 'assistant') {
+          // Append to existing assistant message
           msgs[msgs.length - 1] = { ...last, content: last.content + payload.text }
+        } else {
+          // Create new assistant message after tool/user message
+          msgs.push({
+            id: crypto.randomUUID(),
+            sessionId,
+            role: 'assistant',
+            content: payload.text,
+            toolCalls: [],
+            tokensIn: 0,
+            tokensOut: 0,
+            costUsd: 0,
+            createdAt: new Date().toISOString(),
+          })
         }
         return { messages: msgs, streamingText: s.streamingText + payload.text }
       })
     }))
 
-    // Tool start
+    // Tool start - add tool call to the current assistant message (for streaming UI)
     unlisteners.push(await listen<{ session_id: string; call_id: string; tool_name: string; input: Record<string, unknown> }>('agent:tool-start', ({ payload }) => {
       if (payload.session_id !== sessionId) return
       const toolCall: ToolCallDisplay = {
@@ -146,10 +183,11 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       })
     }))
 
-    // Tool end
-    unlisteners.push(await listen<{ session_id: string; call_id: string; output: string; is_error: boolean }>('agent:tool-end', ({ payload }) => {
+    // Tool end - update the pending tool call AND add a separate tool message for persistence
+    unlisteners.push(await listen<{ session_id: string; call_id: string; tool_name: string; output: string; is_error: boolean }>('agent:tool-end', ({ payload }) => {
       if (payload.session_id !== sessionId) return
       set(s => {
+        // First update the pending tool call in the assistant message
         const msgs = s.messages.map(msg => ({
           ...msg,
           toolCalls: msg.toolCalls.map(tc =>
@@ -158,7 +196,23 @@ export const useAgentStore = create<AgentState>((set, get) => ({
               : tc
           ),
         }))
-        return { messages: msgs }
+        // Add a separate tool message for proper conversation flow
+        const toolMsg: ChatMessage = {
+          id:        payload.call_id,
+          sessionId: sessionId,
+          role:      'tool',
+          content:   payload.output,
+          toolCalls: [],
+          callId:    payload.call_id,
+          toolName:  payload.tool_name,
+          toolInput: {},  // Will be filled from the original tool call
+          isError:   payload.is_error,
+          tokensIn:  0,
+          tokensOut: 0,
+          costUsd:   0,
+          createdAt: new Date().toISOString(),
+        }
+        return { messages: [...msgs, toolMsg] }
       })
     }))
 

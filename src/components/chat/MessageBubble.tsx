@@ -1,9 +1,12 @@
-// MessageBubble — renders a single chat message with tool calls.
+// MessageBubble — renders a single chat message.
 // User messages: right-aligned green tinted bubble.
-// Assistant messages: left-aligned dark bubble + tool call blocks below.
+// Assistant messages: left-aligned dark bubble.
+// Tool messages: left-aligned info-tinted bubble (separate from assistant).
 
+import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { Terminal } from 'lucide-react'
 import ToolCallDisplay from './ToolCallDisplay'
 import type { ChatMessage } from '../../stores/agentStore'
 
@@ -16,6 +19,16 @@ interface Props {
 export default function MessageBubble({ message, isLast, streaming }: Props) {
   const isUser      = message.role === 'user'
   const isAssistant = message.role === 'assistant'
+  const isTool      = message.role === 'tool'
+
+  // Tool messages render as a tool bubble
+  if (isTool) {
+    return (
+      <div className="flex flex-col items-start gap-0.5">
+        <ToolMessageBubble message={message} />
+      </div>
+    )
+  }
 
   return (
     <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} gap-0.5`}>
@@ -72,10 +85,14 @@ export default function MessageBubble({ message, isLast, streaming }: Props) {
         </div>
       )}
 
-      {/* Tool call blocks */}
+      {/* Tool call blocks (for streaming UI only) */}
       {isAssistant && message.toolCalls.map(tc => (
         <ToolCallDisplay key={tc.callId} toolCall={tc} />
       ))}
+
+      {/* Tool message bubbles (for persisted tool messages) */}
+      {isAssistant && message.toolCalls.length > 0 && message.content && (
+        <div style={{ marginTop: '8px' }} />)}
 
       {/* Cost/token badge for completed assistant messages */}
       {isAssistant && !streaming && message.tokensOut > 0 && (
@@ -85,6 +102,96 @@ export default function MessageBubble({ message, isLast, streaming }: Props) {
         >
           ↑{message.tokensIn.toLocaleString()} ↓{message.tokensOut.toLocaleString()} tokens
           {message.costUsd > 0 && ` · $${message.costUsd.toFixed(4)}`}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ToolMessageBubble — renders a tool execution as a separate chat bubble
+// Shows tool name, input args (collapsed), and output with proper formatting
+function ToolMessageBubble({ message }: { message: ChatMessage }) {
+  const [expanded, setExpanded] = useState(false)
+
+  return (
+    <div
+      className="rounded-sm font-mono text-xs self-start max-w-4xl w-full"
+      style={{
+        background:  'var(--bg-surface)',
+        border:      '1px solid var(--border-1)',
+        borderLeft:  `3px solid ${message.isError ? 'var(--danger)' : 'var(--info)'}`,
+      }}
+    >
+      {/* Header row - always visible */}
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-1.5 w-full border-none cursor-pointer px-2 py-1.5"
+        style={{ background: 'transparent' }}
+      >
+        <Terminal size={11} color={message.isError ? 'var(--danger)' : 'var(--info)'} />
+        <span style={{ color: message.isError ? 'var(--danger)' : 'var(--info)' }}>
+          {message.toolName}
+        </span>
+        {message.isError && (
+          <span style={{ color: 'var(--danger)', fontSize: '10px', marginLeft: '4px' }}>
+            ✗ error
+          </span>
+        )}
+        {!message.isError && (
+          <span style={{ color: 'var(--accent)', fontSize: '10px', marginLeft: '4px' }}>
+            ✓ done
+          </span>
+        )}
+        <span style={{ color: 'var(--text-3)', marginLeft: 'auto', fontSize: '10px' }}>
+          {expanded ? '▼' : '▶'}
+        </span>
+      </button>
+
+      {/* Expanded content */}
+      {expanded && (
+        <div className="px-2 pb-2 space-y-1">
+          {/* Input args */}
+          {message.toolInput && Object.keys(message.toolInput).length > 0 && (
+            <div style={{ color: 'var(--text-2)', paddingLeft: '12px', fontSize: '10px' }}>
+              {Object.entries(message.toolInput).map(([k, v]) => (
+                <div key={k} className="truncate">
+                  <span style={{ color: 'var(--text-3)' }}>{k}: </span>
+                  <span>{typeof v === 'string' ? v.slice(0, 100) : JSON.stringify(v).slice(0, 100)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Output */}
+          <div className="mt-2 pl-3">
+            {message.isError ? (
+              <div
+                className="whitespace-pre-wrap break-all p-2 rounded"
+                style={{
+                  color: 'var(--danger)',
+                  borderLeft: `2px solid var(--danger)`,
+                  backgroundColor: '#FF006610',
+                  fontSize: '11px',
+                }}
+              >
+                {message.content}
+              </div>
+            ) : (
+              <div
+                className="whitespace-pre-wrap break-all p-2 rounded font-mono"
+                style={{
+                  color: 'var(--accent)',
+                  borderLeft: `2px solid var(--accent)`,
+                  backgroundColor: 'var(--surface-bg)',
+                  fontSize: '11px',
+                  maxHeight: '300px',
+                  overflowY: 'auto',
+                }}
+              >
+                {message.content.length > 2000 ? message.content.slice(0, 2000) + '…' : message.content}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

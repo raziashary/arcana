@@ -71,31 +71,34 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const messages = await invoke<any[]>('get_session_messages', { sessionId: id })
       
       // Transform backend Message format to frontend ChatMessage format
+      // Tool messages are now separate rows in the database
       const chatMessages = messages.map(msg => {
-        // Create a map of call_id -> ToolResult for quick lookup
-        const resultsMap = new Map()
-        if (msg.tool_results) {
-          msg.tool_results.forEach((result: any) => {
-            resultsMap.set(result.call_id, result)
-          })
+        // Check if this is a tool message
+        if (msg.role === 'tool') {
+          return {
+            id: msg.id,
+            sessionId: msg.session_id,
+            role: 'tool' as const,
+            content: msg.content,
+            toolCalls: [],  // Tool messages don't have nested tool calls
+            callId: msg.tool_call_id,
+            toolName: msg.tool_name,
+            toolInput: msg.tool_input || {},
+            isError: msg.is_error,
+            tokensIn: 0,
+            tokensOut: 0,
+            costUsd: 0,
+            createdAt: msg.created_at,
+          }
         }
         
+        // For user and assistant messages
         return {
           id: msg.id,
           sessionId: msg.session_id,
           role: msg.role as 'user' | 'assistant',
           content: msg.content,
-          toolCalls: (msg.tool_calls || []).map((tc: any) => {
-            const result = resultsMap.get(tc.call_id)
-            return {
-              callId: tc.call_id,
-              toolName: tc.tool_name,
-              input: tc.input,
-              output: result ? result.output : null,
-              isError: result ? result.is_error : false,
-              pending: false,
-            }
-          }),
+          toolCalls: [],  // Tool calls are now separate messages
           tokensIn: msg.tokens_in || 0,
           tokensOut: msg.tokens_out || 0,
           costUsd: msg.cost_usd || 0,

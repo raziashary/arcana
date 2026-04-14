@@ -101,7 +101,7 @@ pub async fn send_message(
             app_clone,
             state_clone.clone(),
             pending_clone,
-        );
+        ).with_session_manager(session_mgr_clone.clone());
 
         let result = engine.run(
             &session_id_c,

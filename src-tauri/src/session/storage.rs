@@ -4,7 +4,7 @@
 use rusqlite::{Connection, params};
 use std::path::PathBuf;
 use crate::errors::{AutoDevError, Result};
-use super::types::{Message, MessageRole, Session, ToolCall, ToolResult};
+use super::types::{Message, MessageRole, Session};
 
 pub struct SessionStorage {
     conn: Connection,
@@ -23,6 +23,7 @@ impl SessionStorage {
     }
 
     fn migrate(&self) -> Result<()> {
+        // Initial setup
         self.conn.execute_batch(
             "
             PRAGMA journal_mode = WAL;
@@ -37,22 +38,57 @@ impl SessionStorage {
                 created_at  TEXT NOT NULL,
                 updated_at  TEXT NOT NULL
             );
-
-            CREATE TABLE IF NOT EXISTS messages (
-                id           TEXT PRIMARY KEY,
-                session_id   TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-                role         TEXT NOT NULL,
-                content      TEXT NOT NULL,
-                tool_calls   TEXT NOT NULL DEFAULT '[]',
-                tool_results TEXT NOT NULL DEFAULT '[]',
-                tokens_in    INTEGER NOT NULL DEFAULT 0,
-                tokens_out   INTEGER NOT NULL DEFAULT 0,
-                cost_usd     REAL NOT NULL DEFAULT 0.0,
-                created_at   TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
             ",
         )?;
+
+        // Check if messages table exists
+        let table_exists: bool = self.conn.query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'",
+            [],
+            |_| Ok(true)
+        ).unwrap_or(false);
+
+        if !table_exists {
+            // Create new table with V2 schema
+            self.conn.execute_batch(
+                "
+                CREATE TABLE messages (
+                    id           TEXT PRIMARY KEY,
+                    session_id   TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                    role         TEXT NOT NULL,
+                    content      TEXT NOT NULL,
+                    tool_name    TEXT,
+                    tool_input   TEXT,
+                    tool_call_id TEXT,
+                    is_error     INTEGER NOT NULL DEFAULT 0,
+                    tokens_in    INTEGER NOT NULL DEFAULT 0,
+                    tokens_out   INTEGER NOT NULL DEFAULT 0,
+                    cost_usd     REAL NOT NULL DEFAULT 0.0,
+                    created_at   TEXT NOT NULL
+                );
+                CREATE INDEX idx_messages_session ON messages(session_id, created_at);
+                CREATE INDEX idx_messages_tool ON messages(tool_call_id);
+                ",
+            )?;
+        } else {
+            // Migrate existing table: add new columns if they don't exist
+            // SQLite doesn't have "ADD COLUMN IF NOT EXISTS", so we catch errors
+            let _ = self.conn.execute("ALTER TABLE messages ADD COLUMN tool_name TEXT", []);
+            let _ = self.conn.execute("ALTER TABLE messages ADD COLUMN tool_input TEXT", []);
+            let _ = self.conn.execute("ALTER TABLE messages ADD COLUMN tool_call_id TEXT", []);
+            let _ = self.conn.execute("ALTER TABLE messages ADD COLUMN is_error INTEGER NOT NULL DEFAULT 0", []);
+            
+            // Create indexes (these use IF NOT EXISTS)
+            let _ = self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at)",
+                []
+            );
+            let _ = self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_messages_tool ON messages(tool_call_id)",
+                []
+            );
+        }
+
         Ok(())
     }
 
@@ -80,19 +116,23 @@ impl SessionStorage {
     }
 
     pub fn insert_message(&self, msg: &Message) -> Result<()> {
-        let tool_calls   = serde_json::to_string(&msg.tool_calls)?;
-        let tool_results = serde_json::to_string(&msg.tool_results)?;
+        let tool_input = msg.tool_input.as_ref()
+            .map(|v| serde_json::to_string(v).unwrap_or_default())
+            .unwrap_or_default();
+        
         self.conn.execute(
             "INSERT INTO messages
-             (id, session_id, role, content, tool_calls, tool_results, tokens_in, tokens_out, cost_usd, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             (id, session_id, role, content, tool_name, tool_input, tool_call_id, is_error, tokens_in, tokens_out, cost_usd, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 msg.id,
                 msg.session_id,
                 format!("{:?}", msg.role).to_lowercase(),
                 msg.content,
-                tool_calls,
-                tool_results,
+                msg.tool_name.as_ref().map(String::as_str),
+                if tool_input.is_empty() { None } else { Some(tool_input.as_str()) },
+                msg.tool_call_id.as_ref().map(String::as_str),
+                msg.is_error as i32,
                 msg.tokens_in,
                 msg.tokens_out,
                 msg.cost_usd,
@@ -103,18 +143,22 @@ impl SessionStorage {
     }
 
     pub fn update_message(&self, msg: &Message) -> Result<()> {
-        let tool_calls   = serde_json::to_string(&msg.tool_calls)?;
-        let tool_results = serde_json::to_string(&msg.tool_results)?;
+        let tool_input = msg.tool_input.as_ref()
+            .map(|v| serde_json::to_string(v).unwrap_or_default())
+            .unwrap_or_default();
+        
         self.conn.execute(
             "UPDATE messages SET
-               content=?2, tool_calls=?3, tool_results=?4,
-               tokens_in=?5, tokens_out=?6, cost_usd=?7
+               content=?2, tool_name=?3, tool_input=?4, tool_call_id=?5, is_error=?6,
+               tokens_in=?7, tokens_out=?8, cost_usd=?9
              WHERE id=?1",
             params![
                 msg.id,
                 msg.content,
-                tool_calls,
-                tool_results,
+                msg.tool_name.as_ref().map(String::as_str),
+                if tool_input.is_empty() { None } else { Some(tool_input.as_str()) },
+                msg.tool_call_id.as_ref().map(String::as_str),
+                msg.is_error as i32,
                 msg.tokens_in,
                 msg.tokens_out,
                 msg.cost_usd,
@@ -171,7 +215,7 @@ impl SessionStorage {
 
     fn load_messages(&self, session_id: &str) -> Result<Vec<Message>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, session_id, role, content, tool_calls, tool_results,
+            "SELECT id, session_id, role, content, tool_name, tool_input, tool_call_id, is_error,
                     tokens_in, tokens_out, cost_usd, created_at
              FROM messages WHERE session_id=?1 ORDER BY created_at ASC"
         )?;
@@ -182,23 +226,26 @@ impl SessionStorage {
                 "tool"      => MessageRole::Tool,
                 _           => MessageRole::User,
             };
-            let tool_calls: Vec<ToolCall> = serde_json::from_str(
-                &row.get::<_, String>(4).unwrap_or_default()
-            ).unwrap_or_default();
-            let tool_results: Vec<ToolResult> = serde_json::from_str(
-                &row.get::<_, String>(5).unwrap_or_default()
-            ).unwrap_or_default();
+            // Parse tool fields for tool messages
+            let tool_name: Option<String> = row.get(4)?;
+            let tool_input: Option<serde_json::Value> = row.get::<_, Option<String>>(5)?
+                .and_then(|s| serde_json::from_str(&s).ok());
+            let tool_call_id: Option<String> = row.get(6)?;
+            let is_error: bool = row.get::<_, i32>(7)? != 0;
+            
             Ok(Message {
                 id:           row.get(0)?,
                 session_id:   row.get(1)?,
                 role,
                 content:      row.get(3)?,
-                tool_calls,
-                tool_results,
-                tokens_in:    row.get(6)?,
-                tokens_out:   row.get(7)?,
-                cost_usd:     row.get(8)?,
-                created_at:   row.get::<_, String>(9)?.parse().unwrap_or_default(),
+                tool_name,
+                tool_input,
+                tool_call_id,
+                is_error,
+                tokens_in:    row.get(8)?,
+                tokens_out:   row.get(9)?,
+                cost_usd:     row.get(10)?,
+                created_at:   row.get::<_, String>(11)?.parse().unwrap_or_default(),
             })
         })?.filter_map(|r| r.ok()).collect();
         Ok(msgs)

@@ -15,6 +15,8 @@ use crate::events::{
     emit_permission_request, emit_tool_end, emit_tool_start,
     PermissionPayload, ToolEndPayload, ToolStartPayload,
 };
+use crate::session::manager::SessionManager;
+use crate::session::types::Message;
 use super::permission::{PendingPermissions, PermissionMode, PermissionResponse};
 use super::tool_trait::{Tool, ToolContext, ToolResult};
 
@@ -29,6 +31,8 @@ pub struct ToolExecutor {
     working_dir: String,
     // Tools auto-approved for this session (AllowAlways responses)
     always_allow: std::collections::HashSet<String>,
+    // Session manager for persisting tool messages
+    session_mgr: Option<Arc<SessionManager>>,
 }
 
 impl ToolExecutor {
@@ -46,6 +50,25 @@ impl ToolExecutor {
             session_id,
             working_dir,
             always_allow: std::collections::HashSet::new(),
+            session_mgr: None,
+        }
+    }
+
+    /// Set the session manager for persisting tool messages
+    pub fn with_session_manager(mut self, session_mgr: Arc<SessionManager>) -> Self {
+        self.session_mgr = Some(session_mgr);
+        self
+    }
+
+    /// Persist a tool message to the database
+    fn save_tool_message(&self, call_id: &str, tool_name: &str, input: serde_json::Value, output: &str, is_error: bool) {
+        if let Some(ref session_mgr) = self.session_mgr {
+            let tool_msg = Message::new_tool(&self.session_id, call_id, tool_name, input, output, is_error);
+            if let Err(e) = session_mgr.append_message(&tool_msg) {
+                error!("Failed to save tool message: {}", e);
+            } else {
+                debug!("Saved tool message: call_id={} tool={}", call_id, tool_name);
+            }
         }
     }
 
@@ -91,11 +114,14 @@ impl ToolExecutor {
 
         let result = if approved {
             debug!("Executing tool: {}", tool.name());
-            tool.execute(input, &ctx).await
+            tool.execute(input.clone(), &ctx).await
         } else {
             warn!("Tool '{}' denied by user", tool.name());
             ToolResult::error(format!("Tool '{}' was denied by user", tool.name()))
         };
+
+        // Persist tool message to database
+        self.save_tool_message(&call_id, tool.name(), input, &result.output, result.is_error);
 
         // Emit tool end event for UI
         emit_tool_end(&self.app, ToolEndPayload {
@@ -145,18 +171,18 @@ impl ToolExecutor {
             );
 
             let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_READ_TOOLS));
-            let mut read_handles: Vec<JoinHandle<(usize, String, ToolResult)>> = Vec::new();
+            let mut read_handles: Vec<JoinHandle<(usize, String, ToolResult, String, String, serde_json::Value)>> = Vec::new();
 
             for (tool, input, tool_use_id, original_idx) in read_tools {
                 let sem_clone = Arc::clone(&semaphore);
                 let app = self.app.clone();
                 let session_id = self.session_id.clone();
                 let working_dir = self.working_dir.clone();
-                let mode = self.mode.clone();
-                let always_allow = self.always_allow.clone();
-                let pending = self.pending.clone();
+                let _mode = self.mode.clone();
+                let _always_allow = self.always_allow.clone();
+                let _pending = self.pending.clone();
 
-                let handle: JoinHandle<(usize, String, ToolResult)> = tokio::spawn(async move {
+                let handle = tokio::spawn(async move {
                     let _permit = sem_clone.acquire().await.unwrap();
 
                     let call_id = Uuid::new_v4().to_string();
@@ -175,18 +201,21 @@ impl ToolExecutor {
                     });
 
                     // Execute (read-only always approved)
-                    let result = tool.execute(input, &ctx).await;
+                    let result = tool.execute(input.clone(), &ctx).await;
+
+                    // Get tool name for persistence
+                    let tool_name = tool.name().to_string();
 
                     // Emit end event
                     emit_tool_end(&app, ToolEndPayload {
                         session_id: session_id.clone(),
                         call_id: call_id.clone(),
-                        tool_name: tool.name().to_string(),
+                        tool_name: tool_name.clone(),
                         output: result.output.clone(),
                         is_error: result.is_error,
                     });
 
-                    (original_idx, tool_use_id, result)
+                    (original_idx, tool_use_id, result, call_id, tool_name, input)
                 });
 
                 read_handles.push(handle);
@@ -195,7 +224,14 @@ impl ToolExecutor {
             // Collect concurrent results
             for handle in read_handles {
                 match handle.await {
-                    Ok((idx, tool_use_id, result)) => {
+                    Ok((idx, tool_use_id, result, call_id, tool_name, input)) => {
+                        // Persist tool message
+                        if let Some(ref session_mgr) = self.session_mgr {
+                            let tool_msg = Message::new_tool(&self.session_id, &call_id, &tool_name, input, &result.output, result.is_error);
+                            if let Err(e) = session_mgr.append_message(&tool_msg) {
+                                error!("Failed to save tool message (concurrent): {}", e);
+                            }
+                        }
                         results[idx] = (tool_use_id, result);
                     }
                     Err(e) => {
@@ -244,11 +280,14 @@ impl ToolExecutor {
 
                 let result = if approved {
                     debug!("Executing write tool: {}", tool.name());
-                    tool.execute(input, &ctx).await
+                    tool.execute(input.clone(), &ctx).await
                 } else {
                     warn!("Write tool '{}' denied by user", tool.name());
                     ToolResult::error(format!("Tool '{}' was denied by user", tool.name()))
                 };
+
+                // Persist tool message
+                self.save_tool_message(&call_id, tool.name(), input, &result.output, result.is_error);
 
                 // Emit end event
                 emit_tool_end(&self.app, ToolEndPayload {

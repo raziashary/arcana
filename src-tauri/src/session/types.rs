@@ -34,8 +34,11 @@ pub struct Message {
     pub session_id: String,
     pub role:       MessageRole,
     pub content:    String,
-    pub tool_calls: Vec<ToolCall>,
-    pub tool_results: Vec<ToolResult>,
+    // For tool messages: metadata about the tool execution
+    pub tool_name:  Option<String>,
+    pub tool_input: Option<serde_json::Value>,
+    pub tool_call_id: Option<String>, // Links tool result to original call
+    pub is_error:   bool,             // For tool messages: indicates error
     // Token/cost for this message (assistant messages only)
     pub tokens_in:  u32,
     pub tokens_out: u32,
@@ -50,8 +53,10 @@ impl Message {
             session_id:   session_id.to_string(),
             role:         MessageRole::User,
             content:      content.to_string(),
-            tool_calls:   vec![],
-            tool_results: vec![],
+            tool_name:    None,
+            tool_input:   None,
+            tool_call_id: None,
+            is_error:     false,
             tokens_in:    0,
             tokens_out:   0,
             cost_usd:     0.0,
@@ -65,8 +70,28 @@ impl Message {
             session_id:   session_id.to_string(),
             role:         MessageRole::Assistant,
             content:      String::new(),
-            tool_calls:   vec![],
-            tool_results: vec![],
+            tool_name:    None,
+            tool_input:   None,
+            tool_call_id: None,
+            is_error:     false,
+            tokens_in:    0,
+            tokens_out:   0,
+            cost_usd:     0.0,
+            created_at:   Utc::now(),
+        }
+    }
+
+    /// Create a new tool result message (separate bubble in chat)
+    pub fn new_tool(session_id: &str, call_id: &str, tool_name: &str, input: serde_json::Value, output: &str, is_error: bool) -> Self {
+        Self {
+            id:           Uuid::new_v4().to_string(),
+            session_id:   session_id.to_string(),
+            role:         MessageRole::Tool,
+            content:      output.to_string(),
+            tool_name:    Some(tool_name.to_string()),
+            tool_input:   Some(input),
+            tool_call_id: Some(call_id.to_string()),
+            is_error,
             tokens_in:    0,
             tokens_out:   0,
             cost_usd:     0.0,
