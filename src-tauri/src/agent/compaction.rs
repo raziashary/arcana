@@ -109,12 +109,15 @@ impl CompactionEngine {
         });
 
         let summary_request = crate::provider::types::CompletionRequest {
-            model:       model.to_string(),
-            messages:    summary_conversation,
-            system:      None,
-            tools:       vec![],
-            max_tokens:  1024,
-            temperature: Some(0.3),
+            model:                  model.to_string(),
+            messages:               summary_conversation,
+            system:                 None,
+            tools:                  vec![],
+            max_tokens:             1024,
+            temperature:            Some(0.3),
+            top_p:                  None,
+            reasoning_effort:       None,
+            thinking_budget_tokens: None,
         };
 
         // Try to get a summary from the LLM

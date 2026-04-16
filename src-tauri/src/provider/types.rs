@@ -4,12 +4,13 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelInfo {
-    pub id:              String,
-    pub name:            String,
-    pub context_window:  u32,
-    pub supports_vision: bool,
-    pub cost_in_per_1m:  f64,   // USD per 1M input tokens
-    pub cost_out_per_1m: f64,   // USD per 1M output tokens
+    pub id:                String,
+    pub name:              String,
+    pub context_window:    u32,
+    pub supports_vision:   bool,
+    pub supports_thinking: bool,   // Extended thinking / reasoning mode available
+    pub cost_in_per_1m:    f64,    // USD per 1M input tokens
+    pub cost_out_per_1m:   f64,    // USD per 1M output tokens
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -46,12 +47,15 @@ pub struct ToolDefinition {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompletionRequest {
-    pub model:       String,
-    pub messages:    Vec<RequestMessage>,
-    pub system:      Option<String>,
-    pub tools:       Vec<ToolDefinition>,
-    pub max_tokens:  u32,
-    pub temperature: Option<f32>,
+    pub model:                  String,
+    pub messages:               Vec<RequestMessage>,
+    pub system:                 Option<String>,
+    pub tools:                  Vec<ToolDefinition>,
+    pub max_tokens:             u32,
+    pub temperature:            Option<f32>,
+    pub top_p:                  Option<f32>,    // nucleus sampling (0..1)
+    pub reasoning_effort:       Option<String>, // "low" | "medium" | "high" (OpenAI reasoning models)
+    pub thinking_budget_tokens: Option<u32>,    // Anthropic extended thinking budget
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

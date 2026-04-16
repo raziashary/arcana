@@ -33,8 +33,8 @@ export function BashOutputDisplay({ data }: BashOutputDisplayProps) {
           <span
             className="px-2 py-0.5 rounded text-xs font-semibold"
             style={{
-              backgroundColor: data.exit_code === 0 ? "#00FF8820" : "#FF006620",
-              color: data.exit_code === 0 ? "#00FF88" : "#FF0066",
+              backgroundColor: data.exit_code === 0 ? "#7FDBCA20" : "#FF636320",
+              color: data.exit_code === 0 ? "#7FDBCA" : "#FF6363",
             }}
           >
             Exit {data.exit_code}

@@ -69,7 +69,7 @@ function SidebarItem({ label, active }: { label: string; active: boolean }) {
         style={{
           width:      '5px',
           height:     '5px',
-          background: active ? 'var(--accent)' : '#2a2a2a',
+          background: active ? 'var(--accent)' : '#0D3652',
         }}
       />
       <span className="truncate">{label}</span>

@@ -31,8 +31,6 @@ If the implementation introduces significant architectural changes or requires a
 
 ## 3. Source Reference
 
-Important: You need to reference @autodevmockup.html for UI reference and application design.
-
 For every development step, cross-reference the relevant portions of the following source codebases:
 
 - `@claude-code-source-main` — Claude Code source reference

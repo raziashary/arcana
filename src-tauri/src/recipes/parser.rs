@@ -53,6 +53,18 @@ pub fn load_all_recipes(recipes_dir: &Path) -> (Vec<Recipe>, Vec<String>) {
     (recipes, errors)
 }
 
+/// Load a single recipe by its id from the recipes directory.
+pub fn load_recipe_by_id(recipe_id: &str) -> Result<Option<Recipe>> {
+    let dir = crate::recipes::recipes_dir()?;
+    let path = dir.join(format!("{recipe_id}.yaml"));
+    if !path.exists() {
+        return Ok(None);
+    }
+    let yaml = std::fs::read_to_string(&path)?;
+    let recipe = parse_recipe(&yaml)?;
+    Ok(Some(recipe))
+}
+
 /// Write a recipe to a YAML file.
 pub fn save_recipe(recipes_dir: &Path, recipe: &Recipe) -> Result<()> {
     let yaml = serde_yaml::to_string(recipe)

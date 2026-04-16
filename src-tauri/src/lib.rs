@@ -13,6 +13,7 @@ pub mod agent;
 pub mod commands;
 pub mod db;
 pub mod recipes;
+pub mod sidecar;
 
 // Register all Tauri commands on the builder from within the lib crate.
 // generate_handler! must run here so the __cmd__* macros (produced by
@@ -33,13 +34,24 @@ pub fn register_commands(
             store_github_pat, store_provider_key,
         },
         task_commands::{
-            list_tasks, get_task, update_task_status, delete_task,
+            list_tasks, get_task, update_task_status, delete_task, clear_all_tasks,
         },
         autodev_instructions_commands::{
             get_autodev_instructions, set_autodev_instructions, delete_autodev_instructions,
             check_autodev_instructions_exists, get_autodev_instructions_char_count,
         },
-        recipe_commands::{list_recipes, get_recipe},
+        recipe_commands::{list_recipes, get_recipe, create_recipe, update_recipe, delete_recipe, list_recipe_backups, restore_recipe_backup, generate_recipe_yaml},
+        model_config_commands::{get_model_config, set_model_config, delete_model_config},
+        github_mcp_commands::{get_github_mcp_config, set_github_mcp_config},
+        worker_commands::{
+            list_workers, get_worker_by_slug, create_worker, update_worker_status,
+            update_worker_model, update_worker_repos, bind_worker_recipe,
+            delete_worker, start_worker_recipe, stop_worker_recipe,
+        },
+        workspace_commands::{get_workspace_dir, set_workspace_dir, pick_workspace_dir},
+        file_commands::search_workspace_files,
+        log_commands::{list_log_files, read_log_file, clear_log_files},
+        sidecar_commands::{get_sidecar_status, check_sidecar_connectivity, start_sidecar, stop_sidecar},
     };
     builder.invoke_handler(tauri::generate_handler![
         // Agent
@@ -74,6 +86,7 @@ pub fn register_commands(
         get_task,
         update_task_status,
         delete_task,
+        clear_all_tasks,
         // AUTODEV.md Instructions
         get_autodev_instructions,
         set_autodev_instructions,
@@ -83,5 +96,44 @@ pub fn register_commands(
         // Recipes
         list_recipes,
         get_recipe,
+        create_recipe,
+        update_recipe,
+        delete_recipe,
+        list_recipe_backups,
+        restore_recipe_backup,
+        generate_recipe_yaml,
+        // Model config (temperature, top_p, reasoning effort, thinking)
+        get_model_config,
+        set_model_config,
+        delete_model_config,
+        // GitHub MCP configuration
+        get_github_mcp_config,
+        set_github_mcp_config,
+        // Workers
+        list_workers,
+        get_worker_by_slug,
+        create_worker,
+        update_worker_status,
+        update_worker_model,
+        update_worker_repos,
+        bind_worker_recipe,
+        delete_worker,
+        start_worker_recipe,
+        stop_worker_recipe,
+        // Workspace directory
+        get_workspace_dir,
+        set_workspace_dir,
+        pick_workspace_dir,
+        // File search (for @-mention picker)
+        search_workspace_files,
+        // Log file reading / management (for Logs tab)
+        list_log_files,
+        read_log_file,
+        clear_log_files,
+        // Sidecar lifecycle (core-orchestrator)
+        get_sidecar_status,
+        check_sidecar_connectivity,
+        start_sidecar,
+        stop_sidecar,
     ])
 }

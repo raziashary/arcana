@@ -1,0 +1,182 @@
+
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'IBM Plex Mono', 'Courier New', monospace; background: #011627; color: #D6DEEB; }
+  .shell { background: #011627; padding: 12px; border-radius: 4px; }
+  .titlebar { background: #00233B; border-bottom: 1px solid #0D3652; padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; border-radius: 4px 4px 0 0; }
+  .dots { display: flex; gap: 6px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .tabs { background: #00233B; border-bottom: 1px solid #0D3652; display: flex; gap: 0; }
+  .tab { padding: 8px 16px; font-size: 11px; color: #637777; cursor: pointer; border-bottom: 2px solid transparent; }
+  .tab.active { color: #D6DEEB; border-bottom: 2px solid #82AAFF; }
+  .content { background: #011627; display: flex; gap: 0; min-height: 320px; }
+  .sidebar { width: 180px; background: #01111D; border-right: 1px solid #0D3652; padding: 10px 0; flex-shrink: 0; }
+  .sidebar-item { padding: 5px 12px; font-size: 10px; color: #637777; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+  .sidebar-item.active { background: #0B3A5C; color: #D6DEEB; border-left: 2px solid #7FDBCA; }
+  .sidebar-item:hover { background: #022C4A; color: #D6DEEB; }
+  .main { flex: 1; padding: 14px; }
+  .roster-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: #00233B; border: 1px solid #0D3652; border-radius: 2px; margin-bottom: 4px; }
+  .roster-row.working { border-left: 3px solid #7FDBCA; }
+  .dot-status { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .agent-name { font-size: 10px; color: #82AAFF; flex: 1; }
+  .agent-task { font-size: 9px; color: #637777; }
+  .issue-badge { background: #0B3A5C; color: #FFCB8B; font-size: 9px; padding: 1px 6px; border-radius: 2px; }
+  .section-title { font-size: 9px; color: #7FDBCA; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 8px; margin-top: 12px; }
+  .task-col { display: flex; flex-direction: column; gap: 4px; }
+  .task-card { background: #00233B; border: 1px solid #0D3652; border-radius: 2px; padding: 7px 8px; width: 120px; }
+  .task-card.p1 { border-left: 3px solid #FFCB8B; }
+  .task-card.p2 { border-left: 3px solid #82AAFF; }
+  .task-card-title { font-size: 9px; color: #D6DEEB; margin-bottom: 3px; }
+  .task-card-meta { font-size: 8px; color: #637777; }
+  .progress { height: 3px; background: #0D3652; border-radius: 1px; margin-top: 5px; }
+  .progress-fill { height: 3px; background: #7FDBCA; border-radius: 1px; }
+  .board { display: flex; gap: 10px; }
+  .col-label { font-size: 8px; color: #637777; margin-bottom: 5px; letter-spacing: 0.5px; text-transform: uppercase; }
+  .statusbar { background: #003A5C; border-top: 1px solid #0D3652; padding: 5px 12px; display: flex; justify-content: space-between; align-items: center; border-radius: 0 0 4px 4px; }
+  .model-pill { background: #0B3A5C; color: #82AAFF; font-size: 9px; padding: 2px 8px; border-radius: 2px; border: 1px solid #82AAFF; }
+  .cost-text { font-size: 9px; color: #ECC48D; }
+  .palette-row { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 10px; }
+  .swatch { height: 20px; flex: 1; min-width: 30px; border-radius: 2px; }
+  .swatch-label { font-size: 8px; color: #637777; text-align: center; margin-top: 2px; }
+  .divider { height: 1px; background: #011F35; margin: 10px 0; }
+  .chat-bubble { padding: 8px 10px; border-radius: 2px; font-size: 10px; margin-bottom: 4px; }
+  .tool-block { background: #01111D; border-left: 3px solid #82AAFF; padding: 7px 10px; font-size: 9px; border-radius: 0 2px 2px 0; margin-bottom: 4px; }
+  .tool-name { color: #82AAFF; margin-bottom: 3px; }
+  .tool-arg { color: #637777; }
+  .tool-arg span { color: #ECC48D; }
+  .tool-result { color: #ADDB67; margin-top: 3px; }
+</style>
+
+<div class="shell">
+  <div class="titlebar">
+    <div class="dots">
+      <div class="dot" style="background:#FF6363"></div>
+      <div class="dot" style="background:#FFCB8B"></div>
+      <div class="dot" style="background:#ADDB67"></div>
+    </div>
+    <span style="font-size:10px;color:#637777;">AutoDev  v1.0.0 — Winter is Coming</span>
+    <span style="font-size:9px;color:#3D5A6E;">[ _ ] [ □ ] [ × ]</span>
+  </div>
+
+  <div class="tabs">
+    <div class="tab">Chat</div>
+    <div class="tab active">AutoDev</div>
+    <div class="tab">IDE</div>
+    <div class="tab">Recipes</div>
+    <div class="tab">Settings</div>
+  </div>
+
+  <div class="content">
+    <div class="sidebar">
+      <div class="sidebar-item active">● Agent Roster</div>
+      <div class="sidebar-item">◆ Task Board</div>
+      <div class="sidebar-item">▸ Cost Today</div>
+      <div class="divider" style="margin:6px 0;"></div>
+      <div class="sidebar-item" style="color:#3D5A6E;font-size:9px;">FILTERS</div>
+      <div class="sidebar-item">All Agents</div>
+      <div class="sidebar-item">Active Only</div>
+    </div>
+
+    <div class="main">
+      <div class="section-title">Agent Roster</div>
+
+      <div class="roster-row working">
+        <div class="dot-status" style="background:#7FDBCA;box-shadow:0 0 0 3px #7FDBCA33;"></div>
+        <div class="agent-name">SUPERVISOR</div>
+        <div class="agent-task" style="color:#7FDBCA;">Active · polling</div>
+      </div>
+      <div class="roster-row working">
+        <div class="dot-status" style="background:#7FDBCA;box-shadow:0 0 0 3px #7FDBCA33;"></div>
+        <div class="agent-name">WORKER-BACKEND</div>
+        <div class="agent-task">00:14 elapsed</div>
+        <div class="issue-badge">#142</div>
+      </div>
+      <div class="roster-row">
+        <div class="dot-status" style="background:#82AAFF;"></div>
+        <div class="agent-name">WORKER-FRONTEND</div>
+        <div class="agent-task">Idle · waiting</div>
+      </div>
+      <div class="roster-row">
+        <div class="dot-status" style="background:#82AAFF;"></div>
+        <div class="agent-name">WORKER-PLATFORM</div>
+        <div class="agent-task">Idle · waiting</div>
+      </div>
+      <div class="roster-row working">
+        <div class="dot-status" style="background:#C792EA;"></div>
+        <div class="agent-name">QC AGENT</div>
+        <div class="agent-task" style="color:#C792EA;">Reviewing PR</div>
+        <div class="issue-badge" style="color:#C792EA;">#87</div>
+      </div>
+
+      <div class="section-title">Task Board</div>
+      <div class="board">
+        <div>
+          <div class="col-label">Ready (3)</div>
+          <div class="task-col">
+            <div class="task-card p1">
+              <div class="task-card-title">Fix SSE hook</div>
+              <div class="task-card-meta" style="color:#FFCB8B;">p1-high</div>
+            </div>
+            <div class="task-card p2">
+              <div class="task-card-title">Add docstrings</div>
+              <div class="task-card-meta" style="color:#82AAFF;">p2-medium</div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="col-label">In Progress (1)</div>
+          <div class="task-col">
+            <div class="task-card" style="border-left:3px solid #7FDBCA;">
+              <div class="task-card-title">/health endpoint</div>
+              <div class="task-card-meta" style="color:#7FDBCA;">backend</div>
+              <div class="progress"><div class="progress-fill" style="width:60%"></div></div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="col-label">QC Review (1)</div>
+          <div class="task-col">
+            <div class="task-card" style="border-left:3px solid #C792EA;">
+              <div class="task-card-title">PR #87</div>
+              <div class="task-card-meta" style="color:#C792EA;">reviewing</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-title" style="margin-top:14px;">Chat — Tool Call Sample</div>
+      <div class="tool-block">
+        <div class="tool-name">⬡ github_create_issue</div>
+        <div class="tool-arg">title: <span>"Add GET /agents/health endpoint"</span></div>
+        <div class="tool-arg">labels: <span>"worker-backend, p2-medium"</span></div>
+        <div class="tool-result">✓ Issue #142 created</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="statusbar">
+    <div class="model-pill">claude-sonnet-4-6</div>
+    <div style="display:flex;gap:16px;align-items:center;">
+      <span style="font-size:9px;color:#7FDBCA;">1.2M tokens</span>
+      <span class="cost-text">$2.14 today</span>
+    </div>
+  </div>
+
+  <div style="padding:10px 0 4px;">
+    <div style="font-size:9px;color:#637777;margin-bottom:5px;letter-spacing:1px;">PALETTE</div>
+    <div class="palette-row">
+      <div><div class="swatch" style="background:#011627;border:1px solid #0D3652;"></div><div class="swatch-label">bg-app</div></div>
+      <div><div class="swatch" style="background:#00233B;"></div><div class="swatch-label">surface</div></div>
+      <div><div class="swatch" style="background:#01111D;"></div><div class="swatch-label">elevated</div></div>
+      <div><div class="swatch" style="background:#0B3A5C;"></div><div class="swatch-label">selected</div></div>
+      <div><div class="swatch" style="background:#82AAFF;"></div><div class="swatch-label" style="color:#82AAFF;">accent</div></div>
+      <div><div class="swatch" style="background:#7FDBCA;"></div><div class="swatch-label" style="color:#7FDBCA;">aqua</div></div>
+      <div><div class="swatch" style="background:#ADDB67;"></div><div class="swatch-label" style="color:#ADDB67;">success</div></div>
+      <div><div class="swatch" style="background:#ECC48D;"></div><div class="swatch-label" style="color:#ECC48D;">gold</div></div>
+      <div><div class="swatch" style="background:#FFCB8B;"></div><div class="swatch-label" style="color:#FFCB8B;">amber</div></div>
+      <div><div class="swatch" style="background:#F78C6C;"></div><div class="swatch-label" style="color:#F78C6C;">orange</div></div>
+      <div><div class="swatch" style="background:#FF6363;"></div><div class="swatch-label" style="color:#FF6363;">danger</div></div>
+      <div><div class="swatch" style="background:#C792EA;"></div><div class="swatch-label" style="color:#C792EA;">purple</div></div>
+    </div>
+  </div>
+</div>

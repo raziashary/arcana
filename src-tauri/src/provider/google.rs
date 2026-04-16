@@ -33,28 +33,31 @@ impl GoogleProvider {
     fn models_static() -> Vec<ModelInfo> {
         vec![
             ModelInfo {
-                id:              "gemini-2.0-flash-thinking-exp-01-21".into(),
-                name:            "Gemini 2.0 Flash Thinking".into(),
-                context_window:  1_000_000,
-                supports_vision: true,
-                cost_in_per_1m:  0.10,
-                cost_out_per_1m: 0.40,
+                id:                "gemini-2.0-flash-thinking-exp-01-21".into(),
+                name:              "Gemini 2.0 Flash Thinking".into(),
+                context_window:    1_000_000,
+                supports_vision:   true,
+                supports_thinking: true,
+                cost_in_per_1m:    0.10,
+                cost_out_per_1m:   0.40,
             },
             ModelInfo {
-                id:              "gemini-2.5-pro".into(),
-                name:            "Gemini 2.5 Pro".into(),
-                context_window:  1_000_000,
-                supports_vision: true,
-                cost_in_per_1m:  1.25,
-                cost_out_per_1m: 5.0,
+                id:                "gemini-2.5-pro".into(),
+                name:              "Gemini 2.5 Pro".into(),
+                context_window:    1_000_000,
+                supports_vision:   true,
+                supports_thinking: true,
+                cost_in_per_1m:    1.25,
+                cost_out_per_1m:   5.0,
             },
             ModelInfo {
-                id:              "gemini-2.5-flash".into(),
-                name:            "Gemini 2.5 Flash".into(),
-                context_window:  1_000_000,
-                supports_vision: true,
-                cost_in_per_1m:  0.075,
-                cost_out_per_1m: 0.30,
+                id:                "gemini-2.5-flash".into(),
+                name:              "Gemini 2.5 Flash".into(),
+                context_window:    1_000_000,
+                supports_vision:   true,
+                supports_thinking: false,
+                cost_in_per_1m:    0.075,
+                cost_out_per_1m:   0.30,
             },
         ]
     }
@@ -121,6 +124,21 @@ impl GoogleProvider {
 
         if !tools.is_empty() {
             body["tools"] = json!(tools);
+        }
+
+        // generationConfig: temperature, topP, thinkingConfig
+        let mut gen_config = serde_json::Map::new();
+        if let Some(temp) = req.temperature {
+            gen_config.insert("temperature".into(), json!(temp));
+        }
+        if let Some(top_p) = req.top_p {
+            gen_config.insert("topP".into(), json!(top_p));
+        }
+        if req.thinking_budget_tokens.is_some() {
+            gen_config.insert("thinkingConfig".into(), json!({ "thinkingBudget": req.thinking_budget_tokens }));
+        }
+        if !gen_config.is_empty() {
+            body["generationConfig"] = serde_json::Value::Object(gen_config);
         }
 
         body

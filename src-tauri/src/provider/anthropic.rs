@@ -35,28 +35,31 @@ impl AnthropicProvider {
     fn models_static() -> Vec<ModelInfo> {
         vec![
             ModelInfo {
-                id:              "claude-opus-4-5".into(),
-                name:            "Claude Opus 4.5".into(),
-                context_window:  200_000,
-                supports_vision: true,
-                cost_in_per_1m:  15.0,
-                cost_out_per_1m: 75.0,
+                id:                "claude-opus-4-5".into(),
+                name:              "Claude Opus 4.5".into(),
+                context_window:    200_000,
+                supports_vision:   true,
+                supports_thinking: true,
+                cost_in_per_1m:    15.0,
+                cost_out_per_1m:   75.0,
             },
             ModelInfo {
-                id:              "claude-sonnet-4-5".into(),
-                name:            "Claude Sonnet 4.5".into(),
-                context_window:  200_000,
-                supports_vision: true,
-                cost_in_per_1m:  3.0,
-                cost_out_per_1m: 15.0,
+                id:                "claude-sonnet-4-5".into(),
+                name:              "Claude Sonnet 4.5".into(),
+                context_window:    200_000,
+                supports_vision:   true,
+                supports_thinking: true,
+                cost_in_per_1m:    3.0,
+                cost_out_per_1m:   15.0,
             },
             ModelInfo {
-                id:              "claude-haiku-4-5".into(),
-                name:            "Claude Haiku 4.5".into(),
-                context_window:  200_000,
-                supports_vision: true,
-                cost_in_per_1m:  0.25,
-                cost_out_per_1m: 1.25,
+                id:                "claude-haiku-4-5".into(),
+                name:              "Claude Haiku 4.5".into(),
+                context_window:    200_000,
+                supports_vision:   true,
+                supports_thinking: false,
+                cost_in_per_1m:    0.25,
+                cost_out_per_1m:   1.25,
             },
         ]
     }
@@ -100,6 +103,15 @@ impl AnthropicProvider {
         }
         if let Some(temp) = req.temperature {
             body["temperature"] = json!(temp);
+        }
+        if let Some(top_p) = req.top_p {
+            body["top_p"] = json!(top_p);
+        }
+        // Extended thinking (Anthropic): inject thinking block before tools
+        if let Some(budget) = req.thinking_budget_tokens {
+            body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget });
+            // Anthropic requires temperature=1 when thinking is enabled
+            body["temperature"] = json!(1.0);
         }
         if stream {
             body["stream"] = json!(true);

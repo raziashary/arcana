@@ -12,10 +12,11 @@ import AutoDevTab  from './tabs/AutoDevPanel'
 import IDETab      from './tabs/IDE'
 import RecipesTab  from './tabs/Recipes'
 import SettingsTab from './tabs/Settings'
+import LogsTab     from './tabs/Logs'
 import { useSettingsStore } from './stores/settingsStore'
 import { useCostStore }     from './stores/costStore'
 
-export type TabId = 'chat' | 'autodev' | 'ide' | 'recipes' | 'settings'
+export type TabId = 'chat' | 'autodev' | 'ide' | 'recipes' | 'settings' | 'logs'
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'chat',     label: 'Chat'     },
@@ -23,6 +24,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'ide',      label: 'IDE'      },
   { id: 'recipes',  label: 'Recipes'  },
   { id: 'settings', label: 'Settings' },
+  { id: 'logs',     label: 'Logs'     },
 ]
 
 export default function App() {
@@ -52,6 +54,7 @@ export default function App() {
           {activeTab === 'ide'      && <IDETab />}
           {activeTab === 'recipes'  && <RecipesTab />}
           {activeTab === 'settings' && <SettingsTab />}
+          {activeTab === 'logs'     && <LogsTab />}
         </div>
 
         <Sidebar />

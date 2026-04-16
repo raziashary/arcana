@@ -22,6 +22,7 @@
 8. [Module Breakdown & Dependency Graph](#8-module-breakdown--dependency-graph)
 9. [Phase 1 — App Shell + Provider + Chat](#9-phase-1--app-shell--provider--chat)
 10. [Phase 2 — Recipes + AutoDev Panel + GitHub](#10-phase-2--recipes--autodev-panel--github)
+10.5. [Phase 2.5 — Recipe Agent Sandbox + Native Task Tools + Logs Tab](#105-phase-25--recipe-agent-sandbox--native-task-tools--logs-tab)
 11. [Phase 3 — IDE + Skills + Hooks + MCP Server](#11-phase-3--ide--skills--hooks--mcp-server)
 12. [Phase 4 — Subagents + Model Router + Dispatch](#12-phase-4--subagents--model-router--dispatch)
 13. [Phase 5 — Plugin + CLI + Installers](#13-phase-5--plugin--cli--installers)
@@ -1800,8 +1801,8 @@ Phase 2 remains the **grandiose vision**: PA delegates → Board → Supervisor 
 
 - [x] **Backend — Recipe Parser & Engine:**
   - YAML recipe parser with validation — Parse recipe YAML into Recipe struct (`src-tauri/src/recipes/parser.rs`)
-  - Recipe execution engine (run recipe steps as agent messages) — Core engine (`src-tauri/src/recipes/mod.rs`)
-  - ⏸️ Cron scheduler for recurring recipes — `tokio-cron-scheduler` **DEFERRED to Phase 2.2** (requires full execution engine)
+  - Recipe execution engine (run recipe steps as agent messages) — `src-tauri/src/recipes/runner.rs` (`RecipeRunner`)
+  - [x] Cron scheduler for recurring recipes — `src-tauri/src/recipes/scheduler.rs` (`RecipeScheduler`) using `cron` crate + tokio tasks
 - [x] **Backend — Hardcoded System Recipes:**
   - Supervisor recipe (`~/.autodev/recipes/supervisor-poll.yaml`) — written at startup via `src-tauri/src/recipes/defaults.rs`
   - Worker recipe (`~/.autodev/recipes/worker-backend-poll.yaml`) — written at startup
@@ -1938,7 +1939,7 @@ Phase 2 remains the **grandiose vision**: PA delegates → Board → Supervisor 
 **Goal:** Production-grade worker management, multiple worker types, GitHub integration, full submodule bridge.
 
 **Worker Management System (Full Implementation):**
-- [ ] **Workers Database:**
+- [x] **Workers Database:**
   - SQLite database at `~/.autodev/workers.db`
   - Schema: workers table (see Module Breakdown § 8 for full schema)
   - Rust module: `src-tauri/src/db/workers.rs` with `rusqlite` crate
@@ -1948,9 +1949,9 @@ Phase 2 remains the **grandiose vision**: PA delegates → Board → Supervisor 
     - `update_worker_status(worker_id, status)` → Updates worker state
     - `delete_worker(worker_id)` → Soft delete (sets status='deleted')
     - `get_worker_by_slug(slug)` → Retrieves worker config
-    - `start_worker_recipe(worker_id)` → Starts recipe cron job
-    - `stop_worker_recipe(worker_id)` → Stops recipe cron job
-- [ ] **Pre-Defined Workers Seeded on First Launch:**
+    - `start_worker_recipe(worker_id)` → Starts recipe cron job via `RecipeScheduler`
+    - `stop_worker_recipe(worker_id)` → Stops recipe cron job via `RecipeScheduler`
+- [x] **Pre-Defined Workers Seeded on First Launch:**
   - On app first run, seed `workers.db` with 5 pre-defined workers:
     - `worker-backend` (type: backend, model: claude-sonnet-4-6, status: created)
     - `worker-frontend` (type: frontend, model: claude-sonnet-4-6, status: created)
@@ -1960,45 +1961,31 @@ Phase 2 remains the **grandiose vision**: PA delegates → Board → Supervisor 
   - Also seed system agents:
     - `supervisor` (is_system_defined: 1, cannot delete)
     - `qc-agent` (is_system_defined: 1, cannot delete)
-- [ ] **Worker Creation UI (Settings → Workers Tab):**
-  - "Create Worker" button → Opens modal
+- [x] **Worker Creation UI (Settings → Workers Tab):**
+  - "Create Worker" button → Opens `WorkerCreateModal`
   - Worker creation form fields:
     - Worker Name (auto-generates slug from name)
-    - Worker Type dropdown (Backend, Frontend, Platform, MCP Builder, Cleanup, Custom)
-    - Primary Repos multi-select (fetches from GitHub org via PAT)
-    - Model dropdown (lists available models from providers)
-    - Polling Interval slider (30s - 10min, default 2min)
-    - Recipe Template: Auto-generate or Custom YAML
-  - On submit:
-    - Creates worker in `workers.db`
-    - Generates recipe YAML at `~/.autodev/recipes/worker-{slug}-poll.yaml`
-    - Updates Agent Roster dynamically
-  - Validation:
-    - Worker name must be unique
-    - Slug must be unique (auto-sanitized from name)
-    - Primary repos must exist in GitHub org
-- [ ] **Worker Management UI (Settings → Workers Tab):**
-  - Table showing all workers:
-    - Columns: Name, Type, Status, Model, Primary Repos, Actions
-    - System agents (Supervisor, QC) shown with 🔒 lock icon, cannot delete
-    - Pre-defined workers can be edited/deleted
-    - Custom workers can be edited/deleted
-  - Worker row actions:
-    - Start/Stop/Pause (toggles recipe execution)
-    - Edit (opens edit modal)
-    - Delete (soft delete, confirms first)
-  - Worker status indicators (full set):
-    - 🟢 Active (recipe running, polling)
-    - 🟡 Working (executing task)
-    - 🔵 Idle (created but not started)
-    - 🔴 Error (recipe crashed)
-    - ⏸️ Paused (user paused)
-- [ ] **Agent Roster Dynamic Updates:**
-  - Agent Roster reads from `workers.db` instead of hardcoded list
-  - Real-time updates when worker status changes
-  - Shows queue count for workers in 'queued' state
-- [ ] **Recipe Auto-Generation:**
-  - Template system for worker recipes
+    - Worker Type dropdown (Backend, Frontend, Platform, MCP, Cleanup, Custom)
+    - Primary Repos (text input, comma-separated)
+    - Model input
+    - Polling Interval input (seconds)
+    - Description
+  - On submit: creates worker in `workers.db` via `create_worker` Tauri command
+  - Validation: name + type required
+- [x] **Worker Management UI (Settings → Workers Tab):**
+  - `WorkerTable` component in `src/components/workers/WorkerTable.tsx`
+  - Table: Name | Type | Status | Model | Actions
+  - System agents (is_system_defined) shown with SYSTEM badge, cannot delete
+  - Worker row actions: Start/Stop/Delete
+  - Status color-coded via `workerStatusColor()` in `workerStore.ts`
+- [x] **Agent Roster Dynamic Updates:**
+  - `AutoDevPanel.tsx` `AgentRoster` reads from `useWorkerStore` (workers.db)
+  - Replaces hardcoded AGENT_DEFS array
+  - Status dots use live `workerStatusColor()` with glow effect on 'working'
+- [x] **Recipe Auto-Generation:**
+  - AI-assisted YAML generation via `generate_recipe_yaml` Tauri command (LLM prompt)
+  - `RecipeEditor.tsx` collapsible "Generate with AI" panel: worker type + description → YAML preview → Apply to Form
+  - Backend: `src-tauri/src/commands/recipe_commands.rs` — `generate_recipe_yaml(worker_type, name, description)`
   - Generates YAML with appropriate instructions per worker type:
     ```yaml
     version: "1.0.0"
@@ -2021,36 +2008,32 @@ Phase 2 remains the **grandiose vision**: PA delegates → Board → Supervisor 
 
 **RECIPES TAB UI (Full Editing — Completes Recipe System):**
 > **Note**: Phase 2.1 had read-only Recipes. Phase 2.2 adds full create/edit/delete UI.
-- [ ] **Recipe Editor (Monaco YAML Editor):**
-  - Full YAML editing with syntax highlighting and validation
-  - Schema validation against Recipe struct (version, title, schedule, etc.)
-  - Auto-complete for fields (schedule cron syntax, permission_mode enum)
-  - "Save" / "Reset" / "Validate" buttons
-  - Live preview of parsed Recipe struct
-  - Error highlighting for invalid YAML
-- [ ] **Recipe Create/Edit/Delete UI:**
-  - "New Recipe" button in Recipes Tab
-  - Recipe creation modal with template selection (Worker, Supervisor, QC, Custom)
-  - Template picker shows: Blank, Worker Backend, Worker Frontend, Supervisor Poll, QC Review, Custom
-  - Recipe deletion with confirmation (shows which workers use this recipe)
-  - Duplicate recipe button (clone existing as starting point)
-- [ ] **Recipe Browser Enhancements:**
-  - Filter by: System Recipes (locked), Pre-defined, Custom
-  - Search by name or content
-  - Sort by: Name, Last Modified, Schedule frequency
-  - Recipe status indicators: Active (running), Paused, Error, Draft (never run)
-  - Click recipe → Opens editor (if editable) or viewer (if locked)
-- [ ] **Recipe-Worker Binding UI:**
-  - In Worker Edit modal: dropdown to select which recipe this worker uses
-  - Shows recipe compatibility (Worker recipes vs Supervisor recipes)
-  - Warning if changing recipe while worker is Active
-- [ ] **Recipe Versioning (Basic):**
-  - On save: backup previous version to `~/.autodev/recipes/backups/`
-  - "View History" button shows last 5 versions with timestamps
-  - "Restore" button to revert to previous version
+- [x] **Recipe Editor (Structured Form):**
+  - `src/components/recipes/RecipeEditor.tsx` — structured form modal
+  - Fields: ID (slug), Title, Description, Schedule, Permission Mode, Agent Role, Model, Instructions
+  - "Save" / "Cancel" / "Delete" buttons
+  - System recipe protection: warns before editing, requires explicit override
+  - Version history panel (shows backups with restore buttons)
+- [x] **Recipe Create/Edit/Delete UI:**
+  - "New Recipe" button in Recipes Tab toolbar
+  - "Edit" button on each recipe card (previously disabled)
+  - Recipe deletion with confirmation (`delete_recipe` Tauri command)
+  - ID auto-slugified from title on create
+- [x] **Recipe Browser Enhancements:**
+  - System/User recipe sections retained
+  - Edit button opens `RecipeEditor` modal
+  - Run button still disabled (execution engine in Phase 2.3)
+- [x] **Recipe-Worker Binding UI:**
+  - `WorkerTable.tsx` — Recipe column with inline `<select>` dropdown per worker row
+  - Calls `bind_worker_recipe(worker_id, recipe_id)` on change (existing Tauri command)
+  - Loads recipe list from `list_recipes` on table mount; `worker.recipe_id` highlighted in accent color
+- [x] **Recipe Versioning (Basic):**
+  - On save: `update_recipe` Tauri command backs up previous version to `~/.autodev/recipes/backups/`
+  - "History" button in editor shows last N backups with timestamps
+  - "Restore" button calls `restore_recipe_backup` Tauri command
 
 **Enhanced Supervisor Logic (Full Implementation):**
-- [ ] **Supervisor Recipe Logic (Production):**
+- [x] **Supervisor Recipe Logic (Production):**
   - `supervisor-poll.yaml` recipe (system-defined, locked, reads from workers.db):
     - Polls `~/.autodev/tasks.db` every 2 min for tasks with status='ready'
     - For each ready task:
@@ -2066,37 +2049,68 @@ Phase 2 remains the **grandiose vision**: PA delegates → Board → Supervisor 
   - Has access to all workers via `list_workers()` Tauri command (exposed to core-orchestrator as AutoDev tool)
 
 **GitHub Integration:**
-- [ ] GitHub PAT storage in vault — Secure keychain storage
-- [ ] GitHub MCP integration: list repos, create PR, review PR — Workers use this to create PRs after completing tasks
+- [x] GitHub PAT storage in vault — `store_github_pat` / `get_github_pat` / `delete_github_pat` via OS keychain
+- [x] GitHub PAT UI — `GitHubPATCard` in Settings tab (show stored/clear status, save, remove)
+- [x] GitHub MCP integration: settings card + config storage
+  - `GitHubMCPCard` in Settings tab: enable/disable toggle, org input, allowed repos textarea
+  - Backend: `src-tauri/src/commands/github_mcp_commands.rs` — `get_github_mcp_config` / `set_github_mcp_config`
+  - Config stored in `~/.autodev/config.db` `app_settings` table as JSON
+  - Worker PR creation via MCP server (runtime activation in Phase 3.4)
 
 **Provider Support & Model Enhancements:**
-- [ ] Additional providers: OpenAI, Gemini — Extend beyond Anthropic
-- [ ] **Thinking Models + Reasoning Effort:**
-  - Support models with reasoning capabilities (o1, o3, Claude 3.7 Sonnet with extended thinking)
-  - Reasoning effort slider in Settings: Low / Medium / High
-  - Store reasoning preference per model in `model_registry.py` equivalent
-  - Display reasoning tokens separately in cost tracking
-- [ ] **Temperature + Top-P Parameters:**
-  - Per-model configuration for temperature (0.0 - 2.0) and top-p (0.0 - 1.0)
-  - UI in Settings → Models with sliders + reset to defaults
-  - Store in `~/.autodev/model_configs.db` (SQLite)
-  - Default presets: Creative (temp 1.0), Balanced (temp 0.7), Precise (temp 0.3)
-- [ ] **Model Context Window Validation:**
-  - Store max context window per model in registry (4k, 8k, 128k, 200k)
-  - Pre-flight check: warn if prompt + estimated response exceeds 80% of context window
-  - Context meter in UI showing current / max tokens
-  - Auto-suggestion to compact or summarize when nearing limit
+- [x] Additional providers: OpenAI (`openai.rs`) and Google Gemini (`google.rs`) implemented with full `build_body()`, streaming, tool use, `supports_thinking`, `cost_in/out_per_1m`
+- [x] **Thinking Models + Reasoning Effort:**
+  - `CompletionRequest` extended: `reasoning_effort: Option<String>`, `thinking_budget_tokens: Option<u32>`
+  - Anthropic: `betas=["interleaved-thinking-2025-05-14"]` + thinking block in body when `thinking_budget_tokens` set
+  - OpenAI: `reasoning_effort` param for o-series models
+  - `ModelInfo.supports_thinking` flag on all providers
+  - `ModelConfigSection` in Settings: "Enable Extended Thinking" toggle + budget slider (1024–32000 tokens)
+- [x] **Temperature + Top-P Parameters:**
+  - `CompletionRequest` extended: `temperature: Option<f32>`, `top_p: Option<f32>`
+  - All 3 providers wire these params through their `build_body()`
+  - Backend: `src-tauri/src/db/model_configs.rs` + `model_config_commands.rs` (CRUD in `~/.autodev/config.db`)
+  - Frontend: `modelConfigStore.ts` (Zustand), `ModelConfigSection` in Settings (sliders + reset buttons)
+- [x] **Model Context Window Meter:**
+  - `ContextMeter` component in `Chat.tsx` input meta row
+  - Estimates tokens (chars/4), displays color-coded progress bar + percentage
+  - `MODEL_CONTEXT` map covers Anthropic/OpenAI/Google models; defaults to 200k
+  - Tooltip shows `~Xk / Yk tokens used`
 
 **Submodule Bridge (core-orchestrator integration):**
-- [ ] **[SUBMODULE]** `unified_tool_handler.py`: Add `register_autodev_handler()` + routing logic
-- [ ] **[SUBMODULE]** `autodev_handler.py`: New file with AutoDevToolHandler class
-- [ ] **[SUBMODULE]** `living_agent.py`: Wire up autodev_handler in `initialize_bridges()`
-- [ ] **[SUBMODULE]** `tool_executor.py`: Handle `__autodev` suffix in execution tracking
-- [ ] **[SUBMODULE]** Unit tests for autodev tool routing
-- [ ] **[SUBMODULE]** Integration tests for worker recipes with AutoDev tools
+- [x] **[SUBMODULE]** `unified_tool_handler.py`: `register_autodev_handler()` + routing logic
+- [x] **[SUBMODULE]** `autodev_handler.py`: `AutoDevToolHandler` class with 8 tools
+- [x] **[SUBMODULE]** `living_agent.py`: STEP 4.7 autodev handler initialization
+- [x] **[SUBMODULE]** `list_workers__autodev`: reads `~/.autodev/workers.db` directly via `sqlite3` (no Tauri round-trip)
+- [x] **[SUBMODULE]** Unit tests (`tests/test_autodev_handler.py`): routing, list_workers, file ops
+- [x] **[SUBMODULE]** Integration test framework for Phase 2.3:
+  - `tests/conftest.py` — shared fixtures: `tmp_autodev_dir`, `workers_db`, `config_db`, `mock_llm_provider`, `handler`
+  - `tests/test_phase23_integration.py` — 25 tests covering: model config CRUD, worker-recipe binding, recipe YAML structure, GitHub MCP config, AutoDevToolHandler routing
 
 **2.2 Success Criteria:**
 > Create custom worker "worker-api" via UI → Assign it specific repos → Task routes to it → Worker creates PR on GitHub → QC reviews → Supervisor merges
+
+---
+
+#### Phase 2.3+ — Workspace Folder + Auto-Launch ✅ **Implemented**
+
+> **Foundation for Phase 3 IDE**: The workspace folder establishes the root directory concept that the IDE tab will build on.
+
+- [x] **Workspace Folder Selection:**
+  - Native OS folder-picker dialog via `rfd` crate — `pick_workspace_dir()` Tauri command
+  - Persist selected folder to `~/.autodev/config.db` `app_settings` table (key: `workspace_dir`)
+  - Commands: `get_workspace_dir`, `set_workspace_dir`, `pick_workspace_dir`
+  - `WorkspaceCard` in Settings tab — top section with `ACTIVE` badge, Change + Clear buttons
+  - All agents (PA, Supervisor, Workers) use workspace_dir as `working_dir`
+  - Frontend: `workspaceStore.ts` — Zustand store, loaded at app startup
+- [x] **@-Mention Path Resolution:**
+  - Chat input preprocesses `@path/to/file` and `@filename.ext` → absolute paths from workspace root
+  - Applied in `resolveAtMentions()` before `send_message` IPC call
+  - Example: `@src-tauri/src/main.rs` → `C:\AIRS Foundry\autodev\autodev\src-tauri\src\main.rs`
+  - Skips tokens that are already absolute paths
+- [x] **Auto-Launch Worker Fleet:**
+  - On app startup, all workers with `recipe_id` set (and not paused/deleted) are auto-started
+  - No manual "Start" click required — fleet wakes up immediately on launch
+  - Workers silently fail (error status) if no provider configured yet, retry on next cron tick
 
 ---
 
@@ -2106,13 +2120,274 @@ Phase 2 remains the **grandiose vision**: PA delegates → Board → Supervisor 
 Phase 2.1 Dependencies:
   create_task tool → tasks.db → TaskBoard UI
   PA Mode Toggle → System Prompt Variants → Tool Registry Filtering
-  Cron Scheduler → Hardcoded Supervisor Recipe → Hardcoded Worker Recipe
+  [x] Cron Scheduler → Hardcoded Supervisor Recipe → Hardcoded Worker Recipe
 
 Phase 2.2 Dependencies (requires 2.1):
   workers.db → Worker Management UI → Recipe Auto-Generation
   GitHub PAT → GitHub MCP → Workers create PRs
   Submodule Bridge → core-orchestrator integration
+
+Phase 2.3+ Dependencies (implemented):
+  [x] Workspace Folder (config.db) → PA Sessions + Recipe Runner working_dir
+  [x] @-mention resolution → workspace_dir → absolute paths in chat
+  [x] Auto-launch → RecipeScheduler → all workers start on app open
 ```
+
+---
+
+## 10.5. Phase 2.5 — Recipe Agent Sandbox + Native Task Tools + Logs Tab
+
+**Goal**: Fix critical bugs preventing task board automation (missing native tools, workspace pollution), add comprehensive logging for debugging, and enhance file picker with folder support.
+
+**Why This Phase**: Phase 2.3+ exposed two critical issues blocking supervisor/worker automation:
+1. Recipe agents wrote Python scripts to project root (workspace pollution)
+2. Supervisor recipe required `list_tasks` + `update_task_status` tools that didn't exist as agent tools
+
+This phase fixes both issues and adds debugging infrastructure.
+
+### Phase 2.5 Deliverables
+
+#### Critical Bug Fixes
+
+**1. Recipe Agent Sandbox Isolation:**
+- [x] `src-tauri/src/recipes/runner.rs` — Changed `working_dir` from `workspace_dir` → `~/.autodev/agents/<slug>/`
+  - Each recipe agent (supervisor, worker-backend, etc.) gets isolated sandbox directory
+  - Auto-creates `~/.autodev/agents/<slug>/` on first run
+  - Python scripts, logs, markdown files created by agents now go to sandbox, never to workspace
+  - **Impact**: Eliminates workspace pollution (no more `check_backend_tasks.py`, `SUPERVISOR_EXECUTION_LOG.md`, etc. in project root)
+
+**2. Native Task Board Tools (FastDevelopment Mode):**
+- [x] `src-tauri/src/agent/builtin_tools/list_tasks_tool.rs` — `ListTasksTool`
+  - Input: optional `status` filter (ready, assigned, in_progress, qc_review, done, failed, cancelled)
+  - Returns: JSON array of tasks with id, title, status, priority, assigned_worker, acceptance_criteria
+  - Read-only tool, available in FastDevelopment + Review modes
+  - **Impact**: Supervisor can now query task board directly without Python scripts
+
+- [x] `src-tauri/src/agent/builtin_tools/update_task_status_tool.rs` — `UpdateTaskStatusTool`
+  - Input: task_id, status, optional assigned_worker
+  - Updates task status + worker assignment atomically
+  - Available in FastDevelopment + Review modes
+  - **Impact**: Supervisor can assign tasks and update progress without Python scripts
+
+- [x] `src-tauri/src/agent/builtin_tools/mod.rs` — Tool Registration
+  - Both tools registered in `FastDevelopment` mode (used by recipe agents)
+  - `create_task` moved to FastDevelopment (was Delegate-only)
+  - Delegate mode unchanged: still has `create_task` only
+  - **Tool Registry State**:
+    - FastDevelopment: read_file, write_file, edit_file, bash, list_directory, grep, glob, **list_tasks**, **update_task_status**, **create_task**
+    - Review: same as FastDevelopment
+    - Delegate: create_task only
+
+#### Logging Infrastructure
+
+**3. Log File System:**
+- [x] `src-tauri/src/commands/log_commands.rs` — New module
+  - `list_log_files() -> Vec<String>` — returns available log dates (YYYY-MM-DD format)
+  - `read_log_file(date: String) -> String` — reads full log file content
+  - Logs stored at `~/.autodev/logs/autodev-YYYY-MM-DD.log` (daily rotation)
+  - Registered in `src-tauri/src/lib.rs`
+
+**4. Logs Tab (Frontend):**
+- [x] `src/tabs/Logs.tsx` — Full-featured log viewer
+  - Date picker: select which day's log to view
+  - Level filter: ALL, ERROR, WARN, INFO, DEBUG, TRACE
+  - Search box: filter log lines by text
+  - Auto-scroll toggle: follow latest logs
+  - Auto-refresh: every 3 seconds (configurable)
+  - **Copy All** button: copies entire log to clipboard (shows "Copied!" confirmation)
+  - **Export** button: downloads log as `.log` file to browser Downloads folder
+  - Color-coded log levels: ERROR (coral), WARN (amber), INFO (periwinkle), DEBUG (muted), TRACE (dark)
+  - Timestamp, module, and message parsing from tracing format
+  - Added to `src/App.tsx` as 6th tab
+
+#### File Picker Enhancements
+
+**5. @-Mention File Picker with Folders:**
+- [x] `src-tauri/src/commands/file_commands.rs` — Updated FileEntry struct
+  - Added `is_dir: bool` field
+  - Added `children_count: u32` field (recursive file count in directory)
+  - `count_files_in_dir()` helper function for recursive counting
+  - Search results now include both files and folders
+
+- [x] `src/components/chat/AtFilePicker.tsx` — Updated UI
+  - Folders shown with □ icon (gold color) + "(N files)" count
+  - Files shown with </> icon (accent color)
+  - Keyboard navigation: ↑↓ to move, Enter to select, Escape to close
+  - Fuzzy matching on both file and folder names
+
+#### Testing & Verification
+
+- [x] Cargo check: PASSES (1 pre-existing grep.rs warning)
+- [x] TypeScript: tsc --noEmit PASSES (0 errors)
+- [x] `.gitignore` updated: added `scripts/` directory to ignore list (user action)
+
+### Phase 2.5 Success Criteria
+
+> **Workspace Cleanliness**: Run supervisor recipe → No Python files created in project root or `scripts/` folder → All agent helper files go to `~/.autodev/agents/supervisor/`
+
+> **Task Board Automation**: Supervisor recipe polls tasks via `list_tasks` tool → Finds "ready" tasks → Assigns via `update_task_status` tool → Worker claims and executes → All without Python scripts
+
+> **Logging**: User opens Logs tab → Selects today's date → Sees color-coded log lines → Filters by ERROR level → Finds root cause → Exports log for sharing
+
+> **File Picker**: User types `@src` in chat → Sees folders with file counts → Selects `src/` folder → Absolute path inserted → Can also select individual files
+
+### Phase 2.5 Impact Summary
+
+| Issue | Before | After |
+|-------|--------|-------|
+| Workspace pollution | 29+ Python files in root | 0 files in root; all in `~/.autodev/agents/` |
+| Task board access | LLM invents Python scripts | Native Rust tools: `list_tasks`, `update_task_status` |
+| Debugging | Logs scattered, hard to find | Centralized in `~/.autodev/logs/`, viewable in UI |
+| File selection | Only files, no folders | Folders + files with recursive counts |
+
+---
+
+## 10.6. Phase 2.6 — Fleet Sidecar Integration ✅ **Implemented**
+
+> **Goal**: AutoDev spawns and monitors both Python submodule processes from within the app, routes their stdout/stderr into the AutoDev Logs tab, enforces correct startup order, and excludes the irrelevant adobe-mcp-server from the AutoDev deployment.
+
+### Submodule Connection Architecture
+
+```
+AutoDev (Rust + Tauri)
+  └── SidecarManager  [src-tauri/src/sidecar/mod.rs]
+        │
+        ├── Phase 1: memory-mcp-server  :8000  [submodules/memory-mcp-server/]
+        │     Command: uv run python main.py --mode dev
+        │     Health:  GET http://127.0.0.1:8000/health
+        │     Logs:    ~/.autodev/logs/memory-mcp.log  +  tracing subscriber
+        │
+        └── Phase 2: core-orchestrator  :4000  [submodules/core-orchestrator/]
+              Command: uv run uvicorn api_gateway.api.main:app --host 127.0.0.1 --port 4000
+              Health:  GET http://127.0.0.1:4000/api/system/health
+              Logs:    ~/.autodev/logs/core-orchestrator.log  +  tracing subscriber
+                         ↓
+                    LivingAgent  [src/airs/agent/living_agent.py]
+                         ↓
+                    MemoryCore   [src/airs/memory/] (connects to :8000)
+```
+
+**Startup order is mandatory**: `MemoryCore` inside `LivingAgent` connects to `:8000` at agent
+creation time. If `memory-mcp-server` is not up when `core-orchestrator` starts, agents will fail
+to initialise memory. `SidecarManager.start_memory()` must be called and confirmed healthy before
+`SidecarManager.start()` is called for core-orchestrator.
+
+### Files Involved
+
+| File | Role |
+|------|------|
+| `src-tauri/src/sidecar/mod.rs` | `SidecarManager` — spawns/stops/monitors both processes; `spawn_log_router()` pipes stdout/stderr; `resolve_sidecar_path()` / `resolve_memory_path()` |
+| `src-tauri/src/sidecar/client.rs` | `OrchestratorClient` — `is_healthy()` (`:4000`), `is_memory_healthy()` (`:8000`), `ensure_agent()`, `invoke_worker()` |
+| `src-tauri/src/commands/sidecar_commands.rs` | Tauri commands: `start_sidecar` (starts memory first → then orchestrator), `stop_sidecar` (kills both), `check_sidecar_connectivity`, `get_sidecar_status` |
+| `src-tauri/src/main.rs` | On startup: probes `:8000` and `:4000`; marks sidecars running if already up externally |
+| `src/stores/sidecarStore.ts` | Zustand store — sidecar status, `loadStatus()`, `startSidecar()`, `stopSidecar()` |
+| `src/tabs/AutoDevPanel.tsx` | Status badge in header; probes connectivity on mount |
+| `submodules/core-orchestrator/autodev_mcp_config.yaml` | **AutoDev-specific MCP config** — memory only, no adobe-mcp-server |
+| `submodules/core-orchestrator/api_gateway/api/main.py` | Reads `MCP_CONFIG_FILE` env var; uses `autodev_mcp_config.yaml` when set |
+| `submodules/core-orchestrator/.env` | `MCP_CONFIG_FILE=autodev_mcp_config.yaml` set here |
+
+### Adobe MCP Server — Why It's Excluded
+
+`core-orchestrator` ships with two MCP servers defined in `config/mcp/`:
+- `mcp-adobe` — Adobe Firefly/Photoshop creative tools (NOT needed for AutoDev)
+- `mcp-memory` — Long-term semantic memory via mem0 (required for LivingAgent)
+
+Previously, `mcp_config.yaml` included both. AutoDev now uses `autodev_mcp_config.yaml` which
+contains only `mcp-memory`. This is selected via `MCP_CONFIG_FILE=autodev_mcp_config.yaml` in
+`.env`. The full `mcp_config.yaml` remains for AIRS production deployments that use Adobe tools.
+
+Note: even without this fix, adobe doesn't block startup — `service_registry.py` catches config
+errors and continues with partial registry. But explicit exclusion is cleaner.
+
+### Log Routing
+
+Both processes are spawned with `Stdio::piped()`. Two background `std::thread`s per process
+(`spawn_log_router`) read lines from stdout/stderr:
+1. Each line is emitted via `tracing::info!("[core-orch] ...")` → appears in main AutoDev log file
+2. Each line is also appended to a dedicated sidecar log file:
+   - `~/.autodev/logs/core-orchestrator.log`
+   - `~/.autodev/logs/memory-mcp.log`
+
+Both log files are readable from the AutoDev **Logs tab** (which reads `~/.autodev/logs/`). This
+means all three log streams (Rust app, core-orchestrator, memory-mcp) are visible in one UI.
+
+### Phase 2.6 Deliverables
+
+- [x] `sidecar/mod.rs` — `SidecarManager` manages both processes + log routing + `resolve_memory_path()`
+- [x] `sidecar/client.rs` — `is_memory_healthy()` health check on `:8000`
+- [x] `sidecar_commands.rs` — `start_sidecar` enforces memory→orchestrator startup order; `stop_sidecar` kills both
+- [x] `main.rs` — startup probe for both `:8000` and `:4000`
+- [x] `autodev_mcp_config.yaml` — AutoDev MCP config (memory only)
+- [x] `api_gateway/api/main.py` — `MCP_CONFIG_FILE` env var support
+- [x] `core-orchestrator/.env` — `MCP_CONFIG_FILE=autodev_mcp_config.yaml`
+
+---
+
+## Phase 2 Bug and Improvements
+
+All fixes applied systematically from `phase2submodulefix.md`. Each task is marked as done below.
+
+### FIX-1 — AutoDev Tool Pipeline (E-01)
+
+- [x] **T1.1** `models.py` — Added `autodev_tools: List[str]` field to `AgentCreate` Pydantic model with default empty list.
+- [x] **T1.2** `agent_writer.py` — Added `autodev_tools: Optional[List[str]] = None` parameter to `create_agent_config_from_request`; wired through to `AgentConfig(autodev_tools=autodev_tools or [])`.
+- [x] **T1.3** `agent_schema.py` — Added `autodev_tools: List[str]` field to `AgentConfig` schema.
+- [x] **T1.4** `factory.py` — Reads `agent_config.autodev_tools` and passes the list to `AgentMetadata(autodev_tools=autodev_tool_names)`.
+- [x] **T1.5** `client.rs` — `ensure_agent` POST body now includes `autodev_tools` list (8 tools). `mcp_servers` is `[]` — memory is handled transparently inside core-orchestrator (`living_agent.py` → `context_service.py` → `memory_core.py`); agents never see or call memory-mcp-server tools directly.
+- [x] **T1.6** `autodev_handler.py` — `get_tool_specs()` now returns `ToolSpec` Pydantic objects (not plain dicts) so `living_agent.add_tools()` type validation passes.
+- [x] **T1.10** Deleted all stale agent YAML configs from `config/agents/` (`supervisor-*`, `worker-backend-*`, `worker-frontend-*`, `worker-mcp-*`, `qc-agent-*`, `worker-cleanup-*`, `worker-platform-*`). Next `ensure_agent` call recreates them with the correct fields.
+
+### FIX-3 — Unicode Encoding (E-11)
+
+- [x] **T3.2** `app.py` — Added `sys.stdout.reconfigure(encoding="utf-8", errors="replace")` and `sys.stderr.reconfigure(...)` guarded by `sys.platform == "win32"` at startup, before the logging system initializes.
+- [x] **T3.3** `sidecar/mod.rs` — Upgraded `PYTHONIOENCODING` from `"utf-8"` to `"utf-8:replace"` in both sidecar spawn commands (dev mode + uvicorn mode). Also sets `PYTHONUTF8=1`.
+
+### FIX-4 — Episodic Memory Isolation (E-03)
+
+- [x] **T4.0** `service.py` — Replaced ephemeral `headless-{uuid}` session ID with stable `worker-{agent_id}` so each fleet worker has a persistent, deterministic memory lane across all recipe ticks.
+- [x] **T4.1 / T6.1** `stream_manager.py` — Extended `broadcast_to_session` headless guard to also skip `worker-*` sessions (which have no SSE connection by design). All `emit_*` methods delegate through this guard.
+- [x] **T4.2** `mem0_adapter.py:864` — Fixed permissive session filter: changed `if item_session_id is not None and item_session_id != session_id` → `if item_session_id != session_id`. Memories with `session_id=None` (legacy unscoped) are now excluded from session-scoped queries.
+- [x] **T4.4** `context_service.py` — Added `agent_id: Optional[str] = None` parameter to `_retrieve_recent_conversation`; passes `"metadata.agent_id": agent_id` filter to `list_memories` MCP call when available.
+- [x] **T4.5** `context_service.py` — Added `agent_id: Optional[str] = None` parameter to `_retrieve_relevant_conversation`; passes `"metadata.agent_id": agent_id` filter to `search_memories` MCP call when available. Both call sites in `build_agent_context` now forward `agent_id`. Also applied to `get_timeline_messages`: injects `agent_id` into the `list_memories` filter dict before the MCP call (not just as a post-retrieval filter).
+
+### FIX-5 — Scheduler First-Tick Failures (E-04)
+
+- [x] **T5.1** `runner.rs` — Added public `is_orchestrator_ready() -> bool` method to `RecipeRunner` that delegates to `orch_client.is_healthy()`.
+- [x] **T5.2** `scheduler.rs` — Added `wait_for_orchestrator_ready()` module-level async helper (polls every 2 s, up to 45 s timeout). Called inside the `async_runtime::spawn` block before the first cron iteration so the first recipe tick waits for the orchestrator to be reachable.
+
+### FIX-7 — LiteLLM Log Noise (E-06/E-09)
+
+- [x] **T7.2** `app.py` — Silenced `LiteLLM`, `LiteLLM Router`, `LiteLLM Proxy`, `openai`, `openai._base_client`, `httpx`, and `httpcore` loggers to `WARNING` level at module load time to prevent log circuit breaker triggers and API key exposure in plain-text logs.
+- [x] **T7.3** `sidecar/mod.rs` — Added `LITELLM_LOG=WARNING` environment variable to the core-orchestrator uvicorn spawn command, suppressing LiteLLM debug noise at the OS process level (complements T7.2).
+
+### FIX-10 — asyncio Deprecation (E-12)
+
+- [x] **T10.1** `memory-mcp-server/main.py` — Replaced 3× `asyncio.get_event_loop()` calls with `asyncio.get_running_loop()` in the signal handler, `shutdown_server_with_timeout`, and Windows exception handler registration.
+- [x] **T10.2** `mem0_adapter.py` — Bulk-replaced all `asyncio.get_event_loop()` calls (17 occurrences) with `asyncio.get_running_loop()` throughout all async adapter methods (`add_async`, `search_async`, `get_async`, `update_async`, `delete_async`, `list_memories_async`, `delete_all_async`, `get_history_async`, `close`).
+
+---
+
+### App Run Procedure (Unchanged)
+
+The run procedure remains the same as before:
+
+```powershell
+# Terminal 1 — build and run (from autodev/ directory)
+cd src-tauri
+cargo build
+cd ..
+npm run tauri dev
+```
+
+**Sidecars auto-start on app launch.** On startup, AutoDev:
+1. Probes `:8000` and `:4000` — marks them running if already up (e.g. you started them manually)
+2. If not running: **automatically spawns the fleet** (no manual button click needed):
+   - Starts memory-mcp-server, waits up to 20s for health check
+   - Starts core-orchestrator, waits up to 30s for health check
+   - Logs all startup events to console and `~/.autodev/logs/`
+3. Once both are healthy, Mode 2 (LivingAgent) is active; workers use core-orchestrator
+
+If either sidecar fails to start (path not found, port conflict, etc.), workers automatically fall back to Mode 1 (Rust AgentEngine). The "Start Fleet" button in the AutoDev tab can still be used to manually restart the sidecars if needed.
 
 ---
 
@@ -2658,13 +2933,14 @@ Hook actions receive context object:
 #### Phase 3.2 Deliverables Checklist
 
 **Backend:**
-- [ ] File tree generation with git status
+- [x] **Workspace folder selection** — pre-implemented in Phase 2.3+: `workspace_commands.rs` (`get/set/pick_workspace_dir`), stored in `config.db`. IDE tab reads from the same config.
+- [ ] File tree generation with git status (scoped to `workspace_dir`)
 - [ ] File reading with encoding detection (UTF-8, UTF-16, etc.)
-- [ ] Fast file search by name
+- [ ] Fast file search by name (within `workspace_dir`)
 - [ ] File content search (grep integration)
 - [ ] Symbol extraction via tree-sitter
 - [ ] File metadata retrieval
-- [ ] Workspace state management
+- [ ] Workspace state management (multi-root workspace support for Phase 4)
 
 **Frontend:**
 - [ ] File tree component with icons and git badges

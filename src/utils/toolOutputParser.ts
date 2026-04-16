@@ -45,11 +45,24 @@ export interface FileContent {
   language?: string;
 }
 
+export interface DirectoryEntry {
+  name:         string
+  path:         string
+  is_directory: boolean
+  size_bytes?:  number
+}
+
+export interface DirectoryListingOutput {
+  path:    string
+  entries: DirectoryEntry[]
+}
+
 export type ToolOutputType =
   | { type: "grep"; data: GrepOutput }
   | { type: "glob"; data: GlobOutput }
   | { type: "bash"; data: BashOutput }
   | { type: "file_content"; data: FileContent }
+  | { type: "directory_listing"; data: DirectoryListingOutput }
   | { type: "text"; data: string };
 
 export function parseToolOutput(
@@ -76,6 +89,22 @@ export function parseToolOutput(
 
       case "read_file":
         return { type: "file_content", data: { path: "", content: output } };
+
+      case "list_directory": {
+        try {
+          const parsed = JSON.parse(output) as DirectoryListingOutput
+          return { type: "directory_listing", data: parsed }
+        } catch {
+          // Fallback: parse as plain text lines
+          const lines = output.split('\n').filter(Boolean)
+          const entries: DirectoryEntry[] = lines.map(line => ({
+            name: line.trim(),
+            path: line.trim(),
+            is_directory: line.endsWith('/') || line.endsWith('\\'),
+          }))
+          return { type: "directory_listing", data: { path: '', entries } }
+        }
+      }
 
       default:
         return { type: "text", data: output };

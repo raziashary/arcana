@@ -8,6 +8,12 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Terminal } from 'lucide-react'
 import ToolCallDisplay from './ToolCallDisplay'
+import { GrepResultsDisplay } from './GrepResultsDisplay'
+import { GlobResultsDisplay } from './GlobResultsDisplay'
+import { FileContentDisplay } from './FileContentDisplay'
+import { BashOutputDisplay } from './BashOutputDisplay'
+import { DirectoryListingDisplay } from './DirectoryListingDisplay'
+import { parseToolOutput } from '../../utils/toolOutputParser'
 import type { ChatMessage } from '../../stores/agentStore'
 
 interface Props {
@@ -162,7 +168,7 @@ function ToolMessageBubble({ message }: { message: ChatMessage }) {
             </div>
           )}
 
-          {/* Output */}
+          {/* Output — use rich display for known tool types */}
           <div className="mt-2 pl-3">
             {message.isError ? (
               <div
@@ -176,24 +182,44 @@ function ToolMessageBubble({ message }: { message: ChatMessage }) {
               >
                 {message.content}
               </div>
-            ) : (
-              <div
-                className="whitespace-pre-wrap break-all p-2 rounded font-mono"
-                style={{
-                  color: 'var(--accent)',
-                  borderLeft: `2px solid var(--accent)`,
-                  backgroundColor: 'var(--surface-bg)',
-                  fontSize: '11px',
-                  maxHeight: '300px',
-                  overflowY: 'auto',
-                }}
-              >
-                {message.content.length > 2000 ? message.content.slice(0, 2000) + '…' : message.content}
-              </div>
-            )}
+            ) : renderPersistedToolOutput(message.toolName ?? '', message.content)}
           </div>
         </div>
       )}
     </div>
   )
+}
+
+function renderPersistedToolOutput(toolName: string, content: string) {
+  const parsed = parseToolOutput(toolName, content)
+
+  switch (parsed.type) {
+    case 'grep':
+      return <GrepResultsDisplay data={parsed.data} />
+    case 'glob':
+      return <GlobResultsDisplay data={parsed.data} />
+    case 'file_content':
+      return <FileContentDisplay data={parsed.data} />
+    case 'bash':
+      return <BashOutputDisplay data={parsed.data} />
+    case 'directory_listing':
+      return <DirectoryListingDisplay data={parsed.data.entries} />
+    case 'text':
+    default:
+      return (
+        <div
+          className="whitespace-pre-wrap break-all p-2 rounded font-mono"
+          style={{
+            color: 'var(--accent)',
+            borderLeft: '2px solid var(--accent)',
+            backgroundColor: 'var(--surface-bg)',
+            fontSize: '11px',
+            maxHeight: '300px',
+            overflowY: 'auto',
+          }}
+        >
+          {content.length > 2000 ? content.slice(0, 2000) + '…' : content}
+        </div>
+      )
+  }
 }

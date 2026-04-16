@@ -11,7 +11,7 @@ impl Tool for ListDirectoryTool {
     fn name(&self) -> &str { "list_directory" }
 
     fn description(&self) -> &str {
-        "List files and subdirectories at a path. Returns a structured text listing with file sizes and types."
+        "List files and subdirectories at a path. Returns structured JSON with name, path, is_directory, size_bytes."
     }
 
     fn input_schema(&self) -> serde_json::Value {
@@ -50,65 +50,73 @@ impl Tool for ListDirectoryTool {
             return ToolResult::error(format!("Not a directory: {}", base.display()));
         }
 
-        let mut lines = vec![format!("{}/ (directory)", base.display())];
-        list_dir_recursive(&base, &base, 0, if recursive { 3 } else { 1 }, &mut lines);
+        let mut entries: Vec<serde_json::Value> = Vec::new();
+        collect_entries(&base, &base, 0, if recursive { 3 } else { 1 }, &mut entries);
 
-        if lines.len() == 1 {
-            lines.push("  (empty)".to_string());
-        }
+        let output = json!({
+            "path": base.display().to_string(),
+            "entries": entries,
+        });
 
-        ToolResult::success(lines.join("\n"))
+        ToolResult::success(output.to_string())
     }
 }
 
-fn list_dir_recursive(
+// Skip common noise directories
+const SKIP: &[&str] = &[
+    ".git", "node_modules", "target", "__pycache__", ".venv", "venv",
+    "dist", "build", ".airs",
+];
+
+fn collect_entries(
     root:      &Path,
     path:      &Path,
     depth:     usize,
     max_depth: usize,
-    out:       &mut Vec<String>,
+    out:       &mut Vec<serde_json::Value>,
 ) {
     if depth >= max_depth { return; }
 
-    let Ok(entries) = std::fs::read_dir(path) else { return };
-    let indent = "  ".repeat(depth + 1);
+    let Ok(read) = std::fs::read_dir(path) else { return };
 
-    let mut entries: Vec<_> = entries.filter_map(|e| e.ok()).collect();
-    entries.sort_by_key(|e| {
+    let mut dir_entries: Vec<_> = read.filter_map(|e| e.ok()).collect();
+    dir_entries.sort_by_key(|e| {
         let is_dir = e.path().is_dir();
         (!is_dir, e.file_name())
     });
 
-    // Skip common noise directories
-    const SKIP: &[&str] = &[
-        ".git", "node_modules", "target", "__pycache__", ".venv", "venv",
-        "dist", "build", ".airs",
-    ];
-
-    for entry in entries {
+    for entry in dir_entries {
         let name = entry.file_name();
-        let name_str = name.to_string_lossy();
+        let name_str = name.to_string_lossy().to_string();
         if SKIP.iter().any(|s| *s == name_str) { continue; }
 
         let entry_path = entry.path();
-        if entry_path.is_dir() {
-            out.push(format!("{indent}{name_str}/"));
-            list_dir_recursive(root, &entry_path, depth + 1, max_depth, out);
+        let is_dir     = entry_path.is_dir();
+        let size_bytes: Option<u64> = if is_dir {
+            None
         } else {
-            let size = entry.metadata()
-                .map(|m| format_size(m.len()))
-                .unwrap_or_default();
-            out.push(format!("{indent}{name_str}  {size}"));
-        }
-    }
-}
+            entry.metadata().ok().map(|m| m.len())
+        };
 
-fn format_size(bytes: u64) -> String {
-    if bytes < 1_024 {
-        format!("({bytes}B)")
-    } else if bytes < 1_024 * 1_024 {
-        format!("({:.1}KB)", bytes as f64 / 1_024.0)
-    } else {
-        format!("({:.1}MB)", bytes as f64 / 1_024.0 / 1_024.0)
+        // Path relative to root for display
+        let rel = entry_path.strip_prefix(root)
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| entry_path.display().to_string());
+
+        let mut obj = json!({
+            "name":         name_str,
+            "path":         rel,
+            "is_directory": is_dir,
+        });
+
+        if let Some(sz) = size_bytes {
+            obj["size_bytes"] = json!(sz);
+        }
+
+        out.push(obj);
+
+        if is_dir {
+            collect_entries(root, &entry_path, depth + 1, max_depth, out);
+        }
     }
 }

@@ -2,6 +2,7 @@
 sidecars/
 dist/
 target/
+scripts/
 
 # Python
 *.pyc

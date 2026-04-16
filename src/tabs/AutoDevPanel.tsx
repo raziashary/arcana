@@ -6,13 +6,19 @@
 //   - Metrics footer: Cost Today | Tokens | Closed | QC Pass Rate
 
 import { useEffect, useState, useCallback } from 'react'
-import { RefreshCw, Trash2, ChevronDown, ChevronRight, Plus } from 'lucide-react'
+import { RefreshCw, Trash2, ChevronDown, ChevronRight, Plus, Eraser } from 'lucide-react'
 import { invoke } from '@tauri-apps/api/core'
 import {
   useTaskStore,
   priorityLabel,
   type Task,
 } from '../stores/taskStore'
+import {
+  useWorkerStore,
+  workerStatusColor,
+  WORKER_TYPE_LABELS,
+} from '../stores/workerStore'
+import { useSidecarStore } from '../stores/sidecarStore'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -34,20 +40,11 @@ function elapsedSince(dateStr: string): string {
   return `${String(diffMin).padStart(2, '0')}:${String(diffSec).padStart(2, '0')}`
 }
 
-// ─── Agent Roster (vertical table) ───────────────────────────────────────────
-
-const AGENT_DEFS = [
-  { id: 'supervisor',       label: 'SUPERVISOR'       },
-  { id: 'worker-backend',   label: 'WORKER-BACKEND'   },
-  { id: 'worker-frontend',  label: 'WORKER-FRONTEND'  },
-  { id: 'worker-platform',  label: 'WORKER-PLATFORM'  },
-  { id: 'worker-mcp',       label: 'WORKER-MCP'       },
-  { id: 'worker-cleanup',   label: 'WORKER-CLEANUP'   },
-  { id: 'qc',               label: 'QC AGENT'         },
-]
+// ─── Agent Roster (vertical table) — reads from workers.db ─────────────────────
 
 function AgentRoster({ tasks }: { tasks: Task[] }) {
-  const [, tick] = useState(0)
+  const workerStore = useWorkerStore()
+  const [, tick]    = useState(0)
 
   // Re-render every second so elapsed timers update live
   useEffect(() => {
@@ -55,28 +52,47 @@ function AgentRoster({ tasks }: { tasks: Task[] }) {
     return () => clearInterval(id)
   }, [])
 
+  const workers = workerStore.workers
+
+  if (workers.length === 0) {
+    return (
+      <div
+        className="shrink-0 border-b font-mono"
+        style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-1)', padding: '8px 12px' }}
+      >
+        <span style={{ fontSize: 11, color: '#333' }}>Loading agents…</span>
+      </div>
+    )
+  }
+
   return (
     <div
       className="shrink-0 border-b font-mono"
       style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-1)' }}
     >
-      {AGENT_DEFS.map(agent => {
+      {workers.map(worker => {
         const active = tasks.find(
-          t => t.assigned_worker === agent.id && t.status === 'in_progress'
+          t => t.assigned_worker === worker.slug && t.status === 'in_progress'
         )
-        const isWorking  = !!active
+        const isWorking  = worker.status === 'working' || !!active
+        const dotColor   = workerStatusColor(isWorking ? 'working' : worker.status)
+        const typeLabel  = (WORKER_TYPE_LABELS[worker.worker_type] ?? worker.worker_type).toUpperCase()
+        const label      = worker.slug.toUpperCase()
         const taskLabel  = active
           ? `#${active.id} — ${active.title}`
-          : agent.id === 'supervisor'
-            ? 'Polling · 0 tasks queued'
-            : 'Idle — awaiting tasks'
-        const dotColor   = isWorking ? '#FFAA00' : '#4477FF'
-        const elapsed    = active ? elapsedSince(active.updated_at) : '—'
+          : worker.status === 'active' || worker.status === 'idle'
+            ? 'Idle — awaiting tasks'
+            : worker.status === 'paused'
+              ? 'Paused'
+              : worker.status === 'created'
+                ? 'Created — not started'
+                : 'Error'
+        const elapsed = active ? elapsedSince(active.updated_at) : '—'
 
         return (
           <div
-            key={agent.id}
-            className="flex items-center gap-2 px-3"
+            key={worker.id}
+            className="flex items-center gap-2"
             style={{
               borderBottom: '1px solid #111',
               padding: '7px 10px',
@@ -85,10 +101,13 @@ function AgentRoster({ tasks }: { tasks: Task[] }) {
           >
             <div
               className="shrink-0 rounded-full"
-              style={{ width: 7, height: 7, background: dotColor }}
+              style={{
+                width: 7, height: 7, background: dotColor,
+                boxShadow: isWorking ? `0 0 4px ${dotColor}` : 'none',
+              }}
             />
-            <div className="shrink-0" style={{ color: '#888', width: 140 }}>
-              {agent.label}
+            <div className="shrink-0" style={{ color: '#888', width: 150 }}>
+              {label}
             </div>
             <div
               className="flex-1 overflow-hidden"
@@ -96,9 +115,12 @@ function AgentRoster({ tasks }: { tasks: Task[] }) {
             >
               {taskLabel}
             </div>
+            <div className="shrink-0" style={{ color: '#555', fontSize: '10px', width: 55 }}>
+              {typeLabel}
+            </div>
             <div
               className="shrink-0 text-right"
-              style={{ color: '#333', fontSize: '10px', width: 70 }}
+              style={{ color: '#333', fontSize: '10px', width: 55 }}
             >
               {elapsed}
             </div>
@@ -126,12 +148,13 @@ function TaskCard({
 
   return (
     <div
-      className="font-mono text-xs cursor-pointer"
+      className="font-mono text-xs cursor-pointer anim-fade-in"
       style={{
         background:   '#111',
         border:       '1px solid #1d1d1d',
         borderRadius: '2px',
         marginBottom: '6px',
+        transition:   'border-color 0.15s ease, box-shadow 0.15s ease',
       }}
       onClick={() => setExpanded(e => !e)}
     >
@@ -150,13 +173,20 @@ function TaskCard({
             {task.title}
           </div>
           {task.assigned_worker && (
-            <div style={{ fontSize: '10px', color: doneStyle ? '#00FF88' : '#333' }}>
+            <div style={{ fontSize: '10px', color: doneStyle ? '#ADDB67' : '#3D5A6E' }}>
               {doneStyle ? '✓ done' : task.assigned_worker}
             </div>
           )}
           {showProgress && (
-            <div style={{ height: 2, background: '#1a1a1a', borderRadius: 1, marginTop: 5, overflow: 'hidden' }}>
-              <div style={{ height: '100%', background: '#00FF88', borderRadius: 1, width: '60%' }} />
+            <div style={{ height: 2, background: '#0D3652', borderRadius: 1, marginTop: 5, overflow: 'hidden', position: 'relative' }}>
+              {/* Shimmer sweep — continuous animation indicating active work */}
+              <div
+                style={{
+                  position: 'absolute', top: 0, left: 0, height: '100%',
+                  width: '40%', background: '#7FDBCA', borderRadius: 1,
+                  animation: 'shimmer 1.8s ease-in-out infinite',
+                }}
+              />
             </div>
           )}
         </div>
@@ -201,8 +231,8 @@ function TaskCard({
 
 const COL_HEADER_COLORS: Partial<Record<string, string>> = {
   ready:       'var(--accent)',
-  in_progress: '#FFAA00',
-  qc_review:   '#a78bfa',
+  in_progress: '#FFCB8B',
+  qc_review:   '#C792EA',
   done_today:  'var(--success)',
 }
 
@@ -221,8 +251,8 @@ function KanbanColumn({
     <div
       style={{
         flex:         1,
-        background:   '#0D0D0D',
-        border:       '1px solid #1a1a1a',
+        background:   '#00233B',
+        border:       '1px solid #0D3652',
         borderRadius: '2px',
         padding:      '8px',
         minHeight:    120,
@@ -250,18 +280,18 @@ function KanbanColumn({
               width:        6,
               height:       6,
               borderRadius: '50%',
-              background:   COL_HEADER_COLORS[colId] ?? '#333',
+              background:   COL_HEADER_COLORS[colId] ?? '#3D5A6E',
             }}
           />
           <span>{label}</span>
         </div>
-        <span style={{ color: '#333' }}>{tasks.length}</span>
+        <span style={{ color: '#3D5A6E' }}>{tasks.length}</span>
       </div>
 
       {/* Tasks */}
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {tasks.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '16px 0', color: '#2a2a2a', fontSize: '10px', fontFamily: 'monospace' }}>
+          <div style={{ textAlign: 'center', padding: '16px 0', color: '#3D5A6E', fontSize: '10px', fontFamily: 'monospace' }}>
             empty
           </div>
         ) : (
@@ -310,42 +340,42 @@ function MetricsRow({
     {
       label: 'Cost Today',
       value: costUsd != null ? `$${costUsd.toFixed(2)}` : '—',
-      color: '#00FF88',
+      color: '#7FDBCA',
     },
     {
       label: 'Tokens',
       value: totalTokens > 0 ? formatTokens(totalTokens) : '—',
-      color: '#888',
+      color: '#637777',
     },
     {
       label: 'Closed',
       value: String(todayDone.length),
-      color: '#888',
+      color: '#637777',
     },
     {
       label: 'QC Pass Rate',
       value: qcPassRate != null ? `${qcPassRate}%` : '—',
-      color: '#FFAA00',
+      color: '#FFCB8B',
     },
   ]
 
   return (
     <div
       className="shrink-0 flex gap-2 p-3"
-      style={{ borderTop: '1px solid #1a1a1a', background: '#0A0A0A' }}
+      style={{ borderTop: '1px solid #0D3652', background: '#011627' }}
     >
       {metrics.map(m => (
         <div
           key={m.label}
           style={{
             flex:         1,
-            background:   '#0D0D0D',
-            border:       '1px solid #1a1a1a',
+            background:   '#00233B',
+            border:       '1px solid #0D3652',
             borderRadius: '2px',
             padding:      '8px 10px',
           }}
         >
-          <div style={{ fontFamily: 'monospace', fontSize: '9px', color: '#333', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+          <div style={{ fontFamily: 'monospace', fontSize: '9px', color: '#3D5A6E', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
             {m.label}
           </div>
           <div style={{ fontFamily: 'monospace', fontSize: '16px', color: m.color, marginTop: 2 }}>
@@ -357,13 +387,32 @@ function MetricsRow({
   )
 }
 
-// ─── Main Panel ───────────────────────────────────────────────────────────────
+function formatLastRefreshed(d: Date): string {
+  const diffMs  = Date.now() - d.getTime()
+  const diffSec = Math.floor(diffMs / 1_000)
+  if (diffSec < 10)  return 'just now'
+  if (diffSec < 60)  return `${diffSec}s ago`
+  const diffMin = Math.floor(diffSec / 60)
+  return `${diffMin}m ago`
+}
 
 export default function AutoDevTab() {
-  const { tasks, isLoading, loadTasks, deleteTask } = useTaskStore()
-  const [costUsd,   setCostUsd]   = useState<number | null>(null)
-  const [tokensIn,  setTokensIn]  = useState<number | null>(null)
-  const [tokensOut, setTokensOut] = useState<number | null>(null)
+  const { tasks, loadTasks, deleteTask } = useTaskStore()
+  const workerStore = useWorkerStore()
+  const { status: sidecarStatus, isConnected: sidecarConnected, checkConnectivity } = useSidecarStore()
+  const [costUsd,      setCostUsd]      = useState<number | null>(null)
+  const [tokensIn,     setTokensIn]     = useState<number | null>(null)
+  const [tokensOut,    setTokensOut]    = useState<number | null>(null)
+  const [clearConfirm, setClearConfirm] = useState(false)
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null)
+  const [isRefreshing,  setIsRefreshing]  = useState(false)
+  const [, tick] = useState(0)
+
+  // Re-render every 10s so the "Xm ago" label stays fresh
+  useEffect(() => {
+    const id = setInterval(() => tick(n => n + 1), 10_000)
+    return () => clearInterval(id)
+  }, [])
 
   // get_cost_today returns [costUsd: f64, tokensIn: u64, tokensOut: u64]
   const loadCost = useCallback(async () => {
@@ -377,10 +426,31 @@ export default function AutoDevTab() {
     }
   }, [])
 
+  const doRefresh = useCallback(async () => {
+    if (isRefreshing) return
+    setIsRefreshing(true)
+    try {
+      await Promise.all([loadTasks(), loadCost(), workerStore.loadWorkers()])
+      setLastRefreshed(new Date())
+    } finally {
+      setIsRefreshing(false)
+    }
+  }, [isRefreshing, loadTasks, loadCost, workerStore])
+
+  // Probe core-orchestrator health on mount (non-blocking)
   useEffect(() => {
-    loadTasks()
-    loadCost()
-  }, [])
+    checkConnectivity()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    doRefresh()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-refresh every 3 minutes — enough to stay current without stressing the app.
+  useEffect(() => {
+    const id = setInterval(doRefresh, 180_000)
+    return () => clearInterval(id)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Column definitions — matches mockup's 4-column layout
   // "Ready" merges ready + assigned (both are pre-work states)
@@ -403,32 +473,58 @@ export default function AutoDevTab() {
   return (
     <div
       className="flex flex-col flex-1 overflow-hidden"
-      style={{ background: '#0A0A0A', fontFamily: 'IBM Plex Mono, monospace' }}
+      style={{ background: '#011627', fontFamily: 'IBM Plex Mono, monospace' }}
     >
       {/* Panel header */}
       <div
         className="flex items-center justify-between px-4 py-2 shrink-0"
-        style={{ borderBottom: '1px solid #1a1a1a', background: '#0D0D0D' }}
+        style={{ borderBottom: '1px solid #0D3652', background: '#00233B' }}
       >
-        <span style={{ fontSize: '11px', color: '#555', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+        <span style={{ fontSize: '11px', color: '#637777', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
           Agent Roster
         </span>
-        <div className="flex gap-2">
-          <button
-            onClick={() => { loadTasks(); loadCost() }}
+        <div className="flex items-center gap-3">
+          {/* core-orchestrator sidecar status badge */}
+          <div
             className="flex items-center gap-1"
-            style={{
-              background: '#111', border: '1px solid #222', borderRadius: 2,
-              padding: '4px 10px', color: '#666', fontSize: '10px', cursor: 'pointer',
-            }}
+            title={`core-orchestrator: ${sidecarStatus}`}
+            style={{ fontSize: '9px', color: sidecarConnected ? '#7FDBCA' : '#637777', letterSpacing: '0.05em' }}
           >
-            <RefreshCw size={10} />
-            <span>{isLoading ? 'loading…' : 'Refresh'}</span>
-          </button>
+            <span style={{
+              width: 5, height: 5, borderRadius: '50%', display: 'inline-block',
+              background: sidecarConnected ? '#7FDBCA'
+                : sidecarStatus === 'starting' ? '#FFCB8B'
+                : '#3D5A6E',
+              boxShadow: sidecarConnected ? '0 0 4px #7FDBCA' : 'none',
+            }} />
+            <span>{sidecarConnected ? 'LivingAgent' : 'Mode 1'}</span>
+          </div>
+        <div className="flex gap-2">
+          <div className="flex items-center gap-2">
+            {lastRefreshed && (
+              <span style={{ fontSize: '9px', color: '#3D5A6E', fontFamily: 'monospace' }}>
+                ↺ {formatLastRefreshed(lastRefreshed)}
+              </span>
+            )}
+            <button
+              onClick={doRefresh}
+              className="flex items-center gap-1"
+              disabled={isRefreshing}
+              style={{
+                background: '#0B3A5C', border: '1px solid #1A527A', borderRadius: 2,
+                padding: '4px 10px', color: isRefreshing ? '#82AAFF' : '#637777',
+                fontSize: '10px', cursor: isRefreshing ? 'default' : 'pointer',
+                transition: 'color 0.2s',
+              }}
+            >
+              <RefreshCw size={10} className={isRefreshing ? 'anim-spin' : ''} />
+              <span>{isRefreshing ? 'updating…' : 'Refresh'}</span>
+            </button>
+          </div>
           <button
             style={{
-              background: '#00FF8812', border: '1px solid #00FF8840', borderRadius: 2,
-              padding: '4px 10px', color: '#00FF88', fontSize: '10px', cursor: 'pointer',
+              background: 'var(--accent-muted)', border: '1px solid var(--accent-border)', borderRadius: 2,
+              padding: '4px 10px', color: 'var(--accent)', fontSize: '10px', cursor: 'pointer',
               display: 'flex', alignItems: 'center', gap: 4,
             }}
             title="Create task (use PA in Delegate Mode)"
@@ -438,6 +534,7 @@ export default function AutoDevTab() {
             <span>New Task</span>
           </button>
         </div>
+        </div> {/* closes flex items-center gap-3 */}
       </div>
 
       {/* Agent roster table */}
@@ -446,11 +543,34 @@ export default function AutoDevTab() {
       {/* Task board label */}
       <div
         className="flex items-center justify-between px-4 py-2 shrink-0"
-        style={{ borderBottom: '1px solid #1a1a1a', background: '#0D0D0D' }}
+        style={{ borderBottom: '1px solid #0D3652', background: '#00233B' }}
       >
-        <span style={{ fontSize: '11px', color: '#555', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+        <span style={{ fontSize: '11px', color: '#637777', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
           Task Board
         </span>
+        <button
+          onClick={async () => {
+            if (!clearConfirm) { setClearConfirm(true); setTimeout(() => setClearConfirm(false), 3000); return }
+            await invoke('clear_all_tasks')
+            setClearConfirm(false)
+            loadTasks()
+          }}
+          className="flex items-center gap-1"
+          style={{
+            background:   clearConfirm ? '#FF636320' : '#0B3A5C',
+            border:       clearConfirm ? '1px solid #FF636350' : '1px solid #1A527A',
+            borderRadius: 2,
+            padding:      '3px 8px',
+            color:        clearConfirm ? '#FF6363' : '#637777',
+            fontSize:     '10px',
+            fontFamily:   'monospace',
+            cursor:       'pointer',
+          }}
+          title={clearConfirm ? 'Click again to confirm — deletes all tasks' : 'Clear all tasks from board'}
+        >
+          <Eraser size={9} />
+          <span>{clearConfirm ? 'Confirm clear?' : 'Clear Board'}</span>
+        </button>
       </div>
 
       {/* Kanban board */}

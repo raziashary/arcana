@@ -34,3 +34,11 @@ pub fn delete_task(id: i64) -> Result<()> {
     let db = TasksDb::open()?;
     db.delete(id)
 }
+
+/// Delete ALL tasks and reset the ID sequence.
+/// Used by the "Clear Board" button to start fresh tracking.
+#[tauri::command]
+pub fn clear_all_tasks() -> Result<()> {
+    let db = TasksDb::open()?;
+    db.clear_all()
+}

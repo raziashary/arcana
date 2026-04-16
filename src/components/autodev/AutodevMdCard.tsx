@@ -12,7 +12,7 @@ import AutodevMdEditor from './AutodevMdEditor'
 function StatusDot({ content }: { content: string }) {
   const isEmpty    = content.trim().length === 0
   const isOver     = content.length > MAX_AUTODEV_CHARS * 0.85
-  const background = isEmpty ? '#2a2a2a' : isOver ? 'var(--warning)' : 'var(--success)'
+  const background = isEmpty ? '#0D3652' : isOver ? 'var(--warning)' : 'var(--success)'
   return (
     <div
       className="shrink-0 rounded-full"

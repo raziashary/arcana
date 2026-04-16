@@ -218,15 +218,16 @@ impl TasksDb {
     pub fn update_status(&self, id: i64, status: &str, assigned_worker: Option<&str>) -> Result<()> {
         // completed_at is set atomically: datetime('now') on done, NULL on any other transition.
         // This ensures the "Done Today" filter stays accurate across status cycles.
+        // updated_at is always refreshed so stall detection (supervisor) stays accurate.
         let completed_at_sql = if status == "done" { "datetime('now')" } else { "NULL" };
         if let Some(worker) = assigned_worker {
             let sql = format!(
-                "UPDATE tasks SET status = ?1, assigned_worker = ?2, completed_at = {completed_at_sql} WHERE id = ?3"
+                "UPDATE tasks SET status = ?1, assigned_worker = ?2, updated_at = datetime('now'), completed_at = {completed_at_sql} WHERE id = ?3"
             );
             self.conn.execute(&sql, params![status, worker, id])?;
         } else {
             let sql = format!(
-                "UPDATE tasks SET status = ?1, completed_at = {completed_at_sql} WHERE id = ?2"
+                "UPDATE tasks SET status = ?1, updated_at = datetime('now'), completed_at = {completed_at_sql} WHERE id = ?2"
             );
             self.conn.execute(&sql, params![status, id])?;
         }
@@ -235,6 +236,16 @@ impl TasksDb {
 
     pub fn delete(&self, id: i64) -> Result<()> {
         self.conn.execute("DELETE FROM tasks WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Delete all tasks and reset the auto-increment counter.
+    /// Used by the UI "Clear Board" action to start fresh.
+    pub fn clear_all(&self) -> Result<()> {
+        self.conn.execute_batch(
+            "DELETE FROM tasks;
+             DELETE FROM sqlite_sequence WHERE name = 'tasks';"
+        )?;
         Ok(())
     }
 }

@@ -2,12 +2,15 @@
 // Each sub-module manages its own connection and migration.
 // Databases:
 //   ~/.autodev/tasks.db            — Internal task board (Supervisor ↔ Workers)
-//   ~/.autodev/config.db           — AUTODEV.md instructions (global + per-repo)
+//   ~/.autodev/config.db           — AUTODEV.md instructions + per-model configs
+//   ~/.autodev/workers.db          — Worker registry (Phase 2.2)
 // 
 // Session data lives in the existing ~/.airs/autodev.db (see session/storage.rs).
 
 pub mod tasks;
 pub mod autodev_instructions;
+pub mod workers;
+pub mod model_configs;
 
 use std::path::PathBuf;
 use crate::errors::{AutoDevError, Result};

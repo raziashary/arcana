@@ -11,6 +11,8 @@ pub mod list_directory;
 pub mod grep;
 pub mod glob;
 pub mod create_task;
+pub mod list_tasks_tool;
+pub mod update_task_status_tool;
 
 use std::sync::Arc;
 use super::{PAMode, tool_registry::ToolRegistry};
@@ -21,12 +23,17 @@ pub fn register_all(registry: &mut ToolRegistry) {
 }
 
 /// Register tools filtered by PA mode:
-/// - FastDevelopment: all file/execution tools
-/// - Review:          same tools (permission layer is at execution time)
+/// - FastDevelopment: all file/execution tools + task board tools (list_tasks, update_task_status, create_task)
+/// - Review:          same as FastDevelopment (permission layer is at execution time)
 /// - Delegate:        only create_task — zero file tools
+///
+/// Task board tools (list_tasks, update_task_status, create_task) are available in FastDevelopment
+/// so that recipe agents (Supervisor, Workers) can manage the board without resorting to
+/// writing Python scripts. This is the primary fix for workspace pollution.
 pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
     match mode {
         PAMode::FastDevelopment | PAMode::Review => {
+            // File & execution tools
             registry.register(Arc::new(read_file::ReadFileTool));
             registry.register(Arc::new(write_file::WriteFileTool));
             registry.register(Arc::new(edit_file::EditFileTool));
@@ -34,6 +41,10 @@ pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
             registry.register(Arc::new(list_directory::ListDirectoryTool));
             registry.register(Arc::new(grep::GrepTool));
             registry.register(Arc::new(glob::GlobTool));
+            // Task board tools — recipe agents (Supervisor, Workers) use these directly
+            registry.register(Arc::new(list_tasks_tool::ListTasksTool));
+            registry.register(Arc::new(update_task_status_tool::UpdateTaskStatusTool));
+            registry.register(Arc::new(create_task::CreateTaskTool));
         }
         PAMode::Delegate => {
             registry.register(Arc::new(create_task::CreateTaskTool));

@@ -7,21 +7,32 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        'bg-app':     '#0A0A0A',
-        'bg-surface': '#0D0D0D',
-        'bg-card':    '#111111',
-        'border-1':   '#1a1a1a',
-        'border-2':   '#222222',
-        accent:       '#00FF88',
-        'accent-muted': '#00FF8812',
-        'accent-border': '#00FF8825',
-        danger:       '#FF4444',
-        warning:      '#FFAA00',
-        info:         '#4477FF',
-        'text-1':     '#888888',
-        'text-2':     '#555555',
-        'text-3':     '#444444',
-        'text-4':     '#333333',
+        /* Backgrounds — Winter is Coming */
+        'bg-app':      '#011627',
+        'bg-surface':  '#00233B',
+        'bg-card':     '#01111D',
+        'bg-2':        '#022C4A',
+        'bg-input':    '#0D2137',
+        'bg-selected': '#0B3A5C',
+        'bg-hover':    '#022C4A',
+        /* Borders */
+        'border-1':    '#0D3652',
+        'border-2':    '#1A527A',
+        /* Accent system */
+        accent:        '#82AAFF',
+        'accent-muted':  '#82AAFF15',
+        'accent-border': '#82AAFF30',
+        aqua:          '#7FDBCA',
+        success:       '#ADDB67',
+        danger:        '#FF6363',
+        warning:       '#FFCB8B',
+        info:          '#C792EA',
+        gold:          '#ECC48D',
+        /* Typography */
+        'text-1':      '#D6DEEB',
+        'text-2':      '#637777',
+        'text-3':      '#3D5A6E',
+        'text-4':      '#1A3A50',
       },
       fontFamily: {
         mono: ['IBM Plex Mono', 'monospace'],

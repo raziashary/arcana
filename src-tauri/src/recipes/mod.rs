@@ -5,6 +5,8 @@
 pub mod types;
 pub mod parser;
 pub mod defaults;
+pub mod runner;
+pub mod scheduler;
 
 use crate::errors::Result;
 use crate::db::autodev_dir;

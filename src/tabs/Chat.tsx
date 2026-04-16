@@ -1,18 +1,91 @@
 // Chat tab — PA-mode streaming chat with tool execution.
 // Wires agent store events, manages session, renders message list.
+// Phase 2.3: T4c — Context window meter in input meta row.
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { Send, Square } from 'lucide-react'
 import MessageBubble    from '../components/chat/MessageBubble'
 import PermissionDialog from '../components/chat/PermissionDialog'
 import { SessionBar }   from '../components/chat/SessionBar'
+import AtFilePicker, { type FileEntry } from '../components/chat/AtFilePicker'
 import { useAgentStore }    from '../stores/agentStore'
 import { useSessionStore }  from '../stores/sessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useCostStore }     from '../stores/costStore'
 import PaModeToggle from '../components/chat/PaModeToggle'
+import { useWorkspaceStore } from '../stores/workspaceStore'
+
+// ─── Context window sizes (tokens) per model ─────────────────────────────────
+// Fallback to 200_000 for unknown models.
+const MODEL_CONTEXT: Record<string, number> = {
+  // Anthropic
+  'claude-opus-4-5':      200_000,
+  'claude-sonnet-4-5':    200_000,
+  'claude-haiku-3-5':     200_000,
+  // OpenAI
+  'gpt-4o':               128_000,
+  'gpt-4o-mini':          128_000,
+  'gpt-4.1':            1_000_000,
+  'gpt-4.1-mini':       1_000_000,
+  'o4-mini':              200_000,
+  'o3':                   200_000,
+  // Google
+  'gemini-2.0-flash':   1_000_000,
+  'gemini-2.5-pro':     2_000_000,
+  'gemini-1.5-pro':     2_000_000,
+  'gemini-1.5-flash':   1_000_000,
+}
+
+// Rough token estimate: total_chars / 4 (industry heuristic)
+function estimateTokens(charCount: number): number {
+  return Math.ceil(charCount / 4)
+}
+
+function ContextMeter({ modelId, messages }: { modelId: string; messages: { content?: unknown; text?: string }[] }) {
+  const contextWindow = MODEL_CONTEXT[modelId] ?? 200_000
+
+  const usedTokens = useMemo(() => {
+    let chars = 0
+    for (const m of messages) {
+      if (typeof (m as { text?: string }).text === 'string') chars += (m as { text: string }).text.length
+      if (Array.isArray((m as { content?: unknown[] }).content)) {
+        for (const c of (m as { content: unknown[] }).content) {
+          if (typeof c === 'object' && c !== null && 'text' in c) chars += String((c as { text: unknown }).text).length
+        }
+      }
+    }
+    return estimateTokens(chars)
+  }, [messages])
+
+  const pct     = Math.min(usedTokens / contextWindow, 1)
+  const pctDisp = (pct * 100).toFixed(1)
+  const barColor = pct > 0.9 ? '#FF6363' : pct > 0.75 ? '#FF6363' : pct > 0.5 ? '#FFCB8B' : 'var(--aqua)'
+
+  const fmt = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n)
+
+  return (
+    <span className="flex items-center gap-1.5" title={`~${fmt(usedTokens)} / ${fmt(contextWindow)} tokens used`}>
+      <span style={{ color: 'var(--text-4)' }}>ctx</span>
+      <span
+        style={{
+          display: 'inline-block', width: 48, height: 3,
+          background: 'var(--border-1)', borderRadius: 99, overflow: 'hidden', verticalAlign: 'middle',
+        }}
+      >
+        <span
+          style={{
+            display: 'block', height: '100%',
+            width: `${pct * 100}%`, background: barColor,
+            borderRadius: 99, transition: 'width 0.3s ease',
+          }}
+        />
+      </span>
+      <span style={{ color: barColor }}>{pctDisp}%</span>
+    </span>
+  )
+}
 
 export default function ChatTab() {
   const messages      = useAgentStore(s => s.messages)
@@ -22,12 +95,24 @@ export default function ChatTab() {
   const workingDir    = useAgentStore(s => s.workingDir)
   const setWorkingDir = useAgentStore(s => s.setWorkingDir)
   const setSessionId  = useAgentStore(s => s.setSessionId)
+  const workspaceDir  = useWorkspaceStore(s => s.workspaceDir)
 
-  const [input,       setInput]       = useState('')
-  const [localDir,    setLocalDir]    = useState(workingDir)
-  const [isStarting,  setIsStarting]  = useState(false)
+  const [input,         setInput]         = useState('')
+  // Session working dir: prefer workspace dir over agent store default
+  const [localDir,      setLocalDir]      = useState(workingDir)
+  const [isStarting,    setIsStarting]    = useState(false)
+  // @-mention file picker state
+  const [atQuery,       setAtQuery]       = useState<string | null>(null)
+  const [atResults,     setAtResults]     = useState<FileEntry[]>([])
+  const [atSelectedIdx, setAtSelectedIdx] = useState(0)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef       = useRef<HTMLTextAreaElement>(null)
+
+  // Load sessions from backend on mount so SessionBar populates
+  useEffect(() => {
+    sessionStore.loadSessions()
+    useWorkspaceStore.getState().loadWorkspaceDir()
+  }, [])
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -42,19 +127,33 @@ export default function ChatTab() {
     return () => { unlistenersRef.current.forEach(fn => fn()) }
   }, [])
 
+  // Resolve @path tokens to absolute paths relative to workspace dir.
+  // Matches @word/path/file, @folder/name, @filename.ext — anything with . or /
+  const resolveAtMentions = (text: string): string => {
+    const ws = workspaceDir || localDir
+    if (!ws) return text
+    const sep = ws.includes('\\') ? '\\' : '/'
+    return text.replace(/@([\/\\]?[\w\-.][\w\-.+/\\]*[./\\][\w\-.+/\\]*|[\w\-]+\.[\w]+)/g, (_, p) => {
+      if (p.startsWith('/') || p.startsWith('\\') || /^[A-Za-z]:/.test(p)) return `@${p}`
+      return `${ws}${sep}${p}`
+    })
+  }
+
   const ensureSession = async (): Promise<string> => {
     if (sessionStore.activeSessionId) return sessionStore.activeSessionId
 
     const provider = settingsStore.activeProvider ?? 'anthropic'
     const model    = settingsStore.activeModel    ?? 'claude-sonnet-4-5'
-    const sessionId  = await sessionStore.createSession(localDir, provider, model)
+    // Use workspace dir as the session working dir if set
+    const dir = workspaceDir || localDir
+    const sessionId  = await sessionStore.createSession(dir, provider, model)
     setSessionId(sessionId)
     return sessionId
   }
 
   const handleSend = async () => {
     if (!input.trim() || isStreaming) return
-    const text = input.trim()
+    const text = resolveAtMentions(input.trim())
     setInput('')
 
     // Ensure provider + key
@@ -102,7 +201,66 @@ export default function ChatTab() {
     useAgentStore.getState().stopStreaming()
   }
 
+  // Handle @query: detect @ followed by non-space chars at cursor → trigger file search
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const val    = e.target.value
+    setInput(val)
+    const cursor     = e.target.selectionStart ?? val.length
+    const textBefore = val.slice(0, cursor)
+    const atMatch    = textBefore.match(/@(\S*)$/)
+    if (atMatch) {
+      const q = atMatch[1]
+      setAtQuery(q)
+      setAtSelectedIdx(0)
+      invoke<FileEntry[]>('search_workspace_files', { query: q })
+        .then(r => setAtResults(r))
+        .catch(() => setAtResults([]))
+    } else {
+      setAtQuery(null)
+      setAtResults([])
+    }
+  }
+
+  // Insert selected file path at the @query position — AI sees raw absolute path
+  const handleFileSelect = (entry: FileEntry) => {
+    const cursor     = inputRef.current?.selectionStart ?? input.length
+    const textBefore = input.slice(0, cursor)
+    const atIdx      = textBefore.lastIndexOf('@')
+    if (atIdx === -1) { setAtQuery(null); setAtResults([]); return }
+    const newInput = input.slice(0, atIdx) + entry.absolute_path + input.slice(cursor)
+    setInput(newInput)
+    setAtQuery(null)
+    setAtResults([])
+    setAtSelectedIdx(0)
+    // Restore focus after React re-render
+    setTimeout(() => inputRef.current?.focus(), 0)
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Intercept navigation keys when the file picker is open
+    if (atResults.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setAtSelectedIdx(i => Math.min(i + 1, atResults.length - 1))
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setAtSelectedIdx(i => Math.max(i - 1, 0))
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        if (atResults[atSelectedIdx]) handleFileSelect(atResults[atSelectedIdx])
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setAtQuery(null)
+        setAtResults([])
+        return
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
@@ -193,13 +351,23 @@ export default function ChatTab() {
           padding:      '10px 14px',
         }}
       >
+        {/* @-mention file picker — full-width block above the textarea row */}
+        {atResults.length > 0 && atQuery !== null && (
+          <AtFilePicker
+            results={atResults}
+            selectedIndex={atSelectedIdx}
+            query={atQuery}
+            onSelect={handleFileSelect}
+          />
+        )}
+
         <div className="flex items-end gap-2">
           <textarea
             ref={inputRef}
             value={input}
-            onChange={e => setInput(e.target.value)}
+            onChange={handleInputChange}
             onKeyDown={handleKeyDown}
-            placeholder="Send a message… (Enter to send, Shift+Enter for newline)"
+            placeholder="Send a message… (@ to reference a file, Enter to send)"
             rows={1}
             style={{
               flex:        1,
@@ -223,8 +391,8 @@ export default function ChatTab() {
               aria-label="Cancel"
               className="shrink-0 font-mono text-xs px-3 py-2 rounded-sm cursor-pointer"
               style={{
-                background: '#FF444420',
-                border:     '1px solid #FF444440',
+                background: '#FF636320',
+                border:     '1px solid #FF636340',
                 color:      'var(--danger)',
               }}
             >
@@ -253,8 +421,11 @@ export default function ChatTab() {
           style={{ fontSize: '10px', color: 'var(--text-4)' }}
         >
           <span>⏎ send · ⇧⏎ newline</span>
-          <span>
-            {settingsStore.activeModel ?? 'no model'} · ManualApproval
+          <span className="flex items-center gap-3">
+            {settingsStore.activeModel && (
+              <ContextMeter modelId={settingsStore.activeModel} messages={messages as { content?: unknown; text?: string }[]} />
+            )}
+            <span>{settingsStore.activeModel ?? 'no model'} · ManualApproval</span>
           </span>
         </div>
       </div>

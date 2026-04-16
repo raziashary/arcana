@@ -1,24 +1,14 @@
-// Recipes tab — list system and user-defined YAML recipes.
-// Phase 2.1: read-only viewer. Recipe execution scheduling is Phase 2.2.
-// See: DEVELOPMENT_PLAN.md — Recipes System
+// Recipes tab — list, create, edit, delete YAML recipes with versioning.
+// Phase 2.1: read-only viewer.
+// Phase 2.2: full CRUD via RecipeEditor modal + backup/restore versioning.
+// See: DEVELOPMENT_PLAN.md Phase 2.2 — RECIPES TAB UI
 
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { RefreshCw, ChevronDown, ChevronRight, Play } from 'lucide-react'
+import { RefreshCw, ChevronDown, ChevronRight, Play, Plus, Pencil } from 'lucide-react'
+import RecipeEditor, { type Recipe } from '../components/recipes/RecipeEditor'
 
-interface Recipe {
-  id:              string
-  title:           string
-  description:     string | null
-  schedule:        string | null
-  permission_mode: 'autonomous' | 'supervised'
-  agent_role:      string | null
-  model:           string | null
-  is_system:       boolean
-  instructions:    string
-}
-
-function RecipeCard({ recipe }: { recipe: Recipe }) {
+function RecipeCard({ recipe, onEdit }: { recipe: Recipe; onEdit: (r: Recipe) => void }) {
   const [expanded, setExpanded] = useState(false)
 
   return (
@@ -83,7 +73,7 @@ function RecipeCard({ recipe }: { recipe: Recipe }) {
         </div>
       </div>
 
-      {/* Run Now button — recipe execution engine coming Phase 2.2 */}
+      {/* Action bar */}
       <div
         className="px-3 pb-2 flex items-center justify-between"
         style={{ borderTop: '1px solid var(--border-1)', paddingTop: '6px' }}
@@ -91,22 +81,33 @@ function RecipeCard({ recipe }: { recipe: Recipe }) {
         <span style={{ color: 'var(--text-4)', fontSize: '9px' }}>
           {recipe.schedule ?? 'manual'}
         </span>
-        <button
-          disabled
-          title="Recipe execution engine coming in Phase 2.2"
-          className="flex items-center gap-1 rounded opacity-40"
-          style={{
-            fontSize:   '9px',
-            padding:    '2px 6px',
-            background: 'var(--bg-card)',
-            border:     '1px solid var(--border-2)',
-            color:      'var(--text-3)',
-            cursor:     'not-allowed',
-          }}
-        >
-          <Play size={8} />
-          Run Now
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={e => { e.stopPropagation(); onEdit(recipe) }}
+            className="flex items-center gap-1 rounded"
+            style={{
+              fontSize: '9px', padding: '2px 6px',
+              background: 'var(--bg-card)', border: '1px solid var(--border-2)',
+              color: 'var(--text-3)', cursor: 'pointer',
+            }}
+          >
+            <Pencil size={8} />
+            Edit
+          </button>
+          <button
+            disabled
+            title="Recipe execution engine coming in Phase 2.3"
+            className="flex items-center gap-1 rounded opacity-40"
+            style={{
+              fontSize: '9px', padding: '2px 6px',
+              background: 'var(--bg-card)', border: '1px solid var(--border-2)',
+              color: 'var(--text-3)', cursor: 'not-allowed',
+            }}
+          >
+            <Play size={8} />
+            Run
+          </button>
+        </div>
       </div>
 
       {expanded && (
@@ -142,9 +143,11 @@ function RecipeCard({ recipe }: { recipe: Recipe }) {
 }
 
 export default function RecipesTab() {
-  const [recipes,   setRecipes]   = useState<Recipe[]>([])
-  const [isLoading, setIsLoading] = useState(false)
-  const [error,     setError]     = useState<string | null>(null)
+  const [recipes,       setRecipes]       = useState<Recipe[]>([])
+  const [isLoading,     setIsLoading]     = useState(false)
+  const [error,         setError]         = useState<string | null>(null)
+  const [editingRecipe, setEditingRecipe] = useState<Recipe | null | undefined>(undefined)
+  // undefined = closed, null = new recipe, Recipe = edit mode
 
   const loadRecipes = async () => {
     setIsLoading(true)
@@ -186,6 +189,17 @@ export default function RecipesTab() {
         {isLoading && <span style={{ color: 'var(--text-4)' }}>loading…</span>}
         {error    && <span style={{ color: 'var(--error)', fontSize: '10px' }}>{error}</span>}
         <button
+          onClick={() => setEditingRecipe(null)}
+          className="flex items-center gap-1 px-2 py-1 rounded"
+          style={{
+            background: 'var(--accent-muted)', border: '1px solid var(--accent-border)',
+            color: 'var(--accent)', cursor: 'pointer', fontSize: '11px',
+          }}
+        >
+          <Plus size={11} />
+          <span>New Recipe</span>
+        </button>
+        <button
           onClick={loadRecipes}
           className="flex items-center gap-1 px-2 py-1 rounded transition-opacity hover:opacity-80"
           style={{
@@ -212,7 +226,7 @@ export default function RecipesTab() {
               SYSTEM RECIPES
             </div>
             <div className="flex flex-col gap-2">
-              {systemRecipes.map(r => <RecipeCard key={r.id} recipe={r} />)}
+              {systemRecipes.map(r => <RecipeCard key={r.id} recipe={r} onEdit={setEditingRecipe} />)}
             </div>
           </div>
         )}
@@ -226,7 +240,7 @@ export default function RecipesTab() {
               USER RECIPES
             </div>
             <div className="flex flex-col gap-2">
-              {userRecipes.map(r => <RecipeCard key={r.id} recipe={r} />)}
+              {userRecipes.map(r => <RecipeCard key={r.id} recipe={r} onEdit={setEditingRecipe} />)}
             </div>
           </div>
         )}
@@ -240,6 +254,15 @@ export default function RecipesTab() {
           </div>
         )}
       </div>
+
+      {/* Recipe editor modal */}
+      {editingRecipe !== undefined && (
+        <RecipeEditor
+          recipe={editingRecipe}
+          onClose={() => setEditingRecipe(undefined)}
+          onSaved={() => { setEditingRecipe(undefined); loadRecipes() }}
+        />
+      )}
     </div>
   )
 }

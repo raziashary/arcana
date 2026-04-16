@@ -9,6 +9,7 @@ import { GrepResultsDisplay } from './GrepResultsDisplay'
 import { GlobResultsDisplay } from './GlobResultsDisplay'
 import { FileContentDisplay } from './FileContentDisplay'
 import { BashOutputDisplay } from './BashOutputDisplay'
+import { DirectoryListingDisplay } from './DirectoryListingDisplay'
 
 interface Props {
   toolCall: ToolCallData
@@ -108,6 +109,9 @@ function renderToolOutput(toolCall: ToolCallData) {
     
     case 'bash':
       return <BashOutputDisplay data={parsed.data} />
+    
+    case 'directory_listing':
+      return <DirectoryListingDisplay data={parsed.data.entries} />
     
     case 'text':
     default:

@@ -33,28 +33,40 @@ impl OpenAIProvider {
     fn models_static() -> Vec<ModelInfo> {
         vec![
             ModelInfo {
-                id:              "gpt-4.1".into(),
-                name:            "GPT-4.1".into(),
-                context_window:  1_000_000,
-                supports_vision: true,
-                cost_in_per_1m:  5.0,   // Placeholder — update with actual pricing
-                cost_out_per_1m: 15.0,
+                id:                "gpt-4.1".into(),
+                name:              "GPT-4.1".into(),
+                context_window:    1_000_000,
+                supports_vision:   true,
+                supports_thinking: false,
+                cost_in_per_1m:    5.0,
+                cost_out_per_1m:   15.0,
             },
             ModelInfo {
-                id:              "gpt-4.1-mini".into(),
-                name:            "GPT-4.1 Mini".into(),
-                context_window:  1_000_000,
-                supports_vision: true,
-                cost_in_per_1m:  1.0,
-                cost_out_per_1m: 3.0,
+                id:                "gpt-4.1-mini".into(),
+                name:              "GPT-4.1 Mini".into(),
+                context_window:    1_000_000,
+                supports_vision:   true,
+                supports_thinking: false,
+                cost_in_per_1m:    1.0,
+                cost_out_per_1m:   3.0,
             },
             ModelInfo {
-                id:              "gpt-4o".into(),
-                name:            "GPT-4o".into(),
-                context_window:  128_000,
-                supports_vision: true,
-                cost_in_per_1m:  2.50,
-                cost_out_per_1m: 10.0,
+                id:                "gpt-4o".into(),
+                name:              "GPT-4o".into(),
+                context_window:    128_000,
+                supports_vision:   true,
+                supports_thinking: false,
+                cost_in_per_1m:    2.50,
+                cost_out_per_1m:   10.0,
+            },
+            ModelInfo {
+                id:                "o4-mini".into(),
+                name:              "o4-mini".into(),
+                context_window:    200_000,
+                supports_vision:   false,
+                supports_thinking: true,
+                cost_in_per_1m:    1.10,
+                cost_out_per_1m:   4.40,
             },
         ]
     }
@@ -157,6 +169,16 @@ impl OpenAIProvider {
         if !tools.is_empty() {
             body["tools"] = json!(tools);
             body["tool_choice"] = json!("auto");
+        }
+        if let Some(temp) = req.temperature {
+            body["temperature"] = json!(temp);
+        }
+        if let Some(top_p) = req.top_p {
+            body["top_p"] = json!(top_p);
+        }
+        // reasoning_effort for o-series models (o1, o3, o4-mini)
+        if let Some(ref effort) = req.reasoning_effort {
+            body["reasoning_effort"] = json!(effort);
         }
         if stream {
             body["stream"] = json!(true);

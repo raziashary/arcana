@@ -138,12 +138,15 @@ impl AgentEngine {
             }
 
             let request = CompletionRequest {
-                model:       model.to_string(),
-                messages:    history.clone(),
-                system:      Some(system_prompt.clone()),
-                tools:       tool_defs.clone(),
-                max_tokens:  8192,
-                temperature: None,
+                model:                  model.to_string(),
+                messages:               history.clone(),
+                system:                 Some(system_prompt.clone()),
+                tools:                  tool_defs.clone(),
+                max_tokens:             8192,
+                temperature:            None,
+                top_p:                  None,
+                reasoning_effort:       None,
+                thinking_budget_tokens: None,
             };
 
             debug!("Starting LLM stream turn={turn} session={session_id}");
