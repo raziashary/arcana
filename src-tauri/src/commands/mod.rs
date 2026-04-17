@@ -16,3 +16,5 @@ pub mod workspace_commands;
 pub mod file_commands;
 pub mod log_commands;
 pub mod sidecar_commands;
+pub mod skill_commands;
+pub mod hook_commands;

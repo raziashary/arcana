@@ -14,6 +14,8 @@ pub mod commands;
 pub mod db;
 pub mod recipes;
 pub mod sidecar;
+pub mod skills;
+pub mod hooks;
 
 // Register all Tauri commands on the builder from within the lib crate.
 // generate_handler! must run here so the __cmd__* macros (produced by
@@ -52,6 +54,14 @@ pub fn register_commands(
         file_commands::search_workspace_files,
         log_commands::{list_log_files, read_log_file, clear_log_files},
         sidecar_commands::{get_sidecar_status, check_sidecar_connectivity, start_sidecar, stop_sidecar},
+        skill_commands::{
+            list_skills, get_skill, search_skills, skills_by_category,
+            execute_skill, validate_skill_parameters, reload_skills, import_skill,
+        },
+        hook_commands::{
+            list_hooks, enable_hook, disable_hook, add_hook, remove_hook,
+            test_hook, get_hook_logs,
+        },
     };
     builder.invoke_handler(tauri::generate_handler![
         // Agent
@@ -135,5 +145,22 @@ pub fn register_commands(
         check_sidecar_connectivity,
         start_sidecar,
         stop_sidecar,
+        // Skills system (Phase 3.1)
+        list_skills,
+        get_skill,
+        search_skills,
+        skills_by_category,
+        execute_skill,
+        validate_skill_parameters,
+        reload_skills,
+        import_skill,
+        // Hooks system (Phase 3.1)
+        list_hooks,
+        enable_hook,
+        disable_hook,
+        add_hook,
+        remove_hook,
+        test_hook,
+        get_hook_logs,
     ])
 }

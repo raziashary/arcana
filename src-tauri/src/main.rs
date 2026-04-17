@@ -9,6 +9,7 @@ use autodev_lib::recipes::runner::RecipeRunner;
 use autodev_lib::recipes::scheduler::RecipeScheduler;
 use autodev_lib::sidecar::SidecarManager;
 use autodev_lib::sidecar::client::OrchestratorClient;
+use autodev_lib::skills::SkillRegistry;
 
 fn main() {
     // Capture panics and write them to both stderr and the tracing log file
@@ -26,7 +27,17 @@ fn main() {
         eprintln!("Warning: Failed to initialise recipes: {e}");
     }
 
+    // Initialise skills (writes default builtin skills to ~/.autodev/skills/)
+    if let Err(e) = autodev_lib::skills::ensure_default_skills() {
+        eprintln!("Warning: Failed to initialise skills: {e}");
+    }
+    let skill_registry = Arc::new(SkillRegistry::new());
+    if let Err(e) = skill_registry.reload() {
+        eprintln!("Warning: Failed to load skills: {e}");
+    }
+
     let app_state: Arc<Mutex<AppState>> = Arc::new(Mutex::new(AppState::new()));
+    let skill_registry_managed = skill_registry.clone();
 
     let session_mgr: Arc<SessionManager> = Arc::new(
         SessionManager::new().expect("Failed to initialise session database"),
@@ -58,6 +69,7 @@ fn main() {
             .manage(pending_permissions)
             .manage(sidecar_mgr)
             .manage(orch_client)
+            .manage(skill_registry_managed)
             .setup(move |app| {
                 // Build RecipeRunner + RecipeScheduler now that we have AppHandle
                 let runner = Arc::new(RecipeRunner::new(

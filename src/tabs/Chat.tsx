@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { Send, Square } from 'lucide-react'
+import { Send, Square, Zap } from 'lucide-react'
 import MessageBubble    from '../components/chat/MessageBubble'
 import PermissionDialog from '../components/chat/PermissionDialog'
 import { SessionBar }   from '../components/chat/SessionBar'
@@ -16,6 +16,10 @@ import { useSettingsStore } from '../stores/settingsStore'
 import { useCostStore }     from '../stores/costStore'
 import PaModeToggle from '../components/chat/PaModeToggle'
 import { useWorkspaceStore } from '../stores/workspaceStore'
+import SkillsPalette from '../components/skills/SkillsPalette'
+import SkillSlashPicker from '../components/skills/SkillSlashPicker'
+import SkillParameterModal from '../components/skills/SkillParameterModal'
+import { useSkillStore, type Skill, type SkillSummary } from '../stores/skillStore'
 
 // ─── Context window sizes (tokens) per model ─────────────────────────────────
 // Fallback to 200_000 for unknown models.
@@ -92,6 +96,7 @@ export default function ChatTab() {
   const isStreaming   = useAgentStore(s => s.isStreaming)
   const sessionStore  = useSessionStore()
   const settingsStore = useSettingsStore()
+  const skillStore    = useSkillStore()
   const workingDir    = useAgentStore(s => s.workingDir)
   const setWorkingDir = useAgentStore(s => s.setWorkingDir)
   const setSessionId  = useAgentStore(s => s.setSessionId)
@@ -101,6 +106,11 @@ export default function ChatTab() {
   // Session working dir: prefer workspace dir over agent store default
   const [localDir,      setLocalDir]      = useState(workingDir)
   const [isStarting,    setIsStarting]    = useState(false)
+  // /skill-name slash picker state
+  const [slashQuery,       setSlashQuery]       = useState<string | null>(null)
+  const [slashResults,     setSlashResults]     = useState<SkillSummary[]>([])
+  const [slashSelectedIdx, setSlashSelectedIdx] = useState(0)
+  const [slashSkill,       setSlashSkill]       = useState<Skill | null>(null)
   // @-mention file picker state
   const [atQuery,       setAtQuery]       = useState<string | null>(null)
   const [atResults,     setAtResults]     = useState<FileEntry[]>([])
@@ -215,10 +225,49 @@ export default function ChatTab() {
       invoke<FileEntry[]>('search_workspace_files', { query: q })
         .then(r => setAtResults(r))
         .catch(() => setAtResults([]))
+      setSlashQuery(null)
+      setSlashResults([])
     } else {
       setAtQuery(null)
       setAtResults([])
+      // /skill-name detection: only trigger when not an @-mention
+      const slashMatch = textBefore.match(/\/([\w-]*)$/)
+      if (slashMatch) {
+        const q = slashMatch[1]
+        setSlashQuery(q)
+        setSlashSelectedIdx(0)
+        skillStore.searchSkills(q || '')
+          .then(r => setSlashResults(r.slice(0, 8)))
+          .catch(() => setSlashResults([]))
+      } else {
+        setSlashQuery(null)
+        setSlashResults([])
+      }
     }
+  }
+
+  // Select skill from slash picker — clear /word and open SkillParameterModal
+  const handleSlashSelect = async (summary: SkillSummary) => {
+    const cursor     = inputRef.current?.selectionStart ?? input.length
+    const textBefore = input.slice(0, cursor)
+    const slashIdx   = textBefore.lastIndexOf('/')
+    const newInput   = input.slice(0, slashIdx) + input.slice(cursor)
+    setInput(newInput)
+    setSlashQuery(null)
+    setSlashResults([])
+    setSlashSelectedIdx(0)
+    const skill = await skillStore.getSkill(summary.name)
+    setSlashSkill(skill)
+    setTimeout(() => inputRef.current?.focus(), 0)
+  }
+
+  // Execute skill from slash flow — insert rendered template into input
+  const handleSlashExecute = async (params: Record<string, unknown>) => {
+    if (!slashSkill) return
+    const result = await skillStore.executeSkill(slashSkill.name, params)
+    setInput(i => i ? i + '\n\n' + result.rendered : result.rendered)
+    setSlashSkill(null)
+    setTimeout(() => inputRef.current?.focus(), 0)
   }
 
   // Insert selected file path at the @query position — AI sees raw absolute path
@@ -237,6 +286,17 @@ export default function ChatTab() {
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Intercept navigation when slash skill picker is open
+    if (slashResults.length > 0) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setSlashSelectedIdx(i => Math.min(i + 1, slashResults.length - 1)); return }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); setSlashSelectedIdx(i => Math.max(i - 1, 0)); return }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        if (slashResults[slashSelectedIdx]) handleSlashSelect(slashResults[slashSelectedIdx])
+        return
+      }
+      if (e.key === 'Escape') { e.preventDefault(); setSlashQuery(null); setSlashResults([]); return }
+    }
     // Intercept navigation keys when the file picker is open
     if (atResults.length > 0) {
       if (e.key === 'ArrowDown') {
@@ -351,6 +411,16 @@ export default function ChatTab() {
           padding:      '10px 14px',
         }}
       >
+        {/* /skill-name picker — full-width block above the textarea row */}
+        {slashResults.length > 0 && slashQuery !== null && (
+          <SkillSlashPicker
+            results={slashResults}
+            selectedIndex={slashSelectedIdx}
+            query={slashQuery}
+            onSelect={handleSlashSelect}
+          />
+        )}
+
         {/* @-mention file picker — full-width block above the textarea row */}
         {atResults.length > 0 && atQuery !== null && (
           <AtFilePicker
@@ -358,6 +428,17 @@ export default function ChatTab() {
             selectedIndex={atSelectedIdx}
             query={atQuery}
             onSelect={handleFileSelect}
+          />
+        )}
+
+        <SkillsPalette onInsert={rendered => setInput(i => i ? i + '\n\n' + rendered : rendered)} />
+
+        {/* Slash skill parameter modal */}
+        {slashSkill && (
+          <SkillParameterModal
+            skill={slashSkill}
+            onExecute={handleSlashExecute}
+            onClose={() => setSlashSkill(null)}
           />
         )}
 
@@ -384,6 +465,16 @@ export default function ChatTab() {
               maxHeight:   '120px',
             }}
           />
+
+          {/* Skills palette button */}
+          <button
+            title="Open skills palette (⌘⇧S)"
+            onClick={() => skillStore.openPalette()}
+            className="shrink-0 font-mono text-xs px-2 py-2 rounded-sm cursor-pointer"
+            style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', color: 'var(--text-3)' }}
+          >
+            <Zap size={13} />
+          </button>
 
           {isStreaming ? (
             <button

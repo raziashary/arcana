@@ -14,6 +14,7 @@ import WorkerTable from '../components/workers/WorkerTable'
 import WorkerCreateModal from '../components/workers/WorkerCreateModal'
 import { invoke } from '@tauri-apps/api/core'
 import { useWorkspaceStore } from '../stores/workspaceStore'
+import HooksSettings from '../components/settings/HooksSettings'
 
 export default function SettingsTab() {
   const store          = useSettingsStore()
@@ -73,6 +74,11 @@ export default function SettingsTab() {
         <div className="pt-4">
           <SectionHeader title="System Prompt" />
           <SystemPromptEditor />
+        </div>
+
+        <div className="pt-4">
+          <SectionHeader title="Hooks" />
+          <HooksSettings />
         </div>
 
       </div>

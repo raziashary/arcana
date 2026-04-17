@@ -2439,18 +2439,18 @@ If either sidecar fails to start (path not found, port conflict, etc.), workers 
 **Backend — Skills Engine:**
 
 **File Structure:**
-- [ ] `src-tauri/src/skills/mod.rs`: Skills module declaration
-- [ ] `src-tauri/src/skills/types.rs`: `Skill`, `SkillCategory`, `SkillParameter` structs
-- [ ] `src-tauri/src/skills/loader.rs`: `SkillLoader` with hot-reload capability
-- [ ] `src-tauri/src/skills/engine.rs`: `SkillEngine` for parameter substitution and execution
-- [ ] `src-tauri/src/skills/registry.rs`: `SkillRegistry` with category-based organization
+- [x] `src-tauri/src/skills/mod.rs`: Skills module declaration
+- [x] `src-tauri/src/skills/types.rs`: `Skill`, `SkillCategory`, `SkillParameter` structs
+- [x] `src-tauri/src/skills/loader.rs`: `SkillLoader` with hot-reload capability
+- [x] `src-tauri/src/skills/engine.rs`: `SkillEngine` for parameter substitution and execution
+- [x] `src-tauri/src/skills/registry.rs`: `SkillRegistry` with category-based organization
 
 **Skill Discovery & Loading:**
-- [ ] Scan `~/.autodev/skills/` on startup and file watcher for hot-reload
-- [ ] Recursive directory scanning: `~/.autodev/skills/{category}/{skill_name}.md`
-- [ ] YAML frontmatter parsing for metadata
-- [ ] Markdown body as skill template with `{{parameter}}` substitution
-- [ ] JSON schema validation for skill parameters
+- [x] Scan `~/.autodev/skills/` on startup (file watcher deferred)
+- [x] Recursive directory scanning: `~/.autodev/skills/{category}/{skill_name}.md`
+- [x] YAML frontmatter parsing for metadata
+- [x] Markdown body as skill template with `{{parameter}}` substitution
+- [x] JSON schema validation for skill parameters
 
 **Skill Schema (YAML Frontmatter):**
 ```yaml
@@ -2484,12 +2484,12 @@ tags: [backend, frontend, api]
 ```
 
 **Tauri Commands:**
-- [ ] `list_skills(category_filter?) -> Vec<SkillSummary>`: List all available skills
-- [ ] `get_skill(name) -> SkillDetail`: Load full skill with template
-- [ ] `execute_skill(name, parameters) -> SkillExecutionResult`: Execute skill with parameter substitution
-- [ ] `validate_skill_parameters(name, parameters) -> ValidationResult`: Pre-validate before execution
-- [ ] `reload_skills() -> ()`: Force reload from disk (for development)
-- [ ] `import_skill(url_or_path) -> Result<Skill>`: Import from external source
+- [x] `list_skills(category_filter?) -> Vec<SkillSummary>`: List all available skills
+- [x] `get_skill(name) -> SkillDetail`: Load full skill with template
+- [x] `execute_skill(name, parameters) -> SkillExecutionResult`: Execute skill with parameter substitution
+- [x] `validate_skill_parameters(name, parameters) -> ValidationResult`: Pre-validate before execution
+- [x] `reload_skills() -> ()`: Force reload from disk (for development)
+- [x] `import_skill(url_or_path) -> Result<Skill>`: Import from external source
 
 **Skill Execution Flow:**
 ```
@@ -2523,56 +2523,56 @@ User: "/feature-implementation"
 **Built-in Skill Categories:**
 
 **1. Coding Skills (`~/.autodev/skills/coding/`):**
-- [ ] `feature-implementation.md`: Standard 5-step feature development
-- [ ] `api-endpoint.md`: Design → Implement → Test → Document flow
-- [ ] `database-migration.md`: Schema design → Migration → Validation
-- [ ] `refactoring.md`: Analyze → Plan → Execute → Verify pattern
-- [ ] `code-review.md`: Read → Analyze → Comment → Summarize workflow
-- [ ] `test-addition.md`: Identify → Write → Run → Fix cycle
+- [x] `feature-implementation.md`: Standard 5-step feature development
+- [x] `api-endpoint.md`: Design → Implement → Test → Document flow
+- [x] `database-migration.md`: Schema design → Migration → Validation
+- [x] `refactoring.md`: Analyze → Plan → Execute → Verify pattern
+- [x] `code-review.md`: Read → Analyze → Comment → Summarize workflow
+- [x] `test-addition.md`: Identify → Write → Run → Fix cycle
 
 **2. Debugging Skills (`~/.autodev/skills/debugging/`):**
-- [ ] `error-investigation.md`: Log analysis → Reproduction → Root cause → Fix
-- [ ] `performance-optimization.md`: Profile → Identify bottleneck → Optimize → Validate
-- [ ] `race-condition-debug.md`: Pattern recognition → Lock analysis → Fix → Stress test
+- [x] `error-investigation.md`: Log analysis → Reproduction → Root cause → Fix
+- [x] `performance-optimization.md`: Profile → Identify bottleneck → Optimize → Validate
+- [x] `race-condition-debug.md`: Pattern recognition → Lock analysis → Fix → Stress test
 
 **3. DevOps Skills (`~/.autodev/skills/devops/`):**
-- [ ] `docker-setup.md`: Dockerfile → Compose → Test → Push
-- [ ] `ci-pipeline-fix.md`: Diagnose → Patch → Test → Deploy
-- [ ] `dependency-update.md`: Check → Update → Test → Commit
+- [x] `docker-setup.md`: Dockerfile → Compose → Test → Push
+- [x] `ci-pipeline-fix.md`: Diagnose → Patch → Test → Deploy
+- [x] `dependency-update.md`: Check → Update → Test → Commit
 
 **4. Fleet Skills (`~/.autodev/skills/fleet/`):** ⭐ Critical for Phase 2.2
-- [ ] `worker-task-execution.md`: Claim → Analyze → Execute → Report pattern
-- [ ] `supervisor-orchestration.md`: Poll → Assign → Monitor → Merge workflow
-- [ ] `qc-review.md`: Fetch → Review → Comment → Approve/Reject flow
-- [ ] `epic-breakdown.md`: Analyze → Decompose → Create subtasks → Assign
+- [x] `worker-task-execution.md`: Claim → Analyze → Execute → Report pattern
+- [x] `supervisor-orchestration.md`: Poll → Assign → Monitor → Merge workflow
+- [x] `qc-review.md`: Fetch → Review → Comment → Approve/Reject flow
+- [x] `epic-breakdown.md`: Analyze → Decompose → Create subtasks → Assign
 
 **Frontend — Skills UI:**
 
 **Skills Palette (`src/components/skills/SkillsPalette.tsx`):**
-- [ ] `Cmd+Shift+S` shortcut to open skills palette (like VS Code command palette)
-- [ ] Search/filter by name, category, tags
-- [ ] Category sidebar: Coding | Debugging | DevOps | Fleet | Custom
-- [ ] Preview pane showing skill description and parameters
-- [ ] "Execute" button with parameter form modal
-- [ ] Recent skills section at top
+- [x] `Cmd+Shift+S` shortcut to open skills palette (like VS Code command palette)
+- [x] Search/filter by name, category, tags
+- [x] Category sidebar: Coding | Debugging | DevOps | Fleet | Custom
+- [x] Preview pane showing skill description and parameters
+- [x] "Execute" button with parameter form modal
+- [x] Recent skills section at top
 
 **Skill Parameter Modal (`src/components/skills/SkillParameterModal.tsx`):**
-- [ ] Dynamic form generation from JSON schema
-- [ ] Validation messages per field
-- [ ] Required vs optional field indicators
-- [ ] Default value pre-population
-- [ ] Description tooltips for each parameter
-- [ ] "Execute" / "Cancel" buttons
+- [x] Dynamic form generation from JSON schema
+- [x] Validation messages per field
+- [x] Required vs optional field indicators
+- [x] Default value pre-population
+- [x] Description tooltips for each parameter
+- [x] "Execute" / "Cancel" buttons
 
 **Skill Store (`src/stores/skillStore.ts`):**
-- [ ] State: `skills` (by category), `recentSkills`, `isLoading`, `executionHistory`
-- [ ] Actions: `loadSkills()`, `executeSkill()`, `searchSkills()`, `addToRecent()`
+- [x] State: `skills` (by category), `recentSkills`, `isLoading`, `executionHistory`
+- [x] Actions: `loadSkills()`, `executeSkill()`, `searchSkills()`, `addToRecent()`
 
 **Slash Command Integration:**
-- [ ] Auto-complete slash commands in chat input
-- [ ] `/skill-name` triggers skill palette pre-filtered
-- [ ] Tab completion for skill names
-- [ ] Skills appear in tool suggestions
+- [x] Auto-complete slash commands in chat input
+- [x] `/skill-name` triggers skill palette pre-filtered
+- [x] Tab completion for skill names
+- [ ] Skills appear in tool suggestions (future: tool registry integration)
 
 #### Hooks System Architecture
 
@@ -2581,55 +2581,55 @@ User: "/feature-implementation"
 **Backend — Hooks Engine:**
 
 **File Structure:**
-- [ ] `src-tauri/src/hooks/mod.rs`: Hooks module declaration
-- [ ] `src-tauri/src/hooks/types.rs`: `Hook`, `HookType`, `HookCondition`, `HookResult` enums
-- [ ] `src-tauri/src/hooks/registry.rs`: `HookRegistry` with priority-based ordering
-- [ ] `src-tauri/src/hooks/executor.rs`: `HookExecutor` with sandboxed execution
-- [ ] `src-tauri/src/hooks/conditions.rs`: `HookConditionEvaluator` for conditional execution
+- [x] `src-tauri/src/hooks/mod.rs`: Hooks module declaration
+- [x] `src-tauri/src/hooks/types.rs`: `Hook`, `HookType`, `HookCondition`, `HookResult` enums
+- [x] `src-tauri/src/hooks/registry.rs`: `HookRegistry` with priority-based ordering
+- [x] `src-tauri/src/hooks/executor.rs`: `HookExecutor` with sandboxed execution
+- [x] `src-tauri/src/hooks/conditions.rs`: `HookConditionEvaluator` for conditional execution
 
 **Hook Types (Event Triggers):**
 
 **1. Agent Lifecycle Hooks:**
-- [ ] `SessionStart`: Triggered when new session created
-- [ ] `SessionEnd`: Triggered when session closed
-- [ ] `AgentLoopStart`: Before agent begins processing
-- [ ] `AgentLoopEnd`: After agent completes turn
-- [ ] `OnError`: When agent encounters error
+- [x] `SessionStart`: Triggered when new session created
+- [x] `SessionEnd`: Triggered when session closed
+- [x] `AgentLoopStart`: Before agent begins processing
+- [x] `AgentLoopEnd`: After agent completes turn
+- [x] `OnError`: When agent encounters error
 
 **2. Tool Execution Hooks:**
-- [ ] `PreToolUse`: Before any tool executes (can modify inputs or block)
-- [ ] `PostToolUse`: After tool completes (can modify outputs)
-- [ ] `OnToolError`: When tool execution fails
-- [ ] `OnPermissionRequest`: When permission dialog shown
+- [x] `PreToolUse`: Before any tool executes (can modify inputs or block)
+- [x] `PostToolUse`: After tool completes (can modify outputs)
+- [x] `OnToolError`: When tool execution fails
+- [x] `OnPermissionRequest`: When permission dialog shown
 
 **3. File System Hooks:**
-- [ ] `PreFileRead`: Before read_file tool executes
-- [ ] `PostFileWrite`: After write_file or edit_file succeeds
-- [ ] `PreFileDelete`: Before file deletion (can prevent)
-- [ ] `OnCheckpointCreate`: When file checkpoint created
-- [ ] `OnCheckpointRestore`: When file restored from checkpoint
+- [x] `PreFileRead`: Before read_file tool executes
+- [x] `PostFileWrite`: After write_file or edit_file succeeds
+- [x] `PreFileDelete`: Before file deletion (can prevent)
+- [x] `OnCheckpointCreate`: When file checkpoint created
+- [x] `OnCheckpointRestore`: When file restored from checkpoint
 
 **4. Git Hooks:**
-- [ ] `PreCommit`: Before git commit executes
-- [ ] `PostCommit`: After commit succeeds
-- [ ] `PrePush`: Before git push
-- [ ] `OnBranchSwitch`: When switching branches
-- [ ] `OnMergeConflict`: When merge conflict detected
+- [x] `PreCommit`: Before git commit executes
+- [x] `PostCommit`: After commit succeeds
+- [x] `PrePush`: Before git push
+- [x] `OnBranchSwitch`: When switching branches
+- [x] `OnMergeConflict`: When merge conflict detected
 
 **5. Plan Management Hooks:**
-- [ ] `PrePlanStep`: Before executing tools for plan step
-- [ ] `PostPlanStep`: After plan step completes
-- [ ] `OnPlanActivate`: When plan moves draft → active
-- [ ] `OnPlanComplete`: When all plan steps done
-- [ ] `OnPlanAbandon`: When plan abandoned
+- [x] `PrePlanStep`: Before executing tools for plan step
+- [x] `PostPlanStep`: After plan step completes
+- [x] `OnPlanActivate`: When plan moves draft → active
+- [x] `OnPlanComplete`: When all plan steps done
+- [x] `OnPlanAbandon`: When plan abandoned
 
 **6. Fleet-Specific Hooks:** ⭐ Critical for Phase 2.2
-- [ ] `OnTaskClaim`: When worker claims task
-- [ ] `OnTaskComplete`: When worker completes task
-- [ ] `OnTaskFail`: When worker task fails
-- [ ] `OnQCReviewStart`: When QC begins review
-- [ ] `OnQCApprove`: When QC approves work
-- [ ] `OnQCFail`: When QC rejects work
+- [x] `OnTaskClaim`: When worker claims task
+- [x] `OnTaskComplete`: When worker completes task
+- [x] `OnTaskFail`: When worker task fails
+- [x] `OnQCReviewStart`: When QC begins review
+- [x] `OnQCApprove`: When QC approves work
+- [x] `OnQCFail`: When QC rejects work
 
 **Hook Configuration (`~/.autodev/hooks/hooks.json`):**
 ```json
@@ -2699,24 +2699,24 @@ User: "/feature-implementation"
 ```
 
 **Hook Action Types:**
-- [ ] `shell`: Execute shell command with variable substitution
-- [ ] `script`: Execute Python/Node script file
-- [ ] `http`: HTTP POST/GET request with JSON body
-- [ ] `notification`: System notification (desktop)
-- [ ] `log`: Write to custom log file
-- [ ] `block`: Prevent action with optional message
-- [ ] `modify`: Change tool inputs before execution
-- [ ] `emit_event`: Custom Tauri event for frontend
+- [x] `shell`: Execute shell command with variable substitution
+- [x] `script`: Execute Python/Node script file (stubbed, deferred)
+- [x] `http`: HTTP POST/GET request with JSON body
+- [x] `notification`: System notification (desktop)
+- [x] `log`: Write to custom log file
+- [x] `block`: Prevent action with optional message
+- [x] `modify`: Change tool inputs before execution (stubbed, deferred)
+- [x] `emit_event`: Custom Tauri event for frontend
 
 **Hook Conditions:**
-- [ ] `tool_name`: Match specific tool
-- [ ] `file_pattern`: Glob pattern for file paths
-- [ ] `repo_path`: Only in specific repositories
-- [ ] `command_pattern`: Regex match for bash commands
-- [ ] `session_type`: PA vs Fleet sessions
-- [ ] `agent_mode`: FastDevelopment vs Review vs Delegate
-- [ ] `time_range`: Only during business hours
-- [ ] `custom_condition`: JavaScript expression evaluated at runtime
+- [x] `tool_name`: Match specific tool
+- [x] `file_pattern`: Glob pattern for file paths
+- [x] `repo_path`: Only in specific repositories
+- [x] `command_pattern`: Regex match for bash commands
+- [x] `session_type`: PA vs Fleet sessions
+- [x] `agent_mode`: FastDevelopment vs Review vs Delegate
+- [x] `time_range`: Only during business hours
+- [ ] `custom_condition`: JavaScript expression (future)
 
 **Hook Execution Context:**
 Hook actions receive context object:
@@ -2746,69 +2746,70 @@ Hook actions receive context object:
 ```
 
 **Tauri Commands:**
-- [ ] `list_hooks() -> Vec<HookConfig>`: List all configured hooks
-- [ ] `enable_hook(hook_id) -> ()`: Enable a hook
-- [ ] `disable_hook(hook_id) -> ()`: Disable a hook
-- [ ] `add_hook(config) -> Result<HookConfig>`: Add new hook
-- [ ] `remove_hook(hook_id) -> ()`: Remove custom hook
-- [ ] `test_hook(hook_id, context) -> HookResult`: Test hook with mock context
-- [ ] `get_hook_logs(hook_id?, limit?) -> Vec<HookExecutionLog>`: View execution history
+- [x] `list_hooks() -> Vec<HookConfig>`: List all configured hooks
+- [x] `enable_hook(hook_id) -> ()`: Enable a hook
+- [x] `disable_hook(hook_id) -> ()`: Disable a hook
+- [x] `add_hook(config) -> Result<HookConfig>`: Add new hook
+- [x] `remove_hook(hook_id) -> ()`: Remove custom hook
+- [x] `test_hook(hook_id, context) -> HookResult`: Test hook with mock context
+- [x] `get_hook_logs(hook_id?, limit?) -> Vec<HookExecutionLog>`: View execution history
 
 **Frontend — Hooks UI:**
 
 **Hooks Settings Panel (`src/components/settings/HooksSettings.tsx`):**
-- [ ] List all hooks with toggle switches
-- [ ] Drag-drop priority reordering
-- [ ] "Add Hook" button with template selection
-- [ ] Hook editor: JSON/YAML editor with validation
-- [ ] Test button with mock context generator
-- [ ] Execution log viewer with timestamps
+- [x] List all hooks with toggle switches
+- [ ] Drag-drop priority reordering (deferred)
+- [x] "Add Hook" button (form-based, template gallery deferred)
+- [x] Hook editor: form-based editor with action type fields and conditions
+- [x] Test button with inline result (empty context)
+- [x] Execution log viewer with timestamps
 
 **Hook Log Viewer (`src/components/hooks/HookLogViewer.tsx`):**
-- [ ] Filter by hook type, success/failure, time range
-- [ ] Expandable entries showing full context
-- [ ] Error highlighting for failed hooks
-- [ ] Export logs button
+- [x] Filter by outcome (All / Executed / Failed / Blocked / Skipped)
+- [x] Expandable entries showing full output and error context
+- [x] Error highlighting for failed hooks
+- [x] Export logs button (JSON download)
 
 #### Phase 3.1 Deliverables Checklist
 
 **Backend — Skills System:**
-- [ ] `src-tauri/src/skills/mod.rs`: Module declaration
-- [ ] `src-tauri/src/skills/types.rs`: Skill, SkillCategory, SkillParameter structs
-- [ ] `src-tauri/src/skills/loader.rs`: SkillLoader with hot-reload
-- [ ] `src-tauri/src/skills/engine.rs`: SkillEngine for parameter substitution
-- [ ] `src-tauri/src/skills/registry.rs`: SkillRegistry with category organization
+- [x] `src-tauri/src/skills/mod.rs`: Module declaration
+- [x] `src-tauri/src/skills/types.rs`: Skill, SkillCategory, SkillParameter structs
+- [x] `src-tauri/src/skills/loader.rs`: SkillLoader with hot-reload
+- [x] `src-tauri/src/skills/engine.rs`: SkillEngine for parameter substitution
+- [x] `src-tauri/src/skills/registry.rs`: SkillRegistry with category organization
 - [ ] Skills directory scanning with file watcher
-- [ ] YAML frontmatter parsing for skill metadata
-- [ ] Markdown template with `{{parameter}}` substitution
-- [ ] JSON schema validation for skill parameters
-- [ ] Tauri commands: `list_skills`, `get_skill`, `execute_skill`, `validate_skill_parameters`, `reload_skills`, `import_skill`
-- [ ] 20+ built-in skills across 5 categories (coding, debugging, devops, fleet, custom)
-- [ ] Skill execution history tracking
+- [x] YAML frontmatter parsing for skill metadata
+- [x] Markdown template with `{{parameter}}` substitution
+- [x] JSON schema validation for skill parameters
+- [x] Tauri commands: `list_skills`, `get_skill`, `execute_skill`, `validate_skill_parameters`, `reload_skills`, `import_skill`
+- [x] 20+ built-in skills across 5 categories (coding, debugging, devops, fleet, custom)
+- [x] Skill execution history tracking
 
 **Frontend — Skills System:**
-- [ ] `src/components/skills/SkillsPalette.tsx`: Command palette UI (Cmd+Shift+S)
-- [ ] `src/components/skills/SkillParameterModal.tsx`: Dynamic parameter forms
-- [ ] `src/stores/skillStore.ts`: Skill state management
+- [x] `src/components/skills/SkillsPalette.tsx`: Command palette UI (Cmd+Shift+S)
+- [x] `src/components/skills/SkillParameterModal.tsx`: Dynamic parameter forms
+- [x] `src/stores/skillStore.ts`: Skill state management
 - [ ] Slash command auto-complete for skills
-- [ ] Recent skills tracking
-- [ ] Skills category browser
+- [x] Recent skills tracking
+- [x] Skills category browser
 
 **Backend — Hooks System:**
-- [ ] `src-tauri/src/hooks/mod.rs`: Module declaration
-- [ ] `src-tauri/src/hooks/types.rs`: Hook, HookType, HookCondition, HookResult enums
-- [ ] `src-tauri/src/hooks/registry.rs`: HookRegistry with priority ordering
-- [ ] `src-tauri/src/hooks/executor.rs`: HookExecutor with sandboxing
-- [ ] `src-tauri/src/hooks/conditions.rs`: HookConditionEvaluator
-- [ ] 18 hook types across 6 categories (agent, tool, file, git, plan, fleet)
-- [ ] Action types: shell, script, http, notification, log, block, modify, emit_event
-- [ ] Hook conditions: tool_name, file_pattern, repo_path, command_pattern, session_type, agent_mode, time_range
-- [ ] Tauri commands: `list_hooks`, `enable_hook`, `disable_hook`, `add_hook`, `remove_hook`, `test_hook`, `get_hook_logs`
-- [ ] Hooks configuration persistence in SQLite
+- [x] `src-tauri/src/hooks/mod.rs`: Module declaration
+- [x] `src-tauri/src/hooks/types.rs`: Hook, HookType, HookCondition, HookResult enums
+- [x] `src-tauri/src/hooks/registry.rs`: HookRegistry with priority ordering
+- [x] `src-tauri/src/hooks/executor.rs`: HookExecutor with sandboxing
+- [x] `src-tauri/src/hooks/conditions.rs`: HookConditionEvaluator
+- [x] 31 hook types across 6 categories (agent, tool, file, git, plan, fleet)
+- [x] Action types: shell, http, notification, log, block, emit_event
+- [x] Hook conditions: tool_name, file_pattern, repo_path, command_pattern, session_type, agent_mode, time_range
+- [x] Tauri commands: `list_hooks`, `enable_hook`, `disable_hook`, `add_hook`, `remove_hook`, `test_hook`, `get_hook_logs`
+- [x] Hooks configuration persistence in SQLite
 
 **Frontend — Hooks System:**
-- [ ] `src/components/settings/HooksSettings.tsx`: Hook management UI
-- [ ] `src/components/hooks/HookLogViewer.tsx`: Execution log viewer
+- [x] `src/components/settings/HooksSettings.tsx`: Hook management UI
+- [x] `src/components/hooks/HookLogViewer.tsx`: Execution log viewer
+- [x] `src/stores/hookStore.ts`: Hook state management
 - [ ] Hook template gallery (pre-built hooks)
 - [ ] Hook testing interface with mock context
 
