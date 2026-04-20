@@ -16,6 +16,7 @@ pub mod recipes;
 pub mod sidecar;
 pub mod skills;
 pub mod hooks;
+pub mod ide;
 
 // Register all Tauri commands on the builder from within the lib crate.
 // generate_handler! must run here so the __cmd__* macros (produced by
@@ -61,6 +62,11 @@ pub fn register_commands(
         hook_commands::{
             list_hooks, enable_hook, disable_hook, add_hook, remove_hook,
             test_hook, get_hook_logs,
+        },
+        ide_commands::{
+            read_file_tree, read_file_content, get_file_metadata,
+            search_files, search_file_contents, get_symbol_tree,
+            get_ide_workspace_state, set_ide_workspace_state,
         },
     };
     builder.invoke_handler(tauri::generate_handler![
@@ -162,5 +168,14 @@ pub fn register_commands(
         remove_hook,
         test_hook,
         get_hook_logs,
+        // IDE (Phase 3.2)
+        read_file_tree,
+        read_file_content,
+        get_file_metadata,
+        search_files,
+        search_file_contents,
+        get_symbol_tree,
+        get_ide_workspace_state,
+        set_ide_workspace_state,
     ])
 }

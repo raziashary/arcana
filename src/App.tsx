@@ -2,7 +2,7 @@
 // Renders TitleBar + TabBar + active tab content + Sidebar + StatusBar.
 // Design matches autodevmockup.html exactly.
 
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import TitleBar    from './components/layout/TitleBar'
 import TabBar      from './components/layout/TabBar'
 import StatusBar   from './components/layout/StatusBar'
@@ -15,6 +15,7 @@ import SettingsTab from './tabs/Settings'
 import LogsTab     from './tabs/Logs'
 import { useSettingsStore } from './stores/settingsStore'
 import { useCostStore }     from './stores/costStore'
+import { useUiStore }       from './stores/uiStore'
 
 export type TabId = 'chat' | 'autodev' | 'ide' | 'recipes' | 'settings' | 'logs'
 
@@ -28,7 +29,8 @@ const TABS: { id: TabId; label: string }[] = [
 ]
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<TabId>('chat')
+  const activeTab    = useUiStore((s) => s.activeTab)
+  const setActiveTab = useUiStore((s) => s.setActiveTab)
   const { loadProviders, loadDefaultSystemPrompt } = useSettingsStore()
   const { loadFromBackend } = useCostStore()
 

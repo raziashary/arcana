@@ -5,6 +5,7 @@
 import { useState } from 'react'
 import { formatFileSize } from '../../utils/toolOutputParser'
 import type { DirectoryEntry } from '../../utils/toolOutputParser'
+import { openInIde } from '../../utils/openInIde'
 
 interface DirectoryListingDisplayProps {
   data: DirectoryEntry[]
@@ -77,7 +78,18 @@ export function DirectoryListingDisplay({ data }: DirectoryListingDisplayProps) 
               }}
             >
               <td style={{ padding: '4px 10px', color: 'var(--text-1)' }}>
-                {entry.is_directory ? '📁' : '📄'} {entry.name}
+                {entry.is_directory ? (
+                  <>📁 {entry.name}</>
+                ) : (
+                  <button
+                    onClick={() => openInIde(entry.path ?? entry.name)}
+                    className="hover:underline text-left"
+                    style={{ background: 'transparent', border: 'none', padding: 0, color: 'inherit', font: 'inherit', cursor: 'pointer' }}
+                    title="Open in IDE"
+                  >
+                    📄 {entry.name}
+                  </button>
+                )}
               </td>
               <td style={{ padding: '4px 10px', color: 'var(--text-3)' }}>
                 {entry.is_directory ? 'dir' : 'file'}

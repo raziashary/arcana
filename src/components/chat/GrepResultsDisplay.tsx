@@ -1,5 +1,7 @@
 import { useState } from "react";
+import { ExternalLink } from "lucide-react";
 import { GrepOutput } from "../../utils/toolOutputParser";
+import { openInIde } from "../../utils/openInIde";
 
 interface GrepResultsDisplayProps {
   data: GrepOutput;
@@ -51,28 +53,49 @@ export function GrepResultsDisplay({ data }: GrepResultsDisplayProps) {
           return (
             <div key={fileResult.file} className="border rounded" style={{ borderColor: "var(--border-primary)" }}>
               {/* File Header */}
-              <button
-                onClick={() => toggleFile(fileResult.file)}
-                className="w-full text-left p-2 flex items-center gap-2 transition-colors hover:bg-opacity-10"
+              <div
+                className="flex items-center"
                 style={{ backgroundColor: isExpanded ? "var(--accent-color)10" : "transparent" }}
               >
-                <span>{isExpanded ? "▼" : "▶"}</span>
-                <span className="font-mono text-sm" style={{ color: "var(--accent-color)" }}>
-                  {fileResult.file}
-                </span>
-                <span className="text-xs ml-auto" style={{ color: "var(--text-tertiary)" }}>
-                  {fileResult.matches.length} matches
-                </span>
-              </button>
+                <button
+                  onClick={() => toggleFile(fileResult.file)}
+                  className="flex-1 text-left p-2 flex items-center gap-2 transition-colors hover:bg-opacity-10 min-w-0"
+                  style={{ background: "transparent" }}
+                >
+                  <span>{isExpanded ? "▼" : "▶"}</span>
+                  <span className="font-mono text-sm truncate" style={{ color: "var(--accent-color)" }}>
+                    {fileResult.file}
+                  </span>
+                  <span className="text-xs ml-auto shrink-0" style={{ color: "var(--text-tertiary)" }}>
+                    {fileResult.matches.length} matches
+                  </span>
+                </button>
+                <button
+                  onClick={() => openInIde(fileResult.file, fileResult.matches[0]?.line_number)}
+                  className="p-2 shrink-0 hover:bg-opacity-20"
+                  style={{ color: "var(--accent-color)", background: "transparent", border: "none", cursor: "pointer" }}
+                  title="Open in IDE"
+                  aria-label={`Open ${fileResult.file} in IDE`}
+                >
+                  <ExternalLink size={12} />
+                </button>
+              </div>
 
               {/* Match List */}
               {isExpanded && (
                 <div className="border-t" style={{ borderColor: "var(--border-primary)" }}>
                   {fileResult.matches.map((match, idx) => (
-                    <div
+                    <button
                       key={idx}
-                      className="p-2 border-b last:border-b-0"
-                      style={{ borderColor: "var(--border-secondary)", backgroundColor: "#00000020" }}
+                      onClick={() => openInIde(fileResult.file, match.line_number)}
+                      className="w-full text-left p-2 border-b last:border-b-0 hover:brightness-125 transition"
+                      style={{
+                        borderColor: "var(--border-secondary)",
+                        backgroundColor: "#00000020",
+                        background: "transparent",
+                        cursor: "pointer",
+                      }}
+                      title="Open at this line in IDE"
                     >
                       <div className="text-xs mb-1" style={{ color: "var(--text-tertiary)" }}>
                         Line {match.line_number}
@@ -80,7 +103,7 @@ export function GrepResultsDisplay({ data }: GrepResultsDisplayProps) {
                       <code className="block font-mono text-sm" style={{ color: "var(--text-primary)" }}>
                         {highlightMatch(match.line_content, match.match_positions)}
                       </code>
-                    </div>
+                    </button>
                   ))}
                 </div>
               )}

@@ -1124,6 +1124,306 @@ impl CostTracker {
 
 ---
 
+### Database Module (Phase 2.1)
+
+**Location**: `src-tauri/src/db/`
+
+**Purpose**: SQLite persistence for tasks, model configs, and AUTODEV.md storage.
+
+#### `src-tauri/src/db/mod.rs`
+
+**Purpose**: Module declarations and re-exports.
+
+**Exports**:
+- `autodev_dir()` - Returns `~/.autodev` path
+- `TasksDb`, `ModelConfigsDb`, `AutodevInstructionsDb`
+
+**Submodules**: `tasks`, `model_configs`, `autodev_instructions`
+
+---
+
+#### `src-tauri/src/db/tasks.rs`
+
+**Purpose**: Task management for Internal Board (~/.autodev/tasks.db).
+
+**Key Components**:
+```rust
+pub struct TasksDb {
+    conn: Connection,
+}
+
+pub struct Task {
+    pub id: String,
+    pub title: String,
+    pub priority: TaskPriority,
+    pub task_type: TaskType,
+    pub status: TaskStatus,
+    pub acceptance_criteria: String,
+    pub assigned_worker: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub completed_at: Option<String>,
+}
+
+pub enum TaskStatus { Ready, Assigned, InProgress, QCReview, Done }
+pub enum TaskPriority { Low, Medium, High, Critical }
+pub enum TaskType { Feature, Bug, Refactor, Docs, Test, Infrastructure }
+```
+
+**Methods**:
+- `create_task()` - Create new task with status="ready"
+- `list_tasks()` - Get all tasks
+- `get_by_status()` - Filter by status
+- `update_status()` - Move through state machine with updated_at tracking
+- `get_stalled_tasks()` - Find tasks stuck > 10 minutes
+- `delete_task()` - Remove task
+
+**Task State Machine**:
+```
+ready → assigned (supervisor) → in_progress (worker) → qc_review (worker) → done (QC)
+                                                                    ↓
+                                                              assigned (QC reject)
+```
+
+**Relationships**:
+- Used by: `create_task_tool.rs` (Delegate Mode)
+- Used by: `task_commands.rs` (AutoDev Panel)
+- Used by: `recipes/runner.rs` (Recipe polling)
+
+---
+
+#### `src-tauri/src/db/model_configs.rs`
+
+**Purpose**: Per-model configuration storage (~/.autodev/config.db).
+
+**Key Components**:
+```rust
+pub struct ModelConfigsDb;
+
+pub struct ModelConfig {
+    pub temperature: Option<f32>,           // 0.0 - 2.0
+    pub top_p: Option<f32>,               // 0.0 - 1.0
+    pub reasoning_effort: Option<String>, // "low", "medium", "high"
+    pub thinking_budget_tokens: Option<u32>,
+}
+```
+
+**Methods**:
+- `get_config(model_id)` - Retrieve config
+- `set_config(model_id, config)` - Save config
+- `delete_config(model_id)` - Remove config
+
+**Relationships**:
+- Used by: `model_config_commands.rs`
+- Used by: Provider implementations (Anthropic, OpenAI, Google)
+
+---
+
+#### `src-tauri/src/db/autodev_instructions.rs`
+
+**Purpose**: AUTODEV.md storage per project.
+
+**Key Components**:
+```rust
+pub struct AutodevInstructionsDb;
+```
+
+**Methods**:
+- `get(project_path)` - Retrieve AUTODEV.md content
+- `set(project_path, content)` - Save content
+- `delete(project_path)` - Remove entry
+- `exists(project_path)` - Check existence
+- `char_count(project_path)` - Get character count
+
+**Relationships**:
+- Used by: `autodev_instructions_commands.rs`
+- Used by: `agent/context.rs` (injected into system prompt)
+
+---
+
+### Recipes Module (Phase 2.1)
+
+**Location**: `src-tauri/src/recipes/`
+
+**Purpose**: Recipe engine with YAML parsing, execution, and cron scheduling.
+
+#### `src-tauri/src/recipes/mod.rs`
+
+**Purpose**: Module declarations and re-exports.
+
+**Exports**:
+- `RecipeRunner`, `RecipeScheduler`, `RecipeParser`
+- `Recipe`, `RecipeStep`, `RecipeTrigger`
+- `ensure_default_recipes()`
+
+**Submodules**: `runner`, `scheduler`, `parser`, `defaults`, `types`
+
+---
+
+#### `src-tauri/src/recipes/types.rs`
+
+**Purpose**: Recipe data types.
+
+**Key Components**:
+```rust
+pub struct Recipe {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub permission_mode: PermissionMode,
+    pub trigger: RecipeTrigger,
+    pub steps: Vec<RecipeStep>,
+}
+
+pub struct RecipeStep {
+    pub name: String,
+    pub instruction: String,
+    pub tools: Option<Vec<String>>,
+    pub expected_output: Option<String>,
+}
+
+pub enum RecipeTrigger {
+    Cron { schedule: String },    // "*/1 * * * *"
+    Startup,
+    Webhook { endpoint: String },
+}
+
+pub enum WorkerType {
+    Supervisor, Backend, Frontend, Platform, MCP, Cleanup, QCAgent, Custom,
+}
+```
+
+---
+
+#### `src-tauri/src/recipes/parser.rs`
+
+**Purpose**: YAML recipe parsing and validation.
+
+**Key Components**:
+```rust
+pub struct RecipeParser;
+
+impl RecipeParser {
+    pub fn parse(yaml: &str) -> Result<Recipe, RecipeParseError>
+    pub fn validate(recipe: &Recipe) -> Result<(), RecipeParseError>
+    pub fn parse_file(path: &Path) -> Result<Recipe, RecipeParseError>
+}
+```
+
+**Recipe Schema**:
+```yaml
+id: supervisor-poll
+name: Supervisor Poll
+version: "1.0"
+description: Polls for ready tasks and assigns to workers
+permission_mode: SmartApprove
+trigger:
+  type: cron
+  schedule: "*/1 * * * *"
+steps:
+  - name: Poll tasks
+    instruction: "Query the task database for tasks with status='ready'..."
+    tools: ["list_tasks"]
+```
+
+---
+
+#### `src-tauri/src/recipes/runner.rs`
+
+**Purpose**: Execute recipe steps as agent prompts (in-memory context only).
+
+**Key Components**:
+```rust
+pub struct RecipeRunner {
+    recipe: Recipe,
+    provider: Arc<dyn Provider>,
+    tool_registry: ToolRegistry,
+    context: RecipeContext,
+}
+
+impl RecipeRunner {
+    pub async fn run(&self) -> Result<RunResult, AutoDevError>
+    pub async fn execute_step(&self, step: &RecipeStep) -> Result<StepResult, AutoDevError>
+}
+```
+
+**Key Behavior**:
+- Polls tasks from `tasks.rs` by status (assigned, in_progress)
+- Executes recipe instructions as LLM prompts
+- Updates task status through state machine
+- **Ephemeral sessions** - No DB persistence (removed `.with_session_manager()`)
+- In-memory context only
+
+**Task Polling**:
+```rust
+// Workers poll for BOTH assigned AND in_progress tasks
+let tasks = tasks_db.get_by_status("assigned")?;
+let in_progress = tasks_db.get_by_status("in_progress")?;
+// Resume interrupted work
+```
+
+**Relationships**:
+- Uses: `tasks.rs` for task CRUD
+- Uses: `AgentEngine` for LLM execution
+- Triggered by: `scheduler.rs`
+
+---
+
+#### `src-tauri/src/recipes/scheduler.rs`
+
+**Purpose**: Cron-based recipe execution using `tokio-cron-scheduler`.
+
+**Key Components**:
+```rust
+pub struct RecipeScheduler {
+    sched: JobScheduler,
+}
+
+impl RecipeScheduler {
+    pub fn new() -> Self
+    pub fn register_recipe(&mut self, recipe: &Recipe) -> Result<Uuid, JobSchedulerError>
+    pub async fn start(&self) -> Result<(), JobSchedulerError>
+    pub async fn stop(&self) -> Result<(), JobSchedulerError>
+}
+```
+
+**Schedule Formats**:
+- `"*/1 * * * *"` - Every 1 minute (supervisor, workers, QC)
+- `"*/5 * * * *"` - Every 5 minutes (platform)
+- `"*/10 * * * *"` - Every 10 minutes (cleanup)
+
+**Relationships**:
+- Triggers: `runner.rs` execution
+- Called by: `lib.rs` on startup
+
+---
+
+#### `src-tauri/src/recipes/defaults.rs`
+
+**Purpose**: Hardcoded system recipes written on startup.
+
+**Exports**:
+- `ensure_default_recipes()` - Writes system recipes to `~/.autodev/recipes/`
+- `SUPERVISOR_RECIPE`, `WORKER_BACKEND_RECIPE`, etc.
+
+**System Recipes** (always overwritten on startup - code is source of truth):
+
+| Recipe | Schedule | Purpose |
+|--------|----------|---------|
+| `supervisor-poll.yaml` | */1 min | Polls ready tasks, assigns to workers |
+| `worker-backend-poll.yaml` | */1 min | Executes backend tasks |
+| `worker-frontend-poll.yaml` | */1 min | Executes frontend tasks |
+| `worker-mcp-poll.yaml` | */1 min | Executes MCP integration tasks |
+| `worker-platform-poll.yaml` | */5 min | Platform/infrastructure tasks |
+| `worker-cleanup-poll.yaml` | */10 min | Cleanup tasks |
+| `qc-agent-poll.yaml` | */1 min | Quality control review |
+
+**Relationships**:
+- Called by: `lib.rs` during app initialization
+
+---
+
 ## Frontend (React/TypeScript)
 
 ### Core Files
@@ -1217,7 +1517,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
 
 **Relationships**:
 - Listens to: Tauri events from backend
-- Used by: `Chat.tsx`, `MessageBubble.tsx`, `ToolCallDisplay.tsx`
+- Used by: `Chat.tsx`, `MessageBubble.tsx`, `ToolCallDisplay.tsx`, `ContextMeter.tsx`
 
 ---
 
@@ -1251,10 +1551,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
 #### `src/stores/settingsStore.ts`
 
-**Purpose**: Provider configuration and system prompt management.
+**Purpose**: Provider configuration, system prompt, and PA Mode state.
 
 **Key Components**:
 ```typescript
+type PAMode = 'fast' | 'review' | 'delegate';
+
 interface SettingsState {
   providers: Provider[]
   activeProvider: string | null
@@ -1262,6 +1564,7 @@ interface SettingsState {
   systemPrompt: string | null
   defaultSystemPrompt: string
   isLoadingProviders: boolean
+  paMode: PAMode  // Phase 2.1: PA Mode Toggle
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -1270,12 +1573,17 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   setSystemPrompt: async (prompt) => {...}
   loadDefaultSystemPrompt: async () => {...}
   resetSystemPrompt: async () => {...}
+  setPAMode: (mode: PAMode) => {...}  // Phase 2.1
 }))
 ```
 
+**PA Mode Integration**:
+- `paMode` sent to backend on every `send_message` invoke
+- Backend filters tools based on mode (Delegate = only create_task)
+
 **Relationships**:
 - Calls Tauri commands: `list_providers`, `set_active_provider`, `get_system_prompt`, `set_system_prompt`, `get_default_system_prompt`, `vault_get`, `vault_set`
-- Used by: `Settings.tsx`, `StatusBar.tsx`
+- Used by: `Settings.tsx`, `StatusBar.tsx`, `PaModeToggle.tsx`
 
 ---
 
@@ -1299,7 +1607,198 @@ export const useCostStore = create<CostState>((set) => ({
 
 **Relationships**:
 - Listens to: `agent:done` event
-- Displays in: `StatusBar.tsx`
+- Displays in: `StatusBar.tsx`, `AutoDevPanel.tsx`
+
+---
+
+#### `src/stores/taskStore.ts` (Phase 2.1)
+
+**Purpose**: Internal Board task management.
+
+**Key Components**:
+```typescript
+interface TaskState {
+  tasks: Task[]
+  isLoading: boolean
+  tasksByStatus: Record<TaskStatus, Task[]>
+}
+
+export const useTaskStore = create<TaskState>((set, get) => ({
+  loadTasks: async () => {...}
+  updateTaskStatus: async (id, status) => {...}
+  deleteTask: async (id) => {...}
+  getTasksByStatus: (status) => {...}
+}))
+```
+
+**Tauri Commands**: `list_tasks`, `update_task_status`, `delete_task`
+
+**Relationships**:
+- Used by: `AutoDevPanel.tsx`, `KanbanBoard.tsx`, `TaskCard.tsx`
+
+---
+
+#### `src/stores/workerStore.ts` (Phase 2.1)
+
+**Purpose**: Worker agent roster and status.
+
+**Key Components**:
+```typescript
+interface WorkerState {
+  workers: Worker[]
+  isLoading: boolean
+}
+
+export const useWorkerStore = create<WorkerState>((set, get) => ({
+  loadWorkers: async () => {...}
+  updateWorker: async (worker) => {...}
+  bindRecipeToWorker: async (workerId, recipeId) => {...}
+}))
+```
+
+**Tauri Commands**: `list_workers`, `update_worker`, `bind_worker_recipe`
+
+**Relationships**:
+- Used by: `AgentRoster.tsx`, `WorkerTable.tsx`
+
+---
+
+#### `src/stores/modelConfigStore.ts` (Phase 2.3)
+
+**Purpose**: Per-model configuration (temperature, top_p, reasoning).
+
+**Key Components**:
+```typescript
+interface ModelConfigState {
+  configs: Record<string, ModelConfig>
+  activeConfig: ModelConfig | null
+}
+
+interface ModelConfig {
+  temperature?: number          // 0.0 - 2.0
+  top_p?: number                // 0.0 - 1.0
+  reasoning_effort?: string     // "low", "medium", "high"
+  thinking_budget_tokens?: number
+}
+
+export const useModelConfigStore = create<ModelConfigState>((set) => ({
+  loadModelConfig: async (modelId) => {...}
+  setModelConfig: async (modelId, config) => {...}
+  resetModelConfig: async (modelId) => {...}
+}))
+```
+
+**Tauri Commands**: `get_model_config`, `set_model_config`, `delete_model_config`
+
+**Relationships**:
+- Used by: `ModelConfigSection.tsx`
+
+---
+
+#### `src/stores/recipeStore.ts` (Phase 2.1-2.3)
+
+**Purpose**: Recipe list and AI generation.
+
+**Key Components**:
+```typescript
+interface RecipeState {
+  recipes: Recipe[]
+  isLoading: boolean
+  selectedRecipe: Recipe | null
+}
+
+export const useRecipeStore = create<RecipeState>((set, get) => ({
+  loadRecipes: async () => {...}
+  selectRecipe: (recipe) => {...}
+  generateRecipeWithAI: async (workerType, description) => {...}  // Phase 2.3
+}))
+```
+
+**Tauri Commands**: `list_recipes`, `get_recipe`, `generate_recipe_yaml`
+
+**Relationships**:
+- Used by: `Recipes.tsx`, `RecipeEditor.tsx`, `WorkerTable.tsx`
+
+---
+
+#### `src/stores/ideStore.ts` (Phase 3.2)
+
+**Purpose**: IDE Core state management.
+
+**Key Components**:
+```typescript
+interface IdeState {
+  openTabs: OpenTab[]
+  activeTab: string | null
+  fileTree: FileTreeNode[]
+  expandedDirs: Set<string>
+  recentFiles: string[]
+  isSearchOpen: boolean
+  searchQuery: string
+  searchResults: FileSearchResult[]
+}
+
+export const useIdeStore = create<IdeState>((set, get) => ({
+  init: async () => {...}
+  refreshTree: async () => {...}
+  loadDirChildren: async (path) => {...}
+  toggleDir: (path) => {...}
+  openFile: async (path, gotoLine?) => {...}  // Integration API
+  closeTab: (path) => {...}
+  closeOtherTabs: (path) => {...}
+  closeAllTabs: () => {...}
+  switchTab: (path) => {...}
+  setSearchOpen: (open) => {...}
+}))
+```
+
+**Integration API**:
+```typescript
+// For chat tool-result renderers
+import { useIdeStore } from '@/stores/ideStore'
+useIdeStore.getState().openFile('src/foo.ts', 42)
+```
+
+**Tauri Commands**:
+- `read_file_tree`, `read_file_content`, `search_files`
+- `get_ide_workspace_state`, `set_ide_workspace_state`
+
+**Relationships**:
+- Used by: `IDE.tsx`, `FileTree.tsx`, `TabBar.tsx`, `CodeViewer.tsx`, `FileSearch.tsx`, `SymbolOutline.tsx`
+
+---
+
+#### `src/stores/uiStore.ts` (Phase 3.2)
+
+**Purpose**: Global UI state for cross-component communication.
+
+**Key Components**:
+```typescript
+type TabId = 'chat' | 'ide' | 'autodev' | 'settings' | 'recipes'
+
+interface UiState {
+  activeTab: TabId
+}
+
+export const useUiStore = create<UiState>((set) => ({
+  setActiveTab: (tab: TabId) => set({ activeTab: tab })
+}))
+```
+
+**Integration Flow**:
+```typescript
+// Click file in chat → open in IDE
+import { useUiStore } from '@/stores/uiStore'
+import { useIdeStore } from '@/stores/ideStore'
+
+function openInIde(path: string, gotoLine?: number) {
+  useUiStore.getState().setActiveTab('ide')  // Switch to IDE tab
+  useIdeStore.getState().openFile(path, gotoLine)  // Open file
+}
+```
+
+**Relationships**:
+- Used by: `App.tsx`, `Sidebar.tsx`, `openInIde.ts`
 
 ---
 
@@ -1307,19 +1806,21 @@ export const useCostStore = create<CostState>((set) => ({
 
 #### `src/tabs/Chat.tsx`
 
-**Purpose**: Main chat interface with streaming and tool display.
+**Purpose**: Main chat interface with streaming, tool display, and PA Mode Toggle.
 
 **Key Components**:
 ```typescript
 export default function ChatTab() {
   const messages = useAgentStore(s => s.messages)
   const isStreaming = useAgentStore(s => s.isStreaming)
+  const paMode = useSettingsStore(s => s.paMode)
   
   const handleSend = async () => {
     // 1. Ensure session exists
     // 2. Set up event listeners
     // 3. Add user message to store
-    // 4. Invoke send_message command
+    // 4. Invoke send_message command WITH paMode param
+    await invoke('send_message', { sessionId, userMessage, paMode })
   }
   
   const handleCancel = async () => {
@@ -1329,20 +1830,28 @@ export default function ChatTab() {
 ```
 
 **Layout**:
+- Header: `PaModeToggle` (3-button segmented control)
 - Left: `SessionBar` (200px)
 - Center: Message list (`MessageBubble` components)
-- Bottom: Input area with send/cancel buttons
+- Bottom: Input area with `ContextMeter`
+
+**PA Mode Integration**:
+- Sends `paMode` parameter to backend on every `send_message`
+- Backend filters tool registry based on mode:
+  - Fast Development: All 7 file tools
+  - Review Mode: All tools + permission prompts
+  - Delegate Mode: Only `create_task` tool
 
 **Relationships**:
 - Uses: `useAgentStore`, `useSessionStore`, `useSettingsStore`, `useCostStore`
 - Calls: `send_message`, `cancel_agent` commands
-- Renders: `MessageBubble`, `PermissionDialog`, `SessionBar`
+- Renders: `MessageBubble`, `PermissionDialog`, `SessionBar`, `PaModeToggle`, `ContextMeter`
 
 ---
 
 #### `src/tabs/Settings.tsx`
 
-**Purpose**: Provider configuration and system prompt editing.
+**Purpose**: Provider configuration, system prompt editing, GitHub settings.
 
 **Key Components**:
 ```typescript
@@ -1353,6 +1862,13 @@ export default function SettingsTab() {
     <div>
       <SectionHeader title="Providers" />
       {store.providers.map(p => <ProviderCard key={p.id} providerId={p.id} />)}
+      
+      <SectionHeader title="Model Configuration" />
+      <ModelConfigSection />  {/* Phase 2.3: Temperature, Top-P, Reasoning */}
+      
+      <SectionHeader title="GitHub Integration" />
+      <GitHubPATCard />
+      <GitHubMCPCard />  {/* Phase 2.3: MCP Server config */}
       
       <SectionHeader title="System Prompt" />
       <SystemPromptEditor />
@@ -1365,10 +1881,159 @@ export default function SettingsTab() {
 - Provider list with connection testing
 - API key input (masked, stored in vault)
 - Model selection dropdown
+- **ModelConfigSection** (Phase 2.3): Temperature, Top-P, reasoning effort
+- **GitHubMCPCard** (Phase 2.3): MCP server configuration
 - System prompt editor with save/reset
 
 **Relationships**:
-- Uses: `useSettingsStore`
+- Uses: `useSettingsStore`, `useModelConfigStore`
+
+---
+
+#### `src/tabs/AutoDevPanel.tsx` (Phase 2.1)
+
+**Purpose**: Internal Task Board with Kanban view.
+
+**Key Components**:
+```typescript
+export default function AutoDevPanel() {
+  const { tasks, loadTasks } = useTaskStore()
+  const { workers } = useWorkerStore()
+  
+  // Auto-refresh every 60 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      loadTasks()
+      loadCost()
+      loadWorkers()
+    }, 60_000)
+    return () => clearInterval(interval)
+  }, [])
+  
+  return (
+    <div className="autodev-panel">
+      <Header title="AutoDev Board" />
+      <AgentRoster workers={workers} />
+      <KanbanBoard tasks={tasks} />
+      <MetricsFooter />
+    </div>
+  )
+}
+```
+
+**Layout**:
+- Header: Title + Agent Roster toggle
+- Main: 4-column Kanban (Ready | In Progress | QC Review | Done Today)
+- Footer: Cost Today | Tokens | Closed | QC Pass Rate
+
+**Features**:
+- Task cards with expand for acceptance criteria
+- Drag-and-drop status changes
+- **Agent roster** with 7 hardcoded agents + status dots
+- **Auto-refresh** every 60 seconds (Phase 2.6)
+- Metrics footer with live calculations
+
+**Task State Machine Display**:
+- `Ready` column: Merges `ready` + `assigned` status
+- `In Progress` column: Shows progress indicator
+- `QC Review` column: Tasks awaiting quality control
+- `Done Today` column: Completed today only
+
+**Relationships**:
+- Uses: `useTaskStore`, `useWorkerStore`, `useCostStore`
+- Renders: `KanbanBoard`, `TaskCard`, `AgentRoster`
+
+---
+
+#### `src/tabs/Recipes.tsx` (Phase 2.1-2.3)
+
+**Purpose**: Recipe browser and management.
+
+**Key Components**:
+```typescript
+export default function RecipesTab() {
+  const { recipes, loadRecipes } = useRecipeStore()
+  
+  return (
+    <div className="recipes-tab">
+      <h1>Recipes</h1>
+      <div className="recipe-list">
+        {recipes.map(recipe => (
+          <RecipeCard key={recipe.id} recipe={recipe} />
+        ))}
+      </div>
+      <RecipeEditor />  {/* Phase 2.3: AI generation panel */}
+    </div>
+  )
+}
+```
+
+**Features**:
+- Recipe list (system + user recipes)
+- Expandable recipe cards with YAML preview
+- **[Run Now] button** (disabled in 2.1, coming in 2.2)
+- **Generate with AI panel** (Phase 2.3):
+  - Worker type selector
+  - Description textarea
+  - YAML preview with Apply to Form
+
+**Relationships**:
+- Uses: `useRecipeStore`
+- Renders: `RecipeCard`, `RecipeEditor`
+
+---
+
+#### `src/tabs/IDE.tsx` (Phase 3.2)
+
+**Purpose**: IDE Core with file explorer and code viewer.
+
+**Key Components**:
+```typescript
+export default function IDETab() {
+  const { fileTree, openTabs, activeTab } = useIdeStore()
+  
+  return (
+    <div className="ide-layout">
+      <aside className="sidebar">
+        <FileTree tree={fileTree} />
+        <SymbolOutline />
+      </aside>
+      <main className="editor-area">
+        <TabBar tabs={openTabs} active={activeTab} />
+        <CodeViewer />
+        <IdeStatusBar />
+      </main>
+      <FileSearch />  {/* Ctrl/⌘+P overlay */}
+    </div>
+  )
+}
+```
+
+**Layout**:
+- Left sidebar: `FileTree` + `SymbolOutline`
+- Center: `TabBar` + `CodeViewer` (Monaco)
+- Right: (reserved for future git panel - Phase 3.3)
+- Bottom: `IdeStatusBar`
+
+**Features**:
+- File tree with **git status badges** (modified, added, untracked)
+- Tab bar with **middle-click close**
+- **Monaco read-only viewer** with custom Winter-is-Coming theme
+- **Quick-open file search** (Ctrl/⌘+P)
+- **Symbol outline** for navigation
+- **Click file in chat to open in IDE** (integration)
+
+**Integration API**:
+```typescript
+// From chat tool-result renderers
+import { useIdeStore } from '@/stores/ideStore'
+useIdeStore.getState().openFile('src/foo.ts', 42)
+```
+
+**Relationships**:
+- Uses: `useIdeStore`, `useUiStore`
+- Tauri Commands: `read_file_tree`, `read_file_content`, `search_files`, `get_symbol_tree`
+- Renders: `FileTree`, `TabBar`, `CodeViewer`, `FileSearch`, `SymbolOutline`, `IdeStatusBar`
 
 ---
 
@@ -1510,6 +2175,21 @@ export interface GlobOutput {
   files: GlobFileEntry[]
 }
 
+export interface DirectoryEntry {
+  name: string
+  path: string
+  is_directory: boolean
+  size_bytes?: number
+}
+
+export type ToolOutputType = 
+  | { type: 'grep'; data: GrepOutput }
+  | { type: 'glob'; data: GlobOutput }
+  | { type: 'bash'; data: BashOutput }
+  | { type: 'file_content'; data: FileContent }
+  | { type: 'directory_listing'; data: DirectoryListingOutput }
+  | null
+
 export function parseToolOutput(toolName: string, output: string): ToolOutputType
 export function detectLanguageFromPath(path: string): string
 export function formatFileSize(bytes: number): string
@@ -1518,6 +2198,38 @@ export function formatFileSize(bytes: number): string
 **Relationships**:
 - Used by: `ToolCallDisplay.tsx` to render appropriate component
 - Supports: Syntax highlighting decisions
+- Phase 1 Extension: Added `DirectoryEntry` for `list_directory` tool
+
+---
+
+#### `src/utils/openInIde.ts` (Phase 3.2)
+
+**Purpose**: Universal helper to open files in IDE from chat tool results.
+
+**Key Components**:
+```typescript
+export async function openInIde(path: string, gotoLine?: number): Promise<void> {
+  // 1. Normalize path
+  const normalizedPath = path.startsWith('/') ? path.slice(1) : path
+  
+  // 2. Switch to IDE tab via uiStore
+  useUiStore.getState().setActiveTab('ide')
+  
+  // 3. Open file via ideStore (handles line jumps)
+  await useIdeStore.getState().openFile(normalizedPath, gotoLine)
+}
+```
+
+**Integration Points**:
+- `FileContentDisplay.tsx` - "Open in IDE" button
+- `GrepResultsDisplay.tsx` - Click match line to jump
+- `GlobResultsDisplay.tsx` - Click file path
+- `DirectoryListingDisplay.tsx` - Click file entry
+
+**Relationships**:
+- Uses: `useUiStore` (tab switching)
+- Uses: `useIdeStore` (file opening)
+- Called by: Chat tool-result renderers
 
 ---
 
@@ -1641,29 +2353,32 @@ Frontend (React)
 
 ## File Summary Statistics
 
-### Backend (Rust)
+### Backend (Rust) - 72 Files Total
 
-| Module | Files | Purpose |
-|--------|-------|---------|
-| Core | 5 | lib, main, errors, events, logging |
-| Agent | 9 | Tool system, execution engine, context |
-| Built-in Tools | 8 | File, bash, grep, glob tools |
-| Commands | 5 | Tauri command handlers |
-| Provider | 7 | LLM API abstractions |
-| Session | 4 | Persistence layer |
-| State | 2 | Runtime state |
-| Vault | 2 | Secure storage |
-| Cost | 2 | Usage tracking |
+| Module | Files | Purpose | Phase Added |
+|--------|-------|---------|-------------|
+| Core | 5 | lib, main, errors, events, logging | 1.0 |
+| Agent | 10 | Tool system, engine, context, **create_task tool** | 1.0 + **2.1** |
+| Built-in Tools | 9 | File, bash, grep, glob tools + **create_task** | 1.0 + **2.1** |
+| Commands | 11 | Tauri command handlers + **task, recipe, model, ide, worker cmds** | 1.0 + **2.1-3.2** |
+| Provider | 7 | LLM API abstractions | 1.0 |
+| Session | 4 | Persistence layer | 1.0 |
+| State | 2 | Runtime state | 1.0 |
+| Vault | 2 | Secure storage | 1.0 |
+| Cost | 2 | Usage tracking | 1.0 |
+| **DB** | **4** | **tasks, model_configs, autodev_instructions** | **2.1** |
+| **Recipes** | **6** | **parser, runner, scheduler, defaults, types** | **2.1** |
+| **IDE** | **7** | **file_tree, file_reader, file_search, symbols, workspace** | **3.2** |
 
-### Frontend (TypeScript)
+### Frontend (TypeScript) - 48 Files Total
 
-| Module | Files | Purpose |
-|--------|-------|---------|
-| Core | 3 | App, main, Vite config |
-| Stores | 4 | Zustand state management |
-| Tabs | 3 | Chat, Settings, IDE |
-| Components | 12 | UI components |
-| Utils | 1 | Tool output parsing |
+| Module | Files | Purpose | Phase Added |
+|--------|-------|---------|-------------|
+| Core | 3 | App, main, Vite config | 1.0 |
+| Stores | 7 | Zustand stores + **task, worker, recipe, model, ide, ui** | 1.0 + **2.1-3.2** |
+| Tabs | 5 | Chat, Settings + **AutoDevPanel, Recipes, IDE** | 1.0 + **2.1-3.2** |
+| Components | 28 | UI components + **autodev, workers, recipes, ide, rich tool displays** | 1.0 + **2.1-3.2** |
+| Utils | 2 | Tool output parsing + **openInIde** | 1.0 + **3.2** |
 
 ---
 
@@ -1721,28 +2436,154 @@ Frontend (React)
 
 ---
 
-## Future Extensions (Phase 2+)
+## Completed Phases Summary
+
+### Phase 2.1 — Vision Core ✅ (Shipped)
+
+**Backend**:
+- `src-tauri/src/db/` - Tasks, model configs, AUTODEV.md storage
+- `src-tauri/src/recipes/` - Recipe parser, runner, scheduler, defaults
+- `src-tauri/src/agent/builtin_tools/create_task.rs` - Delegate Mode tool
+- `src-tauri/src/commands/task_commands.rs` - Task management commands
+- `src-tauri/src/commands/recipe_commands.rs` - Recipe commands
+
+**Frontend**:
+- `src/stores/taskStore.ts`, `workerStore.ts`, `recipeStore.ts`
+- `src/tabs/AutoDevPanel.tsx` - Kanban board with 4 columns
+- `src/components/autodev/KanbanBoard.tsx`, `TaskCard.tsx`, `AgentRoster.tsx`
+- `src/components/chat/PaModeToggle.tsx` - 3-mode segmented control
+
+### Phase 2.2 — Production Scale ⏸️ (Partial)
+
+**Implemented**:
+- Worker Management UI (`WorkerTable.tsx`, `WorkerCreateModal.tsx`)
+- Recipe-Worker binding
+
+**Pending**:
+- Full recipe CRUD UI
+- Real-time Tauri events for task updates
+
+### Phase 2.3 — Polish ✅ (Shipped)
+
+**Backend**:
+- `src/db/model_configs.rs` - Per-model settings
+- `src/commands/model_config_commands.rs`
+- `src/commands/github_mcp_commands.rs` - MCP server config
+- `src/commands/recipe_commands.rs` - `generate_recipe_yaml`
+
+**Frontend**:
+- `src/stores/modelConfigStore.ts`
+- `src/components/settings/ModelConfigSection.tsx`
+- `src/components/settings/GitHubMCPCard.tsx`
+- `src/components/recipes/RecipeEditor.tsx` - AI generation panel
+- `src/components/chat/ContextMeter.tsx` - Token usage indicator
+
+### Phase 3.2 — IDE Core ✅ (Shipped)
+
+**Backend** (`src-tauri/src/ide/`):
+- `file_tree.rs` - Git status overlay, lazy expansion
+- `file_reader.rs` - Encoding detection, pagination
+- `file_search.rs` - Fuzzy search, content search
+- `symbols.rs` - Regex-based symbol extraction
+- `workspace.rs` - Tab persistence
+
+**Commands** (`commands/ide_commands.rs`):
+- `read_file_tree`, `read_file_content`, `get_file_metadata`
+- `search_files`, `search_file_contents`
+- `get_symbol_tree`
+- `get_ide_workspace_state`, `set_ide_workspace_state`
+
+**Frontend**:
+- `src/stores/ideStore.ts` - IDE state management
+- `src/stores/uiStore.ts` - Global tab switching
+- `src/tabs/IDE.tsx` - Full IDE layout
+- `src/components/ide/FileTree.tsx` - File explorer
+- `src/components/ide/TabBar.tsx` - Tab bar with close buttons
+- `src/components/ide/CodeViewer.tsx` - Monaco viewer
+- `src/components/ide/FileSearch.tsx` - Quick-open (Ctrl/⌘+P)
+- `src/components/ide/SymbolOutline.tsx` - Symbol navigation
+- `src/components/ide/IdeStatusBar.tsx` - Status bar
+- `src/utils/openInIde.ts` - Chat-to-IDE integration
+
+---
+
+## Future Extensions (Phase 3.3+)
 
 ### Planned Modules
 
-1. **Task Database** (`src-tauri/src/db/tasks.rs`)
-   - SQLite table for worker task management
-   - `create_task` tool for delegate mode
-
-2. **Git Module** (`src-tauri/src/git/`)
+1. **Git Module** (`src-tauri/src/git/`)
    - Worktree management
    - Branch operations
    - Diff/status via git2-rs
+   - **Git panel** as IDE sub-panel (not separate tab)
 
-3. **Sidecar Integration**
+2. **Sidecar Integration**
    - HTTP client to core-orchestrator
    - Worker mode execution
-   - Recipe management
+   - Full multi-agent orchestration
 
-4. **IDE Tab** (`src/tabs/IDE.tsx`)
-   - File explorer
-   - Monaco editor integration
-   - Git panel
+---
+
+## IDE Module (Phase 3.2)
+
+### Backend (`src-tauri/src/ide/`)
+
+| File              | Purpose                                                            |
+|-------------------|--------------------------------------------------------------------|
+| `mod.rs`          | Module declaration                                                  |
+| `types.rs`        | DTOs mirrored in `src/stores/ideStore.ts`                          |
+| `file_tree.rs`    | Recursive walk + git2 status overlay; lazy expansion via `has_more` |
+| `file_reader.rs`  | Encoding detection (UTF-8/16), language id, binary sniff, pagination|
+| `file_search.rs`  | Fuzzy name search + substring content search                        |
+| `symbols.rs`      | Regex-based extractor — Rust / TS / JS / Python / Go                |
+| `workspace.rs`    | Persists open tabs + expanded dirs in `config.db::app_settings`     |
+
+Tauri commands (in `commands/ide_commands.rs`):
+
+- `read_file_tree(path?, depth?, ignore_patterns?) → FileTreeNode`
+- `read_file_content(path, start_line?, end_line?) → FileContent`
+- `get_file_metadata(path) → FileMetadata`
+- `search_files(query, path?, glob?, max_results?) → Vec<FileSearchResult>`
+- `search_file_contents(query, path?, max_results?) → Vec<ContentSearchResult>`
+- `get_symbol_tree(path) → SymbolTree`
+- `get_ide_workspace_state() / set_ide_workspace_state(state)`
+
+All commands resolve paths against the active workspace
+(`workspace_commands::load_workspace_dir`) and reject paths that
+escape it.
+
+### Frontend (`src/components/ide/` + `src/stores/ideStore.ts`)
+
+| Component           | Responsibility                                        |
+|---------------------|--------------------------------------------------------|
+| `FileTree.tsx`      | Collapsible tree with git badges + refresh             |
+| `TabBar.tsx`        | Tabs + close + middle-click close                      |
+| `CodeViewer.tsx`    | Monaco read-only viewer, custom Winter-is-Coming theme |
+| `FileSearch.tsx`    | Ctrl/⌘+P overlay with arrow-key nav                    |
+| `SymbolOutline.tsx` | Click-to-jump symbol list                              |
+| `IdeStatusBar.tsx`  | Path, line count, size, language, encoding             |
+
+**Store**: `useIdeStore` (Zustand) — sole authority for tabs, active tab,
+expansion state, recent files, and tree cache. Actions: `init`,
+`refreshTree`, `loadDirChildren`, `toggleDir`, `openFile`, `closeTab`,
+`closeOtherTabs`, `closeAllTabs`, `switchTab`, `setSearchOpen`. Every
+mutation that changes persisted state calls `set_ide_workspace_state`
+in the background.
+
+**Integration API**: external callers (e.g. chat tool-result renderers)
+open a file in the IDE via
+
+```ts
+import { useIdeStore } from '@/stores/ideStore'
+useIdeStore.getState().openFile('src/foo.ts', 42)
+```
+
+`gotoLine` is honoured by Monaco through `revealLineInCenter` on mount
+and on subsequent jumps.
+
+See `docs/development/PHASE_3_2_IDE_NOTES.md` for the deviation log
+(regex-based symbols as a first cut, `.gitignore` parsing deferred to
+Phase 3.3, intentional lack of inline editing, etc.).
 
 ---
 

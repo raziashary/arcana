@@ -1,5 +1,7 @@
 import { Highlight, themes } from "prism-react-renderer";
+import { ExternalLink } from "lucide-react";
 import { FileContent, detectLanguageFromPath } from "../../utils/toolOutputParser";
+import { openInIde } from "../../utils/openInIde";
 
 interface FileContentDisplayProps {
   data: FileContent;
@@ -12,31 +14,52 @@ export function FileContentDisplay({ data }: FileContentDisplayProps) {
     navigator.clipboard.writeText(data.content);
   };
 
+  const handleOpenInIde = () => openInIde(data.path, data.start_line ?? undefined);
+
   return (
     <div className="rounded" style={{ backgroundColor: "var(--surface-bg)", border: "1px solid var(--border-primary)" }}>
       {/* Header */}
       <div className="flex items-center justify-between p-2 border-b" style={{ borderColor: "var(--border-primary)" }}>
-        <div className="flex items-center gap-2">
-          <span className="font-mono text-sm" style={{ color: "var(--accent-color)" }}>
+        <div className="flex items-center gap-2 min-w-0">
+          <button
+            onClick={handleOpenInIde}
+            className="font-mono text-sm truncate hover:underline"
+            style={{ color: "var(--accent-color)", background: "transparent", border: "none", padding: 0, cursor: "pointer" }}
+            title="Open in IDE"
+          >
             {data.path}
-          </span>
+          </button>
           {data.start_line && data.end_line && (
             <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
               :{data.start_line}-{data.end_line}
             </span>
           )}
         </div>
-        <button
-          onClick={handleCopy}
-          className="px-2 py-1 text-xs rounded transition-colors"
-          style={{
-            backgroundColor: "var(--accent-color)20",
-            color: "var(--accent-color)",
-            border: "1px solid var(--accent-color)40",
-          }}
-        >
-          Copy
-        </button>
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            onClick={handleOpenInIde}
+            className="flex items-center gap-1 px-2 py-1 text-xs rounded transition-colors"
+            style={{
+              backgroundColor: "var(--accent-color)20",
+              color: "var(--accent-color)",
+              border: "1px solid var(--accent-color)40",
+            }}
+            title="Open in IDE tab"
+          >
+            <ExternalLink size={11} /> Open in IDE
+          </button>
+          <button
+            onClick={handleCopy}
+            className="px-2 py-1 text-xs rounded transition-colors"
+            style={{
+              backgroundColor: "var(--accent-color)20",
+              color: "var(--accent-color)",
+              border: "1px solid var(--accent-color)40",
+            }}
+          >
+            Copy
+          </button>
+        </div>
       </div>
 
       {/* Code Block */}

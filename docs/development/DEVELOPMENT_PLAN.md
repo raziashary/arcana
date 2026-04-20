@@ -1564,7 +1564,7 @@ Shows tool results with context-specific formatting:
    - Green highlight for modified lines (from `write_file` results)
    - Yellow highlight for diff lines
    - Copy button for code block
-   - "Open in IDE" button (Phase 3 integration)
+   - ✅ "Open in IDE" button — delivered in Phase 3.2 via `src/utils/openInIde.ts`
 
 2. **GrepResultsDisplay** (for `grep` tool):
    - Pattern and match count summary
@@ -2814,9 +2814,9 @@ Hook actions receive context object:
 - [ ] Hook testing interface with mock context
 
 **Integration:**
-- [ ] Skills exposed in slash commands
-- [ ] Skills integrated with Plan Management (plan templates)
-- [ ] Hooks integrated with all tool executions
+- [x] Skills exposed in slash commands
+- [x] Skills integrated with Plan Management (plan templates)
+- [x] Hooks integrated with all tool executions
 - [ ] Hooks integrated with Plan Management lifecycle
 - [ ] Documentation: Skills authoring guide, Hooks reference
 
@@ -2839,30 +2839,32 @@ Hook actions receive context object:
 #### Backend — File System & IDE Services
 
 **File Structure:**
-- [ ] `src-tauri/src/ide/mod.rs`: IDE module declaration
-- [ ] `src-tauri/src/ide/file_tree.rs`: File tree generation with metadata
-- [ ] `src-tauri/src/ide/file_reader.rs`: File reading with encoding detection
-- [ ] `src-tauri/src/ide/file_search.rs`: Fast file search (name + content)
-- [ ] `src-tauri/src/ide/symbols.rs`: Symbol extraction (tree-sitter based)
-- [ ] `src-tauri/src/ide/workspace.rs`: Workspace state management
+- [x] `src-tauri/src/ide/mod.rs`: IDE module declaration
+- [x] `src-tauri/src/ide/types.rs`: Shared DTOs (FileTreeNode, FileContent, Symbol, …)
+- [x] `src-tauri/src/ide/file_tree.rs`: File tree generation with metadata
+- [x] `src-tauri/src/ide/file_reader.rs`: File reading with encoding detection + language id
+- [x] `src-tauri/src/ide/file_search.rs`: Fast file search (name + content)
+- [x] `src-tauri/src/ide/symbols.rs`: Symbol extraction (regex-based first cut, Rust/TS/JS/Python/Go — tree-sitter upgrade tracked as Phase 3.2.1)
+- [x] `src-tauri/src/ide/workspace.rs`: Workspace state management (open tabs / expanded dirs persisted to `config.db`)
 
-**Tauri Commands:**
-- [ ] `read_file_tree(path, depth?, ignore_patterns?) -> FileTreeNode`: Recursive directory listing
-- [ ] `read_file_content(path, offset?, limit?) -> FileContent`: Read with pagination
-- [ ] `search_files(query, path?, glob?, max_results?) -> Vec<FileSearchResult>`: Fast search
-- [ ] `search_file_contents(query, path?, max_results?) -> Vec<ContentSearchResult>`: Grep-like content search
-- [ ] `get_file_metadata(path) -> FileMetadata`: Size, modified, permissions, git status
-- [ ] `get_symbol_tree(path) -> SymbolTree`: Parse file into symbols (functions, classes, etc.)
-- [ ] `resolve_symbol(path, line, column) -> SymbolDefinition`: Go to definition
-- [ ] `find_symbol_references(path, symbol_name) -> Vec<SymbolReference>`: Find usages
+**Tauri Commands:** (registered in `commands/ide_commands.rs` + `lib.rs`)
+- [x] `read_file_tree(path, depth?, ignore_patterns?) -> FileTreeNode`: Recursive directory listing (pagination via `depth` + `has_more`)
+- [x] `read_file_content(path, start_line?, end_line?) -> FileContent`: Line-based pagination + encoding/language detection
+- [x] `search_files(query, path?, glob?, max_results?) -> Vec<FileSearchResult>`: Fuzzy name search with subsequence fallback
+- [x] `search_file_contents(query, path?, max_results?) -> Vec<ContentSearchResult>`: Case-insensitive grep-like content search
+- [x] `get_file_metadata(path) -> FileMetadata`: Size, modified, readonly, git status
+- [x] `get_symbol_tree(path) -> SymbolTree`: Parse file into symbols (functions, classes, etc.)
+- [x] `get_ide_workspace_state() / set_ide_workspace_state(state)`: Persist open tabs + expanded dirs
+- [ ] `resolve_symbol(path, line, column) -> SymbolDefinition`: Go to definition *(deferred — needs tree-sitter)*
+- [ ] `find_symbol_references(path, symbol_name) -> Vec<SymbolReference>`: Find usages *(deferred — needs tree-sitter)*
 
 **File Tree Features:**
-- [ ] Recursive directory scanning with depth limit
-- [ ] Git status integration (modified, untracked, staged)
-- [ ] Lazy loading for large directories
-- [ ] Ignore pattern support (`.gitignore`, custom patterns)
-- [ ] File type icons mapping (200+ file extensions)
-- [ ] Directory expansion/collapse state persistence
+- [x] Recursive directory scanning with depth limit (`depth` parameter, default 1)
+- [x] Git status integration (modified, untracked, staged, deleted, conflicted — via git2)
+- [x] Lazy loading for large directories (`has_more=true` placeholder, second call to expand)
+- [x] Ignore pattern support (built-in skip list + caller-supplied `ignore_patterns`). `.gitignore` not yet parsed — deferred to Phase 3.3 alongside git work.
+- [x] File type icons mapping (lucide-react — generic file/folder icons; extension-specific icons tracked for follow-up polish)
+- [x] Directory expansion/collapse state persistence (`ide_expanded_dirs` in `app_settings`)
 
 #### Frontend — IDE UI Components
 
@@ -2885,78 +2887,78 @@ Hook actions receive context object:
 ```
 
 **File Tree Component (`src/components/ide/FileTree.tsx`):**
-- [ ] Collapsible folder tree with chevron indicators
-- [ ] File icons based on extension (using `lucide-react` or `vscode-icons`)
-- [ ] Git status badges (M=modified, U=untracked, S=staged)
-- [ ] Context menu: Open, Copy Path, Delete, Rename, New File/Folder
-- [ ] Drag-and-drop file movement (within tree)
-- [ ] Filter/search within tree
-- [ ] "Open Editors" section at top
-- [ ] Recently opened files section
+- [x] Collapsible folder tree with chevron indicators
+- [x] File icons based on type (lucide-react — generic file/folder today; extension-specific icons is polish work)
+- [x] Git status badges (M/U/S/D/!)
+- [ ] Context menu: Open, Copy Path, Delete, Rename, New File/Folder *(deferred — requires file-mutation commands)*
+- [ ] Drag-and-drop file movement (within tree) *(deferred)*
+- [ ] Filter/search within tree *(covered by Ctrl+P quick-open; inline filter is polish)*
+- [ ] "Open Editors" section at top *(deferred)*
+- [x] Recently opened files (surfaced in FileSearch when query is empty)
 
 **Code Viewer Component (`src/components/ide/CodeViewer.tsx`):**
-- [ ] Monaco Editor integration (`@monaco-editor/react`)
-- [ ] Syntax highlighting for 50+ languages via Monarch grammars
-- [ ] Read-only mode for safety (PA writes via tools, not direct editing)
-- [ ] Line numbers with optional relative line numbers
-- [ ] Current line highlighting
-- [ ] Code folding support
-- [ ] Minimap (overview) on right side
-- [ ] Scroll to line capability (from tool results)
-- [ ] "Open in IDE" from tool results jumps to specific line
+- [x] Monaco Editor integration (`@monaco-editor/react` ^4)
+- [x] Syntax highlighting for 50+ languages via Monarch grammars (extension → monaco id mapping in `file_reader::detect_language`)
+- [x] Read-only mode for safety (PA writes via tools, not direct editing)
+- [x] Line numbers with current-line highlighting
+- [x] Code folding support (Monaco default)
+- [x] Minimap (overview) on right side
+- [x] Scroll to line capability (via `OpenTab.gotoLine` + `editor.revealLineInCenter`)
+- [x] "Open in IDE" jumps to specific line when `openFile(path, line)` is called
 
 **Tab Management (`src/components/ide/TabBar.tsx`):**
-- [ ] Horizontal tab bar with file names
-- [ ] Modified indicator (dot or asterisk)
-- [ ] Close button per tab (middle-click to close)
-- [ ] Tab overflow handling (scroll or dropdown)
-- [ ] Tab reordering via drag-drop
-- [ ] "Close Others", "Close All", "Close Unmodified" context menu
-- [ ] Tab state persistence across sessions
+- [x] Horizontal tab bar with file names
+- [ ] Modified indicator *(N/A — viewer is read-only; marker will return if inline editing ships)*
+- [x] Close button per tab (middle-click to close too)
+- [x] Tab overflow handling (horizontal scroll container)
+- [ ] Tab reordering via drag-drop *(deferred polish)*
+- [x] `closeOtherTabs` / `closeAllTabs` actions exposed on the store *(context menu UI is polish)*
+- [x] Tab state persistence across sessions (via `ide_open_tabs` + `ide_active_tab` keys)
 
 **File Search (`src/components/ide/FileSearch.tsx`):**
-- [ ] `Ctrl+P` / `Cmd+P` quick file open
-- [ ] Fuzzy search matching
-- [ ] Recent files prioritized in results
-- [ ] File path preview in results
-- [ ] Keyboard navigation (arrow keys + enter)
+- [x] `Ctrl+P` / `Cmd+P` quick file open (global keybinding in `tabs/IDE.tsx`)
+- [x] Fuzzy search matching (subsequence + prefix/contains scoring)
+- [x] Recent files shown when query is empty
+- [x] File path preview in results
+- [x] Keyboard navigation (↑/↓ + Enter + Esc)
 
 **Symbol Outline (`src/components/ide/SymbolOutline.tsx`):**
-- [ ] Tree view of file symbols (functions, classes, variables)
-- [ ] Click to jump to symbol definition
-- [ ] Filter/search symbols
-- [ ] Sort by position or alphabetical
+- [x] Flat view of file symbols (functions, classes, structs, enums, traits, modules, constants, types)
+- [x] Click to jump to symbol definition (uses `openFile(path, line)`)
+- [x] Filter/search symbols (inline filter input)
+- [ ] Sort by position or alphabetical toggle *(sorted by source order today — alphabetical toggle is polish)*
 
 **IDE Store (`src/stores/ideStore.ts`):**
-- [ ] State: `openTabs`, `activeTab`, `fileTree`, `expandedDirs`, `recentFiles`
-- [ ] Actions: `openFile()`, `closeTab()`, `switchTab()`, `refreshTree()`, `searchFiles()`
+- [x] State: `openTabs`, `activeTab`, `rootTree`, `expandedDirs`, `recentFiles`, `searchOpen`
+- [x] Actions: `init`, `refreshTree`, `loadDirChildren`, `toggleDir`, `openFile`, `closeTab`, `closeOtherTabs`, `closeAllTabs`, `switchTab`, `setSearchOpen`
+- [x] Persists tabs + active tab + expanded dirs across restarts via `set_ide_workspace_state`
 
 #### Phase 3.2 Deliverables Checklist
 
 **Backend:**
 - [x] **Workspace folder selection** — pre-implemented in Phase 2.3+: `workspace_commands.rs` (`get/set/pick_workspace_dir`), stored in `config.db`. IDE tab reads from the same config.
-- [ ] File tree generation with git status (scoped to `workspace_dir`)
-- [ ] File reading with encoding detection (UTF-8, UTF-16, etc.)
-- [ ] Fast file search by name (within `workspace_dir`)
-- [ ] File content search (grep integration)
-- [ ] Symbol extraction via tree-sitter
-- [ ] File metadata retrieval
-- [ ] Workspace state management (multi-root workspace support for Phase 4)
+- [x] File tree generation with git status (scoped to `workspace_dir`)
+- [x] File reading with encoding detection (UTF-8, UTF-16 LE/BE, BOM-aware, binary detection)
+- [x] Fast file search by name (within `workspace_dir`)
+- [x] File content search (walkdir + substring matching; swappable for ripgrep later)
+- [x] Symbol extraction (regex-based first cut — tree-sitter upgrade planned as Phase 3.2.1)
+- [x] File metadata retrieval
+- [x] Workspace state management (single root today; multi-root stays deferred to Phase 4)
 
 **Frontend:**
-- [ ] File tree component with icons and git badges
-- [ ] Monaco Editor code viewer (read-only)
-- [ ] Tab management with persistence
-- [ ] Quick file search (`Ctrl+P`)
-- [ ] Symbol outline panel
-- [ ] Git status integration in file tree
-- [ ] Breadcrumb navigation
-- [ ] File context menu operations
+- [x] File tree component with icons and git badges
+- [x] Monaco Editor code viewer (read-only)
+- [x] Tab management with persistence
+- [x] Quick file search (`Ctrl+P`)
+- [x] Symbol outline panel
+- [x] Git status integration in file tree
+- [ ] Breadcrumb navigation *(deferred polish)*
+- [ ] File context menu operations *(deferred — needs file-mutation commands)*
 
 **Integration:**
-- [ ] "Open in IDE" from tool results
-- [ ] Click file path in chat to open in IDE
-- [ ] IDE state sync with session
+- [x] `ideStore.openFile(path, gotoLine?)` API wired into chat tool-result renderers via `src/utils/openInIde.ts`
+- [x] Click file path in chat to open in IDE — wired in `FileContentDisplay`, `GrepResultsDisplay` (per-match line jump), `GlobResultsDisplay`, `DirectoryListingDisplay`; also switches active top-level tab via new `src/stores/uiStore.ts`
+- [x] IDE state sync with session (open tabs / active tab persisted via `set_ide_workspace_state`)
 
 #### Phase 3.2 Success Criteria
 
@@ -3267,7 +3269,7 @@ Hook actions receive context object:
 
 ### Phase 3.5 — Plan Management System
 
-**Goal**: PA can create, track, and manage plans for complex multi-step tasks. Fleet-ready design for Supervisor, Worker, QC coordination in Phase 4.
+**Goal**: PA **and Fleet agents** can create, track, and manage plans for complex multi-step tasks. Full planning capabilities for Supervisor (epic breakdown), Workers (sub-plans for complex tasks), and QC (verification plans).
 
 **Depends On**: All previous sub-phases (uses Skills for plan templates, IDE for file viewing, Git for checkpointing, MCP for Fleet coordination)
 
@@ -3277,7 +3279,7 @@ Hook actions receive context object:
 
 **SQLite Schema:**
 ```sql
--- Plans table
+-- Plans table (extended for Fleet planning)
 CREATE TABLE plans (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
@@ -3287,10 +3289,16 @@ CREATE TABLE plans (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     assigned_agent TEXT, -- null for PA, 'supervisor', 'worker-backend', etc.
-    FOREIGN KEY (session_id) REFERENCES sessions(id)
+    -- Fleet planning extensions
+    created_by TEXT, -- 'PA', 'supervisor', 'worker-{slug}', 'qc'
+    agent_scope TEXT CHECK(agent_scope IN ('personal', 'fleet', 'epic')), -- plan visibility
+    parent_plan_id TEXT, -- For nested plans (worker sub-plan of supervisor epic)
+    task_id INTEGER, -- Optional link to tasks.db entry
+    FOREIGN KEY (session_id) REFERENCES sessions(id),
+    FOREIGN KEY (parent_plan_id) REFERENCES plans(id) ON DELETE CASCADE
 );
 
--- Plan items (steps)
+-- Plan items (steps) - extended for Fleet execution
 CREATE TABLE plan_items (
     id TEXT PRIMARY KEY,
     plan_id TEXT NOT NULL,
@@ -3303,6 +3311,11 @@ CREATE TABLE plan_items (
     estimated_tools TEXT, -- JSON array of tool names
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     completed_at DATETIME,
+    -- Fleet execution fields
+    assigned_worker TEXT, -- Worker slug who claimed this item
+    worktree_branch TEXT, -- Git worktree for isolation
+    pr_url TEXT, -- Link to created PR when done
+    result_summary TEXT, -- Completion summary
     FOREIGN KEY (plan_id) REFERENCES plans(id) ON DELETE CASCADE,
     FOREIGN KEY (parent_id) REFERENCES plan_items(id)
 );
@@ -3333,11 +3346,12 @@ CREATE TABLE plan_executions (
 
 **Rust Module Structure:**
 - [ ] `src-tauri/src/plan/mod.rs`: Module declaration
-- [ ] `src-tauri/src/plan/types.rs`: `Plan`, `PlanItem`, `PlanStatus`, `AgentType` structs
-- [ ] `src-tauri/src/plan/repository.rs`: `PlanRepository` with full CRUD
+- [ ] `src-tauri/src/plan/types.rs`: `Plan`, `PlanItem`, `PlanStatus`, `AgentType`, `PlanScope` structs
+- [ ] `src-tauri/src/plan/repository.rs`: `PlanRepository` with full CRUD + Fleet queries
 - [ ] `src-tauri/src/plan/engine.rs`: `PlanEngine` for execution state machine
+- [ ] `src-tauri/src/plan/fleet.rs`: **Fleet plan operations** (epic breakdown, sub-plans, claiming)
 
-**Tauri Commands:**
+**Tauri Commands (PA Planning):**
 - [ ] `create_plan(session_id, title, description) -> Result<Plan>`
 - [ ] `get_plan(plan_id) -> Result<Plan>`
 - [ ] `list_plans(session_id) -> Result<Vec<PlanSummary>>`
@@ -3349,6 +3363,30 @@ CREATE TABLE plan_executions (
 - [ ] `get_plan_progress(plan_id) -> Result<PlanProgress>`
 - [ ] `activate_plan(plan_id) -> Result<()>` -- change status from draft to active
 - [ ] `abandon_plan(plan_id, reason) -> Result<()>`
+
+**Tauri Commands (Fleet Planning):**
+- [ ] `create_plan_by_agent(title, description, agent_id, parent_plan_id?, session_id) -> Result<Plan>`
+  - Agents create plans: supervisor, worker-{slug}, qc
+  - Supports nested sub-plans via parent_plan_id
+- [ ] `break_down_epic(epic_task_id, supervisor_id) -> Result<Plan>`
+  - Supervisor converts epic task into plan with subtasks
+  - Auto-creates plan_items from acceptance criteria
+- [ ] `claim_plan_item(item_id, worker_id) -> Result<()>`
+  - Worker claims next available plan step
+  - Updates assigned_worker, status='in_progress'
+- [ ] `release_plan_item(item_id, worker_id) -> Result<()>`
+  - Worker releases item (for reassignment)
+- [ ] `create_subplan(parent_plan_id, worker_id, title, description) -> Result<Plan>`
+  - Worker creates nested plan for complex subtask
+- [ ] `report_plan_progress(plan_id, worker_id, item_id, status, notes) -> Result<PlanProgress>`
+  - Fleet progress updates with worker attribution
+- [ ] `submit_plan_for_qc(plan_id, worker_id) -> Result<()>`
+  - Worker submits completed plan for QC review
+- [ ] `get_plans_for_agent(agent_id, scope?) -> Result<Vec<PlanSummary>>`
+  - Supervisor queries: get_plans_for_agent("supervisor")
+  - Worker queries: get_plans_for_agent("worker-backend")
+- [ ] `get_plan_tree(plan_id) -> Result<PlanTree>`
+  - Returns plan + all nested subplans recursively
 
 #### Built-in Plan Tools
 
@@ -3378,6 +3416,43 @@ CREATE TABLE plan_executions (
   - Input: `template_name` (e.g., "feature-implementation"), `session_id`, `custom_title`
   - Returns: `plan_id` with pre-populated steps from template
 
+**Fleet Plan Tools (AutoDev Handler — `__autodev` suffix):**
+
+Tools exposed to core-orchestrator for Fleet agents:
+
+- [ ] **`break_down_epic__autodev`**: Supervisor converts epic to plan
+  - Input: `epic_task_id` (int), `analysis_depth` ("quick" | "thorough")
+  - Returns: `plan_id`, `item_count`, `estimated_steps`
+  - Behavior: Reads task acceptance criteria, creates plan_items with dependencies
+
+- [ ] **`create_subplan__autodev`**: Worker creates nested plan for complex subtask
+  - Input: `parent_plan_id`, `title`, `description`, `estimated_steps` (3-10)
+  - Returns: `subplan_id`, `plan_tree_depth`
+  - Behavior: Creates child plan linked to parent, worker owns subplan
+
+- [ ] **`claim_plan_item__autodev`**: Worker claims next available item
+  - Input: `plan_id` or `agent_type` ("any", "supervisor", "worker", "qc")
+  - Returns: `item_id`, `title`, `description`, `dependencies_met` (bool)
+  - Behavior: Finds pending item with all dependencies done, assigns to worker
+
+- [ ] **`update_plan_step__autodev`**: Worker updates step status (Fleet version)
+  - Input: `plan_id`, `item_id`, `status` ("in_progress", "done", "blocked"), `notes`, `pr_url?`
+  - Returns: `confirmation`, `current_progress`, `unblocked_items` (array)
+  - Behavior: Updates status, if "done" marks completed_at, triggers dependency unlock
+
+- [ ] **`submit_for_qc__autodev`**: Worker submits plan for QC review
+  - Input: `plan_id`, `result_summary`, `pr_urls` (array)
+  - Returns: `qc_task_id`, `estimated_review_time`
+  - Behavior: Creates QC task, links to plan, notifies QC agent
+
+- [ ] **`get_plan_status__autodev`**: Query plan state (Fleet version)
+  - Input: `plan_id`, `include_subplans` (bool)
+  - Returns: Full plan with items, subplans array, progress_percentage per agent
+
+- [ ] **`list_active_plans__autodev`**: See plans by scope
+  - Input: `scope` ("personal", "fleet", "epic", "all"), `agent_filter?`
+  - Returns: Array of plans with progress, ownership, parent/child links
+
 #### System Prompt Integration
 
 **Updated BASE_SYSTEM_PROMPT Guidance:**
@@ -3399,12 +3474,41 @@ Plan step status meanings:
 
 **Template Directory:** `~/.autodev/skills/plans/`
 
-**Built-in Templates:**
+**Built-in Templates (PA Planning):**
 - [ ] `feature-implementation.yaml`: Standard 5-step feature dev
 - [ ] `bug-fix.yaml`: Debug → Fix → Test → Verify flow
 - [ ] `refactoring.yaml`: Analyze → Plan → Execute → Verify
 - [ ] `code-review.yaml`: Read → Analyze → Comment → Summarize
 - [ ] `api-endpoint.yaml`: Design → Implement → Test → Document
+
+**Fleet Plan Templates (Skills Integration):**
+
+Template Directory: `~/.autodev/skills/plans/`
+
+- [ ] **`epic-breakdown.yaml`** — Supervisor template
+  - Steps: Analyze Epic → Decompose Requirements → Identify Dependencies → Create Subtasks → Assign to Workers
+  - Auto-generates plan_items with agent_type="Worker" and dependency chains
+  - Input: epic_title, acceptance_criteria, affected_repos
+
+- [ ] **`worker-subplan.yaml`** — Worker complex task template
+  - Steps: Understand Subtask → Explore Code → Design Approach → Implement → Unit Test → Integration Test
+  - Creates nested plan linked to parent epic plan
+  - Input: parent_plan_id, subtask_description, estimated_complexity
+
+- [ ] **`refactoring-plan.yaml`** — Worker refactoring template
+  - Steps: Analyze Impact → Create Worktree → Migrate Code → Run Tests → Update Docs → Create PR
+  - Includes git worktree_branch field per step
+  - Input: refactor_scope, affected_files, test_commands
+
+- [ ] **`qc-verification.yaml`** — QC review template
+  - Steps: Review PR Changes → Run Test Suite → Check Edge Cases → Verify Documentation → Approve/Reject
+  - Creates verification checklist from acceptance criteria
+  - Input: pr_url, plan_id, test_commands
+
+- [ ] **`bug-investigation.yaml`** — Worker debugging template
+  - Steps: Reproduce Bug → Isolate Root Cause → Design Fix → Implement Fix → Regression Test → Close Issue
+  - Links to GitHub issue for context
+  - Input: issue_number, repo, reproduction_steps
 
 **Template Format:**
 ```yaml
@@ -3438,16 +3542,25 @@ steps:
 **Plan Sidebar Card:**
 - [ ] `src/components/sidebar/PlanCard.tsx`
   - Shows active plan title, progress bar, current step
-  - Status indicator: 🟡 Draft / 🟢 Active / ✅ Complete / ⚪ Abandoned
+  - **Agent ownership indicator**: Shows which agent owns the plan (PA / Supervisor / Worker / QC)
+  - **Scope badge**: Personal / Fleet / Epic
+  - Status indicator: 🟡 Draft / 🟢 Active / 🟡 In Progress / ✅ Complete / ⚪ Abandoned
+  - Nested plan indicator: Shows parent/child relationship
   - Click to open full Plan view
 
 **Plan Detail View:**
 - [ ] `src/components/plan/PlanView.tsx`
   - Collapsible step list with status icons
-  - Drag-and-drop reordering (draft plans only)
-  - Dependency visualization (graph/tree)
-  - Notes field per step
-  - Action buttons: [Activate] [Add Step] [Mark Done] [Abandon]
+  - **Agent assignment column**: Shows which worker claimed each item
+  - **Worktree/PR links**: Direct links to git branches and PRs per step
+  - Drag-and-drop reordering (draft plans only, PA plans)
+  - Dependency visualization (graph/tree) with unlock status
+  - Notes field per step with **worker attribution**
+  - **Context-aware action buttons by agent type:**
+    - PA: [Activate] [Add Step] [Mark Done] [Abandon]
+    - Supervisor: [Break Down Epic] [Assign to Worker] [Add Step] [Auto-Assign]
+    - Worker: [Claim Step] [Mark Done] [Create Subplan] [Release Item]
+    - QC: [Start Review] [Approve] [Reject] [Request Changes]
 
 **Plan Chat Display:**
 - [ ] `src/components/chat/PlanDisplay.tsx`
@@ -3457,9 +3570,15 @@ steps:
 
 **Plan Store:**
 - [ ] `src/stores/planStore.ts`
-  - State: `activePlan`, `planHistory`, `isLoading`
+  - State: `activePlan`, `planHistory`, `isLoading`, `fleetPlans`, `planTree`
   - Actions: `loadPlan`, `updateStepStatus`, `createPlan`, `setActivePlan`
-  - Event listeners: `plan:created`, `plan:updated`, `plan:step_completed`
+  - **Fleet actions:**
+    - `claimPlanItem(itemId, workerId)` — Worker claims step
+    - `createSubplan(parentId, workerId, title, description)` — Nested plan creation
+    - `loadPlansForAgent(agentId, scope)` — Load plans by agent
+    - `loadPlanTree(planId)` — Load plan + all nested subplans
+    - `submitForQC(planId, workerId)` — Submit plan for review
+  - Event listeners: `plan:created`, `plan:updated`, `plan:step_completed`, `plan:item_claimed`, `plan:subplan_created`
 
 #### Plan Hooks Integration
 
@@ -3491,35 +3610,133 @@ steps:
 - [ ] Session restore: Check for incomplete plans on session load
 - [ ] Recovery prompt: "Continue plan 'X'? 3 of 7 steps remaining" [Resume] [Abandon]
 
-#### Fleet Integration Foundation (Phase 4 Ready)
+#### Fleet Plan Execution Flow
 
-**Multi-Agent Design:**
-- [ ] Plan items have `agent_type` field: PA, Supervisor, Worker, QC
-- [ ] Plans have `assigned_agent` for delegation
-- [ ] Status transitions support multi-agent workflow:
-  - `draft` → `assigned` → `in_progress` → `review` → `done`
+**Supervisor Epic Breakdown:**
+```
+1. SUPERVISOR POLL CYCLE
+   └─ Sees epic task #123: "Refactor auth system"
+   └─ Calls break_down_epic__autodev(epic_task_id=123)
+   └─ Creates Plan #P1 with agent_scope='epic', created_by='supervisor'
+   └─ Auto-generates 6 plan_items:
+      ├─ Step 1: Analyze current auth (agent_type='Supervisor')
+      ├─ Step 2: Design new auth flow → agent_type='Worker', assigned_worker=null
+      ├─ Step 3: Update database schema → agent_type='Worker', depends_on=[2]
+      ├─ Step 4: Update API endpoints → agent_type='Worker', depends_on=[3]
+      ├─ Step 5: Update frontend → agent_type='Worker', assigned_worker='worker-frontend'
+      └─ Step 6: Integration tests → agent_type='Worker', depends_on=[3,4,5]
+```
 
-**Phase 4 Integration Points:**
-- [ ] Supervisor queries: `get_plans_for_agent("supervisor")`
-- [ ] Worker claims: `claim_plan_item(worker_id, item_id)`
-- [ ] QC reviews: `submit_plan_for_qc(plan_id)`
+**Worker Subplan Creation:**
+```
+2. WORKER-BACKEND CLAIM & SUBPLAN
+   └─ Polls claim_plan_item__autodev(plan_id='P1')
+   └─ Gets Step 2 assigned (status='in_progress', assigned_worker='worker-backend')
+   └─ Step 2 is complex (multi-file refactor)
+   └─ Calls create_subplan__autodev(parent_plan_id='P1', title="Auth middleware refactor")
+   └─ Creates Subplan #P2 with parent_plan_id='P1', agent_scope='fleet'
+   └─ Subplan items:
+      ├─ Sub-step 2.1: Read current auth code
+      ├─ Sub-step 2.2: Write new auth middleware (worktree_branch='worker/auth-refactor')
+      └─ Sub-step 2.3: Update unit tests
+   └─ Completes all subplan items
+   └─ Calls update_plan_step__autodev(P1, step_2, 'done', pr_url='github.com/.../142')
+   └─ Subplan #P2 auto-completed when parent item done
+```
+
+**Dependency Unlock & QC Handoff:**
+```
+3. DEPENDENCY CASCADE & QC
+   └─ Step 2 done → Step 3 dependencies now met → Status 'pending' → 'ready'
+   └─ Worker-Backend claims Step 3...
+   └─ All steps done → Worker submits for QC
+   └─ Calls submit_for_qc__autodev(P1, result_summary, pr_urls=[142, 143, 144])
+   └─ QC Agent creates verification plan #P3
+   └─ QC reviews all PRs, approves → Supervisor merges → Closes epic
+```
+
+#### Plan Hooks Integration (Extended for Fleet)
+
+**Hook Events:**
+- [ ] `PrePlanStep`: Before executing tools for a step
+- [ ] `PostPlanStep`: After step tools complete
+- [ ] `OnPlanActivate`: When plan moves draft → active
+- [ ] `OnPlanComplete`: All steps done
+- **Fleet Hooks:**
+  - [ ] `OnEpicBreakdown`: Supervisor creates plan from epic
+    - Auto-emits to AutoDev Panel
+    - Triggers worker notification
+  - [ ] `OnPlanItemClaimed`: Worker claims step
+    - Updates AutoDev Panel agent roster
+    - Creates worktree if specified
+  - [ ] `OnSubplanCreated`: Worker creates nested plan
+    - Links parent/child in UI tree view
+    - Inherits parent plan context
+  - [ ] `OnPlanQCSubmit`: Worker submits for review
+    - Creates QC task in tasks.db
+    - Notifies QC agent via MCP
+  - [ ] `OnDependencyUnblocked`: Dependency satisfied
+    - Auto-updates waiting items to 'pending'
+    - Emits to plan dependency graph UI
+
+**Hooks Config:** `~/.autodev/hooks/plan_hooks.json`
 
 #### Phase 3.5 Deliverables Checklist
 
+**PA Planning Core:**
 - [ ] SQLite schema: plans, plan_items, plan_item_dependencies, plan_executions tables
 - [ ] Rust plan module: types, repository, engine
-- [ ] Tauri commands: full CRUD for plans and plan items
+- [ ] Tauri commands: full CRUD for plans and plan items (PA commands)
 - [ ] Built-in tools: create_plan, add_plan_step, update_plan_step, get_plan_status, list_active_plans, create_plan_from_template
 - [ ] System prompt updated with plan guidance
-- [ ] Plan templates: 5 built-in YAML templates
+- [ ] Plan templates: 5 built-in YAML templates (PA-focused)
 - [ ] PlanCard sidebar component
 - [ ] PlanView detail page with dependency viz
 - [ ] PlanDisplay inline chat component
-- [ ] planStore.ts frontend state management
+- [ ] planStore.ts frontend state management (PA actions)
 - [ ] Plan hooks: PrePlanStep, PostPlanStep, OnPlanActivate, OnPlanComplete
 - [ ] Auto-save and session recovery
 - [ ] Resume prompt for incomplete plans
-- [ ] Fleet-ready fields: assigned_agent, agent_type
+
+**Fleet Planning Extensions:**
+- [ ] **Database Extensions:**
+  - [ ] Fleet fields in plans table: created_by, agent_scope, parent_plan_id, task_id
+  - [ ] Fleet fields in plan_items: assigned_worker, worktree_branch, pr_url, result_summary
+- [ ] **Backend — Fleet Plan Module:**
+  - [ ] `src-tauri/src/plan/fleet.rs` — Fleet operations
+  - [ ] Tauri commands: create_plan_by_agent, break_down_epic, claim_plan_item, release_plan_item
+  - [ ] Tauri commands: create_subplan, report_plan_progress, submit_plan_for_qc, get_plans_for_agent, get_plan_tree
+  - [ ] Repository queries: find_claimable_items, get_plan_tree_recursive, get_plans_by_scope
+- [ ] **AutoDev Handler — Fleet Plan Tools:**
+  - [ ] `break_down_epic__autodev` — Supervisor epic → plan conversion
+  - [ ] `create_subplan__autodev` — Worker nested plan creation
+  - [ ] `claim_plan_item__autodev` — Worker step claiming
+  - [ ] `update_plan_step__autodev` — Fleet progress updates
+  - [ ] `submit_for_qc__autodev` — QC handoff
+  - [ ] `get_plan_status__autodev` — Fleet plan query
+  - [ ] `list_active_plans__autodev` — Scoped plan listing
+- [ ] **Fleet Plan Templates (Skills):**
+  - [ ] `epic-breakdown.yaml` — Supervisor template
+  - [ ] `worker-subplan.yaml` — Worker complex task template
+  - [ ] `refactoring-plan.yaml` — Worker refactoring with worktrees
+  - [ ] `qc-verification.yaml` — QC review checklist
+  - [ ] `bug-investigation.yaml` — Worker debugging flow
+- [ ] **Frontend — Fleet Plan UI:**
+  - [ ] Agent ownership indicator in PlanCard (PA/Supervisor/Worker/QC badge)
+  - [ ] Scope badge (Personal/Fleet/Epic) with color coding
+  - [ ] Nested plan tree visualization in PlanView
+  - [ ] Agent filter: Show only items assigned to specific worker
+  - [ ] Context-aware action buttons by agent type (Supervisor/Worker/QC specific)
+  - [ ] Worktree branch links and PR URL displays
+  - [ ] Plan tree view: Expand/collapse parent/child plans
+- [ ] **Plan Store — Fleet Actions:**
+  - [ ] `claimPlanItem()`, `createSubplan()`, `loadPlansForAgent()`, `loadPlanTree()`, `submitForQC()`
+  - [ ] Event listeners: plan:item_claimed, plan:subplan_created
+- [ ] **Fleet Plan Hooks:**
+  - [ ] `OnEpicBreakdown`, `OnPlanItemClaimed`, `OnSubplanCreated`, `OnPlanQCSubmit`, `OnDependencyUnblocked`
+
+**Fleet Plan Success Criteria:**
+> **Supervisor** detects epic task → Creates plan via `break_down_epic__autodev` → **Workers** claim items and create subplans for complex work → **QC** creates verification plan → All plans complete with proper dependency resolution → Epic closed
 
 ---
 
@@ -3691,11 +3908,369 @@ Phase 3 Cross-Sub-Phase Integration Points:
 - [ ] **Data Integrity**: Preserve original timestamps, mark as migrated
 - [ ] **Rollback Plan**: Keep original sessions table until migration verified
 
-**Subagents + Multi-Agent:**
-- [ ] Subagent spawning with isolated context
-- [ ] Agent team coordination (supervisor → workers pattern)
-- [ ] Lock file management for task claiming
-- [ ] Heartbeat reporting (every 5 min to status file)
+### Phase 4.9 — Subagent System (Leveraging Core-Orchestrator)
+
+**Design Philosophy**: Instead of building a new subagent tool from scratch, AutoDev leverages the existing **core-orchestrator's agent factory** (`AgentFactory.create_agent()`). The subagent system is a **bridge** between AutoDev's Rust backend and core-orchestrator's Python `LivingAgent` instances.
+
+**Benchmark Research:**
+- **Claude Code**: Uses `AgentTool` with `runAgent()` — child agents get isolated context (fresh message history), subset of parent tools, custom system prompts. Parent blocks until child completes, receiving summary.
+- **Goose**: `SubagentExecutionTool` with notification events for async task tracking. Parent can poll or wait for completion events.
+- **Core-Orchestrator**: Already has `LivingAgent` with `MemoryCore`, `AgentFactory.create_agent()` for spawning, A2A protocol for agent-to-agent communication.
+
+**Key Insight**: Core-orchestrator already has everything needed for subagents:
+- ✅ `AgentFactory.create_agent(name, override_config)` — spawns new LivingAgent
+- ✅ `LivingAgent.process_message()` — runs agent with isolated context
+- ✅ A2A protocol — agent-to-agent communication
+- ✅ Task execution FSM — tracks subagent lifecycle
+
+**Architecture: Rust Bridge → HTTP → Core-Orchestrator**
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  AUTODEV SUBAGENT SYSTEM                                                      │
+│                                                                              │
+│  ┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐   │
+│  │  Parent Agent    │────▶│  Rust Subagent   │────▶│  Core-Orchestrator│   │
+│  │  (Rust AgentEngine)│     │  Bridge (HTTP)   │     │  LivingAgent      │   │
+│  └──────────────────┘     └──────────────────┘     └──────────────────┘   │
+│          │                          │                       │               │
+│          │                          │                       │               │
+│          │ 1. spawn_subagent()      │ 2. POST /agents/create│               │
+│          │─────────────────────────▶│───────────────────────▶│               │
+│          │                          │                       │               │
+│          │ 3. execute_subtask()     │ 4. POST /agents/{id}/process        │
+│          │─────────────────────────▶│───────────────────────▶│               │
+│          │                          │                       │               │
+│          │ 5. receive summary       │ 6. SSE /agents/{id}/events            │
+│          │◀─────────────────────────│◀───────────────────────│               │
+│          │                          │                       │               │
+│          │ 7. terminate_subagent()  │ 8. POST /agents/{id}/terminate        │
+│          │─────────────────────────▶│───────────────────────▶│               │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Backend — Subagent Module
+
+**Rust Module Structure:**
+- [ ] `src-tauri/src/subagent/mod.rs` — Module declaration
+- [ ] `src-tauri/src/subagent/types.rs` — SubagentConfig, SubagentStatus, SubagentResult
+- [ ] `src-tauri/src/subagent/bridge.rs` — HTTP bridge to core-orchestrator
+- [ ] `src-tauri/src/subagent/manager.rs` — SubagentManager (tracks active subagents)
+- [ ] `src-tauri/src/subagent/pool.rs` — SubagentPool (limits max concurrent subagents)
+
+**Core Types:**
+```rust
+pub struct SubagentConfig {
+    pub name: String,                    // Unique subagent name (auto-generated: "{parent}-sub-{n}")
+    pub parent_session_id: String,       // Parent's session ID
+    pub system_prompt: String,           // Custom system prompt (or inherit from parent)
+    pub tools: Vec<String>,               // Tool subset (e.g., ["read_file", "grep", "bash"])
+    pub model: String,                   // Model override (or inherit from parent)
+    pub working_dir: String,             // Working directory (git worktree for isolation)
+    pub max_turns: u32,                  // Max tool turns (default: 20)
+    pub timeout_secs: u32,               // Timeout (default: 300s)
+    pub inherit_autodev_md: bool,        // Inherit AUTODEV.md from parent
+}
+
+pub struct SubagentHandle {
+    pub id: String,                      // Core-orchestrator agent ID
+    pub config: SubagentConfig,
+    pub status: SubagentStatus,
+    pub created_at: DateTime<Utc>,
+    pub events: mpsc::Receiver<SubagentEvent>, // SSE event stream
+}
+
+pub enum SubagentStatus {
+    Spawning,      // Creating agent in core-orchestrator
+    Idle,          // Agent ready, waiting for task
+    Running,       // Processing message
+    Completed,     // Finished successfully
+    Failed,        // Error or timeout
+    Terminated,    // Explicitly killed
+}
+```
+
+**Tauri Commands:**
+- [ ] `spawn_subagent(config: SubagentConfig) -> Result<SubagentHandle>`
+  - Calls core-orchestrator `POST /api/agents/create`
+  - Creates git worktree for isolation (if working_dir specified)
+  - Registers subagent in manager
+  - Returns handle with event stream
+
+- [ ] `execute_subtask(subagent_id: String, prompt: String, context: SubtaskContext) -> Result<SubagentResult>`
+  - Sends task to subagent via `POST /api/agents/{id}/process`
+  - Streams events back via SSE
+  - Blocks until completion or timeout
+  - Returns summary result
+
+- [ ] `get_subagent_status(subagent_id: String) -> Result<SubagentStatus>`
+  - Query core-orchestrator for agent status
+  - Returns current state and metadata
+
+- [ ] `terminate_subagent(subagent_id: String, force: bool) -> Result<()>`
+  - Graceful shutdown (or force kill)
+  - Cleanup worktree if created
+  - Remove from manager
+
+- [ ] `list_active_subagents(parent_session_id: Option<String>) -> Result<Vec<SubagentSummary>>`
+  - List all subagents (optionally filtered by parent)
+  - Shows status, runtime, current task
+
+- [ ] `abort_subagent(subagent_id: String) -> Result<()>`
+  - Cancel running subagent immediately
+  - Emit abort signal via SSE
+
+**Subagent Bridge (HTTP Client):**
+```rust
+pub struct SubagentBridge {
+    client: reqwest::Client,
+    base_url: String,  // core-orchestrator endpoint (localhost:8765)
+}
+
+impl SubagentBridge {
+    async fn create_agent(&self, config: &SubagentConfig) -> Result<String>;
+    async fn process_message(&self, agent_id: &str, message: &str) -> Result<ProcessResult>;
+    async fn get_status(&self, agent_id: &str) -> Result<AgentStatus>;
+    async fn terminate(&self, agent_id: &str) -> Result<()>;
+    async fn subscribe_events(&self, agent_id: &str) -> Result<mpsc::Receiver<AgentEvent>>;
+}
+```
+
+**Core-Orchestrator API Endpoints (Already Exist):**
+- `POST /api/agents/` — Create new agent (returns agent_id)
+- `POST /api/agents/{id}/process` — Send message to agent
+- `GET /api/agents/{id}/status` — Get agent status
+- `POST /api/agents/{id}/terminate` — Terminate agent
+- `GET /api/agents/{id}/events` — SSE event stream
+
+#### Built-in Subagent Tool
+
+**Tool: `spawn_subagent`**
+```rust
+pub struct SpawnSubagentInput {
+    pub name: Option<String>,           // Optional custom name (auto-generated if None)
+    pub task_description: String,       // What the subagent should do
+    pub tools: Vec<String>,             // Allowed tools (subset of parent)
+    pub files: Vec<String>,             // Files to provide as context
+    pub model: Option<String>,          // Model override
+    pub max_turns: Option<u32>,         // Max tool turns
+}
+
+pub struct SpawnSubagentOutput {
+    pub subagent_id: String,
+    pub result_summary: String,         // Final result from subagent
+    pub files_modified: Vec<String>,    // Files the subagent touched
+    pub cost_usd: f64,
+    pub tokens_in: u32,
+    pub tokens_out: u32,
+    pub duration_secs: f64,
+}
+```
+
+**Execution Flow:**
+```
+1. Parent Agent calls spawn_subagent tool
+   └─ Tool validates parameters
+   └─ Creates SubagentConfig
+
+2. SubagentBridge.create_agent()
+   └─ POST /api/agents/ to core-orchestrator
+   └─ Core-orchestrator: AgentFactory.create_agent()
+   └─ Returns agent_id (e.g., "worker-backend-sub-3")
+
+3. Git Worktree Setup (if needed)
+   └─ Create worktree at .autodev/worktrees/{subagent_id}/
+   └─ Set as working_dir in config
+
+4. Execute Subtask
+   └─ Bridge.process_message() with task_description
+   └─ Core-orchestrator: LivingAgent.process_message()
+   └─ Subagent runs with isolated context
+
+5. Stream Events
+   └─ SSE events: token, tool_start, tool_end, thinking, done
+   └─ Parent can display progress in UI
+
+6. Completion
+   └─ Subagent finishes (success/failure/timeout)
+   └─ Core-orchestrator returns final result
+   └─ Bridge returns SpawnSubagentOutput to parent
+
+7. Cleanup
+   └─ Terminate subagent in core-orchestrator
+   └─ Optionally preserve worktree for review
+   └─ Log subagent session to parent history
+```
+
+#### Parallel Subagent Execution
+
+**Tool: `spawn_parallel_subagents`**
+```rust
+pub struct ParallelSubagentsInput {
+    pub subtasks: Vec<SubtaskSpec>,    // 2-10 parallel subtasks
+    pub max_concurrent: u32,            // Max parallel (default: 5)
+    pub aggregate_results: bool,        // Return combined summary
+}
+
+pub struct ParallelSubagentsOutput {
+    pub results: Vec<SubagentResult>,
+    pub combined_summary: String,       // LLM-generated aggregate
+    pub total_cost_usd: f64,
+    pub total_duration_secs: f64,
+}
+```
+
+**Use Cases:**
+- Review 5 files in parallel (each file → 1 subagent)
+- Test multiple approaches (3 subagents with different strategies)
+- Analyze large codebase (shard across subagents)
+
+#### Nested Subagents
+
+**Architecture supports nesting:**
+- Parent (Worker) spawns Subagent A
+- Subagent A spawns Subagent B (for sub-subtask)
+- Up to 3 levels deep (configurable)
+- Each level has own worktree isolation
+
+**Tracking:**
+- Subagent ID includes parent chain: `worker-backend-sub-3-sub-1`
+- SQLite table tracks parent-child relationships
+- UI shows nested tree view
+
+#### Frontend — Subagent UI
+
+**Subagent Monitor Panel:**
+- [ ] `src/components/subagent/SubagentMonitor.tsx`
+  - Tree view of active subagents (parent → children)
+  - Real-time status indicators
+  - Current task description per subagent
+  - Progress bars for running subagents
+  - Cost tracking per subagent
+
+**Subagent Event Display:**
+- [ ] `src/components/subagent/SubagentEventStream.tsx`
+  - Shows SSE events from subagent (like ChatMessages)
+  - Token streaming from subagent
+  - Tool calls made by subagent
+  - Thinking/reasoning display
+
+**Subagent Result Card:**
+- [ ] `src/components/subagent/SubagentResultCard.tsx`
+  - Summary of completed subagent work
+  - Files modified list
+  - Cost and duration stats
+  - "View Full Log" button
+
+#### Subagent Store
+
+- [ ] `src/stores/subagentStore.ts`
+  - State: `activeSubagents`, `subagentHistory`, `eventStreams`
+  - Actions:
+    - `spawnSubagent(config)` → Returns handle
+    - `trackSubagent(subagentId)` → Subscribe to events
+    - `terminateSubagent(subagentId)`
+    - `getSubagentTree(parentId)` → Nested structure
+  - Event listeners: `subagent:spawned`, `subagent:completed`, `subagent:failed`
+
+#### Integration with Fleet
+
+**Worker Recipes Using Subagents:**
+```yaml
+# worker-backend-poll.yaml (updated for subagents)
+instructions: |
+  You are Worker Backend.
+  1. Poll for assigned tasks
+  2. If task is complex (>5 files), SPAWN SUBAGENTS:
+     - spawn_subagent for analysis
+     - spawn_parallel_subagents for file reviews
+  3. Coordinate results
+  4. Submit final PR
+```
+
+**Supervisor Epic Breakdown with Subagents:**
+```
+Supervisor receives epic "Refactor auth system"
+├─ Spawns Analysis Subagent: "Analyze current auth code"
+├─ Waits for analysis result
+├─ Spawns 3 Parallel Subagents:
+│  ├─ Subagent 1: "Design new auth middleware"
+│  ├─ Subagent 2: "Plan database migrations"
+│  └─ Subagent 3: "Update API documentation"
+├─ Collects all results
+├─ Creates implementation plan
+└─ Assigns to workers
+```
+
+#### Subagent Safety & Limits
+
+**Resource Limits:**
+- Max concurrent subagents per parent: 10
+- Max nesting depth: 3 levels
+- Max subagent lifetime: 10 minutes (timeout)
+- Max tokens per subagent: 50k (configurable)
+
+**Isolation Guarantees:**
+- Each subagent gets fresh message history (no parent context leak)
+- Git worktree per subagent (file changes isolated)
+- Tool subset (parent controls what subagent can access)
+- No MCP server access unless explicitly granted
+
+**Cleanup:**
+- Auto-terminate orphaned subagents (parent dies → children killed)
+- Worktree cleanup on termination (configurable)
+- SQLite cleanup of old subagent records (>30 days)
+
+#### Subagent Deliverables Checklist
+
+- [ ] **Backend — Subagent Module:**
+  - [ ] `src-tauri/src/subagent/types.rs` — SubagentConfig, SubagentHandle, SubagentStatus
+  - [ ] `src-tauri/src/subagent/bridge.rs` — HTTP bridge to core-orchestrator
+  - [ ] `src-tauri/src/subagent/manager.rs` — SubagentManager (spawn/track/cleanup)
+  - [ ] `src-tauri/src/subagent/pool.rs` — Concurrency limits
+  - [ ] Tauri commands: spawn_subagent, execute_subtask, get_subagent_status, terminate_subagent, list_active_subagents
+
+- [ ] **Backend — Git Worktree Integration:**
+  - [ ] Auto-create worktree for each subagent
+  - [ ] Cleanup worktree on termination
+  - [ ] Track worktree → subagent mapping
+
+- [ ] **Built-in Tool:**
+  - [ ] `spawn_subagent` tool (single subagent)
+  - [ ] `spawn_parallel_subagents` tool (parallel execution)
+  - [ ] Tool registration in builtin_tools
+
+- [ ] **Core-Orchestrator Integration:**
+  - [ ] Verify `/api/agents/*` endpoints work via sidecar bridge
+  - [ ] Subagent metadata forwarding (AUTODEV.md, tools, model)
+  - [ ] SSE event streaming implementation
+
+- [ ] **Frontend — Subagent UI:**
+  - [ ] `SubagentMonitor.tsx` — Tree view of active subagents
+  - [ ] `SubagentEventStream.tsx` — Real-time event display
+  - [ ] `SubagentResultCard.tsx` — Completed subagent summary
+  - [ ] Integration in ChatMessages for subagent tool calls
+
+- [ ] **Frontend — Subagent Store:**
+  - [ ] `subagentStore.ts` with spawn/track/terminate actions
+  - [ ] Event stream management
+  - [ ] Parent-child tree visualization
+
+- [ ] **Safety & Limits:**
+  - [ ] Max concurrent subagents enforcement
+  - [ ] Max nesting depth check
+  - [ ] Subagent timeout handling
+  - [ ] Orphan cleanup (parent death detection)
+
+- [ ] **Integration with Fleet:**
+  - [ ] Worker recipes updated to use subagents for complex tasks
+  - [ ] Supervisor epic breakdown using subagents
+  - [ ] Subagent cost tracking per worker
+
+**Subagent Success Criteria:**
+> Parent agent spawns subagent → Subagent executes task in isolated worktree → Returns summary → Parent continues with result. Parent can spawn 5 parallel subagents → All complete → Parent aggregates results.
+
+---
 
 **Model Router + Dispatch:**
 - [ ] Model Router: configurable role → model mapping

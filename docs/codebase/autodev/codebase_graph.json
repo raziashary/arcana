@@ -1,11 +1,11 @@
 {
   "metadata": {
     "project": "AutoDev",
-    "version": "1.0.0",
-    "generated_at": "2025-01-15",
-    "total_files": 67,
-    "backend_files": 46,
-    "frontend_files": 21
+    "version": "2.0.0",
+    "generated_at": "2026-04-20",
+    "total_files": 120,
+    "backend_files": 72,
+    "frontend_files": 48
   },
   "nodes": {
     "backend": {
@@ -99,6 +99,18 @@
             "tool_trait", "tool_registry", "tool_executor", "permission",
             "context", "engine", "compaction", "builtin_tools"
           ]
+        },
+        {
+          "id": "agent/create_task_tool.rs",
+          "path": "src-tauri/src/agent/builtin_tools/create_task.rs",
+          "type": "tool",
+          "purpose": "create_task tool for Delegate Mode - writes tasks to SQLite board",
+          "exports": ["CreateTaskTool"],
+          "implements": "Tool",
+          "name": "create_task",
+          "is_read_only": false,
+          "input_schema": { "title": "string", "priority": "string", "task_type": "string", "acceptance_criteria": "string", "description": "string (optional)" },
+          "connections": ["tasks.rs"]
         },
         {
           "id": "agent/tool_trait.rs",
@@ -218,13 +230,18 @@
           "id": "builtin_tools/mod.rs",
           "path": "src-tauri/src/agent/builtin_tools/mod.rs",
           "type": "module",
-          "purpose": "Registers all built-in tools with the registry",
-          "exports": ["register_builtin_tools"],
+          "purpose": "Registers all built-in tools with the registry, mode-aware filtering for PA Mode Toggle",
+          "exports": ["register_builtin_tools", "register_for_mode"],
           "registers": [
             "BashTool", "ReadFileTool", "WriteFileTool", "EditFileTool",
-            "ListDirectoryTool", "GrepTool", "GlobTool"
+            "ListDirectoryTool", "GrepTool", "GlobTool", "CreateTaskTool"
           ],
-          "connections": ["ToolRegistry", "lib.rs"]
+          "mode_filtering": {
+            "FastDevelopment": "All 7 file tools",
+            "ReviewMode": "All 7 file tools",
+            "DelegateMode": "Only create_task tool"
+          },
+          "connections": ["ToolRegistry", "lib.rs", "agent_commands.rs"]
         },
         {
           "id": "builtin_tools/bash.rs",
@@ -340,8 +357,80 @@
             "agent_commands",
             "session_commands",
             "settings_commands",
-            "vault_commands"
+            "vault_commands",
+            "task_commands",
+            "recipe_commands",
+            "model_config_commands",
+            "github_mcp_commands",
+            "ide_commands",
+            "autodev_instructions_commands",
+            "worker_commands"
           ]
+        },
+        {
+          "id": "commands/task_commands.rs",
+          "path": "src-tauri/src/commands/task_commands.rs",
+          "type": "command_handler",
+          "purpose": "Task management commands for Internal Board",
+          "exports": ["list_tasks", "get_task", "update_task_status", "delete_task"],
+          "connections": ["tasks.rs", "AutoDevPanel.tsx"]
+        },
+        {
+          "id": "commands/recipe_commands.rs",
+          "path": "src-tauri/src/commands/recipe_commands.rs",
+          "type": "command_handler",
+          "purpose": "Recipe management commands",
+          "exports": ["list_recipes", "get_recipe", "bind_worker_recipe", "generate_recipe_yaml"],
+          "connections": ["recipes/mod.rs", "Recipes.tsx", "WorkerTable.tsx"]
+        },
+        {
+          "id": "commands/model_config_commands.rs",
+          "path": "src-tauri/src/commands/model_config_commands.rs",
+          "type": "command_handler",
+          "purpose": "Per-model configuration (temperature, top_p, reasoning_effort)",
+          "exports": ["get_model_config", "set_model_config", "delete_model_config"],
+          "connections": ["model_configs.rs", "ModelConfigSection.tsx"]
+        },
+        {
+          "id": "commands/github_mcp_commands.rs",
+          "path": "src-tauri/src/commands/github_mcp_commands.rs",
+          "type": "command_handler",
+          "purpose": "GitHub MCP server configuration",
+          "exports": ["get_github_mcp_config", "set_github_mcp_config"],
+          "connections": ["GitHubMCPCard.tsx"]
+        },
+        {
+          "id": "commands/ide_commands.rs",
+          "path": "src-tauri/src/commands/ide_commands.rs",
+          "type": "command_handler",
+          "purpose": "IDE Core commands for file tree, viewer, search, symbols",
+          "exports": [
+            "read_file_tree",
+            "read_file_content",
+            "get_file_metadata",
+            "search_files",
+            "search_file_contents",
+            "get_symbol_tree",
+            "get_ide_workspace_state",
+            "set_ide_workspace_state"
+          ],
+          "connections": ["ide/mod.rs", "ideStore.ts"]
+        },
+        {
+          "id": "commands/autodev_instructions_commands.rs",
+          "path": "src-tauri/src/commands/autodev_instructions_commands.rs",
+          "type": "command_handler",
+          "purpose": "AUTODEV.md storage and retrieval commands",
+          "exports": ["get_autodev_instructions", "set_autodev_instructions", "delete_autodev_instructions", "check_autodev_instructions", "get_autodev_char_count"],
+          "connections": ["autodev_instructions.rs"]
+        },
+        {
+          "id": "commands/worker_commands.rs",
+          "path": "src-tauri/src/commands/worker_commands.rs",
+          "type": "command_handler",
+          "purpose": "Worker agent roster commands",
+          "exports": ["list_workers", "get_worker", "update_worker"],
+          "connections": ["workers_db.rs", "AgentRoster.tsx"]
         },
         {
           "id": "commands/agent_commands.rs",
@@ -566,6 +655,191 @@
           "connections": ["vault_commands"]
         }
       ],
+      "db": [
+        {
+          "id": "db/mod.rs",
+          "path": "src-tauri/src/db/mod.rs",
+          "type": "module",
+          "purpose": "Database module declarations and re-exports",
+          "exports": ["autodev_dir", "TasksDb", "ModelConfigsDb", "AutodevInstructionsDb"],
+          "submodules": ["tasks", "model_configs", "autodev_instructions"]
+        },
+        {
+          "id": "db/tasks.rs",
+          "path": "src-tauri/src/db/tasks.rs",
+          "type": "persistence",
+          "purpose": "SQLite task management for Internal Board (~/.autodev/tasks.db)",
+          "exports": ["TasksDb", "Task", "TaskStatus", "TaskPriority", "TaskType"],
+          "methods": ["new", "create_task", "get_task", "list_tasks", "update_status", "delete_task", "get_by_status", "get_stalled_tasks"],
+          "database_tables": "tasks (id, title, priority, type, status, acceptance_criteria, assigned_worker, created_at, updated_at, completed_at)",
+          "connections": ["create_task_tool.rs", "task_commands.rs", "recipes/runner.rs"]
+        },
+        {
+          "id": "db/model_configs.rs",
+          "path": "src-tauri/src/db/model_configs.rs",
+          "type": "persistence",
+          "purpose": "Per-model configuration storage (~/.autodev/config.db)",
+          "exports": ["ModelConfigsDb", "ModelConfig"],
+          "methods": ["new", "get_config", "set_config", "delete_config"],
+          "config_fields": ["temperature", "top_p", "reasoning_effort", "thinking_budget_tokens"],
+          "connections": ["model_config_commands.rs", "provider implementations"]
+        },
+        {
+          "id": "db/autodev_instructions.rs",
+          "path": "src-tauri/src/db/autodev_instructions.rs",
+          "type": "persistence",
+          "purpose": "AUTODEV.md storage per project (~/.autodev/config.db)",
+          "exports": ["AutodevInstructionsDb"],
+          "methods": ["new", "get", "set", "delete", "exists", "char_count"],
+          "connections": ["autodev_instructions_commands.rs", "agent/context.rs"]
+        }
+      ],
+      "recipes": [
+        {
+          "id": "recipes/mod.rs",
+          "path": "src-tauri/src/recipes/mod.rs",
+          "type": "module",
+          "purpose": "Recipe system module declarations",
+          "exports": ["RecipeRunner", "RecipeScheduler", "RecipeParser", "Recipe", "RecipeStep", "RecipeTrigger", "ensure_default_recipes"],
+          "submodules": ["runner", "scheduler", "parser", "defaults", "types"]
+        },
+        {
+          "id": "recipes/runner.rs",
+          "path": "src-tauri/src/recipes/runner.rs",
+          "type": "core_engine",
+          "purpose": "Execute recipe steps as agent prompts (in-memory context, no session persistence)",
+          "exports": ["RecipeRunner"],
+          "fields": ["recipe", "provider", "tool_registry", "context"],
+          "methods": ["run", "execute_step"],
+          "behavior": [
+            "Polls tasks from tasks.db by status",
+            "Executes recipe instructions as LLM prompts",
+            "Updates task status (ready → assigned → in_progress → qc_review → done)",
+            "Ephemeral sessions (no DB persistence)"
+          ],
+          "connections": ["tasks.rs", "agent/engine.rs", "scheduler.rs"]
+        },
+        {
+          "id": "recipes/scheduler.rs",
+          "path": "src-tauri/src/recipes/scheduler.rs",
+          "type": "scheduler",
+          "purpose": "Cron-based recipe execution using tokio-cron-scheduler",
+          "exports": ["RecipeScheduler"],
+          "methods": ["new", "register_recipe", "start", "stop"],
+          "schedule_formats": ["*/1 * * * * (1 min)", "*/2 * * * * (2 min)", "*/5 * * * * (5 min)", "*/10 * * * * (10 min)"],
+          "connections": ["runner.rs", "lib.rs"]
+        },
+        {
+          "id": "recipes/parser.rs",
+          "path": "src-tauri/src/recipes/parser.rs",
+          "type": "parser",
+          "purpose": "YAML recipe parsing and validation",
+          "exports": ["RecipeParser", "RecipeParseError"],
+          "methods": ["parse", "validate", "parse_file"],
+          "recipe_schema": {
+            "id": "string",
+            "name": "string",
+            "version": "string",
+            "description": "string",
+            "permission_mode": "ManualApproval | Autonomous | SmartApprove",
+            "trigger": "{ type: cron/startup/webhook, schedule?: string }",
+            "steps": "[{ name, instruction, tools?, expected_output? }]"
+          },
+          "connections": ["types.rs"]
+        },
+        {
+          "id": "recipes/defaults.rs",
+          "path": "src-tauri/src/recipes/defaults.rs",
+          "type": "defaults",
+          "purpose": "Hardcoded system recipes written on startup",
+          "exports": ["ensure_default_recipes", "SUPERVISOR_RECIPE", "WORKER_BACKEND_RECIPE", "WORKER_FRONTEND_RECIPE", "WORKER_MCP_RECIPE", "QC_AGENT_RECIPE", "WORKER_PLATFORM_RECIPE", "WORKER_CLEANUP_RECIPE"],
+          "system_recipes": [
+            "supervisor-poll.yaml (*/1 min) - Polls ready tasks, assigns to workers",
+            "worker-backend-poll.yaml (*/1 min) - Executes backend tasks",
+            "worker-frontend-poll.yaml (*/1 min) - Executes frontend tasks",
+            "worker-mcp-poll.yaml (*/1 min) - Executes MCP integration tasks",
+            "worker-platform-poll.yaml (*/5 min) - Platform/infrastructure tasks",
+            "worker-cleanup-poll.yaml (*/10 min) - Cleanup tasks",
+            "qc-agent-poll.yaml (*/1 min) - Quality control review"
+          ],
+          "connections": ["lib.rs"]
+        },
+        {
+          "id": "recipes/types.rs",
+          "path": "src-tauri/src/recipes/types.rs",
+          "type": "shared_types",
+          "purpose": "Recipe data types",
+          "exports": ["Recipe", "RecipeStep", "RecipeTrigger", "PermissionMode", "WorkerType"],
+          "used_by": ["parser.rs", "runner.rs"]
+        }
+      ],
+      "ide": [
+        {
+          "id": "ide/mod.rs",
+          "path": "src-tauri/src/ide/mod.rs",
+          "type": "module",
+          "purpose": "IDE Core module declarations (Phase 3.2)",
+          "exports": ["FileTreeNode", "FileContent", "FileMetadata", "FileSearchResult", "SymbolTree", "IdeWorkspaceState"],
+          "submodules": ["types", "file_tree", "file_reader", "file_search", "symbols", "workspace"]
+        },
+        {
+          "id": "ide/types.rs",
+          "path": "src-tauri/src/ide/types.rs",
+          "type": "shared_types",
+          "purpose": "IDE DTOs mirrored in ideStore.ts",
+          "exports": ["FileTreeNode", "FileContent", "FileMetadata", "FileSearchResult", "ContentSearchResult", "SymbolTree", "SymbolNode", "IdeWorkspaceState"],
+          "used_by": ["file_tree.rs", "file_reader.rs", "file_search.rs", "symbols.rs", "workspace.rs"]
+        },
+        {
+          "id": "ide/file_tree.rs",
+          "path": "src-tauri/src/ide/file_tree.rs",
+          "type": "utility",
+          "purpose": "Recursive directory walk with git2 status overlay and lazy expansion",
+          "exports": ["read_file_tree", "FileTreeNode"],
+          "features": ["Git status badges (modified, added, untracked)", "Lazy expansion via has_more flag", "Depth-limited traversal", "Ignore pattern support"],
+          "dependencies": ["walkdir", "git2"],
+          "connections": ["ide_commands.rs"]
+        },
+        {
+          "id": "ide/file_reader.rs",
+          "path": "src-tauri/src/ide/file_reader.rs",
+          "type": "utility",
+          "purpose": "File reading with encoding detection and pagination",
+          "exports": ["read_file_content", "FileContent", "detect_encoding"],
+          "features": ["UTF-8/UTF-16LE/UTF-16BE detection", "BOM handling", "Binary file sniffing", "Language detection from extension", "Line-based pagination"],
+          "connections": ["ide_commands.rs"]
+        },
+        {
+          "id": "ide/file_search.rs",
+          "path": "src-tauri/src/ide/file_search.rs",
+          "type": "utility",
+          "purpose": "Fuzzy file name search and content substring search",
+          "exports": ["search_files", "search_file_contents", "FileSearchResult", "ContentSearchResult"],
+          "features": ["Fuzzy name matching", "Content substring search", "Glob pattern filtering", "Configurable max results"],
+          "connections": ["ide_commands.rs", "FileSearch.tsx"]
+        },
+        {
+          "id": "ide/symbols.rs",
+          "path": "src-tauri/src/ide/symbols.rs",
+          "type": "utility",
+          "purpose": "Regex-based symbol extraction for outline view",
+          "exports": ["get_symbol_tree", "SymbolTree", "SymbolNode"],
+          "supported_languages": ["Rust", "TypeScript", "JavaScript", "Python", "Go"],
+          "extraction_patterns": ["Functions", "Structs/Classes", "Enums", "Traits/Interfaces", "Constants"],
+          "notes": "Tree-sitter upgrade planned for Phase 3.2.1; regex-based as first cut",
+          "connections": ["ide_commands.rs", "SymbolOutline.tsx"]
+        },
+        {
+          "id": "ide/workspace.rs",
+          "path": "src-tauri/src/ide/workspace.rs",
+          "type": "persistence",
+          "purpose": "IDE workspace state persistence in config.db",
+          "exports": ["IdeWorkspaceState", "load_workspace_state", "save_workspace_state"],
+          "persistence_keys": ["ide_open_tabs", "ide_active_tab", "ide_expanded_dirs"],
+          "storage_location": "~/.autodev/config.db::app_settings",
+          "connections": ["ide_commands.rs", "ideStore.ts"]
+        }
+      ],
       "cost": [
         {
           "id": "cost/mod.rs",
@@ -649,6 +923,154 @@
           "connections": ["Chat.tsx", "MessageBubble.tsx", "ToolCallDisplay.tsx"]
         },
         {
+          "id": "stores/taskStore.ts",
+          "path": "src/stores/taskStore.ts",
+          "type": "state_management",
+          "purpose": "Internal Board task management (Phase 2.1)",
+          "exports": ["useTaskStore", "Task", "TaskStatus", "TaskPriority"],
+          "state_fields": [
+            "tasks: Task[]",
+            "isLoading: boolean",
+            "tasksByStatus: Record<TaskStatus, Task[]>"
+          ],
+          "actions": [
+            "loadTasks",
+            "updateTaskStatus",
+            "deleteTask",
+            "getTasksByStatus"
+          ],
+          "tauri_commands": ["list_tasks", "update_task_status", "delete_task", "get_task"],
+          "connections": ["AutoDevPanel.tsx", "TaskCard.tsx", "KanbanBoard.tsx"]
+        },
+        {
+          "id": "stores/workerStore.ts",
+          "path": "src/stores/workerStore.ts",
+          "type": "state_management",
+          "purpose": "Worker agent roster and status (Phase 2.1)",
+          "exports": ["useWorkerStore", "Worker", "WorkerStatus"],
+          "state_fields": [
+            "workers: Worker[]",
+            "isLoading: boolean"
+          ],
+          "actions": ["loadWorkers", "updateWorker", "bindRecipeToWorker"],
+          "tauri_commands": ["list_workers", "update_worker", "bind_worker_recipe"],
+          "connections": ["AgentRoster.tsx", "WorkerTable.tsx"]
+        },
+        {
+          "id": "stores/settingsStore.ts",
+          "path": "src/stores/settingsStore.ts",
+          "type": "state_management",
+          "purpose": "Provider configuration, system prompt, and PA Mode state",
+          "exports": ["useSettingsStore", "PAMode", "PA_MODES"],
+          "state_fields": [
+            "providers: Provider[]",
+            "activeProvider: string | null",
+            "activeModel: string | null",
+            "systemPrompt: string | null",
+            "defaultSystemPrompt: string",
+            "isLoadingProviders: boolean",
+            "paMode: PAMode (FastDev | Review | Delegate)"
+          ],
+          "actions": [
+            "loadProviders",
+            "setActiveProvider",
+            "setSystemPrompt",
+            "loadDefaultSystemPrompt",
+            "resetSystemPrompt",
+            "setPAMode"
+          ],
+          "tauri_commands": [
+            "list_providers",
+            "set_active_provider",
+            "get_system_prompt",
+            "set_system_prompt",
+            "get_default_system_prompt",
+            "vault_get",
+            "vault_set"
+          ],
+          "connections": ["Settings.tsx", "StatusBar.tsx", "PaModeToggle.tsx"]
+        },
+        {
+          "id": "stores/modelConfigStore.ts",
+          "path": "src/stores/modelConfigStore.ts",
+          "type": "state_management",
+          "purpose": "Per-model configuration (Phase 2.3)",
+          "exports": ["useModelConfigStore", "ModelConfig"],
+          "state_fields": [
+            "configs: Record<string, ModelConfig>",
+            "activeConfig: ModelConfig | null"
+          ],
+          "config_fields": ["temperature", "top_p", "reasoning_effort", "thinking_budget_tokens"],
+          "actions": ["loadModelConfig", "setModelConfig", "resetModelConfig"],
+          "tauri_commands": ["get_model_config", "set_model_config", "delete_model_config"],
+          "connections": ["ModelConfigSection.tsx"]
+        },
+        {
+          "id": "stores/recipeStore.ts",
+          "path": "src/stores/recipeStore.ts",
+          "type": "state_management",
+          "purpose": "Recipe list and management (Phase 2.1-2.2)",
+          "exports": ["useRecipeStore", "Recipe"],
+          "state_fields": [
+            "recipes: Recipe[]",
+            "isLoading: boolean",
+            "selectedRecipe: Recipe | null"
+          ],
+          "actions": ["loadRecipes", "selectRecipe", "generateRecipeWithAI"],
+          "tauri_commands": ["list_recipes", "get_recipe", "generate_recipe_yaml"],
+          "connections": ["Recipes.tsx", "RecipeEditor.tsx", "WorkerTable.tsx"]
+        },
+        {
+          "id": "stores/ideStore.ts",
+          "path": "src/stores/ideStore.ts",
+          "type": "state_management",
+          "purpose": "IDE Core state management (Phase 3.2)",
+          "exports": ["useIdeStore", "OpenTab", "FileTreeNode"],
+          "state_fields": [
+            "openTabs: OpenTab[]",
+            "activeTab: string | null",
+            "fileTree: FileTreeNode[]",
+            "expandedDirs: Set<string>",
+            "recentFiles: string[]",
+            "isSearchOpen: boolean",
+            "searchQuery: string",
+            "searchResults: FileSearchResult[]"
+          ],
+          "actions": [
+            "init",
+            "refreshTree",
+            "loadDirChildren",
+            "toggleDir",
+            "openFile(path, gotoLine?)",
+            "closeTab",
+            "closeOtherTabs",
+            "closeAllTabs",
+            "switchTab",
+            "setSearchOpen"
+          ],
+          "integration_api": "useIdeStore.getState().openFile(path, gotoLine?) - For chat tool-result renderers",
+          "tauri_commands": [
+            "read_file_tree",
+            "read_file_content",
+            "search_files",
+            "get_ide_workspace_state",
+            "set_ide_workspace_state"
+          ],
+          "connections": ["IDE.tsx", "FileTree.tsx", "TabBar.tsx", "CodeViewer.tsx", "FileSearch.tsx"]
+        },
+        {
+          "id": "stores/uiStore.ts",
+          "path": "src/stores/uiStore.ts",
+          "type": "state_management",
+          "purpose": "Global UI state for cross-component communication (Phase 3.2)",
+          "exports": ["useUiStore", "TabId"],
+          "state_fields": [
+            "activeTab: TabId ('chat' | 'ide' | 'autodev' | 'settings' | 'recipes')"
+          ],
+          "actions": ["setActiveTab"],
+          "connections": ["App.tsx", "Sidebar.tsx", "openInIde.ts"]
+        },
+        {
           "id": "stores/sessionStore.ts",
           "path": "src/stores/sessionStore.ts",
           "type": "state_management",
@@ -729,33 +1151,102 @@
           "id": "tabs/Chat.tsx",
           "path": "src/tabs/Chat.tsx",
           "type": "view",
-          "purpose": "Main chat interface with streaming and tool display",
+          "purpose": "Main chat interface with streaming, tool display, and PA Mode Toggle",
           "key_functions": [
             "handleSend() - Send message to agent",
             "handleCancel() - Cancel running agent",
             "ensureSession() - Create session if needed"
           ],
           "layout": [
+            "Header: PaModeToggle (3-button segmented)",
             "Left: SessionBar (200px)",
             "Center: Message list",
-            "Bottom: Input area"
+            "Bottom: Input area with ContextMeter"
           ],
           "uses": ["useAgentStore", "useSessionStore", "useSettingsStore", "useCostStore"],
           "tauri_commands": ["send_message", "cancel_agent"],
-          "renders": ["MessageBubble", "PermissionDialog", "SessionBar"]
+          "renders": ["MessageBubble", "PermissionDialog", "SessionBar", "PaModeToggle", "ContextMeter"],
+          "pa_mode_integration": "Sends paMode param to backend on every send_message"
         },
         {
           "id": "tabs/Settings.tsx",
           "path": "src/tabs/Settings.tsx",
           "type": "view",
-          "purpose": "Provider configuration and system prompt editing",
+          "purpose": "Provider configuration, system prompt editing, GitHub settings",
           "features": [
             "Provider list with connection testing",
             "API key input (masked)",
             "Model selection dropdown",
-            "System prompt editor with save/reset"
+            "System prompt editor with save/reset",
+            "ModelConfigSection (temperature, top_p, reasoning)",
+            "GitHubPATCard and GitHubMCPCard"
           ],
-          "uses": ["useSettingsStore"]
+          "uses": ["useSettingsStore", "modelConfigStore"]
+        },
+        {
+          "id": "tabs/AutoDevPanel.tsx",
+          "path": "src/tabs/AutoDevPanel.tsx",
+          "type": "view",
+          "purpose": "Internal Task Board with Kanban view (Phase 2.1)",
+          "layout": [
+            "Header: Title + Agent Roster toggle",
+            "Main: 4-column Kanban (Ready | In Progress | QC Review | Done Today)",
+            "Footer: Cost Today | Tokens | Closed | QC Pass Rate"
+          ],
+          "features": [
+            "Task cards with expand for acceptance criteria",
+            "Drag-and-drop status changes",
+            "Agent roster with status dots",
+            "Auto-refresh every 60 seconds",
+            "Metrics footer with live calculations"
+          ],
+          "uses": ["useTaskStore", "useWorkerStore", "useCostStore"],
+          "renders": ["KanbanBoard", "TaskCard", "AgentRoster"]
+        },
+        {
+          "id": "tabs/Recipes.tsx",
+          "path": "src/tabs/Recipes.tsx",
+          "type": "view",
+          "purpose": "Recipe browser and management (Phase 2.1-2.3)",
+          "features": [
+            "Recipe list (system + user)",
+            "Expandable recipe cards with YAML preview",
+            "Generate with AI panel (Phase 2.3)",
+            "[Run Now] button (disabled in 2.1)"
+          ],
+          "uses": ["useRecipeStore"],
+          "renders": ["RecipeCard", "RecipeEditor"]
+        },
+        {
+          "id": "tabs/IDE.tsx",
+          "path": "src/tabs/IDE.tsx",
+          "type": "view",
+          "purpose": "IDE Core with file explorer and code viewer (Phase 3.2)",
+          "layout": [
+            "Left sidebar: FileTree + SymbolOutline",
+            "Center: TabBar + CodeViewer (Monaco)",
+            "Right: (reserved for future git panel)",
+            "Bottom: IdeStatusBar"
+          ],
+          "features": [
+            "File tree with git status badges",
+            "Tab bar with middle-click close",
+            "Monaco read-only viewer with custom theme",
+            "Quick-open file search (Ctrl/⌘+P)",
+            "Symbol outline for navigation",
+            "Click file in chat to open in IDE"
+          ],
+          "uses": ["useIdeStore", "useUiStore"],
+          "tauri_commands": [
+            "read_file_tree",
+            "read_file_content",
+            "search_files",
+            "get_symbol_tree",
+            "get_ide_workspace_state",
+            "set_ide_workspace_state"
+          ],
+          "renders": ["FileTree", "TabBar", "CodeViewer", "FileSearch", "SymbolOutline", "IdeStatusBar"],
+          "integration_api": "openInIde(path, gotoLine?) - Called from chat tool-result renderers"
         }
       ],
       "components": [
@@ -770,6 +1261,287 @@
             "tokensInToday / tokensOutToday"
           ],
           "uses": ["useCostStore", "useSettingsStore"]
+        },
+        {
+          "id": "components/layout/Sidebar.tsx",
+          "path": "src/components/layout/Sidebar.tsx",
+          "type": "ui_component",
+          "purpose": "Navigation sidebar with tab switching",
+          "features": [
+            "Tab buttons: Chat, IDE, AutoDev, Recipes, Settings",
+            "Active tab highlighting with accent color",
+            "Navigation via useUiStore"
+          ],
+          "uses": ["useUiStore"],
+          "connections": ["App.tsx"]
+        },
+        {
+          "id": "components/chat/PaModeToggle.tsx",
+          "path": "src/components/chat/PaModeToggle.tsx",
+          "type": "ui_component",
+          "purpose": "PA Mode segmented toggle (Phase 2.1)",
+          "exports": ["PaModeToggle"],
+          "modes": [
+            { "id": "fast", "label": "⚡ Fast Development", "tools": "All 7 builtin tools" },
+            { "id": "review", "label": "🔍 Review Mode", "tools": "All tools + permission prompts" },
+            { "id": "delegate", "label": "📋 Delegate Mode", "tools": "Only create_task tool" }
+          ],
+          "uses": ["useSettingsStore"],
+          "connections": ["Chat.tsx", "settingsStore.ts"]
+        },
+        {
+          "id": "components/chat/ContextMeter.tsx",
+          "path": "src/components/chat/ContextMeter.tsx",
+          "type": "ui_component",
+          "purpose": "Context window usage indicator (Phase 2.3)",
+          "features": [
+            "Color-coded progress bar (green/yellow/orange/red)",
+            "Token estimation (chars/4)",
+            "Tooltip: ~Xk / Yk tokens used",
+            "MODEL_CONTEXT map for known models"
+          ],
+          "uses": ["useAgentStore"],
+          "connections": ["Chat.tsx"]
+        },
+        {
+          "id": "components/autodev/KanbanBoard.tsx",
+          "path": "src/components/autodev/KanbanBoard.tsx",
+          "type": "ui_component",
+          "purpose": "4-column Kanban board for task management (Phase 2.1)",
+          "columns": ["Ready", "In Progress", "QC Review", "Done Today"],
+          "features": ["Task cards", "Status-based filtering", "Drag-and-drop"],
+          "uses": ["useTaskStore"],
+          "renders": ["TaskCard"]
+        },
+        {
+          "id": "components/autodev/TaskCard.tsx",
+          "path": "src/components/autodev/TaskCard.tsx",
+          "type": "ui_component",
+          "purpose": "Individual task card with expand/collapse",
+          "displays": ["#id · priority", "Title", "Assigned worker", "Acceptance criteria (expand)"],
+          "interactions": ["Click to expand", "Status change buttons"],
+          "uses": ["useTaskStore"]
+        },
+        {
+          "id": "components/autodev/AgentRoster.tsx",
+          "path": "src/components/autodev/AgentRoster.tsx",
+          "type": "ui_component",
+          "purpose": "Worker agent status table (Phase 2.1)",
+          "layout": "Vertical table: status dot | AGENT-NAME | current task/idle | elapsed time",
+          "agents": ["Supervisor", "Worker Backend", "Worker Frontend", "Worker Platform", "Worker MCP", "Worker Cleanup", "QC Agent"],
+          "status_dots": { "yellow": "working", "blue": "idle" },
+          "uses": ["useWorkerStore", "useTaskStore"]
+        },
+        {
+          "id": "components/workers/WorkerTable.tsx",
+          "path": "src/components/workers/WorkerTable.tsx",
+          "type": "ui_component",
+          "purpose": "Worker management table with recipe binding (Phase 2.2)",
+          "features": [
+            "Recipe column with select dropdown",
+            "Bind/unbind recipe to worker",
+            "Status indicators"
+          ],
+          "tauri_commands": ["bind_worker_recipe"],
+          "uses": ["useWorkerStore", "useRecipeStore"]
+        },
+        {
+          "id": "components/workers/WorkerCreateModal.tsx",
+          "path": "src/components/workers/WorkerCreateModal.tsx",
+          "type": "ui_component",
+          "purpose": "Modal for creating new worker agents"
+        },
+        {
+          "id": "components/recipes/RecipeEditor.tsx",
+          "path": "src/components/recipes/RecipeEditor.tsx",
+          "type": "ui_component",
+          "purpose": "Recipe creation/editing with AI generation (Phase 2.3)",
+          "features": [
+            "Collapsible 'Generate with AI' panel",
+            "Worker type selector",
+            "Description textarea",
+            "YAML preview",
+            "Apply to Form button"
+          ],
+          "state": ["showGenPanel", "genWorkerType", "genDesc", "generating", "generatedYaml", "genError"],
+          "tauri_commands": ["generate_recipe_yaml"],
+          "uses": ["useRecipeStore"]
+        },
+        {
+          "id": "components/recipes/RecipeCard.tsx",
+          "path": "src/components/recipes/RecipeCard.tsx",
+          "type": "ui_component",
+          "purpose": "Expandable recipe card display"
+        },
+        {
+          "id": "components/settings/ModelConfigSection.tsx",
+          "path": "src/components/settings/ModelConfigSection.tsx",
+          "type": "ui_component",
+          "purpose": "Per-model configuration panel (Phase 2.3)",
+          "controls": [
+            "Temperature slider (0-2)",
+            "Top-P slider (0-1)",
+            "Reasoning effort select",
+            "Thinking budget slider"
+          ],
+          "uses": ["useModelConfigStore"],
+          "tauri_commands": ["get_model_config", "set_model_config"]
+        },
+        {
+          "id": "components/settings/GitHubMCPCard.tsx",
+          "path": "src/components/settings/GitHubMCPCard.tsx",
+          "type": "ui_component",
+          "purpose": "GitHub MCP server configuration card (Phase 2.3)",
+          "features": [
+            "Enable/Disable toggle",
+            "Org input",
+            "Repos textarea (one per line)",
+            "Server URL input"
+          ],
+          "uses": ["useSettingsStore"],
+          "tauri_commands": ["get_github_mcp_config", "set_github_mcp_config"]
+        },
+        {
+          "id": "components/ide/FileTree.tsx",
+          "path": "src/components/ide/FileTree.tsx",
+          "type": "ui_component",
+          "purpose": "File explorer with git status badges (Phase 3.2)",
+          "features": [
+            "Collapsible tree view",
+            "Git status badges (modified, added, untracked)",
+            "Lazy expansion",
+            "Click to open file",
+            "Refresh button"
+          ],
+          "uses": ["useIdeStore"],
+          "tauri_commands": ["read_file_tree"]
+        },
+        {
+          "id": "components/ide/TabBar.tsx",
+          "path": "src/components/ide/TabBar.tsx",
+          "type": "ui_component",
+          "purpose": "Horizontal tab bar with close buttons (Phase 3.2)",
+          "features": [
+            "Click to switch tabs",
+            "Middle-click to close",
+            "Close button per tab",
+            "Keyboard navigation (Enter/Space)"
+          ],
+          "aria": "role='tablist' with role='tab' children, aria-selected literal values",
+          "uses": ["useIdeStore"]
+        },
+        {
+          "id": "components/ide/CodeViewer.tsx",
+          "path": "src/components/ide/CodeViewer.tsx",
+          "type": "ui_component",
+          "purpose": "Monaco-based read-only code viewer (Phase 3.2)",
+          "features": [
+            "Syntax highlighting for all major languages",
+            "Custom 'autodev-dark' Winter-is-Coming theme",
+            "Read-only mode (agents mutate via tools)",
+            "Line number navigation via revealLineInCenter",
+            "Breadcrumb navigation"
+          ],
+          "dependencies": ["@monaco-editor/react"],
+          "uses": ["useIdeStore"]
+        },
+        {
+          "id": "components/ide/FileSearch.tsx",
+          "path": "src/components/ide/FileSearch.tsx",
+          "type": "ui_component",
+          "purpose": "Quick-open file search overlay (Ctrl/⌘+P) (Phase 3.2)",
+          "features": [
+            "Fuzzy file name search",
+            "Arrow key navigation",
+            "Enter to open",
+            "Escape to close"
+          ],
+          "uses": ["useIdeStore"],
+          "tauri_commands": ["search_files"]
+        },
+        {
+          "id": "components/ide/SymbolOutline.tsx",
+          "path": "src/components/ide/SymbolOutline.tsx",
+          "type": "ui_component",
+          "purpose": "Symbol navigation panel (Phase 3.2)",
+          "features": [
+            "Click-to-jump symbol list",
+            "Hierarchical display",
+            "Filter/search"
+          ],
+          "uses": ["useIdeStore"],
+          "tauri_commands": ["get_symbol_tree"]
+        },
+        {
+          "id": "components/ide/IdeStatusBar.tsx",
+          "path": "src/components/ide/IdeStatusBar.tsx",
+          "type": "ui_component",
+          "purpose": "IDE status bar (Phase 3.2)",
+          "displays": ["File path", "Line count", "File size", "Language", "Encoding"]
+        },
+        {
+          "id": "components/chat/FileContentDisplay.tsx",
+          "path": "src/components/chat/FileContentDisplay.tsx",
+          "type": "ui_component",
+          "purpose": "Rich file content display with Open in IDE button (Phase 1 extensions)",
+          "features": [
+            "Syntax highlighting via prism-react-renderer",
+            "Copy button",
+            "Open in IDE button",
+            "Clickable file path"
+          ],
+          "uses": ["openInIde.ts"]
+        },
+        {
+          "id": "components/chat/GrepResultsDisplay.tsx",
+          "path": "src/components/chat/GrepResultsDisplay.tsx",
+          "type": "ui_component",
+          "purpose": "Rich grep results display (Phase 1 extensions)",
+          "features": [
+            "Collapsible file sections",
+            "Match highlighting in yellow",
+            "Line numbers",
+            "Open in IDE icon per file",
+            "Clickable match lines"
+          ],
+          "uses": ["openInIde.ts"]
+        },
+        {
+          "id": "components/chat/GlobResultsDisplay.tsx",
+          "path": "src/components/chat/GlobResultsDisplay.tsx",
+          "type": "ui_component",
+          "purpose": "Rich glob results display (Phase 1 extensions)",
+          "features": [
+            "Sortable table (Name | Size | Modified)",
+            "Filter by extension",
+            "Directory/file icons",
+            "Clickable file paths"
+          ],
+          "uses": ["openInIde.ts"]
+        },
+        {
+          "id": "components/chat/DirectoryListingDisplay.tsx",
+          "path": "src/components/chat/DirectoryListingDisplay.tsx",
+          "type": "ui_component",
+          "purpose": "Rich directory listing display (Phase 1 extensions)",
+          "features": [
+            "Sortable table (Name | Type | Size)",
+            "Directory/file icons",
+            "Clickable file entries"
+          ],
+          "uses": ["openInIde.ts"]
+        },
+        {
+          "id": "components/chat/BashOutputDisplay.tsx",
+          "path": "src/components/chat/BashOutputDisplay.tsx",
+          "type": "ui_component",
+          "purpose": "Rich bash output display (Phase 1 extensions)",
+          "features": [
+            "Command display",
+            "Exit code badge (green/red)",
+            "Stdout/stderr tabs",
+            "ANSI color support via ansi-to-react"
+          ]
         },
         {
           "id": "components/chat/MessageBubble.tsx",
@@ -837,7 +1609,8 @@
             "GlobOutput", "GlobFileEntry",
             "BashOutput",
             "FileContent",
-            "ToolOutputType"
+            "ToolOutputType",
+            "DirectoryEntry", "DirectoryListingOutput"
           ],
           "functions": [
             "parseToolOutput(toolName, output)",
@@ -845,6 +1618,21 @@
             "formatFileSize(bytes)"
           ],
           "connections": ["ToolCallDisplay.tsx"]
+        },
+        {
+          "id": "utils/openInIde.ts",
+          "path": "src/utils/openInIde.ts",
+          "type": "utility",
+          "purpose": "Universal helper to open files in IDE from chat (Phase 3.2)",
+          "exports": ["openInIde"],
+          "signature": "openInIde(path: string, gotoLine?: number): Promise<void>",
+          "behavior": [
+            "Normalizes path",
+            "Switches to IDE tab via useUiStore",
+            "Opens file via useIdeStore.openFile()",
+            "Handles line jumps for grep results"
+          ],
+          "connections": ["FileContentDisplay.tsx", "GrepResultsDisplay.tsx", "GlobResultsDisplay.tsx", "DirectoryListingDisplay.tsx"]
         }
       ]
     }
@@ -855,12 +1643,48 @@
       { "from": "lib.rs", "to": "commands::session_commands", "type": "uses" },
       { "from": "lib.rs", "to": "commands::settings_commands", "type": "uses" },
       { "from": "lib.rs", "to": "commands::vault_commands", "type": "uses" },
+      { "from": "lib.rs", "to": "commands::task_commands", "type": "uses" },
+      { "from": "lib.rs", "to": "commands::recipe_commands", "type": "uses" },
+      { "from": "lib.rs", "to": "commands::model_config_commands", "type": "uses" },
+      { "from": "lib.rs", "to": "commands::github_mcp_commands", "type": "uses" },
+      { "from": "lib.rs", "to": "commands::ide_commands", "type": "uses" },
+      { "from": "lib.rs", "to": "commands::autodev_instructions_commands", "type": "uses" },
+      { "from": "lib.rs", "to": "commands::worker_commands", "type": "uses" },
+      { "from": "lib.rs", "to": "recipes/defaults.rs", "type": "calls" },
       { "from": "lib.rs", "to": "state::AppState", "type": "manages" },
       { "from": "lib.rs", "to": "logging", "type": "uses" },
       { "from": "main.rs", "to": "logging", "type": "uses" },
       { "from": "main.rs", "to": "autodev_lib", "type": "calls" },
       { "from": "events.rs", "to": "agent::engine", "type": "emits_to" },
       { "from": "events.rs", "to": "frontend_stores", "type": "consumed_by" },
+      { "from": "builtin_tools/mod.rs", "to": "create_task_tool.rs", "type": "registers" },
+      { "from": "create_task_tool.rs", "to": "tasks.rs", "type": "writes_to" },
+      { "from": "commands::task_commands", "to": "tasks.rs", "type": "uses" },
+      { "from": "commands::recipe_commands", "to": "recipes/mod.rs", "type": "uses" },
+      { "from": "commands::recipe_commands", "to": "recipes/parser.rs", "type": "uses" },
+      { "from": "recipes/runner.rs", "to": "tasks.rs", "type": "polls" },
+      { "from": "recipes/runner.rs", "to": "agent/engine.rs", "type": "uses" },
+      { "from": "recipes/scheduler.rs", "to": "recipes/runner.rs", "type": "triggers" },
+      { "from": "recipes/parser.rs", "to": "recipes/types.rs", "type": "uses" },
+      { "from": "recipes/defaults.rs", "to": "recipes/parser.rs", "type": "uses" },
+      { "from": "commands::model_config_commands", "to": "model_configs.rs", "type": "uses" },
+      { "from": "model_configs.rs", "to": "provider::anthropic.rs", "type": "provides_config" },
+      { "from": "model_configs.rs", "to": "provider::openai.rs", "type": "provides_config" },
+      { "from": "model_configs.rs", "to": "provider::google.rs", "type": "provides_config" },
+      { "from": "commands::github_mcp_commands", "to": "github_mcp_config.rs", "type": "uses" },
+      { "from": "commands::ide_commands", "to": "ide/mod.rs", "type": "uses" },
+      { "from": "ide/file_tree.rs", "to": "git2", "type": "uses" },
+      { "from": "ide/file_tree.rs", "to": "walkdir", "type": "uses" },
+      { "from": "ide/file_reader.rs", "to": "ide_commands.rs", "type": "used_by" },
+      { "from": "ide/file_search.rs", "to": "ide_commands.rs", "type": "used_by" },
+      { "from": "ide/symbols.rs", "to": "ide_commands.rs", "type": "used_by" },
+      { "from": "ide/workspace.rs", "to": "config.db", "type": "persists_to" },
+      { "from": "agent/context.rs", "to": "autodev_instructions.rs", "type": "reads_from" },
+      { "from": "commands::autodev_instructions_commands", "to": "autodev_instructions.rs", "type": "uses" },
+      { "from": "commands::worker_commands", "to": "workers_db.rs", "type": "uses" },
+      { "from": "db/mod.rs", "to": "tasks.rs", "type": "exports" },
+      { "from": "db/mod.rs", "to": "model_configs.rs", "type": "exports" },
+      { "from": "db/mod.rs", "to": "autodev_instructions.rs", "type": "exports" },
       { "from": "agent::engine", "to": "provider::traits", "type": "uses" },
       { "from": "agent::engine", "to": "agent::tool_executor", "type": "uses" },
       { "from": "agent::engine", "to": "agent::context", "type": "uses" },
@@ -899,6 +1723,7 @@
       { "from": "App.tsx", "to": "stores/settingsStore", "type": "uses" },
       { "from": "App.tsx", "to": "stores/sessionStore", "type": "uses" },
       { "from": "App.tsx", "to": "stores/costStore", "type": "uses" },
+      { "from": "App.tsx", "to": "stores/uiStore", "type": "uses" },
       { "from": "App.tsx", "to": "tabs/Chat.tsx", "type": "renders" },
       { "from": "App.tsx", "to": "tabs/Settings.tsx", "type": "renders" },
       { "from": "App.tsx", "to": "components/layout/StatusBar.tsx", "type": "renders" },
@@ -907,6 +1732,12 @@
       { "from": "stores/sessionStore", "to": "commands::session_commands", "type": "calls" },
       { "from": "stores/settingsStore", "to": "commands::settings_commands", "type": "calls" },
       { "from": "stores/settingsStore", "to": "commands::vault_commands", "type": "calls" },
+      { "from": "stores/taskStore", "to": "commands::task_commands", "type": "calls" },
+      { "from": "stores/workerStore", "to": "commands::worker_commands", "type": "calls" },
+      { "from": "stores/workerStore", "to": "commands::recipe_commands", "type": "calls" },
+      { "from": "stores/modelConfigStore", "to": "commands::model_config_commands", "type": "calls" },
+      { "from": "stores/recipeStore", "to": "commands::recipe_commands", "type": "calls" },
+      { "from": "stores/ideStore", "to": "commands::ide_commands", "type": "calls" },
       { "from": "stores/costStore", "to": "events.rs", "type": "listens_to" },
       { "from": "tabs/Chat.tsx", "to": "stores/agentStore", "type": "uses" },
       { "from": "tabs/Chat.tsx", "to": "stores/sessionStore", "type": "uses" },
@@ -916,7 +1747,51 @@
       { "from": "tabs/Chat.tsx", "to": "components/chat/MessageBubble.tsx", "type": "renders" },
       { "from": "tabs/Chat.tsx", "to": "components/chat/SessionBar.tsx", "type": "renders" },
       { "from": "tabs/Chat.tsx", "to": "components/chat/PermissionDialog.tsx", "type": "renders" },
+      { "from": "tabs/Chat.tsx", "to": "components/chat/PaModeToggle.tsx", "type": "renders" },
+      { "from": "tabs/Chat.tsx", "to": "components/chat/ContextMeter.tsx", "type": "renders" },
       { "from": "tabs/Settings.tsx", "to": "stores/settingsStore", "type": "uses" },
+      { "from": "tabs/Settings.tsx", "to": "components/settings/ModelConfigSection.tsx", "type": "renders" },
+      { "from": "tabs/Settings.tsx", "to": "components/settings/GitHubMCPCard.tsx", "type": "renders" },
+      { "from": "tabs/AutoDevPanel.tsx", "to": "stores/taskStore", "type": "uses" },
+      { "from": "tabs/AutoDevPanel.tsx", "to": "stores/workerStore", "type": "uses" },
+      { "from": "tabs/AutoDevPanel.tsx", "to": "components/autodev/KanbanBoard.tsx", "type": "renders" },
+      { "from": "tabs/AutoDevPanel.tsx", "to": "components/autodev/AgentRoster.tsx", "type": "renders" },
+      { "from": "tabs/Recipes.tsx", "to": "stores/recipeStore", "type": "uses" },
+      { "from": "tabs/Recipes.tsx", "to": "components/recipes/RecipeCard.tsx", "type": "renders" },
+      { "from": "tabs/Recipes.tsx", "to": "components/recipes/RecipeEditor.tsx", "type": "renders" },
+      { "from": "tabs/IDE.tsx", "to": "stores/ideStore", "type": "uses" },
+      { "from": "tabs/IDE.tsx", "to": "stores/uiStore", "type": "uses" },
+      { "from": "tabs/IDE.tsx", "to": "components/ide/FileTree.tsx", "type": "renders" },
+      { "from": "tabs/IDE.tsx", "to": "components/ide/TabBar.tsx", "type": "renders" },
+      { "from": "tabs/IDE.tsx", "to": "components/ide/CodeViewer.tsx", "type": "renders" },
+      { "from": "tabs/IDE.tsx", "to": "components/ide/FileSearch.tsx", "type": "renders" },
+      { "from": "tabs/IDE.tsx", "to": "components/ide/SymbolOutline.tsx", "type": "renders" },
+      { "from": "tabs/IDE.tsx", "to": "components/ide/IdeStatusBar.tsx", "type": "renders" },
+      { "from": "components/layout/Sidebar.tsx", "to": "stores/uiStore", "type": "uses" },
+      { "from": "components/autodev/KanbanBoard.tsx", "to": "components/autodev/TaskCard.tsx", "type": "renders" },
+      { "from": "components/autodev/KanbanBoard.tsx", "to": "stores/taskStore", "type": "uses" },
+      { "from": "components/autodev/TaskCard.tsx", "to": "stores/taskStore", "type": "uses" },
+      { "from": "components/autodev/AgentRoster.tsx", "to": "stores/workerStore", "type": "uses" },
+      { "from": "components/autodev/AgentRoster.tsx", "to": "stores/taskStore", "type": "uses" },
+      { "from": "components/workers/WorkerTable.tsx", "to": "stores/workerStore", "type": "uses" },
+      { "from": "components/workers/WorkerTable.tsx", "to": "stores/recipeStore", "type": "uses" },
+      { "from": "components/recipes/RecipeEditor.tsx", "to": "stores/recipeStore", "type": "uses" },
+      { "from": "components/settings/ModelConfigSection.tsx", "to": "stores/modelConfigStore", "type": "uses" },
+      { "from": "components/settings/GitHubMCPCard.tsx", "to": "stores/settingsStore", "type": "uses" },
+      { "from": "components/ide/FileTree.tsx", "to": "stores/ideStore", "type": "uses" },
+      { "from": "components/ide/TabBar.tsx", "to": "stores/ideStore", "type": "uses" },
+      { "from": "components/ide/CodeViewer.tsx", "to": "stores/ideStore", "type": "uses" },
+      { "from": "components/ide/FileSearch.tsx", "to": "stores/ideStore", "type": "uses" },
+      { "from": "components/ide/SymbolOutline.tsx", "to": "stores/ideStore", "type": "uses" },
+      { "from": "components/chat/FileContentDisplay.tsx", "to": "utils/openInIde", "type": "uses" },
+      { "from": "components/chat/GrepResultsDisplay.tsx", "to": "utils/openInIde", "type": "uses" },
+      { "from": "components/chat/GlobResultsDisplay.tsx", "to": "utils/openInIde", "type": "uses" },
+      { "from": "components/chat/DirectoryListingDisplay.tsx", "to": "utils/openInIde", "type": "uses" },
+      { "from": "App.tsx", "to": "stores/uiStore", "type": "uses" },
+      { "from": "App.tsx", "to": "components/layout/Sidebar.tsx", "type": "renders" },
+      { "from": "App.tsx", "to": "tabs/AutoDevPanel.tsx", "type": "renders" },
+      { "from": "App.tsx", "to": "tabs/Recipes.tsx", "type": "renders" },
+      { "from": "App.tsx", "to": "tabs/IDE.tsx", "type": "renders" },
       { "from": "components/layout/StatusBar.tsx", "to": "stores/costStore", "type": "uses" },
       { "from": "components/layout/StatusBar.tsx", "to": "stores/settingsStore", "type": "uses" },
       { "from": "components/chat/MessageBubble.tsx", "to": "stores/agentStore", "type": "uses" },
@@ -969,30 +1844,33 @@
     }
   },
   "file_counts": {
-    "total": 67,
+    "total": 120,
     "backend": {
-      "total": 46,
+      "total": 72,
       "by_category": {
         "core": 5,
-        "agent": 9,
-        "builtin_tools": 8,
-        "commands": 5,
+        "agent": 10,
+        "builtin_tools": 9,
+        "commands": 11,
         "provider": 7,
         "session": 4,
         "state": 2,
         "vault": 2,
         "cost": 2,
-        "tests": 2
+        "db": 4,
+        "recipes": 6,
+        "ide": 7,
+        "tests": 3
       }
     },
     "frontend": {
-      "total": 21,
+      "total": 48,
       "by_category": {
         "core": 3,
-        "stores": 4,
-        "tabs": 3,
-        "components": 10,
-        "utils": 1
+        "stores": 7,
+        "tabs": 5,
+        "components": 28,
+        "utils": 5
       }
     }
   }

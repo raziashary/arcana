@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { GlobOutput, formatFileSize } from "../../utils/toolOutputParser";
+import { openInIde } from "../../utils/openInIde";
 
 interface GlobResultsDisplayProps {
   data: GlobOutput;
@@ -103,9 +104,20 @@ export function GlobResultsDisplay({ data }: GlobResultsDisplayProps) {
                 <td className="p-2">
                   <div className="flex items-center gap-2">
                     <span>{file.is_directory ? "📁" : "📄"}</span>
-                    <span className="font-mono text-xs" style={{ color: "var(--accent-color)" }}>
-                      {file.path}
-                    </span>
+                    {file.is_directory ? (
+                      <span className="font-mono text-xs" style={{ color: "var(--accent-color)" }}>
+                        {file.path}
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => openInIde(file.path)}
+                        className="font-mono text-xs hover:underline text-left"
+                        style={{ color: "var(--accent-color)", background: "transparent", border: "none", padding: 0, cursor: "pointer" }}
+                        title="Open in IDE"
+                      >
+                        {file.path}
+                      </button>
+                    )}
                   </div>
                 </td>
                 <td className="p-2 text-right font-mono text-xs" style={{ color: "var(--text-tertiary)" }}>
