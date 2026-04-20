@@ -3,6 +3,7 @@ use serde_json::json;
 use std::path::Path;
 
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
+use crate::hooks::{HookRegistry, HookType, HookContext, ToolCallContext};
 
 pub struct ReadFileTool;
 
@@ -45,6 +46,32 @@ impl Tool for ReadFileTool {
         };
 
         let path = resolve_path(&path_str, &ctx.working_dir);
+
+        // Fire PreFileRead hook
+        let hook_ctx = HookContext {
+            hook_type: HookType::PreFileRead.as_str().to_string(),
+            timestamp: chrono::Utc::now(),
+            session_id: Some(ctx.session_id.clone()),
+            agent_mode: None,
+            tool_call: Some(ToolCallContext {
+                id: ctx.call_id.clone(),
+                name: "read_file".to_string(),
+                input: input.clone(),
+                result: None,
+                is_error: false,
+            }),
+            file_path: Some(path.to_string_lossy().to_string()),
+            task_id: None,
+            worker_id: None,
+            extra: serde_json::json!({
+                "start_line": input["start_line"].as_u64(),
+                "end_line": input["end_line"].as_u64(),
+            }),
+        };
+        let should_continue = HookRegistry::fire(&HookType::PreFileRead, &hook_ctx).await;
+        if !should_continue {
+            return ToolResult::error("File read blocked by hook");
+        }
 
         match std::fs::read_to_string(&path) {
             Err(e) => ToolResult::error(format!("Cannot read '{}': {e}", path.display())),

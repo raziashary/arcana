@@ -29,3 +29,13 @@ pub enum PAMode {
     /// No file tools, only create_task for delegating to workers
     Delegate,
 }
+
+impl PAMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PAMode::FastDevelopment => "fast_development",
+            PAMode::Review => "review",
+            PAMode::Delegate => "delegate",
+        }
+    }
+}

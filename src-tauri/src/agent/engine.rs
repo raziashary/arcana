@@ -16,6 +16,7 @@ use crate::events::{
     AgentDonePayload, AgentErrorPayload, ThinkingPayload, TokenPayload,
 };
 use crate::cost::tracker::CostTracker;
+use crate::hooks::{HookRegistry, HookType, HookContext};
 use crate::provider::types::{
     CompletionRequest, MessageContent, RequestMessage, StreamChunk,
 };
@@ -112,6 +113,24 @@ impl AgentEngine {
         let mut total_tokens_out: u32 = 0;
 
         loop {
+            // Fire AgentLoopStart hook at beginning of each turn
+            let loop_ctx = HookContext {
+                hook_type: HookType::AgentLoopStart.as_str().to_string(),
+                timestamp: chrono::Utc::now(),
+                session_id: Some(session_id.to_string()),
+                agent_mode: Some(self.pa_mode.as_str().to_string()),
+                tool_call: None,
+                file_path: Some(working_dir.to_string()),
+                task_id: None,
+                worker_id: None,
+                extra: serde_json::json!({
+                    "turn": turn,
+                    "total_tokens_in": total_tokens_in,
+                    "total_tokens_out": total_tokens_out,
+                }),
+            };
+            HookRegistry::fire(&HookType::AgentLoopStart, &loop_ctx).await;
+
             if turn >= MAX_TOOL_TURNS {
                 error!("Max tool turns ({MAX_TOOL_TURNS}) reached for session {session_id}");
                 break;
@@ -163,6 +182,24 @@ impl AgentEngine {
             let response_content = match stream_result {
                 Ok(content) => content,
                 Err(e) => {
+                    // Fire OnError hook
+                    let error_ctx = HookContext {
+                        hook_type: HookType::OnError.as_str().to_string(),
+                        timestamp: chrono::Utc::now(),
+                        session_id: Some(session_id.to_string()),
+                        agent_mode: Some(self.pa_mode.as_str().to_string()),
+                        tool_call: None,
+                        file_path: Some(working_dir.to_string()),
+                        task_id: None,
+                        worker_id: None,
+                        extra: serde_json::json!({
+                            "error": e.to_string(),
+                            "turn": turn,
+                            "phase": "stream_response",
+                        }),
+                    };
+                    HookRegistry::fire(&HookType::OnError, &error_ctx).await;
+
                     emit_agent_error(&self.app, AgentErrorPayload {
                         session_id: session_id.to_string(),
                         message:    e.to_string(),
@@ -240,6 +277,24 @@ impl AgentEngine {
 
             turn += 1;
         }
+
+        // Fire AgentLoopEnd hook when loop completes
+        let loop_end_ctx = HookContext {
+            hook_type: HookType::AgentLoopEnd.as_str().to_string(),
+            timestamp: chrono::Utc::now(),
+            session_id: Some(session_id.to_string()),
+            agent_mode: Some(self.pa_mode.as_str().to_string()),
+            tool_call: None,
+            file_path: Some(working_dir.to_string()),
+            task_id: None,
+            worker_id: None,
+            extra: serde_json::json!({
+                "final_turn": turn,
+                "total_tokens_in": total_tokens_in,
+                "total_tokens_out": total_tokens_out,
+            }),
+        };
+        HookRegistry::fire(&HookType::AgentLoopEnd, &loop_end_ctx).await;
 
         // Record cost in app state
         let cost = CostTracker::calculate(model, total_tokens_in, total_tokens_out);

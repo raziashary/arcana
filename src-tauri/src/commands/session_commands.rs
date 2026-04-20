@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use tauri::State;
 use crate::errors::Result;
+use crate::hooks::{HookRegistry, HookType, HookContext};
 use crate::session::{manager::SessionManager, types::{Session, Message}};
 
 #[tauri::command]
@@ -33,6 +34,24 @@ pub fn delete_session(
     session_id:  String,
     session_mgr: State<'_, Arc<SessionManager>>,
 ) -> Result<()> {
+    // Fire SessionEnd hook before deleting
+    let ctx = HookContext {
+        hook_type: HookType::SessionEnd.as_str().to_string(),
+        timestamp: chrono::Utc::now(),
+        session_id: Some(session_id.clone()),
+        agent_mode: None,
+        tool_call: None,
+        file_path: None,
+        task_id: None,
+        worker_id: None,
+        extra: serde_json::json!({}),
+    };
+    
+    // Use tauri async runtime to fire hook
+    tauri::async_runtime::spawn(async move {
+        HookRegistry::fire(&HookType::SessionEnd, &ctx).await;
+    });
+    
     session_mgr.delete_session(&session_id)
 }
 
@@ -43,7 +62,30 @@ pub fn create_session(
     model:       String,
     session_mgr: State<'_, Arc<SessionManager>>,
 ) -> Result<Session> {
-    session_mgr.create_session(&working_dir, &provider, &model)
+    let session = session_mgr.create_session(&working_dir, &provider, &model)?;
+    
+    // Fire SessionStart hook after creation
+    let ctx = HookContext {
+        hook_type: HookType::SessionStart.as_str().to_string(),
+        timestamp: chrono::Utc::now(),
+        session_id: Some(session.id.clone()),
+        agent_mode: None,
+        tool_call: None,
+        file_path: Some(working_dir),
+        task_id: None,
+        worker_id: None,
+        extra: serde_json::json!({
+            "provider": provider,
+            "model": model,
+        }),
+    };
+    
+    // Use tauri async runtime to fire hook
+    tauri::async_runtime::spawn(async move {
+        HookRegistry::fire(&HookType::SessionStart, &ctx).await;
+    });
+    
+    Ok(session)
 }
 
 #[tauri::command]

@@ -3,6 +3,7 @@ use serde_json::json;
 use std::path::Path;
 
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
+use crate::hooks::{HookRegistry, HookType, HookContext, ToolCallContext};
 
 pub struct WriteFileTool;
 
@@ -54,7 +55,32 @@ impl Tool for WriteFileTool {
         }
 
         match std::fs::write(&path, content) {
-            Ok(_)  => ToolResult::success(format!("Wrote {} bytes to '{}'", content.len(), path.display())),
+            Ok(_)  => {
+                // Fire PostFileWrite hook after successful write
+                let hook_ctx = HookContext {
+                    hook_type: HookType::PostFileWrite.as_str().to_string(),
+                    timestamp: chrono::Utc::now(),
+                    session_id: Some(ctx.session_id.clone()),
+                    agent_mode: None,
+                    tool_call: Some(ToolCallContext {
+                        id: ctx.call_id.clone(),
+                        name: "write_file".to_string(),
+                        input: input.clone(),
+                        result: Some(serde_json::json!({"bytes_written": content.len()})),
+                        is_error: false,
+                    }),
+                    file_path: Some(path.to_string_lossy().to_string()),
+                    task_id: None,
+                    worker_id: None,
+                    extra: serde_json::json!({
+                        "bytes_written": content.len(),
+                    }),
+                };
+                tokio::spawn(async move {
+                    HookRegistry::fire(&HookType::PostFileWrite, &hook_ctx).await;
+                });
+                ToolResult::success(format!("Wrote {} bytes to '{}'", content.len(), path.display()))
+            }
             Err(e) => ToolResult::error(format!("Cannot write '{}': {e}", path.display())),
         }
     }

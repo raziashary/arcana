@@ -15,6 +15,7 @@ use crate::events::{
     emit_permission_request, emit_tool_end, emit_tool_start,
     PermissionPayload, ToolEndPayload, ToolStartPayload,
 };
+use crate::hooks::{HookRegistry, HookType, HookContext, ToolCallContext};
 use crate::session::manager::SessionManager;
 use crate::session::types::Message;
 use super::permission::{PendingPermissions, PermissionMode, PermissionResponse};
@@ -112,13 +113,68 @@ impl ToolExecutor {
             }
         };
 
-        let result = if approved {
+        // Fire PreToolUse hook
+        let pre_ctx = HookContext {
+            hook_type: HookType::PreToolUse.as_str().to_string(),
+            timestamp: chrono::Utc::now(),
+            session_id: Some(self.session_id.clone()),
+            agent_mode: None,
+            tool_call: Some(ToolCallContext {
+                id: call_id.clone(),
+                name: tool.name().to_string(),
+                input: input.clone(),
+                result: None,
+                is_error: false,
+            }),
+            file_path: None,
+            task_id: None,
+            worker_id: None,
+            extra: serde_json::json!({
+                "working_dir": self.working_dir,
+                "is_read_only": tool.is_read_only(),
+            }),
+        };
+        let should_continue = HookRegistry::fire(&HookType::PreToolUse, &pre_ctx).await;
+
+        let result = if !should_continue {
+            warn!("Tool '{}' blocked by PreToolUse hook", tool.name());
+            ToolResult::error(format!("Tool '{}' was blocked by a hook", tool.name()))
+        } else if approved {
             debug!("Executing tool: {}", tool.name());
             tool.execute(input.clone(), &ctx).await
         } else {
             warn!("Tool '{}' denied by user", tool.name());
             ToolResult::error(format!("Tool '{}' was denied by user", tool.name()))
         };
+
+        // Fire PostToolUse or OnToolError hook
+        let post_hook_type = if result.is_error {
+            HookType::OnToolError
+        } else {
+            HookType::PostToolUse
+        };
+        let post_ctx = HookContext {
+            hook_type: post_hook_type.as_str().to_string(),
+            timestamp: chrono::Utc::now(),
+            session_id: Some(self.session_id.clone()),
+            agent_mode: None,
+            tool_call: Some(ToolCallContext {
+                id: call_id.clone(),
+                name: tool.name().to_string(),
+                input: input.clone(),
+                result: Some(serde_json::json!({"output": &result.output})),
+                is_error: result.is_error,
+            }),
+            file_path: None,
+            task_id: None,
+            worker_id: None,
+            extra: serde_json::json!({
+                "output": &result.output,
+                "is_error": result.is_error,
+                "working_dir": self.working_dir,
+            }),
+        };
+        HookRegistry::fire(&post_hook_type, &post_ctx).await;
 
         // Persist tool message to database
         self.save_tool_message(&call_id, tool.name(), input, &result.output, result.is_error);
@@ -278,13 +334,70 @@ impl ToolExecutor {
                     }
                 };
 
-                let result = if approved {
+                // Fire PreToolUse hook
+                let pre_ctx = HookContext {
+                    hook_type: HookType::PreToolUse.as_str().to_string(),
+                    timestamp: chrono::Utc::now(),
+                    session_id: Some(self.session_id.clone()),
+                    agent_mode: None,
+                    tool_call: Some(ToolCallContext {
+                        id: call_id.clone(),
+                        name: tool.name().to_string(),
+                        input: input.clone(),
+                        result: None,
+                        is_error: false,
+                    }),
+                    file_path: None,
+                    task_id: None,
+                    worker_id: None,
+                    extra: serde_json::json!({
+                        "working_dir": self.working_dir,
+                        "is_read_only": tool.is_read_only(),
+                        "batch": true,
+                    }),
+                };
+                let should_continue = HookRegistry::fire(&HookType::PreToolUse, &pre_ctx).await;
+
+                let result = if !should_continue {
+                    warn!("Tool '{}' blocked by PreToolUse hook", tool.name());
+                    ToolResult::error(format!("Tool '{}' was blocked by a hook", tool.name()))
+                } else if approved {
                     debug!("Executing write tool: {}", tool.name());
                     tool.execute(input.clone(), &ctx).await
                 } else {
                     warn!("Write tool '{}' denied by user", tool.name());
                     ToolResult::error(format!("Tool '{}' was denied by user", tool.name()))
                 };
+
+                // Fire PostToolUse or OnToolError hook
+                let post_hook_type = if result.is_error {
+                    HookType::OnToolError
+                } else {
+                    HookType::PostToolUse
+                };
+                let post_ctx = HookContext {
+                    hook_type: post_hook_type.as_str().to_string(),
+                    timestamp: chrono::Utc::now(),
+                    session_id: Some(self.session_id.clone()),
+                    agent_mode: None,
+                    tool_call: Some(ToolCallContext {
+                        id: call_id.clone(),
+                        name: tool.name().to_string(),
+                        input: input.clone(),
+                        result: Some(serde_json::json!({"output": &result.output})),
+                        is_error: result.is_error,
+                    }),
+                    file_path: None,
+                    task_id: None,
+                    worker_id: None,
+                    extra: serde_json::json!({
+                        "output": &result.output,
+                        "is_error": result.is_error,
+                        "working_dir": self.working_dir,
+                        "batch": true,
+                    }),
+                };
+                HookRegistry::fire(&post_hook_type, &post_ctx).await;
 
                 // Persist tool message
                 self.save_tool_message(&call_id, tool.name(), input, &result.output, result.is_error);

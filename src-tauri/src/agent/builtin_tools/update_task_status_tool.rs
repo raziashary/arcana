@@ -6,6 +6,7 @@
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use crate::db::tasks::TasksDb;
+use crate::hooks::{HookRegistry, HookType, HookContext, ToolCallContext};
 use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 
 pub struct UpdateTaskStatusTool;
@@ -75,6 +76,48 @@ impl Tool for UpdateTaskStatusTool {
 
         if let Err(e) = db.update_status(id, &status, assigned_worker.as_deref()) {
             return ToolResult::error(&format!("Failed to update task #{id}: {e}"));
+        }
+
+        // Fire fleet hooks for task lifecycle events
+        let hook_type = match status.as_str() {
+            "assigned" => Some(HookType::OnTaskClaim),
+            "done" => Some(HookType::OnTaskComplete),
+            "failed" => Some(HookType::OnTaskFail),
+            "qc_review" => Some(HookType::OnQcReviewStart),
+            _ => None,
+        };
+
+        if let Some(ht) = hook_type {
+            let ctx = HookContext {
+                hook_type: ht.as_str().to_string(),
+                timestamp: chrono::Utc::now(),
+                session_id: Some(_ctx.session_id.clone()),
+                agent_mode: Some("Worker".to_string()),
+                tool_call: Some(ToolCallContext {
+                    id: _ctx.call_id.clone(),
+                    name: "update_task_status".to_string(),
+                    input: input.clone(),
+                    result: Some(json!({
+                        "task_id": id,
+                        "previous_status": task.status.as_str(),
+                        "new_status": status,
+                    })),
+                    is_error: false,
+                }),
+                file_path: None,
+                task_id: Some(id.to_string()),
+                worker_id: assigned_worker.clone(),
+                extra: json!({
+                    "task_title": task.title,
+                    "previous_status": task.status.as_str(),
+                    "new_status": status,
+                }),
+            };
+
+            // Fire hook asynchronously (don't block tool response)
+            tokio::spawn(async move {
+                HookRegistry::fire(&ht, &ctx).await;
+            });
         }
 
         ToolResult::success(json!({
