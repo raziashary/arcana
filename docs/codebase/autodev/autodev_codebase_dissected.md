@@ -1983,6 +1983,93 @@ export default function RecipesTab() {
 
 ---
 
+## Phase 3.3 — Git Integration + Checkpointing
+
+Full git integration built on `git2-rs` (libgit2), plus a file-level
+checkpointing system used by every file-mutating agent tool so edits are
+always undoable.
+
+### Backend: `src-tauri/src/git/`
+
+Module composition (all files live under `src-tauri/src/git/`):
+
+| File | Responsibility |
+|---|---|
+| `mod.rs`        | Module declaration + doc comments |
+| `types.rs`      | DTOs: `RepoInfo`, `GitStatusReport`, `StatusEntry`, `FileStatus`, `DiffResult`, `CommitInfo`, `BranchInfo`, `WorktreeInfo`, `StashInfo`, `PullResult`, `BlameLine`, `CheckpointInfo`, `RestoreResult` |
+| `repo.rs`       | `open / info / init / clone_repo` plus `build_info` helper |
+| `status.rs`     | `status()` — categorises into staged / unstaged / untracked / conflicted + ahead/behind |
+| `diff.rs`       | Unified-diff generation for workdir↔index, index↔HEAD, and in-memory blob-to-blob |
+| `commit.rs`     | `stage / unstage / commit / discard_changes` — commit message trailer injection (`Generated-by: AutoDev/<role>`) |
+| `branch.rs`     | `list / create / delete / checkout` with upstream + ahead/behind resolution |
+| `remote.rs`     | `fetch / push / pull` with ssh-agent + credential-helper callbacks; pull enforces fast-forward |
+| `worktree.rs`   | `list / add / remove` for per-task worktree isolation (used later by Fleet) |
+| `history.rs`    | `log` (optionally path-filtered) + `blame` |
+| `stash.rs`      | `list / push / apply / drop` |
+| `checkpoint.rs` | Snapshot store under `~/.autodev/checkpoints/<session_id>/` with SQLite index in `config.db`. `RETENTION_PER_FILE = 50`. Public `auto_checkpoint_before_write()` used by `write_file` / `edit_file` tools. |
+
+### Tauri commands — `src-tauri/src/commands/git_commands.rs`
+
+29 commands across repository, status/diff, staging, commit, remote, branch, worktree, history/blame, stash, and checkpoint. Long-running network ops (`git_clone`, `git_push`, `git_pull`, `git_fetch`) run on a blocking task via `tokio::task::spawn_blocking`.
+
+### Auto-checkpoint integration
+
+Every call to the `write_file` and `edit_file` builtin tools calls
+`crate::git::checkpoint::auto_checkpoint_before_write(session_id, file_path)`
+immediately before the filesystem write. Errors are logged but never propagate — checkpointing must never block the edit.
+
+### Frontend — `src/components/git/` + `src/stores/gitStore.ts`
+
+`gitStore.ts` is a Zustand store mirroring every DTO and wrapping every Tauri command. Components (all dark-theme inline styles, consistent with the rest of the IDE):
+
+- `GitPanel.tsx` — togglable right-side panel with 5 tabs: **Changes / History / Branches / Stash / Undo**. Mounted in `tabs/IDE.tsx`, opened via the **Git** button in the tab header. Renders sub-components for each section.
+- `DiffViewer.tsx` — renders a unified-diff patch string with line-origin colouring (additions green, deletions red, hunk headers lavender).
+- `BranchManager.tsx` — local + remote branch lists, create-and-checkout input, hover-delete.
+- `StashManager.tsx` — list + create (with include-untracked) + apply / pop / drop per-row.
+- `CheckpointViewer.tsx` — timeline grouped by file path, restore with inline confirmation, delete per row.
+
+### IDE integration — `src/tabs/IDE.tsx`
+
+A Git toggle button sits at the right edge of the TabBar row. The GitPanel mounts in the flex row after the main editor column, with a fixed width (360px default, 280px min).
+
+### Data flow
+
+```
+UI action
+  ↓
+useGitStore.action()
+  ↓ invoke('git_*')
+Tauri IPC
+  ↓
+commands::git_commands::*
+  ↓
+crate::git::<module>
+  ↓
+git2-rs (libgit2)
+```
+
+For checkpoints:
+
+```
+agent tool (write_file / edit_file)
+  ↓ synchronous
+git::checkpoint::auto_checkpoint_before_write()
+  ↓ insert row
+config.db `checkpoints` table
+  ↓ write blob
+~/.autodev/checkpoints/<session>/<stamp>_<basename>.<uuid>.snap
+```
+
+### Key architectural decisions
+
+1. **libgit2 via `git2` crate, not shelling out.** All git ops are in-process for performance and error fidelity.
+2. **Pull is fast-forward only.** Non-ff merges return an error; a full merge driver (`git/merge.rs`) is deferred. This keeps the UX safe — agents never silently resolve conflicts.
+3. **Checkpoints are filesystem-backed, SQLite-indexed.** Fast random access via the DB, but the snapshots themselves are plain files the user can inspect/copy.
+4. **Unified-diff rendering in pure React.** We get the patch string from libgit2 and render it ourselves; no Monaco DiffEditor dependency, which keeps the Git panel lightweight.
+5. **Trailer-based attribution.** Commits created from AutoDev get a `Generated-by: AutoDev/<role>` trailer — machine-greppable and preserves normal commit flow.
+
+---
+
 #### `src/tabs/IDE.tsx` (Phase 3.2)
 
 **Purpose**: IDE Core with file explorer and code viewer.

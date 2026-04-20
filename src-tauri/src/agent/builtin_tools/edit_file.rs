@@ -119,6 +119,12 @@ impl Tool for EditFileTool {
         let old_lines = content.lines().count();
         let new_lines = new_content.lines().count();
 
+        // Phase 3.3 — snapshot current contents before overwriting.
+        crate::git::checkpoint::auto_checkpoint_before_write(
+            &ctx.session_id,
+            &file_path.to_string_lossy(),
+        );
+
         if let Err(e) = fs::write(&file_path, &new_content).await {
             return ToolResult::error(format!("Failed to write file '{}': {}", file_path.display(), e));
         }

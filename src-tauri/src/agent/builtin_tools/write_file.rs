@@ -54,6 +54,12 @@ impl Tool for WriteFileTool {
             }
         }
 
+        // Phase 3.3 — auto-checkpoint before overwrite so the edit is undoable.
+        crate::git::checkpoint::auto_checkpoint_before_write(
+            &ctx.session_id,
+            &path.to_string_lossy(),
+        );
+
         match std::fs::write(&path, content) {
             Ok(_)  => {
                 // Fire PostFileWrite hook after successful write

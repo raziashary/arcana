@@ -17,6 +17,7 @@ pub mod sidecar;
 pub mod skills;
 pub mod hooks;
 pub mod ide;
+pub mod git;
 
 // Register all Tauri commands on the builder from within the lib crate.
 // generate_handler! must run here so the __cmd__* macros (produced by
@@ -67,6 +68,17 @@ pub fn register_commands(
             read_file_tree, read_file_content, get_file_metadata,
             search_files, search_file_contents, get_symbol_tree,
             get_ide_workspace_state, set_ide_workspace_state,
+        },
+        git_commands::{
+            git_open_repo, git_clone, git_init, git_status, git_diff,
+            git_stage, git_unstage, git_discard, git_commit,
+            git_push, git_pull, git_fetch,
+            git_branch_list, git_branch_create, git_branch_delete, git_checkout,
+            git_worktree_list, git_worktree_add, git_worktree_remove,
+            git_log, git_blame,
+            git_stash_list, git_stash_push, git_stash_apply, git_stash_drop,
+            create_checkpoint, restore_checkpoint, list_checkpoints,
+            delete_checkpoint, compare_checkpoints,
         },
     };
     builder.invoke_handler(tauri::generate_handler![
@@ -177,5 +189,43 @@ pub fn register_commands(
         get_symbol_tree,
         get_ide_workspace_state,
         set_ide_workspace_state,
+        // Git (Phase 3.3) — repo / status / diff
+        git_open_repo,
+        git_clone,
+        git_init,
+        git_status,
+        git_diff,
+        // Git — staging / commit
+        git_stage,
+        git_unstage,
+        git_discard,
+        git_commit,
+        // Git — remote
+        git_push,
+        git_pull,
+        git_fetch,
+        // Git — branches
+        git_branch_list,
+        git_branch_create,
+        git_branch_delete,
+        git_checkout,
+        // Git — worktrees
+        git_worktree_list,
+        git_worktree_add,
+        git_worktree_remove,
+        // Git — history / blame
+        git_log,
+        git_blame,
+        // Git — stash
+        git_stash_list,
+        git_stash_push,
+        git_stash_apply,
+        git_stash_drop,
+        // Git — checkpoints
+        create_checkpoint,
+        restore_checkpoint,
+        list_checkpoints,
+        delete_checkpoint,
+        compare_checkpoints,
     ])
 }

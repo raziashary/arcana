@@ -30,6 +30,10 @@ pub enum AutoDevError {
     #[error("Session error: {0}")]
     Session(String),
 
+    // Git / libgit2 errors (Phase 3.3)
+    #[error("Git error: {0}")]
+    Git(String),
+
     // IO errors
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

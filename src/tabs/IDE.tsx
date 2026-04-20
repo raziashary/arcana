@@ -17,7 +17,8 @@
 // Shortcuts:
 //   Ctrl/Cmd + P → FileSearch overlay
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
+import { GitBranch } from 'lucide-react'
 import { useIdeStore } from '../stores/ideStore'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 import FileTree      from '../components/ide/FileTree'
@@ -26,6 +27,7 @@ import CodeViewer    from '../components/ide/CodeViewer'
 import FileSearch    from '../components/ide/FileSearch'
 import SymbolOutline from '../components/ide/SymbolOutline'
 import IdeStatusBar  from '../components/ide/IdeStatusBar'
+import GitPanel      from '../components/git/GitPanel'
 
 export default function IDETab() {
   const { workspaceDir, loadWorkspaceDir } = useWorkspaceStore()
@@ -33,6 +35,9 @@ export default function IDETab() {
   const activeTab     = useIdeStore((s) => s.activeTab)
   const openTabs      = useIdeStore((s) => s.openTabs)
   const setSearchOpen = useIdeStore((s) => s.setSearchOpen)
+
+  // Phase 3.3 — togglable Git sub-panel on the right.
+  const [gitOpen, setGitOpen] = useState(false)
 
   // Boot: load workspace dir if not already, then init IDE state.
   useEffect(() => {
@@ -98,7 +103,22 @@ export default function IDETab() {
 
       {/* Main column — tabs, editor, status bar */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        <TabBar />
+        <div className="flex items-center border-b" style={{ borderColor: 'var(--border-1)' }}>
+          <div className="flex-1 min-w-0"><TabBar /></div>
+          <button
+            onClick={() => setGitOpen((v) => !v)}
+            className="flex items-center gap-1 px-2 py-1 text-[10px] font-mono uppercase tracking-wider hover:bg-[var(--bg-hover)]"
+            style={{
+              color:       gitOpen ? 'var(--accent)' : 'var(--text-2)',
+              borderLeft:  '1px solid var(--border-1)',
+            }}
+            title="Toggle Git panel"
+            aria-label="Toggle Git panel"
+          >
+            <GitBranch size={11} />
+            Git
+          </button>
+        </div>
         {activeTab && openTabs.some((t) => t.relativePath === activeTab) ? (
           <CodeViewer tabPath={activeTab} />
         ) : (
@@ -114,6 +134,9 @@ export default function IDETab() {
         )}
         <IdeStatusBar />
       </div>
+
+      {/* Right column — Git panel (togglable) */}
+      {gitOpen && <GitPanel onClose={() => setGitOpen(false)} />}
 
       <FileSearch />
     </div>
