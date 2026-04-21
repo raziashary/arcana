@@ -3335,17 +3335,59 @@ uv run python scripts/migrate_to_clean_ids.py             # execute
 
 ---
 
-### Phase 3.5 — Plan Management System
+### Phase 3.5 — Plan Management System (Planner Compiler Architecture)
 
-**Goal**: PA **and Fleet agents** can create, track, and manage plans for complex multi-step tasks. Full planning capabilities for Supervisor (epic breakdown), Workers (sub-plans for complex tasks), and QC (verification plans).
+**Goal**: PA **and Fleet agents** can create, track, and manage plans for complex multi-step tasks via a unified planner compiler. Full planning capabilities for Supervisor (epic breakdown), Workers (sub-plans for complex tasks), and QC (verification plans).
+
+**Architecture**: Hybrid — Generic planner compiler in `core-orchestrator`, domain-specific orchestration in AutoDev Tauri backend.
 
 **Depends On**: All previous sub-phases (uses Skills for plan templates, IDE for file viewing, Git for checkpointing, MCP for Fleet coordination)
 
 **When to Use**: When PA determines a query requires 5+ steps or 10+ tool calls, it creates a plan first.
 
+---
+
+#### Architecture Overview
+
+**Design Philosophy**: Single `planner__internal` tool with YAML DSL, following the Adobe compiler pattern. Reduces LLM cognitive load from 10+ tools to 1 tool with action-based routing.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  HYBRID PLAN ARCHITECTURE                                                    │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  CORE-ORCHESTRATOR (internal_tools/planner/planner_compiler.py)       │   │
+│  │  ─────────────────────────────────────────────────────────────────    │   │
+│  │  • PlannerSuiteTool — Single tool: planner__internal                  │   │
+│  │  • YAML DSL compiler with action routing                                │   │
+│  │  • Generic planning primitives (domain-agnostic)                      │   │
+│  │  • Standalone SQLite mode for other services                          │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                              ▲                                               │
+│                              │ HTTP Bridge (internal tool call)              │
+│                              ▼                                               │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  AUTODEV (Tauri)                                                      │   │
+│  │  ─────────────────────────────────────────────────────────────────    │   │
+│  │  • PlannerCompilerBridge — Routes to core-orchestrator                │   │
+│  │  • Domain-specific orchestration (Fleet, worktrees, git)            │   │
+│  │  • Direct SQLite access for queries                                   │   │
+│  │  • UI event emission                                                  │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                              │                                               │
+│                              ▼                                               │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  SQLite (~/.autodev/autodev.db) — Single source of truth               │   │
+│  │  • plans, plan_items, plan_item_dependencies, plan_executions       │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 #### Plan Data Model
 
-**SQLite Schema:**
+**SQLite Schema (unchanged — proven design):**
 ```sql
 -- Plans table (extended for Fleet planning)
 CREATE TABLE plans (
@@ -3410,132 +3452,552 @@ CREATE TABLE plan_executions (
 );
 ```
 
-#### Backend Implementation
+---
+
+#### Core-Orchestrator — Planner Compiler
+
+**Module Structure:**
+- [ ] `src/internal_tools/planner/__init__.py` — Module exports
+- [ ] `src/internal_tools/planner/planner_compiler.py` — `PlannerSuiteTool` class
+- [ ] `src/internal_tools/planner/schemas.py` — YAML DSL schemas per action
+- [ ] `src/internal_tools/planner/actions.py` — Action handlers (create, addStep, etc.)
+- [ ] `src/internal_tools/planner/standalone_db.py` — SQLAlchemy models for standalone mode
+
+**PlannerSuiteTool — Single Tool Interface:**
+```python
+class PlannerSuiteTool(BaseInternalTool):
+    """
+    Unified planning interface with YAML DSL compiler.
+    
+    ## Actions
+    
+    - listActions: Discover all available actions and their schemas
+    - create: Create a new plan
+    - addStep: Add a step to an existing plan
+    - updateStep: Update step status or properties
+    - getPlan: Retrieve plan details and progress
+    - listPlans: List active/completed plans
+    - checkDependencies: Check which dependencies are satisfied
+    - executeTemplate: Execute a plan template (YAML file)
+    - deletePlan: Delete a plan
+    - abandonPlan: Mark plan as abandoned
+    
+    ## Fleet-Specific Actions (AutoDev context only)
+    
+    - breakDownEpic: Supervisor converts epic task to plan
+    - claimItem: Worker claims next available plan item
+    - createSubplan: Worker creates nested plan for complex subtask
+    - submitForQC: Worker submits plan for QC review
+    
+    ## When to Use
+    
+    Use this tool when:
+    • Task requires 5+ steps or 10+ tool calls
+    • Need to coordinate multi-file changes
+    • Breaking down complex epics
+    • Tracking progress across multiple sessions
+    
+    ## Usage Pattern
+    
+    Simple tasks: Execute directly with action
+    Complex tasks: Use listActions first to discover schema
+    
+    ## YAML DSL Format
+    
+    action: create
+    title: "Refactor auth middleware"
+    description: "Update JWT handling across all endpoints"
+    scope: fleet
+    created_by: supervisor
+    """
+    
+    name = "planner"
+    
+    parameters = {
+        "type": "object",
+        "properties": {
+            "yaml_dsl": {
+                "type": "string",
+                "description": "YAML DSL command defining the planning action and parameters"
+            }
+        },
+        "required": ["yaml_dsl"]
+    }
+```
+
+**YAML DSL Examples:**
+
+```yaml
+# Learn available actions (discover schema)
+action: listActions
+include_fleet: true
+
+# Create a plan
+action: create
+title: "Implement OAuth2 flow"
+description: |
+  Add OAuth2 authentication to the API.
+  Includes token generation, refresh, and validation.
+scope: personal
+session_id: "sess_abc123"
+
+# Add steps to a plan
+action: addStep
+plan_id: "plan_xyz789"
+title: "Create token endpoint"
+description: "Implement /auth/token endpoint with JWT generation"
+depends_on: []  # No dependencies for first step
+estimated_tools: ["write_file", "edit_file"]
+
+# Add step with dependency
+action: addStep
+plan_id: "plan_xyz789"
+title: "Add refresh token logic"
+description: "Implement token refresh mechanism"
+depends_on: [0]  # Depends on first step (by index)
+estimated_tools: ["edit_file"]
+
+# Update step status
+action: updateStep
+plan_id: "plan_xyz789"
+step_index: 0
+status: "in_progress"
+notes: "Starting implementation of token endpoint"
+
+# Mark step done
+action: updateStep
+plan_id: "plan_xyz789"
+step_index: 0
+status: "done"
+notes: "Token endpoint implemented and tested"
+
+# Get plan status
+action: getPlan
+plan_id: "plan_xyz789"
+include_items: true
+
+# List active plans
+action: listPlans
+scope: personal
+session_id: "sess_abc123"
+status_filter: active
+
+# Check dependencies
+action: checkDependencies
+plan_id: "plan_xyz789"
+
+# Execute from template
+action: executeTemplate
+template_name: "feature-implementation"
+session_id: "sess_abc123"
+custom_title: "Add OAuth2 flow"
+
+# --- Fleet-specific actions ---
+
+# Supervisor breaks down epic
+action: breakDownEpic
+epic_task_id: 123
+analysis_depth: thorough
+supervisor_id: "supervisor"
+
+# Worker claims next available item
+action: claimItem
+plan_id: "plan_fleet456"
+worker_id: "worker-backend"
+
+# Worker creates subplan
+action: createSubplan
+parent_plan_id: "plan_fleet456"
+worker_id: "worker-backend"
+title: "Database migration subplan"
+description: "Migrate user table to support OAuth2 fields"
+estimated_steps: 5
+
+# Worker submits for QC
+action: submitForQC
+plan_id: "plan_fleet456"
+worker_id: "worker-backend"
+result_summary: "OAuth2 flow implemented with all tests passing"
+pr_urls: ["https://github.com/.../142"]
+```
+
+**Action Routing in Compiler:**
+```python
+async def compile(self, yaml_dsl: str, context: Dict) -> Dict:
+    """Main compiler entry point — parses YAML and routes to handler."""
+    plan_data = yaml.safe_load(yaml_dsl)
+    action = plan_data.get("action")
+    
+    # Add runtime context (agent_id, session_id, worktree, etc.)
+    plan_data["_context"] = context
+    
+    handlers = {
+        "listActions": self._handle_list_actions,
+        "create": self._handle_create,
+        "addStep": self._handle_add_step,
+        "updateStep": self._handle_update_step,
+        "getPlan": self._handle_get_plan,
+        "listPlans": self._handle_list_plans,
+        "checkDependencies": self._handle_check_deps,
+        "executeTemplate": self._handle_execute_template,
+        "deletePlan": self._handle_delete_plan,
+        "abandonPlan": self._handle_abandon_plan,
+        # Fleet-specific
+        "breakDownEpic": self._handle_breakdown_epic,
+        "claimItem": self._handle_claim_item,
+        "createSubplan": self._handle_create_subplan,
+        "submitForQC": self._handle_submit_qc,
+    }
+    
+    handler = handlers.get(action)
+    if not handler:
+        return {"error": f"Unknown action: {action}. Use listActions to discover valid actions."}
+    
+    return await handler(plan_data)
+```
+
+**Storage Backend Selection:**
+```python
+async def _handle_create(self, plan_data: Dict) -> Dict:
+    """Create new plan — selects storage backend based on context."""
+    context = plan_data.get("_context", {})
+    
+    if context.get("autodev_bridge"):
+        # Use AutoDev's SQLite via HTTP bridge
+        return await self._call_autodev_bridge("create_plan", plan_data)
+    else:
+        # Use local SQLite (standalone mode for other services)
+        return await self._create_in_local_db(plan_data)
+```
+
+---
+
+#### AutoDev Backend — Planner Bridge
 
 **Rust Module Structure:**
-- [ ] `src-tauri/src/plan/mod.rs`: Module declaration
-- [ ] `src-tauri/src/plan/types.rs`: `Plan`, `PlanItem`, `PlanStatus`, `AgentType`, `PlanScope` structs
-- [ ] `src-tauri/src/plan/repository.rs`: `PlanRepository` with full CRUD + Fleet queries
-- [ ] `src-tauri/src/plan/engine.rs`: `PlanEngine` for execution state machine
-- [ ] `src-tauri/src/plan/fleet.rs`: **Fleet plan operations** (epic breakdown, sub-plans, claiming)
+- [ ] `src-tauri/src/plan/mod.rs` — Module declaration
+- [ ] `src-tauri/src/plan/types.rs` — `Plan`, `PlanItem`, `PlanStatus`, `AgentType`, `PlanScope` structs
+- [ ] `src-tauri/src/plan/repository.rs` — `PlanRepository` with full CRUD + Fleet queries
+- [ ] `src-tauri/src/plan/compiler_bridge.rs` — **PlannerCompilerBridge** (routes to core-orchestrator)
+- [ ] `src-tauri/src/plan/fleet.rs` — Fleet plan operations (epic breakdown, claiming)
 
-**Tauri Commands (PA Planning):**
-- [ ] `create_plan(session_id, title, description) -> Result<Plan>`
-- [ ] `get_plan(plan_id) -> Result<Plan>`
-- [ ] `list_plans(session_id) -> Result<Vec<PlanSummary>>`
-- [ ] `add_plan_item(plan_id, title, description, order, parent_id, agent_type) -> Result<PlanItem>`
-- [ ] `update_plan_item_status(item_id, status, notes) -> Result<()>`
-- [ ] `set_plan_item_dependency(item_id, depends_on_item_id) -> Result<()>`
-- [ ] `reorder_plan_items(plan_id, item_orders) -> Result<()>`
-- [ ] `delete_plan(plan_id) -> Result<()>`
-- [ ] `get_plan_progress(plan_id) -> Result<PlanProgress>`
-- [ ] `activate_plan(plan_id) -> Result<()>` -- change status from draft to active
-- [ ] `abandon_plan(plan_id, reason) -> Result<()>`
+**PlannerCompilerBridge:**
+```rust
+/// Bridge between AutoDev and core-orchestrator planner compiler
+pub struct PlannerCompilerBridge {
+    client: reqwest::Client,
+    core_orchestrator_url: String,
+}
 
-**Tauri Commands (Fleet Planning):**
-- [ ] `create_plan_by_agent(title, description, agent_id, parent_plan_id?, session_id) -> Result<Plan>`
-  - Agents create plans: supervisor, worker-{slug}, qc
-  - Supports nested sub-plans via parent_plan_id
-- [ ] `break_down_epic(epic_task_id, supervisor_id) -> Result<Plan>`
-  - Supervisor converts epic task into plan with subtasks
-  - Auto-creates plan_items from acceptance criteria
-- [ ] `claim_plan_item(item_id, worker_id) -> Result<()>`
-  - Worker claims next available plan step
-  - Updates assigned_worker, status='in_progress'
-- [ ] `release_plan_item(item_id, worker_id) -> Result<()>`
-  - Worker releases item (for reassignment)
-- [ ] `create_subplan(parent_plan_id, worker_id, title, description) -> Result<Plan>`
-  - Worker creates nested plan for complex subtask
-- [ ] `report_plan_progress(plan_id, worker_id, item_id, status, notes) -> Result<PlanProgress>`
-  - Fleet progress updates with worker attribution
-- [ ] `submit_plan_for_qc(plan_id, worker_id) -> Result<()>`
-  - Worker submits completed plan for QC review
-- [ ] `get_plans_for_agent(agent_id, scope?) -> Result<Vec<PlanSummary>>`
-  - Supervisor queries: get_plans_for_agent("supervisor")
-  - Worker queries: get_plans_for_agent("worker-backend")
-- [ ] `get_plan_tree(plan_id) -> Result<PlanTree>`
-  - Returns plan + all nested subplans recursively
+impl PlannerCompilerBridge {
+    /// Compile YAML DSL via core-orchestrator planner tool
+    pub async fn compile(
+        &self,
+        yaml_dsl: &str,
+        context: PlanContext
+    ) -> Result<PlanCompilerResult> {
+        // Enrich context with AutoDev-specific fields
+        let enriched_context = json!({
+            "agent_id": context.agent_id,
+            "session_id": context.session_id,
+            "worktree_branch": context.worktree_branch,
+            "autodev_bridge": true,  // Signal to use AutoDev SQLite
+        });
+        
+        // Call core-orchestrator planner__internal tool
+        let result = self.call_planner_tool(yaml_dsl, enriched_context).await?;
+        
+        // Post-process: emit UI events, trigger hooks
+        self.emit_plan_event(&result).await?;
+        
+        Ok(result)
+    }
+    
+    /// Direct SQLite query for read operations (faster than HTTP round-trip)
+    pub async fn query_plans(&self, filter: PlanFilter) -> Result<Vec<PlanSummary>> {
+        // Direct SQLite access via repository
+        let repo = PlanRepository::new(self.db_conn.clone());
+        repo.list_plans(filter).await
+    }
+}
+```
 
-#### Built-in Plan Tools
+**Tauri Commands (all routed through compiler):**
+- [ ] `planner_compile(yaml_dsl: String, context: PlanContext) -> Result<PlanCompilerResult>`
+  - Main entry point — all plan operations go through this
+  - Calls core-orchestrator planner__internal tool
+  - Returns parsed result with UI events emitted
 
-**Tools for PA to Manage Plans:**
-- [ ] **`create_plan` Tool**: Create new plan for complex tasks
-  - Input: `title` (string), `description` (string, optional), `template` (string, optional)
-  - Returns: `plan_id`, `confirmation_message`
-  - System prompt: "When task requires 5+ steps or 10+ tool calls, create a plan first"
+- [ ] `get_plan(plan_id: String) -> Result<Plan>`
+  - Direct SQLite query (read optimization)
+- [ ] `list_plans(filter: PlanFilter) -> Result<Vec<PlanSummary>>`
+  - Direct SQLite query with filters
+- [ ] `get_plan_tree(plan_id: String) -> Result<PlanTree>`
+  - Recursive query for parent + all nested subplans
 
-- [ ] **`add_plan_step` Tool**: Add step to existing plan
-  - Input: `plan_id`, `title`, `description`, `depends_on` (array of step indices, optional), `agent_type` (default: "PA")
-  - Returns: `step_id`, `step_number`, `plan_progress_percentage`
+**Fleet-Specific Tauri Commands:**
+- [ ] `break_down_epic(epic_task_id: i64, supervisor_id: String) -> Result<Plan>`
+  - Calls planner with `action: breakDownEpic`
+- [ ] `claim_plan_item(plan_id: String, worker_id: String) -> Result<PlanItem>`
+  - Calls planner with `action: claimItem`
+- [ ] `create_subplan(parent_plan_id: String, worker_id: String, yaml_dsl: String) -> Result<Plan>`
+  - Calls planner with `action: createSubplan`
+- [ ] `submit_plan_for_qc(plan_id: String, worker_id: String, result_summary: String, pr_urls: Vec<String>) -> Result<()>`
+  - Calls planner with `action: submitForQC`
 
-- [ ] **`update_plan_step` Tool**: Update step status
-  - Input: `plan_id`, `step_id`, `status` ("in_progress", "done", "blocked"), `notes` (optional)
-  - Returns: `confirmation`, `current_progress`, `next_steps` (dependencies now unblocked)
+---
 
-- [ ] **`get_plan_status` Tool**: Query plan state
-  - Input: `plan_id`, `include_completed` (boolean, default true)
-  - Returns: `plan` with all items, `progress_percentage`, `estimated_remaining_steps`
+#### Agent YAML Configuration for Planner
 
-- [ ] **`list_active_plans` Tool**: See all active plans
-  - Input: `session_id`, `status_filter` (optional: "active", "draft", "all")
-  - Returns: Array of plans with progress summaries
+**Internal Tool Opt-In (Required for All AutoDev Fleet Agents):**
 
-- [ ] **`create_plan_from_template` Tool**: Instantiate plan from skill template
-  - Input: `template_name` (e.g., "feature-implementation"), `session_id`, `custom_title`
-  - Returns: `plan_id` with pre-populated steps from template
+Agents that need planning capabilities must declare the planner in their YAML config under `internal_tools`.
 
-**Fleet Plan Tools (AutoDev Handler — `__autodev` suffix):**
+**Schema Definition** (`src/airs/config/agent_schema.py`):
+```python
+class InternalToolConfig(BaseModel):
+    """
+    Internal tool configuration.
+    Used in agent YAML under internal_tools key to opt-in to built-in tools.
+    """
+    id: str = Field(..., description="Internal tool ID — must match BaseInternalTool.name")
+    required: bool = Field(default=True, description="Fail agent init if tool can't be loaded")
+```
 
-Tools exposed to core-orchestrator for Fleet agents:
+**AgentConfig Field**:
+```python
+internal_tools: List[InternalToolConfig] = Field(
+    default_factory=list,
+    description="Internal tools to enable for this agent. "
+                "Each entry opts the agent into one built-in tool by its id."
+)
+```
 
-- [ ] **`break_down_epic__autodev`**: Supervisor converts epic to plan
-  - Input: `epic_task_id` (int), `analysis_depth` ("quick" | "thorough")
-  - Returns: `plan_id`, `item_count`, `estimated_steps`
-  - Behavior: Reads task acceptance criteria, creates plan_items with dependencies
+**Agent YAML Example** (`config/agents/supervisor.yaml`):
+```yaml
+id: supervisor
+name: Supervisor Agent
+description: Orchestrates epic breakdown and worker coordination
+job_title: Fleet Supervisor
+gender: neutral
 
-- [ ] **`create_subplan__autodev`**: Worker creates nested plan for complex subtask
-  - Input: `parent_plan_id`, `title`, `description`, `estimated_steps` (3-10)
-  - Returns: `subplan_id`, `plan_tree_depth`
-  - Behavior: Creates child plan linked to parent, worker owns subplan
+llm:
+  provider: openai
+  model: gpt-4o
+  temperature: 0.2
 
-- [ ] **`claim_plan_item__autodev`**: Worker claims next available item
-  - Input: `plan_id` or `agent_type` ("any", "supervisor", "worker", "qc")
-  - Returns: `item_id`, `title`, `description`, `dependencies_met` (bool)
-  - Behavior: Finds pending item with all dependencies done, assigns to worker
+system_prompt: |
+  You are the Fleet Supervisor. Your role is to:
+  1. Break down epic tasks into executable plans
+  2. Coordinate workers via plan assignment
+  3. Monitor progress and resolve dependencies
 
-- [ ] **`update_plan_step__autodev`**: Worker updates step status (Fleet version)
-  - Input: `plan_id`, `item_id`, `status` ("in_progress", "done", "blocked"), `notes`, `pr_url?`
-  - Returns: `confirmation`, `current_progress`, `unblocked_items` (array)
-  - Behavior: Updates status, if "done" marks completed_at, triggers dependency unlock
+# REQUIRED: Opt-in to planner internal tool
+internal_tools:
+  - id: planner
+    required: true
 
-- [ ] **`submit_for_qc__autodev`**: Worker submits plan for QC review
-  - Input: `plan_id`, `result_summary`, `pr_urls` (array)
-  - Returns: `qc_task_id`, `estimated_review_time`
-  - Behavior: Creates QC task, links to plan, notifies QC agent
+# MCP servers (optional)
+mcp_servers:
+  - id: autodev-fleet
+    uri: http://localhost:8000/mcp
 
-- [ ] **`get_plan_status__autodev`**: Query plan state (Fleet version)
-  - Input: `plan_id`, `include_subplans` (bool)
-  - Returns: Full plan with items, subplans array, progress_percentage per agent
+capabilities:
+  streaming: true
+  auto_retry: true
+```
 
-- [ ] **`list_active_plans__autodev`**: See plans by scope
-  - Input: `scope` ("personal", "fleet", "epic", "all"), `agent_filter?`
-  - Returns: Array of plans with progress, ownership, parent/child links
+**Worker Agent YAML Example** (`config/agents/worker-backend.yaml`):
+```yaml
+id: worker-backend
+name: Backend Worker
+description: Executes backend development tasks via plan items
+job_title: Backend Developer
+gender: male
+
+llm:
+  provider: openai
+  model: gpt-4o
+  temperature: 0.1
+
+system_prompt: |
+  You are a backend development specialist. You:
+  1. Claim plan items from the fleet queue
+  2. Execute complex tasks via planner subplans when needed
+  3. Submit completed work for QC review
+
+# REQUIRED: Planner for claiming items and creating subplans
+internal_tools:
+  - id: planner
+    required: true
+
+mcp_servers:
+  - id: autodev-fleet
+    uri: http://localhost:8000/mcp
+```
+
+**QC Agent YAML Example** (`config/agents/qc.yaml`):
+```yaml
+id: qc
+name: Quality Control
+description: Reviews completed work and approves or rejects
+job_title: Code Reviewer
+gender: female
+
+system_prompt: |
+  You verify all work meets acceptance criteria. Use planner to:
+  1. Create verification plans for complex reviews
+  2. Track review progress across multiple PRs
+
+internal_tools:
+  - id: planner
+    required: true
+```
+
+**How It Works:**
+1. **Registration**: `PlannerSuiteTool` (name="planner") registered in `InternalToolBridge`
+2. **Discovery**: `AgentFactory.create_agent_from_config()` extracts `internal_tool_ids` from config
+3. **Metadata**: `internal_tool_ids` passed to `AgentMetadata.internal_tools`
+4. **Exposure**: `LivingAgent` calls `InternalToolBridge.get_tools(tool_ids)` which returns `ToolSpec` with LLM name `planner__internal`
+5. **Routing**: LLM calls `planner__internal`, `UnifiedToolHandler` routes to `InternalToolBridge.handle_tool_call()`
+6. **Execution**: `PlannerCompiler.compile()` parses YAML DSL and executes action
+
+**Naming Convention**:
+- Tool ID in YAML: `planner` (matches `BaseInternalTool.name`)
+- LLM-facing tool name: `planner__internal` (auto-added by bridge)
+- Tool call from LLM: `{"name": "planner__internal", "arguments": {"yaml_dsl": "action: create..."}}`
+
+---
+
+#### Built-in Planner Tool
+
+**Single Tool: `planner`**
+
+The PA and agents use ONE tool for all planning operations:
+
+```rust
+pub struct PlannerTool;
+
+impl Tool for PlannerTool {
+    fn name(&self) -> &str { "planner" }
+    
+    fn description(&self) -> &str {
+        r#"Unified planning interface with YAML DSL compiler.
+
+## Available Actions
+
+Use 'listActions' to discover all actions, or execute directly:
+
+### Basic Actions
+- listActions: Get schema for all actions
+- create: Create new plan
+- addStep: Add step to plan
+- updateStep: Update step status
+- getPlan: Get plan details
+- listPlans: List plans
+- checkDependencies: Check which steps are unblocked
+- executeTemplate: Create plan from template
+- deletePlan: Delete plan
+- abandonPlan: Abandon plan
+
+### Fleet Actions (for workers/supervisors)
+- breakDownEpic: Convert epic to plan
+- claimItem: Claim next available step
+- createSubplan: Create nested plan
+- submitForQC: Submit for review
+
+## When to Use
+
+Create a plan when task requires 5+ steps or 10+ tool calls.
+
+## YAML DSL Syntax
+
+action: create
+title: "Your plan title"
+description: "What this plan accomplishes"
+scope: personal  # or fleet, epic
+
+## Example Workflow
+
+1. Call planner with listActions to see schemas
+2. Create plan with action: create
+3. Add steps with action: addStep
+4. Update progress with action: updateStep
+"#
+    }
+    
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "yaml_dsl": {
+                    "type": "string",
+                    "description": "YAML DSL command. Use 'action: listActions' to discover available actions."
+                }
+            },
+            "required": ["yaml_dsl"]
+        })
+    }
+    
+    async fn call(&self, args: Value) -> Result<Value> {
+        let yaml_dsl = args["yaml_dsl"].as_str()
+            .ok_or_else(|| anyhow!("Missing yaml_dsl parameter"))?;
+        
+        // Route to PlannerCompilerBridge
+        let bridge = PlannerCompilerBridge::new();
+        let context = PlanContext::from_current_session();
+        let result = bridge.compile(yaml_dsl, context).await?;
+        
+        Ok(json!(result))
+    }
+}
+```
+
+---
 
 #### System Prompt Integration
 
 **Updated BASE_SYSTEM_PROMPT Guidance:**
 ```
 For complex multi-step tasks (5+ steps or 10+ tool calls):
-1. FIRST: Create a plan using create_plan tool
-2. THEN: Add 3-7 steps using add_plan_step tool, specifying dependencies if needed
-3. DURING: Update step status as you progress with update_plan_step
-4. ALWAYS: Reference the plan_id in your thinking
+
+1. FIRST: Discover planner actions
+   planner:
+     yaml_dsl: "action: listActions"
+
+2. THEN: Create plan
+   planner:
+     yaml_dsl: |
+       action: create
+       title: "Your plan title"
+       description: "What you need to accomplish"
+       scope: personal
+
+3. ADD STEPS: 3-7 steps via addStep action
+   planner:
+     yaml_dsl: |
+       action: addStep
+       plan_id: "{plan_id_from_create}"
+       title: "Step title"
+       description: "What this step does"
+       depends_on: []  # or [0, 1] for dependencies
+
+4. UPDATE PROGRESS: As you complete steps
+   planner:
+     yaml_dsl: |
+       action: updateStep
+       plan_id: "{plan_id}"
+       step_index: 0
+       status: done
+       notes: "Completed successfully"
 
 Plan step status meanings:
 - pending: Not started yet
 - in_progress: Currently working on this
 - done: Step completed successfully
 - blocked: Waiting on dependencies or external input
+
+Always reference the plan_id in your thinking.
 ```
 
 #### Plan Templates (Skills Integration)
@@ -3678,14 +4140,18 @@ steps:
 - [ ] Session restore: Check for incomplete plans on session load
 - [ ] Recovery prompt: "Continue plan 'X'? 3 of 7 steps remaining" [Resume] [Abandon]
 
-#### Fleet Plan Execution Flow
+#### Fleet Plan Execution Flow (via Planner Compiler)
 
 **Supervisor Epic Breakdown:**
 ```
 1. SUPERVISOR POLL CYCLE
    └─ Sees epic task #123: "Refactor auth system"
-   └─ Calls break_down_epic__autodev(epic_task_id=123)
-   └─ Creates Plan #P1 with agent_scope='epic', created_by='supervisor'
+   └─ Calls planner with YAML DSL:
+      action: breakDownEpic
+      epic_task_id: 123
+      supervisor_id: "supervisor"
+      analysis_depth: thorough
+   └─ Compiler creates Plan #P1 with agent_scope='epic', created_by='supervisor'
    └─ Auto-generates 6 plan_items:
       ├─ Step 1: Analyze current auth (agent_type='Supervisor')
       ├─ Step 2: Design new auth flow → agent_type='Worker', assigned_worker=null
@@ -3698,17 +4164,26 @@ steps:
 **Worker Subplan Creation:**
 ```
 2. WORKER-BACKEND CLAIM & SUBPLAN
-   └─ Polls claim_plan_item__autodev(plan_id='P1')
+   └─ Polls planner with claimItem action:
+      action: claimItem
+      plan_id: "P1"
+      worker_id: "worker-backend"
    └─ Gets Step 2 assigned (status='in_progress', assigned_worker='worker-backend')
    └─ Step 2 is complex (multi-file refactor)
-   └─ Calls create_subplan__autodev(parent_plan_id='P1', title="Auth middleware refactor")
+   └─ Calls planner with createSubplan:
+      action: createSubplan
+      parent_plan_id: "P1"
+      worker_id: "worker-backend"
+      title: "Auth middleware refactor"
+      description: "Migrate JWT handling to new middleware pattern"
+      estimated_steps: 3
    └─ Creates Subplan #P2 with parent_plan_id='P1', agent_scope='fleet'
    └─ Subplan items:
       ├─ Sub-step 2.1: Read current auth code
       ├─ Sub-step 2.2: Write new auth middleware (worktree_branch='worker/auth-refactor')
       └─ Sub-step 2.3: Update unit tests
-   └─ Completes all subplan items
-   └─ Calls update_plan_step__autodev(P1, step_2, 'done', pr_url='github.com/.../142')
+   └─ Completes all subplan items via updateStep actions
+   └─ Updates parent step via updateStep with pr_url
    └─ Subplan #P2 auto-completed when parent item done
 ```
 
@@ -3716,12 +4191,18 @@ steps:
 ```
 3. DEPENDENCY CASCADE & QC
    └─ Step 2 done → Step 3 dependencies now met → Status 'pending' → 'ready'
-   └─ Worker-Backend claims Step 3...
-   └─ All steps done → Worker submits for QC
-   └─ Calls submit_for_qc__autodev(P1, result_summary, pr_urls=[142, 143, 144])
-   └─ QC Agent creates verification plan #P3
+   └─ Worker-Backend claims Step 3 via claimItem action...
+   └─ All steps done → Worker submits for QC:
+      action: submitForQC
+      plan_id: "P1"
+      worker_id: "worker-backend"
+      result_summary: "OAuth2 flow implemented, all tests passing"
+      pr_urls: ["https://github.com/.../142"]
+   └─ QC Agent creates verification plan #P3 via create action
    └─ QC reviews all PRs, approves → Supervisor merges → Closes epic
 ```
+
+**Key Benefit:** Fleet agents use the SAME `planner` tool with different actions, reducing cognitive load and enabling the LLM to learn one interface for all planning operations.
 
 #### Plan Hooks Integration (Extended for Fleet)
 
@@ -3751,60 +4232,123 @@ steps:
 
 #### Phase 3.5 Deliverables Checklist
 
-**PA Planning Core:**
-- [ ] SQLite schema: plans, plan_items, plan_item_dependencies, plan_executions tables
-- [ ] Rust plan module: types, repository, engine
-- [ ] Tauri commands: full CRUD for plans and plan items (PA commands)
-- [ ] Built-in tools: create_plan, add_plan_step, update_plan_step, get_plan_status, list_active_plans, create_plan_from_template
-- [ ] System prompt updated with plan guidance
-- [ ] Plan templates: 5 built-in YAML templates (PA-focused)
-- [ ] PlanCard sidebar component
-- [ ] PlanView detail page with dependency viz
-- [ ] PlanDisplay inline chat component
-- [ ] planStore.ts frontend state management (PA actions)
-- [ ] Plan hooks: PrePlanStep, PostPlanStep, OnPlanActivate, OnPlanComplete
-- [ ] Auto-save and session recovery
-- [ ] Resume prompt for incomplete plans
+**Core-Orchestrator — Planner Compiler (Reusable):**
+- [ ] `src/internal_tools/planner/__init__.py` — Module exports
+- [ ] `src/internal_tools/planner/planner_compiler.py` — `PlannerSuiteTool` class with YAML DSL compiler
+- [ ] `src/internal_tools/planner/schemas.py` — JSON schemas for all actions (create, addStep, updateStep, etc.)
+- [ ] `src/internal_tools/planner/actions.py` — Action handlers for each planner action
+- [ ] `src/internal_tools/planner/standalone_db.py` — SQLAlchemy models for standalone mode (other services)
+- [ ] Tool registration: `planner__internal` exposed via UnifiedToolHandler
+- [ ] Standalone mode: Can run independently with own SQLite (for non-AutoDev services)
 
-**Fleet Planning Extensions:**
-- [ ] **Database Extensions:**
-  - [ ] Fleet fields in plans table: created_by, agent_scope, parent_plan_id, task_id
-  - [ ] Fleet fields in plan_items: assigned_worker, worktree_branch, pr_url, result_summary
-- [ ] **Backend — Fleet Plan Module:**
-  - [ ] `src-tauri/src/plan/fleet.rs` — Fleet operations
-  - [ ] Tauri commands: create_plan_by_agent, break_down_epic, claim_plan_item, release_plan_item
-  - [ ] Tauri commands: create_subplan, report_plan_progress, submit_plan_for_qc, get_plans_for_agent, get_plan_tree
-  - [ ] Repository queries: find_claimable_items, get_plan_tree_recursive, get_plans_by_scope
-- [ ] **AutoDev Handler — Fleet Plan Tools:**
-  - [ ] `break_down_epic__autodev` — Supervisor epic → plan conversion
-  - [ ] `create_subplan__autodev` — Worker nested plan creation
-  - [ ] `claim_plan_item__autodev` — Worker step claiming
-  - [ ] `update_plan_step__autodev` — Fleet progress updates
-  - [ ] `submit_for_qc__autodev` — QC handoff
-  - [ ] `get_plan_status__autodev` — Fleet plan query
-  - [ ] `list_active_plans__autodev` — Scoped plan listing
-- [ ] **Fleet Plan Templates (Skills):**
-  - [ ] `epic-breakdown.yaml` — Supervisor template
+**Agent Configuration (YAML):**
+- [ ] `InternalToolConfig` schema in `src/airs/config/agent_schema.py` (already exists)
+- [ ] Agent YAML examples with `internal_tools` opt-in:
+  - [ ] `config/agents/supervisor.yaml` — with `internal_tools: [{id: planner, required: true}]`
+  - [ ] `config/agents/worker-backend.yaml` — with planner opt-in
+  - [ ] `config/agents/worker-frontend.yaml` — with planner opt-in
+  - [ ] `config/agents/qc.yaml` — with planner opt-in
+- [ ] Documentation: All Fleet agents must declare planner in `internal_tools` to use planning
+- [ ] Naming convention documented: YAML `id: planner` → LLM `planner__internal`
+
+**AutoDev Backend — Planner Bridge:**
+- [ ] SQLite schema: plans, plan_items, plan_item_dependencies, plan_executions tables
+- [ ] `src-tauri/src/plan/mod.rs` — Module declaration
+- [ ] `src-tauri/src/plan/types.rs` — `Plan`, `PlanItem`, `PlanStatus`, `AgentType`, `PlanScope` structs
+- [ ] `src-tauri/src/plan/repository.rs` — `PlanRepository` with full CRUD + Fleet queries
+- [ ] `src-tauri/src/plan/compiler_bridge.rs` — **PlannerCompilerBridge** (routes YAML DSL to core-orchestrator)
+- [ ] `src-tauri/src/plan/fleet.rs` — Fleet operations (epic breakdown, claiming, subplans)
+- [ ] Tauri commands:
+  - [ ] `planner_compile(yaml_dsl, context)` — Main entry point (all operations)
+  - [ ] `get_plan(plan_id)` — Direct SQLite query (read optimization)
+  - [ ] `list_plans(filter)` — Direct SQLite query
+  - [ ] `get_plan_tree(plan_id)` — Recursive query for nested plans
+- [ ] Fleet Tauri commands:
+  - [ ] `break_down_epic(epic_task_id, supervisor_id)` — Calls compiler with `action: breakDownEpic`
+  - [ ] `claim_plan_item(plan_id, worker_id)` — Calls compiler with `action: claimItem`
+  - [ ] `create_subplan(parent_plan_id, worker_id, yaml_dsl)` — Calls compiler with `action: createSubplan`
+  - [ ] `submit_plan_for_qc(plan_id, worker_id, result_summary, pr_urls)` — Calls compiler with `action: submitForQC`
+
+**Built-in Planner Tool:**
+- [ ] **Single `planner` tool** (replaces 10+ separate tools)
+  - [ ] Tool definition with YAML DSL parameter
+  - [ ] Routes to PlannerCompilerBridge
+  - [ ] Context-aware (PA vs Fleet)
+- [ ] System prompt updated with planner guidance and YAML DSL examples
+- [ ] Tool registration in `builtin_tools/mod.rs`
+
+**Planner Actions (Compiler Handlers):**
+- [ ] `listActions` — Discover all actions and schemas
+- [ ] `create` — Create new plan
+- [ ] `addStep` — Add step to existing plan
+- [ ] `updateStep` — Update step status/properties
+- [ ] `getPlan` — Get plan details and progress
+- [ ] `listPlans` — List active/completed plans
+- [ ] `checkDependencies` — Check which dependencies are satisfied
+- [ ] `executeTemplate` — Execute plan from YAML template
+- [ ] `deletePlan` — Delete plan
+- [ ] `abandonPlan` — Mark plan as abandoned
+- [ ] Fleet-specific actions:
+  - [ ] `breakDownEpic` — Supervisor converts epic to plan
+  - [ ] `claimItem` — Worker claims next available item
+  - [ ] `createSubplan` — Worker creates nested plan
+  - [ ] `submitForQC` — Worker submits for review
+
+**Plan Templates (Skills Integration):**
+- [ ] **PA Planning Templates:**
+  - [ ] `feature-implementation.yaml`: Standard 5-step feature dev
+  - [ ] `bug-fix.yaml`: Debug → Fix → Test → Verify flow
+  - [ ] `refactoring.yaml`: Analyze → Plan → Execute → Verify
+  - [ ] `code-review.yaml`: Read → Analyze → Comment → Summarize
+  - [ ] `api-endpoint.yaml`: Design → Implement → Test → Document
+- [ ] **Fleet Plan Templates:**
+  - [ ] `epic-breakdown.yaml` — Supervisor template (Analyze → Decompose → Assign)
   - [ ] `worker-subplan.yaml` — Worker complex task template
   - [ ] `refactoring-plan.yaml` — Worker refactoring with worktrees
   - [ ] `qc-verification.yaml` — QC review checklist
   - [ ] `bug-investigation.yaml` — Worker debugging flow
-- [ ] **Frontend — Fleet Plan UI:**
-  - [ ] Agent ownership indicator in PlanCard (PA/Supervisor/Worker/QC badge)
+
+**Frontend UI Components:**
+- [ ] `src/components/sidebar/PlanCard.tsx` — Active plan with progress, ownership badge, scope badge
+- [ ] `src/components/plan/PlanView.tsx` — Detail view with collapsible steps, dependency viz, action buttons
+- [ ] `src/components/chat/PlanDisplay.tsx` — Inline plan card in chat
+- [ ] `src/components/plan/PlanTreeView.tsx` — Nested plan tree (parent/child)
+- [ ] Fleet UI features:
+  - [ ] Agent ownership indicator (PA/Supervisor/Worker/QC badge)
   - [ ] Scope badge (Personal/Fleet/Epic) with color coding
-  - [ ] Nested plan tree visualization in PlanView
   - [ ] Agent filter: Show only items assigned to specific worker
-  - [ ] Context-aware action buttons by agent type (Supervisor/Worker/QC specific)
+  - [ ] Context-aware action buttons by agent type
   - [ ] Worktree branch links and PR URL displays
-  - [ ] Plan tree view: Expand/collapse parent/child plans
-- [ ] **Plan Store — Fleet Actions:**
-  - [ ] `claimPlanItem()`, `createSubplan()`, `loadPlansForAgent()`, `loadPlanTree()`, `submitForQC()`
-  - [ ] Event listeners: plan:item_claimed, plan:subplan_created
-- [ ] **Fleet Plan Hooks:**
-  - [ ] `OnEpicBreakdown`, `OnPlanItemClaimed`, `OnSubplanCreated`, `OnPlanQCSubmit`, `OnDependencyUnblocked`
+
+**Plan Store:**
+- [ ] `src/stores/planStore.ts` with state: `activePlan`, `planHistory`, `fleetPlans`, `planTree`
+- [ ] Actions: `loadPlan`, `updateStepStatus`, `compilePlanner(yaml_dsl)`, `setActivePlan`
+- [ ] Fleet actions: `claimPlanItem()`, `createSubplan()`, `loadPlansForAgent()`, `loadPlanTree()`, `submitForQC()`
+- [ ] Event listeners: `plan:created`, `plan:updated`, `plan:step_completed`, `plan:item_claimed`, `plan:subplan_created`
+
+**Plan Hooks Integration:**
+- [ ] `PrePlanStep` — Before executing tools for a step
+- [ ] `PostPlanStep` — After step tools complete
+- [ ] `OnPlanActivate` — When plan moves draft → active
+- [ ] `OnPlanComplete` — All steps done
+- [ ] Fleet hooks:
+  - [ ] `OnEpicBreakdown` — Supervisor creates plan from epic
+  - [ ] `OnPlanItemClaimed` — Worker claims step
+  - [ ] `OnSubplanCreated` — Worker creates nested plan
+  - [ ] `OnPlanQCSubmit` — Worker submits for review
+  - [ ] `OnDependencyUnblocked` — Dependency satisfied
+- [ ] Hooks config: `~/.autodev/hooks/plan_hooks.json`
+
+**Persistence & Recovery:**
+- [ ] Auto-save after every step status update
+- [ ] Session restore: Check for incomplete plans on load
+- [ ] Recovery prompt: "Continue plan 'X'? 3 of 7 steps remaining" [Resume] [Abandon]
 
 **Fleet Plan Success Criteria:**
-> **Supervisor** detects epic task → Creates plan via `break_down_epic__autodev` → **Workers** claim items and create subplans for complex work → **QC** creates verification plan → All plans complete with proper dependency resolution → Epic closed
+> **Supervisor** detects epic task → Uses planner with `action: breakDownEpic` → Creates plan with steps → **Workers** claim items via `action: claimItem` → Complex work spawns subplans via `action: createSubplan` → **QC** creates verification plan → All plans complete with proper dependency resolution → Epic closed
+
+**Key Architecture Win:**
+> All planning operations (PA personal plans, Supervisor epic breakdown, Worker subplans, QC verification) use the SAME `planner` tool with YAML DSL actions. Reduced from 10+ tools to 1 tool with self-documenting `listActions` discovery.
 
 ---
 
