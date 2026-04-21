@@ -55,12 +55,36 @@ impl Tool for UpdateTaskStatusTool {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => return ToolResult::error("'status' is required"),
         };
-        // null or absent → unassign; string → assign
-        let assigned_worker = if input["assigned_worker"].is_null() || input["assigned_worker"].is_null() {
-            input["assigned_worker"].as_str().map(|s| s.to_string())
-        } else {
-            input["assigned_worker"].as_str().map(|s| s.to_string())
-        };
+        // null or absent → leave unassigned; string → set assigned_worker
+        let assigned_worker = input["assigned_worker"].as_str().map(|s| s.to_string());
+
+        // ── State-transition guardrails ───────────────────────────────────────
+        //
+        // Reject nonsense combinations before they touch the DB. Historically
+        // the Supervisor LLM produced `{status:'ready', assigned_worker:'X'}`
+        // (a half-assignment), which left the task stuck in the READY column
+        // tagged with a worker while workers ignored it because status != 'assigned'.
+        // See `logs/demo.txt` 2026-04-20T12:52:05 for the failure trace.
+        //
+        // The canonical invariants are:
+        //   - `ready`: assigned_worker MUST be null
+        //   - `assigned` / `in_progress`: assigned_worker MUST be set
+        //
+        // For status='ready' with a worker set, we surface a clear error so
+        // the LLM retries with `assign_task` or the correct status.
+        if status == "ready" && assigned_worker.is_some() {
+            return ToolResult::error(
+                "Invalid state: status='ready' requires assigned_worker=null. \
+                 If you meant to dispatch work, call `assign_task(id, worker_slug)` instead — \
+                 it atomically sets status='assigned' AND assigned_worker."
+            );
+        }
+        if matches!(status.as_str(), "assigned" | "in_progress") && assigned_worker.is_none() {
+            return ToolResult::error(&format!(
+                "Invalid state: status='{status}' requires assigned_worker to be set. \
+                 Pass assigned_worker='worker-<slug>' or use `assign_task` for dispatch."
+            ));
+        }
 
         let db = match TasksDb::open() {
             Ok(db) => db,

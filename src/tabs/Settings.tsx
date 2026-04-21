@@ -14,6 +14,7 @@ import WorkerTable from '../components/workers/WorkerTable'
 import WorkerCreateModal from '../components/workers/WorkerCreateModal'
 import { invoke } from '@tauri-apps/api/core'
 import { useWorkspaceStore } from '../stores/workspaceStore'
+import { useRuntimeConfigStore } from '../stores/runtimeConfigStore'
 import HooksSettings from '../components/settings/HooksSettings'
 
 export default function SettingsTab() {
@@ -33,6 +34,9 @@ export default function SettingsTab() {
 
         <SectionHeader title="Workspace" />
         <WorkspaceCard />
+
+        <SectionHeader title="Demo Mode" />
+        <DemoModeCard />
 
         <SectionHeader title="Providers" />
 
@@ -176,6 +180,106 @@ function WorkspaceCard() {
       {ws.error && (
         <div className="font-mono text-xs" style={{ color: 'var(--danger)' }}>
           {ws.error}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Demo Mode (skip Python sidecars) ────────────────────────────────────────
+//
+// Toggles `runtime_config.json::skip_sidecars` on disk. When ON:
+//   - memory-mcp-server and core-orchestrator are NOT spawned at next launch
+//   - the StartupProgress FSM fast-forwards through every phase to "ready"
+//   - Chat + Worker recipes still work via the native Rust AgentEngine
+//   - LivingAgent / mem0 features are unavailable
+// The change requires an app restart to take effect (sidecar spawn happens
+// once, in the Tauri setup hook).
+
+function DemoModeCard() {
+  const cfg = useRuntimeConfigStore()
+
+  useEffect(() => {
+    cfg.load()
+  }, [])
+
+  const skip   = cfg.config?.skip_sidecars ?? false
+  const dirty  = cfg.dirty
+  const dotBg  = skip ? 'var(--warning)' : 'var(--aqua)'
+  const badgeBg     = skip ? '#FFCB8B15' : 'var(--accent-muted)'
+  const badgeBorder = skip ? '#FFCB8B40' : 'var(--accent-border)'
+  const badgeColor  = skip ? 'var(--warning)' : 'var(--accent)'
+
+  const onToggle = () => {
+    cfg.setSkipSidecars(!skip)
+  }
+
+  return (
+    <div
+      className="rounded-sm p-4 space-y-3"
+      style={{ background: 'var(--bg-card)', border: '1px solid var(--border-1)' }}
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span
+            className="w-1.5 h-1.5 rounded-full shrink-0"
+            style={{ background: dotBg }}
+          />
+          <span className="font-mono text-xs" style={{ color: 'var(--text-1)' }}>
+            Skip Python Sidecars
+          </span>
+          <span
+            className="font-mono px-1.5 py-0.5"
+            style={{
+              fontSize: '10px', background: badgeBg,
+              border: `1px solid ${badgeBorder}`, color: badgeColor, borderRadius: '2px',
+            }}
+          >
+            {skip ? 'ON' : 'OFF'}
+          </span>
+        </div>
+        <button
+          onClick={onToggle}
+          disabled={cfg.isLoading}
+          className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40"
+          style={{
+            background: skip ? 'var(--bg-2)' : 'var(--accent-muted)',
+            border: `1px solid ${skip ? 'var(--border-1)' : 'var(--accent-border)'}`,
+            color: skip ? 'var(--text-1)' : 'var(--accent)',
+          }}
+        >
+          {skip ? 'Disable Demo Mode' : 'Enable Demo Mode'}
+        </button>
+      </div>
+
+      <div className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
+        When <span style={{ color: 'var(--accent)' }}>ON</span>, AutoDev launches without spawning
+        memory-mcp-server or core-orchestrator. Chat and Worker recipes still run via the
+        native Rust <span style={{ color: 'var(--accent)' }}>AgentEngine</span> (calls the LLM
+        provider directly). Use this when the sidecars are under maintenance or for fast demos.
+      </div>
+
+      <div className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
+        <span style={{ color: 'var(--text-2)' }}>Disabled features in Demo Mode:</span>{' '}
+        LivingAgent memory persistence, mem0 vector search, A2A protocol endpoints,
+        agent CRUD via core-orchestrator API.
+      </div>
+
+      {dirty && (
+        <div
+          className="font-mono text-xs px-2 py-1.5 rounded-sm flex items-center gap-2"
+          style={{
+            background: '#FFCB8B15', border: '1px solid #FFCB8B40', color: 'var(--warning)',
+          }}
+        >
+          <RotateCcw size={11} />
+          Restart AutoDev for this change to take effect.
+        </div>
+      )}
+
+      {cfg.error && (
+        <div className="font-mono text-xs" style={{ color: 'var(--danger)' }}>
+          {cfg.error}
         </div>
       )}
     </div>

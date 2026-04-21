@@ -24,6 +24,7 @@
 10. [Phase 2 — Recipes + AutoDev Panel + GitHub](#10-phase-2--recipes--autodev-panel--github)
 10.5. [Phase 2.5 — Recipe Agent Sandbox + Native Task Tools + Logs Tab](#105-phase-25--recipe-agent-sandbox--native-task-tools--logs-tab)
 11. [Phase 3 — IDE + Skills + Hooks + MCP Server](#11-phase-3--ide--skills--hooks--mcp-server)
+11.1. [Phase 3.3.1 — Startup Feedback + Agent ID Persistence](#phase-331--startup-feedback--agent-id-persistence)
 12. [Phase 4 — Subagents + Model Router + Dispatch](#12-phase-4--subagents--model-router--dispatch)
 13. [Phase 5 — Plugin + CLI + Installers](#13-phase-5--plugin--cli--installers)
 14. [State Machine & Event System Design](#14-state-machine--event-system-design)
@@ -3123,6 +3124,55 @@ Deferred (out-of-scope for Phase 3.3):
 - Merge-branch button in Branch Manager.
 - Two-select checkpoint comparator UI (backend `compare_checkpoints` is ready).
 - Keyboard shortcut for undo / file-level checkpoint restoration UI.
+
+---
+
+### Phase 3.3.1 — Startup Feedback + Agent ID Persistence
+
+**Status**: **COMPLETE** ✅ (April 20, 2026)
+
+**Goal**: Two closely-related stability/UX fixes that surfaced while running the full fleet end-to-end:
+
+1. **Toast-driven startup loading UI** — the ~15 s fleet warm-up looked like a freeze; users had no visibility into what was happening.
+2. **Remove ULID suffix from agent IDs** — every app restart was minting new agent YAMLs (`worker-backend-8mhrv0b1`, `worker-backend-9ehggj75`, …), severing mem0 memory continuity and polluting `config/agents/`.
+
+Full design rationale, log evidence, and alternatives considered: [`startup_sequence_and_agent_persistence_analysis.md`](./startup_sequence_and_agent_persistence_analysis.md).
+
+#### Part 1 — Startup progress FSM + overlay
+
+- [x] `src-tauri/src/sidecar/startup_progress.rs` — new module: `StartupPhase` enum (12 phases), monotonic `StartupProgress::advance()`, `scan_line()` log-pattern dispatcher, Tauri `startup:progress` event emission.
+- [x] `src-tauri/src/sidecar/mod.rs` — `spawn_log_router` threads `Option<Arc<StartupProgress>>` through; `SidecarManager` holds an attached tracker and advances it from `start_memory`/`start`/`mark_memory_running`/`mark_running`.
+- [x] `src-tauri/src/main.rs` — creates `Arc<StartupProgress>` in the setup hook, emits `Init` + `Skills`, attaches it to `SidecarManager` before the sidecar auto-start task.
+- [x] `src/stores/startupStore.ts` — Zustand store mirroring the Rust FSM (phase IDs kept in strict sync), subscribes to `startup:progress`, auto-dismisses 600 ms after `ready`.
+- [x] `src/components/startup/StartupOverlay.tsx` + `.css` — full-screen modal: per-phase icons (lucide `Check` / `Loader2` / `Circle`), progress bar, percent + hint footer, Winter-is-Coming palette.
+- [x] `src/App.tsx` — mounts `<StartupOverlay />` at the root of `.app-shell`.
+
+**Phase ordering** (canonical, enforced by `advance()` monotonicity): `Init → Skills → MemoryStarting → VectorDb → MemoryReady → OrchStarting → Routers → Agents → LivingAgents → OrchReady → Workers → Ready`. The `Workers` transition is squeezed in inside `mark_running()` between `OrchReady` and `Ready` to avoid the scheduler auto-start (fixed +500 ms delay) racing ahead of the sidecar boot (~15 s).
+
+#### Part 2 — Clean-name agent IDs (no UUID)
+
+- [x] `submodules/core-orchestrator/api_gateway/modules/agents/service.py::generate_agent_id` — returns the clean slug only (no ULID suffix). Docstring explains delegation of duplicate prevention to `AgentRegistry.register` (in-memory uniqueness) and `AgentConfigWriter.config_exists` (disk-level uniqueness).
+- [x] `submodules/core-orchestrator/api_gateway/modules/agents/service.py::AgentService.create_agent` — clearer error message referencing the update/delete endpoints on collision.
+- [x] `submodules/core-orchestrator/scripts/migrate_to_clean_ids.py` — one-time legacy-file consolidation: for each known fleet worker (`supervisor`, `qc-agent`, `worker-*`), rename the newest UUID-suffixed YAML to `{worker}.yaml` (rewriting its inner `id` field) and archive the rest to `config/agents/.archive/`. Supports `--dry-run`.
+
+**Verified-correct unchanged code paths**:
+- `src/airs/config/auto_register.py::register_agent_metadata_only` already short-circuits on `AgentRegistry.get_agent(config.id)` — now matches exactly because `config.id` is a clean slug.
+- `src/airs/agent/registry.py::register` already raises `ValueError` on duplicate names — this is the primary duplicate-prevention mechanism for the no-UUID scheme.
+- `src-tauri/src/sidecar/client.rs::find_or_create_agent` exact-name match (`if name == slug`) now succeeds on first restart after migration.
+
+#### User action required
+
+```powershell
+cd autodev/submodules/core-orchestrator
+uv run python scripts/migrate_to_clean_ids.py --dry-run   # preview
+uv run python scripts/migrate_to_clean_ids.py             # execute
+# Then restart AutoDev; the overlay walks through all 12 phases.
+```
+
+#### Verification
+
+- `cargo check --lib` → 0 errors, 2 pre-existing warnings (`grep.rs`, `git/repo.rs`), unrelated.
+- `npx tsc --noEmit` → 3 pre-existing errors (`SkillCreatorModal`, `SkillsPalette`, `hookStore`), unrelated; no new errors introduced.
 
 ---
 

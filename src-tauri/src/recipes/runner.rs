@@ -64,6 +64,31 @@ impl RecipeRunner {
     /// Execute a recipe for the given worker slug.
     /// Updates worker status in DB: idle → working → idle/error.
     pub async fn run_recipe(&self, recipe: &Recipe, worker_slug: &str) -> Result<()> {
+        // ── Deterministic no-op short-circuit ──────────────────────────────────
+        //
+        // For "worker-*" slugs (backend / frontend / platform / mcp / cleanup),
+        // the recipe is meaningful ONLY when there is an actual task on the
+        // board assigned to this worker in a runnable state
+        // (`assigned` or `in_progress`). Historically the LLM was spun up on
+        // every cron tick regardless and — finding an empty board — would
+        // hallucinate work, drift through random files, and churn until the
+        // hard `MAX_TOOL_TURNS` cap (20). That produced the "18 loops for a
+        // simple markdown" behaviour seen in `logs/demo.txt`.
+        //
+        // Supervisor (assigns work, scans stalled tasks) and QC agent
+        // (reviews qc_review tasks) must still run every tick because they
+        // operate on the board globally, so they are exempt from this gate.
+        if worker_slug.starts_with("worker-") {
+            if !Self::has_runnable_task(worker_slug) {
+                info!(
+                    "[RecipeRunner] worker '{}' has no assigned/in_progress tasks — skipping tick",
+                    worker_slug
+                );
+                self.set_worker_status(worker_slug, "idle");
+                return Ok(());
+            }
+        }
+
         // ── Model resolution (shared by both modes) ───────────────────────────
         // Priority: worker.model (DB) > recipe.model (YAML) > active_model > default.
         let worker_model: Option<String> = WorkersDb::open().ok()
@@ -81,21 +106,31 @@ impl RecipeRunner {
         // Ephemeral session id — used by Mode 1 if reached
         let session_id = format!("recipe-{}-{}", worker_slug, Uuid::new_v4());
 
-        // Working directory for recipe agents: ~/.autodev/agents/<slug>/
-        // This MUST NOT be the workspace — recipe agents write ephemeral helper files
-        // (Python scripts, logs, markdown) and those must never pollute the project root.
-        // Each worker gets its own sandbox directory inside ~/.autodev/agents/.
-        let working_dir = crate::db::autodev_dir()
-            .map(|p| {
-                let agent_dir = p.join("agents").join(worker_slug);
-                let _ = std::fs::create_dir_all(&agent_dir);
-                agent_dir.to_string_lossy().into_owned()
-            })
-            .unwrap_or_else(|_| {
-                std::env::var("USERPROFILE")
-                    .or_else(|_| std::env::var("HOME"))
-                    .unwrap_or_else(|_| ".".to_string())
-            });
+        // Working directory for recipe agents.
+        //
+        // Priority:
+        //   1. Configured workspace dir (set via Settings → Workspace Folder).
+        //      This is the SAME root the Personal Assistant uses, so the worker
+        //      fleet and the PA share a consistent view of the project.
+        //   2. Fallback sandbox ~/.autodev/agents/<slug>/ when no workspace is set,
+        //      so background ticks can still run on a fresh install without
+        //      polluting a random cwd.
+        let workspace_dir = crate::commands::workspace_commands::load_workspace_dir();
+        let working_dir = if !workspace_dir.trim().is_empty() {
+            workspace_dir
+        } else {
+            crate::db::autodev_dir()
+                .map(|p| {
+                    let agent_dir = p.join("agents").join(worker_slug);
+                    let _ = std::fs::create_dir_all(&agent_dir);
+                    agent_dir.to_string_lossy().into_owned()
+                })
+                .unwrap_or_else(|_| {
+                    std::env::var("USERPROFILE")
+                        .or_else(|_| std::env::var("HOME"))
+                        .unwrap_or_else(|_| ".".to_string())
+                })
+        };
 
         // ── Mode 2: core-orchestrator LivingAgent (primary path) ───────────────
         // Check health before every tick — fast (3 s timeout, localhost).
@@ -106,8 +141,24 @@ impl RecipeRunner {
 
             match self.orch_client.ensure_agent(worker_slug, &model).await {
                 Ok(agent_id) => {
+                    // Prepend the active workspace dir to the instructions so the
+                    // LivingAgent's file tools resolve paths against the same root
+                    // the Personal Assistant uses. Without this, Mode 2 workers
+                    // operate on whatever cwd core-orchestrator was launched in
+                    // and ignore the user's configured workspace.
+                    let instructions_with_ws = format!(
+                        "[AUTODEV WORKSPACE]\nworking_dir: {working_dir}\n\
+                         All file operations (read_file, write_file, bash, glob, grep) \
+                         MUST be resolved relative to this absolute path unless the user \
+                         provides another absolute path.\n\n{}",
+                        recipe.instructions
+                    );
+                    info!(
+                        "[RecipeRunner] worker '{}' workspace={}",
+                        worker_slug, working_dir
+                    );
                     match self.orch_client
-                        .invoke_worker(&agent_id, &recipe.instructions, RECIPE_TRIGGER)
+                        .invoke_worker(&agent_id, &instructions_with_ws, RECIPE_TRIGGER)
                         .await
                     {
                         Ok(response) => {
@@ -117,6 +168,14 @@ impl RecipeRunner {
                                 response.trim()
                             );
                             self.set_worker_status(worker_slug, "idle");
+                            // Same stranded-task safety net as the Mode 1 path —
+                            // see the long comment at the reconcile call below.
+                            // Without this, a Mode 2 LivingAgent that finishes
+                            // its tick without moving the task past `in_progress`
+                            // would leave the task stranded forever.
+                            if worker_slug.starts_with("worker-") {
+                                Self::reconcile_stranded_task(worker_slug);
+                            }
                             return Ok(());
                         }
                         Err(e) => {
@@ -206,7 +265,90 @@ impl RecipeRunner {
             }
         }
 
+        // ── Post-session reconciliation ────────────────────────────────────────
+        //
+        // If a session ends (naturally, cancelled, or at MAX_TOOL_TURNS) with a
+        // task still in `in_progress` for this worker, that means the worker
+        // did NOT reach an explicit terminal state (qc_review / failed / done).
+        // Left alone, subsequent ticks re-enter the same in_progress task with
+        // a fresh session and the LLM redoes work it already completed —
+        // observed at 2026-04-20T13:03:41 where worker-backend wrote the file
+        // at turn 5 but dawdled on bash verifications until hitting max_turns.
+        //
+        // Auto-promote stranded in_progress tasks to `qc_review`. QC will then
+        // verify whether the work product exists. If it does → mark done.
+        // If not → bounce back to `assigned` for a retry. Either way the task
+        // escapes the in_progress limbo and the board keeps moving.
+        if worker_slug.starts_with("worker-") {
+            Self::reconcile_stranded_task(worker_slug);
+        }
+
         result.map(|_| ())
+    }
+
+    /// If a task remains `in_progress` for this worker after the session
+    /// ends, promote it to `qc_review` so QC can verify work state. See
+    /// comment at the call site for motivation.
+    fn reconcile_stranded_task(worker_slug: &str) {
+        let db = match crate::db::tasks::TasksDb::open() {
+            Ok(db) => db,
+            Err(_) => return,
+        };
+        let tasks = match db.list(None) {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        for t in tasks {
+            let is_mine = t.assigned_worker.as_deref() == Some(worker_slug);
+            let is_in_progress = matches!(t.status, crate::db::tasks::TaskStatus::InProgress);
+            if is_mine && is_in_progress {
+                match db.update_status(t.id, "qc_review", Some(worker_slug)) {
+                    Ok(()) => {
+                        info!(
+                            "[RecipeRunner] Reconciled stranded in_progress task #{} → qc_review \
+                             (worker '{}' session ended without explicit completion)",
+                            t.id, worker_slug
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            "[RecipeRunner] Failed to reconcile stranded task #{}: {e}",
+                            t.id
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Returns true when the local task board has at least one task assigned to
+    /// `worker_slug` in a runnable state (`assigned` or `in_progress`).
+    ///
+    /// Used by `run_recipe` to skip LLM invocation on empty ticks so workers
+    /// can't fabricate work when there is literally nothing queued. Reads
+    /// `~/.autodev/tasks.db` via `TasksDb`; any DB failure is treated as
+    /// "no work" (fail-safe: never spin up the LLM when we can't confirm work
+    /// exists).
+    fn has_runnable_task(worker_slug: &str) -> bool {
+        let db = match crate::db::tasks::TasksDb::open() {
+            Ok(db) => db,
+            Err(e) => {
+                warn!("[RecipeRunner] tasks.db open failed ({e}); treating as no-work");
+                return false;
+            }
+        };
+        let all = match db.list(None) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("[RecipeRunner] tasks.db list failed ({e}); treating as no-work");
+                return false;
+            }
+        };
+        all.iter().any(|t| {
+            t.assigned_worker.as_deref() == Some(worker_slug)
+                && matches!(t.status, crate::db::tasks::TaskStatus::Assigned
+                                    | crate::db::tasks::TaskStatus::InProgress)
+        })
     }
 
     fn set_worker_status(&self, slug: &str, status: &str) {

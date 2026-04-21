@@ -13,6 +13,7 @@ pub mod glob;
 pub mod create_task;
 pub mod list_tasks_tool;
 pub mod update_task_status_tool;
+pub mod assign_task;
 
 use std::sync::Arc;
 use super::{PAMode, tool_registry::ToolRegistry};
@@ -44,6 +45,7 @@ pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
             // Task board tools — recipe agents (Supervisor, Workers) use these directly
             registry.register(Arc::new(list_tasks_tool::ListTasksTool));
             registry.register(Arc::new(update_task_status_tool::UpdateTaskStatusTool));
+            registry.register(Arc::new(assign_task::AssignTaskTool));
             registry.register(Arc::new(create_task::CreateTaskTool));
         }
         PAMode::Delegate => {

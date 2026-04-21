@@ -9,6 +9,7 @@ use autodev_lib::recipes::runner::RecipeRunner;
 use autodev_lib::recipes::scheduler::RecipeScheduler;
 use autodev_lib::sidecar::SidecarManager;
 use autodev_lib::sidecar::client::OrchestratorClient;
+use autodev_lib::sidecar::startup_progress::{StartupPhase, StartupProgress};
 use autodev_lib::skills::SkillRegistry;
 
 fn main() {
@@ -71,6 +72,30 @@ fn main() {
             .manage(orch_client)
             .manage(skill_registry_managed)
             .setup(move |app| {
+                // Startup progress state machine — drives the loading overlay.
+                // Attached to SidecarManager so spawn/health transitions + log
+                // lines from both Python sidecars all feed the same FSM.
+                let progress = Arc::new(StartupProgress::new(app.handle().clone()));
+                progress.advance(StartupPhase::Init);
+                // Skills were already loaded synchronously above — emit now that
+                // the AppHandle is available.
+                progress.advance(StartupPhase::Skills);
+                sidecar_mgr_for_setup.set_progress(progress.clone());
+                // Expose progress as Tauri state so `get_startup_phase` can
+                // serve a snapshot on demand. This is the recovery path for
+                // events emitted before the React listener registered (Tauri
+                // does NOT replay missed events).
+                app.manage(progress.clone());
+
+                // Read the on-disk Demo Mode flag once. Used to decide
+                // whether to spawn the Python sidecars below.
+                let runtime_cfg = autodev_lib::runtime_config::read();
+                if runtime_cfg.skip_sidecars {
+                    eprintln!("[AutoDev] Demo Mode active — sidecars will NOT be started.");
+                    eprintln!("[AutoDev] Chat + Worker fleet still work via the native AgentEngine.");
+                    eprintln!("[AutoDev] To re-enable sidecars: Settings → Demo Mode → off, then restart.");
+                }
+
                 // Build RecipeRunner + RecipeScheduler now that we have AppHandle
                 let runner = Arc::new(RecipeRunner::new(
                     app.handle().clone(),
@@ -83,10 +108,39 @@ fn main() {
 
                 // Auto-start the sidecar fleet on app launch.
                 // Non-blocking — fires and forgets on a background task.
-                let orch_probe  = orch_client_for_setup;
-                let sidecar_ref = sidecar_mgr_for_setup;
+                // Skipped entirely in Demo Mode; in that case we fast-forward
+                // the StartupProgress FSM straight to Ready so the loading
+                // overlay dismisses cleanly.
+                let orch_probe        = orch_client_for_setup;
+                let sidecar_ref       = sidecar_mgr_for_setup;
+                let skip_sidecars     = runtime_cfg.skip_sidecars;
+                let progress_for_demo = progress.clone();
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+                    if skip_sidecars {
+                        // Demo Mode: walk the FSM through every "would have"
+                        // phase so the UI shows a quick scripted boot rather
+                        // than jumping straight to Ready. Each step is < 200ms
+                        // so total perceived boot time is ~1.4s.
+                        for phase in [
+                            StartupPhase::MemoryStarting,
+                            StartupPhase::VectorDb,
+                            StartupPhase::MemoryReady,
+                            StartupPhase::OrchStarting,
+                            StartupPhase::Routers,
+                            StartupPhase::Agents,
+                            StartupPhase::LivingAgents,
+                            StartupPhase::OrchReady,
+                            StartupPhase::Workers,
+                            StartupPhase::Ready,
+                        ] {
+                            progress_for_demo.advance(phase);
+                            tokio::time::sleep(std::time::Duration::from_millis(140)).await;
+                        }
+                        eprintln!("[AutoDev] Demo Mode boot complete (sidecars skipped).");
+                        return;
+                    }
 
                     // ── Phase 1: Check if sidecars are already running externally ──────────
                     let mem_already_up = orch_probe.is_memory_healthy().await;
@@ -150,8 +204,14 @@ fn main() {
                     }
                 });
 
-                // Auto-start every worker that has a recipe bound and is not paused/deleted
-                // Deferred via async_runtime::spawn to ensure the Tokio runtime is active
+                // Auto-start every worker that has a recipe bound and is not paused/deleted.
+                // Deferred via async_runtime::spawn to ensure the Tokio runtime is active.
+                // Note: the StartupPhase::Workers transition is NOT emitted from here
+                // because the scheduler spawn fires at a fixed +500ms delay, while the
+                // sidecar fleet takes ~15s to become healthy; advancing to Workers too
+                // early would lock out the later MemoryReady/OrchReady transitions
+                // (advance() is monotonic). Workers is emitted from the sidecar
+                // auto-start path once both sidecars are healthy.
                 let scheduler_clone = scheduler.clone();
                 tauri::async_runtime::spawn(async move {
                     // Small delay to ensure the Tauri event loop is fully running

@@ -18,6 +18,7 @@ pub mod skills;
 pub mod hooks;
 pub mod ide;
 pub mod git;
+pub mod runtime_config;
 
 // Register all Tauri commands on the builder from within the lib crate.
 // generate_handler! must run here so the __cmd__* macros (produced by
@@ -80,6 +81,7 @@ pub fn register_commands(
             create_checkpoint, restore_checkpoint, list_checkpoints,
             delete_checkpoint, compare_checkpoints,
         },
+        startup_commands::{get_startup_phase, get_runtime_config, set_skip_sidecars},
     };
     builder.invoke_handler(tauri::generate_handler![
         // Agent
@@ -227,5 +229,9 @@ pub fn register_commands(
         list_checkpoints,
         delete_checkpoint,
         compare_checkpoints,
+        // Startup overlay + Demo Mode (Phase 3.3.1)
+        get_startup_phase,
+        get_runtime_config,
+        set_skip_sidecars,
     ])
 }

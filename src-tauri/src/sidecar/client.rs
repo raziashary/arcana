@@ -44,7 +44,12 @@ pub struct OrchestratorClient {
     base_url:    String,
     api_key:     String,
     jwt_token:   Mutex<Option<String>>,           // cached JWT token from service-login
-    agent_cache: Mutex<HashMap<String, String>>,  // worker_slug → core-orchestrator agent_id
+    // worker_slug → (core-orchestrator agent_id, last-applied llm_model).
+    // The model component lets us detect when the Tauri-side settings
+    // (or per-worker override in workers.db) have changed so we can
+    // push the new model into the agent's YAML config before the next
+    // invoke, keeping Mode 2 in sync with Mode 1 without restart.
+    agent_cache: Mutex<HashMap<String, (String, String)>>,
 }
 
 impl OrchestratorClient {
@@ -182,20 +187,66 @@ impl OrchestratorClient {
     /// change across deployments and the AgentUpdate API does not expose system_prompt.
     /// Instead, instructions are injected per-tick in invoke_worker's prompt body.
     pub async fn ensure_agent(&self, slug: &str, model: &str) -> Result<String> {
-        // Fast-path: cached agent_id from a previous tick
+        // Fast-path: cached agent_id from a previous tick, but only if the
+        // caller-requested model still matches what we last pushed to the
+        // orchestrator. If it diverges (user changed the fleet model in
+        // Settings, or a per-worker override was written to workers.db),
+        // fall through to the slow-path so we can PUT /config and rewrite
+        // the agent's YAML before the next invoke.
         {
-            if let Some(id) = self.agent_cache.lock().unwrap().get(slug).cloned() {
-                debug!("[OrchestratorClient] cache hit '{slug}' → {id}");
-                return Ok(id);
+            let cache = self.agent_cache.lock().unwrap();
+            if let Some((id, applied_model)) = cache.get(slug) {
+                if applied_model == model {
+                    debug!("[OrchestratorClient] cache hit '{slug}' → {id} (model='{model}')");
+                    return Ok(id.clone());
+                }
+                debug!(
+                    "[OrchestratorClient] cache stale for '{slug}': applied='{applied_model}' \
+                     requested='{model}' — will reconcile YAML"
+                );
             }
         }
 
-        // Slow-path: list agents, look for matching name
+        // Slow-path: find-or-create, then reconcile llm_model if needed.
         let id = self.find_or_create_agent(slug, model).await?;
 
-        // Write back into cache (hold lock only briefly — not across await)
-        self.agent_cache.lock().unwrap().insert(slug.to_string(), id.clone());
+        // Cache (id, model) as the last-applied tuple. On the next tick
+        // the fast-path above short-circuits unless the model changes again.
+        self.agent_cache
+            .lock()
+            .unwrap()
+            .insert(slug.to_string(), (id.clone(), model.to_string()));
         Ok(id)
+    }
+
+    /// Push a `PUT /api/agents/{id}/config` with the new llm_model so the
+    /// agent's YAML on disk (config/agents/{slug}.yaml) is rewritten and the
+    /// in-memory LivingAgent is reloaded. This is the only supported way to
+    /// keep Mode 2 fleet agents pinned to the user-selected model without
+    /// restarting the core-orchestrator sidecar.
+    async fn update_agent_model(&self, agent_id: &str, model: &str) -> Result<()> {
+        self.ensure_authenticated().await?;
+        let url = format!("{}/api/agents/{}/config", self.base_url, agent_id);
+        let body = serde_json::json!({ "llm_model": model });
+
+        let resp = self.client
+            .put(&url)
+            .header("Authorization", self.get_auth_header())
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AutoDevError::Agent(format!("PUT /api/agents/{agent_id}/config: {e}")))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text   = resp.text().await.unwrap_or_default();
+            return Err(AutoDevError::Agent(format!(
+                "agent config update failed (HTTP {status}): {}",
+                &text[..text.len().min(400)]
+            )));
+        }
+        debug!("[OrchestratorClient] pushed llm_model='{model}' to agent {agent_id}");
+        Ok(())
     }
 
     async fn find_or_create_agent(&self, slug: &str, model: &str) -> Result<String> {
@@ -221,7 +272,29 @@ impl OrchestratorClient {
                 let name = agent["name"].as_str().unwrap_or("");
                 if name == slug {
                     if let Some(id) = agent["id"].as_str() {
-                        debug!("[OrchestratorClient] found existing agent '{slug}' → {id}");
+                        // Reconcile the agent's llm_model against what the
+                        // caller wants (e.g. user changed the fleet model
+                        // in Settings). Writing via /config rewrites the
+                        // YAML on disk and reloads the LivingAgent, so
+                        // subsequent invokes route through the new model
+                        // without restarting core-orchestrator.
+                        let current_model = agent["llm_model"].as_str().unwrap_or("");
+                        if current_model != model {
+                            debug!(
+                                "[OrchestratorClient] agent '{slug}' model drift \
+                                 '{current_model}' → '{model}' — updating YAML"
+                            );
+                            if let Err(e) = self.update_agent_model(id, model).await {
+                                // Non-fatal: log and continue with the old model
+                                // rather than blocking the recipe tick.
+                                tracing::warn!(
+                                    "[OrchestratorClient] failed to push model update \
+                                     for '{slug}' ({id}): {e}"
+                                );
+                            }
+                        } else {
+                            debug!("[OrchestratorClient] found existing agent '{slug}' → {id}");
+                        }
                         return Ok(id.to_string());
                     }
                 }
@@ -260,7 +333,13 @@ impl OrchestratorClient {
             "system_prompt": system_prompt,
             "mcp_servers":   [],
             "internal_tools": [],
+            // Tools bridged from the Rust host into the core-orchestrator
+            // LivingAgent (Mode 2). These must mirror what's registered in
+            // `agent/builtin_tools/mod.rs` for Mode 1, otherwise fleet agents
+            // can only do file ops in Mode 2 and cannot touch the task board —
+            // which silently breaks every supervisor/worker/qc recipe.
             "autodev_tools": [
+                // File / execution
                 "read_file__autodev",
                 "write_file__autodev",
                 "edit_file__autodev",
@@ -268,7 +347,13 @@ impl OrchestratorClient {
                 "list_directory__autodev",
                 "grep__autodev",
                 "glob__autodev",
+                // Worker registry
                 "list_workers__autodev",
+                // Task board — required for supervisor, workers, qc-agent
+                "list_tasks__autodev",
+                "update_task_status__autodev",
+                "assign_task__autodev",
+                "create_task__autodev",
             ],
             "capabilities":  ["task_management", "code_generation", "autodev_fleet"],
         });

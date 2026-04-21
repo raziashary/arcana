@@ -20,3 +20,4 @@ pub mod skill_commands;
 pub mod hook_commands;
 pub mod ide_commands;
 pub mod git_commands;
+pub mod startup_commands;

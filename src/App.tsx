@@ -13,6 +13,7 @@ import IDETab      from './tabs/IDE'
 import RecipesTab  from './tabs/Recipes'
 import SettingsTab from './tabs/Settings'
 import LogsTab     from './tabs/Logs'
+import StartupOverlay from './components/startup/StartupOverlay'
 import { useSettingsStore } from './stores/settingsStore'
 import { useCostStore }     from './stores/costStore'
 import { useUiStore }       from './stores/uiStore'
@@ -42,6 +43,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      <StartupOverlay />
       <TitleBar />
       <TabBar
         tabs={TABS}

@@ -18,15 +18,17 @@
 // through the Rust tracing subscriber (visible in the main app log).
 
 pub mod client;
+pub mod startup_progress;
 
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tracing::{error, info, warn};
 
 use crate::errors::{AutoDevError, Result};
+use startup_progress::{StartupPhase, StartupProgress};
 
 // ─── SidecarStatus ────────────────────────────────────────────────────────────
 
@@ -73,10 +75,14 @@ fn logs_dir() -> PathBuf {
 /// Spawns a background thread that reads lines from `reader`, writes each line
 /// to `log_file` (appended), and also emits them via the tracing subscriber so
 /// they appear in the AutoDev Logs tab alongside Rust log lines.
+///
+/// If `progress` is provided, each line is also fed through the startup-phase
+/// scanner so the loading UI advances as Python sidecars hit their milestones.
 fn spawn_log_router<R: std::io::Read + Send + 'static>(
     reader: R,
     log_file: PathBuf,
     prefix: &'static str,
+    progress: Option<Arc<StartupProgress>>,
 ) {
     std::thread::spawn(move || {
         let mut file = match fs::OpenOptions::new()
@@ -96,6 +102,9 @@ fn spawn_log_router<R: std::io::Read + Send + 'static>(
                 Ok(l) => {
                     info!("[{prefix}] {l}");
                     let _ = writeln!(file, "{l}");
+                    if let Some(p) = progress.as_ref() {
+                        p.scan_line(prefix, &l);
+                    }
                 }
                 Err(_) => break,
             }
@@ -124,6 +133,9 @@ pub struct SidecarManager {
     // memory-mcp-server (port 8000) — must be running before core-orchestrator
     memory_process: Mutex<Option<Child>>,
     memory_status:  Mutex<SidecarStatus>,
+    // Startup phase tracker — set once the Tauri AppHandle is available
+    // (see main.rs setup hook). Log router + status transitions feed this.
+    progress:       Mutex<Option<Arc<StartupProgress>>>,
 }
 
 impl SidecarManager {
@@ -133,7 +145,19 @@ impl SidecarManager {
             orch_status:    Mutex::new(SidecarStatus::Stopped),
             memory_process: Mutex::new(None),
             memory_status:  Mutex::new(SidecarStatus::Stopped),
+            progress:       Mutex::new(None),
         }
+    }
+
+    /// Attach the startup-progress tracker. Called once from main.rs after the
+    /// Tauri AppHandle is available. Safe to call multiple times — replaces the
+    /// previous tracker.
+    pub fn set_progress(&self, progress: Arc<StartupProgress>) {
+        *self.progress.lock().unwrap() = Some(progress);
+    }
+
+    fn progress(&self) -> Option<Arc<StartupProgress>> {
+        self.progress.lock().unwrap().clone()
     }
 
     // ─── memory-mcp-server lifecycle ───────────────────────────────────────────
@@ -150,6 +174,9 @@ impl SidecarManager {
         }
         *self.memory_status.lock().unwrap() = SidecarStatus::Starting;
         info!("[SidecarManager] Spawning memory-mcp-server from: {}", cwd.display());
+        if let Some(p) = self.progress() {
+            p.advance(StartupPhase::MemoryStarting);
+        }
 
         let mut child = Command::new("uv")
             .args(["run", "python", "main.py", "--mode", "dev"])
@@ -164,11 +191,12 @@ impl SidecarManager {
             ))?;
 
         let log_dir = logs_dir();
+        let progress = self.progress();
         if let Some(stdout) = child.stdout.take() {
-            spawn_log_router(stdout, log_dir.join("memory-mcp.log"), "memory-mcp");
+            spawn_log_router(stdout, log_dir.join("memory-mcp.log"), "memory-mcp", progress.clone());
         }
         if let Some(stderr) = child.stderr.take() {
-            spawn_log_router(stderr, log_dir.join("memory-mcp.log"), "memory-mcp ERR");
+            spawn_log_router(stderr, log_dir.join("memory-mcp.log"), "memory-mcp ERR", progress);
         }
 
         *self.memory_process.lock().unwrap() = Some(child);
@@ -189,6 +217,9 @@ impl SidecarManager {
     pub fn mark_memory_running(&self) {
         *self.memory_status.lock().unwrap() = SidecarStatus::Running;
         info!("[SidecarManager] memory-mcp-server is ready on :8000");
+        if let Some(p) = self.progress() {
+            p.advance(StartupPhase::MemoryReady);
+        }
     }
 
     /// Mark memory-mcp-server as errored.
@@ -219,6 +250,9 @@ impl SidecarManager {
         }
         *self.orch_status.lock().unwrap() = SidecarStatus::Starting;
         info!("[SidecarManager] Spawning core-orchestrator from: {}", cwd.display());
+        if let Some(p) = self.progress() {
+            p.advance(StartupPhase::OrchStarting);
+        }
 
         let mut child = Command::new("uv")
             .args([
@@ -239,11 +273,12 @@ impl SidecarManager {
             ))?;
 
         let log_dir = logs_dir();
+        let progress = self.progress();
         if let Some(stdout) = child.stdout.take() {
-            spawn_log_router(stdout, log_dir.join("core-orchestrator.log"), "core-orch");
+            spawn_log_router(stdout, log_dir.join("core-orchestrator.log"), "core-orch", progress.clone());
         }
         if let Some(stderr) = child.stderr.take() {
-            spawn_log_router(stderr, log_dir.join("core-orchestrator.log"), "core-orch ERR");
+            spawn_log_router(stderr, log_dir.join("core-orchestrator.log"), "core-orch ERR", progress);
         }
 
         *self.orch_process.lock().unwrap() = Some(child);
@@ -264,6 +299,17 @@ impl SidecarManager {
     pub fn mark_running(&self) {
         *self.orch_status.lock().unwrap() = SidecarStatus::Running;
         info!("[SidecarManager] core-orchestrator is ready and accepting requests on :4000");
+        if let Some(p) = self.progress() {
+            p.advance(StartupPhase::OrchReady);
+            // Fleet is ready only when BOTH sidecars are healthy. The Workers
+            // transition is squeezed in between OrchReady and Ready so the
+            // loading UI shows a final "Starting worker fleet…" step instead
+            // of jumping straight to ready.
+            if self.fleet_is_ready() {
+                p.advance(StartupPhase::Workers);
+                p.advance(StartupPhase::Ready);
+            }
+        }
     }
 
     /// Mark core-orchestrator as errored.
