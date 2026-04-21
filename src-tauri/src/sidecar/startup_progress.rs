@@ -57,8 +57,10 @@ pub enum StartupPhase {
     OrchReady       = 9,
     /// RecipeScheduler has started the worker fleet.
     Workers         = 10,
+    /// All 7 fleet agents verified registered in core-orchestrator.
+    FleetReady      = 11,
     /// Both sidecars healthy, fleet warm — app is usable.
-    Ready           = 11,
+    Ready           = 12,
 }
 
 impl StartupPhase {
@@ -77,6 +79,7 @@ impl StartupPhase {
             Self::LivingAgents   => "living_agents",
             Self::OrchReady      => "orch_ready",
             Self::Workers        => "workers",
+            Self::FleetReady     => "fleet_ready",
             Self::Ready          => "ready",
         }
     }
@@ -95,6 +98,7 @@ impl StartupPhase {
             Self::LivingAgents   => "Creating LivingAgents…",
             Self::OrchReady      => "Core Orchestrator ready",
             Self::Workers        => "Starting worker fleet…",
+            Self::FleetReady     => "Verifying fleet agents…",
             Self::Ready          => "AutoDev is ready",
         }
     }

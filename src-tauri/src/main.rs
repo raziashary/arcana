@@ -133,6 +133,7 @@ fn main() {
                             StartupPhase::LivingAgents,
                             StartupPhase::OrchReady,
                             StartupPhase::Workers,
+                            StartupPhase::FleetReady,
                             StartupPhase::Ready,
                         ] {
                             progress_for_demo.advance(phase);
@@ -201,6 +202,40 @@ fn main() {
                                 eprintln!("[AutoDev] Could not resolve core-orchestrator path; set AUTODEV_SIDECAR_PATH");
                             }
                         }
+
+                        // ── Phase 3: Fleet verification ─────────────────────────────────────────
+                        // After both sidecars are healthy, wait for RecipeScheduler to start
+                        // workers and then verify all 7 fleet agents are registered.
+                        let progress_fleet = progress.clone();
+                        let orch_client_fleet = orch_probe.clone();
+                        tauri::async_runtime::spawn(async move {
+                            // Give RecipeScheduler time to start workers (+3s after orch ready)
+                            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                            progress_fleet.advance(StartupPhase::Workers);
+
+                            // Poll fleet verification for up to 60 seconds
+                            let mut verified = false;
+                            for attempt in 1..=60u32 {
+                                let (ready, missing) = orch_client_fleet.verify_fleet_ready().await;
+                                if ready {
+                                    verified = true;
+                                    eprintln!("[AutoDev] Fleet verification complete — all 7 agents registered after {attempt}s");
+                                    break;
+                                }
+                                if attempt % 10 == 0 {
+                                    eprintln!("[AutoDev] Fleet verification waiting — missing: {:?}", missing);
+                                }
+                                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                            }
+
+                            if !verified {
+                                let (_, missing) = orch_client_fleet.verify_fleet_ready().await;
+                                eprintln!("[AutoDev] Fleet verification timeout — proceeding with missing agents: {:?}", missing);
+                            }
+
+                            progress_fleet.advance(StartupPhase::FleetReady);
+                            progress_fleet.advance(StartupPhase::Ready);
+                        });
                     }
                 });
 

@@ -64,6 +64,11 @@ impl RecipeRunner {
     /// Execute a recipe for the given worker slug.
     /// Updates worker status in DB: idle → working → idle/error.
     pub async fn run_recipe(&self, recipe: &Recipe, worker_slug: &str) -> Result<()> {
+        // ── Mode 2 health check (needed for dispatch routing decision) ──────────
+        // We check orchestrator health early because it determines whether we
+        // apply the "no tasks" short-circuit below.
+        let orch_healthy = self.orch_client.is_healthy().await;
+
         // ── Deterministic no-op short-circuit ──────────────────────────────────
         //
         // For "worker-*" slugs (backend / frontend / platform / mcp / cleanup),
@@ -75,13 +80,20 @@ impl RecipeRunner {
         // hard `MAX_TOOL_TURNS` cap (20). That produced the "18 loops for a
         // simple markdown" behaviour seen in `logs/demo.txt`.
         //
-        // Supervisor (assigns work, scans stalled tasks) and QC agent
-        // (reviews qc_review tasks) must still run every tick because they
-        // operate on the board globally, so they are exempt from this gate.
-        if worker_slug.starts_with("worker-") {
+        // CRITICAL FIX: Only apply this short-circuit when running in Mode 1
+        // (Rust AgentEngine). When Mode 2 (orchestrator) is healthy, we ALWAYS
+        // dispatch through the LivingAgent so that:
+        //   1. ensure_agent() is called, creating the YAML config if missing
+        //   2. The agent's idle handling ("Board clean — idle.") runs
+        //   3. All fleet workers have consistent Mode 2 behavior
+        //
+        // Without this exception, workers with no tasks never reach
+        // ensure_agent(), so their YAMLs are never created and they appear
+        // "missing" from the fleet even though they're scheduled.
+        if !orch_healthy && worker_slug.starts_with("worker-") {
             if !Self::has_runnable_task(worker_slug) {
                 info!(
-                    "[RecipeRunner] worker '{}' has no assigned/in_progress tasks — skipping tick",
+                    "[RecipeRunner] worker '{}' has no assigned/in_progress tasks — skipping tick (Mode 1)",
                     worker_slug
                 );
                 self.set_worker_status(worker_slug, "idle");
@@ -133,9 +145,9 @@ impl RecipeRunner {
         };
 
         // ── Mode 2: core-orchestrator LivingAgent (primary path) ───────────────
-        // Check health before every tick — fast (3 s timeout, localhost).
+        // Use the pre-checked health result from earlier in the function.
         // If reachable, dispatch through LivingAgent for FSMs + mem0 + A2A.
-        if self.orch_client.is_healthy().await {
+        if orch_healthy {
             info!("[RecipeRunner] core-orchestrator reachable — dispatching '{}' via LivingAgent", worker_slug);
             self.set_worker_status(worker_slug, "working");
 

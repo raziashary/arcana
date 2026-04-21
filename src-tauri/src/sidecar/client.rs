@@ -138,6 +138,64 @@ impl OrchestratorClient {
             .unwrap_or_default()
     }
 
+    // ─── Fleet Verification ──────────────────────────────────────────────────
+
+    /// Expected fleet agents for a fully-booted AutoDev system.
+    const FLEET_AGENTS: [&'static str; 7] = [
+        "supervisor",
+        "qc-agent",
+        "worker-backend",
+        "worker-frontend",
+        "worker-mcp",
+        "worker-platform",
+        "worker-cleanup",
+    ];
+
+    /// Verify that all 7 fleet agents are registered in core-orchestrator.
+    /// 
+    /// Returns `(true, Vec<agent_name>)` if all agents exist, 
+    /// or `(false, Vec<missing_agent_names>)` if some are missing.
+    /// Used by the startup progress FSM to gate "FleetReady" phase.
+    pub async fn verify_fleet_ready(&self) -> (bool, Vec<String>) {
+        if !self.ensure_authenticated().await.is_ok() {
+            return (false, Self::FLEET_AGENTS.iter().map(|s| s.to_string()).collect());
+        }
+
+        let list_url = format!("{}/api/agents", self.base_url);
+        let list_resp = self.client
+            .get(&list_url)
+            .header("Authorization", self.get_auth_header())
+            .send()
+            .await;
+
+        let agents: Vec<serde_json::Value> = match list_resp {
+            Ok(resp) if resp.status().is_success() => {
+                resp.json().await.unwrap_or_default()
+            }
+            _ => return (false, Self::FLEET_AGENTS.iter().map(|s| s.to_string()).collect()),
+        };
+
+        let registered_names: std::collections::HashSet<String> = agents
+            .iter()
+            .filter_map(|a| a["name"].as_str().map(|s| s.to_string()))
+            .collect();
+
+        let missing: Vec<String> = Self::FLEET_AGENTS
+            .iter()
+            .filter(|&&name| !registered_names.contains(name))
+            .map(|&name| name.to_string())
+            .collect();
+
+        let ready = missing.is_empty();
+        if ready {
+            debug!("[OrchestratorClient] Fleet verification passed — all 7 agents registered");
+        } else {
+            debug!("[OrchestratorClient] Fleet verification pending — missing: {:?}", missing);
+        }
+        
+        (ready, missing)
+    }
+
     // ─── Health ──────────────────────────────────────────────────────────────
 
     /// Returns true if core-orchestrator responds with 2xx within 3 seconds.

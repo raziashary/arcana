@@ -87,6 +87,20 @@ impl RecipeScheduler {
                 );
             }
 
+            // ── IMMEDIATE STARTUP TICK (Fleet Initialization) ─────────────────────
+            // Fire one tick immediately after orchestrator is ready, regardless of
+            // the cron schedule. This ensures all 7 fleet agents create their YAMLs
+            // within seconds of boot, even if their normal schedule is 5 or 10 minutes.
+            // Without this, worker-platform and worker-cleanup would wait 5-10 min
+            // before first registration, breaking first-time user experience.
+            info!("[RecipeScheduler] Firing STARTUP tick for '{}' (immediate registration)", slug_owned);
+            if let Err(e) = runner.run_recipe(&recipe, &slug_owned).await {
+                error!("[RecipeScheduler] Startup tick failed for '{}': {e}", slug_owned);
+                // Non-fatal: continue to cron loop even if startup tick failed
+            }
+
+            // ── CRON SCHEDULE LOOP ───────────────────────────────────────────────
+            // After startup tick, fall back to the worker's configured schedule.
             for next_fire in schedule.upcoming(Utc) {
                 let now      = Utc::now();
                 let wait_dur = (next_fire - now).to_std().unwrap_or_default();

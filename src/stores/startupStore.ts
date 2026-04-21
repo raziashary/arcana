@@ -25,6 +25,7 @@ export type StartupPhaseId =
   | "living_agents"
   | "orch_ready"
   | "workers"
+  | "fleet_ready"
   | "ready";
 
 export interface StartupPhase {
@@ -55,6 +56,7 @@ const PHASE_DEFS: Array<{ id: StartupPhaseId; label: string }> = [
   { id: "living_agents",    label: "Creating LivingAgents…" },
   { id: "orch_ready",       label: "Core Orchestrator ready" },
   { id: "workers",          label: "Starting worker fleet…" },
+  { id: "fleet_ready",      label: "Verifying fleet agents…" },
   { id: "ready",            label: "AutoDev is ready" },
 ];
 
