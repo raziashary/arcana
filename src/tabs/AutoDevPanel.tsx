@@ -137,12 +137,14 @@ function TaskCard({
   task,
   showProgress,
   doneStyle,
+  buildFailedStyle,
   onDelete,
 }: {
-  task:         Task
-  showProgress: boolean
-  doneStyle:    boolean
-  onDelete:     (id: number) => void
+  task:              Task
+  showProgress:      boolean
+  doneStyle:         boolean
+  buildFailedStyle:  boolean
+  onDelete:          (id: number) => void
 }) {
   const [expanded, setExpanded] = useState(false)
 
@@ -173,8 +175,8 @@ function TaskCard({
             {task.title}
           </div>
           {task.assigned_worker && (
-            <div style={{ fontSize: '10px', color: doneStyle ? '#ADDB67' : '#3D5A6E' }}>
-              {doneStyle ? '✓ done' : task.assigned_worker}
+            <div style={{ fontSize: '10px', color: buildFailedStyle ? '#FFCB8B' : (doneStyle ? '#ADDB67' : '#7FDBCA') }}>
+              {buildFailedStyle ? '⚠ build failed' : (doneStyle ? '✓ done' : task.assigned_worker)}
             </div>
           )}
           {showProgress && (
@@ -244,9 +246,6 @@ function KanbanColumn({
   tasks:    Task[]
   onDelete: (id: number) => void
 }) {
-  const showProgress = colId === 'in_progress'
-  const doneStyle    = colId === 'done_today'
-
   return (
     <div
       style={{
@@ -295,15 +294,21 @@ function KanbanColumn({
             empty
           </div>
         ) : (
-          tasks.map(task => (
-            <TaskCard
-              key={task.id}
-              task={task}
-              showProgress={showProgress}
-              doneStyle={doneStyle}
-              onDelete={onDelete}
-            />
-          ))
+          tasks.map(task => {
+            const showProgress = colId === 'in_progress'
+            const doneStyle = colId === 'done_today' && task.status === 'done'
+            const buildFailedStyle = colId === 'done_today' && task.status === 'build_failed'
+            return (
+              <TaskCard
+                key={task.id}
+                task={task}
+                showProgress={showProgress}
+                doneStyle={doneStyle}
+                buildFailedStyle={buildFailedStyle}
+                onDelete={onDelete}
+              />
+            )
+          })
         )}
       </div>
     </div>
@@ -460,7 +465,8 @@ export default function AutoDevTab() {
   const qcTasks        = tasks.filter(t => t.status === 'qc_review')
   const doneTodayTasks = tasks.filter(t =>
     (t.status === 'done' && isToday(t.completed_at)) ||
-    (t.status === 'failed' && isToday(t.updated_at))
+    (t.status === 'failed' && isToday(t.updated_at)) ||
+    (t.status === 'build_failed' && isToday(t.updated_at))
   )
 
   const COLS = [

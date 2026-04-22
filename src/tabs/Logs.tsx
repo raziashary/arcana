@@ -2,7 +2,7 @@
 // Auto-refreshes every 3 seconds. Lines colour-coded by level.
 // All log events from Rust tracing (INFO/WARN/ERROR/DEBUG) appear here.
 //
-// Truncation: `read_log_file` returns only the last 10 000 lines by default.
+// Truncation: `read_log_file` returns only the last 3 000 lines by default.
 // A banner appears at the top when a log file exceeds that limit, offering
 // "Download full log" which calls `read_log_file_full` over a separate
 // command. This keeps the IPC payload bounded and the UI responsive even
@@ -97,7 +97,7 @@ export default function LogsTab() {
     try {
       const result = await invoke<LogFileResult>('read_log_file', {
         date: selectedDate,
-        tailLines: 10000,
+        tailLines: 3000,
       })
       setRawContent(result.content)
       setTotalLines(result.total_lines)

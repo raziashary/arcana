@@ -148,9 +148,12 @@ pub fn emit_cost_update(app: &AppHandle, payload: CostUpdatePayload) {
 
 #[derive(Debug, Serialize, Clone)]
 pub struct WorkerStatusPayload {
-    pub slug:      String,
-    pub status:    String,
-    pub timestamp: String,
+    pub slug:               String,
+    pub status:             String,
+    pub previous_status:    Option<String>,
+    pub reason:             Option<String>,
+    pub cooldown_seconds:   Option<u32>,
+    pub timestamp:          String,
 }
 
 #[derive(Debug, Serialize, Clone)]

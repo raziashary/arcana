@@ -18,7 +18,10 @@ impl Tool for BashTool {
     fn name(&self) -> &str { "bash" }
 
     fn description(&self) -> &str {
-        "Execute a shell command in the working directory. Returns stdout and stderr. Use for running tests, linting, builds, and other shell operations."
+        #[cfg(target_os = "windows")]
+        return "Execute a shell command in the working directory. Returns stdout and stderr. Use for running tests, linting, builds, and other shell operations.\n\nPlatform note: The shell is Windows CMD. Avoid Unix-only utilities (`head`, `tail`, `jq`, `grep` in pipes). Use PowerShell-compatible alternatives or run commands separately.";
+        #[cfg(not(target_os = "windows"))]
+        return "Execute a shell command in the working directory. Returns stdout and stderr. Use for running tests, linting, builds, and other shell operations.";
     }
 
     fn input_schema(&self) -> serde_json::Value {
@@ -47,6 +50,16 @@ impl Tool for BashTool {
             None    => return ToolResult::error("Missing required field: command"),
         };
         let timeout_secs = input["timeout_secs"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS);
+
+        let command = if cfg!(target_os = "windows") {
+            let rewritten = rewrite_for_windows(&command);
+            if rewritten != command {
+                tracing::debug!("[BashTool] rewritten command: {} -> {}", command, rewritten);
+            }
+            rewritten
+        } else {
+            command
+        };
 
         let shell_cmd = if cfg!(target_os = "windows") {
             let mut cmd = Command::new("cmd");
@@ -89,6 +102,15 @@ impl Tool for BashTool {
                 if is_error && output.is_empty() {
                     output = format!("Command exited with code {exit_code}");
                 }
+                // Fix 10c: structured suggestion on exit 255 + "not recognized" (Windows)
+                if is_error && exit_code == 255 && cfg!(target_os = "windows") && output.contains("is not recognized") {
+                    let suggestion = format!(
+                        "{output}\n\n[SUGGESTION] This command uses a Unix utility not available on Windows. \
+                        Try rewriting it with PowerShell-compatible syntax (e.g. `Select-Object -First N` instead of `head -n`, \
+                        `Out-File` instead of `>` redirection in pipes, and avoid `grep`, `jq`, `tail` in piped commands)."
+                    );
+                    return ToolResult::error(suggestion);
+                }
                 if is_error { ToolResult::error(output) } else { ToolResult::success(output) }
             }
         }
@@ -101,7 +123,7 @@ async fn run_command(
 ) -> std::io::Result<(String, String, i32)> {
     // Normalize the path to handle spaces and special characters on Windows
     let normalized_path = PathBuf::from(working_dir);
-    
+
     cmd.current_dir(&normalized_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -111,4 +133,27 @@ async fn run_command(
     let stderr   = String::from_utf8_lossy(&output.stderr).to_string();
     let exit_code = output.status.code().unwrap_or(-1);
     Ok((stdout, stderr, exit_code))
+}
+
+/// Fix 10b: Unix → PowerShell command pre-processor for Windows.
+///
+/// Detects common Unix-only utilities in piped commands and rewrites them
+/// to Windows equivalents before spawning the process. Applied only on
+/// `cfg!(target_os = "windows")`.
+fn rewrite_for_windows(cmd: &str) -> String {
+    let mut out = cmd.to_string();
+    // `head -N` → `Select-Object -First N` (PowerShell)
+    // Handle both `head -20` and `head -n 20` forms.
+    out = out.replace(" | head -n ", " | Select-Object -First ");
+    out = out.replace(" | head -", " | Select-Object -First ");
+    // `tail -N` → `Select-Object -Last N`
+    out = out.replace(" | tail -n ", " | Select-Object -Last ");
+    out = out.replace(" | tail -", " | Select-Object -Last ");
+    // `grep PATTERN` in a pipe → `Select-String -Pattern PATTERN`
+    // This is a best-effort rewrite; complex grep flags are not handled.
+    out = out.replace(" | grep ", " | Select-String ");
+    out = out.replace(" | grep -i ", " | Select-String -Pattern ");
+    // `jq '.'` → no direct equivalent; leave as-is so it fails with exit 255
+    // and the structured error handler (Fix 10c) guides the LLM to self-correct.
+    out
 }

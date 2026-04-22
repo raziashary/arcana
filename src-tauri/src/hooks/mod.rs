@@ -11,6 +11,8 @@ pub mod conditions;
 pub mod executor;
 pub mod registry;
 pub mod db;
+pub mod ecosystem;
 
 pub use registry::HookRegistry;
 pub use types::{HookContext, HookType, ToolCallContext};
+pub use ecosystem::Ecosystem;

@@ -61,6 +61,7 @@ pub enum TaskStatus {
     InProgress,   // Worker is executing
     QcReview,     // Worker completed, QC reviewing
     Done,         // QC approved, merged
+    BuildFailed,  // Dependencies/build validation failed (Fix 8d)
     Failed,       // Task failed — needs attention
     Cancelled,    // Manually cancelled
 }
@@ -70,13 +71,15 @@ impl TaskStatus {
         match self {
             Self::Ready => "ready", Self::Assigned => "assigned",
             Self::InProgress => "in_progress", Self::QcReview => "qc_review",
-            Self::Done => "done", Self::Failed => "failed", Self::Cancelled => "cancelled",
+            Self::Done => "done", Self::BuildFailed => "build_failed",
+            Self::Failed => "failed", Self::Cancelled => "cancelled",
         }
     }
     pub fn from_str(s: &str) -> Self {
         match s {
             "assigned" => Self::Assigned, "in_progress" => Self::InProgress,
             "qc_review" => Self::QcReview, "done" => Self::Done,
+            "build_failed" => Self::BuildFailed,
             "failed" => Self::Failed, "cancelled" => Self::Cancelled, _ => Self::Ready,
         }
     }

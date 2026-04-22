@@ -112,10 +112,14 @@ let _listenersInstalled = false
 const _unlistenFns: UnlistenFn[] = []
 
 // Phase 3.0 R2 event payload (matches Rust `WorkerStatusPayload`).
+// Fix 9a: expanded with previous_status, reason, cooldown_seconds.
 interface WorkerStatusEvent {
-  slug:      string
-  status:    WorkerStatus
-  timestamp: string
+  slug:               string
+  status:             WorkerStatus
+  previous_status:    string | null
+  reason:             string | null
+  cooldown_seconds:   number | null
+  timestamp:          string
 }
 
 export const useWorkerStore = create<WorkerStoreState>((set, get) => ({
@@ -216,14 +220,34 @@ export const useWorkerStore = create<WorkerStoreState>((set, get) => ({
     if (_listenersInstalled) return
     _listenersInstalled = true
 
+    // Fix 9b: dedup map — prevent toast spam on repeated error transitions.
+    const _lastToastTs: Record<string, number> = {}
+    const TOAST_DEDUP_MS = 5000
+
     try {
       const unlisten = await listen<WorkerStatusEvent>('worker:status', (event) => {
-        const { slug, status } = event.payload
+        const { slug, status, reason, cooldown_seconds } = event.payload
         set(state => ({
           workers: state.workers.map(w =>
             w.slug === slug ? { ...w, status } : w
           ),
         }))
+        // Fix 9b: emit toast on error or cooldown transitions
+        const now = Date.now()
+        if (status === 'error') {
+          const last = _lastToastTs[slug] ?? 0
+          if (now - last > TOAST_DEDUP_MS) {
+            _lastToastTs[slug] = now
+            const { addToast } = require('../stores/toastStore')
+            addToast({
+              title: `Worker ${slug} errored`,
+              message: reason ?? 'Invoke failed — see logs for details',
+              type: 'error',
+              workerSlug: slug,
+              durationMs: cooldown_seconds ? cooldown_seconds * 1000 : 4000,
+            })
+          }
+        }
       })
       _unlistenFns.push(unlisten)
     } catch (e) {

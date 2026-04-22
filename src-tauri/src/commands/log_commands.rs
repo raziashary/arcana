@@ -71,7 +71,7 @@ pub fn list_log_files() -> Result<Vec<String>> {
 
 /// Read the **tail** of a log file for a given date (e.g. "2026-04-15").
 /// Pass an empty string to read today's log.
-/// Only the last `tail_lines` (default 10 000) are returned over IPC so the
+/// Only the last `tail_lines` (default 3 000) are returned over IPC so the
 /// frontend stays responsive even when a single-day log grows large.
 /// The full file can be fetched via `read_log_file_full` for download.
 #[tauri::command]
@@ -101,7 +101,7 @@ pub fn read_log_file(date: String, tail_lines: Option<usize>) -> Result<LogFileR
         });
     }
 
-    let limit = tail_lines.unwrap_or(10_000);
+    let limit = tail_lines.unwrap_or(3_000);
     let full_size = std::fs::metadata(&path)
         .map(|m| m.len())
         .unwrap_or(0);

@@ -19,6 +19,7 @@ use crate::agent::engine::AgentEngine;
 // the runner sets `working`, end when it sets `idle` or `error`), so we don't
 // need separate tick-start/tick-end events.
 use crate::events::{emit_worker_status, WorkerStatusPayload};
+use crate::hooks::ecosystem::Ecosystem;
 use crate::agent::permission::{PendingPermissions, PermissionMode};
 use crate::agent::PAMode;
 use crate::db::workers::WorkersDb;
@@ -185,6 +186,8 @@ impl RecipeRunner {
                                 response.trim()
                             );
                             self.set_worker_status(worker_slug, "idle");
+                            // Fix 8c: sentinel-file guard after successful tick.
+                            Self::guard_and_validate(worker_slug, std::path::Path::new(&working_dir));
                             // Same stranded-task safety net as the Mode 1 path —
                             // see the long comment at the reconcile call below.
                             // Without this, a Mode 2 LivingAgent that finishes
@@ -275,6 +278,8 @@ impl RecipeRunner {
             Ok(_)  => {
                 info!("[RecipeRunner] Rust AgentEngine completed for worker '{}'", worker_slug);
                 self.set_worker_status(worker_slug, "idle");
+                // Fix 8c: sentinel-file guard after successful tick.
+                Self::guard_and_validate(worker_slug, std::path::Path::new(&working_dir));
             }
             Err(e) => {
                 error!("[RecipeRunner] Rust AgentEngine failed for worker '{}': {e}", worker_slug);
@@ -369,19 +374,100 @@ impl RecipeRunner {
     }
 
     fn set_worker_status(&self, slug: &str, status: &str) {
-        if let Ok(db) = WorkersDb::open() {
+        let previous = if let Ok(db) = WorkersDb::open() {
             if let Ok(Some(worker)) = db.get_by_slug(slug) {
+                let prev = worker.status.clone();
                 let _ = db.update_status(worker.id, status);
+                Some(prev)
+            } else {
+                None
             }
-        }
+        } else {
+            None
+        };
         // Phase 3.0 R2 — push the single source-of-truth transition to the UI.
         // The Agent Roster subscribes via `workerStore.initEventListeners()`
         // and mutates local state in place, eliminating the derived-status
         // flicker where rows went `idle → error → idle` between ticks.
+        // Fix 9a: expanded payload with previous_status, reason, cooldown_seconds.
+        let reason: Option<String> = if status == "error" {
+            Some("Invoke failed — see logs for details".into())
+        } else {
+            None
+        };
+        let cooldown_seconds: Option<u32> = if status == "error" {
+            Some(30)
+        } else {
+            None
+        };
         emit_worker_status(&self.app, WorkerStatusPayload {
-            slug:      slug.to_string(),
-            status:    status.to_string(),
-            timestamp: chrono::Utc::now().to_rfc3339(),
+            slug:               slug.to_string(),
+            status:             status.to_string(),
+            previous_status:    previous,
+            reason,
+            cooldown_seconds,
+            timestamp:          chrono::Utc::now().to_rfc3339(),
         });
+    }
+
+    /// Fix 8c — Sentinel-file guard.
+    /// After a worker tick succeeds, verify the generated project has its
+    /// dependencies installed by checking the ecosystem sentinel file.
+    /// If sentinel is missing, update the active in_progress task to
+    /// `build_failed` so QC can inspect it.
+    fn guard_and_validate(worker_slug: &str, working_dir: &std::path::Path) {
+        use std::fs;
+        use crate::db::tasks::{TasksDb, TaskStatus};
+
+        // Only guard for workers (not supervisor, etc.)
+        if !worker_slug.starts_with("worker-") {
+            return;
+        }
+
+        // Find active task for this worker
+        let db = match TasksDb::open() {
+            Ok(db) => db,
+            Err(_) => return,
+        };
+        let tasks = match db.list(None) {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        let active_task = tasks.into_iter().find(|t| {
+            t.assigned_worker.as_deref() == Some(worker_slug)
+                && matches!(t.status, TaskStatus::InProgress)
+        });
+        let Some(task) = active_task else { return };
+
+        // Detect ecosystem
+        let Some(ecosystem) = Ecosystem::detect(working_dir) else { return };
+        let sentinel: std::path::PathBuf = working_dir.join(ecosystem.sentinel_path());
+
+        if sentinel.exists() {
+            info!(
+                "[RecipeRunner] Sentinel found for '{}' ({:?}) — build guard passed",
+                worker_slug, sentinel
+            );
+            return;
+        }
+
+        // Sentinel missing → mark build_failed
+        warn!(
+            "[RecipeRunner] Sentinel missing for '{}' ({:?}) — marking task #{} build_failed",
+            worker_slug, sentinel, task.id
+        );
+
+        // Write a guard log note in the workspace
+        let guard_log = working_dir.join("build_guard.log");
+        let note = format!(
+            "[AutoDev Build Guard] {:?} dependencies not installed.\nExpected sentinel: {:?}\nRun '{}' and '{}' in this directory, then retry.\n",
+            ecosystem,
+            sentinel,
+            ecosystem.install_cmd(),
+            ecosystem.validate_cmd(),
+        );
+        let _ = fs::write(&guard_log, note);
+
+        let _ = db.update_status(task.id, "build_failed", Some(worker_slug));
     }
 }

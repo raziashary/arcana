@@ -65,6 +65,15 @@ impl AnthropicProvider {
     }
 
     fn build_body(&self, req: &CompletionRequest, stream: bool) -> serde_json::Value {
+        // Fix 6c: band-aid — map short config key to canonical Anthropic API name.
+        // Core-orchestrator's model_registry.py maps "claude-4-5-haiku" →
+        // "anthropic/claude-haiku-4-5-20251001". When Rust AgentEngine falls back
+        // (Mode 1) it uses the raw config key, causing Anthropic 404.
+        let model = match req.model.as_str() {
+            "claude-4-5-haiku" => "anthropic/claude-haiku-4-5-20251001",
+            other => other,
+        };
+
         let messages: Vec<serde_json::Value> = req.messages.iter().map(|m| {
             let content: Vec<serde_json::Value> = m.content.iter().map(|c| match c {
                 MessageContent::Text { text } => json!({ "type": "text", "text": text }),
@@ -91,7 +100,7 @@ impl AnthropicProvider {
         })).collect();
 
         let mut body = json!({
-            "model":       req.model,
+            "model":       model,
             "max_tokens":  req.max_tokens,
             "messages":    messages,
         });

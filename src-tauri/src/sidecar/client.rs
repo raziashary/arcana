@@ -50,12 +50,19 @@ pub struct OrchestratorClient {
     // push the new model into the agent's YAML config before the next
     // invoke, keeping Mode 2 in sync with Mode 1 without restart.
     agent_cache: Mutex<HashMap<String, (String, String)>>,
+    // registry_key (short name) → full API model name. Fetched lazily from
+    // core-orchestrator GET /api/llm/models and used by the Rust AgentEngine
+    // fallback to map config keys (e.g. "claude-4-5-haiku") to canonical
+    // LiteLLM names (e.g. "anthropic/claude-haiku-4-5-20251001").
+    model_registry_cache: Mutex<HashMap<String, String>>,
 }
 
 impl OrchestratorClient {
     pub fn new() -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(INVOKE_TIMEOUT_SECS))
+            .pool_max_idle_per_host(1)
+            .pool_idle_timeout(Duration::from_secs(30))
             .build()
             .expect("reqwest::Client build failed (should not happen)");
         Self {
@@ -64,6 +71,7 @@ impl OrchestratorClient {
             api_key:     API_KEY.into(),
             jwt_token:   Mutex::new(None),
             agent_cache: Mutex::new(HashMap::new()),
+            model_registry_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -480,13 +488,10 @@ impl OrchestratorClient {
             "parameters": serde_json::Value::Null,
         });
 
-        let resp = self.client
-            .post(&invoke_url)
-            .header("Authorization", self.get_auth_header())
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AutoDevError::Agent(format!("POST /api/agents/{agent_id}/invoke: {e}")))?;
+        let resp = match self.try_invoke(&invoke_url, &body, agent_id).await {
+            Ok(r) => r,
+            Err(e) => return Err(e),
+        };
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -511,6 +516,107 @@ impl OrchestratorClient {
             .to_string();
 
         Ok(content)
+    }
+
+    // ─── Retry wrapper for invoke_worker (Fix 6b) ─────────────────────────────
+
+    /// Send the invoke POST with a single retry on connection-level errors.
+    /// Windows silently resets idle pooled connections (WinError 10054); a fresh
+    /// retry usually succeeds because the OS has already re-established the
+    /// loopback socket by the time we wake up.
+    async fn try_invoke(
+        &self,
+        url: &str,
+        body: &serde_json::Value,
+        agent_id: &str,
+    ) -> Result<reqwest::Response> {
+        let req_builder = self.client
+            .post(url)
+            .header("Authorization", self.get_auth_header())
+            .json(body);
+
+        match req_builder.try_clone() {
+            None => {
+                // Cannot clone (e.g. streaming body) — single-shot, no retry
+                return req_builder
+                    .send()
+                    .await
+                    .map_err(|e| AutoDevError::Agent(format!("POST /api/agents/{agent_id}/invoke: {e}")));
+            }
+            Some(cloned) => {
+                match cloned.send().await {
+                    Ok(resp) => return Ok(resp),
+                    Err(e) if e.is_connect() || e.is_timeout() => {
+                        tracing::warn!(
+                            "[OrchestratorClient] invoke connection error for '{agent_id}' ({e}), retrying in 100ms"
+                        );
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        match req_builder.send().await {
+                            Ok(resp) => Ok(resp),
+                            Err(e2) => Err(AutoDevError::Agent(format!(
+                                "POST /api/agents/{agent_id}/invoke (retry failed): {e2}"
+                            ))),
+                        }
+                    }
+                    Err(e) => Err(AutoDevError::Agent(format!(
+                        "POST /api/agents/{agent_id}/invoke: {e}"
+                    ))),
+                }
+            }
+        }
+    }
+
+    // ─── Model Registry Cache (Fix 6d) ────────────────────────────────────────
+
+    /// Resolve a short model config key to the canonical API model name.
+    ///
+    /// On first call, lazily fetches `GET /api/llm/models` from core-orchestrator,
+    /// which returns `[{ "registry_key": "...", "name": "..." }, …]` and
+    /// populates `model_registry_cache`. Subsequent calls are in-memory.
+    ///
+    /// If core-orchestrator is unreachable or the key is not found, returns
+    /// `None` so the caller can fall back to the raw key.
+    pub async fn resolve_model_name(&self, key: &str) -> Option<String> {
+        {
+            let cache = self.model_registry_cache.lock().unwrap();
+            if let Some(name) = cache.get(key) {
+                debug!("[OrchestratorClient] model cache hit '{key}' → {name}");
+                return Some(name.clone());
+            }
+        }
+        // Cache miss — fetch from core-orchestrator
+        if self.ensure_authenticated().await.is_err() {
+            debug!("[OrchestratorClient] cannot fetch model registry: not authenticated");
+            return None;
+        }
+        let url = format!("{}/api/llm/models", self.base_url);
+        match self.client
+            .get(&url)
+            .header("Authorization", self.get_auth_header())
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                let models: Vec<serde_json::Value> = resp.json().await.unwrap_or_default();
+                let mut cache = self.model_registry_cache.lock().unwrap();
+                for m in &models {
+                    let rkey = m["registry_key"].as_str().unwrap_or("");
+                    let name = m["name"].as_str().unwrap_or("");
+                    if !rkey.is_empty() && !name.is_empty() {
+                        cache.insert(rkey.to_string(), name.to_string());
+                    }
+                }
+                cache.get(key).cloned()
+            }
+            Ok(resp) => {
+                debug!("[OrchestratorClient] model registry fetch returned HTTP {}", resp.status());
+                None
+            }
+            Err(e) => {
+                debug!("[OrchestratorClient] model registry fetch failed: {e}");
+                None
+            }
+        }
     }
 
     // ─── Cache Management ─────────────────────────────────────────────────────

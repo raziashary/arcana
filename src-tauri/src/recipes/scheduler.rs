@@ -73,9 +73,12 @@ impl RecipeScheduler {
         // Phase 3.0 R2 — push status to UI so the Agent Roster turns this
         // row "alive" the moment the user hits Start.
         crate::events::emit_worker_status_global(crate::events::WorkerStatusPayload {
-            slug:      worker_slug.to_string(),
-            status:    "idle".to_string(),
-            timestamp: chrono::Utc::now().to_rfc3339(),
+            slug:               worker_slug.to_string(),
+            status:             "idle".to_string(),
+            previous_status:    None,
+            reason:             None,
+            cooldown_seconds:   None,
+            timestamp:          chrono::Utc::now().to_rfc3339(),
         });
 
         let runner     = self.runner.clone();
@@ -166,9 +169,12 @@ impl RecipeScheduler {
         // Phase 3.0 R2 — push status so the Agent Roster dims this row
         // immediately without waiting for the next `list_workers` poll.
         crate::events::emit_worker_status_global(crate::events::WorkerStatusPayload {
-            slug:      worker_slug.to_string(),
-            status:    "paused".to_string(),
-            timestamp: chrono::Utc::now().to_rfc3339(),
+            slug:               worker_slug.to_string(),
+            status:             "paused".to_string(),
+            previous_status:    None,
+            reason:             None,
+            cooldown_seconds:   None,
+            timestamp:          chrono::Utc::now().to_rfc3339(),
         });
 
         info!("[RecipeScheduler] Stopped worker '{}'", worker_slug);

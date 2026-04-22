@@ -91,9 +91,12 @@ pub fn update_worker_status(worker_id: i64, status: String) -> Result<()> {
     // so any other subscriber (another open window, a future mobile client)
     // sees the change instantly.
     crate::events::emit_worker_status_global(crate::events::WorkerStatusPayload {
-        slug:      worker.slug,
+        slug:               worker.slug,
         status,
-        timestamp: chrono::Utc::now().to_rfc3339(),
+        previous_status:    None,
+        reason:             None,
+        cooldown_seconds:   None,
+        timestamp:          chrono::Utc::now().to_rfc3339(),
     });
     Ok(())
 }

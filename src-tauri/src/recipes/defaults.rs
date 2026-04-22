@@ -165,7 +165,15 @@ qc_review. Budgeting rules:
 - Never modify frontend React code
 - Never push directly to main — QC reviews first
 - Always verify acceptance criteria before marking qc_review
-- One task at a time — never claim a second task while one is in_progress"#.into(),
+- One task at a time — never claim a second task while one is in_progress
+
+## Build Validation (MANDATORY)
+After all file writes are complete, run the ecosystem-specific install and validate commands:
+- Node projects (`package.json` present): `npm install` then `npm run build` (or `npx tsc --noEmit`)
+- Python projects (`requirements.txt` / `pyproject.toml`): `pip install -r requirements.txt` then `python -m pytest`
+- Rust projects (`Cargo.toml`): `cargo build` then `cargo test`
+- Go projects (`go.mod`): `go mod tidy` then `go test ./...`
+If either install or validate exits non-zero, capture the full stderr to a `build.log` artifact and mark the task status as `build_failed` instead of `qc_review` so QC can inspect it."#.into(),
     }
 }
 
@@ -220,7 +228,13 @@ qc_review.
 - Only modify frontend code (React, TypeScript, Tailwind CSS in src/)
 - Never modify Rust backend or Python sidecar code
 - Follow existing component patterns — monospace/dark aesthetic
-- Always run tsc before marking qc_review"#.into(),
+- Always run tsc before marking qc_review
+
+## Build Validation (MANDATORY)
+After all file writes are complete, run the ecosystem-specific install and validate commands:
+- `npm install` (or `pnpm install` / `yarn` if lockfile present)
+- Then `npm run build` (or `npx tsc --noEmit` / `vite build`)
+If either exits non-zero, capture the full stderr to a `build.log` artifact and mark the task status as `build_failed` instead of `qc_review` so QC can inspect it."#.into(),
     }
 }
 
@@ -253,7 +267,10 @@ After a task transition (done/failed) or after confirming no runnable tasks, rep
 ## Constraints
 - Always run in supervised mode — confirm destructive operations
 - Never modify application logic — only infra/config/CI files
-- Test config changes before marking done"#.into(),
+- Test config changes before marking done
+
+## Build Validation (MANDATORY)
+After all file writes are complete, run the ecosystem-specific install and validate commands for the detected manifest (package.json, requirements.txt, Cargo.toml, go.mod). If either exits non-zero, capture the full stderr to a `build.log` artifact and mark the task status as `build_failed` instead of `done` so QC can inspect it."#.into(),
     }
 }
 
@@ -289,7 +306,10 @@ After a task transition (qc_review/failed) or after confirming no runnable tasks
 ## Constraints
 - MCP servers must expose standard MCP protocol endpoints
 - New tools must have proper inputSchema JSON definitions
-- Always test tool roundtrip before marking qc_review"#.into(),
+- Always test tool roundtrip before marking qc_review
+
+## Build Validation (MANDATORY)
+After all file writes are complete, run the ecosystem-specific install and validate commands for the detected manifest. If either exits non-zero, capture the full stderr to a `build.log` artifact and mark the task status as `build_failed` instead of `qc_review` so QC can inspect it."#.into(),
     }
 }
 
@@ -328,7 +348,10 @@ After a task transition (done/failed) or after confirming no runnable tasks, rep
 ## Constraints
 - Only remove code that is demonstrably unused — never guess
 - Do not change functionality, only remove/clean
-- Run checks after every change batch"#.into(),
+- Run checks after every change batch
+
+## Build Validation (MANDATORY)
+After all file writes are complete, run the ecosystem-specific install and validate commands for the detected manifest. If either exits non-zero, capture the full stderr to a `build.log` artifact and mark the task status as `build_failed` instead of `done` so QC can inspect it."#.into(),
     }
 }
 
