@@ -85,6 +85,21 @@ impl Tool for CreateTaskTool {
             Err(e) => return ToolResult::error(&format!("Failed to create task: {e}")),
         };
 
+        // Phase 3.0 R1 — push-based dispatch. Wake the Supervisor immediately
+        // so it dispatches this task on the next event-loop tick instead of
+        // waiting up to one cron cycle (previously ~21 s dead window).
+        crate::recipes::scheduler::kick("supervisor");
+
+        // Phase 3.0 R1 — notify the UI (AutoDev Panel kanban) that the board
+        // changed without requiring a poll. The frontend `taskStore` listens
+        // to `task:changed` and re-fetches `list_tasks` on any event.
+        crate::events::emit_task_changed_global(crate::events::TaskChangedPayload {
+            task_id: Some(task.id),
+            kind:    "created".into(),
+            status:  Some("ready".into()),
+            assigned_worker: None,
+        });
+
         ToolResult::success(json!({
             "task_id": task.id,
             "title": task.title,

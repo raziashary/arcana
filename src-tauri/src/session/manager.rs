@@ -60,4 +60,9 @@ impl SessionManager {
     pub fn update_session_title(&self, session: &Session) -> Result<()> {
         self.storage.lock().unwrap().upsert_session(session)
     }
+
+    /// Phase 3.0 R3 — persist the PA mode toggle for a session.
+    pub fn set_pa_mode(&self, session_id: &str, pa_mode: &str) -> Result<()> {
+        self.storage.lock().unwrap().update_session_pa_mode(session_id, pa_mode)
+    }
 }

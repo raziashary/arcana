@@ -84,8 +84,19 @@ pub async fn send_message(
 
     let provider_id_c = provider_id.clone();
 
-    // Parse PA mode (default: FastDevelopment)
-    let resolved_pa_mode = match pa_mode.as_deref().unwrap_or("fast_development") {
+    // Phase 3.0 R3 — session row is the source of truth for PA mode. The
+    // optional `pa_mode` argument from the frontend is accepted only as a
+    // last-resort fallback (e.g. a legacy caller that hasn't been updated)
+    // and is overridden whenever the session has a stored mode. This stops
+    // the "PA visibly switches back to Mode 1" regression where a reload
+    // reset the frontend store before `send_message` fired.
+    let session_mode = session.pa_mode.clone();
+    let effective_mode_str: &str = if !session_mode.is_empty() {
+        session_mode.as_str()
+    } else {
+        pa_mode.as_deref().unwrap_or("fast_development")
+    };
+    let resolved_pa_mode = match effective_mode_str {
         "review"   => crate::agent::PAMode::Review,
         "delegate" => crate::agent::PAMode::Delegate,
         _          => crate::agent::PAMode::FastDevelopment,

@@ -75,6 +75,11 @@ fn main() {
                 // Startup progress state machine — drives the loading overlay.
                 // Attached to SidecarManager so spawn/health transitions + log
                 // lines from both Python sidecars all feed the same FSM.
+                // Phase 3.0 R1/R2 — install the process-wide AppHandle so
+                // background subsystems (task-board tools, RecipeRunner,
+                // hooks) can emit Tauri events without State plumbing.
+                autodev_lib::events::install_app_handle(app.handle().clone());
+
                 let progress = Arc::new(StartupProgress::new(app.handle().clone()));
                 progress.advance(StartupPhase::Init);
                 // Skills were already loaded synchronously above — emit now that
@@ -105,6 +110,12 @@ fn main() {
                     orch_client_for_setup.clone(),
                 ));
                 let scheduler = Arc::new(RecipeScheduler::new(runner));
+
+                // Phase 3.0 R1 — expose the scheduler to the task-board tools
+                // via a module-level OnceLock so `create_task`, `assign_task`,
+                // and `update_task_status` can fire push-based kicks without
+                // needing Tauri `State<>` access.
+                autodev_lib::recipes::scheduler::install_global(scheduler.clone());
 
                 // Auto-start the sidecar fleet on app launch.
                 // Non-blocking — fires and forgets on a background task.

@@ -35,11 +35,21 @@ impl SessionStorage {
                 working_dir TEXT NOT NULL,
                 provider    TEXT NOT NULL,
                 model       TEXT NOT NULL,
+                pa_mode     TEXT NOT NULL DEFAULT 'fast_development',
                 created_at  TEXT NOT NULL,
                 updated_at  TEXT NOT NULL
             );
             ",
         )?;
+
+        // Phase 3.0 R3 — migrate existing `sessions` rows to include the new
+        // `pa_mode` column. SQLite has no `ADD COLUMN IF NOT EXISTS`, so the
+        // error-on-duplicate is swallowed intentionally (same best-effort
+        // pattern used below for the `messages` table).
+        let _ = self.conn.execute(
+            "ALTER TABLE sessions ADD COLUMN pa_mode TEXT NOT NULL DEFAULT 'fast_development'",
+            []
+        );
 
         // Check if messages table exists
         let table_exists: bool = self.conn.query_row(
@@ -94,13 +104,14 @@ impl SessionStorage {
 
     pub fn upsert_session(&self, session: &Session) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO sessions (id, title, working_dir, provider, model, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO sessions (id, title, working_dir, provider, model, pa_mode, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(id) DO UPDATE SET
                title=excluded.title,
                working_dir=excluded.working_dir,
                provider=excluded.provider,
                model=excluded.model,
+               pa_mode=excluded.pa_mode,
                updated_at=excluded.updated_at",
             params![
                 session.id,
@@ -108,10 +119,27 @@ impl SessionStorage {
                 session.working_dir,
                 session.provider,
                 session.model,
+                session.pa_mode,
                 session.created_at.to_rfc3339(),
                 session.updated_at.to_rfc3339(),
             ],
         )?;
+        Ok(())
+    }
+
+    /// Phase 3.0 R3 — targeted write for the PA mode column. Used by the
+    /// `set_session_pa_mode` Tauri command so a mode toggle doesn't have to
+    /// round-trip the entire session row.
+    pub fn update_session_pa_mode(&self, session_id: &str, pa_mode: &str) -> Result<()> {
+        let updated = self.conn.execute(
+            "UPDATE sessions SET pa_mode = ?1, updated_at = ?2 WHERE id = ?3",
+            params![pa_mode, chrono::Utc::now().to_rfc3339(), session_id],
+        )?;
+        if updated == 0 {
+            return Err(AutoDevError::Session(format!(
+                "Session '{session_id}' not found — cannot set pa_mode"
+            )));
+        }
         Ok(())
     }
 
@@ -169,7 +197,7 @@ impl SessionStorage {
 
     pub fn list_sessions(&self) -> Result<Vec<Session>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, working_dir, provider, model, created_at, updated_at
+            "SELECT id, title, working_dir, provider, model, pa_mode, created_at, updated_at
              FROM sessions ORDER BY updated_at DESC LIMIT 50"
         )?;
         let sessions: Vec<Session> = stmt.query_map([], |row| {
@@ -179,8 +207,9 @@ impl SessionStorage {
                 working_dir: row.get(2)?,
                 provider:    row.get(3)?,
                 model:       row.get(4)?,
-                created_at:  row.get::<_, String>(5)?.parse().unwrap_or_default(),
-                updated_at:  row.get::<_, String>(6)?.parse().unwrap_or_default(),
+                pa_mode:     row.get::<_, Option<String>>(5)?.unwrap_or_else(|| "fast_development".into()),
+                created_at:  row.get::<_, String>(6)?.parse().unwrap_or_default(),
+                updated_at:  row.get::<_, String>(7)?.parse().unwrap_or_default(),
                 messages:    vec![],
             })
         })?.filter_map(|r| r.ok()).collect();
@@ -189,7 +218,7 @@ impl SessionStorage {
 
     pub fn get_session_with_messages(&self, session_id: &str) -> Result<Option<Session>> {
         let session = self.conn.query_row(
-            "SELECT id, title, working_dir, provider, model, created_at, updated_at
+            "SELECT id, title, working_dir, provider, model, pa_mode, created_at, updated_at
              FROM sessions WHERE id=?1",
             params![session_id],
             |row| Ok(Session {
@@ -198,8 +227,9 @@ impl SessionStorage {
                 working_dir: row.get(2)?,
                 provider:    row.get(3)?,
                 model:       row.get(4)?,
-                created_at:  row.get::<_, String>(5)?.parse().unwrap_or_default(),
-                updated_at:  row.get::<_, String>(6)?.parse().unwrap_or_default(),
+                pa_mode:     row.get::<_, Option<String>>(5)?.unwrap_or_else(|| "fast_development".into()),
+                created_at:  row.get::<_, String>(6)?.parse().unwrap_or_default(),
+                updated_at:  row.get::<_, String>(7)?.parse().unwrap_or_default(),
                 messages:    vec![],
             }),
         );

@@ -102,6 +102,29 @@ impl Tool for UpdateTaskStatusTool {
             return ToolResult::error(&format!("Failed to update task #{id}: {e}"));
         }
 
+        // Phase 3.0 R1 — push-based dispatch on status handoffs.
+        //   qc_review → wake QC agent immediately
+        //   assigned  → wake the worker immediately (stall resets / re-queues)
+        // The `working` gate inside kick_worker prevents duplicate ticks if
+        // the target is already running.
+        match status.as_str() {
+            "qc_review" => crate::recipes::scheduler::kick("qc-agent"),
+            "assigned"  => {
+                if let Some(ref w) = assigned_worker {
+                    crate::recipes::scheduler::kick(w);
+                }
+            }
+            _ => {}
+        }
+
+        // Phase 3.0 R1 — task-board push event for the UI.
+        crate::events::emit_task_changed_global(crate::events::TaskChangedPayload {
+            task_id: Some(id),
+            kind:    "status".into(),
+            status:  Some(status.clone()),
+            assigned_worker: assigned_worker.clone(),
+        });
+
         // Fire fleet hooks for task lifecycle events
         let hook_type = match status.as_str() {
             "assigned" => Some(HookType::OnTaskClaim),

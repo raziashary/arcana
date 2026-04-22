@@ -14,18 +14,37 @@ import {
   WORKER_TYPE_LABELS,
 } from '../../stores/workerStore'
 
+// Toast notification state
+type ToastType = 'success' | 'warning' | 'error'
+interface Toast {
+  id: number
+  message: string
+  type: ToastType
+}
+
 // ─── Available models ────────────────────────────────────────────────────────
+// Must match registry keys in core-orchestrator/src/llm/providers/model_registry.py
 
 const AVAILABLE_MODELS = [
-  'claude-haiku-4-5',
+  // Anthropic Claude (follows claude-{version}-{tier} pattern)
+  'claude-4-5-haiku',
+  'claude-4-5-haiku-thinking',
   'claude-sonnet-4-5',
-  'claude-opus-4-5',
+  'claude-sonnet-4-5-thinking',
+  'claude-4-1-opus',
+  'claude-4-1-opus-thinking',
+  // OpenAI GPT
   'gpt-4.1',
   'gpt-4.1-mini',
-  'gpt-4o-mini',
   'gpt-4o',
-  'gemini-2.0-flash',
-  'gemini-2.0-pro',
+  'gpt-4o-mini',
+  // Google Gemini (follows gemini-{version}-{tier} pattern)
+  'gemini-3-pro',
+  'gemini-3-pro-thinking',
+  'gemini-3-flash',
+  'gemini-3-flash-thinking',
+  'gemini-2.5-pro',
+  'gemini-2.5-flash',
 ]
 
 // ─── Status Dot ───────────────────────────────────────────────────────────────
@@ -55,6 +74,7 @@ function WorkerRow({
   onStop,
   onDelete,
   onModelChange,
+  onModelSyncResult,
 }: {
   worker:        Worker
   recipes:       Array<{ id: string; title: string }>
@@ -62,6 +82,7 @@ function WorkerRow({
   onStop:        (id: number) => void
   onDelete:      (id: number) => void
   onModelChange: (id: number, model: string) => void
+  onModelSyncResult: (message: string, type: ToastType) => void
 }) {
   const [binding,  setBinding]  = useState(false)
   const [savingModel, setSavingModel] = useState(false)
@@ -69,10 +90,24 @@ function WorkerRow({
   const handleModelChange = async (model: string) => {
     setSavingModel(true)
     try {
-      await invoke('update_worker_model', { workerId: worker.id, model })
+      // Use sync version that immediately pushes to core-orchestrator
+      const result = await invoke<{
+        db_updated: boolean
+        sync_status: string
+        message: string
+        model: string
+      }>('update_worker_model_sync', { workerId: worker.id, model })
+      
       onModelChange(worker.id, model)
+      
+      // Show toast based on sync status
+      const toastType: ToastType = 
+        result.sync_status === 'synced' ? 'success' :
+        result.sync_status === 'pending' ? 'warning' : 'error'
+      onModelSyncResult(result.message, toastType)
     } catch (e) {
-      console.error('update_worker_model failed:', e)
+      console.error('update_worker_model_sync failed:', e)
+      onModelSyncResult(`Failed to update model: ${e}`, 'error')
     } finally {
       setSavingModel(false)
     }
@@ -216,8 +251,9 @@ interface WorkerTableProps {
 export default function WorkerTable({ onAddWorker }: WorkerTableProps) {
   const store      = useWorkerStore()
   const [confirm, setConfirm] = useState<number | null>(null)
-  const [recipes, setRecipes] = useState<Array<{ id: string; title: string }>>([]
-  )
+  const [recipes, setRecipes] = useState<Array<{ id: string; title: string }>>([])
+  const [toasts, setToasts] = useState<Toast[]>([])
+  const [toastId, setToastId] = useState(0)
 
   useEffect(() => {
     invoke<Array<{ id: string; title: string; is_system: boolean }>>('list_recipes')
@@ -238,6 +274,17 @@ export default function WorkerTable({ onAddWorker }: WorkerTableProps) {
   const handleModelChange = (_id: number, _model: string) => {
     // Reload the worker list so the store reflects the persisted model change
     store.loadWorkers().catch(console.error)
+  }
+
+  const showToast = (message: string, type: ToastType) => {
+    const id = toastId + 1
+    setToastId(id)
+    const newToast: Toast = { id, message, type }
+    setToasts(prev => [...prev, newToast])
+    // Auto-dismiss after 4 seconds
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id))
+    }, 4000)
   }
 
   const handleStart = (id: number) =>
@@ -299,10 +346,50 @@ export default function WorkerTable({ onAddWorker }: WorkerTableProps) {
                 onStop={handleStop}
                 onDelete={handleDelete}
                 onModelChange={handleModelChange}
+                onModelSyncResult={showToast}
               />
             ))}
           </tbody>
         </table>
+      </div>
+
+      {/* Toast notifications */}
+      <div style={{
+        position: 'fixed',
+        bottom: 20,
+        right: 20,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        zIndex: 1000,
+      }}>
+        {toasts.map(toast => (
+          <div
+            key={toast.id}
+            style={{
+              padding: '10px 14px',
+              borderRadius: 4,
+              fontFamily: 'monospace',
+              fontSize: 11,
+              maxWidth: 320,
+              boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+              animation: 'fadeInUp 0.3s ease-out',
+              border: '1px solid',
+              borderColor: toast.type === 'success' ? 'var(--success)' : 
+                          toast.type === 'warning' ? '#FFCB8B' : '#FF6363',
+              backgroundColor: toast.type === 'success' ? 'rgba(173,219,103,0.1)' :
+                              toast.type === 'warning' ? 'rgba(255,203,139,0.1)' :
+                              'rgba(255,99,99,0.1)',
+              color: toast.type === 'success' ? 'var(--success)' :
+                     toast.type === 'warning' ? '#FFCB8B' : '#FF6363',
+            }}
+          >
+            {toast.type === 'success' && '✓ '}
+            {toast.type === 'warning' && '⚠ '}
+            {toast.type === 'error' && '✗ '}
+            {toast.message}
+          </div>
+        ))}
       </div>
 
       {confirm !== null && (

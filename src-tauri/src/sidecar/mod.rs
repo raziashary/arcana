@@ -25,7 +25,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::errors::{AutoDevError, Result};
 use startup_progress::{StartupPhase, StartupProgress};
@@ -100,7 +100,21 @@ fn spawn_log_router<R: std::io::Read + Send + 'static>(
         for line in reader.lines() {
             match line {
                 Ok(l) => {
-                    info!("[{prefix}] {l}");
+                    // Phase 3.0 R4 — Windows asyncio teardown chatter filter.
+                    // `memory-mcp` and `core-orchestrator` periodically log
+                    // `ConnectionResetError [WinError 10054]` plus the related
+                    // `_ProactorBasePipeTransport._call_connection_lost` frame
+                    // when an idle HTTP keep-alive is reaped by Windows. It
+                    // is benign (the request already succeeded or was retried)
+                    // but floods the in-app Logs tab. We still write the line
+                    // to the on-disk log file so forensics stay complete —
+                    // only the tracing emission is downgraded to `debug!`.
+                    let is_asyncio_noise = is_windows_asyncio_noise(&l);
+                    if is_asyncio_noise {
+                        debug!("[{prefix}] {l}");
+                    } else {
+                        info!("[{prefix}] {l}");
+                    }
                     let _ = writeln!(file, "{l}");
                     if let Some(p) = progress.as_ref() {
                         p.scan_line(prefix, &l);
@@ -110,6 +124,16 @@ fn spawn_log_router<R: std::io::Read + Send + 'static>(
             }
         }
     });
+}
+
+/// Phase 3.0 R4 — predicate for the Windows asyncio keep-alive teardown log
+/// pattern. Matched on both stdout and stderr routers. Kept as a free
+/// function so unit tests can exercise it without spawning a subprocess.
+fn is_windows_asyncio_noise(line: &str) -> bool {
+    // The two anchor substrings are distinctive enough that substring match
+    // is sufficient — no regex dependency needed.
+    line.contains("ConnectionResetError") && line.contains("WinError 10054")
+        || line.contains("_ProactorBasePipeTransport._call_connection_lost")
 }
 
 // ─── SidecarManager ───────────────────────────────────────────────────────────

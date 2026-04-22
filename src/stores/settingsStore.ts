@@ -140,8 +140,24 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   setPAMode: (mode) => {
+    // Phase 3.0 R3 — PA mode is now session-scoped. The localStorage value
+    // survives as a first-launch fallback for brand-new sessions, but the
+    // session row is the source of truth so reloads / engine rebuilds
+    // never snap back to `fast_development`. The active session id is
+    // resolved lazily from sessionStore to avoid a circular import.
     localStorage.setItem('autodev:pa_mode', mode)
     set({ paMode: mode })
+    void (async () => {
+      try {
+        const { useSessionStore } = await import('./sessionStore')
+        const activeId = useSessionStore.getState().activeSessionId
+        if (activeId) {
+          await invoke('set_session_pa_mode', { sessionId: activeId, paMode: mode })
+        }
+      } catch (e) {
+        console.error('[settingsStore] set_session_pa_mode failed:', e)
+      }
+    })()
   },
 
   loadDefaultSystemPrompt: async () => {

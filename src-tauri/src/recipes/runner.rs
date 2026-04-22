@@ -14,6 +14,11 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::agent::engine::AgentEngine;
+// Phase 3.0 R2 — status push. The `working`/`idle`/`error` transitions emitted
+// from `set_worker_status` already encode the full tick lifecycle (start when
+// the runner sets `working`, end when it sets `idle` or `error`), so we don't
+// need separate tick-start/tick-end events.
+use crate::events::{emit_worker_status, WorkerStatusPayload};
 use crate::agent::permission::{PendingPermissions, PermissionMode};
 use crate::agent::PAMode;
 use crate::db::workers::WorkersDb;
@@ -369,5 +374,14 @@ impl RecipeRunner {
                 let _ = db.update_status(worker.id, status);
             }
         }
+        // Phase 3.0 R2 — push the single source-of-truth transition to the UI.
+        // The Agent Roster subscribes via `workerStore.initEventListeners()`
+        // and mutates local state in place, eliminating the derived-status
+        // flicker where rows went `idle → error → idle` between ticks.
+        emit_worker_status(&self.app, WorkerStatusPayload {
+            slug:      slug.to_string(),
+            status:    status.to_string(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        });
     }
 }

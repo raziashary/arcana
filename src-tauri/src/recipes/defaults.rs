@@ -299,7 +299,12 @@ fn worker_cleanup_recipe() -> Recipe {
         id:              WORKER_CLEANUP_RECIPE_ID.into(),
         title:           "Worker Cleanup — Code Quality".into(),
         description:     Some("Handles lint, dead code removal, and housekeeping tasks.".into()),
-        schedule:        Some("*/10 * * * *".into()),
+        // Phase 3.0 R5 — was "*/10 * * * *" (6.3-min cadence observed in logs);
+        // tightened so cleanup participates in the fleet at roughly the same
+        // cadence as the other workers. Push-based kicks (R1) make the actual
+        // pickup latency sub-second when work exists; the cron cadence is
+        // just the idle-poll fallback.
+        schedule:        Some("*/2 * * * *".into()),
         permission_mode: RecipePermissionMode::Autonomous,
         agent_role:      Some("worker-cleanup".into()),
         model:           None,

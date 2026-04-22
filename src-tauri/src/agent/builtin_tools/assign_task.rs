@@ -111,6 +111,20 @@ impl Tool for AssignTaskTool {
             return ToolResult::error(&format!("Failed to assign task #{id}: {e}"));
         }
 
+        // Phase 3.0 R1 — push-based dispatch. The supervisor just handed work
+        // to a worker; wake that worker *now* instead of waiting up to its
+        // cron cadence. This is the fix for the "serialised pickup" symptom
+        // where 8 assigned tasks rolled in one at a time.
+        crate::recipes::scheduler::kick(&worker_slug);
+
+        // Phase 3.0 R1 — task-board push event for the UI.
+        crate::events::emit_task_changed_global(crate::events::TaskChangedPayload {
+            task_id: Some(id),
+            kind:    "assigned".into(),
+            status:  Some("assigned".into()),
+            assigned_worker: Some(worker_slug.clone()),
+        });
+
         // Fleet hook — downstream listeners (UI, event bus) react to task
         // lifecycle events. `OnTaskClaim` is the canonical "someone owns this
         // now" signal.

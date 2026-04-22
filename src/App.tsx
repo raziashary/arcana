@@ -17,6 +17,8 @@ import StartupOverlay from './components/startup/StartupOverlay'
 import { useSettingsStore } from './stores/settingsStore'
 import { useCostStore }     from './stores/costStore'
 import { useUiStore }       from './stores/uiStore'
+import { useWorkerStore }   from './stores/workerStore'
+import { useTaskStore }     from './stores/taskStore'
 
 export type TabId = 'chat' | 'autodev' | 'ide' | 'recipes' | 'settings' | 'logs'
 
@@ -34,11 +36,18 @@ export default function App() {
   const setActiveTab = useUiStore((s) => s.setActiveTab)
   const { loadProviders, loadDefaultSystemPrompt } = useSettingsStore()
   const { loadFromBackend } = useCostStore()
+  const initWorkerEvents = useWorkerStore(s => s.initEventListeners)
+  const initTaskEvents   = useTaskStore(s => s.initEventListeners)
 
   useEffect(() => {
     loadProviders()
     loadDefaultSystemPrompt()
     loadFromBackend()
+    // Phase 3.0 R1/R2 — install the Tauri event-channel subscriptions once
+    // per app lifetime. Both calls are idempotent (guarded by module-level
+    // flags) so React StrictMode's double-mount is safe.
+    void initWorkerEvents()
+    void initTaskEvents()
   }, [])
 
   return (

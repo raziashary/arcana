@@ -107,10 +107,20 @@ pub struct Session {
     pub working_dir: String,
     pub provider:    String,
     pub model:       String,
+    // Phase 3.0 R3 — persisted PA mode. Previously only lived in the
+    // frontend Zustand store + localStorage, so a session reload or a fresh
+    // engine build snapped back to the default `fast_development` even when
+    // the user had explicitly selected Delegate. Stored per-session so each
+    // chat remembers its own mode.
+    pub pa_mode:     String,
     pub created_at:  DateTime<Utc>,
     pub updated_at:  DateTime<Utc>,
     pub messages:    Vec<Message>,
 }
+
+/// Valid values for `Session.pa_mode`. Kept in one place so the Rust side
+/// and the Tauri command layer can validate uniformly.
+pub const PA_MODES: &[&str] = &["fast_development", "review", "delegate"];
 
 impl Session {
     pub fn new(working_dir: &str, provider: &str, model: &str) -> Self {
@@ -125,6 +135,7 @@ impl Session {
             working_dir: resolved_dir,
             provider:    provider.to_string(),
             model:       model.to_string(),
+            pa_mode:     "fast_development".to_string(),
             created_at:  now,
             updated_at:  now,
             messages:    vec![],

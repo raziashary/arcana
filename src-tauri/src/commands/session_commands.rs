@@ -4,7 +4,8 @@ use std::sync::Arc;
 use tauri::State;
 use crate::errors::Result;
 use crate::hooks::{HookRegistry, HookType, HookContext};
-use crate::session::{manager::SessionManager, types::{Session, Message}};
+use crate::session::{manager::SessionManager, types::{Session, Message, PA_MODES}};
+use crate::errors::AutoDevError;
 
 #[tauri::command]
 pub fn list_sessions(
@@ -100,4 +101,23 @@ pub fn update_session_title(
     let mut updated_session = session;
     updated_session.title = title;
     session_mgr.update_session_title(&updated_session)
+}
+
+/// Phase 3.0 R3 — persist the PA mode for a session so it survives reloads
+/// and engine rebuilds. The frontend `settingsStore.setPAMode` action calls
+/// this whenever the active session is known; `send_message` reads the
+/// stored value as the source of truth.
+#[tauri::command]
+pub fn set_session_pa_mode(
+    session_id:  String,
+    pa_mode:     String,
+    session_mgr: State<'_, Arc<SessionManager>>,
+) -> Result<()> {
+    if !PA_MODES.contains(&pa_mode.as_str()) {
+        return Err(AutoDevError::Session(format!(
+            "Invalid pa_mode '{pa_mode}'. Expected one of: {}",
+            PA_MODES.join(", ")
+        )));
+    }
+    session_mgr.set_pa_mode(&session_id, &pa_mode)
 }

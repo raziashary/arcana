@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::errors::{AutoDevError, Result};
 
@@ -520,6 +520,78 @@ impl OrchestratorClient {
     pub fn clear_cache(&self) {
         self.agent_cache.lock().unwrap().clear();
         debug!("[OrchestratorClient] agent cache cleared");
+    }
+
+    // ─── Immediate Model Update (UI-triggered) ────────────────────────────────
+
+    /// Immediately update an agent's model in core-orchestrator.
+    /// 
+    /// Unlike the lazy update in `find_or_create_agent` (which waits for the
+    /// next recipe tick), this actively looks up the agent by slug and pushes
+    /// the model change immediately. Used when the user changes a worker's
+    /// model in the Settings UI — they get immediate feedback via toast.
+    ///
+    /// Returns `Ok(true)` if the update was applied,
+    /// `Ok(false)` if the agent doesn't exist yet (will be created on next tick),
+    /// or `Err` if the API call failed.
+    pub async fn update_agent_model_by_slug(&self, slug: &str, model: &str) -> Result<bool> {
+        self.ensure_authenticated().await?;
+
+        // Look up agent by name
+        let list_url = format!("{}/api/agents", self.base_url);
+        let list_resp = self.client
+            .get(&list_url)
+            .header("Authorization", self.get_auth_header())
+            .send()
+            .await
+            .map_err(|e| AutoDevError::Agent(format!("GET /api/agents: {e}")))?;
+
+        if !list_resp.status().is_success() {
+            return Err(AutoDevError::Agent("Failed to list agents from orchestrator".into()));
+        }
+
+        let agents: Vec<serde_json::Value> = list_resp
+            .json()
+            .await
+            .unwrap_or_default();
+
+        // Find agent by slug
+        let agent_info = agents.iter().find(|a| {
+            a["name"].as_str().map(|n| n == slug).unwrap_or(false)
+        });
+
+        let (agent_id, current_model) = match agent_info {
+            Some(agent) => {
+                let id = agent["id"]
+                    .as_str()
+                    .ok_or_else(|| AutoDevError::Agent(format!("Agent '{slug}' missing 'id' field")))?;
+                let current = agent["llm_model"].as_str().unwrap_or("");
+                (id.to_string(), current.to_string())
+            }
+            None => {
+                // Agent doesn't exist yet — will be created with correct model on next tick
+                debug!("[OrchestratorClient] agent '{slug}' not found — will be created with model '{model}' on next tick");
+                return Ok(false);
+            }
+        };
+
+        // Only update if model actually changed
+        if current_model == model {
+            debug!("[OrchestratorClient] agent '{slug}' already on model '{model}' — no change needed");
+            return Ok(true);
+        }
+
+        // Push the model update
+        info!("[OrchestratorClient] Pushing model change for '{slug}': '{current_model}' → '{model}'");
+        self.update_agent_model(&agent_id, model).await?;
+
+        // Update cache to reflect new model
+        self.agent_cache
+            .lock()
+            .unwrap()
+            .insert(slug.to_string(), (agent_id, model.to_string()));
+
+        Ok(true)
     }
 }
 

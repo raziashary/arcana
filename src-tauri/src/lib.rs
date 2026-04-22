@@ -29,7 +29,7 @@ pub fn register_commands(
 ) -> tauri::Builder<tauri::Wry> {
     use commands::{
         agent_commands::{cancel_agent, respond_to_permission, send_message},
-        session_commands::{create_session, delete_session, get_session, get_session_messages, list_sessions, update_session_title},
+        session_commands::{create_session, delete_session, get_session, get_session_messages, list_sessions, set_session_pa_mode, update_session_title},
         settings_commands::{
             get_active_provider, get_cost_today, get_default_system_prompt, get_system_prompt,
             list_providers, set_active_provider, set_system_prompt, test_provider_connection,
@@ -50,12 +50,12 @@ pub fn register_commands(
         github_mcp_commands::{get_github_mcp_config, set_github_mcp_config},
         worker_commands::{
             list_workers, get_worker_by_slug, create_worker, update_worker_status,
-            update_worker_model, update_worker_repos, bind_worker_recipe,
+            update_worker_model, update_worker_model_sync, update_worker_repos, bind_worker_recipe,
             delete_worker, start_worker_recipe, stop_worker_recipe,
         },
         workspace_commands::{get_workspace_dir, set_workspace_dir, pick_workspace_dir},
         file_commands::search_workspace_files,
-        log_commands::{list_log_files, read_log_file, clear_log_files},
+        log_commands::{list_log_files, read_log_file, read_log_file_full, clear_log_files},
         sidecar_commands::{get_sidecar_status, check_sidecar_connectivity, start_sidecar, stop_sidecar},
         skill_commands::{
             list_skills, get_skill, search_skills, skills_by_category,
@@ -94,6 +94,7 @@ pub fn register_commands(
         get_session_messages,
         create_session,
         update_session_title,
+        set_session_pa_mode,
         delete_session,
         // Settings / providers
         list_providers,
@@ -145,6 +146,7 @@ pub fn register_commands(
         create_worker,
         update_worker_status,
         update_worker_model,
+        update_worker_model_sync,
         update_worker_repos,
         bind_worker_recipe,
         delete_worker,
@@ -159,6 +161,7 @@ pub fn register_commands(
         // Log file reading / management (for Logs tab)
         list_log_files,
         read_log_file,
+        read_log_file_full,
         clear_log_files,
         // Sidecar lifecycle (core-orchestrator)
         get_sidecar_status,

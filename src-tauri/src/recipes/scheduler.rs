@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use chrono::Utc;
 use cron::Schedule;
@@ -70,6 +70,13 @@ impl RecipeScheduler {
 
         // Set worker to 'idle' (active, ready to fire)
         db.update_status(worker.id, "idle")?;
+        // Phase 3.0 R2 — push status to UI so the Agent Roster turns this
+        // row "alive" the moment the user hits Start.
+        crate::events::emit_worker_status_global(crate::events::WorkerStatusPayload {
+            slug:      worker_slug.to_string(),
+            status:    "idle".to_string(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        });
 
         let runner     = self.runner.clone();
         let slug_owned = worker_slug.to_string();
@@ -156,6 +163,13 @@ impl RecipeScheduler {
                 let _ = db.update_status(worker.id, "paused");
             }
         }
+        // Phase 3.0 R2 — push status so the Agent Roster dims this row
+        // immediately without waiting for the next `list_workers` poll.
+        crate::events::emit_worker_status_global(crate::events::WorkerStatusPayload {
+            slug:      worker_slug.to_string(),
+            status:    "paused".to_string(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        });
 
         info!("[RecipeScheduler] Stopped worker '{}'", worker_slug);
         Ok(())
@@ -178,6 +192,78 @@ impl RecipeScheduler {
     /// Check if a specific worker has an active schedule.
     pub fn is_running(&self, worker_slug: &str) -> bool {
         self.handles.lock().unwrap().contains_key(worker_slug)
+    }
+
+    // ── Push-based kick (Phase 3.0 R1) ────────────────────────────────────────
+
+    /// Fire an immediate one-off recipe tick for `worker_slug`, bypassing the
+    /// cron cadence. Called by the task-board tools when a state transition
+    /// means the worker has work to do *right now* (task created →
+    /// supervisor; task assigned → worker; qc_review → qc-agent).
+    ///
+    /// Semantics:
+    ///   - No-op if the worker isn't registered, has no bound recipe, or is
+    ///     currently `working` (a tick is already in flight). This prevents
+    ///     duplicate parallel runs from piling onto a single LLM session.
+    ///   - Parallel to — not a replacement for — the cron loop. The cron loop
+    ///     stays exactly as it was for idle/recovery polling.
+    ///   - Never blocks the caller: the tick runs on the Tauri async runtime.
+    pub fn kick_worker(&self, worker_slug: &str) {
+        // Gate: skip if worker is already in flight.
+        let (worker_opt, recipe_id_opt) = match WorkersDb::open() {
+            Ok(db) => match db.get_by_slug(worker_slug) {
+                Ok(Some(w)) => {
+                    if w.status == "working" {
+                        info!("[RecipeScheduler] kick_worker('{}'): skipped (already working)", worker_slug);
+                        return;
+                    }
+                    let rid = w.recipe_id.clone();
+                    (Some(w), rid)
+                }
+                Ok(None) => {
+                    warn!("[RecipeScheduler] kick_worker('{}'): worker not found", worker_slug);
+                    return;
+                }
+                Err(e) => {
+                    warn!("[RecipeScheduler] kick_worker('{}'): DB error: {e}", worker_slug);
+                    return;
+                }
+            },
+            Err(e) => {
+                warn!("[RecipeScheduler] kick_worker('{}'): open workers.db failed: {e}", worker_slug);
+                return;
+            }
+        };
+        let _ = worker_opt;
+
+        let recipe_id = match recipe_id_opt {
+            Some(id) => id,
+            None => {
+                warn!("[RecipeScheduler] kick_worker('{}'): no bound recipe", worker_slug);
+                return;
+            }
+        };
+
+        let recipe = match load_recipe_by_id(&recipe_id) {
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                warn!("[RecipeScheduler] kick_worker('{}'): recipe '{}' not on disk", worker_slug, recipe_id);
+                return;
+            }
+            Err(e) => {
+                warn!("[RecipeScheduler] kick_worker('{}'): load recipe failed: {e}", worker_slug);
+                return;
+            }
+        };
+
+        let runner = self.runner.clone();
+        let slug   = worker_slug.to_string();
+        async_runtime::spawn(async move {
+            info!("[RecipeScheduler] kick_worker: firing '{}' immediately (push-based dispatch)", slug);
+            if let Err(e) = runner.run_recipe(&recipe, &slug).await {
+                error!("[RecipeScheduler] kick_worker: recipe run failed for '{}': {e}", slug);
+            }
+        });
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
@@ -205,6 +291,39 @@ async fn wait_for_orchestrator_ready(runner: &super::runner::RecipeRunner, timeo
             return false;
         }
         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    }
+}
+
+// ─── Global scheduler handle (Phase 3.0 R1) ──────────────────────────────────
+//
+// The task-board tools (`create_task`, `assign_task`, `update_task_status`)
+// run inside the agent's tool-execution loop and do not have access to Tauri
+// `State<>`. This OnceLock gives them a cheap, lock-free handle to the
+// scheduler so they can `kick()` the relevant worker the instant the board
+// state changes, collapsing the previous scheduler-only dead window.
+//
+// `install_global` is called exactly once from main.rs right after the
+// RecipeScheduler is constructed. `kick(slug)` is a safe no-op if called
+// before installation (tests, early boot).
+
+static GLOBAL_SCHEDULER: OnceLock<Arc<RecipeScheduler>> = OnceLock::new();
+
+/// Install the process-wide RecipeScheduler handle. Idempotent; subsequent
+/// calls are silently ignored (OnceLock semantics).
+pub fn install_global(scheduler: Arc<RecipeScheduler>) {
+    let _ = GLOBAL_SCHEDULER.set(scheduler);
+}
+
+/// Fire an immediate tick for `worker_slug`. No-ops if the scheduler has not
+/// been installed yet. This is the public API called from the task-board tools
+/// — they never hold an `Arc<RecipeScheduler>` directly.
+pub fn kick(worker_slug: &str) {
+    if let Some(s) = GLOBAL_SCHEDULER.get() {
+        s.kick_worker(worker_slug);
+    } else {
+        // Early-boot or test environment — tick will be handled by the next
+        // cron fire once the scheduler is installed.
+        warn!("[RecipeScheduler::kick] global scheduler not installed — '{}' will wait for next cron tick", worker_slug);
     }
 }
 

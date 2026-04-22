@@ -9,6 +9,11 @@ export interface Session {
   working_dir:   string
   provider:      string
   model:         string
+  // Phase 3.0 R3 — persisted PA mode. Mirrors the Rust `Session.pa_mode`
+  // column. When switching / creating sessions we copy this into
+  // `settingsStore.paMode` so the mode toggle always reflects the loaded
+  // session's stored setting.
+  pa_mode:       string
   created_at:    string
   updated_at:    string
   message_count: number
@@ -52,6 +57,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       provider,
       model,
     })
+
+    // Phase 3.0 R3 — carry the user's current PA-mode preference onto the
+    // new session row so Delegate sticks across New Session clicks. If the
+    // preference equals the default, the backend already has it.
+    try {
+      const { useSettingsStore } = await import('./settingsStore')
+      const currentMode = useSettingsStore.getState().paMode
+      if (currentMode && currentMode !== 'fast_development' && currentMode !== session.pa_mode) {
+        await invoke('set_session_pa_mode', { sessionId: session.id, paMode: currentMode })
+        session.pa_mode = currentMode
+      }
+    } catch (e) {
+      console.error('Failed to seed pa_mode for new session:', e)
+    }
+
     set(s => ({ 
       sessions: [session, ...s.sessions], 
       activeSession: session,
@@ -65,6 +85,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (!session) return
     
     set({ activeSession: session, activeSessionId: id })
+
+    // Phase 3.0 R3 — hydrate PA mode from the session row so the toggle
+    // reflects what the user last chose for *this* chat (not a global
+    // localStorage default). Lazy import avoids a circular dependency.
+    if (session.pa_mode) {
+      try {
+        const { useSettingsStore } = await import('./settingsStore')
+        const current = useSettingsStore.getState().paMode
+        if (current !== session.pa_mode) {
+          // Update directly (not via setPAMode) so we don't write back the
+          // same value we just read — avoids a redundant round-trip.
+          useSettingsStore.setState({ paMode: session.pa_mode as any })
+          localStorage.setItem('autodev:pa_mode', session.pa_mode)
+        }
+      } catch (e) {
+        console.error('Failed to hydrate paMode from session:', e)
+      }
+    }
     
     // Load messages for this session
     try {

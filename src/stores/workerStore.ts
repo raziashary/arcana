@@ -5,6 +5,7 @@
 
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 // ─── Types (mirror Rust Worker struct) ───────────────────────────────────────
 
@@ -99,6 +100,22 @@ interface WorkerStoreState {
   // Derived selectors
   getWorkerBySlug:      (slug: string) => Worker | undefined
   activeWorkers:        () => Worker[]
+
+  // Phase 3.0 R2 — push-channel subscription. Call once from App.tsx at
+  // mount. Idempotent: guarded by the private flag below.
+  initEventListeners:   () => Promise<void>
+}
+
+// Module-scoped guard so repeated calls to initEventListeners don't register
+// duplicate handlers (React StrictMode double-mounts effects in development).
+let _listenersInstalled = false
+const _unlistenFns: UnlistenFn[] = []
+
+// Phase 3.0 R2 event payload (matches Rust `WorkerStatusPayload`).
+interface WorkerStatusEvent {
+  slug:      string
+  status:    WorkerStatus
+  timestamp: string
 }
 
 export const useWorkerStore = create<WorkerStoreState>((set, get) => ({
@@ -189,4 +206,29 @@ export const useWorkerStore = create<WorkerStoreState>((set, get) => ({
 
   activeWorkers: () =>
     get().workers.filter(w => w.status === 'active' || w.status === 'working'),
+
+  initEventListeners: async () => {
+    // Phase 3.0 R2 — register the `worker:status` push listener exactly
+    // once per app lifetime. Replaces the old pattern of deriving status
+    // from task-board staleness, which was the root of the `idle → error
+    // → idle` flicker observed in the Agent Roster (see
+    // docs/development/runtime-fixes/phase3/fleet-flow-analysis.md §2.6).
+    if (_listenersInstalled) return
+    _listenersInstalled = true
+
+    try {
+      const unlisten = await listen<WorkerStatusEvent>('worker:status', (event) => {
+        const { slug, status } = event.payload
+        set(state => ({
+          workers: state.workers.map(w =>
+            w.slug === slug ? { ...w, status } : w
+          ),
+        }))
+      })
+      _unlistenFns.push(unlisten)
+    } catch (e) {
+      console.error('[workerStore] Failed to register worker:status listener:', e)
+      _listenersInstalled = false  // allow retry
+    }
+  },
 }))

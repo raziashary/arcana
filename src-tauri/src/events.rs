@@ -2,8 +2,27 @@
 // All agent → frontend communication uses named Tauri events.
 // The frontend subscribes to these via @tauri-apps/api listen().
 
+use std::sync::OnceLock;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
+
+// Global AppHandle installed from main.rs after setup. Lets non-Tauri
+// subsystems (task-board tools, recipes, hooks) emit fleet events without
+// having to thread `AppHandle` through every call site. Fleet tools run in
+// background tokio tasks with no Tauri `State<>` access, so this is the
+// minimal indirection required for Phase 3.0 R1/R2.
+static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
+
+/// Install the global AppHandle exactly once. Called from main.rs `.setup()`.
+pub fn install_app_handle(app: AppHandle) {
+    let _ = APP_HANDLE.set(app);
+}
+
+/// Access the global AppHandle. Returns None if emission is attempted before
+/// setup completes (tests, early boot). Callers must no-op on None.
+pub fn app_handle() -> Option<&'static AppHandle> {
+    APP_HANDLE.get()
+}
 
 // ── Event name constants ──────────────────────────────────────────────────────
 
@@ -15,6 +34,17 @@ pub const EVT_AGENT_PERMISSION:  &str = "agent:permission-request";
 pub const EVT_AGENT_DONE:        &str = "agent:done";
 pub const EVT_AGENT_ERROR:       &str = "agent:error";
 pub const EVT_COST_UPDATE:       &str = "cost:update";
+
+// Phase 3.0 R2 — fleet status push channel. Replaces polling-based derivation
+// of worker status in the Agent Roster. Emitted from RecipeRunner on every
+// transition (working / idle / error) and at tick boundaries.
+pub const EVT_WORKER_STATUS:     &str = "worker:status";
+pub const EVT_WORKER_TICK_START: &str = "worker:tick-start";
+pub const EVT_WORKER_TICK_END:   &str = "worker:tick-end";
+
+// Phase 3.0 R1 — task board changes push channel. Emitted from every task DB
+// write path so the AutoDev Panel refreshes without polling.
+pub const EVT_TASK_CHANGED:      &str = "task:changed";
 
 // ── Payload types ─────────────────────────────────────────────────────────────
 
@@ -112,4 +142,70 @@ pub fn emit_agent_error(app: &AppHandle, payload: AgentErrorPayload) {
 
 pub fn emit_cost_update(app: &AppHandle, payload: CostUpdatePayload) {
     let _ = app.emit(EVT_COST_UPDATE, payload);
+}
+
+// ── Phase 3.0 R2 payloads + emit helpers ─────────────────────────────────────
+
+#[derive(Debug, Serialize, Clone)]
+pub struct WorkerStatusPayload {
+    pub slug:      String,
+    pub status:    String,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct WorkerTickStartPayload {
+    pub slug:      String,
+    pub mode:      String,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct WorkerTickEndPayload {
+    pub slug:      String,
+    pub outcome:   String,
+    pub timestamp: String,
+}
+
+pub fn emit_worker_status(app: &AppHandle, payload: WorkerStatusPayload) {
+    let _ = app.emit(EVT_WORKER_STATUS, payload);
+}
+
+pub fn emit_worker_tick_start(app: &AppHandle, payload: WorkerTickStartPayload) {
+    let _ = app.emit(EVT_WORKER_TICK_START, payload);
+}
+
+pub fn emit_worker_tick_end(app: &AppHandle, payload: WorkerTickEndPayload) {
+    let _ = app.emit(EVT_WORKER_TICK_END, payload);
+}
+
+// ── Phase 3.0 R1 payloads + emit helpers ─────────────────────────────────────
+
+#[derive(Debug, Serialize, Clone)]
+pub struct TaskChangedPayload {
+    pub task_id: Option<i64>,
+    pub kind:    String,
+    pub status:  Option<String>,
+    pub assigned_worker: Option<String>,
+}
+
+pub fn emit_task_changed(app: &AppHandle, payload: TaskChangedPayload) {
+    let _ = app.emit(EVT_TASK_CHANGED, payload);
+}
+
+// ── Global emit helpers (use installed AppHandle) ────────────────────────────
+// These exist so background subsystems (task DB tools, hooks, schedulers)
+// can fire events without being plumbed an AppHandle. They silently no-op
+// when `install_app_handle` hasn't run yet — expected during boot and tests.
+
+pub fn emit_task_changed_global(payload: TaskChangedPayload) {
+    if let Some(app) = app_handle() {
+        emit_task_changed(app, payload);
+    }
+}
+
+pub fn emit_worker_status_global(payload: WorkerStatusPayload) {
+    if let Some(app) = app_handle() {
+        emit_worker_status(app, payload);
+    }
 }

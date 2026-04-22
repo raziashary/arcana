@@ -3,6 +3,7 @@
 
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 export type TaskPriority = 'p0' | 'p1' | 'p2' | 'p3'
 export type TaskType     = 'feature' | 'bug' | 'refactor' | 'docs' | 'chore'
@@ -52,7 +53,14 @@ interface TaskState {
   updateTaskStatus:   (id: number, status: TaskStatus, worker?: string)    => Promise<void>
   deleteTask:         (id: number)                                          => Promise<void>
   tasksByStatus:      (status: TaskStatus)                                  => Task[]
+
+  // Phase 3.0 R1 — live task-board push channel. Call once from App.tsx.
+  initEventListeners: () => Promise<void>
 }
+
+// Module-level guard so StrictMode double-mounts don't double-register.
+let _taskListenersInstalled = false
+const _taskUnlistenFns: UnlistenFn[] = []
 
 export const useTaskStore = create<TaskState>((set, get) => ({
   tasks:     [],
@@ -91,4 +99,26 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   tasksByStatus: (status) => get().tasks.filter(t => t.status === status),
+
+  initEventListeners: async () => {
+    // Phase 3.0 R1 — subscribe to the board-push channel. Every task write
+    // (create / assign / status update / delete / clear_all) emits
+    // `task:changed` from Rust; we react by re-fetching. Simple and
+    // correct — the list is small (bounded by how many tasks the user has
+    // open). Fine-grained patching can replace this if the board ever grows.
+    if (_taskListenersInstalled) return
+    _taskListenersInstalled = true
+
+    try {
+      const unlisten = await listen('task:changed', () => {
+        // Fire-and-forget refresh. Keeps the kanban in sync without the UI
+        // having to poll.
+        void get().loadTasks()
+      })
+      _taskUnlistenFns.push(unlisten)
+    } catch (e) {
+      console.error('[taskStore] Failed to register task:changed listener:', e)
+      _taskListenersInstalled = false
+    }
+  },
 }))
