@@ -1,10 +1,16 @@
 // Logs tab — Real-time log viewer for ~/.autodev/logs/autodev-YYYY-MM-DD.log
 // Auto-refreshes every 3 seconds. Lines colour-coded by level.
 // All log events from Rust tracing (INFO/WARN/ERROR/DEBUG) appear here.
+//
+// Truncation: `read_log_file` returns only the last 10 000 lines by default.
+// A banner appears at the top when a log file exceeds that limit, offering
+// "Download full log" which calls `read_log_file_full` over a separate
+// command. This keeps the IPC payload bounded and the UI responsive even
+// when a single-day log grows large during heavy fleet activity.
 
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { RefreshCw, ChevronDown, Download, Copy, Check, Trash2 } from 'lucide-react'
+import { RefreshCw, ChevronDown, Download, Copy, Check, Trash2, AlertTriangle } from 'lucide-react'
 
 // ─── Log line parser ──────────────────────────────────────────────────────────
 
@@ -60,6 +66,9 @@ export default function LogsTab() {
   const [loading,      setLoading]      = useState(false)
   const [copied,       setCopied]        = useState(false)
   const [rawContent,   setRawContent]    = useState('')
+  const [totalLines,   setTotalLines]    = useState(0)
+  const [truncated,    setTruncated]     = useState(false)
+  const [fullSize,     setFullSize]      = useState(0)
   const [clearConfirm, setClearConfirm]  = useState(false)
   const [clearingLogs, setClearingLogs]  = useState(false)
   const bottomRef    = useRef<HTMLDivElement>(null)
@@ -76,19 +85,34 @@ export default function LogsTab() {
     } catch (_) { /* no log dir yet */ }
   }, [selectedDate])
 
-  // Read the selected log file and parse lines
+  // Read the selected log file (tail-truncated) and parse lines
+  interface LogFileResult {
+    content:         string
+    total_lines:     number
+    truncated:       boolean
+    full_size_bytes: number
+  }
   const loadLog = useCallback(async () => {
     setLoading(true)
     try {
-      const content = await invoke<string>('read_log_file', { date: selectedDate })
-      setRawContent(content)
-      const parsed  = content
+      const result = await invoke<LogFileResult>('read_log_file', {
+        date: selectedDate,
+        tailLines: 10000,
+      })
+      setRawContent(result.content)
+      setTotalLines(result.total_lines)
+      setTruncated(result.truncated)
+      setFullSize(result.full_size_bytes)
+      const parsed = result.content
         .split('\n')
         .filter(l => l.trim().length > 0)
         .map(parseLine)
       setLines(parsed)
     } catch (_) {
       setRawContent('')
+      setTotalLines(0)
+      setTruncated(false)
+      setFullSize(0)
       setLines([])
     } finally {
       setLoading(false)
@@ -276,7 +300,7 @@ export default function LogsTab() {
             <span style={{ fontFamily: 'monospace', fontSize: 9 }}>{copied ? 'Copied!' : 'Copy'}</span>
           </button>
 
-          {/* Export .log file */}
+          {/* Export truncated (visible) */}
           <button
             onClick={() => {
               if (!rawContent) return
@@ -291,7 +315,7 @@ export default function LogsTab() {
               URL.revokeObjectURL(url)
             }}
             disabled={!rawContent}
-            title="Download log file"
+            title="Download visible (truncated) log"
             style={{
               background:   'var(--bg-card)',
               border:       '1px solid var(--border-2)',
@@ -307,6 +331,43 @@ export default function LogsTab() {
             <Download size={9} />
             <span style={{ fontFamily: 'monospace', fontSize: 9 }}>Export</span>
           </button>
+
+          {/* Download full log (only shown when truncated) */}
+          {truncated && (
+            <button
+              onClick={async () => {
+                try {
+                  const full = await invoke<string>('read_log_file_full', { date: selectedDate })
+                  const blob = new Blob([full], { type: 'text/plain' })
+                  const url  = URL.createObjectURL(blob)
+                  const a    = document.createElement('a')
+                  a.href     = url
+                  a.download = `autodev-${selectedDate || 'log'}-FULL.log`
+                  document.body.appendChild(a)
+                  a.click()
+                  document.body.removeChild(a)
+                  URL.revokeObjectURL(url)
+                } catch (e) {
+                  console.error('Failed to download full log:', e)
+                }
+              }}
+              title="Download full log file (not truncated)"
+              style={{
+                background:   '#FFCB8B18',
+                border:       '1px solid #FFCB8B50',
+                borderRadius: 2,
+                padding:      '2px 7px',
+                color:        '#FFCB8B',
+                cursor:       'pointer',
+                display:      'flex',
+                alignItems:   'center',
+                gap:          4,
+              }}
+            >
+              <Download size={9} />
+              <span style={{ fontFamily: 'monospace', fontSize: 9 }}>Full</span>
+            </button>
+          )}
 
           {/* Clear all log files */}
           <button
@@ -372,11 +433,29 @@ export default function LogsTab() {
           </button>
         </div>
 
-        {/* Stats row */}
-        <div style={{ marginTop: 4, display: 'flex', gap: 12 }}>
+        {/* Stats row + truncation banner */}
+        <div style={{ marginTop: 4, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ fontFamily: 'monospace', fontSize: 9, color: 'var(--text-4)' }}>
             {visibleLines.length} / {lines.length} lines
+            {truncated && (
+              <span style={{ color: '#FFCB8B', marginLeft: 4 }}>
+                (showing last {lines.length.toLocaleString()} of {totalLines.toLocaleString()} total)
+              </span>
+            )}
           </span>
+          {truncated && (
+            <span style={{
+              fontFamily: 'monospace',
+              fontSize: 9,
+              color: '#FFCB8B',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+            }}>
+              <AlertTriangle size={9} />
+              {(fullSize / 1024 / 1024).toFixed(1)} MB on disk
+            </span>
+          )}
           {dates.length > 0 && selectedDate === dates[0] && (
             <span style={{ fontFamily: 'monospace', fontSize: 9, color: 'var(--aqua)', opacity: 0.6 }}>
               ● live
