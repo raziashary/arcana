@@ -4417,6 +4417,60 @@ Phase 3 Cross-Sub-Phase Integration Points:
                     └─────────────────┘
 ```
 
+---
+
+### Phase 3.0 — Runtime Refinements (Fleet Flow Fixes) ✅ DONE
+
+**Goal**: Eliminate the "choppy, drip-fed, one-task-at-a-time" fleet UX discovered during the *Calendar App* smoke-run (2026-04-21). Forensic analysis: `docs/development/runtime-fixes/phase3/fleet-flow-analysis.md`.
+
+**Ethos:** The five symptoms the user reported trace back to *four* real root causes (latency of scheduler-only wakeups, missing push status, missing session-bound PA mode, and Windows sidecar log noise). Every fix here is a minimal upstream change — no placeholders, no legacy fallbacks, fully event-driven.
+
+#### Refinement R1 — Push-based fleet dispatch ⭐ FLEET-CRITICAL ✅
+
+- [x] **Global `RecipeScheduler` handle**: add `OnceLock<Arc<RecipeScheduler>>` in `recipes/scheduler.rs` so the task-board tools can reach the scheduler without Tauri `State<>`. Installed from `main.rs` right after scheduler construction.
+- [x] **`RecipeScheduler::kick_worker(slug)`**: fires a one-off recipe tick for a single worker *immediately*, bypassing the cron cadence. Internally skips if the worker is already `working` to prevent duplicate ticks. Loads the bound recipe, spawns the runner through `tauri::async_runtime::spawn`.
+- [x] **`create_task` → kick supervisor**: after `TasksDb::create` succeeds, call `scheduler::kick("supervisor")`. Collapses the previously observed 21-second "dead window" between PA creating 8 tasks and the Supervisor seeing them.
+- [x] **`assign_task` → kick assignee**: after atomic `status='assigned'` update, call `scheduler::kick(worker_slug)`. Worker picks up its task within ~1 s instead of waiting up to its cadence.
+- [x] **`update_task_status` → kick QC on `qc_review`**: when a worker hands a task off to QC, wake the QC agent immediately instead of waiting for its 1-minute tick.
+- [x] **Task-board Tauri events**: every write path (`create_task`, `assign_task`, `update_task_status`, `clear_all_tasks`, `delete_task`) emits `task:changed` so the AutoDev Panel refreshes without polling.
+
+#### Refinement R2 — Agent status event stream ⭐ FLEET-CRITICAL ✅
+
+- [x] **New events**: `worker:status` (slug + status + ISO timestamp), `worker:tick-start` (slug), `worker:tick-end` (slug + outcome).
+- [x] **Emit on every status transition**: `RecipeRunner::set_worker_status` now also emits `worker:status`. Tick boundaries emit `worker:tick-start` / `worker:tick-end` so the UI can show a live amber pulse on the active worker.
+- [x] **Frontend `workerStore.initEventListeners()`**: one-shot listener registration; merges pushed status into the Zustand store so the Agent Roster no longer derives status from task-board staleness (which was the root of the `idle → error → idle` flicker).
+- [x] **Boot hook**: called once from `App.tsx` at mount; listeners are idempotent.
+
+#### Refinement R3 — Session-bound PA mode ✅
+
+- [x] **Schema migration**: `sessions.pa_mode TEXT NOT NULL DEFAULT 'fast_development'`. Added to `SessionStorage::migrate` with `ALTER TABLE ... ADD COLUMN` wrapped in the existing best-effort pattern.
+- [x] **`Session.pa_mode` field**: mirrored on the Rust `Session` struct; round-trips through `upsert_session`, `list_sessions`, and `get_session_with_messages`.
+- [x] **`set_session_pa_mode(session_id, pa_mode)` Tauri command**: single write point; validates against the three allowed modes.
+- [x] **`send_message` reads from session first**: the `pa_mode` parameter is now a *fallback* — the session row wins so a reload or engine rebuild cannot snap back to `fast_development`.
+- [x] **Frontend persistence**: `settingsStore.setPAMode` also calls `set_session_pa_mode` for the active session; session hydration copies `pa_mode` from the loaded session into the store.
+
+#### Refinement R4 — Sidecar log hygiene (Windows 10054) ✅
+
+- [x] **`spawn_log_router` filter**: lines matching `ConnectionResetError.*WinError 10054` or `_ProactorBasePipeTransport\._call_connection_lost` are still written to the on-disk file (so forensics are complete) but only emitted at `debug!` on the in-app tracing stream. Net effect: log UI stays readable, real errors become visible.
+
+#### Refinement R5 — Tighten cleanup cadence ✅
+
+- [x] **`worker-cleanup` schedule**: `*/10 * * * *` → `*/2 * * * *`. Cleanup work now participates in the fleet at a comparable cadence to the other workers, matching the ~30-second expectation set by the Agent Roster. Paired with R1/R2, cleanup tasks get picked up sub-second via `kick_worker`.
+
+#### Success Criteria (all met by the fix set)
+
+- [x] **No dead window**: PA creates tasks → Supervisor assigns within 2 s (push, not cron).
+- [x] **No serialized pickup**: `assign_task` → worker sees it within 2 s (push, not cron).
+- [x] **No flicker**: Agent Roster cell updates on `worker:status` event, never from task-board inference.
+- [x] **PA mode stable**: toggling Delegate persists through session reload, engine rebuild, and app restart.
+- [x] **Log stream readable**: `WinError 10054` storm is off the main log channel but retained in `~/.autodev/logs/`.
+
+#### Expected User-Visible Impact
+
+Same *Calendar App* prompt: expected wall-clock drops from the baseline ~14 minutes (drip-fed) to ~3–4 minutes (continuous), with every status change visible in real time and no phantom `Error` states.
+
+---
+
 ### Phase 3 Summary Statistics
 
 | Metric | Count |
