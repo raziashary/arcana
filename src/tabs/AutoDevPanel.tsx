@@ -80,13 +80,17 @@ function AgentRoster({ tasks }: { tasks: Task[] }) {
         const label      = worker.slug.toUpperCase()
         const taskLabel  = active
           ? `#${active.id} — ${active.title}`
+          : worker.status === 'working'
+            ? 'Working — polling…'
           : worker.status === 'active' || worker.status === 'idle'
             ? 'Idle — awaiting tasks'
             : worker.status === 'paused'
               ? 'Paused'
               : worker.status === 'created'
                 ? 'Created — not started'
-                : 'Error'
+                : worker.status === 'error'
+                  ? 'Error — see logs'
+                  : worker.status
         const elapsed = active ? elapsedSince(active.updated_at) : '—'
 
         return (
@@ -404,7 +408,7 @@ function formatLastRefreshed(d: Date): string {
 export default function AutoDevTab() {
   const { tasks, loadTasks, deleteTask } = useTaskStore()
   const workerStore = useWorkerStore()
-  const { status: sidecarStatus, isConnected: sidecarConnected, checkConnectivity } = useSidecarStore()
+  const { status: sidecarStatus, isConnected: sidecarConnected } = useSidecarStore()
   const [costUsd,      setCostUsd]      = useState<number | null>(null)
   const [tokensIn,     setTokensIn]     = useState<number | null>(null)
   const [tokensOut,    setTokensOut]    = useState<number | null>(null)
@@ -441,11 +445,6 @@ export default function AutoDevTab() {
       setIsRefreshing(false)
     }
   }, [isRefreshing, loadTasks, loadCost, workerStore])
-
-  // Probe core-orchestrator health on mount (non-blocking)
-  useEffect(() => {
-    checkConnectivity()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     doRefresh()

@@ -16,6 +16,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 import { useRuntimeConfigStore } from '../stores/runtimeConfigStore'
 import HooksSettings from '../components/settings/HooksSettings'
+import SidecarPanel from '../components/sidecar/SidecarPanel'
+import McpToolBrowser from '../components/sidecar/McpToolBrowser'
 
 export default function SettingsTab() {
   const store          = useSettingsStore()
@@ -37,6 +39,12 @@ export default function SettingsTab() {
 
         <SectionHeader title="Demo Mode" />
         <DemoModeCard />
+
+        <SectionHeader title="Services" />
+        <SidecarPanel />
+
+        <SectionHeader title="MCP Tools" />
+        <McpToolBrowser />
 
         <SectionHeader title="Providers" />
 

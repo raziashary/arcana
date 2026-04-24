@@ -7,6 +7,7 @@ use crate::provider::types::{ModelInfo, ProviderStatus};
 use crate::provider::anthropic::AnthropicProvider;
 use crate::provider::openai::OpenAIProvider;
 use crate::provider::google::GoogleProvider;
+use crate::provider::ollama::OllamaProvider;
 use crate::provider::traits::Provider;
 use crate::state::AppState;
 use crate::vault::keychain::{VaultManager, provider_key};
@@ -41,12 +42,13 @@ fn build_provider_info(id: &str, name: &str) -> Result<ProviderInfo> {
         "anthropic" => AnthropicProvider::new(String::new()).models(),
         "openai"    => OpenAIProvider::new(String::new()).models(),
         "google"    => GoogleProvider::new(String::new()).models(),
+        "ollama"    => OllamaProvider::default_from_env().models(),
         _ => vec![],
     };
     Ok(ProviderInfo {
         id:      id.to_string(),
         name:    name.to_string(),
-        status:  if has_key { ProviderStatus::Disconnected } else { ProviderStatus::Disconnected },
+        status:  ProviderStatus::Disconnected,
         models,
         has_key,
     })
@@ -54,6 +56,12 @@ fn build_provider_info(id: &str, name: &str) -> Result<ProviderInfo> {
 
 #[tauri::command]
 pub async fn test_provider_connection(provider: String) -> Result<ProviderStatus> {
+    // Ollama does not require an API key — connect directly.
+    if provider == "ollama" {
+        let p = OllamaProvider::default_from_env();
+        return p.test_connection().await;
+    }
+
     let key = VaultManager::get(&provider_key(&provider))?
         .ok_or_else(|| AutoDevError::Provider("No API key stored for provider".into()))?;
 

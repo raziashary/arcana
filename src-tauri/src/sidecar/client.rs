@@ -244,6 +244,58 @@ impl OrchestratorClient {
         }
     }
 
+    /// Returns true if Redis (or Memurai on Windows) responds to a PING on
+    /// `127.0.0.1:6379` within 3 seconds. Uses raw RESP over TCP to avoid
+    /// pulling in a redis crate dependency — we only need liveness, not
+    /// full protocol support.
+    ///
+    /// Phase 3.4b: core-orchestrator uses Redis for the warm memory tier and
+    /// agent card store. A missing Redis does NOT block fleet startup (the
+    /// Python side falls back to cold tier only) but we surface the status
+    /// in the UI so users know whether the warm tier is available.
+    pub async fn is_redis_healthy(&self) -> bool {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+        use tokio::time::timeout;
+
+        let connect = timeout(
+            Duration::from_secs(HEALTH_TIMEOUT_SECS),
+            TcpStream::connect("127.0.0.1:6379"),
+        ).await;
+
+        let mut stream = match connect {
+            Ok(Ok(s))  => s,
+            Ok(Err(e)) => {
+                debug!("[OrchestratorClient] Redis connect failed: {e}");
+                return false;
+            }
+            Err(_) => {
+                debug!("[OrchestratorClient] Redis connect timeout");
+                return false;
+            }
+        };
+
+        // RESP inline command: PING\r\n — server responds with +PONG\r\n
+        if timeout(
+            Duration::from_secs(HEALTH_TIMEOUT_SECS),
+            stream.write_all(b"PING\r\n"),
+        ).await.ok().and_then(|r| r.ok()).is_none() {
+            return false;
+        }
+
+        let mut buf = [0u8; 16];
+        match timeout(
+            Duration::from_secs(HEALTH_TIMEOUT_SECS),
+            stream.read(&mut buf),
+        ).await {
+            Ok(Ok(n)) if n > 0 => {
+                let reply = &buf[..n];
+                reply.starts_with(b"+PONG")
+            }
+            _ => false,
+        }
+    }
+
     // ─── Agent Registration ───────────────────────────────────────────────────
 
     /// Idempotent: find an existing core-orchestrator agent by worker slug, or
@@ -397,30 +449,9 @@ impl OrchestratorClient {
             "description":   format!("AutoDev fleet worker agent — {slug}"),
             "llm_model":     model,
             "system_prompt": system_prompt,
-            "mcp_servers":   [],
+            "mcp_servers": ["autodev-mcp-server"],
             "internal_tools": [],
-            // Tools bridged from the Rust host into the core-orchestrator
-            // LivingAgent (Mode 2). These must mirror what's registered in
-            // `agent/builtin_tools/mod.rs` for Mode 1, otherwise fleet agents
-            // can only do file ops in Mode 2 and cannot touch the task board —
-            // which silently breaks every supervisor/worker/qc recipe.
-            "autodev_tools": [
-                // File / execution
-                "read_file__autodev",
-                "write_file__autodev",
-                "edit_file__autodev",
-                "bash__autodev",
-                "list_directory__autodev",
-                "grep__autodev",
-                "glob__autodev",
-                // Worker registry
-                "list_workers__autodev",
-                // Task board — required for supervisor, workers, qc-agent
-                "list_tasks__autodev",
-                "update_task_status__autodev",
-                "assign_task__autodev",
-                "create_task__autodev",
-            ],
+            "autodev_tools": [],
             "capabilities":  ["task_management", "code_generation", "autodev_fleet"],
         });
 
@@ -698,6 +729,68 @@ impl OrchestratorClient {
             .insert(slug.to_string(), (agent_id, model.to_string()));
 
         Ok(true)
+    }
+
+    // ─── MCP Server Registration ────────────────────────────────────────────────
+
+    /// Register the in-process AutoDev MCP Server with core-orchestrator's
+    /// MCP configuration so LivingAgents can discover tools from it.
+    /// Called once after core-orchestrator is healthy (in main.rs startup).
+    pub async fn register_mcp_server(&self) -> Result<()> {
+        if self.ensure_authenticated().await.is_err() {
+            return Err(AutoDevError::Agent(
+                "Cannot register MCP server: not authenticated".into()
+            ));
+        }
+
+        let url = format!("{}/api/mcp/servers", self.base_url);
+        let body = serde_json::json!({
+            "id": "autodev-mcp-server",
+            "name": "AutoDev MCP Server",
+            "type": "autodev",
+            "transport": "http",
+            "http": {
+                "url": "http://127.0.0.1:8767/mcp",
+                "headers": {"Content-Type": "application/json"}
+            }
+        });
+
+        let resp = self.client
+            .post(&url)
+            .header("Authorization", self.get_auth_header())
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AutoDevError::Agent(format!("POST /api/mcp/servers: {e}")))?;
+
+        if resp.status().is_success() {
+            info!("[OrchestratorClient] autodev-mcp-server registered with core-orchestrator");
+            Ok(())
+        } else if resp.status().as_u16() == 409 {
+            // Already registered — idempotent
+            info!("[OrchestratorClient] autodev-mcp-server already registered (409)");
+            Ok(())
+        } else if resp.status().as_u16() == 400 {
+            // Defensive: also treat 400 with "already exists" as idempotent
+            // (in case Python returns 400 before the fix is deployed)
+            let text = resp.text().await.unwrap_or_default();
+            if text.contains("already exists") {
+                info!("[OrchestratorClient] autodev-mcp-server already registered (400 — legacy response)");
+                Ok(())
+            } else {
+                Err(AutoDevError::Agent(format!(
+                    "MCP server registration failed (HTTP 400): {}",
+                    &text[..text.len().min(400)]
+                )))
+            }
+        } else {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            Err(AutoDevError::Agent(format!(
+                "MCP server registration failed (HTTP {status}): {}",
+                &text[..text.len().min(400)]
+            )))
+        }
     }
 }
 

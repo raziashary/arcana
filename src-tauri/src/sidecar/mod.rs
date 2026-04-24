@@ -4,12 +4,15 @@
 //   Mode 1: PA Agent         → Rust AgentEngine (direct LLM, low latency)
 //   Mode 2: Worker Agent     → core-orchestrator LivingAgent (21 FSMs, mem0, A2A)
 //
-// Two Python sidecars must both run for Mode 2 to be active:
+// Three managed processes must all run for Mode 2 to be active:
 //   1. memory-mcp-server   (port 8000)  — long-term mem0 memory
 //   2. core-orchestrator   (port 4000)  — LivingAgent gateway
+//   3. autodev-mcp-server  (port 8767)  — canonical Rust builtin_tools via MCP
 //
 // Startup order: memory-mcp-server MUST start first because LivingAgent's
 // MemoryCore initialises at agent creation time and connects to port 8000.
+// autodev-mcp-server is an in-process Tokio task (no separate binary), so it
+// starts immediately alongside the Tauri app.
 //
 // Log routing: stdout/stderr from both processes is piped to:
 //   ~/.autodev/logs/core-orchestrator.log
@@ -157,6 +160,13 @@ pub struct SidecarManager {
     // memory-mcp-server (port 8000) — must be running before core-orchestrator
     memory_process: Mutex<Option<Child>>,
     memory_status:  Mutex<SidecarStatus>,
+    // autodev-mcp-server (port 8767) — in-process Tokio task, tracked for fleet readiness
+    mcp_status:     Mutex<SidecarStatus>,
+    // Redis / Memurai (port 6379) — externally managed (Windows service or
+    // system Redis). AutoDev only probes liveness; it does NOT spawn or stop
+    // Redis. Redis is OPTIONAL — its absence disables the warm memory tier
+    // and agent card store but does not block fleet startup.
+    redis_status:   Mutex<SidecarStatus>,
     // Startup phase tracker — set once the Tauri AppHandle is available
     // (see main.rs setup hook). Log router + status transitions feed this.
     progress:       Mutex<Option<Arc<StartupProgress>>>,
@@ -169,6 +179,8 @@ impl SidecarManager {
             orch_status:    Mutex::new(SidecarStatus::Stopped),
             memory_process: Mutex::new(None),
             memory_status:  Mutex::new(SidecarStatus::Stopped),
+            mcp_status:     Mutex::new(SidecarStatus::Running), // Phase 3.4 — MCP is in-process, starts immediately
+            redis_status:   Mutex::new(SidecarStatus::Stopped), // Phase 3.4b — polled, not spawned
             progress:       Mutex::new(None),
         }
     }
@@ -258,6 +270,11 @@ impl SidecarManager {
 
     pub fn memory_is_running(&self) -> bool {
         matches!(self.memory_status.lock().unwrap().clone(), SidecarStatus::Running)
+    }
+
+    /// Returns the OS PID of memory-mcp-server child process, if alive.
+    pub fn memory_pid(&self) -> Option<u32> {
+        self.memory_process.lock().unwrap().as_ref().map(|c| c.id())
     }
 
     // ─── core-orchestrator lifecycle ───────────────────────────────────────────
@@ -354,12 +371,78 @@ impl SidecarManager {
         matches!(self.orch_status.lock().unwrap().clone(), SidecarStatus::Running)
     }
 
-    /// True only when BOTH memory-mcp-server AND core-orchestrator are Running.
-    pub fn fleet_is_ready(&self) -> bool {
-        self.memory_is_running() && self.is_running()
+    /// Returns the OS PID of core-orchestrator child process, if alive.
+    pub fn orch_pid(&self) -> Option<u32> {
+        self.orch_process.lock().unwrap().as_ref().map(|c| c.id())
     }
 
-    /// Terminate both sidecars (call on app shutdown).
+    /// True only when memory-mcp-server, core-orchestrator, AND autodev-mcp-server are Running.
+    pub fn fleet_is_ready(&self) -> bool {
+        self.memory_is_running() && self.is_running() && self.mcp_is_running()
+    }
+
+    // ─── autodev-mcp-server status ────────────────────────────────────────────
+
+    /// Mark autodev-mcp-server as healthy.
+    pub fn mark_mcp_running(&self) {
+        *self.mcp_status.lock().unwrap() = SidecarStatus::Running;
+        info!("[SidecarManager] autodev-mcp-server is ready on :8767");
+    }
+
+    /// Mark autodev-mcp-server as errored.
+    pub fn mark_mcp_error(&self, msg: &str) {
+        warn!("[SidecarManager] autodev-mcp-server error: {msg}");
+        *self.mcp_status.lock().unwrap() = SidecarStatus::Error(msg.to_string());
+    }
+
+    pub fn mcp_status(&self) -> SidecarStatus {
+        self.mcp_status.lock().unwrap().clone()
+    }
+
+    pub fn mcp_is_running(&self) -> bool {
+        matches!(self.mcp_status.lock().unwrap().clone(), SidecarStatus::Running)
+    }
+
+    // ─── redis / memurai status (Phase 3.4b) ──────────────────────────────────
+    //
+    // Redis is externally managed (Memurai service on Windows, system redis on
+    // Linux/macOS). AutoDev only polls liveness — it never spawns redis.
+    // Redis is OPTIONAL: core-orchestrator runs without it (warm tier disabled)
+    // so `redis_is_running()` is NOT part of `fleet_is_ready()`.
+
+    /// Mark Redis as healthy (call after PING returns +PONG).
+    pub fn mark_redis_running(&self) {
+        let mut s = self.redis_status.lock().unwrap();
+        if !matches!(*s, SidecarStatus::Running) {
+            info!("[SidecarManager] Redis/Memurai is reachable on :6379");
+        }
+        *s = SidecarStatus::Running;
+    }
+
+    /// Mark Redis as unreachable. This is not an error for AutoDev — it just
+    /// means the warm memory tier is unavailable and core-orchestrator will
+    /// fall back to cold tier only.
+    pub fn mark_redis_unavailable(&self) {
+        let mut s = self.redis_status.lock().unwrap();
+        if !matches!(*s, SidecarStatus::Error(_)) {
+            warn!(
+                "[SidecarManager] Redis/Memurai not reachable on :6379 — \
+                 warm memory tier disabled (core-orchestrator will use cold tier only)"
+            );
+        }
+        *s = SidecarStatus::Error("Redis not reachable on 127.0.0.1:6379".into());
+    }
+
+    pub fn redis_status(&self) -> SidecarStatus {
+        self.redis_status.lock().unwrap().clone()
+    }
+
+    pub fn redis_is_running(&self) -> bool {
+        matches!(self.redis_status.lock().unwrap().clone(), SidecarStatus::Running)
+    }
+
+    /// Terminate managed sidecars (call on app shutdown).
+    /// NOTE: Redis is NOT stopped — it is externally managed by the OS.
     pub fn stop_all(&self) {
         self.stop();
         self.stop_memory();

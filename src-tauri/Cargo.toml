@@ -45,6 +45,12 @@ keyring = "2"
 # HTTP client (provider API calls)
 reqwest = { version = "0.12", features = ["json", "stream"] }
 
+# MCP protocol (official Rust SDK) — Phase 3.4
+rmcp = { version = "0.16", features = ["server", "transport-streamable-http-server"] }
+
+# HTTP framework for MCP Streamable HTTP transport
+axum = "0.8"
+
 # Utilities
 uuid   = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -69,6 +75,13 @@ rfd = { version = "0.15", features = ["tokio"] }
 
 # git2-rs — Phase 3 (already declared to lock dep version)
 git2 = "0.19"
+
+# Process resource monitoring (CPU%, memory) — Phase 3.4b SidecarPanel
+sysinfo = "0.33"
+
+# Ollama local LLM provider — Phase X
+# Task D3: Keep 0.3.4; panic prevention via D1 (sanitized OLLAMA_HOST) + D2 (catch_unwind)
+ollama-rs = { version = "0.3.4", features = ["stream"] }
 
 [package.metadata.tauri]
 # This section is required by tauri-build to locate icons and capabilities

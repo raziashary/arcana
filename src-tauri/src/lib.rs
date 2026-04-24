@@ -19,6 +19,7 @@ pub mod hooks;
 pub mod ide;
 pub mod git;
 pub mod runtime_config;
+pub mod mcp_server;
 
 // Register all Tauri commands on the builder from within the lib crate.
 // generate_handler! must run here so the __cmd__* macros (produced by
@@ -56,7 +57,14 @@ pub fn register_commands(
         workspace_commands::{get_workspace_dir, set_workspace_dir, pick_workspace_dir},
         file_commands::search_workspace_files,
         log_commands::{list_log_files, read_log_file, read_log_file_full, clear_log_files},
-        sidecar_commands::{get_sidecar_status, check_sidecar_connectivity, start_sidecar, stop_sidecar},
+        sidecar_commands::{
+            get_sidecar_status, check_sidecar_connectivity, start_sidecar, stop_sidecar,
+            get_full_sidecar_status, list_mcp_tools,
+            // Phase 3.4b — per-service lifecycle + resource + log viewer
+            start_memory_mcp, stop_memory_mcp,
+            start_orchestrator, stop_orchestrator,
+            get_resource_usage, read_sidecar_log,
+        },
         skill_commands::{
             list_skills, get_skill, search_skills, skills_by_category,
             execute_skill, validate_skill_parameters, reload_skills, import_skill,
@@ -168,6 +176,15 @@ pub fn register_commands(
         check_sidecar_connectivity,
         start_sidecar,
         stop_sidecar,
+        get_full_sidecar_status,
+        list_mcp_tools,
+        // Phase 3.4b
+        start_memory_mcp,
+        stop_memory_mcp,
+        start_orchestrator,
+        stop_orchestrator,
+        get_resource_usage,
+        read_sidecar_log,
         // Skills system (Phase 3.1)
         list_skills,
         get_skill,

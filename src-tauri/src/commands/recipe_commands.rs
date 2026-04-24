@@ -185,6 +185,7 @@ pub async fn generate_recipe_yaml(
     use crate::provider::anthropic::AnthropicProvider;
     use crate::provider::openai::OpenAIProvider;
     use crate::provider::google::GoogleProvider;
+    use crate::provider::ollama::OllamaProvider;
     use crate::provider::traits::Provider;
     use crate::provider::types::{CompletionRequest, MessageContent, RequestMessage};
 
@@ -197,13 +198,18 @@ pub async fn generate_recipe_yaml(
         (p, m)
     };
 
-    let api_key = VaultManager::get(&provider_key(&provider_id))?
-        .ok_or_else(|| AutoDevError::Agent(format!("No API key for provider '{provider_id}'")))?;
+    let api_key = if provider_id != "ollama" {
+        VaultManager::get(&provider_key(&provider_id))?
+            .ok_or_else(|| AutoDevError::Agent(format!("No API key for provider '{provider_id}'")))?
+    } else {
+        String::new()
+    };
 
     let provider: Arc<dyn Provider> = match provider_id.as_str() {
         "anthropic" => Arc::new(AnthropicProvider::new(api_key)),
         "openai"    => Arc::new(OpenAIProvider::new(api_key)),
         "google"    => Arc::new(GoogleProvider::new(api_key)),
+        "ollama"    => Arc::new(OllamaProvider::default_from_env()),
         _           => return Err(AutoDevError::Agent(format!("Unsupported provider: {provider_id}"))),
     };
 

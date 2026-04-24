@@ -11,6 +11,7 @@
 //   "error: …"  — spawn/health failure
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { create } from "zustand";
 
 export type SidecarStatusStr =
@@ -18,6 +19,11 @@ export type SidecarStatusStr =
   | "starting"
   | "running"
   | `error: ${string}`;
+
+interface StartupProgressPayload {
+  phase: string;
+  message?: string;
+}
 
 interface SidecarState {
   status: SidecarStatusStr;
@@ -28,9 +34,14 @@ interface SidecarState {
   checkConnectivity: () => Promise<boolean>;
   startSidecar: (path?: string) => Promise<string>;
   stopSidecar: () => Promise<void>;
+  initEventListeners: () => Promise<void>;
 }
 
-export const useSidecarStore = create<SidecarState>((set) => ({
+// Module-scoped guard to prevent duplicate listener registration (React StrictMode double-mount)
+let _listenersInstalled = false;
+const _unlistenFns: UnlistenFn[] = [];
+
+export const useSidecarStore = create<SidecarState>((set, get) => ({
   status: "stopped",
   isConnected: false,
 
@@ -79,6 +90,48 @@ export const useSidecarStore = create<SidecarState>((set) => ({
       await invoke<string>("stop_sidecar");
     } finally {
       set({ status: "stopped", isConnected: false });
+    }
+  },
+
+  // ── Event Listeners ──────────────────────────────────────────────────────
+  // Task A1: Wire sidecarStore to startup:progress events.
+  // Subscribes to Rust startup:progress event and transitions to "running" when
+  // orchestrator reaches orch_ready, fleet_ready, or ready phase.
+  // Also starts a 5-second polling interval until isConnected === true.
+  initEventListeners: async () => {
+    if (_listenersInstalled) return;
+    _listenersInstalled = true;
+
+    try {
+      // Register listener for startup:progress events
+      const unlisten = await listen<StartupProgressPayload>(
+        "startup:progress",
+        (event) => {
+          const { phase } = event.payload;
+          // When orchestrator reaches these phases, mark sidecar as running
+          if (phase === "orch_ready" || phase === "fleet_ready" || phase === "ready") {
+            set({ status: "running", isConnected: true });
+          }
+        }
+      );
+      _unlistenFns.push(unlisten);
+
+      // Start a 5-second polling interval as fallback
+      // (in case startup:progress events are missed or delayed)
+      let pollAttempts = 0;
+      const maxAttempts = 12; // 5s * 12 = 60s max
+      const pollInterval = setInterval(async () => {
+        pollAttempts++;
+        const healthy = await get().checkConnectivity();
+        if (healthy) {
+          clearInterval(pollInterval);
+        } else if (pollAttempts >= maxAttempts) {
+          clearInterval(pollInterval);
+        }
+      }, 5000);
+    } catch (e) {
+      console.error("[sidecarStore] Failed to register startup:progress listener:", e);
+      _listenersInstalled = false; // allow retry
     }
   },
 }));

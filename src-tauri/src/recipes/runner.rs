@@ -27,6 +27,7 @@ use crate::errors::{AutoDevError, Result};
 use crate::provider::anthropic::AnthropicProvider;
 use crate::provider::openai::OpenAIProvider;
 use crate::provider::google::GoogleProvider;
+use crate::provider::ollama::OllamaProvider;
 use crate::provider::traits::Provider;
 use crate::recipes::types::Recipe;
 use crate::session::manager::SessionManager;
@@ -235,15 +236,20 @@ impl RecipeRunner {
                 ))?
         };
 
-        let api_key = VaultManager::get(&provider_key(&provider_id))?
-            .ok_or_else(|| AutoDevError::Agent(
-                format!("No API key stored for provider '{provider_id}' — set it in Settings")
-            ))?;
+        let api_key = if provider_id != "ollama" {
+            VaultManager::get(&provider_key(&provider_id))?
+                .ok_or_else(|| AutoDevError::Agent(
+                    format!("No API key stored for provider '{provider_id}' — set it in Settings")
+                ))?
+        } else {
+            String::new()
+        };
 
         let provider: Arc<dyn Provider> = match provider_id.as_str() {
             "anthropic" => Arc::new(AnthropicProvider::new(api_key)),
             "openai"    => Arc::new(OpenAIProvider::new(api_key)),
             "google"    => Arc::new(GoogleProvider::new(api_key)),
+            "ollama"    => Arc::new(OllamaProvider::default_from_env()),
             other       => return Err(AutoDevError::Agent(format!("Unsupported provider: {other}"))),
         };
 

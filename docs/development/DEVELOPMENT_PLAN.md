@@ -3176,119 +3176,398 @@ uv run python scripts/migrate_to_clean_ids.py             # execute
 
 ---
 
-### Phase 3.4 — MCP Server + Sidecar Management
+### Phase 3.4 — MCP Server + Sidecar Management + Python Cleanup
 
-**Goal**: AIRS MCP server for Fleet coordination, sidecar management for core-orchestrator and memory-mcp-server, Ollama provider for local models.
+**Goal**: Replace the duplicated Python `autodev_handler.py` (864 lines of reimplemented Rust tools) with an **AutoDev MCP Server** that exposes the canonical Rust `builtin_tools` via the Model Context Protocol using **Streamable HTTP transport**. Fleet workers (core-orchestrator LivingAgents) connect as MCP clients over HTTP. Sidecar management provides lifecycle control for all managed processes.
+
+**Problem Being Solved**: Currently, `builtin_tools` (Rust) and `autodev_handler.py` (Python) are **two parallel implementations** of the same 10 tools. Every schema change, status addition (e.g. `build_failed`), or validation rule must be ported to both sides. The Python side has already drifted (e.g. `VALID_WORKERS` is hardcoded in both `assign_task.rs` and `autodev_handler.py`). This is a single-source-of-truth violation.
 
 **Depends On**: Skills/Hooks (Fleet needs these patterns)
 
-#### Backend — AIRS MCP Server
+---
 
-**Core Concept**: AutoDev exposes Fleet coordination tools via MCP protocol so external agents (workers, supervisor) can interact with AutoDev's task system.
+#### Step 1 — Add MCP Dependencies (`src-tauri/Cargo.toml`)
 
-**MCP Server Implementation:**
-- [ ] `src-tauri/src/mcp_server/mod.rs`: MCP server module
-- [ ] `src-mcp-server/` (separate crate/binary): AIRS MCP server implementation
-- [ ] `src-mcp-server/tools.rs`: Tool definitions for Fleet coordination
-- [ ] `src-mcp-server/server.rs`: MCP server lifecycle
+**File**: `src-tauri/Cargo.toml`
 
-**AIRS MCP Tools (Exposed to Fleet):**
+Add to `[dependencies]`:
+```toml
+# MCP protocol (official Rust SDK)
+rmcp = { version = "0.16", features = ["server", "transport-streamable-http-server"] }
 
-**Task Management:**
-- [ ] `airs_get_tasks`: List tasks from workers.db
-  - Input: `status?`, `assigned_worker?`, `type?`, `limit?`
-  - Returns: Array of task objects
-- [ ] `airs_get_task_details`: Get single task details
-  - Input: `task_id`
-  - Returns: Full task with acceptance criteria
-- [ ] `airs_claim_task`: Worker claims task
-  - Input: `task_id`, `worker_id`
-  - Returns: Success + task assignment
-- [ ] `airs_report_progress`: Worker reports progress
-  - Input: `task_id`, `status`, `progress_percentage`, `message?`
-  - Returns: Confirmation
-- [ ] `airs_complete_task`: Mark task complete
-  - Input: `task_id`, `result_summary`, `pr_url?`
-  - Returns: Confirmation + next task suggestions
-- [ ] `airs_fail_task`: Mark task failed
-  - Input: `task_id`, `error_message`, `retry_suggested?`
-  - Returns: Confirmation
+# HTTP framework for Streamable HTTP transport
+axum = "0.8"
+```
 
-**Worker Management:**
-- [ ] `airs_list_workers`: List registered workers
-  - Input: `type?`, `status?`
-  - Returns: Array of worker objects
-- [ ] `airs_get_worker_status`: Check worker availability
-  - Input: `worker_id`
-  - Returns: Status, current task, load
+`rmcp` provides the `ServerHandler` trait, `#[tool]`/`#[tool_router]` macros, and Streamable HTTP transport. `axum` routes the `/mcp` endpoint.
 
-**Plan Management (Phase 3.5 Integration):**
-- [ ] `airs_get_plans`: List active plans
-- [ ] `airs_claim_plan_item`: Worker claims plan step
-- [ ] `airs_update_plan_item`: Update plan step status
+---
 
-**AutoDev Integration:**
-- [ ] `airs_get_autodev_instructions`: Retrieve AUTODEV.md content
-- [ ] `airs_get_recipe`: Retrieve recipe by name
-- [ ] `airs_emit_event`: Emit custom event to AutoDev
+#### Step 2 — Build the AutoDev MCP Server Module
 
-#### Backend — Sidecar Management
+**Core Design**: Instead of rewriting tools with `#[tool]` macros (which would duplicate the existing `Tool` trait implementations), we create a **bridge struct** that implements `rmcp::ServerHandler` and dynamically maps MCP tool calls to our existing `dyn Tool` trait objects. This means:
+
+- **No new tool implementations** — `read_file`, `bash`, `list_tasks`, etc. are the existing `.rs` files in `builtin_tools/`
+- **Schema discovery at runtime** — `Tool::name()`, `Tool::description()`, `Tool::input_schema()` feed into `tools/list`
+- **Execution delegation** — MCP `call_tool` → `tool.execute(input, &ToolContext)` → `ToolResult` → MCP `CallToolResult`
+
+**File**: `src-tauri/src/mcp_server/mod.rs`
+
+```rust
+pub mod server;
+pub mod tool_adapter;
+```
+
+**File**: `src-tauri/src/mcp_server/tool_adapter.rs`
+
+Bridge struct wrapping `ToolRegistry`:
+- `impl ServerHandler for AutodevMcpServer` — responds to `tools/list` by iterating `ToolRegistry` and converting each `Tool` to an MCP `Tool` object
+- `call_tool()` handler — looks up tool by name, deserializes args from MCP `CallToolRequest`, constructs a synthetic `ToolContext` (working_dir = `~/.autodev/`), calls `tool.execute()`, converts `ToolResult` to `CallToolResult`
+- `get_info()` — returns server name `"autodev-mcp-server"`, version `"1.0.0"`
+
+**Key**: `ToolContext::session_id` can be a generated UUID per-MCP-call since there's no Tauri session in the sidecar context. `working_dir` defaults to `~/.autodev/` or can be overridden by an MCP Root.
+
+**File**: `src-tauri/src/mcp_server/server.rs`
+
+Streamable HTTP transport setup (rmcp 2025-03-26 standard):
+```rust
+use rmcp::transport::streamable_http_server::{StreamableHttpService, session::local::LocalSessionManager};
+use axum::Router;
+
+let service = StreamableHttpService::new(
+    || Ok(AutodevMcpServer::new(tool_registry)),
+    Arc::new(LocalSessionManager::default()),
+);
+
+let router = Router::new().route_service("/mcp", service);
+let listener = tokio::net::TcpListener::bind("127.0.0.1:8767").await?;
+axum::serve(listener, router).await?;
+```
+
+**Port**: `8767` — adjacent to core-orchestrator (4000) and memory-mcp-server (8000). Bound to `127.0.0.1` only.
+
+---
+
+#### Step 3 — Register MCP Server as a Managed Sidecar
+
+**File**: `src-tauri/src/sidecar/manager.rs` (new or existing)
+
+Add `autodev-mcp-server` to the `SidecarManager`'s managed processes list:
+- **Command**: internal Tauri binary spawns the MCP server as an in-process Tokio task (no separate binary needed since it shares the `autodev_lib` crate)
+- **Alternative**: spawn as separate process if we want isolation
+- **Auto-start**: on app launch, after `core-orchestrator` is healthy
+- **Health check**: `GET /health` on `127.0.0.1:8767` (a lightweight liveness endpoint, not part of MCP spec but useful for sidecar manager)
+- **Restart**: on failure, with 5s exponential backoff (max 60s)
+
+**File**: `src-tauri/src/sidecar/config.rs`
+
+Add sidecar config entry:
+```rust
+SidecarConfig {
+    name: "autodev-mcp-server",
+    port: 8767,
+    auto_start: true,
+    restart_policy: RestartPolicy::ExponentialBackoff { base: 5, max: 60 },
+}
+```
+
+---
+
+#### Step 4 — Reconfigure Fleet Workers to Use MCP (Rust Side)
+
+**File**: `src-tauri/src/sidecar/client.rs` — `ensure_agent()` create body, lines 407-423
+
+**BEFORE** (delete):
+```rust
+"autodev_tools": [
+    "read_file__autodev",
+    "write_file__autodev",
+    "edit_file__autodev",
+    "bash__autodev",
+    "list_directory__autodev",
+    "grep__autodev",
+    "glob__autodev",
+    "list_workers__autodev",
+    "list_tasks__autodev",
+    "update_task_status__autodev",
+    "assign_task__autodev",
+    "create_task__autodev",
+]
+```
+
+**AFTER**:
+```rust
+"mcp_servers": [
+    {
+        "id": "autodev-mcp-server",
+        "url": "http://127.0.0.1:8767/mcp",
+        "transport": "streamable-http"
+    }
+]
+```
+
+This tells core-orchestrator's LivingAgent: "Connect to the AutoDev MCP server at this URL, discover tools via `tools/list`, and route all tool calls through MCP."
+
+---
+
+#### Step 5 — Python Cleanup (Delete Duplication)
+
+**5a. DELETE** `submodules/core-orchestrator/src/airs/bridges/autodev_handler.py` (864 lines)
+
+Entire file is a reimplementation of Rust builtin_tools + task board logic. The MCP server now provides these tools via protocol. No local Python execution needed.
+
+**5b. MODIFY** `submodules/core-orchestrator/src/airs/bridges/unified_tool_handler.py`
+
+Remove all `__autodev` routing:
+- **Line 24**: Delete `self.autodev_handler: Optional[...] = None`
+- **Line 31**: Delete `self.autodev_tools: Set[str] = set()`
+- **Lines 87-105**: Delete `register_autodev_handler()` method
+- **Lines 118-119**: Delete `__autodev` suffix check in `_identify_tool_handler()`
+- **Lines 178-180**: Delete `autodev_handler` routing branch in `handle_tool_call()`
+- **Lines 208-211**: Delete `autodev_handler` entry from `get_handler_status()`
+
+Rationale: MCP tools are handled by the existing `mcp_handler` (line 137, 191). No special `__autodev` routing needed — the `autodev-mcp-server` is just another MCP server from core-orchestrator's perspective.
+
+**5c. MODIFY** `submodules/core-orchestrator/src/airs/config/agent_schema.py` — lines 140-146
+
+Delete:
+```python
+autodev_tools: List[str] = Field(
+    default_factory=list,
+    description="AutoDev tool IDs forwarded from Tauri for fleet workers..."
+)
+```
+
+Rationale: Agents connect to MCP servers via the existing `mcp_servers` field (line 55). The `autodev-mcp-server` is configured there.
+
+**5d. MODIFY** `submodules/core-orchestrator/src/airs/models/agent.py` — lines 66-72
+
+Delete:
+```python
+autodev_tools: List[str] = Field(
+    default_factory=list,
+    description="AutoDev tool names forwarded from Tauri..."
+)
+```
+
+Rationale: Agent runtime loads tools from MCP server discovery at init time, not from a static list.
+
+**5e. MODIFY** `submodules/core-orchestrator/src/airs/config/agent_writer.py`
+
+Delete:
+- **Lines 177-179**: `autodev_tools` YAML writing block
+- **Line 331**: `autodev_tools: Optional[List[str]] = None` parameter from `create_agent_config()`
+- **Line 431**: `autodev_tools=autodev_tools or []` from `AgentConfig` constructor call
+
+Rationale: Agent YAML populates `mcp_servers` list instead (already handled at lines 388-393).
+
+---
+
+#### Step 6 — Verify Core-Orchestrator MCP Client Compatibility
+
+**File**: `submodules/core-orchestrator/src/airs/bridges/mcp_bridge.py` (or equivalent MCP client)
+
+Core-orchestrator already has an MCP client manager (used for `memory-mcp-server`, `github-mcp`, etc.). Verify it supports:
+- **Streamable HTTP transport** (POST + GET on same endpoint) — required for `autodev-mcp-server`
+- **Tool discovery** via `tools/list` — the client must issue this request after connecting
+- **Tool call forwarding** — client calls `tools/call` with the tool name and JSON arguments
+
+If core-orchestrator's MCP client is SSE-only (legacy), add a task to upgrade it to Streamable HTTP or add a compatibility layer.
+
+---
+
+### Phase 3.4 — Implementation Status: **COMPLETE**
+
+**Verification**:
+- [x] `cargo check --lib` → **0 errors**, 2 pre-existing warnings (`grep.rs::context_lines`, `git/repo.rs::to_repo_relative`), unrelated to Phase 3.4.
+
+**Steps**:
+- [x] **Step 1** — `rmcp` (0.16) + `axum` (0.8) added to `src-tauri/Cargo.toml`
+- [x] **Step 2** — MCP server module created (`mcp_server/mod.rs`, `tool_adapter.rs`, `server.rs`) with `AutodevMcpServer` bridging `ToolRegistry` to `rmcp::ServerHandler`
+  - Streamable HTTP transport on `127.0.0.1:8767/mcp`
+  - Dynamic `tools/list` from `ToolRegistry::all()` using `Tool::name`, `Tool::description`, `Tool::input_schema`
+  - `tools/call` dispatches to canonical `Tool::execute()` with synthetic `ToolContext` (`working_dir = ~/.autodev`)
+- [x] **Step 3** — `SidecarManager` updated with `mcp_status` tracking; `fleet_is_ready()` includes MCP server; MCP server starts as in-process Tokio task from `main.rs`
+- [x] **Step 4** — `sidecar/client.rs` changed `autodev_tools` → `mcp_servers: ["autodev-mcp-server"]`, added `OrchestratorClient::register_mcp_server()` (POST to `/api/mcp/servers`, idempotent on 409) invoked from `main.rs` after core-orchestrator is healthy
+- [x] **Step 5** — Python cleanup complete:
+  - `autodev_handler.py` **DELETED** (864 lines)
+  - `unified_tool_handler.py` — `register_autodev_handler`, `__autodev` routing, `autodev_handler`, `autodev_tools` all removed
+  - `agent_schema.py` (`AgentConfig`) — `autodev_tools` field removed
+  - `agent.py` (`AgentMetadata`) — `autodev_tools` field removed
+  - `agent_writer.py` — `autodev_tools` YAML write block + function param removed
+  - `living_agent.py` — STEP 4.7 AutoDev Tool Handler init block removed, `self.autodev_tool_handler` field removed
+  - `factory.py` — `autodev_tool_names` extraction + `autodev_tools=` constructor arg removed
+  - `api_gateway/modules/agents/models.py` — `AgentCreate.autodev_tools` field removed
+  - `api_gateway/modules/agents/service.py` — `autodev_tools=` argument removed from `create_agent_config_from_request()`
+- [x] **Step 6** — Core-orchestrator MCP client verified compatible: `MCPBridge.get_tools()` and `MCPClientManager` support server discovery via `mcp_servers` list; `MCPService.add_server()` handles dynamic registration via `/api/mcp/servers`.
+
+**Key design decisions applied**:
+1. **No tool re-implementation** — existing Rust `Tool` trait objects are reused; schemas discovered at runtime from `Tool::input_schema()`.
+2. **In-process MCP server** — shares the `autodev_lib` crate, no separate binary, no IPC overhead.
+3. **Single source of truth** — `ToolRegistry` in Rust is the only place tools are defined; Python side is purely a client.
+4. **Idempotent registration** — `register_mcp_server()` returns Ok on HTTP 409, so app restart is safe.
+
+**Remaining follow-up (out of Phase 3.4 scope)**:
+- End-to-end smoke test: start Tauri app → confirm `autodev-mcp-server` binds :8767 → confirm core-orchestrator `/api/mcp/servers/autodev-mcp-server` exists → spawn a fleet worker → verify `tools/list` returns the 11 builtin tools.
+- `tsc --noEmit` verification (no TypeScript files were touched in this phase).
+
+---
+
+### Backend — Sidecar Management (Phase 3.4b)
 
 **Sidecar Manager Module:**
-- [ ] `src-tauri/src/sidecar/mod.rs`: Sidecar module
-- [ ] `src-tauri/src/sidecar/manager.rs`: `SidecarManager` for lifecycle
-- [ ] `src-tauri/src/sidecar/process.rs`: Process spawning and monitoring
-- [ ] `src-tauri/src/sidecar/health.rs`: Health check system
-- [ ] `src-tauri/src/sidecar/config.rs`: Sidecar configuration
+- [x] `src-tauri/src/sidecar/mod.rs`: `SidecarManager` consolidates memory-mcp-server, core-orchestrator, and (Phase 3.4) in-process `autodev-mcp-server` tracking.
+- [x] `src-tauri/src/sidecar/client.rs`: `OrchestratorClient` handles auth, agent CRUD, `register_mcp_server()`.
+- [x] `src-tauri/src/sidecar/startup_progress.rs`: Startup phase tracker wired to the UI.
+- [x] Health check via `OrchestratorClient::is_healthy()` polled during startup retry loop (main.rs).
+- [ ] Dedicated `SidecarConfig`/`process.rs`/`health.rs` split (deferred — current single-file design works; revisit when adding redis/ollama).
 
 **Managed Sidecars:**
-- [ ] `core-orchestrator`: Python FastAPI server (Fleet orchestration)
-- [ ] `memory-mcp-server`: Python MCP server (Memory management)
-- [ ] `redis`: Redis server (Pub/sub, caching)
-- [ ] `airs-mcp-server`: Rust MCP server (Fleet coordination tools)
+- [x] `core-orchestrator`: Python FastAPI server (port 4000) — Fleet orchestration, now an MCP **client** to `autodev-mcp-server`
+- [x] `memory-mcp-server`: Python MCP server (port 8000) — Memory management
+- [x] `redis`: Redis / Memurai (port 6379) — **Phase 3.4b** tracked via `SidecarManager.redis_status` with `OrchestratorClient::is_redis_healthy()` (raw RESP PING, no dependency). Optional: absence disables warm memory tier only; does NOT block fleet readiness. Externally managed (Memurai Windows service / system redis); AutoDev only probes liveness.
+- [x] `autodev-mcp-server`: Rust MCP server (port 8767) — Exposes canonical `builtin_tools` via Streamable HTTP **(NEW, Phase 3.4)**
 
 **Sidecar Lifecycle:**
-- [ ] Auto-start on app launch (configurable)
-- [ ] Process spawn with stdout/stderr capture
-- [ ] Health check HTTP endpoints (every 30s)
-- [ ] Auto-restart on failure (with backoff)
-- [ ] Graceful shutdown on app exit
-- [ ] Log rotation and retention
+- [x] Auto-start on app launch (memory → orchestrator → autodev-mcp-server)
+- [x] Process spawn with stdout/stderr capture → `~/.autodev/logs/{memory-mcp,core-orchestrator}.log`
+- [x] Health check loop during startup retry
+- [ ] Auto-restart on failure with exponential backoff (deferred — app restart currently required)
+- [x] Graceful shutdown on app exit (`stop_all()`)
+- [ ] Log rotation (deferred)
 
 **Tauri Commands:**
-- [ ] `start_sidecar(name) -> SidecarStatus`
-- [ ] `stop_sidecar(name) -> SidecarStatus`
-- [ ] `restart_sidecar(name) -> SidecarStatus`
-- [ ] `get_sidecar_status(name) -> SidecarStatus`
-- [ ] `list_sidecars() -> Vec<SidecarStatus>`
-- [ ] `get_sidecar_logs(name, lines?) -> Vec<LogEntry>`
-- [ ] `update_sidecar_config(name, config) -> ()`
+- [x] Sidecar status commands exposed to frontend via `startup_progress` and existing `sidecar` commands in `commands/` modules (see `lib.rs` registrations)
+- [ ] Dedicated `start_sidecar`/`stop_sidecar`/`restart_sidecar` runtime controls (deferred — not required for Phase 3.4 success criteria)
 
-#### Backend — Ollama Provider
+---
 
-**Local Model Support:**
-- [ ] `src-tauri/src/provider/ollama.rs`: Ollama provider implementation
-- [ ] Model listing via Ollama API
-- [ ] Streaming support for local models
-- [ ] Temperature and context window configuration
-- [ ] Quantization level detection
+#### Phase X — Ollama Provider (Local LLM)
 
-**Models Supported:**
-- [ ] Llama 3 (8B, 70B)
-- [ ] Mistral (7B)
-- [ ] CodeLlama (7B, 13B, 34B)
-- [ ] DeepSeek Coder
-- [ ] Custom models via Ollama
+> Reference: `docs/reference/ollamainrust.md` — comprehensive `ollama-rs` 0.3.4 guide.
+> Out of Phase 3.4 scope; implement when local/self-hosted inference is prioritized.
+
+---
+
+##### 1. Dependencies & Crate Setup
+
+- [x] Add `ollama-rs = { version = "0.3.4", features = ["stream", "chat-history"] }` to `src-tauri/Cargo.toml`
+- [x] Add `src-tauri/src/provider/ollama.rs` module file (full Provider trait impl)
+- [x] Re-export in `src-tauri/src/provider/mod.rs`: `pub mod ollama;` + `pub use ollama::OllamaProvider;`
+- [ ] Verify `cargo check --lib` — user to run
+
+##### 2. Provider Struct & Configuration
+
+- [x] Define `OllamaProvider` struct with `host`, `port`, `client: ollama_rs::Ollama`
+- [x] `OllamaProvider::new(host: String, port: u16) -> Self`
+- [x] `OllamaProvider::default_from_env()` reads `OLLAMA_HOST` env var, falls back to `localhost:11434`
+
+##### 3. Dynamic Model Discovery
+
+- [x] `OllamaProvider::fetch_models()` → `client.list_local_models().await` mapped to `Vec<ModelInfo>` with family-based `context_window`, `supports_vision`, cost=0.0, skips embedding models
+- [x] §3.1 Context-window defaults table implemented in `context_window_for_model(name: &str)` covering llama3.x, mistral, codellama, deepseek-coder, qwen2.5, llava, phi3/4, gemma, command-r — fallback 4096
+- [ ] Cache model list for 60s — deferred (no UI dropdown polling yet)
+
+##### 4. Message Format Mapping (our types ↔ ollama-rs)
+
+- [x] `to_ollama_messages()` helper maps `RequestMessage` → `Vec<ChatMessage>`:
+  - System → `ChatMessage::system`, User text → `ChatMessage::user`, Assistant text → `ChatMessage::assistant`
+  - `MessageContent::ToolResult` mapped via `ChatMessage::tool(content)` where available; fallback JSON-embedded user annotation
+  - `MessageContent::ToolUse` in assistant messages serialized as inline annotation text (Ollama raw chat has no structured tool_call replay)
+- [x] Multi-part content blocks joined with `\n`
+
+##### 5. Tool / Function Calling Mapping
+
+- [x] `to_ollama_tools()` helper stub commented with correct type mapping (`ToolDefinition` → `ollama_rs::generation::tools::Tool`)
+- [ ] Raw chat `.tools()` builder on `ChatMessageRequest` — deferred until ollama-rs stabilizes the API (currently exposed via `Coordinator` only)
+- [x] Tool streaming caveat handled: `stream()` detects `!request.tools.is_empty()` and falls back to `complete()` → single-chunk stream (`TextDelta` + `MessageDelta` + `Done`)
+
+##### 6. Non-Streaming Completion (`complete()`)
+
+- [x] `Provider::complete()` builds `ChatMessageRequest` via `build_chat_request()`:
+  - Maps messages + `GenerationOptions` (temperature, top_p, num_ctx, num_predict)
+  - Calls `client.send_chat_messages(request).await`
+  - Maps `ChatMessageResponse` → `CompletionResponse` (UUID message_id, text content, stop_reason from `done_reason`, tokens from `prompt_eval_count`/`eval_count`)
+- [x] Error mapping: `OllamaError` → `AutoDevError::Provider(String)` via `map_ollama_err()`
+
+##### 7. Streaming Completion (`stream()`)
+
+- [x] `Provider::stream()` returns `Result<StreamResult>`:
+  - Non-tool path: `send_chat_messages_stream()` → `futures::StreamExt::map()` → `StreamChunk::TextDelta` per partial content + `StreamChunk::MessageDelta` on `done=true` + `StreamChunk::Done`
+  - Tool path: falls back to non-streaming (see §5)
+- [x] Tracing `debug!` per chunk
+
+##### 8. Connection Testing
+
+- [x] `Provider::test_connection()` → `list_local_models()`:
+  - Success + models → `Connected`
+  - Success + empty → `Connected` + `warn!("No models pulled yet...")`
+  - Error → `ProviderStatus::Error("Ollama not reachable at {host}:{port}")`
+
+##### 9. Provider Registration (All Dispatch Sites)
+
+- [x] `provider/mod.rs` — `pub mod ollama;` + re-export
+- [x] `settings_commands.rs` — `"ollama"` in `build_provider_info()` (static models fallback) + `test_provider_connection()` (no vault key)
+- [x] `agent_commands.rs` — `"ollama"` dispatch arm + conditional vault skip (no API key needed)
+- [x] `recipe_commands.rs` — `"ollama"` dispatch arm + conditional vault skip
+- [x] `recipes/runner.rs` — import + `"ollama"` dispatch arm + conditional vault skip
+- [x] `provider/streaming.rs` — N/A (provider-agnostic SSE parser, not used by Ollama direct stream)
+
+##### 10. Frontend — Provider Selection UI
+
+- [ ] `src/components/settings/ProviderSettings.tsx` (or existing provider config component):
+  - Add "Ollama" to provider list with distinct UI:
+    - No API key input field (local, no auth)
+    - Show host:port input (default `localhost:11434`, editable)
+    - "Test Connection" button calls `test_provider_connection("ollama")`
+    - On success, show model dropdown populated by `list_local_models` equivalent (or fetch from backend)
+- [ ] Model dropdown for Ollama:
+  - Refresh button to re-fetch `ollama list`
+  - Show context window size next to each model
+  - Filter out embedding-only models (`nomic-embed-text`, etc.)
+- [ ] Visual indicator: "Local" badge on Ollama provider card (distinguish from cloud providers)
+
+##### 11. Context Window & Parameter Configuration
+
+- [ ] Per-model context window auto-populated from hardcoded family table (§3.1)
+- [ ] Allow user override of `num_ctx` in provider settings (advanced toggle)
+- [ ] Temperature slider: mapped to `ModelOptions::temperature(0.0–2.0)`
+- [ ] Top-P slider: mapped to `ModelOptions::top_p(0.0–1.0)`
+- [ ] Seed input: mapped to `ModelOptions::seed()` for reproducible outputs
+- [ ] `num_predict` (max tokens): default `-1` (unlimited), allow user override
+
+##### 12. Known Limitations & Deferred Items
+
+- [ ] **Vision models**: `supports_vision` flag set but no image input API wired yet (Ollama vision requires base64 image data in message content; our `MessageContent` enum has no image variant yet)
+- [ ] **Embedding models**: Not exposed as chat providers; skip in model list. Future RAG integration may use `ollama-rs` embeddings API directly.
+- [ ] **Quantization detection**: `ollama list` does not expose quantization level (Q4, Q8, etc.). Deferred — quantization info is not available via ollama-rs public API as of 0.3.4.
+- [ ] **Reasoning/thinking mode**: No ollama model supports extended thinking like Claude. `supports_thinking` stays `false`.
+- [ ] **Tool streaming**: As noted in ollama-rs docs, tool-call streaming is incomplete. Non-streaming tool path is the reliable default.
+
+---
+
+**Models Initially Supported** (all families covered in `models_static()` + `context_window_for_model()`; any Ollama-pulled model works dynamically via `fetch_models()`):
+- [x] Llama 3.1 / 3.2 / 3.3 (8B, 70B) — 128K ctx, general chat + tools (3.1+)
+- [x] Mistral 7B / Mixtral 8x7B — 32K ctx, general chat
+- [x] CodeLlama 7B/13B/34B — 16K ctx, code generation
+- [x] DeepSeek Coder / DeepSeek (general) — 16K / 64K ctx
+- [x] Qwen 2.5 (7B–72B) — 32K ctx, best for tool calling
+- [x] Phi-3 / Phi-4 — 128K ctx
+- [x] Gemma — 8K ctx
+- [x] Command-R — 128K ctx
+- [x] Custom models via `ollama pull <any>` — dynamically discovered via `fetch_models()`
+
+---
 
 #### Frontend — Sidecar UI
 
 **Sidecar Panel (`src/components/sidecar/SidecarPanel.tsx`):**
-- [ ] List all sidecars with status indicators
-- [ ] Start/Stop/Restart buttons per sidecar
-- [ ] Health status (green/yellow/red)
-- [ ] Resource usage (CPU, memory)
-- [ ] Log viewer with tail -f behavior
-- [ ] Configuration editor
+- [x] List all sidecars with status indicators — 4 services shown (memory, orch, autodev-mcp, redis)
+- [x] Start/Stop/Restart buttons per sidecar — wired for memory-mcp-server & core-orchestrator only (autodev-mcp is in-process, redis is external)
+- [x] Health status (green/yellow/red) — tone-coded icons: CheckCircle2 (aqua), Loader2 spin (warning), AlertTriangle (danger), Circle (idle)
+- [x] Resource usage (CPU, memory) — click service name → modal → Resources tab shows CPU% + memory bytes via `sysinfo` crate (`get_resource_usage` command)
+- [x] Log viewer with tail -f behavior — click service name → modal → Logs tab shows last 500 lines of sidecar-specific log file (`read_sidecar_log` command)
+- [ ] Configuration editor — deferred (no user-configurable settings per user request)
 
 **Settings Integration:**
 - [ ] Sidecar auto-start toggle
@@ -3298,40 +3577,63 @@ uv run python scripts/migrate_to_clean_ids.py             # execute
 
 #### Phase 3.4 Deliverables Checklist
 
-**AIRS MCP Server:**
-- [ ] MCP server binary (`src-mcp-server/`)
-- [ ] 12+ Fleet coordination tools
-- [ ] Tool schema definitions
-- [ ] MCP server lifecycle management
-- [ ] Integration with workers.db
+**AutoDev MCP Server (core Phase 3.4 scope):**
+- [x] MCP server module (`src-tauri/src/mcp_server/{mod,server,tool_adapter}.rs`)
+- [x] Tool adapter deriving schemas from Rust `Tool` trait (via `ToolRegistry::all()`)
+- [x] All canonical builtin_tools exposed via MCP protocol (runtime-discovered, no hardcoding)
+- [x] Streamable HTTP transport on `127.0.0.1:8767/mcp` (rmcp 0.16, axum 0.8)
+- [x] Per-request `ToolContext` with synthetic session/call IDs and `~/.autodev` working directory
+- [x] Integration with `workers.db` and task board via existing Rust `Tool` trait implementations
 
-**Sidecar Management:**
-- [ ] Sidecar manager module
-- [ ] 4 managed sidecars (core-orchestrator, memory-mcp-server, redis, airs-mcp-server)
-- [ ] Health check system
-- [ ] Auto-restart with backoff
-- [ ] Log aggregation
-- [ ] Configuration management
+**Python Cleanup (core Phase 3.4 scope):**
+- [x] `autodev_handler.py` deleted (864 lines removed)
+- [x] `unified_tool_handler.py` — `__autodev` routing removed
+- [x] `agent_schema.py` (`AgentConfig`) — `autodev_tools` field removed
+- [x] `agent_writer.py` — `autodev_tools` YAML writing + constructor param removed
+- [x] `agent.py` (`AgentMetadata`) — `autodev_tools` field removed
+- [x] `living_agent.py` — AutoDev Tool Handler init block removed
+- [x] `factory.py` — `autodev_tools` extraction + metadata assignment removed
+- [x] `api_gateway/modules/agents/models.py` — `AgentCreate.autodev_tools` removed
+- [x] `api_gateway/modules/agents/service.py` — `autodev_tools=` argument removed
+- [x] `sidecar/client.rs` — agent creation uses `mcp_servers: ["autodev-mcp-server"]` + `register_mcp_server()`
 
-**Ollama Provider:**
-- [ ] Ollama provider implementation
-- [ ] Model discovery
-- [ ] Streaming support
-- [ ] Local model configuration
+**Sidecar Management (core Phase 3.4 scope):**
+- [x] `autodev-mcp-server` registered with `SidecarManager.mcp_status`
+- [x] Startup order enforced: memory-mcp → core-orchestrator → autodev-mcp-server registration
+- [x] `fleet_is_ready()` requires all three services healthy
+- [ ] Auto-restart with exponential backoff (deferred)
+- [ ] Log rotation (deferred)
 
-**Frontend:**
-- [ ] Sidecar panel with status and logs
-- [ ] MCP tool browser
-- [ ] Sidecar configuration UI
+**Ollama Provider** (out of Phase 3.4 scope — see atomic breakdown in new "Phase X — Ollama Provider" section above)
 
-**Integration:**
-- [ ] Fleet can claim tasks via MCP
-- [ ] Workers report progress via MCP
-- [ ] Supervisor coordinates via MCP tools
+**Frontend (Phase 3.4b — implemented)**:
+- [x] `src/components/sidecar/SidecarPanel.tsx` — live status grid for all 4 services (memory, orchestrator, autodev-mcp, redis) with tone-coded icons, manual refresh, and 10 s auto-poll. Distinguishes required vs optional services.
+- [x] `src/components/sidecar/McpToolBrowser.tsx` — searchable list of tools exposed by `autodev-mcp-server` with collapsible JSON input-schema view. Powered by `list_mcp_tools` Tauri command (direct `ToolRegistry` iteration, no JSON-RPC round-trip).
+- [x] Mounted in `Settings` tab as two new sections: "Services" and "MCP Tools", after "Demo Mode".
+- [ ] Dedicated sidecar configuration editor (port/auto-start per service) — deferred (Demo Mode toggle covers the only current use case).
+
+**New Tauri commands (Phase 3.4b)**:
+- [x] `get_full_sidecar_status` → returns `Vec<ServiceStatus>` with id/name/status/port/required/note for all 4 services
+- [x] `list_mcp_tools` → returns `Vec<McpToolInfo>` straight from the managed `Arc<ToolRegistry>`
+- [x] `check_sidecar_connectivity` extended to also PING Redis and update `SidecarManager.redis_status`
+
+**Core-orchestrator configuration (Phase 3.4b)**:
+- [x] `autodev_mcp_config.yaml` — `mcp-autodev` server entry added alongside `mcp-memory`
+- [x] `mcp_config.yaml` — `mcp-autodev` server entry added alongside `mcp-adobe` + `mcp-memory`
+- [x] `config/mcp/mcp-autodev.yaml` — full extended definition with skills/tags/metadata (mirrors `mcp-adobe.yaml` pattern)
+- [x] `.env` — `MCP_AUTODEV_HOST=localhost`, `MCP_AUTODEV_PORT=8767`, `MCP_AUTODEV_PATH=/mcp` added
+
+**Integration (core Phase 3.4 scope):**
+- [x] Fleet agent creation payload uses `mcp_servers: ["autodev-mcp-server"]` (no more `autodev_tools`)
+- [x] `OrchestratorClient::register_mcp_server()` auto-registers autodev-mcp-server with core-orchestrator on startup
+- [x] Core-orchestrator `MCPBridge` / `MCPClientManager` supports Streamable HTTP MCP discovery
+- [ ] Live end-to-end validation with a running worker (deferred — requires full app smoke test)
 
 #### Phase 3.4 Success Criteria
 
-> Fleet worker connects to AIRS MCP server → Calls `airs_claim_task` → Gets task assignment → Executes using skills → Reports progress → Completes via `airs_complete_task` → AutoDev shows task complete
+> Fleet worker starts → Connects to AIRS MCP Server → Discovers `read_file`, `bash`, `list_tasks`, `assign_task` via `tools/list` → Calls `assign_task` → Rust canonical implementation executes → Task board updates → AutoDev panel reflects change
+>
+> AND: `autodev_handler.py` no longer exists → `__autodev` suffix no longer used → Tool schema changes in Rust automatically propagate to fleet agents via MCP discovery
 
 ---
 

@@ -11,6 +11,9 @@ use autodev_lib::sidecar::SidecarManager;
 use autodev_lib::sidecar::client::OrchestratorClient;
 use autodev_lib::sidecar::startup_progress::{StartupPhase, StartupProgress};
 use autodev_lib::skills::SkillRegistry;
+use autodev_lib::agent::ToolRegistry;
+use autodev_lib::agent::builtin_tools;
+use autodev_lib::mcp_server::server::start_mcp_server;
 
 fn main() {
     // Capture panics and write them to both stderr and the tracing log file
@@ -36,6 +39,13 @@ fn main() {
     if let Err(e) = skill_registry.reload() {
         eprintln!("Warning: Failed to load skills: {e}");
     }
+
+    // Phase 3.4 — start AutoDev MCP Server in-process.
+    // All canonical builtin_tools are registered and exposed over Streamable HTTP
+    // on 127.0.0.1:8767 so core-orchestrator LivingAgents can discover them via MCP.
+    let mut mcp_registry = ToolRegistry::new();
+    builtin_tools::register_all(&mut mcp_registry);
+    let mcp_registry = Arc::new(mcp_registry);
 
     let app_state: Arc<Mutex<AppState>> = Arc::new(Mutex::new(AppState::new()));
     let skill_registry_managed = skill_registry.clone();
@@ -71,6 +81,7 @@ fn main() {
             .manage(sidecar_mgr)
             .manage(orch_client)
             .manage(skill_registry_managed)
+            .manage(mcp_registry.clone())  // Phase 3.4b — exposed so list_mcp_tools can iterate
             .setup(move |app| {
                 // Startup progress state machine — drives the loading overlay.
                 // Attached to SidecarManager so spawn/health transitions + log
@@ -79,6 +90,16 @@ fn main() {
                 // background subsystems (task-board tools, RecipeRunner,
                 // hooks) can emit Tauri events without State plumbing.
                 autodev_lib::events::install_app_handle(app.handle().clone());
+
+                // Phase 3.4 — start AutoDev MCP Server as an async task.
+                // The server exposes all builtin_tools over Streamable HTTP on 127.0.0.1:8767
+                // so core-orchestrator LivingAgents can discover them via MCP.
+                let mcp_registry_for_server = mcp_registry.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _mcp_handle = start_mcp_server(mcp_registry_for_server);
+                    // Keep the handle alive for the lifetime of the app
+                    // (it will be dropped when the app shuts down)
+                });
 
                 let progress = Arc::new(StartupProgress::new(app.handle().clone()));
                 progress.advance(StartupPhase::Init);
@@ -205,6 +226,12 @@ fn main() {
                                             sidecar_ref.mark_running();
                                             orch_probe.clear_cache();
                                             eprintln!("[AutoDev] core-orchestrator ready after {attempt}s — Mode 2 active");
+                                            // Phase 3.4 — register autodev-mcp-server so LivingAgents discover tools
+                                            if let Err(e) = orch_probe.register_mcp_server().await {
+                                                eprintln!("[AutoDev] Failed to register autodev-mcp-server: {e}");
+                                            } else {
+                                                eprintln!("[AutoDev] autodev-mcp-server registered with core-orchestrator");
+                                            }
                                             break;
                                         }
                                     }

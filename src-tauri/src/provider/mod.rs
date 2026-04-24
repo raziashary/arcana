@@ -8,6 +8,8 @@ pub mod streaming;
 pub mod anthropic;
 pub mod openai;
 pub mod google;
+pub mod ollama;
 
 pub use traits::Provider;
 pub use types::{CompletionRequest, CompletionResponse, StreamChunk, ModelInfo, ProviderStatus};
+pub use ollama::OllamaProvider;
