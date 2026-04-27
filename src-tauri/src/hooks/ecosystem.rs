@@ -12,6 +12,7 @@ pub enum Ecosystem {
     Node,
     PythonPip,
     PythonPoetry,
+    PythonUv,
     RustCargo,
     GoMod,
 }
@@ -24,7 +25,10 @@ impl Ecosystem {
             return Some(Ecosystem::Node);
         }
         if dir.join("pyproject.toml").exists() {
-            // Poetry if poetry.lock exists, otherwise pip
+            // uv if uv.lock exists, otherwise poetry if poetry.lock exists, otherwise pip
+            if dir.join("uv.lock").exists() {
+                return Some(Ecosystem::PythonUv);
+            }
             if dir.join("poetry.lock").exists() {
                 return Some(Ecosystem::PythonPoetry);
             }
@@ -48,6 +52,7 @@ impl Ecosystem {
             Ecosystem::Node => "npm install",
             Ecosystem::PythonPip => "pip install -r requirements.txt",
             Ecosystem::PythonPoetry => "poetry install",
+            Ecosystem::PythonUv => "uv sync",
             Ecosystem::RustCargo => "cargo build",
             Ecosystem::GoMod => "go mod tidy",
         }
@@ -59,6 +64,7 @@ impl Ecosystem {
             Ecosystem::Node => "npm run build",
             Ecosystem::PythonPip => "python -m pytest",
             Ecosystem::PythonPoetry => "poetry run pytest",
+            Ecosystem::PythonUv => "uv run pytest",
             Ecosystem::RustCargo => "cargo test",
             Ecosystem::GoMod => "go test ./...",
         }
@@ -68,9 +74,10 @@ impl Ecosystem {
     /// Checked relative to the working directory.
     pub fn sentinel_path(&self) -> PathBuf {
         match self {
-            Ecosystem::Node => PathBuf::from("node_modules/.package-lock.json"),
+            Ecosystem::Node => PathBuf::from("node_modules"),
             Ecosystem::PythonPip => PathBuf::from(".venv/pyvenv.cfg"),
             Ecosystem::PythonPoetry => PathBuf::from(".venv/pyvenv.cfg"),
+            Ecosystem::PythonUv => PathBuf::from(".venv/pyvenv.cfg"),
             Ecosystem::RustCargo => PathBuf::from("target/.rustc_info.json"),
             Ecosystem::GoMod => PathBuf::from("go.sum"),
         }

@@ -20,6 +20,7 @@ pub mod ide;
 pub mod git;
 pub mod runtime_config;
 pub mod mcp_server;
+pub mod plan;
 
 // Register all Tauri commands on the builder from within the lib crate.
 // generate_handler! must run here so the __cmd__* macros (produced by
@@ -40,7 +41,7 @@ pub fn register_commands(
             store_github_pat, store_provider_key,
         },
         task_commands::{
-            list_tasks, get_task, update_task_status, delete_task, clear_all_tasks,
+            list_tasks, get_task, update_task_status, delete_task, clear_all_tasks, get_qc_queue,
         },
         autodev_instructions_commands::{
             get_autodev_instructions, set_autodev_instructions, delete_autodev_instructions,
@@ -90,12 +91,27 @@ pub fn register_commands(
             delete_checkpoint, compare_checkpoints,
         },
         startup_commands::{get_startup_phase, get_runtime_config, set_skip_sidecars},
+        plan_commands::{
+            get_plan, list_plans, get_plan_tree, delete_plan, planner_compile,
+            break_down_epic, claim_plan_item, create_subplan, submit_plan_for_qc,
+        },
     };
     builder.invoke_handler(tauri::generate_handler![
         // Agent
         send_message,
         cancel_agent,
         respond_to_permission,
+        // Plan Management
+        planner_compile,
+        get_plan,
+        list_plans,
+        get_plan_tree,
+        delete_plan,
+        // Fleet Plan Commands
+        break_down_epic,
+        claim_plan_item,
+        create_subplan,
+        submit_plan_for_qc,
         // Sessions
         list_sessions,
         get_session,
@@ -126,6 +142,7 @@ pub fn register_commands(
         update_task_status,
         delete_task,
         clear_all_tasks,
+        get_qc_queue,
         // AUTODEV.md Instructions
         get_autodev_instructions,
         set_autodev_instructions,

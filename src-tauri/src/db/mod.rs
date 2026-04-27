@@ -9,8 +9,9 @@
 
 pub mod tasks;
 pub mod autodev_instructions;
-pub mod workers;
 pub mod model_configs;
+pub mod plans;
+pub mod workers;
 
 use std::path::PathBuf;
 use crate::errors::{AutoDevError, Result};

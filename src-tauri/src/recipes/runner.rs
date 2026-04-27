@@ -158,6 +158,33 @@ impl RecipeRunner {
             info!("[RecipeRunner] core-orchestrator reachable — dispatching '{}' via LivingAgent", worker_slug);
             self.set_worker_status(worker_slug, "working");
 
+            // ── qc-agent pre-flight gate ───────────────────────────────────────────
+            // If no qc_review tasks exist in the local DB, skip the expensive
+            // core-orchestrator invocation entirely and set status to idle.
+            // When tasks DO exist, prepend their titles to the trigger so the
+            // agent has them in-context even if its memory claims otherwise.
+            let mut qc_trigger_override: Option<String> = None;
+            if worker_slug == "qc-agent" {
+                if let Ok(db) = crate::db::tasks::TasksDb::open() {
+                    if let Ok(tasks) = db.list(Some("qc_review")) {
+                        if tasks.is_empty() {
+                            info!("[RecipeRunner] No qc_review tasks in DB — skipping qc-agent tick");
+                            self.set_worker_status(worker_slug, "idle");
+                            return Ok(());
+                        } else {
+                            let titles: Vec<String> = tasks.iter()
+                                .map(|t| format!("#{}: {}", t.id, t.title))
+                                .collect();
+                            qc_trigger_override = Some(format!(
+                                "{RECIPE_TRIGGER}\n\n[BOARD STATE] {} task(s) awaiting QC review:\n{}",
+                                tasks.len(),
+                                titles.join("\n")
+                            ));
+                        }
+                    }
+                }
+            }
+
             match self.orch_client.ensure_agent(worker_slug, &model).await {
                 Ok(agent_id) => {
                     // Prepend the active workspace dir to the instructions so the
@@ -176,8 +203,9 @@ impl RecipeRunner {
                         "[RecipeRunner] worker '{}' workspace={}",
                         worker_slug, working_dir
                     );
+                    let trigger = qc_trigger_override.as_deref().unwrap_or(RECIPE_TRIGGER);
                     match self.orch_client
-                        .invoke_worker(&agent_id, &instructions_with_ws, RECIPE_TRIGGER)
+                        .invoke_worker(&agent_id, &instructions_with_ws, trigger)
                         .await
                     {
                         Ok(response) => {
@@ -187,16 +215,19 @@ impl RecipeRunner {
                                 response.trim()
                             );
                             self.set_worker_status(worker_slug, "idle");
-                            // Fix 8c: sentinel-file guard after successful tick.
-                            Self::guard_and_validate(worker_slug, std::path::Path::new(&working_dir));
                             // Same stranded-task safety net as the Mode 1 path —
                             // see the long comment at the reconcile call below.
                             // Without this, a Mode 2 LivingAgent that finishes
                             // its tick without moving the task past `in_progress`
                             // would leave the task stranded forever.
+                            // Run reconciliation BEFORE guard_and_validate so a
+                            // stranded task is promoted to qc_review instead of
+                            // being incorrectly marked build_failed by the sentinel.
                             if worker_slug.starts_with("worker-") {
                                 Self::reconcile_stranded_task(worker_slug);
                             }
+                            // Fix 8c: sentinel-file guard after successful tick.
+                            Self::guard_and_validate(worker_slug, std::path::Path::new(&working_dir));
                             return Ok(());
                         }
                         Err(e) => {
@@ -284,8 +315,6 @@ impl RecipeRunner {
             Ok(_)  => {
                 info!("[RecipeRunner] Rust AgentEngine completed for worker '{}'", worker_slug);
                 self.set_worker_status(worker_slug, "idle");
-                // Fix 8c: sentinel-file guard after successful tick.
-                Self::guard_and_validate(worker_slug, std::path::Path::new(&working_dir));
             }
             Err(e) => {
                 error!("[RecipeRunner] Rust AgentEngine failed for worker '{}': {e}", worker_slug);
@@ -307,8 +336,18 @@ impl RecipeRunner {
         // verify whether the work product exists. If it does → mark done.
         // If not → bounce back to `assigned` for a retry. Either way the task
         // escapes the in_progress limbo and the board keeps moving.
+        //
+        // Run reconciliation BEFORE the sentinel guard so a stranded task that
+        // completed but forgot to update status is promoted to qc_review
+        // instead of being incorrectly marked build_failed.
         if worker_slug.starts_with("worker-") {
             Self::reconcile_stranded_task(worker_slug);
+        }
+
+        // Fix 8c: sentinel-file guard after successful tick.
+        // Only apply when the engine actually completed (not on error).
+        if result.is_ok() {
+            Self::guard_and_validate(worker_slug, std::path::Path::new(&working_dir));
         }
 
         result.map(|_| ())

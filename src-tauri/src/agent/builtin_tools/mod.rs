@@ -14,6 +14,7 @@ pub mod create_task;
 pub mod list_tasks_tool;
 pub mod update_task_status_tool;
 pub mod assign_task;
+pub mod planner;
 
 use std::sync::Arc;
 use super::{PAMode, tool_registry::ToolRegistry};
@@ -24,13 +25,13 @@ pub fn register_all(registry: &mut ToolRegistry) {
 }
 
 /// Register tools filtered by PA mode:
-/// - FastDevelopment: all file/execution tools + task board tools (list_tasks, update_task_status, create_task)
+/// - FastDevelopment: all file/execution tools + task board tools + planner
 /// - Review:          same as FastDevelopment (permission layer is at execution time)
-/// - Delegate:        only create_task — zero file tools
+/// - Delegate:        create_task + planner — zero file tools
 ///
-/// Task board tools (list_tasks, update_task_status, create_task) are available in FastDevelopment
-/// so that recipe agents (Supervisor, Workers) can manage the board without resorting to
-/// writing Python scripts. This is the primary fix for workspace pollution.
+/// Task board tools (list_tasks, update_task_status, create_task) and planner are available
+/// in all modes so that recipe agents (Supervisor, Workers) can manage tasks and plans
+/// without resorting to writing Python scripts.
 pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
     match mode {
         PAMode::FastDevelopment | PAMode::Review => {
@@ -47,9 +48,13 @@ pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
             registry.register(Arc::new(update_task_status_tool::UpdateTaskStatusTool));
             registry.register(Arc::new(assign_task::AssignTaskTool));
             registry.register(Arc::new(create_task::CreateTaskTool));
+            // Planner tool — available in all modes for plan management
+            registry.register(Arc::new(planner::PlannerTool));
         }
         PAMode::Delegate => {
             registry.register(Arc::new(create_task::CreateTaskTool));
+            // Planner is task management, not file I/O — safe in Delegate mode
+            registry.register(Arc::new(planner::PlannerTool));
         }
     }
 }

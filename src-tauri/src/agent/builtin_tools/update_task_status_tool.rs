@@ -18,8 +18,8 @@ impl Tool for UpdateTaskStatusTool {
     fn description(&self) -> &str {
         "Update the status and/or assigned worker for a task on the AutoDev board. \
         Use this to: assign a task to a worker (status='assigned', assigned_worker='worker-backend'), \
-        mark as in_progress, escalate to failed, or mark as done. \
-        Valid statuses: ready, assigned, in_progress, qc_review, done, failed, cancelled."
+        mark as in_progress, escalate to failed, report build failures, or mark as done. \
+        Valid statuses: ready, assigned, in_progress, qc_review, done, failed, build_failed, cancelled."
     }
 
     fn input_schema(&self) -> Value {
@@ -32,7 +32,7 @@ impl Tool for UpdateTaskStatusTool {
                 },
                 "status": {
                     "type": "string",
-                    "enum": ["ready", "assigned", "in_progress", "qc_review", "done", "failed", "cancelled"],
+                    "enum": ["ready", "assigned", "in_progress", "qc_review", "done", "failed", "build_failed", "cancelled"],
                     "description": "New status for the task"
                 },
                 "assigned_worker": {

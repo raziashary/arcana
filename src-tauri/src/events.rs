@@ -46,6 +46,9 @@ pub const EVT_WORKER_TICK_END:   &str = "worker:tick-end";
 // write path so the AutoDev Panel refreshes without polling.
 pub const EVT_TASK_CHANGED:      &str = "task:changed";
 
+// Phase 3.5 — plan changes push channel. Emitted from every plan DB write.
+pub const EVT_PLAN_CHANGED:      &str = "plan:changed";
+
 // ── Payload types ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Clone)]
@@ -210,5 +213,24 @@ pub fn emit_task_changed_global(payload: TaskChangedPayload) {
 pub fn emit_worker_status_global(payload: WorkerStatusPayload) {
     if let Some(app) = app_handle() {
         emit_worker_status(app, payload);
+    }
+}
+
+// ── Phase 3.5 payloads + emit helpers ──────────────────────────────────────────
+
+#[derive(Debug, Serialize, Clone)]
+pub struct PlanChangedPayload {
+    pub plan_id: Option<String>,
+    pub kind:    String,
+    pub status:  Option<String>,
+}
+
+pub fn emit_plan_changed(app: &AppHandle, payload: PlanChangedPayload) {
+    let _ = app.emit(EVT_PLAN_CHANGED, payload);
+}
+
+pub fn emit_plan_changed_global(payload: PlanChangedPayload) {
+    if let Some(app) = app_handle() {
+        emit_plan_changed(app, payload);
     }
 }

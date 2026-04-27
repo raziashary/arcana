@@ -65,6 +65,27 @@ pub fn delete_task(id: i64) -> Result<()> {
     Ok(())
 }
 
+/// Return qc_review tasks with how long they've been waiting (seconds).
+/// Used by the UI to surface QC backlog age and alert on stalled reviews.
+#[tauri::command]
+pub fn get_qc_queue() -> Result<Vec<(Task, i64)>> {
+    let db = TasksDb::open()?;
+    let tasks = db.list(Some("qc_review"))?;
+    let now = chrono::Utc::now().timestamp();
+    let queue: Vec<(Task, i64)> = tasks
+        .into_iter()
+        .map(|t| {
+            let age = t
+                .updated_at
+                .parse::<chrono::DateTime<chrono::Utc>>()
+                .map(|dt| now - dt.timestamp())
+                .unwrap_or(0);
+            (t, age)
+        })
+        .collect();
+    Ok(queue)
+}
+
 /// Delete ALL tasks and reset the ID sequence.
 /// Used by the "Clear Board" button to start fresh tracking.
 #[tauri::command]

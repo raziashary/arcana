@@ -46,10 +46,12 @@ export const priorityLabel = (p: TaskPriority) => ({ p0: 'P0', p1: 'P1', p2: 'P2
 
 interface TaskState {
   tasks:        Task[]
+  qcQueue:      { task: Task; ageSeconds: number }[]
   isLoading:    boolean
   error:        string | null
 
   loadTasks:          ()                                                    => Promise<void>
+  loadQcQueue:        ()                                                    => Promise<void>
   updateTaskStatus:   (id: number, status: TaskStatus, worker?: string)    => Promise<void>
   deleteTask:         (id: number)                                          => Promise<void>
   tasksByStatus:      (status: TaskStatus)                                  => Task[]
@@ -64,6 +66,7 @@ const _taskUnlistenFns: UnlistenFn[] = []
 
 export const useTaskStore = create<TaskState>((set, get) => ({
   tasks:     [],
+  qcQueue:   [],
   isLoading: false,
   error:     null,
 
@@ -77,6 +80,15 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       console.error('Failed to load tasks:', e)
     } finally {
       set({ isLoading: false })
+    }
+  },
+
+  loadQcQueue: async () => {
+    try {
+      const queue = await invoke<{ task: Task; ageSeconds: number }[]>('get_qc_queue')
+      set({ qcQueue: queue })
+    } catch (e) {
+      console.error('Failed to load QC queue:', e)
     }
   },
 

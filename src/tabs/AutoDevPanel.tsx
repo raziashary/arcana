@@ -338,10 +338,12 @@ function MetricsRow({
   tokensIn:  number | null
   tokensOut: number | null
 }) {
-  const todayDone   = tasks.filter(t => t.status === 'done' && isToday(t.completed_at))
-  const todayFailed = tasks.filter(t => t.status === 'failed' && isToday(t.updated_at))
-  const qcPassRate  = todayDone.length + todayFailed.length > 0
-    ? Math.round((todayDone.length / (todayDone.length + todayFailed.length)) * 100)
+  const todayDone        = tasks.filter(t => t.status === 'done' && isToday(t.completed_at))
+  const todayFailed      = tasks.filter(t => t.status === 'failed' && isToday(t.updated_at))
+  const todayBuildFailed = tasks.filter(t => t.status === 'build_failed' && isToday(t.updated_at))
+  const qcTotal          = todayDone.length + todayFailed.length + todayBuildFailed.length
+  const qcPassRate       = qcTotal > 0
+    ? Math.round((todayDone.length / qcTotal) * 100)
     : null
   const totalTokens = (tokensIn ?? 0) + (tokensOut ?? 0)
 
@@ -360,6 +362,11 @@ function MetricsRow({
       label: 'Closed',
       value: String(todayDone.length),
       color: '#637777',
+    },
+    {
+      label: 'Build Failed',
+      value: String(todayBuildFailed.length),
+      color: '#FF6363',
     },
     {
       label: 'QC Pass Rate',
