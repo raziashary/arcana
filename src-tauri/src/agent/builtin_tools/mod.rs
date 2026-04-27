@@ -15,6 +15,8 @@ pub mod list_tasks_tool;
 pub mod update_task_status_tool;
 pub mod assign_task;
 pub mod planner;
+pub mod spawn_subagent;
+pub mod spawn_parallel_subagents;
 
 use std::sync::Arc;
 use super::{PAMode, tool_registry::ToolRegistry};
@@ -50,6 +52,11 @@ pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
             registry.register(Arc::new(create_task::CreateTaskTool));
             // Planner tool — available in all modes for plan management
             registry.register(Arc::new(planner::PlannerTool));
+            // Subagent tools — Phase 4.9. Available to PA, Workers, and Supervisor
+            // for fan-out / context-isolation work. Not exposed in Delegate mode
+            // (that mode exists to keep PA from doing direct execution).
+            registry.register(Arc::new(spawn_subagent::SpawnSubagentTool));
+            registry.register(Arc::new(spawn_parallel_subagents::SpawnParallelSubagentsTool));
         }
         PAMode::Delegate => {
             registry.register(Arc::new(create_task::CreateTaskTool));

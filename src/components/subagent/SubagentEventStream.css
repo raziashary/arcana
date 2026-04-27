@@ -1,0 +1,173 @@
+/* SubagentEventStream — Winter-is-Coming theme. */
+
+.subagent-event-stream {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-1);
+  font-family: var(--font-ui, system-ui, sans-serif);
+  color: var(--text-1);
+}
+
+.subagent-event-stream-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
+}
+
+.subagent-event-stream-title {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--text-2);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.subagent-event-stream-status {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-weight: 600;
+}
+
+.subagent-event-stream-status.status-spawning,
+.subagent-event-stream-status.status-idle {
+  background: rgba(170, 170, 187, 0.2);
+  color: #aab;
+}
+
+.subagent-event-stream-status.status-running {
+  background: rgba(85, 204, 255, 0.18);
+  color: #5cf;
+}
+
+.subagent-event-stream-status.status-completed {
+  background: rgba(102, 204, 102, 0.18);
+  color: #6c6;
+}
+
+.subagent-event-stream-status.status-failed {
+  background: rgba(230, 102, 102, 0.18);
+  color: #e66;
+}
+
+.subagent-event-stream-status.status-terminated {
+  background: rgba(204, 170, 170, 0.18);
+  color: #caa;
+}
+
+.subagent-event-stream-close {
+  background: transparent;
+  border: none;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+}
+
+.subagent-event-stream-close:hover {
+  color: var(--text-1);
+}
+
+.subagent-event-stream-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.subagent-event-stream-empty {
+  color: var(--text-3);
+  font-style: italic;
+  text-align: center;
+  padding: 20px;
+}
+
+.subagent-event {
+  margin-bottom: 6px;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.subagent-event.token {
+  display: inline;
+  font-family: var(--font-mono, monospace);
+  white-space: pre-wrap;
+}
+
+.subagent-event-icon {
+  flex-shrink: 0;
+}
+
+.subagent-event-text {
+  flex: 1;
+}
+
+.subagent-event.thinking {
+  color: var(--text-3);
+  font-style: italic;
+}
+
+.subagent-event.tool-start {
+  color: var(--aqua, #7fdbca);
+}
+
+.subagent-event.tool-end {
+  color: #6c6;
+}
+
+.subagent-event.tool-end.error {
+  color: #e66;
+}
+
+.subagent-event-output {
+  background: var(--bg-2);
+  padding: 6px 8px;
+  border-radius: 4px;
+  margin: 4px 0 0 0;
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  white-space: pre-wrap;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.subagent-event.final {
+  color: #6c6;
+  font-weight: 600;
+  border-top: 1px dashed var(--border);
+  padding-top: 8px;
+  margin-top: 12px;
+}
+
+.subagent-event.cost {
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.subagent-event.status {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.subagent-event.status.status-completed { color: #6c6; }
+.subagent-event.status.status-failed    { color: #e66; }
+.subagent-event.status.status-running   { color: #5cf; }
+
+.subagent-event.error {
+  color: #e66;
+  background: rgba(230, 102, 102, 0.08);
+  padding: 6px 8px;
+  border-radius: 4px;
+  border-left: 2px solid #e66;
+}

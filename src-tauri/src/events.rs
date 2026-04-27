@@ -49,6 +49,12 @@ pub const EVT_TASK_CHANGED:      &str = "task:changed";
 // Phase 3.5 — plan changes push channel. Emitted from every plan DB write.
 pub const EVT_PLAN_CHANGED:      &str = "plan:changed";
 
+// Phase 4.9 — subagent lifecycle events. One event per SSE frame received
+// from core-orchestrator's `/api/agents/{id}/invoke/stream`, plus internal
+// status transitions (Spawning / Idle / Running / Completed / Failed /
+// Terminated). Fan-out is handled by SubagentManager::pump_events.
+pub const EVT_SUBAGENT_EVENT:    &str = "subagent:event";
+
 // ── Payload types ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Clone)]
@@ -232,5 +238,26 @@ pub fn emit_plan_changed(app: &AppHandle, payload: PlanChangedPayload) {
 pub fn emit_plan_changed_global(payload: PlanChangedPayload) {
     if let Some(app) = app_handle() {
         emit_plan_changed(app, payload);
+    }
+}
+
+// ── Phase 4.9 payloads + emit helpers ─────────────────────────────────────────
+
+/// Wraps a `SubagentEvent` for the global event bus. The event itself
+/// carries its own discriminator (kind + subagent_id) inside `event`, so
+/// the frontend can route by parent/subagent and render appropriately.
+#[derive(Debug, Serialize, Clone)]
+pub struct SubagentEventPayload {
+    pub subagent_id: String,
+    pub event:       crate::subagent::SubagentEvent,
+}
+
+pub fn emit_subagent_event(app: &AppHandle, payload: SubagentEventPayload) {
+    let _ = app.emit(EVT_SUBAGENT_EVENT, payload);
+}
+
+pub fn emit_subagent_event_global(payload: SubagentEventPayload) {
+    if let Some(app) = app_handle() {
+        emit_subagent_event(app, payload);
     }
 }

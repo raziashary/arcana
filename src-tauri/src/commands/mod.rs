@@ -22,3 +22,4 @@ pub mod ide_commands;
 pub mod git_commands;
 pub mod startup_commands;
 pub mod plan_commands;
+pub mod subagent_commands;

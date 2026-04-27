@@ -1,0 +1,220 @@
+// Subagent shared types — DTOs serialized to the frontend, payloads for the
+// internal event stream, and the configuration surface used by Rust callers.
+//
+// See: docs/development/PHASE_4_9_EPHEMERAL_VIA_LIFECYCLE.md
+//      docs/development/DEVELOPMENT_PLAN.md (Phase 4.9)
+//
+// Mirror these structures in src/stores/subagentStore.ts for type parity.
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+/// Request shape for spawning a subagent.
+///
+/// `parent_slug` is **required** because every subagent ID is namespaced under
+/// its parent's slug (see `subagent::slug::generate`). This makes lineage
+/// traceable in logs and the Subagent Monitor UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubagentConfig {
+    /// Slug of the parent agent (e.g. "worker-backend", "supervisor", "pa").
+    pub parent_slug: String,
+
+    /// Parent's session ID — preserved for lineage but not propagated to the
+    /// subagent's LivingAgent (which always gets a fresh isolated session).
+    pub parent_session_id: String,
+
+    /// System prompt for the subagent. Inherits parent's prompt if empty.
+    pub system_prompt: String,
+
+    /// Tool subset the subagent is allowed to use (e.g. ["read_file", "grep"]).
+    /// Empty vec = no `internal_tools` (subagent must rely on MCP only).
+    pub tools: Vec<String>,
+
+    /// LLM model name (registry key, e.g. "claude-4-5-haiku").
+    /// Falls back to the default fleet model when empty.
+    pub model: String,
+
+    /// Working directory for the subagent (typically a fresh git worktree).
+    /// Empty string = inherit parent's working_dir.
+    pub working_dir: String,
+
+    /// Hard cap on tool turns. Default 20.
+    pub max_turns: u32,
+
+    /// Hard cap on subagent runtime. Default 300s.
+    pub timeout_secs: u32,
+
+    /// MCP servers to attach. Defaults to ["autodev-mcp-server"].
+    pub mcp_servers: Vec<String>,
+
+    /// Capability tags forwarded to core-orchestrator's AgentCreate body.
+    pub capabilities: Vec<String>,
+
+    /// Nesting depth (0 = spawned by a top-level agent, 1 = subagent of a
+    /// subagent, etc.). Enforced by `SubagentPool` against `MAX_NESTING_DEPTH`.
+    pub depth: u32,
+}
+
+impl SubagentConfig {
+    /// Defaults applied by `SpawnSubagentTool` when the LLM omits fields.
+    pub const DEFAULT_MAX_TURNS: u32 = 20;
+    pub const DEFAULT_TIMEOUT_SECS: u32 = 300;
+    pub const DEFAULT_MCP_SERVER: &'static str = "autodev-mcp-server";
+}
+
+/// Lifecycle state of a subagent. Drives UI status indicators and the
+/// `SubagentManager`'s cleanup decisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentStatus {
+    /// `POST /api/agents` in flight.
+    Spawning,
+    /// Agent created in core-orchestrator, awaiting `invoke`.
+    Idle,
+    /// `POST /api/agents/{id}/invoke/stream` is consuming events.
+    Running,
+    /// Stream completed successfully; result accumulated.
+    Completed,
+    /// Stream errored, timed out, or core-orchestrator reported failure.
+    Failed,
+    /// User or pool explicitly aborted; cleanup in progress or done.
+    Terminated,
+}
+
+impl SubagentStatus {
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Terminated)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Spawning   => "spawning",
+            Self::Idle       => "idle",
+            Self::Running    => "running",
+            Self::Completed  => "completed",
+            Self::Failed     => "failed",
+            Self::Terminated => "terminated",
+        }
+    }
+}
+
+/// Live handle returned to callers immediately after `spawn_subagent`.
+/// Tracked in `SubagentManager` until the lifecycle terminates.
+///
+/// The actual SSE event stream is held inside `SubagentManager` (not here)
+/// so the handle stays cheaply cloneable for IPC across the Tauri boundary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubagentHandle {
+    /// core-orchestrator agent ID (= the unique slug we generated, e.g.
+    /// "subagent-worker-backend-1745740800123-1").
+    pub id: String,
+    pub config: SubagentConfig,
+    pub status: SubagentStatus,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Compact summary used by `list_active_subagents` for the Monitor UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubagentSummary {
+    pub id: String,
+    pub parent_slug: String,
+    pub parent_session_id: String,
+    pub status: SubagentStatus,
+    pub model: String,
+    pub created_at: DateTime<Utc>,
+    pub depth: u32,
+    /// Most recent event/message text for at-a-glance progress display.
+    pub last_event: Option<String>,
+}
+
+/// Final outcome of a subagent's run. Returned to the parent's tool call.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubagentResult {
+    pub subagent_id: String,
+    pub status: SubagentStatus,
+    /// Final accumulated text content from the subagent.
+    pub result_summary: String,
+    /// Files the subagent modified (best-effort; populated when worktree
+    /// integration is enabled and a diff is available).
+    pub files_modified: Vec<String>,
+    /// Total cost in USD (when reported by core-orchestrator).
+    pub cost_usd: f64,
+    pub tokens_in:  u32,
+    pub tokens_out: u32,
+    pub duration_secs: f64,
+    /// Failure message when `status == Failed` or `Terminated`.
+    pub error: Option<String>,
+}
+
+/// Streaming events forwarded from core-orchestrator's SSE endpoint
+/// (`/api/agents/{id}/invoke/stream`) to the AutoDev event bus.
+///
+/// The kind discriminator (`"token"`, `"tool_start"`, etc.) lets the frontend
+/// reuse rendering logic from the existing chat event stream.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SubagentEvent {
+    /// Streamed token from the LLM.
+    Token { subagent_id: String, text: String },
+    /// Visible "thinking" content (chain-of-thought blocks).
+    Thinking { subagent_id: String, text: String },
+    /// Tool invocation started.
+    ToolStart { subagent_id: String, tool: String, input: serde_json::Value },
+    /// Tool invocation completed.
+    ToolEnd { subagent_id: String, tool: String, output: String, is_error: bool },
+    /// Final summary message; the SSE stream is about to close.
+    Final { subagent_id: String, text: String },
+    /// Cost / usage update (may arrive multiple times).
+    Cost { subagent_id: String, cost_usd: f64, tokens_in: u32, tokens_out: u32 },
+    /// Status transition broadcast (Spawning → Running → Completed, etc.).
+    Status { subagent_id: String, status: SubagentStatus, message: Option<String> },
+    /// Free-form error event (non-fatal; stream continues unless followed
+    /// by a `Status::Failed`).
+    Error { subagent_id: String, message: String },
+}
+
+impl SubagentEvent {
+    pub fn subagent_id(&self) -> &str {
+        match self {
+            SubagentEvent::Token       { subagent_id, .. } |
+            SubagentEvent::Thinking    { subagent_id, .. } |
+            SubagentEvent::ToolStart   { subagent_id, .. } |
+            SubagentEvent::ToolEnd     { subagent_id, .. } |
+            SubagentEvent::Final       { subagent_id, .. } |
+            SubagentEvent::Cost        { subagent_id, .. } |
+            SubagentEvent::Status      { subagent_id, .. } |
+            SubagentEvent::Error       { subagent_id, .. } => subagent_id,
+        }
+    }
+}
+
+/// Input shape for the `spawn_subagent` builtin tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpawnSubagentInput {
+    pub task_description: String,
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+    #[serde(default)]
+    pub tools: Vec<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub max_turns: Option<u32>,
+    #[serde(default)]
+    pub timeout_secs: Option<u32>,
+    #[serde(default)]
+    pub mcp_servers: Vec<String>,
+}
+
+/// Input shape for the `spawn_parallel_subagents` builtin tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpawnParallelSubagentsInput {
+    pub subtasks: Vec<SpawnSubagentInput>,
+    #[serde(default = "default_max_concurrent")]
+    pub max_concurrent: u32,
+    #[serde(default = "default_aggregate")]
+    pub aggregate_results: bool,
+}
+
+fn default_max_concurrent() -> u32 { 5 }
+fn default_aggregate() -> bool { true }

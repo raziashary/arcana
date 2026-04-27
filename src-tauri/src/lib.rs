@@ -21,6 +21,7 @@ pub mod git;
 pub mod runtime_config;
 pub mod mcp_server;
 pub mod plan;
+pub mod subagent;
 
 // Register all Tauri commands on the builder from within the lib crate.
 // generate_handler! must run here so the __cmd__* macros (produced by
@@ -94,6 +95,10 @@ pub fn register_commands(
         plan_commands::{
             get_plan, list_plans, get_plan_tree, delete_plan, planner_compile,
             break_down_epic, claim_plan_item, create_subplan, submit_plan_for_qc,
+        },
+        subagent_commands::{
+            spawn_subagent, execute_subtask, get_subagent_status,
+            terminate_subagent, abort_subagent, list_active_subagents,
         },
     };
     builder.invoke_handler(tauri::generate_handler![
@@ -270,5 +275,12 @@ pub fn register_commands(
         get_startup_phase,
         get_runtime_config,
         set_skip_sidecars,
+        // Subagent System (Phase 4.9)
+        spawn_subagent,
+        execute_subtask,
+        get_subagent_status,
+        terminate_subagent,
+        abort_subagent,
+        list_active_subagents,
     ])
 }

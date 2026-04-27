@@ -4551,7 +4551,9 @@ Same *Calendar App* prompt: expected wall-clock drops from the baseline ~14 minu
 - [ ] **Data Integrity**: Preserve original timestamps, mark as migrated
 - [ ] **Rollback Plan**: Keep original sessions table until migration verified
 
-### Phase 4.9 — Subagent System (Leveraging Core-Orchestrator)
+### Phase 4.9 — Subagent System (Leveraging Core-Orchestrator) ✅ IMPLEMENTED
+
+> **Architectural deviation**: The original spec assumed dedicated `/agents/create`, `/process`, `/terminate`, and `/events` endpoints in core-orchestrator. Those don't exist. We instead implement subagents over the existing **`POST /api/agents` → `POST /api/agents/{id}/invoke/stream` → `DELETE /api/agents/{id}`** lifecycle. Each subagent is a real `LivingAgent` whose ephemerality comes from being created and deleted within the bounds of one subtask. **See `docs/development/PHASE_4_9_EPHEMERAL_VIA_LIFECYCLE.md` for the full rationale, slug convention, and three-layer cleanup strategy.**
 
 **Design Philosophy**: Instead of building a new subagent tool from scratch, AutoDev leverages the existing **core-orchestrator's agent factory** (`AgentFactory.create_agent()`). The subagent system is a **bridge** between AutoDev's Rust backend and core-orchestrator's Python `LivingAgent` instances.
 
@@ -4866,46 +4868,48 @@ Supervisor receives epic "Refactor auth system"
 
 #### Subagent Deliverables Checklist
 
-- [ ] **Backend — Subagent Module:**
-  - [ ] `src-tauri/src/subagent/types.rs` — SubagentConfig, SubagentHandle, SubagentStatus
-  - [ ] `src-tauri/src/subagent/bridge.rs` — HTTP bridge to core-orchestrator
-  - [ ] `src-tauri/src/subagent/manager.rs` — SubagentManager (spawn/track/cleanup)
-  - [ ] `src-tauri/src/subagent/pool.rs` — Concurrency limits
-  - [ ] Tauri commands: spawn_subagent, execute_subtask, get_subagent_status, terminate_subagent, list_active_subagents
+- [x] **Backend — Subagent Module:**
+  - [x] `src-tauri/src/subagent/types.rs` — SubagentConfig, SubagentHandle, SubagentStatus, SubagentEvent, SubagentResult, SubagentSummary
+  - [x] `src-tauri/src/subagent/slug.rs` — unique slug generator (`subagent-{parent}-{millis}-{seq}`) + reserved prefix
+  - [x] `src-tauri/src/subagent/bridge.rs` — Stateless lifecycle runner (create → invoke/stream → delete) + hand-rolled SSE parser
+  - [x] `src-tauri/src/subagent/manager.rs` — SubagentManager (registry + event pump + RAII pool permits + orphan cleanup) + `install_global` / `global` accessor
+  - [x] `src-tauri/src/subagent/pool.rs` — Concurrency limits (`MAX_GLOBAL_CONCURRENT=16`, `MAX_PER_PARENT=10`, `MAX_NESTING_DEPTH=3`) with tokio Semaphore
+  - [x] Tauri commands: `spawn_subagent`, `execute_subtask`, `get_subagent_status`, `terminate_subagent`, `abort_subagent`, `list_active_subagents` (in `commands/subagent_commands.rs`)
+  - [x] OrchestratorClient extensions: `create_ephemeral_agent`, `delete_agent`, `invoke_agent_stream_raw`, `list_ephemeral_subagent_slugs`
 
-- [ ] **Backend — Git Worktree Integration:**
+- [ ] **Backend — Git Worktree Integration:** *(deferred — `working_dir` is forwarded today; auto-worktree per subagent is a follow-up since most subtasks are read-only analysis where it's overkill. Will be enabled when Workers begin spawning code-modifying subagents.)*
   - [ ] Auto-create worktree for each subagent
   - [ ] Cleanup worktree on termination
   - [ ] Track worktree → subagent mapping
 
-- [ ] **Built-in Tool:**
-  - [ ] `spawn_subagent` tool (single subagent)
-  - [ ] `spawn_parallel_subagents` tool (parallel execution)
-  - [ ] Tool registration in builtin_tools
+- [x] **Built-in Tool:**
+  - [x] `spawn_subagent` tool (single subagent, parent blocks for result)
+  - [x] `spawn_parallel_subagents` tool (parallel execution with per-index results + aggregated summary)
+  - [x] Tool registration in `agent/builtin_tools/mod.rs` (FastDevelopment + Review modes; not Delegate)
 
-- [ ] **Core-Orchestrator Integration:**
-  - [ ] Verify `/api/agents/*` endpoints work via sidecar bridge
-  - [ ] Subagent metadata forwarding (AUTODEV.md, tools, model)
-  - [ ] SSE event streaming implementation
+- [x] **Core-Orchestrator Integration:**
+  - [x] Verify `/api/agents/*` endpoints work via sidecar bridge — using existing `OrchestratorClient` JWT auth
+  - [x] Subagent metadata forwarding (system_prompt, model, mcp_servers, capabilities) via `AgentCreate` body
+  - [x] SSE event streaming via `/api/agents/{id}/invoke/stream` — frame parser handles both `event:`/`data:` and bare `data:{type:...}` shapes
 
-- [ ] **Frontend — Subagent UI:**
-  - [ ] `SubagentMonitor.tsx` — Tree view of active subagents
-  - [ ] `SubagentEventStream.tsx` — Real-time event display
-  - [ ] `SubagentResultCard.tsx` — Completed subagent summary
-  - [ ] Integration in ChatMessages for subagent tool calls
+- [x] **Frontend — Subagent UI:**
+  - [x] `SubagentMonitor.tsx` — Grouped-by-parent tree view of active subagents with status indicators, depth badges, abort buttons
+  - [x] `SubagentEventStream.tsx` — Real-time SSE event display (token / thinking / tool_start / tool_end / final / cost / status / error)
+  - [x] `SubagentResultCard.tsx` — Completed subagent summary with files modified, cost/token stats, expand/collapse
+  - [ ] *Integration in ChatMessages for subagent tool calls — pending (the components are wired to the store; embedding them inline in the chat is a small follow-up)*
 
-- [ ] **Frontend — Subagent Store:**
-  - [ ] `subagentStore.ts` with spawn/track/terminate actions
-  - [ ] Event stream management
-  - [ ] Parent-child tree visualization
+- [x] **Frontend — Subagent Store:**
+  - [x] `subagentStore.ts` with spawn/await/terminate/abort actions, refresh, forget
+  - [x] Event stream management — `subagent:event` listener fans into per-subagent event arrays
+  - [x] Parent-child tree visualization — grouped by `parent_slug` in SubagentMonitor
 
-- [ ] **Safety & Limits:**
-  - [ ] Max concurrent subagents enforcement
-  - [ ] Max nesting depth check
-  - [ ] Subagent timeout handling
-  - [ ] Orphan cleanup (parent death detection)
+- [x] **Safety & Limits:**
+  - [x] Max concurrent subagents enforcement (global semaphore + per-parent counter)
+  - [x] Max nesting depth check (rejected at pool acquire time)
+  - [x] Subagent timeout handling (`tokio::time::timeout` wrapper inside `bridge::run`)
+  - [x] Orphan cleanup — three layers: happy-path DELETE, RAII drop on PoolPermit, startup sweep via `cleanup_orphans` (deletes any `subagent-*` agents in core-orchestrator)
 
-- [ ] **Integration with Fleet:**
+- [ ] **Integration with Fleet:** *(future — recipe authors can now USE the tools; the recipes themselves are not yet rewritten to do so)*
   - [ ] Worker recipes updated to use subagents for complex tasks
   - [ ] Supervisor epic breakdown using subagents
   - [ ] Subagent cost tracking per worker

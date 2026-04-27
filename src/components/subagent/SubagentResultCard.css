@@ -1,0 +1,145 @@
+/* SubagentResultCard — Winter-is-Coming theme. */
+
+.subagent-result-card {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin: 8px 0;
+  font-size: 13px;
+  color: var(--text-1);
+}
+
+.subagent-result-card.status-completed {
+  border-left: 3px solid #6c6;
+}
+
+.subagent-result-card.status-failed,
+.subagent-result-card.status-terminated {
+  border-left: 3px solid #e66;
+}
+
+.subagent-result-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.subagent-result-card-title {
+  font-weight: 600;
+}
+
+.subagent-result-card-id {
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.subagent-result-card-spacer {
+  flex: 1;
+}
+
+.subagent-result-card-dismiss {
+  background: transparent;
+  border: none;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.subagent-result-card-dismiss:hover {
+  color: var(--text-1);
+}
+
+.subagent-result-card-error {
+  background: rgba(230, 102, 102, 0.08);
+  border-left: 2px solid #e66;
+  padding: 8px 10px;
+  border-radius: 3px;
+  margin-bottom: 8px;
+  color: #e66;
+  font-size: 12px;
+}
+
+.subagent-result-card-summary {
+  white-space: pre-wrap;
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+
+.subagent-result-card-expand {
+  display: block;
+  margin-top: 6px;
+  background: transparent;
+  border: none;
+  color: var(--aqua, #7fdbca);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0;
+}
+
+.subagent-result-card-expand:hover {
+  text-decoration: underline;
+}
+
+.subagent-result-card-files {
+  background: var(--bg-2);
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+}
+
+.subagent-result-card-files-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-3);
+  margin-bottom: 4px;
+}
+
+.subagent-result-card-files-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+}
+
+.subagent-result-card-files-list li {
+  padding: 2px 0;
+  font-family: monospace;
+}
+
+.subagent-result-card-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--text-3);
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.subagent-result-card-stat {
+  white-space: nowrap;
+}
+
+.subagent-result-card-stat-spacer {
+  flex: 1;
+}
+
+.subagent-result-card-log-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+.subagent-result-card-log-btn:hover {
+  background: var(--bg-2);
+  color: var(--text-1);
+}

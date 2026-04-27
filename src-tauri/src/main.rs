@@ -63,12 +63,20 @@ fn main() {
     let sidecar_mgr    = Arc::new(SidecarManager::new());
     let orch_client    = Arc::new(OrchestratorClient::new());
 
+    // Phase 4.9 — Subagent registry. Shares the same OrchestratorClient so
+    // it benefits from the cached JWT and connection pool. Also installed
+    // globally so builtin tools (`spawn_subagent`, `spawn_parallel_subagents`)
+    // can reach it without Tauri `State<>` plumbing.
+    let subagent_mgr = autodev_lib::subagent::SubagentManager::new(orch_client.clone());
+    autodev_lib::subagent::manager::install_global(subagent_mgr.clone());
+
     // Clone Arcs for the setup hook (setup runs after app handle is available)
     let app_state_for_setup    = app_state.clone();
     let session_mgr_for_setup  = session_mgr.clone();
     let pending_for_setup      = pending_permissions.clone();
     let orch_client_for_setup  = orch_client.clone();
     let sidecar_mgr_for_setup  = sidecar_mgr.clone();
+    let subagent_mgr_for_setup = subagent_mgr.clone();
 
     // register_commands is defined in the lib crate so generate_handler! runs
     // where the #[tauri::command] __cmd__* macros are in scope.
@@ -80,6 +88,7 @@ fn main() {
             .manage(pending_permissions)
             .manage(sidecar_mgr)
             .manage(orch_client)
+            .manage(subagent_mgr)
             .manage(skill_registry_managed)
             .manage(mcp_registry.clone())  // Phase 3.4b — exposed so list_mcp_tools can iterate
             .setup(move |app| {
@@ -246,6 +255,7 @@ fn main() {
                         // workers and then verify all 7 fleet agents are registered.
                         let progress_fleet = progress.clone();
                         let orch_client_fleet = orch_probe.clone();
+                        let subagent_mgr_for_cleanup = subagent_mgr_for_setup.clone();
                         tauri::async_runtime::spawn(async move {
                             // Give RecipeScheduler time to start workers (+3s after orch ready)
                             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
@@ -272,6 +282,12 @@ fn main() {
                             }
 
                             progress_fleet.advance(StartupPhase::FleetReady);
+
+                            // Phase 4.9 — sweep ephemeral subagents that
+                            // outlived a previous AutoDev process. Best-effort;
+                            // failures are logged inside the manager.
+                            subagent_mgr_for_cleanup.cleanup_orphans().await;
+
                             progress_fleet.advance(StartupPhase::Ready);
                         });
                     }
