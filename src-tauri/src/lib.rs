@@ -22,6 +22,7 @@ pub mod runtime_config;
 pub mod mcp_server;
 pub mod plan;
 pub mod subagent;
+pub mod analytics;
 
 // Register all Tauri commands on the builder from within the lib crate.
 // generate_handler! must run here so the __cmd__* macros (produced by
@@ -99,6 +100,11 @@ pub fn register_commands(
         subagent_commands::{
             spawn_subagent, execute_subtask, get_subagent_status,
             terminate_subagent, abort_subagent, list_active_subagents,
+        },
+        analytics_commands::{
+            get_dashboard_summary, get_cost_analytics, get_token_usage,
+            get_api_failures, predict_monthly_cost, export_costs_csv, export_costs_json,
+            get_worker_analytics, get_system_logs,
         },
     };
     builder.invoke_handler(tauri::generate_handler![
@@ -282,5 +288,15 @@ pub fn register_commands(
         terminate_subagent,
         abort_subagent,
         list_active_subagents,
+        // Analytics & Dashboard (Phase 5.4)
+        get_dashboard_summary,
+        get_cost_analytics,
+        get_token_usage,
+        get_api_failures,
+        predict_monthly_cost,
+        export_costs_csv,
+        export_costs_json,
+        get_worker_analytics,
+        get_system_logs,
     ])
 }

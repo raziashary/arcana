@@ -84,7 +84,7 @@ interface HookState {
   testHook:     (hookId: string, context: Record<string, unknown>) => Promise<HookExecutionLog[]>
 }
 
-export const useHookStore = create<HookState>((set, get) => ({
+export const useHookStore = create<HookState>((set) => ({
   hooks:     [],
   logs:      [],
   isLoading: false,

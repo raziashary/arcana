@@ -13,6 +13,7 @@ import IDETab      from './tabs/IDE'
 import RecipesTab  from './tabs/Recipes'
 import SettingsTab from './tabs/Settings'
 import LogsTab     from './tabs/Logs'
+import Dashboard   from './components/dashboard/Dashboard'
 import StartupOverlay from './components/startup/StartupOverlay'
 import ToastStack from './components/ToastStack'
 import { useSettingsStore } from './stores/settingsStore'
@@ -22,15 +23,16 @@ import { useWorkerStore }   from './stores/workerStore'
 import { useTaskStore }     from './stores/taskStore'
 import { useSidecarStore }  from './stores/sidecarStore'
 
-export type TabId = 'chat' | 'autodev' | 'ide' | 'recipes' | 'settings' | 'logs'
+export type TabId = 'chat' | 'autodev' | 'ide' | 'recipes' | 'dashboard' | 'settings' | 'logs'
 
 const TABS: { id: TabId; label: string }[] = [
-  { id: 'chat',     label: 'Chat'     },
-  { id: 'autodev',  label: 'AutoDev'  },
-  { id: 'ide',      label: 'IDE'      },
-  { id: 'recipes',  label: 'Recipes'  },
-  { id: 'settings', label: 'Settings' },
-  { id: 'logs',     label: 'Logs'     },
+  { id: 'chat',      label: 'Chat'      },
+  { id: 'autodev',   label: 'AutoDev'   },
+  { id: 'ide',       label: 'IDE'       },
+  { id: 'recipes',   label: 'Recipes'   },
+  { id: 'dashboard', label: 'Dashboard' },
+  { id: 'settings',  label: 'Settings'  },
+  { id: 'logs',      label: 'Logs'      },
 ]
 
 export default function App() {
@@ -66,12 +68,13 @@ export default function App() {
 
       <div className="app-body">
         <div className="app-main">
-          {activeTab === 'chat'     && <ChatTab />}
-          {activeTab === 'autodev'  && <AutoDevTab />}
-          {activeTab === 'ide'      && <IDETab />}
-          {activeTab === 'recipes'  && <RecipesTab />}
-          {activeTab === 'settings' && <SettingsTab />}
-          {activeTab === 'logs'     && <LogsTab />}
+          {activeTab === 'chat'      && <ChatTab />}
+          {activeTab === 'autodev'   && <AutoDevTab />}
+          {activeTab === 'ide'       && <IDETab />}
+          {activeTab === 'recipes'   && <RecipesTab />}
+          {activeTab === 'dashboard' && <Dashboard />}
+          {activeTab === 'settings'  && <SettingsTab />}
+          {activeTab === 'logs'      && <LogsTab />}
         </div>
 
         <Sidebar />

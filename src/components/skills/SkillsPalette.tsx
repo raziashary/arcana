@@ -3,7 +3,7 @@
 // Phase 3.1
 
 import { useEffect, useRef, useState } from 'react'
-import { Search, X, Clock, Zap, Bug, Server, Users, Plus, ChevronRight, HelpCircle } from 'lucide-react'
+import { Search, X, Clock, Zap, Bug, Server, Users, Plus, ChevronRight } from 'lucide-react'
 import { useSkillStore, type Skill, type SkillCategory, type SkillSummary } from '../../stores/skillStore'
 import SkillParameterModal from './SkillParameterModal'
 import SkillCreatorModal from './SkillCreatorModal'

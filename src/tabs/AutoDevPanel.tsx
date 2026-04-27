@@ -19,6 +19,7 @@ import {
   WORKER_TYPE_LABELS,
 } from '../stores/workerStore'
 import { useSidecarStore } from '../stores/sidecarStore'
+import { SubagentMonitor } from '../components/subagent/SubagentMonitor'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -422,6 +423,7 @@ export default function AutoDevTab() {
   const [clearConfirm, setClearConfirm] = useState(false)
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null)
   const [isRefreshing,  setIsRefreshing]  = useState(false)
+  const [showSubagents, setShowSubagents] = useState(false)
   const [, tick] = useState(0)
 
   // Re-render every 10s so the "Xm ago" label stays fresh
@@ -610,6 +612,65 @@ export default function AutoDevTab() {
 
       {/* Metrics footer */}
       <MetricsRow tasks={tasks} costUsd={costUsd} tokensIn={tokensIn} tokensOut={tokensOut} />
+
+      {/* Subagent Monitor Toggle Button */}
+      <button
+        onClick={() => setShowSubagents(!showSubagents)}
+        style={{
+          position: 'fixed',
+          right: '12px',
+          bottom: '20px',
+          width: '48px',
+          height: '48px',
+          borderRadius: '50%',
+          background: 'var(--accent)',
+          border: 'none',
+          color: '#011627',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '20px',
+          zIndex: 999,
+          boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+        }}
+        title="Toggle subagent monitor"
+      >
+        🤖
+      </button>
+
+      {/* Subagent Monitor Sidebar (Collapsible) */}
+      {showSubagents && (
+        <div style={{
+          position: 'fixed',
+          right: 0,
+          top: 0,
+          bottom: 0,
+          width: '320px',
+          borderLeft: '1px solid #0D3652',
+          background: 'var(--bg-surface)',
+          overflowY: 'auto',
+          zIndex: 1000,
+          boxShadow: '-2px 0 8px rgba(0,0,0,0.3)',
+        }}>
+          <div style={{ padding: '12px', borderBottom: '1px solid #0D3652', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-1)' }}>Subagent Monitor</span>
+            <button
+              onClick={() => setShowSubagents(false)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--text-3)',
+                cursor: 'pointer',
+                fontSize: '16px',
+              }}
+            >
+              ✕
+            </button>
+          </div>
+          <SubagentMonitor />
+        </div>
+      )}
     </div>
   )
 }

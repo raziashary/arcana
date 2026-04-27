@@ -20,6 +20,7 @@ import SkillsPalette from '../components/skills/SkillsPalette'
 import SkillSlashPicker from '../components/skills/SkillSlashPicker'
 import SkillParameterModal from '../components/skills/SkillParameterModal'
 import { useSkillStore, type Skill, type SkillSummary } from '../stores/skillStore'
+import { SubagentMonitor } from '../components/subagent/SubagentMonitor'
 
 // ─── Context window sizes (tokens) per model ─────────────────────────────────
 // Fallback to 200_000 for unknown models.
@@ -115,6 +116,8 @@ export default function ChatTab() {
   const [atQuery,       setAtQuery]       = useState<string | null>(null)
   const [atResults,     setAtResults]     = useState<FileEntry[]>([])
   const [atSelectedIdx, setAtSelectedIdx] = useState(0)
+  // Subagent monitor visibility
+  const [showSubagents, setShowSubagents] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef       = useRef<HTMLTextAreaElement>(null)
 
@@ -521,6 +524,65 @@ export default function ChatTab() {
         </div>
       </div>
       </div>
+      )}
+
+      {/* Subagent Monitor Toggle Button */}
+      <button
+        onClick={() => setShowSubagents(!showSubagents)}
+        style={{
+          position: 'fixed',
+          right: '12px',
+          bottom: '20px',
+          width: '48px',
+          height: '48px',
+          borderRadius: '50%',
+          background: 'var(--accent)',
+          border: 'none',
+          color: '#011627',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '20px',
+          zIndex: 999,
+          boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+        }}
+        title="Toggle subagent monitor"
+      >
+        🤖
+      </button>
+
+      {/* Subagent Monitor Sidebar (Collapsible) */}
+      {showSubagents && (
+        <div style={{
+          position: 'fixed',
+          right: 0,
+          top: 0,
+          bottom: 0,
+          width: '320px',
+          borderLeft: '1px solid #0D3652',
+          background: 'var(--bg-surface)',
+          overflowY: 'auto',
+          zIndex: 1000,
+          boxShadow: '-2px 0 8px rgba(0,0,0,0.3)',
+        }}>
+          <div style={{ padding: '12px', borderBottom: '1px solid #0D3652', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-1)' }}>Subagent Monitor</span>
+            <button
+              onClick={() => setShowSubagents(false)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--text-3)',
+                cursor: 'pointer',
+                fontSize: '16px',
+              }}
+            >
+              ✕
+            </button>
+          </div>
+          <SubagentMonitor parentSessionId={sessionStore.activeSessionId ?? undefined} />
+        </div>
       )}
     </div>
   )

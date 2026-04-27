@@ -35,13 +35,8 @@ export default function SkillCreatorModal({ onClose }: Props) {
     setLoading(true)
     setError('')
     try {
-      // Import skill via store (writes to ~/.autodev/skills/{category}/{name}.md)
-      await store.importSkill({
-        name: name.toLowerCase().replace(/\s+/g, '-'),
-        description,
-        category,
-        template,
-      })
+      // Reload skills from disk to pick up new skill
+      await store.reloadFromDisk()
       onClose()
     } catch (e) {
       setError(String(e))
