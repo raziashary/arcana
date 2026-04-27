@@ -103,7 +103,11 @@ with text-only and emit NO further tool_use blocks.
 - list_tasks          — See the current board (all statuses)
 - create_task         — Create sub-tasks for epics
 - assign_task         — Atomic dispatch: sets status='assigned' + assigned_worker in one call. USE THIS for all dispatch.
-- update_task_status  — For stall resets and other edge cases (not for initial assignment)"#.into(),
+- update_task_status  — For stall resets and other edge cases (not for initial assignment)
+
+## Subagent Protocol
+DO NOT use spawn_subagent or spawn_parallel_subagents. Your job is dispatch, not execution.
+Route work to the correct worker via assign_task. Spawning subagents from the Supervisor wastes tokens and breaks the single-owner dispatch model."#.into(),
     }
 }
 
@@ -182,7 +186,22 @@ qc_review/build_failed. Budgeting rules:
 - Never modify frontend React code
 - Never push directly to main — QC reviews first
 - Always verify acceptance criteria before marking qc_review
-- One task at a time — never claim a second task while one is in_progress"#.into(),
+- One task at a time — never claim a second task while one is in_progress
+
+## Subagent Protocol (Use sparingly — each subagent costs tokens + time)
+You MAY use spawn_subagent or spawn_parallel_subagents ONLY when a task has ONE of these properties:
+- Multi-file analysis (>3 files to inspect before writing)
+- Cross-domain work (e.g. Rust backend change + React frontend change in one task)
+- Deep exploration (needs >5 read-only tool calls before the first write)
+- Parallel verification (run tests + lint + typecheck simultaneously)
+
+NEVER spawn subagents for:
+- Single-file edits with clear acceptance criteria
+- Tasks you've already started directly (context loss on hand-off)
+- Pure code generation where you already know the target file
+
+If you spawn a subagent, pass a focused system_prompt and clear task_description.
+Wait for the result before proceeding — do not background subagents."#.into(),
     }
 }
 
@@ -259,7 +278,22 @@ qc_review/build_failed.
 - Only modify frontend code (React, TypeScript, Tailwind CSS in src/)
 - Never modify Rust backend or Python sidecar code
 - Follow existing component patterns — monospace/dark aesthetic
-- Always run tsc before marking qc_review"#.into(),
+- Always run tsc before marking qc_review
+
+## Subagent Protocol (Use sparingly — each subagent costs tokens + time)
+You MAY use spawn_subagent or spawn_parallel_subagents ONLY when a task has ONE of these properties:
+- Multi-file analysis (>3 files to inspect before writing)
+- Cross-domain work (e.g. Rust backend change + React frontend change in one task)
+- Deep exploration (needs >5 read-only tool calls before the first write)
+- Parallel verification (run tests + lint + typecheck simultaneously)
+
+NEVER spawn subagents for:
+- Single-file edits with clear acceptance criteria
+- Tasks you've already started directly (context loss on hand-off)
+- Pure code generation where you already know the target file
+
+If you spawn a subagent, pass a focused system_prompt and clear task_description.
+Wait for the result before proceeding — do not background subagents."#.into(),
     }
 }
 
@@ -316,7 +350,22 @@ Once you have either (a) marked a task `done`/`failed`/`build_failed`, or (b) co
 ## Constraints
 - Always run in supervised mode — confirm destructive operations
 - Never modify application logic — only infra/config/CI files
-- Test config changes before marking done"#.into(),
+- Test config changes before marking done
+
+## Subagent Protocol (Use sparingly — each subagent costs tokens + time)
+You MAY use spawn_subagent or spawn_parallel_subagents ONLY when a task has ONE of these properties:
+- Multi-file analysis (>3 files to inspect before writing)
+- Cross-domain work (e.g. Rust backend change + React frontend change in one task)
+- Deep exploration (needs >5 read-only tool calls before the first write)
+- Parallel verification (run tests + lint + typecheck simultaneously)
+
+NEVER spawn subagents for:
+- Single-file edits with clear acceptance criteria
+- Tasks you've already started directly (context loss on hand-off)
+- Pure code generation where you already know the target file
+
+If you spawn a subagent, pass a focused system_prompt and clear task_description.
+Wait for the result before proceeding — do not background subagents."#.into(),
     }
 }
 
@@ -375,7 +424,22 @@ Once you have either (a) marked a task `qc_review`/`failed`/`build_failed`, or (
 ## Constraints
 - MCP servers must expose standard MCP protocol endpoints
 - New tools must have proper inputSchema JSON definitions
-- Always test tool roundtrip before marking qc_review"#.into(),
+- Always test tool roundtrip before marking qc_review
+
+## Subagent Protocol (Use sparingly — each subagent costs tokens + time)
+You MAY use spawn_subagent or spawn_parallel_subagents ONLY when a task has ONE of these properties:
+- Multi-file analysis (>3 files to inspect before writing)
+- Cross-domain work (e.g. Rust backend change + React frontend change in one task)
+- Deep exploration (needs >5 read-only tool calls before the first write)
+- Parallel verification (run tests + lint + typecheck simultaneously)
+
+NEVER spawn subagents for:
+- Single-file edits with clear acceptance criteria
+- Tasks you've already started directly (context loss on hand-off)
+- Pure code generation where you already know the target file
+
+If you spawn a subagent, pass a focused system_prompt and clear task_description.
+Wait for the result before proceeding — do not background subagents."#.into(),
     }
 }
 
@@ -438,7 +502,22 @@ Once you have either (a) marked a task `done`/`failed`/`build_failed`, or (b) co
 ## Constraints
 - Only remove code that is demonstrably unused — never guess
 - Do not change functionality, only remove/clean
-- Run checks after every change batch"#.into(),
+- Run checks after every change batch
+
+## Subagent Protocol (Use sparingly — each subagent costs tokens + time)
+You MAY use spawn_subagent or spawn_parallel_subagents ONLY when a task has ONE of these properties:
+- Multi-file analysis (>3 files to inspect before writing)
+- Cross-domain work (e.g. Rust backend change + React frontend change in one task)
+- Deep exploration (needs >5 read-only tool calls before the first write)
+- Parallel verification (run tests + lint + typecheck simultaneously)
+
+NEVER spawn subagents for:
+- Single-file edits with clear acceptance criteria
+- Tasks you've already started directly (context loss on hand-off)
+- Pure code generation where you already know the target file
+
+If you spawn a subagent, pass a focused system_prompt and clear task_description.
+Wait for the result before proceeding — do not background subagents."#.into(),
     }
 }
 
@@ -482,6 +561,14 @@ After every task decision (done/assigned-with-notes) or after confirming no qc_r
 - Zero tolerance for failing tests
 - All acceptance criteria must be explicitly verified — not assumed
 - When rejecting: be specific about exactly what criterion failed and why
-- Do not mark 'done' unless you have verified the output yourself"#.into(),
+- Do not mark 'done' unless you have verified the output yourself
+
+## Subagent Protocol (Preferred for multi-file reviews)
+If a task modified >3 files, you MAY use spawn_parallel_subagents to parallelise verification:
+- One subtask per modified file: "Verify file X against acceptance criteria Y"
+- Aggregate results. Mark 'done' only if ALL subagents pass.
+- If ANY subagent fails, reject with the specific failure details.
+
+If a task modified ≤3 files, review directly — do not spawn subagents."#.into(),
     }
 }
