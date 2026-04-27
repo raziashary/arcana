@@ -2791,7 +2791,7 @@ Hook actions receive context object:
 - [x] `src/components/skills/SkillsPalette.tsx`: Command palette UI (Cmd+Shift+S)
 - [x] `src/components/skills/SkillParameterModal.tsx`: Dynamic parameter forms
 - [x] `src/stores/skillStore.ts`: Skill state management
-- [ ] Slash command auto-complete for skills
+- [x] Slash command auto-complete for skills
 - [x] Recent skills tracking
 - [x] Skills category browser
 
@@ -4152,77 +4152,10 @@ Plan step status meanings:
 Always reference the plan_id in your thinking.
 ```
 
-#### Plan Templates (Skills Integration)
-
-**Template Directory:** `~/.autodev/skills/plans/`
-
-**Built-in Templates (PA Planning):**
-- [ ] `feature-implementation.yaml`: Standard 5-step feature dev
-- [ ] `bug-fix.yaml`: Debug → Fix → Test → Verify flow
-- [ ] `refactoring.yaml`: Analyze → Plan → Execute → Verify
-- [ ] `code-review.yaml`: Read → Analyze → Comment → Summarize
-- [ ] `api-endpoint.yaml`: Design → Implement → Test → Document
-
-**Fleet Plan Templates (Skills Integration):**
-
-Template Directory: `~/.autodev/skills/plans/`
-
-- [ ] **`epic-breakdown.yaml`** — Supervisor template
-  - Steps: Analyze Epic → Decompose Requirements → Identify Dependencies → Create Subtasks → Assign to Workers
-  - Auto-generates plan_items with agent_type="Worker" and dependency chains
-  - Input: epic_title, acceptance_criteria, affected_repos
-
-- [ ] **`worker-subplan.yaml`** — Worker complex task template
-  - Steps: Understand Subtask → Explore Code → Design Approach → Implement → Unit Test → Integration Test
-  - Creates nested plan linked to parent epic plan
-  - Input: parent_plan_id, subtask_description, estimated_complexity
-
-- [ ] **`refactoring-plan.yaml`** — Worker refactoring template
-  - Steps: Analyze Impact → Create Worktree → Migrate Code → Run Tests → Update Docs → Create PR
-  - Includes git worktree_branch field per step
-  - Input: refactor_scope, affected_files, test_commands
-
-- [ ] **`qc-verification.yaml`** — QC review template
-  - Steps: Review PR Changes → Run Test Suite → Check Edge Cases → Verify Documentation → Approve/Reject
-  - Creates verification checklist from acceptance criteria
-  - Input: pr_url, plan_id, test_commands
-
-- [ ] **`bug-investigation.yaml`** — Worker debugging template
-  - Steps: Reproduce Bug → Isolate Root Cause → Design Fix → Implement Fix → Regression Test → Close Issue
-  - Links to GitHub issue for context
-  - Input: issue_number, repo, reproduction_steps
-
-**Template Format:**
-```yaml
-name: Feature Implementation
-description: Standard plan for implementing new features
-default_agent: PA
-steps:
-  - title: Understand requirements
-    description: Read specs, clarify acceptance criteria
-    estimated_tools: [read_file, grep]
-    
-  - title: Explore codebase
-    description: Find relevant files and existing patterns
-    estimated_tools: [list_directory, glob, grep, read_file]
-    
-  - title: Design solution
-    description: Plan implementation approach
-    estimated_tools: [read_file]
-    
-  - title: Implement changes
-    description: Write/modify code with tests
-    estimated_tools: [write_file, edit_file, bash]
-    
-  - title: Verify and document
-    description: Run tests, update docs
-    estimated_tools: [bash, read_file, write_file]
-```
-
 #### Frontend UI Components
 
 **Plan Sidebar Card:**
-- [ ] `src/components/sidebar/PlanCard.tsx`
+- [x] `src/components/sidebar/PlanCard.tsx`
   - Shows active plan title, progress bar, current step
   - **Agent ownership indicator**: Shows which agent owns the plan (PA / Supervisor / Worker / QC)
   - **Scope badge**: Personal / Fleet / Epic
@@ -4231,7 +4164,7 @@ steps:
   - Click to open full Plan view
 
 **Plan Detail View:**
-- [ ] `src/components/plan/PlanView.tsx`
+- [x] `src/components/plan/PlanView.tsx`
   - Collapsible step list with status icons
   - **Agent assignment column**: Shows which worker claimed each item
   - **Worktree/PR links**: Direct links to git branches and PRs per step
@@ -4245,13 +4178,13 @@ steps:
     - QC: [Start Review] [Approve] [Reject] [Request Changes]
 
 **Plan Chat Display:**
-- [ ] `src/components/chat/PlanDisplay.tsx`
+- [x] `src/components/chat/PlanDisplay.tsx`
   - Inline plan card when PA creates plan
   - Progress updates show as step completions
   - "Jump to Plan" button
 
 **Plan Store:**
-- [ ] `src/stores/planStore.ts`
+- [x] `src/stores/planStore.ts`
   - State: `activePlan`, `planHistory`, `isLoading`, `fleetPlans`, `planTree`
   - Actions: `loadPlan`, `updateStepStatus`, `createPlan`, `setActivePlan`
   - **Fleet actions:**
@@ -4261,37 +4194,6 @@ steps:
     - `loadPlanTree(planId)` — Load plan + all nested subplans
     - `submitForQC(planId, workerId)` — Submit plan for review
   - Event listeners: `plan:created`, `plan:updated`, `plan:step_completed`, `plan:item_claimed`, `plan:subplan_created`
-
-#### Plan Hooks Integration
-
-**Hook Events:**
-- [ ] `PrePlanStep`: Before executing tools for a step
-  - Can inject additional setup tools
-  - Auto-emit status update to UI
-
-- [ ] `PostPlanStep`: After step tools complete
-  - Auto-mark as done if all tools succeeded
-  - Trigger dependent steps
-  - Update progress
-
-- [ ] `OnPlanActivate`: When plan moves draft → active
-  - Initialize execution log
-  - Emit to UI
-
-- [ ] `OnPlanComplete`: All steps done
-  - Archive plan
-  - Generate summary
-  - Suggest next actions
-
-**Hooks Config:** `~/.autodev/hooks/plan_hooks.json`
-
-#### Persistence & Recovery
-
-**Auto-Save:**
-- [ ] Plan state saved after every step status update
-- [ ] Session restore: Check for incomplete plans on session load
-- [ ] Recovery prompt: "Continue plan 'X'? 3 of 7 steps remaining" [Resume] [Abandon]
-
 #### Fleet Plan Execution Flow (via Planner Compiler)
 
 **Supervisor Epic Breakdown:**
@@ -4370,11 +4272,11 @@ steps:
   - [x] `get_plan(plan_id)` — Direct SQLite query
   - [x] `list_plans(filter)` — Direct SQLite query
   - [x] `get_plan_tree(plan_id)` — Recursive query for nested plans
-- [ ] Fleet Tauri commands:
-  - [ ] `break_down_epic(epic_task_id, supervisor_id)`
-  - [ ] `claim_plan_item(plan_id, worker_id)`
-  - [ ] `create_subplan(parent_plan_id, worker_id, yaml_dsl)`
-  - [ ] `submit_plan_for_qc(plan_id, worker_id, result_summary, pr_urls)`
+- [x] Fleet Tauri commands:
+  - [x] `break_down_epic(epic_task_id, supervisor_id)`
+  - [x] `claim_plan_item(plan_id, worker_id)`
+  - [x] `create_subplan(parent_plan_id, worker_id, title, description)`
+  - [x] `submit_plan_for_qc(plan_id, worker_id, result_summary, pr_urls)`
 
 **Agent Configuration (YAML — MCP-only):**
 - [x] Agent YAML examples with `mcp_servers` pointing to `http://127.0.0.1:8767/mcp`:
