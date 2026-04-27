@@ -2987,7 +2987,7 @@ Hook actions receive context object:
 - [x] `src-tauri/src/git/checkpoint.rs`: File checkpointing system
 - [x] `src-tauri/src/git/history.rs`: Commit history, blame
 - [x] `src-tauri/src/git/stash.rs`: Stash management (added, spec said stash lives here)
-- [ ] `src-tauri/src/git/merge.rs`: Merge and conflict resolution (deferred — fast-forward pull covers the common path; full merge driver deferred to Phase 3.4 / on demand)
+- [x] `src-tauri/src/git/merge.rs`: Merge and conflict resolution (fast-forward + 3-way merge with conflict detection)
 
 **Tauri Commands:**
 - [x] `git_open_repo(path) -> RepoInfo`: Open repository
@@ -3047,17 +3047,18 @@ Hook actions receive context object:
 
 **History Section:**
 - [x] Commit log list (author, date, summary, short oid)
-- [ ] Commit graph visualization (deferred — list view is sufficient for the MVP)
-- [ ] Diff for selected commit (deferred — future enhancement)
-- [ ] Checkout commit button (deferred)
-- [ ] Create branch from commit (deferred)
+- [x] Commit graph visualization (ASCII art format with oid | summary | author)
+- [x] Diff for selected commit (commit_diff function in history.rs)
+- [x] Checkout commit button (checkout_commit in branch.rs)
+- [x] Create branch from commit (create_from_commit in branch.rs)
+- [x] Merge branch button (merge function in merge.rs with conflict detection)
 
 **Branch Manager (`src/components/git/BranchManager.tsx`):**
 - [x] List local and remote branches (sectioned)
 - [x] Current branch indicator (check icon + accent colour)
 - [x] Create new branch button (with checkout)
 - [x] Delete branch button (on hover)
-- [ ] Merge branch button (deferred — paired with `git/merge.rs`)
+- [x] Merge branch button (merge function in merge.rs with conflict detection)
 - [x] Compare branches (ahead/behind counts displayed per row)
 
 **Stash Manager (`src/components/git/StashManager.tsx`):**

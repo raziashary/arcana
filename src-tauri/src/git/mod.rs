@@ -8,6 +8,7 @@
 //   - Stage / unstage / commit with trailers  (commit.rs)
 //   - Branch list / create / delete / switch  (branch.rs)
 //   - Fetch / push / pull (fast-forward only) (remote.rs)
+//   - Merge and conflict resolution           (merge.rs)
 //   - Worktree list / add / remove            (worktree.rs)
 //   - History (log) and blame annotations     (history.rs)
 //   - Stash list / push / apply / drop        (stash.rs)
@@ -23,6 +24,7 @@ pub mod diff;
 pub mod commit;
 pub mod branch;
 pub mod remote;
+pub mod merge;
 pub mod worktree;
 pub mod history;
 pub mod stash;

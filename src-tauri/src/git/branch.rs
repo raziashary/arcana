@@ -98,6 +98,47 @@ pub fn checkout(repo_path: &str, refname: &str) -> Result<()> {
     checkout_ref(&repo, refname)
 }
 
+/// Checkout a specific commit by OID (detached HEAD state).
+pub fn checkout_commit(repo_path: &str, commit_oid: &str) -> Result<()> {
+    let repo = super::repo::open(repo_path)?;
+    
+    let oid = git2::Oid::from_str(commit_oid)
+        .map_err(|e| AutoDevError::Git(format!("parse oid: {e}")))?;
+    
+    let commit = repo
+        .find_commit(oid)
+        .map_err(|e| AutoDevError::Git(format!("find_commit: {e}")))?;
+    
+    repo.checkout_tree(commit.as_object(), None)
+        .map_err(|e| AutoDevError::Git(format!("checkout_tree: {e}")))?;
+    
+    repo.set_head_detached(oid)
+        .map_err(|e| AutoDevError::Git(format!("set_head_detached: {e}")))?;
+    
+    Ok(())
+}
+
+/// Create a new branch from a specific commit.
+pub fn create_from_commit(repo_path: &str, branch_name: &str, commit_oid: &str, checkout: bool) -> Result<()> {
+    let repo = super::repo::open(repo_path)?;
+    
+    let oid = git2::Oid::from_str(commit_oid)
+        .map_err(|e| AutoDevError::Git(format!("parse oid: {e}")))?;
+    
+    let commit = repo
+        .find_commit(oid)
+        .map_err(|e| AutoDevError::Git(format!("find_commit: {e}")))?;
+    
+    repo.branch(branch_name, &commit, false)
+        .map_err(|e| AutoDevError::Git(format!("branch create: {e}")))?;
+    
+    if checkout {
+        checkout_ref(&repo, &format!("refs/heads/{branch_name}"))?;
+    }
+    
+    Ok(())
+}
+
 fn checkout_ref(repo: &Repository, refname: &str) -> Result<()> {
     // If the user passed a short branch name, expand to refs/heads/… first.
     let full_ref = if refname.starts_with("refs/") {
