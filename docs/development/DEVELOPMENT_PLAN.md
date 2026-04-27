@@ -6144,39 +6144,722 @@ Phase 5 Cross-Sub-Phase Integration:
 
 ---
 
-## 14. Phase 6 — Advanced Developer Tools
+## 14. Phase 6 — Graph Engine
 
-**Goal**: Graphify integration, advanced code analysis, experimental features.
+**Goal**: Build AutoDev's native code knowledge graph engine — SQLite-persistent, tree-sitter-extracted, Leiden-clustered, MCP-served, D3.js-visualized. Gives PA and Worker agents surgical graph queries instead of token-burning full-file reads. Replaces 8× token waste with precise blast-radius context.
 
-> **Note**: This phase is for advanced features that go beyond core AutoDev functionality. These enhance developer productivity but are not required for the core PA + Fleet orchestration vision.
+> **Reference Document**: `docs/reference/autodev-graph-master-spec.md` — full architecture analysis of graphify-5 and code-review-graph reference codebases, combined design, node/edge data model, SQLite schema, 7-stage pipeline, and all 51 atomic tasks.
 
-### Phase 6 Deliverables Checklist
+> **Architecture Decision**: Rust-native extraction (tree-sitter Rust bindings via `tree-sitter` + `tree-sitter-language-pack` crates), SQLite persistence via `rusqlite`, NetworkX-equivalent analysis in pure Rust using `petgraph`. MCP server is the existing `autodev-mcp-server` (port 8767) — graph tools are registered as builtin tools just like `create_task` and `list_tasks`. No new sidecar.
 
-**Graphify Integration (Codebase Visualization):**
-- [ ] Recreate the Graphify tool for codebase dissection
-- [ ] Graph-based code analysis without LLM/AI assistance:
-  - Parse functions, classes, variables from source files (tree-sitter)
-  - Extract docstrings, type hints, signatures
-  - Generate structured markdown similar to `autodev/docs/codebase/` format
-- [ ] **New Tab: Graphify** — Codebase visualization
-  - Interactive graph display of code relationships
-  - Color-coded connections (imports, calls, inheritance)
-  - Zoom, pan, filter by file type or module
-  - Click node → jump to file/line in IDE tab
-- [ ] Graphify tool available to worker agents for codebase analysis
-- [ ] Export graph as PNG/SVG or interactive HTML
+---
 
-**Advanced IDE Features:**
-- [ ] Symbol search across all cloned repos (go to definition, find references)
-- [ ] Code refactoring tools (rename symbol, extract function)
-- [ ] Advanced diff viewer (side-by-side, inline, three-way merge)
-- [ ] Code bookmarks and annotations
+### Phase 6.1 — Storage Layer
 
-**Experimental Features:**
-- [ ] Voice input for chat (speech-to-text)
-- [ ] Custom themes and UI customization
-- [ ] Plugin marketplace for community extensions
-- [ ] A/B testing framework for prompt variants
+**Goal**: Define the SQLite schema and Rust data access layer that everything else builds on.
+
+> **New file**: `src-tauri/src/graph/` module directory. Add `mod graph;` to `src-tauri/src/lib.rs`.
+
+- [ ] **Create `src-tauri/src/graph/mod.rs`** — re-exports all graph submodules:
+  - `pub mod store;`, `pub mod schema;`, `pub mod migrations;`, `pub mod detect;`, `pub mod extract;`, `pub mod build;`, `pub mod cluster;`, `pub mod analyze;`, `pub mod flows;`, `pub mod changes;`, `pub mod incremental;`, `pub mod query;`, `pub mod report;`, `pub mod export;`, `pub mod registry;`, `pub mod cache;`
+
+- [ ] **Create `src-tauri/src/graph/schema.rs`** — raw SQL constants only:
+  - `pub const CREATE_NODES: &str` — nodes table DDL (id, kind, name, qualified_name UNIQUE, file_path, line_start, line_end, language, parent_name, params, return_type, modifiers, is_test, file_hash, community, community_name, agent_author, task_id, worker_locked, worktree, extra JSON, updated_at)
+  - `pub const CREATE_EDGES: &str` — edges table DDL (id, kind, source_qualified, target_qualified, file_path, line, confidence REAL, confidence_tier TEXT, weight REAL, relation, agent_author, task_id, extra JSON, updated_at)
+  - `pub const CREATE_COMMUNITIES: &str` — communities table (id, name, cohesion_score, member_count, dominant_language, updated_at)
+  - `pub const CREATE_FLOWS: &str` — flows table (id, entry_point, flow_path JSON, criticality_score, is_tested, has_security_keyword, updated_at)
+  - `pub const CREATE_SNAPSHOTS: &str` — snapshots table (id, label, node_count, edge_count, graph_json TEXT, created_at)
+  - `pub const CREATE_ANALYSIS_CACHE: &str` — analysis_cache table (key TEXT PRIMARY KEY, value JSON, graph_hash, updated_at)
+  - `pub const CREATE_NODES_FTS: &str` — FTS5 virtual table DDL: `CREATE VIRTUAL TABLE nodes_fts USING fts5(name, qualified_name, file_path, params, return_type, content='nodes', content_rowid='rowid', tokenize='porter unicode61')`
+  - `pub const CREATE_REPOS: &str` — repos registry table (id, path UNIQUE, alias, db_path, last_updated, node_count, edge_count)
+  - `pub const ALL_INDEXES: &[&str]` — array of all `CREATE INDEX IF NOT EXISTS` statements (idx_nodes_file, idx_nodes_qualified, idx_nodes_community, idx_nodes_task, idx_nodes_author, idx_edges_source, idx_edges_target, idx_edges_kind, idx_edges_target_kind, idx_edges_source_kind, idx_edges_file, idx_edges_tier)
+
+- [ ] **Create `src-tauri/src/graph/migrations.rs`** — versioned schema migrations:
+  - `pub fn get_schema_version(conn: &Connection) -> u32` — reads `PRAGMA user_version`
+  - `pub fn run_migrations(conn: &mut Connection) -> Result<()>` — runs all pending migrations in order via `conn.execute_batch()`:
+    - v0→v1: create nodes + edges + metadata tables + all indexes
+    - v1→v2: add communities table
+    - v2→v3: add flows + snapshots tables
+    - v3→v4: add analysis_cache table + FTS5 virtual table
+    - v4→v5: add repos table + agent_author/task_id/worker_locked/worktree columns to nodes and edges
+  - Each migration wrapped in explicit `BEGIN`/`COMMIT`, sets `PRAGMA user_version = N` on success
+  - `pub fn migration_v1(conn: &mut Connection) -> Result<()>` ... `migration_v5(conn: &mut Connection) -> Result<()>` — individual migration functions
+
+- [ ] **Create `src-tauri/src/graph/store.rs`** — `GraphStore` struct, SQLite CRUD:
+  - `pub struct GraphStore { conn: Connection, db_path: PathBuf }` — single connection, WAL mode
+  - `pub fn GraphStore::open(db_path: &Path) -> Result<Self>` — opens/creates DB, enables WAL (`PRAGMA journal_mode=WAL`), `PRAGMA foreign_keys=ON`, calls `run_migrations()`
+  - `pub fn GraphStore::upsert_node(node: &NodeInfo, agent_author: Option<&str>, task_id: Option<i64>) -> Result<i64>` — `INSERT OR REPLACE INTO nodes` with all fields; returns rowid
+  - `pub fn GraphStore::upsert_edge(edge: &EdgeInfo, agent_author: Option<&str>, task_id: Option<i64>) -> Result<i64>` — `INSERT OR REPLACE INTO edges`
+  - `pub fn GraphStore::delete_file_nodes(file_path: &str) -> Result<usize>` — deletes all nodes WHERE file_path = ?; returns count deleted
+  - `pub fn GraphStore::delete_file_edges(file_path: &str) -> Result<usize>` — deletes all edges WHERE file_path = ?
+  - `pub fn GraphStore::get_node(qualified_name: &str) -> Result<Option<GraphNode>>` — SELECT by qualified_name
+  - `pub fn GraphStore::get_edges_for_node(qualified_name: &str) -> Result<Vec<GraphEdge>>` — SELECT WHERE source_qualified = ? OR target_qualified = ?
+  - `pub fn GraphStore::get_stats() -> Result<GraphStats>` — node/edge counts by kind + language list + last_updated
+  - `pub fn GraphStore::list_nodes_by_file(file_path: &str) -> Result<Vec<GraphNode>>` — SELECT WHERE file_path = ?
+  - `pub fn GraphStore::get_file_hash(file_path: &str) -> Result<Option<String>>` — `SELECT file_hash FROM nodes WHERE file_path = ? LIMIT 1`
+  - `pub fn GraphStore::set_community(qualified_name: &str, community: i32, community_name: &str) -> Result<()>`
+  - `pub fn GraphStore::get_all_nodes_for_graph() -> Result<Vec<GraphNode>>` — full table scan for analysis/export (paginated by default)
+  - `pub fn GraphStore::get_all_edges_for_graph() -> Result<Vec<GraphEdge>>` — full table scan for analysis/export
+  - Data structs `GraphNode`, `GraphEdge`, `GraphStats` — `#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]`
+
+- [ ] **Implement FTS5 rebuild in `store.rs`**:
+  - `pub fn GraphStore::rebuild_fts_index() -> Result<usize>` — `DROP TABLE IF EXISTS nodes_fts`, `CREATE VIRTUAL TABLE nodes_fts ...`, `INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')` — all inside `BEGIN IMMEDIATE`/`COMMIT`; returns row count
+  - Called automatically at end of every full build; called incrementally after upserts on changed files
+
+- [ ] **Add `Cargo.toml` dependencies** for graph engine:
+  - `rusqlite = { version = "0.31", features = ["bundled"] }` (already used in project — confirm version)
+  - `tree-sitter = "0.22"` — core tree-sitter runtime
+  - `petgraph = "0.6"` — graph algorithms (BFS, DFS, shortest path)
+  - `sha2 = "0.10"` — SHA-256 file hashing
+  - `rayon = "1.10"` — parallel file parsing
+  - `walkdir = "2"` — directory traversal
+  - `ignore = "0.4"` — .gitignore-aware file filtering
+  - Language grammars: `tree-sitter-python`, `tree-sitter-javascript`, `tree-sitter-typescript`, `tree-sitter-rust`, `tree-sitter-go`, `tree-sitter-java`, `tree-sitter-cpp`, `tree-sitter-c`, `tree-sitter-c-sharp`, `tree-sitter-ruby`, `tree-sitter-kotlin` (add remaining languages incrementally)
+
+**6.1 Success Criteria:**
+> `GraphStore::open("~/.autodev/graph.db")` succeeds → WAL mode confirmed → migrations v1–v5 applied → `get_stats()` returns zero-count GraphStats → `upsert_node()` + `get_node()` round-trips correctly
+
+---
+
+### Phase 6.2 — Detection Layer
+
+**Goal**: Directory walker that produces a filtered list of source file paths, respecting .gitignore and a default ignore pattern list.
+
+- [ ] **Create `src-tauri/src/graph/detect.rs`**:
+  - `pub const CODE_EXTENSIONS: &[&str]` — full list of 35+ extensions: `.py`, `.js`, `.mjs`, `.jsx`, `.ts`, `.tsx`, `.go`, `.rs`, `.java`, `.c`, `.h`, `.cpp`, `.cc`, `.cxx`, `.hpp`, `.cs`, `.rb`, `.php`, `.kt`, `.swift`, `.scala`, `.vue`, `.svelte`, `.dart`, `.r`, `.lua`, `.sol`, `.ex`, `.exs`, `.zig`, `.jl`, `.sh`, `.bash`, `.ps1`, `.m`, `.pl`, `.pm`, `.res`, `.gd`, `.ipynb`
+  - `pub const DEFAULT_IGNORE_PATTERNS: &[&str]` — 30+ patterns: `node_modules/**`, `.git/**`, `.venv/**`, `venv/**`, `__pycache__/**`, `dist/**`, `build/**`, `target/**`, `.next/**`, `vendor/**`, `.dart_tool/**`, `.pub-cache/**`, `.autodev/**`, `coverage/**`, `*.min.js`, `*.min.css`, `*.map`, `*.lock`, `package-lock.json`, `yarn.lock`, `*.pyc`, `*.db`, `*.sqlite`
+  - `pub struct LanguageConfig` — per-language tree-sitter grammar info:
+    ```rust
+    pub struct LanguageConfig {
+        pub language: Language,        // tree-sitter Language handle
+        pub class_node_types: &'static [&'static str],
+        pub function_node_types: &'static [&'static str],
+        pub import_node_types: &'static [&'static str],
+        pub call_node_types: &'static [&'static str],
+        pub name_field: &'static str,  // default "name"
+        pub body_field: &'static str,  // default "body"
+        pub function_label_parens: bool,
+    }
+    ```
+  - `pub fn get_language_config(extension: &str) -> Option<LanguageConfig>` — maps extension → LanguageConfig; uses `match` over all CODE_EXTENSIONS
+  - `pub fn collect_files(root: &Path, extra_ignore: &[&str]) -> Vec<PathBuf>` — uses `ignore::WalkBuilder` for .gitignore support; applies DEFAULT_IGNORE_PATTERNS; filters by CODE_EXTENSIONS; returns sorted `Vec<PathBuf>`
+
+**6.2 Success Criteria:**
+> `collect_files(Path::new("."), &[])` on the autodev repo returns all `.rs`, `.ts`, `.tsx` files, excludes `node_modules/`, `target/`, `.git/`
+
+---
+
+### Phase 6.3 — Extraction Layer
+
+**Goal**: Tree-sitter AST walker that converts source files into `ExtractionResult` (nodes + edges). Per-language import handlers. SHA-256 file cache to skip re-parsing unchanged files.
+
+- [ ] **Create `src-tauri/src/graph/cache.rs`** — extraction result cache:
+  - `pub struct CacheEntry { file_hash: String, result: ExtractionResult, cached_at: u64 }`
+  - Cache storage: `~/.autodev/graph_cache/` directory, one `.json` file per source file (path-hashed filename)
+  - `pub fn load_cached(file_path: &Path, file_hash: &str) -> Option<ExtractionResult>` — reads cache file, validates hash matches, returns `Some(result)` or `None`
+  - `pub fn save_cached(file_path: &Path, file_hash: &str, result: &ExtractionResult) -> Result<()>` — serializes to JSON, writes to cache dir
+  - `pub fn hash_file(path: &Path) -> Result<String>` — reads file bytes, returns `hex::encode(Sha256::digest(&bytes))`
+
+- [ ] **Create `src-tauri/src/graph/extract.rs`** — core extraction:
+  - `#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)] pub struct NodeInfo` — mirrors spec: kind (NodeKind enum), name, file_path, line_start, line_end, language, parent_name, params, return_type, is_test, extra (serde_json::Value)
+  - `#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)] pub struct EdgeInfo` — kind (EdgeKind enum), source (qualified name), target (qualified name), file_path, line, confidence_tier (ConfidenceTier enum), weight, extra
+  - `pub enum NodeKind { File, Class, Function, Type, Test, Module, Import }` — `#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]`
+  - `pub enum EdgeKind { Calls, ImportsFrom, Imports, Inherits, Implements, Contains, TestedBy, DependsOn, References, SemanticallySimilar }` — `#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]`
+  - `pub enum ConfidenceTier { Extracted, Inferred, Ambiguous }` — `#[derive(Debug, Clone, Serialize, Deserialize)]`
+  - `#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)] pub struct ExtractionResult { pub nodes: Vec<NodeInfo>, pub edges: Vec<EdgeInfo> }`
+  - `pub fn make_id(parts: &[&str]) -> String` — joins parts with `_`, strips non-alphanumeric with regex `[^a-zA-Z0-9]+` → `_`, lowercases, trims leading/trailing `_`
+  - `pub fn normalize_id(s: &str) -> String` — same regex normalization for edge endpoint reconciliation
+  - `pub fn extract(path: &Path) -> Result<ExtractionResult>` — entry point:
+    1. `hash_file(path)?` → `file_hash`
+    2. `load_cached(path, &file_hash)` → return early if cache hit
+    3. `get_language_config(extension)` → dispatch to language-specific walker
+    4. `save_cached(path, &file_hash, &result)`
+    5. Return result
+
+- [ ] **Implement Python extractor in `extract.rs`**:
+  - `fn extract_python(path: &Path, source: &[u8], config: &LanguageConfig) -> ExtractionResult`
+  - Walk `class_definition` → emit NodeKind::Class node; walk `function_definition` → emit NodeKind::Function; detect `def test_` prefix or `class Test` prefix → NodeKind::Test; is_test=true
+  - Import handler for `import_statement`: emit EdgeKind::Imports with target = `make_id(&[module_name])`
+  - Import handler for `import_from_statement`: resolve relative dots to full path, emit EdgeKind::ImportsFrom
+  - Second-pass call graph: walk function bodies for `call_expression` nodes → emit EdgeKind::Calls with ConfidenceTier::Extracted for direct calls, ConfidenceTier::Inferred for indirect/chained calls
+  - Emit `contains` edges: class → method, file → top-level function
+
+- [ ] **Implement JavaScript/TypeScript extractor in `extract.rs`**:
+  - `fn extract_js_ts(path: &Path, source: &[u8], config: &LanguageConfig) -> ExtractionResult`
+  - Handle both `class_declaration` and arrow function patterns in variable declarations
+  - Import handler: `import_statement` → resolve relative paths (normalize `.js` → `.ts` for ESM), emit EdgeKind::ImportsFrom; bare imports → EdgeKind::Imports (external)
+  - Export detection: nodes from `export_statement` get `is_exported: true` in extra
+  - JSX component detection: PascalCase function names with JSX return → NodeKind::Class (component)
+
+- [ ] **Implement Go, Rust, Java, C/C++ extractors in `extract.rs`**:
+  - Go: `type_declaration` → Class, `function_declaration` / `method_declaration` → Function; import block → ImportsFrom edges
+  - Rust: `struct_item`, `enum_item`, `impl_item` → Class; `fn` items → Function; `use_declaration` → ImportsFrom; `mod` declarations → Module
+  - Java: `class_declaration`, `interface_declaration`, `enum_declaration` → Class; `method_declaration` → Function; `import_declaration` → ImportsFrom; `extends_interfaces` → Inherits edge
+  - C/C++: `struct_specifier`, `class_specifier` → Class; `function_definition` → Function; `#include` directives → ImportsFrom (resolve to file path)
+
+- [ ] **Implement remaining language extractors** (Ruby, PHP, Kotlin, Swift, Vue, Dart, Bash, Elixir, Zig):
+  - Each follows the same pattern: find class/function nodes using language-specific node types from LanguageConfig, emit NodeInfo, walk bodies for call sites, emit EdgeInfo
+  - Notebook `.ipynb`: parse JSON cells array, detect language from `metadata.kernelspec.language`, extract per-cell, prefix qualified names with `cell_N::`
+  - Vue `.vue`: extract `<script>` block, detect TypeScript from `<script lang="ts">`, delegate to JS/TS extractor
+  - Bash `.sh`: `function_definition` → NodeKind::Function; `command_name` calls → EdgeKind::Calls (ConfidenceTier::Inferred)
+
+- [ ] **Implement parallel extraction in `extract.rs`**:
+  - `pub fn extract_all(paths: &[PathBuf]) -> Vec<(PathBuf, Result<ExtractionResult>)>` — uses `rayon::par_iter()`:
+    ```rust
+    paths.par_iter().map(|p| (p.clone(), extract(p))).collect()
+    ```
+  - Errors are collected alongside successes — caller logs warnings, skips failed files
+  - Thread count: uses Rayon global pool, defaults to `num_cpus`
+
+**6.3 Success Criteria:**
+> `extract(Path::new("src/main.rs"))` on the autodev Tauri main file returns nodes for all `pub fn` items + edges for all `use` declarations → `extract_all(all_rs_files)` completes in parallel with no panics
+
+---
+
+### Phase 6.4 — Build Layer
+
+**Goal**: Merge `Vec<ExtractionResult>` into a deduplicated graph and write it to SQLite.
+
+- [ ] **Create `src-tauri/src/graph/build.rs`**:
+  - `pub fn build(extractions: Vec<ExtractionResult>, store: &GraphStore, agent_author: Option<&str>, task_id: Option<i64>) -> Result<BuildStats>` — entry point for full build:
+    1. Collect all nodes and edges from all ExtractionResults
+    2. `deduplicate_nodes(&mut nodes)` — remove duplicate IDs, prefer shortest ID, no chunk suffix
+    3. `reconcile_edges(&mut edges, &node_ids)` — remap edge endpoints via `normalize_id()`, drop edges where source or target not in node_ids
+    4. Batch upsert to SQLite: `store.upsert_node()` per node, `store.upsert_edge()` per edge
+    5. Rebuild FTS5 index: `store.rebuild_fts_index()`
+    6. Return `BuildStats { nodes_upserted, edges_upserted, files_parsed, elapsed_ms }`
+  - `pub fn deduplicate_nodes(nodes: &mut Vec<NodeInfo>)` — groups by `normalize_id(&node.name)`, keeps first occurrence, logs duplicates count
+  - `pub fn reconcile_edges(edges: &mut Vec<EdgeInfo>, node_ids: &HashSet<String>)` — for each edge: if source not in node_ids try `normalize_id(source)`, same for target; drop edges that still don't resolve (external/stdlib — not an error)
+  - `pub struct BuildStats { pub nodes_upserted: usize, pub edges_upserted: usize, pub files_parsed: usize, pub elapsed_ms: u64 }`
+
+- [ ] **Implement `prune_deleted_files` in `build.rs`**:
+  - `pub fn prune_deleted_files(store: &GraphStore, current_files: &HashSet<String>) -> Result<usize>` — lists all distinct `file_path` values in nodes table, finds paths NOT in `current_files`, calls `store.delete_file_nodes()` + `store.delete_file_edges()` for each; returns total nodes pruned
+
+**6.4 Success Criteria:**
+> Full build on 50 Rust files: all `pub struct` and `pub fn` appear as nodes in SQLite, all `use` statements appear as edges, `get_stats()` shows non-zero counts, duplicates are merged
+
+---
+
+### Phase 6.5 — Incremental Update Layer
+
+**Goal**: Re-parse only changed files (SHA-256 hash check), update their dependents, stay < 2s on 2,900 files.
+
+- [ ] **Create `src-tauri/src/graph/incremental.rs`**:
+  - `pub fn get_git_changed_files(repo_root: &Path, base: &str) -> Result<Vec<PathBuf>>` — runs `git diff --name-only {base}` via `std::process::Command`; validates `base` with regex `^[A-Za-z0-9_.~^/@{}\-]+$` before passing to shell; returns list of changed file paths; returns empty vec on non-git dirs
+  - `pub fn find_changed_by_hash(store: &GraphStore, files: &[PathBuf]) -> Result<Vec<PathBuf>>` — for each file: `store.get_file_hash(path)`, compare to `hash_file(path)`, collect files where hash differs
+  - `pub fn find_dependents(store: &GraphStore, changed_qualified_names: &[String]) -> Result<Vec<PathBuf>>` — `SELECT DISTINCT file_path FROM edges WHERE target_qualified IN (...)` → returns additional files that import changed nodes
+  - `pub fn incremental_update(store: &GraphStore, changed_files: &[PathBuf], agent_author: Option<&str>, task_id: Option<i64>) -> Result<UpdateStats>` — entry point:
+    1. For each changed file: `store.delete_file_nodes(path)` + `store.delete_file_edges(path)`
+    2. `extract_all(changed_files)` in parallel
+    3. `build(new_extractions, store, agent_author, task_id)`
+    4. `find_dependents(store, &new_qualified_names)` → re-parse dependents too (one hop only)
+    5. `store.rebuild_fts_index()` for changed nodes only (targeted FTS update)
+    6. Return `UpdateStats { files_updated, nodes_updated, edges_updated, elapsed_ms }`
+  - `pub struct UpdateStats { pub files_updated: usize, pub nodes_updated: usize, pub edges_updated: usize, pub elapsed_ms: u64 }`
+
+- [ ] **Create `src-tauri/src/graph/watcher.rs`** — Tauri file watcher integration:
+  - `pub fn start_graph_watcher(app_handle: AppHandle, repo_root: PathBuf, db_path: PathBuf) -> Result<()>` — uses Tauri's built-in `tauri_plugin_fs::watch()` or `notify` crate; debounces events (300ms); on change: calls `incremental_update()`, emits Tauri event `"graph:updated"` with payload `{ repo: String, files_updated: usize, elapsed_ms: u64 }`
+  - `pub fn stop_graph_watcher(app_handle: &AppHandle) -> Result<()>` — cancels the watcher handle
+  - Debounce logic: collect all events in 300ms window, deduplicate paths, then fire one `incremental_update()` call
+
+**6.5 Success Criteria:**
+> Save a `.rs` file → watcher fires within 500ms → `incremental_update()` runs → only that file + its dependents re-parsed → `"graph:updated"` event emitted → `get_stats()` shows updated `updated_at`
+
+---
+
+### Phase 6.6 — Community Detection
+
+**Goal**: Group related nodes into communities using Louvain algorithm (petgraph-based), give each community a meaningful name, compute cohesion scores.
+
+- [ ] **Create `src-tauri/src/graph/cluster.rs`**:
+  - `pub struct Community { pub id: i32, pub name: String, pub members: Vec<String>, pub cohesion_score: f32 }`
+  - `pub fn build_adjacency(store: &GraphStore) -> Result<petgraph::Graph<String, f32>>` — loads all edges from SQLite, builds undirected `petgraph::Graph` with edge weights from `EDGE_WEIGHTS` map:
+    ```rust
+    const EDGE_WEIGHTS: &[(&str, f32)] = &[
+        ("CALLS", 1.0), ("IMPORTS_FROM", 0.5), ("INHERITS", 0.8),
+        ("IMPLEMENTS", 0.7), ("CONTAINS", 0.3), ("TESTED_BY", 0.4),
+        ("DEPENDS_ON", 0.6), ("REFERENCES", 0.4),
+    ];
+    ```
+  - `pub fn detect_communities(graph: &petgraph::Graph<String, f32>) -> HashMap<String, i32>` — Louvain modularity using `petgraph`'s community detection or a pure-Rust Louvain crate (`louvain` or `community-detection`); returns `node_qualified_name → community_id` map; seeds with `seed=42` for determinism
+  - `pub fn split_oversized(graph: &petgraph::Graph<String, f32>, communities: &HashMap<String, i32>, threshold_fraction: f32) -> HashMap<String, i32>` — any community with > 25% of total nodes gets re-clustered in isolation; recursively splits until no community exceeds threshold (min community size to split: 10)
+  - `pub fn cohesion_score(store: &GraphStore, member_qualified_names: &[String]) -> f32` — `actual_intra_edges / (n * (n-1) / 2)` where intra_edges queried from SQLite
+  - `pub fn name_community(store: &GraphStore, members: &[String]) -> String` — algorithmic naming:
+    1. Find most common directory prefix from `file_path` of members
+    2. If one class accounts for > 40% of members → use that class name as suffix
+    3. Else: most frequent non-trivial keyword from `name` fields (filter `COMMON_WORDS` set)
+    4. Format: `"{prefix}-{keyword}"` e.g. `"api-health"`, `"db-models"`, `"agent-core"`
+  - `pub fn run_clustering(store: &GraphStore) -> Result<Vec<Community>>` — orchestrates full clustering:
+    1. `build_adjacency(store)`
+    2. `detect_communities(&graph)`
+    3. `split_oversized(&graph, &communities, 0.25)`
+    4. Group nodes by community_id, `name_community()` for each, `cohesion_score()` for each
+    5. `store.set_community(qname, community_id, &community_name)` for every node
+    6. Upsert into `communities` table
+    7. Return sorted by member count desc (community 0 = largest)
+
+**6.6 Success Criteria:**
+> After full build on autodev repo: `list_communities` returns 5–15 named communities; community names like `"graph-store"`, `"agent-context"`, `"recipes-runner"` — not `"Community 0"`; cohesion scores stored in `communities` table
+
+---
+
+### Phase 6.7 — Analysis Engine
+
+**Goal**: God nodes, surprising connections, suggested questions, impact radius, graph diff — the insight layer that makes the graph useful beyond navigation.
+
+- [ ] **Create `src-tauri/src/graph/analyze.rs`**:
+
+  - **God Nodes**:
+    - `pub fn god_nodes(store: &GraphStore, top_n: usize) -> Result<Vec<GodNode>>` — `SELECT qualified_name, COUNT(*) as degree FROM (SELECT source_qualified as qualified_name FROM edges UNION ALL SELECT target_qualified FROM edges) GROUP BY qualified_name ORDER BY degree DESC LIMIT ?`
+    - Filter out file-hub nodes (label == filename), concept nodes (no source_file), AST stubs (name starts with `.` and ends with `()`)
+    - `pub struct GodNode { pub qualified_name: String, pub label: String, pub degree: u32, pub community: Option<i32>, pub community_name: Option<String>, pub file_path: String }`
+
+  - **Surprising Connections**:
+    - `pub fn surprising_connections(store: &GraphStore, top_n: usize) -> Result<Vec<SurprisingConnection>>` — queries cross-file edges (source_qualified file ≠ target_qualified file); excludes IMPORTS, IMPORTS_FROM, CONTAINS, METHOD edges; computes composite surprise score per edge:
+      ```
+      score = confidence_bonus + cross_type_bonus + cross_repo_bonus + cross_community_bonus + peripheral_hub_bonus
+      confidence_bonus: AMBIGUOUS=3, INFERRED=2, EXTRACTED=1
+      cross_type_bonus: +2 if file extensions indicate different categories (code vs notebook vs script)
+      cross_repo_bonus: +2 if top-level directory differs
+      cross_community_bonus: +1 if community(source) ≠ community(target)
+      peripheral_hub_bonus: +1 if min(degree(u),degree(v)) ≤ 2 AND max ≥ 5
+      ```
+    - Returns top_n sorted by score desc
+    - `pub struct SurprisingConnection { pub source: String, pub target: String, pub source_file: String, pub target_file: String, pub confidence_tier: String, pub relation: String, pub score: f32, pub why: Vec<String> }`
+
+  - **Suggested Questions**:
+    - `pub fn suggest_questions(store: &GraphStore, top_n: usize) -> Result<Vec<SuggestedQuestion>>` — generates questions from 5 signal types:
+      1. AMBIGUOUS edges: `"What is the exact relationship between '{source}' and '{target}'?"` — query `SELECT * FROM edges WHERE confidence_tier='AMBIGUOUS' LIMIT 10`
+      2. Bridge nodes (high betweenness): BFS-based betweenness approximation on in-memory petgraph; `"Why does '{node}' connect '{community_a}' to '{community_b}'?"`
+      3. God nodes with INFERRED edges: `"Are the {N} inferred relationships involving '{node}' actually correct?"`
+      4. Isolated nodes (degree ≤ 1): `"What connects {nodes} to the rest of the system?"`
+      5. Low-cohesion communities (cohesion < 0.15): `"Should '{community}' be split into smaller modules?"`
+    - `pub struct SuggestedQuestion { pub question_type: String, pub question: String, pub why: String }`
+
+  - **Impact Radius**:
+    - `pub fn get_impact_radius(store: &GraphStore, qualified_name: &str, max_depth: u32, max_nodes: usize) -> Result<ImpactRadius>` — backward BFS:
+      1. Start with {qualified_name}
+      2. Each step: `SELECT source_qualified FROM edges WHERE target_qualified = ? AND kind IN ('CALLS','IMPORTS_FROM','DEPENDS_ON')` — find callers/dependents
+      3. Also collect: `SELECT target_qualified FROM edges WHERE source_qualified = ? AND kind = 'TESTED_BY'` — find tests
+      4. Classify by hop count: hop ≤ 2 = high_risk, hop 3-4 = medium_risk, hop 5+ = low_risk
+      5. Identify gaps: affected nodes with no TESTED_BY edges at all
+    - `pub struct ImpactRadius { pub changed_node: String, pub affected_nodes: Vec<AffectedNode>, pub tests_to_run: Vec<String>, pub test_coverage_gaps: Vec<String>, pub total_affected: usize, pub high_risk_count: usize }`
+    - `pub struct AffectedNode { pub qualified_name: String, pub label: String, pub file_path: String, pub hops: u32, pub risk_level: String, pub path: Vec<String> }`
+
+  - **Graph Diff**:
+    - `pub fn save_snapshot(store: &GraphStore, label: &str) -> Result<i64>` — reads all nodes + edges, serializes to compressed JSON, writes to `snapshots` table; returns snapshot_id
+    - `pub fn graph_diff(store: &GraphStore, snapshot_id_a: i64, snapshot_id_b: i64) -> Result<GraphDiff>` — loads both snapshots, computes:
+      - `new_nodes`: node IDs in B but not A
+      - `removed_nodes`: node IDs in A but not B
+      - `new_edges`: (source, target, kind) tuples in B but not A
+      - `removed_edges`: (source, target, kind) tuples in A but not B
+      - `summary`: human-readable string `"N new nodes, M new edges, P nodes removed"`
+    - `pub struct GraphDiff { pub new_nodes: Vec<NodeSummary>, pub removed_nodes: Vec<NodeSummary>, pub new_edges: Vec<EdgeSummary>, pub removed_edges: Vec<EdgeSummary>, pub summary: String }`
+
+**6.7 Success Criteria:**
+> `god_nodes(store, 10)` returns top-10 most-connected real entities (not filenames); `surprising_connections(store, 5)` returns cross-module edges with `why` explanations; `get_impact_radius(store, "src/api/health.rs::agents_health", 5, 100)` returns callers + tests within 5 hops
+
+---
+
+### Phase 6.8 — Execution Flow Detection
+
+**Goal**: Identify entry points (API handlers, CLI commands, test functions, async tasks), trace their execution paths forward through CALLS edges, and score criticality.
+
+- [ ] **Create `src-tauri/src/graph/flows.rs`**:
+  - `pub const FRAMEWORK_DECORATOR_PATTERNS: &[&str]` — regex patterns for 15+ frameworks: FastAPI (`app.get`, `app.post`, `router.get`), Click (`@click.command`), Celery (`@task`, `@shared_task`), Django (`@receiver`, `@api_view`), Spring (`@GetMapping`, `@PostMapping`, `@Scheduled`), Express (`app.get`, `router.post`), pydantic-ai/LangChain (`@tool`, `@tool_plain`, `@system_prompt`)
+  - `pub const ENTRY_NAME_PATTERNS: &[&str]` — regex patterns: `^main$`, `^__main__$`, `^test_`, `^Test[A-Z]`, `^on_`, `^handle_`, `^handler$`, `^lambda_handler$`, `^upgrade$`, `^downgrade$`, `^lifespan$`, `^get_db$`
+  - `pub const SECURITY_KEYWORDS: &[&str]` — `["auth", "token", "password", "secret", "crypto", "sign", "verify", "admin", "permission", "role", "session", "cookie", "jwt", "oauth"]`
+  - `pub fn detect_entry_points(store: &GraphStore) -> Result<Vec<String>>` — finds functions with:
+    - No incoming CALLS edges (nothing calls them externally) — `SELECT qualified_name FROM nodes WHERE kind='Function' AND qualified_name NOT IN (SELECT target_qualified FROM edges WHERE kind='CALLS')`
+    - OR `extra` JSON contains a decorator matching any FRAMEWORK_DECORATOR_PATTERNS
+    - OR name matches any ENTRY_NAME_PATTERNS
+    - Returns `Vec<String>` of qualified_names of entry points
+  - `pub fn trace_flow(store: &GraphStore, entry_point: &str, max_depth: u32) -> Result<Vec<String>>` — forward BFS through CALLS edges from entry_point: `SELECT target_qualified FROM edges WHERE source_qualified = ? AND kind = 'CALLS'`; collects path as ordered Vec of qualified_names; max_depth=20 to prevent cycles
+  - `pub fn score_criticality(store: &GraphStore, flow_path: &[String]) -> Result<f32>` — composite score:
+    ```
+    base = 1.0
+    × 1.5 if any node name or params contains a SECURITY_KEYWORD
+    × 0.7 if flow has at least one TESTED_BY edge on any node in path
+    × (1.0 + (path_length as f32).ln() / 10.0)
+    ```
+  - `pub fn run_flow_detection(store: &GraphStore) -> Result<Vec<FlowResult>>` — orchestrates:
+    1. `detect_entry_points(store)`
+    2. For each: `trace_flow(store, entry, 20)`
+    3. `score_criticality(store, &path)`
+    4. Check is_tested: any TESTED_BY edge on any path node
+    5. Check has_security_keyword: any path node name in SECURITY_KEYWORDS
+    6. Upsert into `flows` table
+  - `pub struct FlowResult { pub entry_point: String, pub flow_path: Vec<String>, pub criticality_score: f32, pub is_tested: bool, pub has_security_keyword: bool }`
+
+**6.8 Success Criteria:**
+> On autodev Tauri codebase: `detect_entry_points()` finds Tauri command functions; `trace_flow("main")` returns the startup sequence; `score_criticality()` gives agent-running flows higher scores than utility functions
+
+---
+
+### Phase 6.9 — Change Analysis
+
+**Goal**: Parse git diffs to identify changed functions, then score their risk using the graph (blast radius + security + test coverage).
+
+- [ ] **Create `src-tauri/src/graph/changes.rs`**:
+  - `pub fn parse_git_diff_ranges(repo_root: &Path, base: &str) -> Result<HashMap<String, Vec<(u32, u32)>>>` — runs `git diff --unified=0 {base} --` (base validated with `^[A-Za-z0-9_.~^/@{}\-]+$` regex before use); parses `@@ -start,count +start,count @@` hunk headers; returns `file_path → [(start_line, end_line)]` for changed line ranges
+  - `pub fn find_changed_nodes(store: &GraphStore, changed_ranges: &HashMap<String, Vec<(u32, u32)>>) -> Result<Vec<ChangedNode>>` — for each (file, ranges): query `SELECT qualified_name, name, line_start, line_end FROM nodes WHERE file_path = ?`; check if node's `line_start..=line_end` overlaps any changed range; collect matching nodes
+  - `pub fn score_change_risk(store: &GraphStore, changed_node: &GraphNode) -> Result<RiskScore>` — composite score:
+    - `caller_count`: `SELECT COUNT(*) FROM edges WHERE target_qualified = ? AND kind = 'CALLS'`
+    - `is_tested`: `SELECT COUNT(*) FROM edges WHERE source_qualified = ? AND kind = 'TESTED_BY' LIMIT 1`
+    - `is_security_critical`: node name or flow membership contains SECURITY_KEYWORD
+    - `is_entry_point`: exists in `flows` table as entry_point
+    - Final score: `(caller_count * 0.4) + (if !is_tested { 3.0 } else { 0.0 }) + (if is_security_critical { 2.0 } else { 0.0 }) + (if is_entry_point { 1.0 } else { 0.0 })`
+    - Risk tier: score > 5.0 = "high", > 2.5 = "medium", else "low"
+  - `pub fn detect_changes(store: &GraphStore, repo_root: &Path, base: &str) -> Result<ChangeAnalysis>` — full pipeline:
+    1. `parse_git_diff_ranges(repo_root, base)`
+    2. `find_changed_nodes(store, &ranges)`
+    3. `score_change_risk(store, &node)` for each changed node
+    4. `get_impact_radius(store, &node.qualified_name, 3, 50)` for high-risk nodes
+    5. Collect all tests to run (from TESTED_BY edges + impact radius tests)
+    6. Return `ChangeAnalysis` sorted by risk_score desc
+  - `pub struct ChangeAnalysis { pub changed_nodes: Vec<ScoredChange>, pub tests_to_run: Vec<String>, pub test_coverage_gaps: Vec<String>, pub high_risk_count: usize, pub summary: String }`
+  - `pub struct ScoredChange { pub node: GraphNode, pub risk_score: f32, pub risk_tier: String, pub caller_count: u32, pub is_tested: bool, pub is_security_critical: bool, pub impact_radius: Option<ImpactRadius> }`
+
+**6.9 Success Criteria:**
+> `detect_changes(store, repo_root, "HEAD~1")` after a commit that modifies an API handler returns: the handler as high-risk, its callers in impact radius, the test functions that should be run, gaps where no test covers changed code
+
+---
+
+### Phase 6.10 — Report Generation
+
+**Goal**: GRAPH_REPORT.md — the narrative markdown document that PA and workers read to understand a codebase without browsing files.
+
+- [ ] **Create `src-tauri/src/graph/report.rs`**:
+  - `pub fn generate_report(store: &GraphStore, god_nodes: &[GodNode], communities: &[Community], surprising: &[SurprisingConnection], questions: &[SuggestedQuestion], flows: &[FlowResult]) -> Result<String>` — assembles GRAPH_REPORT.md:
+    ```markdown
+    # GRAPH_REPORT.md — {repo_name}
+    *Generated: {timestamp} | Nodes: {N} | Edges: {E} | Languages: {langs}*
+
+    ## God Nodes (Core Abstractions)
+    The most-connected entities in this codebase — changing any of these has the highest blast radius.
+    | Node | Degree | Community | File |
+    ...
+
+    ## Community Structure
+    {N} communities detected. Cohesion scores indicate internal coupling strength.
+    ### Community {id}: {name} ({member_count} nodes, cohesion: {score})
+    Key members: {top 5 by degree}
+    ...
+
+    ## Surprising Connections
+    Non-obvious relationships the graph found — investigate these first.
+    ...
+
+    ## Suggested Questions
+    Knowledge gaps and areas worth exploring based on graph signals.
+    ...
+
+    ## Critical Execution Flows ({N} detected)
+    ...
+
+    ## Knowledge Gaps
+    {isolated_nodes_count} isolated nodes — potential documentation gaps or missing edges.
+    ...
+    ```
+  - `pub fn write_report(store: &GraphStore, output_path: &Path) -> Result<()>` — orchestrates all analysis passes, calls `generate_report()`, writes `GRAPH_REPORT.md` to output_path
+  - Report regenerated automatically at end of full build and on-demand via Tauri command
+
+- [ ] **Implement snapshot operations in `report.rs`**:
+  - `pub fn save_snapshot(store: &GraphStore, label: &str) -> Result<i64>` — serializes current graph state (all nodes + edges) to compressed JSON blob in `snapshots` table; returns snapshot_id
+  - `pub fn load_snapshot(store: &GraphStore, snapshot_id: i64) -> Result<ExtractionResult>` — deserializes snapshot JSON back to nodes + edges
+
+**6.10 Success Criteria:**
+> `write_report(store, Path::new("graph-out/GRAPH_REPORT.md"))` produces a readable markdown file with god nodes table, community sections with cohesion scores, at least 3 suggested questions, and a summary line count
+
+---
+
+### Phase 6.11 — Export Formats
+
+**Goal**: Export graph data to `graph.json` (MCP interchange), interactive HTML (`graph.html`), and static SVG.
+
+- [ ] **Create `src-tauri/src/graph/export.rs`**:
+
+  - **JSON export**:
+    - `pub fn export_json(store: &GraphStore, output_path: &Path) -> Result<()>` — serializes graph to `graph.json`:
+      ```json
+      {
+        "nodes": [{ "id": "...", "label": "...", "source_file": "...", "source_location": "L42", "kind": "Function", "community": 3, "community_name": "api-health" }],
+        "edges": [{ "source": "...", "target": "...", "kind": "CALLS", "confidence_tier": "EXTRACTED", "weight": 1.0 }]
+      }
+      ```
+    - Used as interchange format for `merge-graphs` cross-repo merge and MCP server graph queries
+
+  - **HTML export** (D3.js force-directed, self-contained, dark theme):
+    - `pub fn export_html(store: &GraphStore, communities: &[Community], output_path: &Path) -> Result<()>` — generates a single self-contained HTML file with:
+      - Inline CSS: dark theme (`#0A0A0A` background matching AutoDev design tokens)
+      - Node colors: 10 community palette colors cycling (`#4E79A7`, `#F28E2B`, `#E15759`, `#76B7B2`, `#59A14F`, `#EDC948`, `#B07AA1`, `#FF9DA7`, `#9C755F`, `#BAB0AC`)
+      - Edge colors: CALLS = `#00FF88` (AIRS green), IMPORTS_FROM = `#4E79A7`, INHERITS = `#B07AA1`, TESTED_BY = `#59A14F`, CONTAINS = `#444444`, SEMANTICALLY_SIMILAR = `#EDC948`
+      - D3.js from CDN with SRI hash (XSS defense)
+      - All user-provided labels HTML-escaped via `fn escape_html(s: &str) -> String` (escapes `<`, `>`, `&`, `"`, `'`, backtick)
+      - Sidebar with: search input, node info panel (name/kind/file/line/community/degree), neighbor list, legend with community names + colors, stats bar
+      - Rendering modes: `full` (≤ 500 nodes), `community` aggregate (> 500 nodes), `auto` (switches automatically)
+      - Cap: embed max 5,000 nodes; above that, switch to community-aggregate mode automatically
+    - `const D3_SRI: &str` — SHA-384 hash of specific D3.js CDN version, verified at build time
+
+  - **SVG export**:
+    - `pub fn export_svg(store: &GraphStore, communities: &[Community], output_path: &Path) -> Result<()>` — static SVG using simple force-layout approximation (Fruchterman-Reingold via petgraph layout or simple circular layout per community); cap at 5,000 nodes; uses same color palette as HTML
+
+**6.11 Success Criteria:**
+> `export_json(store, "graph-out/graph.json")` produces valid JSON parseable by `serde_json::from_str`; `export_html(store, &communities, "graph-out/graph.html")` opens in browser showing force-directed graph with colored nodes; SVG renders as valid file
+
+---
+
+### Phase 6.12 — MCP Server (Graph Tools)
+
+**Goal**: Register all graph tools as builtin tools on the existing `autodev-mcp-server` (port 8767). Workers and PA discover them via `tools/list` — zero new sidecar needed.
+
+> **Pattern**: All graph tools follow the same pattern as `CreateTaskTool` / `ListTasksTool` — implement the `Tool` trait in `src-tauri/src/agent/builtin_tools/`, register in `ToolRegistry`, automatically exposed via MCP.
+
+- [ ] **Create `src-tauri/src/agent/builtin_tools/graph_tools.rs`** — all graph MCP tools:
+
+  - **Discovery tools** (5):
+    - `GetMinimalContextTool` — `name: "get_graph_minimal_context"`, input: `{ task: String }` — scores graph nodes against task terms using `_score_nodes()`, returns top-10 nodes + 3 relevant communities + `next_tool_suggestions` JSON; targets ~100 token output
+    - `GetArchitectureOverviewTool` — `name: "get_graph_architecture_overview"` — returns all communities with member_count + cohesion_score + top 3 nodes each + cross-community coupling matrix from edges
+    - `GetGraphStatsTool` — `name: "get_graph_stats"` — wraps `store.get_stats()`, returns node/edge counts by kind + language list + last_updated timestamp
+    - `ListCommunitiesTool` — `name: "list_graph_communities"` — returns all communities from `communities` table ordered by member_count desc
+    - `GetGraphReportTool` — `name: "get_graph_report"` — reads `GRAPH_REPORT.md` from disk and returns its content as string
+
+  - **Navigation tools** (9):
+    - `QueryGraphTool` — `name: "query_graph"`, input: `{ target: String, pattern: String }` where pattern is one of `callers_of|callees_of|imports_of|tests_for|dependencies_of`; executes appropriate SQL query against edges table
+    - `SemanticSearchTool` — `name: "semantic_search_nodes"`, input: `{ query: String, top_k: u32 }` — FTS5 query against `nodes_fts` table: `SELECT * FROM nodes_fts WHERE nodes_fts MATCH ? ORDER BY rank LIMIT ?`; returns matching nodes with snippet
+    - `GetNodeDetailsTool` — `name: "get_node_details"`, input: `{ qualified_name: String }` — `store.get_node(qname)` + `store.get_edges_for_node(qname)`, groups edges by kind
+    - `FindPathTool` — `name: "find_graph_path"`, input: `{ source: String, target: String }` — loads adjacency from SQLite into petgraph, runs `petgraph::algo::astar()` for shortest weighted path; returns path as array of node labels with edge relations between each hop
+    - `ExplainNodeTool` — `name: "explain_node"`, input: `{ label: String }` — fuzzy-finds node by label (normalize + substring match), returns: name/kind/file/line/community, all neighbors sorted by degree desc (top 20), formatted as human-readable text
+    - `GetFileSummaryTool` — `name: "get_file_summary"`, input: `{ file_path: String }` — `store.list_nodes_by_file(path)`, groups by kind (Classes: N, Functions: N, Tests: N), lists all qualified_names
+    - `ListCallersTool` — `name: "list_callers"`, input: `{ qualified_name: String }` — `SELECT source_qualified FROM edges WHERE target_qualified = ? AND kind = 'CALLS'`
+    - `ListCalleesTool` — `name: "list_callees"`, input: `{ qualified_name: String }` — `SELECT target_qualified FROM edges WHERE source_qualified = ? AND kind = 'CALLS'`
+    - `ListTestsTool` — `name: "list_tests"`, input: `{ qualified_name: String }` — `SELECT target_qualified FROM edges WHERE source_qualified = ? AND kind = 'TESTED_BY'`
+
+  - **Impact tools** (5):
+    - `GetImpactRadiusTool` — `name: "get_impact_radius"`, input: `{ qualified_name: String, max_depth: Option<u32> }` — calls `analyze::get_impact_radius()`
+    - `DetectChangesTool` — `name: "detect_graph_changes"`, input: `{ base: Option<String> }` — calls `changes::detect_changes(store, repo_root, base.unwrap_or("HEAD~1"))`
+    - `GetReviewContextTool` — `name: "get_review_context"`, input: `{ files: Vec<String> }` — reads source snippets for changed functions only (lines from `line_start` to `line_end`); returns minimal source + graph context; targets ≤ 800 tokens total
+    - `GetAffectedFlowsTool` — `name: "get_affected_flows"`, input: `{ file_path: String }` — finds which flows from `flows` table include nodes from this file
+    - `GetFlowCriticalityTool` — `name: "get_flow_criticality"` — returns all flows from `flows` table sorted by criticality_score desc
+
+  - **Analysis tools** (4):
+    - `GetGodNodesTool` — `name: "get_god_nodes"`, input: `{ top_n: Option<u32> }` — calls `analyze::god_nodes()`
+    - `GetSurprisingConnectionsTool` — `name: "get_surprising_connections"`, input: `{ top_n: Option<u32> }` — calls `analyze::surprising_connections()`
+    - `GetSuggestedQuestionsTool` — `name: "get_suggested_questions"` — calls `analyze::suggest_questions()`
+    - `GetGraphDiffTool` — `name: "get_graph_diff"`, input: `{ snapshot_id_a: i64, snapshot_id_b: i64 }` — calls `analyze::graph_diff()`
+
+  - **AutoDev-native tools** (4):
+    - `GetWorkerGraphTool` — `name: "get_worker_graph"`, input: `{ worker_name: String }` — `SELECT * FROM nodes WHERE agent_author = ?`; returns nodes + edges authored by that worker
+    - `GetTaskGraphTool` — `name: "get_task_graph"`, input: `{ task_id: i64 }` — `SELECT * FROM nodes WHERE task_id = ?`; returns all nodes + their edges touched during task
+    - `GetLockedNodesTool` — `name: "get_locked_nodes"` — `SELECT * FROM nodes WHERE worker_locked = 1`; returns locked nodes with their `worktree` attribute
+    - `BuildGraphTool` — `name: "build_graph"`, input: `{ repo_path: String }` — triggers full graph rebuild (detect → extract → build → cluster → analyze → report); returns `BuildStats` JSON
+
+- [ ] **Register all graph tools in `src-tauri/src/agent/builtin_tools/mod.rs`**:
+  - Add `pub mod graph_tools;`
+  - In `ToolRegistry::new()`: register all tools from `graph_tools.rs` alongside existing tools
+  - Graph tools only registered when `graph_enabled: true` in app config (checked at startup)
+
+- [ ] **Add 5 MCP prompts** in a new `src-tauri/src/agent/builtin_tools/graph_prompts.rs`:
+  - `review_changes_prompt` — step-by-step code review workflow using `detect_changes` → `get_impact_radius` → `get_review_context` → `list_tests`
+  - `architecture_map_prompt` — understand codebase: `get_architecture_overview` → `list_communities` → `get_god_nodes` → read key files
+  - `debug_issue_prompt` — trace bug: `semantic_search_nodes` → `query_graph(callers_of)` → `get_affected_flows`
+  - `onboard_developer_prompt` — guided codebase tour: `get_graph_report` → `list_communities` → `explain_node` for each god node
+  - `pre_merge_check_prompt` — pre-merge risk: `detect_changes` → `get_impact_radius` → `get_flow_criticality` → `list_tests`
+  - Each prompt is a `GetPromptResult` that returns a structured `messages` array with role=user and the step-by-step instructions
+
+**6.12 Success Criteria:**
+> Worker agent recipe receives `tools/list` from `autodev-mcp-server` → sees `get_graph_minimal_context` + all 22 graph tools → calls `get_graph_minimal_context(task="implement health endpoint")` → receives relevant nodes with < 150 tokens → uses `list_callers` to find callers of affected function — all without reading a single source file
+
+---
+
+### Phase 6.13 — Query Engine
+
+**Goal**: BFS/DFS traversal with token budget enforcement, shortest weighted path, fuzzy node matching for the CLI and MCP tools.
+
+- [ ] **Create `src-tauri/src/graph/query.rs`**:
+  - `pub fn score_nodes(store: &GraphStore, query_terms: &[&str]) -> Result<Vec<(f32, String)>>` — diacritic-insensitive matching against node `name` (1.0 score per term match) and `file_path` (0.5 score per term match); uses Unicode normalization for diacritic stripping; returns `Vec<(score, qualified_name)>` sorted desc
+  - `pub fn bfs_subgraph(store: &GraphStore, start_nodes: &[String], depth: u32) -> Result<(HashSet<String>, Vec<(String, String)>)>` — breadth-first from start_nodes outward `depth` hops using adjacency from SQLite; returns `(visited_node_ids, edges_seen)` as `Vec<(source_qname, target_qname)>`
+  - `pub fn dfs_subgraph(store: &GraphStore, start_nodes: &[String], depth: u32) -> Result<(HashSet<String>, Vec<(String, String)>)>` — depth-first variant; same return type as BFS
+  - `pub fn subgraph_to_text(store: &GraphStore, nodes: &HashSet<String>, edges: &[(String, String)], token_budget: usize) -> Result<String>` — formats subgraph as text (approx 3 chars/token budget):
+    ```
+    NODE {label} [src={file} loc=L{line} community={name}]
+    EDGE {src_label} --{kind} [{confidence_tier}]--> {tgt_label}
+    ```
+    Nodes sorted by degree desc. Truncates at `token_budget * 3` chars with `"... (truncated to ~{budget} token budget)"` suffix
+  - `pub fn find_shortest_path(store: &GraphStore, source_label: &str, target_label: &str) -> Result<Option<Vec<PathHop>>>` — fuzzy-finds source/target by label using `score_nodes()`, then Dijkstra on petgraph adjacency weighted by edge.weight; returns hops as `Vec<PathHop>`:
+    - `pub struct PathHop { pub node_label: String, pub edge_relation: Option<String>, pub confidence_tier: Option<String> }` — first element has no edge (entry), last has no edge (destination)
+  - `pub fn find_node_by_label(store: &GraphStore, label: &str) -> Result<Vec<String>>` — case-insensitive substring match against `name` column: `SELECT qualified_name FROM nodes WHERE lower(name) LIKE '%' || lower(?) || '%'`; falls back to `qualified_name` LIKE match if empty
+
+- [ ] **Add `airsctl graph` CLI subcommand** in `src-cli/src/main.rs`:
+  - `airsctl graph query "<question>" [--budget N] [--dfs]` — calls `score_nodes` → `bfs_subgraph` → `subgraph_to_text`, prints to stdout
+  - `airsctl graph path "<source>" "<target>"` — calls `find_shortest_path`, prints hop chain
+  - `airsctl graph explain "<label>"` — calls `find_node_by_label` + `get_edges_for_node`, prints node details + neighbors
+  - `airsctl graph build [--repo <path>]` — triggers full build, prints `BuildStats`
+  - `airsctl graph update [--repo <path>]` — triggers incremental update, prints `UpdateStats`
+  - `airsctl graph report [--repo <path>]` — regenerates `GRAPH_REPORT.md`
+  - `airsctl graph diff <snapshot_a_id> <snapshot_b_id>` — prints graph diff summary
+
+**6.13 Success Criteria:**
+> `airsctl graph query "task board"` returns ≤ 2000 token output with relevant task-related nodes; `airsctl graph path "build_graph" "GraphStore"` prints a 3-hop chain; `airsctl graph explain "GraphStore"` prints degree + top 20 neighbors
+
+---
+
+### Phase 6.14 — Graph Tab UI
+
+**Goal**: New fifth tab (`Graph`) in the AutoDev UI — D3.js force-directed graph with community colors, click-to-IDE, filtering, and the GRAPH_REPORT panel.
+
+> **New Tauri commands** (add to `src-tauri/src/commands/graph_commands.rs`):
+> - `build_graph(repo_path: String)` → `BuildStats`
+> - `update_graph(repo_path: String)` → `UpdateStats`
+> - `get_graph_stats(repo_path: String)` → `GraphStats`
+> - `export_graph(repo_path: String, format: String, output_path: String)` → `()`
+> - `get_graph_report(repo_path: String)` → `String`
+> - `get_graph_communities(repo_path: String)` → `Vec<Community>`
+> - `get_graph_nodes_for_viz(repo_path: String, max_nodes: u32)` → `Vec<GraphNode>` (capped for D3)
+> - `get_graph_edges_for_viz(repo_path: String)` → `Vec<GraphEdge>`
+> All registered in `src-tauri/src/lib.rs` alongside existing Tauri commands.
+
+- [ ] **Create `src/tabs/Graph.tsx`** — tab scaffold:
+  - Repo selector dropdown (reuses `useWorkspaceStore().currentRepo`)
+  - Toolbar: `[Build Graph]` button → calls `build_graph()` → shows spinner + BuildStats toast; `[Update]` → calls `update_graph()`; `[Export ▼]` dropdown with `JSON`, `HTML`, `SVG` options
+  - Render mode selector: `[Auto ▼]` / `Full` / `Community` / `File`
+  - Community filter: multi-select dropdown of community names (populated from `get_graph_communities()`)
+  - Edge type filter: checkboxes for CALLS, IMPORTS_FROM, INHERITS, TESTED_BY, CONTAINS, other
+  - Stats bar: `🟢 {N} nodes | {E} edges | {langs} | Last updated: {timestamp}`
+  - Listens for Tauri event `"graph:updated"` → auto-refreshes stats + D3 canvas
+  - Layout: full-height, D3 canvas takes 75% width, NodeInfoPanel takes 25% right sidebar
+
+- [ ] **Create `src/components/graph/GraphCanvas.tsx`** — D3.js force-directed graph:
+  - Accepts `nodes: GraphNode[]`, `edges: GraphEdge[]`, `communities: Community[]`, `renderMode: 'full'|'community'|'file'|'auto'`, `edgeFilter: EdgeKind[]`
+  - D3.js `forceSimulation` with `forceManyBody`, `forceLink`, `forceCenter`
+  - Node radius: `4 + Math.log(degree + 1) * 4` (min 4px, max 20px)
+  - Node fill: community color from palette (10 colors cycling)
+  - Node stroke by kind: `Function` → 1px `#444`, `Class` → 2px community color, `Test` → 1px dashed `#888`, `File` → no stroke
+  - Edge stroke by kind: CALLS=`#00FF88` (opacity 0.6), IMPORTS_FROM=`#4E79A7` (opacity 0.5), INHERITS=`#B07AA1` (opacity 0.6), TESTED_BY=`#59A14F` (opacity 0.5), CONTAINS=`#444` (opacity 0.3)
+  - Edge opacity by confidence_tier: EXTRACTED=0.7, INFERRED=0.4, AMBIGUOUS=0.2
+  - Edge thickness by weight: `0.5 + weight * 2`
+  - Zoom/pan via `d3.zoom()` attached to SVG container
+  - Drag nodes via `d3.drag()` — dragging freezes node position (`fx`, `fy`)
+  - Click node → fires `onNodeSelect(node: GraphNode)` callback → updates parent state → NodeInfoPanel shows details
+  - Double-click node → zoom simulation to center on that node
+  - Auto-mode: switch to community-aggregate view when `nodes.length > 500`, full view when ≤ 500
+  - Community-aggregate mode: one circle per community (sized by member count), clicking expands that community in a separate zoom level
+
+- [ ] **Create `src/components/graph/GraphNodePanel.tsx`** — right sidebar node info:
+  - Shows when a node is selected: name (monospace), kind badge (color-coded), file path (clickable), line range, community name, degree count
+  - Callers section: list of caller node labels (from `list_callers` Tauri command, lazy-loaded on selection)
+  - Callees section: list of callee node labels (from `list_callees`, lazy-loaded)
+  - Tests section: list of test names (from `list_tests`, lazy-loaded)
+  - `[Open in IDE Tab]` button — fires `openInIde(node.file_path, node.line_start)`:
+    ```typescript
+    invoke('open_in_ide', { file: node.file_path, line: node.line_start })
+    // Tauri command switches active tab to IDE, navigates to file:line
+    ```
+
+- [ ] **Add `open_in_ide` Tauri command** in `src-tauri/src/commands/graph_commands.rs`:
+  - `pub async fn open_in_ide(app: AppHandle, file: String, line: u32) -> Result<()>` — emits Tauri event `"ide:navigate"` with `{ file, line }`; `Graph.tsx` and `IDE.tsx` listen: IDE tab becomes active, file tree selects the file, code viewer scrolls to line
+
+- [ ] **Create `src/components/graph/GraphReport.tsx`** — collapsible GRAPH_REPORT panel:
+  - Reads `GRAPH_REPORT.md` via `get_graph_report()` Tauri command
+  - Renders markdown (using existing markdown renderer or `react-markdown`)
+  - Collapsible accordion: `[God Nodes]` section, `[Community Structure]` section, `[Surprising Connections]` section, `[Suggested Questions]` section
+  - `[Regenerate Report]` button → calls `build_graph()` → report refreshes
+
+- [ ] **Create `src/stores/graphStore.ts`** — Zustand store for graph state:
+  - State: `currentRepo: string`, `isBuilding: boolean`, `stats: GraphStats | null`, `communities: Community[]`, `selectedNode: GraphNode | null`, `renderMode: RenderMode`, `edgeFilter: EdgeKind[]`, `lastUpdated: Date | null`
+  - Actions: `buildGraph(repo)`, `updateGraph(repo)`, `loadStats(repo)`, `loadCommunities(repo)`, `selectNode(node)`, `setRenderMode(mode)`, `toggleEdgeFilter(kind)`
+  - Listens for `"graph:updated"` Tauri event → calls `loadStats()` automatically
+
+- [ ] **Register Graph tab** in `src/App.tsx`:
+  - Add `{ id: 'graph', label: 'Graph', icon: <NetworkIcon /> }` to tab array (after IDE, before Recipes)
+  - Import `Graph` from `./tabs/Graph`
+  - Add to tab content switch
+
+**6.14 Success Criteria:**
+> New `[Graph]` tab appears in navigation → `[Build Graph]` button triggers build with progress indication → graph appears as D3 force-directed visualization with colored nodes → click a node → NodeInfoPanel shows callers, callees, tests → `[Open in IDE Tab]` navigates IDE tab to correct file:line → `[Export ▼]` → HTML opens in browser
+
+---
+
+### Phase 6.15 — Worker Integration
+
+**Goal**: Workers automatically get graph context before starting tasks; every file write annotates nodes with `agent_author` + `task_id`; task completion triggers snapshot + diff.
+
+- [ ] **Add worker attribution to `store.rs`**:
+  - `pub fn set_worker_context(store: &mut GraphStore, agent_author: &str, task_id: i64) -> ()` — stores in `GraphStore` struct so all subsequent `upsert_node()` / `upsert_edge()` calls automatically include `agent_author` and `task_id`
+  - `pub fn clear_worker_context(store: &mut GraphStore) -> ()` — clears context after task completes
+
+- [ ] **Wire incremental update into worker lifecycle** in `src-tauri/src/recipes/runner.rs`:
+  - After recipe agent writes a file (detected via PostToolUse hook event on `write_file`): call `incremental_update(store, &[changed_file], Some(agent_author), Some(task_id))`
+  - Before recipe start: `save_snapshot(store, &format!("before_task_{task_id}"))` — saves pre-task state
+  - After recipe completes (success or failure): `save_snapshot(store, &format!("after_task_{task_id}"))` → compute `graph_diff(before_id, after_id)` → store result in `tasks.db` `extra` JSON field on the task record
+  - Emit Tauri event `"graph:updated"` so Graph tab refreshes automatically
+
+- [ ] **PA context injection** in `src-tauri/src/agent/context.rs`:
+  - Add `build_graph_context(query: &str, repo_path: &str) -> String` function:
+    1. Open `GraphStore` for current repo (cached connection)
+    2. `score_nodes(store, &query.split_whitespace().collect::<Vec<_>>())` → top-5 scored nodes
+    3. `bfs_subgraph(store, &top5_qnames, 2)` → 2-hop neighborhood
+    4. `subgraph_to_text(store, &visited, &edges, 800)` → max 800 tokens of graph context
+    5. Return formatted string with header `"## Graph Context (relevant to your query)\n"`
+  - Modify `build_system_prompt_with_mode()`: when `graph.db` exists for current repo AND query is non-empty, append `build_graph_context(user_message, repo_path)` to system prompt (in Fast Development and Review modes; omit in Delegate mode)
+  - Graph context omitted when graph DB does not exist (feature gracefully absent until first build)
+
+- [ ] **QC agent graph usage** — update `qc-review-cycle.yaml` recipe instructions to include:
+  ```yaml
+  instructions: |
+    You are the AIRS QC Agent.
+    Before reviewing any PR:
+    1. Call detect_graph_changes(base="HEAD~1") to get risk-scored changed nodes
+    2. Call get_impact_radius(qualified_name) for any high-risk nodes
+    3. Call list_tests(qualified_name) to verify test coverage exists
+    4. Use get_review_context(files) for token-efficient source access
+    5. Only read raw files for nodes flagged as high-risk with no test coverage
+  ```
+
+**6.15 Success Criteria:**
+> Worker backend recipe picks up task #142 → before_task_142 snapshot saved → worker writes `src/api/health.rs` → graph auto-updates → after_task_142 snapshot saved → `graph_diff(before, after)` shows `"1 new node, 3 new edges"` → this diff visible in AutoDev Panel task card expand → QC agent reviews PR using graph tools with < 500 tokens of context instead of reading entire files
+
+---
+
+### Phase 6.16 — Multi-Repo Registry
+
+**Goal**: Register multiple AIRS-Foundry repos, query across them, merge graphs for cross-repo dependency tracking.
+
+- [ ] **Create `src-tauri/src/graph/registry.rs`** — multi-repo registry:
+  - `pub struct RepoRegistry { db_path: PathBuf }` — registry stored in `~/.autodev/registry.json` (JSON file for simplicity, matches code-review-graph approach)
+  - `pub fn RepoRegistry::load() -> Result<Self>` — reads from `~/.autodev/registry.json`, creates if absent
+  - `pub fn RepoRegistry::register(path: &Path, alias: Option<&str>) -> Result<RepoEntry>` — validates path contains `.git` or `.autodev/` dir; adds to JSON; returns `RepoEntry`
+  - `pub fn RepoRegistry::unregister(path: &Path) -> Result<()>`
+  - `pub fn RepoRegistry::list() -> Result<Vec<RepoEntry>>`
+  - `pub fn RepoRegistry::get_store(path: &Path) -> Result<GraphStore>` — opens `{repo}/.autodev/graph.db`; connection pool via `HashMap<PathBuf, Arc<Mutex<GraphStore>>>` (LRU cap at 10 connections)
+  - `pub struct RepoEntry { pub path: String, pub alias: Option<String>, pub db_path: String, pub last_updated: Option<u64>, pub node_count: Option<u32>, pub edge_count: Option<u32> }`
+
+- [ ] **Implement cross-repo graph merge** in `registry.rs`:
+  - `pub fn merge_graphs(stores: &[&GraphStore], output_path: &Path) -> Result<()>` — reads all nodes + edges from each store, tags each node with `repo` attribute (from store's db_path parent dir name), deduplicates by `qualified_name`, writes combined `graph.json` to output_path
+  - `pub fn merge_all_repos(registry: &RepoRegistry, output_path: &Path) -> Result<MergeStats>` — convenience: opens all registered stores, calls `merge_graphs()`, returns `MergeStats { repos_merged, nodes_merged, edges_merged, cross_repo_edges: usize }`
+
+- [ ] **Add registry Tauri commands** in `src-tauri/src/commands/graph_commands.rs`:
+  - `register_repo(path: String, alias: Option<String>) -> Result<RepoEntry>`
+  - `unregister_repo(path: String) -> Result<()>`
+  - `list_repos() -> Result<Vec<RepoEntry>>`
+  - `merge_all_repos(output_path: String) -> Result<MergeStats>`
+
+- [ ] **Registry UI** in `src/tabs/Graph.tsx` — expandable "Multi-Repo" section:
+  - List of registered repos from `list_repos()` — shows alias, path, node/edge counts, last_updated
+  - `[Register Repo]` button → file picker → calls `register_repo()`
+  - `[Unregister]` button per row
+  - `[Merge All Graphs]` button → calls `merge_all_repos()` → result opens in browser as merged `graph.html`
+
+**6.16 Success Criteria:**
+> Register `core-orchestrator` + `memory-mcp-server` → `list_repos()` returns both → `merge_all_repos()` produces merged `graph.json` with nodes from both repos tagged with repo name → cross-repo IMPORTS_FROM edges visible as surprising connections in GRAPH_REPORT.md
+
+---
+
+### Phase 6 Success Criteria
+
+> **End-to-End Flow**: Razi opens Graph tab → selects `core-orchestrator` repo → clicks `[Build Graph]` → D3 visualization appears (2,000 nodes, colored by community) → clicks `LivingAgent` node → NodeInfoPanel shows 47 callers, 12 callees, 3 test functions → `[Open in IDE Tab]` → IDE tab navigates to `living_agent.py:L45` → Worker backend picks up task → graph auto-updates mid-task → QC agent reviews PR using `detect_changes` in < 400 tokens of graph context
+
+> **Worker Flow**: Worker backend starts task #142 → calls `get_graph_minimal_context(task="add health endpoint")` → receives `AgentService`, `HealthRouter`, `app.py` as relevant nodes → implements only what's needed → PR touches exactly 3 files → QC calls `detect_changes` → sees blast radius is 2 nodes → approves confidently
 
 ---
 
