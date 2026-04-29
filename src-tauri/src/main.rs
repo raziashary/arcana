@@ -24,7 +24,10 @@ fn main() {
         tracing::error!("[PANIC] {msg}");
     }));
 
-    autodev_lib::logging::init();
+    // Phase 7.3 — hold the WorkerGuard alive for the entire process lifetime.
+    // Dropping it early would close the background log-writer thread, causing
+    // silent log loss from that point on.
+    let _log_guard = autodev_lib::logging::init();
 
     // Initialise recipes (writes default system recipes if absent)
     if let Err(e) = autodev_lib::recipes::init() {

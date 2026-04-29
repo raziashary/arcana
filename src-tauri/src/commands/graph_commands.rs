@@ -61,6 +61,13 @@ pub struct GraphVisualizationData {
 // BUILD & UPDATE COMMANDS
 // ============================================================================
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BuildProgressPayload {
+    pub phase: String,
+    pub message: String,
+    pub percent: u8,
+}
+
 #[tauri::command]
 pub async fn build_graph(app: AppHandle, repo_path: Option<String>) -> Result<BuildStats> {
     // Validate repo_path — must be provided and not "."
@@ -86,6 +93,11 @@ pub async fn build_graph(app: AppHandle, repo_path: Option<String>) -> Result<Bu
     }
     
     tracing::info!("[GraphBuild] Starting graph build for repo: {}", repo_path);
+    let _ = app.emit("graph:build_progress", BuildProgressPayload {
+        phase: "init".to_string(),
+        message: format!("Opening database for {}...", repo_path),
+        percent: 5,
+    });
     
     // Database goes in user's home .autodev directory, NOT repo root
     let home_dir = dirs::home_dir()
@@ -111,9 +123,19 @@ pub async fn build_graph(app: AppHandle, repo_path: Option<String>) -> Result<Bu
     let detector = crate::graph::detect::CodeDetector::new(repo_dir);
     let code_files = detector.detect_files()?;
     tracing::info!("[GraphBuild] Detected {} code files ({}ms)", code_files.len(), detect_start.elapsed().as_millis());
+    let _ = app.emit("graph:build_progress", BuildProgressPayload {
+        phase: "detecting".to_string(),
+        message: format!("Found {} code files", code_files.len()),
+        percent: 15,
+    });
     
     if code_files.is_empty() {
         tracing::warn!("[GraphBuild] No code files found in repository: {}", repo_path);
+        let _ = app.emit("graph:build_progress", BuildProgressPayload {
+            phase: "done".to_string(),
+            message: "No code files found".to_string(),
+            percent: 100,
+        });
         let _ = app.emit("graph:updated", ());
         return Ok(BuildStats {
             nodes_extracted: 0,
@@ -144,23 +166,53 @@ pub async fn build_graph(app: AppHandle, repo_path: Option<String>) -> Result<Bu
     
     tracing::info!("[GraphBuild] Extracted {} files ({} errors) in {}ms", 
         extraction_results.len(), extraction_errors, extract_start.elapsed().as_millis());
+    let _ = app.emit("graph:build_progress", BuildProgressPayload {
+        phase: "extracting".to_string(),
+        message: format!("Extracted {} files ({} errors)", extraction_results.len(), extraction_errors),
+        percent: 30,
+    });
     
     // STEP 3: Build graph (upsert nodes/edges to database)
     tracing::info!("[GraphBuild] Building graph from {} extractions...", extraction_results.len());
+    let _ = app.emit("graph:build_progress", BuildProgressPayload {
+        phase: "building".to_string(),
+        message: "Building graph nodes and edges...".to_string(),
+        percent: 40,
+    });
     let build_start = std::time::Instant::now();
     let build_stats = crate::graph::build::build(extraction_results, &store, None, None)?;
     tracing::info!("[GraphBuild] Graph built: {} nodes, {} edges in {}ms", 
         build_stats.nodes_upserted, build_stats.edges_upserted, build_start.elapsed().as_millis());
+    let _ = app.emit("graph:build_progress", BuildProgressPayload {
+        phase: "building".to_string(),
+        message: format!("Upserted {} nodes, {} edges", build_stats.nodes_upserted, build_stats.edges_upserted),
+        percent: 60,
+    });
     
     // STEP 4: Run clustering
     tracing::info!("[GraphBuild] Running clustering...");
+    let _ = app.emit("graph:build_progress", BuildProgressPayload {
+        phase: "clustering".to_string(),
+        message: "Detecting communities...".to_string(),
+        percent: 75,
+    });
     let cluster_start = std::time::Instant::now();
     let communities = run_clustering(&store)?;
     tracing::info!("[GraphBuild] Clustering complete: {} communities ({}ms)", communities.len(), cluster_start.elapsed().as_millis());
+    let _ = app.emit("graph:build_progress", BuildProgressPayload {
+        phase: "clustering".to_string(),
+        message: format!("Found {} communities", communities.len()),
+        percent: 90,
+    });
     
     // Emit event to frontend
     tracing::debug!("[GraphBuild] Emitting graph:updated event");
     let _ = app.emit("graph:updated", ());
+    let _ = app.emit("graph:build_progress", BuildProgressPayload {
+        phase: "done".to_string(),
+        message: "Graph build complete".to_string(),
+        percent: 100,
+    });
     
     let total_elapsed = start.elapsed().as_millis() as u64;
     tracing::info!("[GraphBuild] ✅ Graph build complete in {}ms", total_elapsed);
@@ -175,6 +227,13 @@ pub async fn build_graph(app: AppHandle, repo_path: Option<String>) -> Result<Bu
 
 #[tauri::command]
 pub async fn update_graph(app: AppHandle, repo_path: Option<String>) -> Result<UpdateStats> {
+    let start = std::time::Instant::now();
+    let _ = app.emit("graph:build_progress", BuildProgressPayload {
+        phase: "init".to_string(),
+        message: "Checking workspace...".to_string(),
+        percent: 5,
+    });
+    
     // Validate repo_path — must be provided and not "."
     let repo_path = repo_path
         .and_then(|p| if p.is_empty() || p == "." { None } else { Some(p) })
@@ -191,16 +250,18 @@ pub async fn update_graph(app: AppHandle, repo_path: Option<String>) -> Result<U
         ).into());
     }
     
+    let _ = app.emit("graph:build_progress", BuildProgressPayload {
+        phase: "detecting".to_string(),
+        message: "Finding changed files...".to_string(),
+        percent: 15,
+    });
+    
     // Database goes in user's home .autodev directory, NOT repo root
     let home_dir = dirs::home_dir()
         .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
     let autodev_dir = home_dir.join(".autodev");
-    
-    // Create .autodev directory if it doesn't exist
     std::fs::create_dir_all(&autodev_dir)?;
-    
     let db_path = autodev_dir.join("graph.db");
-    
     let store = GraphStore::open(&db_path)?;
     
     // Perform incremental update
@@ -208,6 +269,12 @@ pub async fn update_graph(app: AppHandle, repo_path: Option<String>) -> Result<U
     
     if changed_files.is_empty() {
         tracing::info!("[UpdateGraph] No changed files detected");
+        let _ = app.emit("graph:build_progress", BuildProgressPayload {
+            phase: "done".to_string(),
+            message: "No changed files".to_string(),
+            percent: 100,
+        });
+        let _ = app.emit("graph:updated", ());
         return Ok(UpdateStats {
             files_changed: 0,
             nodes_added: 0,
@@ -218,9 +285,23 @@ pub async fn update_graph(app: AppHandle, repo_path: Option<String>) -> Result<U
         });
     }
     
+    let _ = app.emit("graph:build_progress", BuildProgressPayload {
+        phase: "building".to_string(),
+        message: format!("Updating {} changed files...", changed_files.len()),
+        percent: 40,
+    });
+    
     let stats = crate::graph::incremental::incremental_update(&store, &changed_files, None, None)?;
     
+    let _ = app.emit("graph:build_progress", BuildProgressPayload {
+        phase: "done".to_string(),
+        message: format!("Updated: {} added, {} removed", stats.nodes_added + stats.edges_added, stats.nodes_removed + stats.edges_removed),
+        percent: 100,
+    });
     let _ = app.emit("graph:updated", ());
+    
+    let mut stats = stats;
+    stats.elapsed_ms = start.elapsed().as_millis() as u64;
     Ok(stats)
 }
 
@@ -268,17 +349,23 @@ pub async fn get_graph_stats(repo_path: Option<String>) -> Result<GraphStats> {
         0.0
     };
     
-    let communities = run_clustering(&store)?;
+    // Count communities from node community fields (already persisted by run_clustering
+    // during build). Avoids re-running the expensive clustering algorithm.
+    let total_communities = all_nodes
+        .iter()
+        .filter_map(|n| n.community)
+        .collect::<std::collections::HashSet<i32>>()
+        .len();
     
-    tracing::info!("[GraphStats] ✅ Stats complete: {} nodes, {} edges, {} communities", total_nodes, total_edges, communities.len());
+    tracing::info!("[GraphStats] ✅ Stats complete: {} nodes, {} edges, {} communities", total_nodes, total_edges, total_communities);
     
     Ok(GraphStats {
         total_nodes,
         total_edges,
-        total_communities: communities.len(),
+        total_communities,
         average_degree,
         graph_density,
-        last_updated: Some(chrono::Local::now().to_rfc3339()),
+        last_updated: None,
     })
 }
 
@@ -559,12 +646,60 @@ pub async fn get_graph_visualization_data() -> Result<GraphVisualizationData> {
     let all_edges = store.get_all_edges_for_graph(i64::MAX, 0)?;
     tracing::info!("[GraphViz] Fetched {} edges", all_edges.len());
     
-    // Fetch communities
-    let communities = run_clustering(&store)?;
-    tracing::info!("[GraphViz] Fetched {} communities", communities.len());
+    // Reconstruct communities from node community fields (already written by run_clustering
+    // during build/update). This avoids re-running the expensive clustering algorithm on
+    // every visualization fetch, which was causing a 2+ second delay.
+    let mut community_map: std::collections::HashMap<i32, (String, Vec<String>)> = std::collections::HashMap::new();
+    for node in &all_nodes {
+        if let Some(comm_id) = node.community {
+            let entry = community_map.entry(comm_id).or_insert_with(|| {
+                (node.community_name.clone().unwrap_or_else(|| "unnamed".to_string()), Vec::new())
+            });
+            entry.1.push(node.qualified_name.clone());
+        }
+    }
+    
+    // Build edge lookup set for cohesion computation
+    let edge_pairs: std::collections::HashSet<(String, String)> = all_edges
+        .iter()
+        .map(|e| {
+            let a = e.source_qualified.clone();
+            let b = e.target_qualified.clone();
+            if a < b { (a, b) } else { (b, a) }
+        })
+        .collect();
+    
+    let communities: Vec<Community> = community_map
+        .into_iter()
+        .map(|(id, (name, members))| {
+            let member_set: std::collections::HashSet<_> = members.iter().cloned().collect();
+            let intra_edges = edge_pairs
+                .iter()
+                .filter(|(a, b)| member_set.contains(a) && member_set.contains(b))
+                .count();
+            let n = members.len() as f32;
+            let max_edges = (n * (n - 1.0) / 2.0).max(1.0) as usize;
+            let cohesion = intra_edges as f32 / max_edges as f32;
+            Community { id, name, members, cohesion_score: cohesion }
+        })
+        .collect();
+    tracing::info!("[GraphViz] Reconstructed {} communities from DB", communities.len());
+    
+    // Filter out external module:: nodes — they clutter the visualization
+    // and are not part of the user's codebase.
+    let project_nodes: Vec<_> = all_nodes
+        .iter()
+        .filter(|node| !node.qualified_name.starts_with("module::"))
+        .collect();
+    
+    // Build set of project node IDs so we can filter edges too
+    let project_node_ids: std::collections::HashSet<String> = project_nodes
+        .iter()
+        .map(|n| n.qualified_name.clone())
+        .collect();
     
     // Convert nodes to visualization format
-    let viz_nodes: Vec<VisualizationNode> = all_nodes
+    let viz_nodes: Vec<VisualizationNode> = project_nodes
         .iter()
         .map(|node| {
             // Size based on node kind (files are larger)
@@ -583,9 +718,14 @@ pub async fn get_graph_visualization_data() -> Result<GraphVisualizationData> {
         })
         .collect();
     
-    // Convert edges to visualization format
+    // Convert edges to visualization format — only include edges where BOTH
+    // source and target are project nodes (not filtered-out module:: nodes)
     let viz_edges: Vec<VisualizationEdge> = all_edges
         .iter()
+        .filter(|edge| {
+            project_node_ids.contains(&edge.source_qualified) &&
+            project_node_ids.contains(&edge.target_qualified)
+        })
         .map(|edge| VisualizationEdge {
             source: edge.source_qualified.clone(),
             target: edge.target_qualified.clone(),

@@ -100,42 +100,132 @@ pub fn get_worker_analytics(
 
     let manager = analytics::global();
     let db = manager.db();
-    
-    // Get daily costs for the range to extract worker data
-    let records = db.get_daily_costs_range(start_date, end_date)?;
-    
-    // Build worker analytics from available data
-    let worker_stats = serde_json::json!({
-        "worker_id": worker_id,
-        "date_range": {
-            "start": start,
-            "end": end
-        },
-        "stats": {
-            "tasks_completed": 0,
-            "tasks_failed": 0,
-            "success_rate": 0.0,
-            "avg_task_duration_minutes": 0,
-            "cost_usd": 0.0,
-            "total_time_minutes": 0
-        },
-        "daily_breakdown": records.iter().map(|r| serde_json::json!({
-            "date": r.date.to_string(),
-            "cost": r.total_cost_usd,
-            "tokens": r.total_tokens
-        })).collect::<Vec<_>>()
-    });
-    
+
+    // Phase 7.6 — Query the real worker_stats table instead of returning zeros.
+    // If a worker_id filter was supplied, return that worker's aggregated stats.
+    // Otherwise, build a summary across all workers that appear in the DB.
+    let worker_stats = if let Some(ref wid) = worker_id {
+        let agg = db.get_worker_stats_range(wid, start_date, end_date)?;
+        let (completed, failed, success_rate, cost, time_min, avg_dur) = agg
+            .map(|r| (
+                r.tasks_completed,
+                r.tasks_failed,
+                r.success_rate,
+                r.cost_usd,
+                r.time_spent_minutes,
+                r.avg_task_duration_minutes,
+            ))
+            .unwrap_or((0, 0, 0.0, 0.0, 0, 0));
+
+        serde_json::json!({
+            "worker_id": worker_id,
+            "date_range": { "start": start, "end": end },
+            "stats": {
+                "tasks_completed": completed,
+                "tasks_failed": failed,
+                "success_rate": success_rate,
+                "avg_task_duration_minutes": avg_dur,
+                "cost_usd": cost,
+                "total_time_minutes": time_min
+            },
+            "daily_breakdown": []
+        })
+    } else {
+        // All workers: pull a distinct list from the live WorkersDb and aggregate each.
+        let workers = crate::db::workers::WorkersDb::open()
+            .ok()
+            .and_then(|wdb| wdb.list().ok())
+            .unwrap_or_default();
+
+        let mut per_worker = Vec::new();
+        for w in &workers {
+            let agg = db.get_worker_stats_range(&w.slug, start_date, end_date)?;
+            let (completed, failed, success_rate, cost, time_min, avg_dur) = agg
+                .map(|r| (
+                    r.tasks_completed,
+                    r.tasks_failed,
+                    r.success_rate,
+                    r.cost_usd,
+                    r.time_spent_minutes,
+                    r.avg_task_duration_minutes,
+                ))
+                .unwrap_or((0, 0, 0.0, 0.0, 0, 0));
+
+            per_worker.push(serde_json::json!({
+                "worker_id": w.slug,
+                "tasks_completed": completed,
+                "tasks_failed": failed,
+                "success_rate": success_rate,
+                "avg_task_duration_minutes": avg_dur,
+                "cost_usd": cost,
+                "total_time_minutes": time_min
+            }));
+        }
+
+        let total_completed: i32 = per_worker.iter()
+            .filter_map(|v| v["tasks_completed"].as_i64())
+            .map(|n| n as i32)
+            .sum();
+        let total_failed: i32 = per_worker.iter()
+            .filter_map(|v| v["tasks_failed"].as_i64())
+            .map(|n| n as i32)
+            .sum();
+        let total_cost: f64 = per_worker.iter()
+            .filter_map(|v| v["cost_usd"].as_f64())
+            .sum();
+        let total = total_completed + total_failed;
+        let overall_success_rate = if total > 0 {
+            total_completed as f64 / total as f64
+        } else {
+            0.0
+        };
+
+        serde_json::json!({
+            "worker_id": null,
+            "date_range": { "start": start, "end": end },
+            "stats": {
+                "tasks_completed": total_completed,
+                "tasks_failed": total_failed,
+                "success_rate": overall_success_rate,
+                "cost_usd": total_cost,
+                "avg_task_duration_minutes": 0,
+                "total_time_minutes": 0
+            },
+            "workers": per_worker,
+            "daily_breakdown": []
+        })
+    };
+
     Ok(worker_stats)
 }
 
 #[tauri::command]
 pub fn get_system_logs(
-    _component: Option<String>,
-    _severity: Option<String>,
-    _hours: i32,
+    component: Option<String>,
+    severity: Option<String>,
+    hours: i32,
 ) -> Result<Vec<serde_json::Value>> {
-    // Get recent system events (mock implementation - returns empty for now)
-    // TODO: Implement system_events table queries
-    Ok(vec![])
+    // Phase 7.7 — Query the real system_events table (already exists in analytics.db).
+    let safe_hours = hours.clamp(1, 168); // 1h–7d guard against absurd ranges
+    let manager = analytics::global();
+    let db = manager.db();
+    let records = db.get_system_events_recent(
+        component.as_deref(),
+        severity.as_deref(),
+        safe_hours,
+    )?;
+
+    let events: Vec<serde_json::Value> = records.into_iter().map(|r| {
+        serde_json::json!({
+            "id":         r.id,
+            "timestamp":  r.timestamp.to_rfc3339(),
+            "component":  r.component,
+            "event_type": r.event_type,
+            "message":    r.message,
+            "severity":   r.severity,
+            "metadata":   r.metadata,
+        })
+    }).collect();
+
+    Ok(events)
 }

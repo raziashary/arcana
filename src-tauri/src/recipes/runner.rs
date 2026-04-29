@@ -215,6 +215,19 @@ impl RecipeRunner {
                                 response.trim()
                             );
                             self.set_worker_status(worker_slug, "idle");
+                            // Phase 7.5 — Record successful Mode 2 tick in analytics DB.
+                            // Cost/tokens are tracked by core-orchestrator internally;
+                            // we record the completion event so the dashboard shows activity.
+                            let _ = crate::analytics::global()
+                                .collector()
+                                .record_worker_stats(
+                                    worker_slug.to_string(),
+                                    1, // tasks_completed (1 successful tick)
+                                    0, // tasks_failed
+                                    0, // time_spent_minutes — not tracked in Mode 2
+                                    0.0, // cost — tracked by core-orchestrator
+                                    0,   // avg_task_duration_minutes
+                                );
                             // Same stranded-task safety net as the Mode 1 path —
                             // see the long comment at the reconcile call below.
                             // Without this, a Mode 2 LivingAgent that finishes
@@ -236,6 +249,16 @@ impl RecipeRunner {
                                  falling back to Rust AgentEngine",
                                 worker_slug
                             );
+                            // Phase 7.7 — record Mode 2 → Mode 1 fallback as a system event.
+                            let _ = crate::analytics::global()
+                                .collector()
+                                .record_system_event(
+                                    "runner".to_string(),
+                                    "mode2_fallback".to_string(),
+                                    format!("Worker '{}' falling back to Mode 1 (invoke error): {e}", worker_slug),
+                                    "warning".to_string(),
+                                    Some(serde_json::json!({ "worker": worker_slug }).to_string()),
+                                );
                         }
                     }
                 }
@@ -250,7 +273,7 @@ impl RecipeRunner {
         } else {
             info!(
                 "[RecipeRunner] core-orchestrator not reachable — \
-                 using Rust AgentEngine for '{}'",
+                 attempting Mode 1 (Rust AgentEngine) fallback for '{}'",
                 worker_slug
             );
         }
@@ -261,10 +284,23 @@ impl RecipeRunner {
         let provider_id = {
             let s = self.state.lock().unwrap();
             s.active_provider.clone()
-                .ok_or_else(|| AutoDevError::Agent(
-                    "No active provider set and core-orchestrator is unreachable. \
-                     Configure a provider in Settings or start core-orchestrator.".into()
-                ))?
+        };
+
+        let provider_id = match provider_id {
+            Some(id) => id,
+            None => {
+                error!(
+                    "[RecipeRunner] Cannot run recipe for '{}': \
+                     core-orchestrator is unreachable AND no LLM provider is configured. \
+                     Go to Settings → Provider to add an API key, or wait for the orchestrator to finish starting.",
+                    worker_slug
+                );
+                self.set_worker_status(worker_slug, "error");
+                return Err(AutoDevError::Agent(
+                    "No LLM provider configured and core-orchestrator is not ready yet. \
+                     Go to Settings → Provider to add an API key.".into()
+                ));
+            }
         };
 
         let api_key = if provider_id != "ollama" {
@@ -315,10 +351,34 @@ impl RecipeRunner {
             Ok(_)  => {
                 info!("[RecipeRunner] Rust AgentEngine completed for worker '{}'", worker_slug);
                 self.set_worker_status(worker_slug, "idle");
+                // Phase 7.5 — Record successful Mode 1 tick in analytics DB.
+                // Token usage is already recorded inside engine.rs per-session;
+                // record the worker-level completion so dashboards can show task counts.
+                let _ = crate::analytics::global()
+                    .collector()
+                    .record_worker_stats(
+                        worker_slug.to_string(),
+                        1, // tasks_completed
+                        0, // tasks_failed
+                        0, // time_spent_minutes — not yet timed
+                        0.0, // cost — recorded per-token inside engine.rs
+                        0,   // avg_task_duration_minutes
+                    );
             }
             Err(e) => {
                 error!("[RecipeRunner] Rust AgentEngine failed for worker '{}': {e}", worker_slug);
                 self.set_worker_status(worker_slug, "error");
+                // Phase 7.5 — Record failed Mode 1 tick in analytics DB.
+                let _ = crate::analytics::global()
+                    .collector()
+                    .record_worker_stats(
+                        worker_slug.to_string(),
+                        0, // tasks_completed
+                        1, // tasks_failed
+                        0,
+                        0.0,
+                        0,
+                    );
             }
         }
 

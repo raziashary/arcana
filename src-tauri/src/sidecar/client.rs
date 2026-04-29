@@ -16,17 +16,23 @@
 //   POST /api/agents/{id}/invoke      — run LivingAgent, returns AgentInvokeResponse (requires JWT)
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{atomic::{AtomicUsize, Ordering}, Arc, Mutex};
 use std::time::Duration;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::errors::{AutoDevError, Result};
 
 const BASE_URL: &str = "http://127.0.0.1:4000";
 const MEMORY_URL: &str = "http://127.0.0.1:8000";  // memory-mcp-server base URL
 const API_KEY: &str = "dev-key-123";               // matches core-orchestrator .env API_KEYS[0]
-const HEALTH_TIMEOUT_SECS: u64 = 3;
+const HEALTH_TIMEOUT_SECS: u64 = 5;               // Phase 7.8 — raised from 3s to give busy orch more time
 const INVOKE_TIMEOUT_SECS: u64 = 600;              // 10-minute ceiling per recipe tick
+
+// Phase 7.8 — consecutive-failure debounce threshold.
+// is_healthy() must see this many consecutive failures before returning false.
+// This prevents a single timeout (orch busy with a long LivingAgent call) from
+// triggering a Mode 1 fallback and wasting a full recipe tick.
+const HEALTH_FAIL_THRESHOLD: usize = 3;
 
 // ─── OrchestratorClient ───────────────────────────────────────────────────────
 
@@ -55,6 +61,12 @@ pub struct OrchestratorClient {
     // fallback to map config keys (e.g. "claude-4-5-haiku") to canonical
     // LiteLLM names (e.g. "anthropic/claude-haiku-4-5-20251001").
     model_registry_cache: Mutex<HashMap<String, String>>,
+    // Phase 7.8 — consecutive-failure debounce.
+    // is_healthy() increments on failure, resets on success. Only after
+    // HEALTH_FAIL_THRESHOLD consecutive failures does it return false so a
+    // single timeout (orch busy with a long LivingAgent call) doesn't
+    // unnecessarily trigger a Mode 1 fallback.
+    health_fail_count: Arc<AtomicUsize>,
 }
 
 impl OrchestratorClient {
@@ -72,6 +84,7 @@ impl OrchestratorClient {
             jwt_token:   Mutex::new(None),
             agent_cache: Mutex::new(HashMap::new()),
             model_registry_cache: Mutex::new(HashMap::new()),
+            health_fail_count: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -206,8 +219,15 @@ impl OrchestratorClient {
 
     // ─── Health ──────────────────────────────────────────────────────────────
 
-    /// Returns true if core-orchestrator responds with 2xx within 3 seconds.
-    /// Any error (connection refused, timeout) returns false — caller falls back.
+    /// Returns true if core-orchestrator responds with 2xx within HEALTH_TIMEOUT_SECS.
+    ///
+    /// Phase 7.8 — consecutive-failure debounce: a single timeout (e.g. orch busy
+    /// processing a long LivingAgent call) is NOT enough to declare the orchestrator
+    /// down. Only after HEALTH_FAIL_THRESHOLD (3) consecutive failures does this
+    /// method return false and trigger a Mode 1 fallback.
+    ///
+    /// On success the counter is reset to 0, so a recovered orch is immediately
+    /// treated as healthy on the next check.
     pub async fn is_healthy(&self) -> bool {
         let url = format!("{}/health", self.base_url);
         let result = self.client
@@ -218,10 +238,36 @@ impl OrchestratorClient {
             .await;
 
         match result {
-            Ok(r)  => r.status().is_success(),
+            Ok(r) if r.status().is_success() => {
+                // Reset the debounce counter on any success.
+                self.health_fail_count.store(0, Ordering::Relaxed);
+                true
+            }
+            Ok(r) => {
+                // Non-2xx response — treat as a failure
+                let count = self.health_fail_count.fetch_add(1, Ordering::Relaxed) + 1;
+                debug!(
+                    "[OrchestratorClient] health check returned HTTP {} (consecutive failures: {}/{})",
+                    r.status(), count, HEALTH_FAIL_THRESHOLD
+                );
+                // Still optimistic below threshold; unhealthy once threshold is reached.
+                count < HEALTH_FAIL_THRESHOLD
+            }
             Err(e) => {
-                debug!("[OrchestratorClient] health check failed: {e}");
-                false
+                let count = self.health_fail_count.fetch_add(1, Ordering::Relaxed) + 1;
+                if count < HEALTH_FAIL_THRESHOLD {
+                    warn!(
+                        "[OrchestratorClient] health check failed ({count}/{HEALTH_FAIL_THRESHOLD}): {e} — \
+                         treating as healthy until threshold reached"
+                    );
+                    true  // still optimistic — orch may just be busy
+                } else {
+                    debug!(
+                        "[OrchestratorClient] health check failed {count} consecutive times: {e} — \
+                         declaring unhealthy"
+                    );
+                    false
+                }
             }
         }
     }
@@ -763,28 +809,37 @@ impl OrchestratorClient {
             .await
             .map_err(|e| AutoDevError::Agent(format!("POST /api/mcp/servers: {e}")))?;
 
-        if resp.status().is_success() {
+        let status = resp.status();
+        if status.is_success() {
             info!("[OrchestratorClient] autodev-mcp-server registered with core-orchestrator");
             Ok(())
-        } else if resp.status().as_u16() == 409 {
+        } else if status.as_u16() == 409 {
             // Already registered — idempotent
             info!("[OrchestratorClient] autodev-mcp-server already registered (409)");
             Ok(())
-        } else if resp.status().as_u16() == 400 {
-            // Defensive: also treat 400 with "already exists" as idempotent
-            // (in case Python returns 400 before the fix is deployed)
+        } else if status.as_u16() == 400 || status.as_u16() == 500 {
+            // Phase 7.9 — treat 400 and 500 with "already exists" body as idempotent.
+            // core-orchestrator currently returns HTTP 500 (instead of 409) when the
+            // server is already registered, which was incorrectly propagated as a Rust
+            // error and logged as a failure. Read the body and check for the sentinel.
             let text = resp.text().await.unwrap_or_default();
-            if text.contains("already exists") {
-                info!("[OrchestratorClient] autodev-mcp-server already registered (400 — legacy response)");
+            let lower = text.to_ascii_lowercase();
+            if lower.contains("already exists")
+                || lower.contains("already registered")
+                || lower.contains("duplicate")
+            {
+                info!(
+                    "[OrchestratorClient] autodev-mcp-server already registered \
+                     (HTTP {} — idempotent)", status.as_u16()
+                );
                 Ok(())
             } else {
                 Err(AutoDevError::Agent(format!(
-                    "MCP server registration failed (HTTP 400): {}",
+                    "MCP server registration failed (HTTP {status}): {}",
                     &text[..text.len().min(400)]
                 )))
             }
         } else {
-            let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
             Err(AutoDevError::Agent(format!(
                 "MCP server registration failed (HTTP {status}): {}",

@@ -65,12 +65,25 @@ impl AnthropicProvider {
     }
 
     fn build_body(&self, req: &CompletionRequest, stream: bool) -> serde_json::Value {
-        // Fix 6c: band-aid — map short config key to canonical Anthropic API name.
-        // Core-orchestrator's model_registry.py maps "claude-4-5-haiku" →
-        // "anthropic/claude-haiku-4-5-20251001". When Rust AgentEngine falls back
-        // (Mode 1) it uses the raw config key, causing Anthropic 404.
+        // Phase 7.1 — normalize all model identifiers to bare direct-API IDs.
+        //
+        // History: workers.db may store old slug names ("claude-4-5-haiku") from
+        // before the canonical naming was settled, or LiteLLM proxy-format names
+        // ("anthropic/claude-haiku-4-5-20251001") that crept in via earlier code.
+        // Both are wrong for direct api.anthropic.com calls which require the bare
+        // model ID only. This caused 9 × "404 not_found_error" in the 2026-04-29
+        // run (log lines 5665, 18916, 21223, 21226, 29402, 37933, 39528, 53037,
+        // 53040) for qc-agent and supervisor whenever Mode 1 fallback fired.
+        //
+        // Canonical IDs accepted by api.anthropic.com/v1/messages:
+        //   claude-haiku-4-5  |  claude-sonnet-4-5  |  claude-opus-4-5
         let model = match req.model.as_str() {
-            "claude-4-5-haiku" => "anthropic/claude-haiku-4-5-20251001",
+            // Old slug names → canonical direct-API IDs
+            "claude-4-5-haiku"  | "claude-haiku-4-5"  => "claude-haiku-4-5",
+            "claude-4-5-sonnet" | "claude-sonnet-4-5" => "claude-sonnet-4-5",
+            "claude-4-5-opus"   | "claude-opus-4-5"   => "claude-opus-4-5",
+            // Strip any LiteLLM "anthropic/" prefix that may have crept in via config
+            s if s.starts_with("anthropic/") => s.trim_start_matches("anthropic/"),
             other => other,
         };
 

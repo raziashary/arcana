@@ -113,6 +113,7 @@ impl WorkersDb {
             .map_err(|e| AutoDevError::Agent(format!("workers.db open failed: {e}")))?;
         let db = Self { conn };
         db.migrate()?;
+        db.migrate_model_names()?;  // Phase 7.1 — fix any stale old-format model slugs
         db.seed_defaults()?;
         Ok(db)
     }
@@ -142,6 +143,25 @@ impl WorkersDb {
                     UPDATE workers SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
                 END;
         "#).map_err(|e| AutoDevError::Agent(format!("workers.db migrate: {e}")))
+    }
+
+    /// Phase 7.1 — one-time data migration: rename any workers.db rows that were
+    /// created with old-format model slugs to the canonical direct-API IDs.
+    ///
+    /// Background: before canonical naming was settled, seeds and UI may have stored
+    /// "claude-4-5-haiku" / "claude-4-5-sonnet" / "claude-4-5-opus". The Anthropic
+    /// provider now maps these correctly, but updating the stored value is cleaner and
+    /// prevents confusion when the model name is displayed in the UI or used in logs.
+    ///
+    /// Safe to run every startup — UPDATE ... WHERE model = '...' is a no-op when
+    /// no matching rows exist.
+    fn migrate_model_names(&self) -> Result<()> {
+        self.conn.execute_batch(r#"
+            UPDATE workers SET model = 'claude-haiku-4-5'  WHERE model = 'claude-4-5-haiku';
+            UPDATE workers SET model = 'claude-sonnet-4-5' WHERE model = 'claude-4-5-sonnet';
+            UPDATE workers SET model = 'claude-opus-4-5'   WHERE model = 'claude-4-5-opus';
+        "#).map_err(|e| AutoDevError::Agent(format!("migrate_model_names: {e}")))?;
+        Ok(())
     }
 
     /// Seed the 5 pre-defined workers + 2 system agents if the table is empty.

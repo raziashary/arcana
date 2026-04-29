@@ -48,6 +48,30 @@ impl AnalyticsQueries {
             0.0
         };
 
+        // Phase 7.6 — Pull worker counts from the live WorkersDb instead of hardcoding zeros.
+        let (total_workers, active_workers, workers_added_today) = {
+            match crate::db::workers::WorkersDb::open() {
+                Ok(wdb) => {
+                    let all = wdb.list().unwrap_or_default();
+                    let total = all.len() as i32;
+                    let active = all.iter()
+                        .filter(|w| w.status != "paused" && w.status != "deleted")
+                        .count() as i32;
+                    let today_str = today.to_string();
+                    let added = all.iter()
+                        .filter(|w| w.created_at.starts_with(&today_str))
+                        .count() as i32;
+                    (total, active, added)
+                }
+                Err(_) => (0, 0, 0),
+            }
+        };
+
+        // Phase 7.6 — Count distinct sessions recorded in token_usage today.
+        let sessions_today = self.db.get_daily_cost(today)?
+            .map(|r| r.session_count)
+            .unwrap_or(0);
+
         Ok(DashboardSummary {
             today_cost,
             yesterday_cost,
@@ -55,11 +79,11 @@ impl AnalyticsQueries {
             today_tokens,
             yesterday_tokens,
             token_change_percent,
-            active_workers: 0,  // TODO: Get from worker registry
-            total_workers: 0,   // TODO: Get from worker registry
-            workers_added_today: 0,  // TODO: Get from worker registry
-            active_sessions: 0,  // TODO: Get from session store
-            sessions_today: 0,   // TODO: Get from session store
+            active_workers,
+            total_workers,
+            workers_added_today,
+            active_sessions: active_workers,  // proxy: any worker in non-paused state
+            sessions_today,
             messages_today: self.db.get_daily_cost(today)?
                 .map(|r| r.message_count)
                 .unwrap_or(0),

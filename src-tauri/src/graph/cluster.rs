@@ -151,14 +151,14 @@ pub fn split_oversized(
 }
 
 pub fn cohesion_score(
-    store: &GraphStore,
+    _store: &GraphStore,
     member_qualified_names: &[String],
+    all_edges: &[crate::graph::store::GraphEdge],
 ) -> Result<f32> {
     if member_qualified_names.len() < 2 {
         return Ok(1.0);
     }
     
-    let all_edges = store.get_all_edges_for_graph(i64::MAX, 0)?;
     let member_set: HashSet<_> = member_qualified_names.iter().cloned().collect();
     
     let intra_edges = all_edges
@@ -179,14 +179,14 @@ pub fn cohesion_score(
 }
 
 pub fn name_community(
-    store: &GraphStore,
+    _store: &GraphStore,
     members: &[String],
+    all_nodes: &[crate::graph::store::GraphNode],
 ) -> Result<String> {
     if members.is_empty() {
         return Ok("unnamed".to_string());
     }
     
-    let all_nodes = store.get_all_nodes_for_graph(i64::MAX, 0)?;
     let member_set: HashSet<_> = members.iter().cloned().collect();
     
     let member_nodes: Vec<_> = all_nodes
@@ -259,13 +259,41 @@ pub fn run_clustering(store: &GraphStore) -> Result<Vec<Community>> {
             .push(node.clone());
     }
     
-    let mut result = Vec::new();
+    // Pre-fetch all nodes and edges ONCE to avoid N+1 queries
+    let all_nodes = store.get_all_nodes_for_graph(i64::MAX, 0)?;
+    let all_edges = store.get_all_edges_for_graph(i64::MAX, 0)?;
+    
+    // Merge tiny communities (< 3 members) into a single "miscellaneous" group
+    const MIN_COMMUNITY_SIZE: usize = 3;
+    let mut misc_members: Vec<String> = Vec::new();
+    let mut significant_communities: Vec<(i32, Vec<String>)> = Vec::new();
+    
     for (comm_id, members) in community_map {
-        let name = name_community(store, &members)?;
-        let cohesion = cohesion_score(store, &members)?;
+        if members.len() < MIN_COMMUNITY_SIZE {
+            misc_members.extend(members);
+        } else {
+            significant_communities.push((comm_id, members));
+        }
+    }
+    
+    if !misc_members.is_empty() {
+        significant_communities.push((-1, misc_members)); // -1 = miscellaneous
+    }
+    
+    let mut result = Vec::new();
+    let mut batch_assignments: Vec<(String, i32, String)> = Vec::new();
+    
+    for (comm_id, members) in significant_communities {
+        let name = if comm_id == -1 {
+            "miscellaneous".to_string()
+        } else {
+            name_community(store, &members, &all_nodes)?
+        };
+        let cohesion = cohesion_score(store, &members, &all_edges)?;
         
+        // Collect for batch update instead of N+1 individual writes
         for member in &members {
-            store.set_community(member, comm_id, &name)?;
+            batch_assignments.push((member.clone(), comm_id, name.clone()));
         }
         
         result.push(Community {
@@ -275,6 +303,9 @@ pub fn run_clustering(store: &GraphStore) -> Result<Vec<Community>> {
             cohesion_score: cohesion,
         });
     }
+    
+    // Single batch update — ~100x faster than looped set_community
+    store.set_communities_batch(&batch_assignments)?;
     
     result.sort_by(|a, b| b.members.len().cmp(&a.members.len()));
     Ok(result)

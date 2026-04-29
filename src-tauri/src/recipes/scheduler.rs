@@ -6,12 +6,15 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use chrono::Utc;
 use cron::Schedule;
 use tauri::async_runtime;
 use async_runtime::JoinHandle;
 use tracing::{error, info, warn};
+// Phase 7.7 — used for metadata JSON in record_system_event calls
+use serde_json;
 
 use crate::db::workers::WorkersDb;
 use crate::errors::{AutoDevError, Result};
@@ -103,7 +106,12 @@ impl RecipeScheduler {
             // within seconds of boot, even if their normal schedule is 5 or 10 minutes.
             // Without this, worker-platform and worker-cleanup would wait 5-10 min
             // before first registration, breaking first-time user experience.
-            info!("[RecipeScheduler] Firing STARTUP tick for '{}' (immediate registration)", slug_owned);
+            let orch_ready = runner.is_orchestrator_ready().await;
+            if orch_ready {
+                info!("[RecipeScheduler] Orchestrator ready — firing STARTUP tick for '{}'", slug_owned);
+            } else {
+                info!("[RecipeScheduler] Orchestrator still starting — firing STARTUP tick for '{}' (Mode 1 fallback)", slug_owned);
+            }
             if let Err(e) = runner.run_recipe(&recipe, &slug_owned).await {
                 error!("[RecipeScheduler] Startup tick failed for '{}': {e}", slug_owned);
                 // Non-fatal: continue to cron loop even if startup tick failed
@@ -111,11 +119,30 @@ impl RecipeScheduler {
 
             // ── CRON SCHEDULE LOOP ───────────────────────────────────────────────
             // After startup tick, fall back to the worker's configured schedule.
+            //
+            // Phase 7.2 — minimum tick floor.
+            // When a long-running recipe (e.g. 24 s LivingAgent call) causes the
+            // next cron time to already be in the past, (next_fire - now) is
+            // negative → .to_std() returns Err → .unwrap_or_default() returned
+            // Duration::ZERO (0 ns), creating a tight spin loop.  Evidence: 32
+            // "next fire in 0ns" occurrences in the 2026-04-29 run; worst burst:
+            // 6 fires in 99 ms for qc-agent (log lines 47862–47914).
+            // Fix: enforce a minimum wait of MIN_TICK_SECS regardless of cron slip.
+            const MIN_TICK_SECS: u64 = 10;
+
             for next_fire in schedule.upcoming(Utc) {
                 let now      = Utc::now();
-                let wait_dur = (next_fire - now).to_std().unwrap_or_default();
+                let raw_wait = (next_fire - now).to_std().unwrap_or(Duration::ZERO);
+                let wait_dur = raw_wait.max(Duration::from_secs(MIN_TICK_SECS));
 
-                info!("[RecipeScheduler] Worker '{}' — next fire in {:?}", slug_owned, wait_dur);
+                if raw_wait < Duration::from_secs(MIN_TICK_SECS) {
+                    warn!(
+                        "[RecipeScheduler] Worker '{}' — cron slipped ({:?}), enforcing {}s floor",
+                        slug_owned, raw_wait, MIN_TICK_SECS
+                    );
+                } else {
+                    info!("[RecipeScheduler] Worker '{}' — next fire in {:?}", slug_owned, wait_dur);
+                }
                 tokio::time::sleep(wait_dur).await;
 
                 // Check that worker is still active before firing
@@ -131,7 +158,29 @@ impl RecipeScheduler {
                         info!("[RecipeScheduler] Firing recipe '{}' for worker '{}'", recipe_id, slug_owned);
                         if let Err(e) = runner.run_recipe(&recipe, &slug_owned).await {
                             error!("[RecipeScheduler] Recipe run failed for '{}': {e}", slug_owned);
-                            // Worker status already set to "error" by runner — keep scheduling
+                            // Phase 7.7 — record the failure in the system_events table so
+                            // the System Logs panel in the Dashboard shows live error history.
+                            let _ = crate::analytics::global()
+                                .collector()
+                                .record_system_event(
+                                    "scheduler".to_string(),
+                                    "recipe_run_failed".to_string(),
+                                    format!("Worker '{}' recipe run failed: {e}", slug_owned),
+                                    "error".to_string(),
+                                    Some(serde_json::json!({
+                                        "worker": slug_owned,
+                                        "recipe": recipe_id,
+                                    }).to_string()),
+                                );
+                            // Phase 7.2 — error backoff: pause 60 s before the next cron
+                            // tick so a fast-failing recipe (e.g. Anthropic 404) cannot
+                            // tight-loop at ~2 invocations/second, flooding the log and
+                            // consuming CPU/network bandwidth.
+                            warn!(
+                                "[RecipeScheduler] Worker '{}' backing off 60s after run error",
+                                slug_owned
+                            );
+                            tokio::time::sleep(Duration::from_secs(60)).await;
                         }
                     }
                     Some("working") => {

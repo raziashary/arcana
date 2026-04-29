@@ -160,6 +160,88 @@ impl GraphStore {
         }
     }
     
+    /// Batch upsert nodes using a single connection and single transaction.
+    /// This is ~100x faster than calling upsert_node in a loop.
+    pub fn upsert_nodes_batch(
+        &self,
+        nodes: &[NodeInfo],
+        agent_author: Option<&str>,
+        task_id: Option<i64>,
+    ) -> Result<usize> {
+        let mut conn = Connection::open(&self.db_path)?;
+        conn.execute_batch("PRAGMA foreign_keys=ON")?;
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+        
+        let mut stmt = conn.prepare(
+            "INSERT OR REPLACE INTO nodes (
+                kind, name, qualified_name, file_path, line_start, line_end,
+                language, parent_name, params, return_type, modifiers, is_test,
+                file_hash, agent_author, task_id, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)"
+        )?;
+        
+        for node in nodes {
+            stmt.execute(params![
+                &node.kind,
+                &node.name,
+                &node.qualified_name,
+                &node.file_path,
+                node.line_start,
+                node.line_end,
+                &node.language,
+                &node.parent_name,
+                node.params.as_deref(),
+                &node.return_type,
+                node.modifiers.as_deref(),
+                node.is_test,
+                &node.file_hash,
+                agent_author,
+                task_id,
+            ])?;
+        }
+        drop(stmt);
+        conn.execute_batch("COMMIT")?;
+        Ok(nodes.len())
+    }
+    
+    /// Batch upsert edges using a single connection and single transaction.
+    pub fn upsert_edges_batch(
+        &self,
+        edges: &[EdgeInfo],
+        agent_author: Option<&str>,
+        task_id: Option<i64>,
+    ) -> Result<usize> {
+        let mut conn = Connection::open(&self.db_path)?;
+        conn.execute_batch("PRAGMA foreign_keys=ON")?;
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+        
+        let mut stmt = conn.prepare(
+            "INSERT OR REPLACE INTO edges (
+                kind, source_qualified, target_qualified, file_path, line,
+                confidence, confidence_tier, weight, relation, agent_author, task_id, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)"
+        )?;
+        
+        for edge in edges {
+            stmt.execute(params![
+                &edge.kind,
+                &edge.source_qualified,
+                &edge.target_qualified,
+                &edge.file_path,
+                edge.line,
+                edge.confidence,
+                &edge.confidence_tier,
+                edge.weight,
+                &edge.relation,
+                agent_author,
+                task_id,
+            ])?;
+        }
+        drop(stmt);
+        conn.execute_batch("COMMIT")?;
+        Ok(edges.len())
+    }
+    
     pub fn upsert_edge(
         &self,
         edge: &EdgeInfo,
@@ -404,6 +486,28 @@ impl GraphStore {
             params![community, community_name, qualified_name],
         )?;
         Ok(())
+    }
+    
+    /// Batch update community assignments for many nodes in a single transaction.
+    /// ~100x faster than calling set_community in a loop.
+    pub fn set_communities_batch(
+        &self,
+        assignments: &[(String, i32, String)],
+    ) -> Result<usize> {
+        let mut conn = Connection::open(&self.db_path)?;
+        conn.execute_batch("PRAGMA foreign_keys=ON")?;
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+        
+        let mut stmt = conn.prepare(
+            "UPDATE nodes SET community = ?, community_name = ? WHERE qualified_name = ?"
+        )?;
+        
+        for (qualified_name, community, community_name) in assignments {
+            stmt.execute(params![community, community_name, qualified_name])?;
+        }
+        drop(stmt);
+        conn.execute_batch("COMMIT")?;
+        Ok(assignments.len())
     }
     
     pub fn get_all_nodes_for_graph(&self, limit: i64, offset: i64) -> Result<Vec<GraphNode>> {

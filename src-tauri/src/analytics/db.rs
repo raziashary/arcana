@@ -290,6 +290,62 @@ impl AnalyticsDb {
         Ok(())
     }
 
+    /// Aggregate worker stats for a single worker over a date range.
+    /// Returns summed tasks_completed, tasks_failed, time_spent_minutes, cost_usd
+    /// and a calculated success_rate. Returns None if no rows exist for the range.
+    pub fn get_worker_stats_range(
+        &self,
+        worker_id: &str,
+        start: NaiveDate,
+        end: NaiveDate,
+    ) -> Result<Option<WorkerStatsRecord>> {
+        let conn = self.conn.lock().map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
+        let mut stmt = conn.prepare(
+            "SELECT
+                 worker_id,
+                 SUM(tasks_completed)        AS tasks_completed,
+                 SUM(tasks_failed)           AS tasks_failed,
+                 SUM(time_spent_minutes)     AS time_spent_minutes,
+                 SUM(cost_usd)               AS cost_usd,
+                 AVG(avg_task_duration_minutes) AS avg_duration,
+                 MAX(last_heartbeat)         AS last_heartbeat
+             FROM worker_stats
+             WHERE worker_id = ? AND date BETWEEN ? AND ?
+             GROUP BY worker_id"
+        ).map_err(|e| AutoDevError::Database(e))?;
+
+        let start_str = start.to_string();
+        let end_str   = end.to_string();
+        let record = stmt.query_row(params![worker_id, start_str, end_str], |row| {
+            let tasks_completed: i32 = row.get(1)?;
+            let tasks_failed: i32    = row.get(2)?;
+            let total = tasks_completed + tasks_failed;
+            let success_rate = if total > 0 {
+                tasks_completed as f64 / total as f64
+            } else {
+                0.0
+            };
+            let hb_str: Option<String> = row.get(6)?;
+            let last_heartbeat = hb_str.and_then(|s| {
+                chrono::DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))
+            });
+            Ok(WorkerStatsRecord {
+                worker_id:                row.get(0)?,
+                date:                     end,   // range end as the "as of" date
+                tasks_completed,
+                tasks_failed,
+                time_spent_minutes:       row.get(3)?,
+                cost_usd:                 row.get(4)?,
+                avg_task_duration_minutes: row.get::<_, f64>(5).unwrap_or(0.0) as i32,
+                success_rate,
+                last_heartbeat,
+            })
+        }).optional()
+            .map_err(|e| AutoDevError::Database(e))?;
+
+        Ok(record)
+    }
+
     pub fn get_worker_stats(&self, worker_id: &str, date: NaiveDate) -> Result<Option<WorkerStatsRecord>> {
         let conn = self.conn.lock().map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
         let mut stmt = conn.prepare(
@@ -375,6 +431,65 @@ impl AnalyticsDb {
     // ═══════════════════════════════════════════════════════════════════════════
     // System Events Operations
     // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Query recent system events, optionally filtered by component and/or severity.
+    /// Returns events from the last `hours` hours, newest first, capped at 500 rows.
+    pub fn get_system_events_recent(
+        &self,
+        component: Option<&str>,
+        severity: Option<&str>,
+        hours: i32,
+    ) -> Result<Vec<SystemEventRecord>> {
+        let conn = self.conn.lock().map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
+
+        // Build the cutoff timestamp string. `hours` is clamped to 1–168 by the
+        // command layer so this format is safe to embed in SQL.
+        let cutoff = format!("-{hours} hours");
+
+        // Optional filters — embed as literal strings in the WHERE clause.
+        // Values come from internal Tauri commands (not user web input) so SQL
+        // injection risk is low; we additionally sanitise by rejecting non-ASCII
+        // and stripping quotes.
+        let sanitize = |s: &str| -> String {
+            s.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect()
+        };
+
+        let component_filter = component
+            .map(|c| format!(" AND component = '{}'", sanitize(c)))
+            .unwrap_or_default();
+        let severity_filter = severity
+            .map(|s| format!(" AND severity = '{}'", sanitize(s)))
+            .unwrap_or_default();
+
+        let sql = format!(
+            "SELECT id, timestamp, component, event_type, message, severity, metadata \
+             FROM system_events \
+             WHERE timestamp > datetime('now', ?){component_filter}{severity_filter} \
+             ORDER BY timestamp DESC LIMIT 500"
+        );
+
+        let mut stmt = conn.prepare(&sql).map_err(|e| AutoDevError::Database(e))?;
+
+        let records = stmt.query_map(params![cutoff], |row| {
+            let ts_str: String = row.get(1)?;
+            let timestamp = chrono::DateTime::parse_from_rfc3339(&ts_str)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now());
+            Ok(SystemEventRecord {
+                id: row.get(0)?,
+                timestamp,
+                component: row.get(2)?,
+                event_type: row.get(3)?,
+                message: row.get(4)?,
+                severity: row.get(5)?,
+                metadata: row.get(6)?,
+            })
+        }).map_err(|e| AutoDevError::Database(e))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| AutoDevError::Database(e))?;
+
+        Ok(records)
+    }
 
     pub fn insert_system_event(&self, record: &SystemEventRecord) -> Result<i64> {
         let mut conn = self.conn.lock().map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;

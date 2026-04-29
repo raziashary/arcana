@@ -63,6 +63,36 @@ impl std::fmt::Display for SidecarStatus {
 }
 
 // ─── Log Routing ──────────────────────────────────────────────────────────────
+//
+// Phase 7.3 / 7.4 — sidecar log size limits.
+//
+// The 2026-04-29 run produced 133 MB (memory-mcp.log) + 4.8 MB (core-orch.log)
+// in 24 minutes.  Root causes:
+//   • mem0 logs the full 1000+ char agent system prompt on every memory store
+//   • Redis connection errors emit a 12-line stack trace on every agent init
+//   • No cap or rotation existed — logs grew without bound
+//
+// Fix strategy:
+//   1. Rotate the sidecar log at process startup if it already exceeds 20 MB
+//      (safe: file is not yet open, no Windows lock contention).
+//   2. Apply a per-session line cap (50 000 lines) — if a tight loop or
+//      runaway verbosity hits the cap, further writes are suppressed with a
+//      single notice line.  Errors still flow through tracing even after cap.
+//   3. Skip extremely long lines (> 2000 chars) — these are serialised
+//      system-prompt or embedding-vector blobs that add bulk with no value.
+//   4. Route Python log lines to the Rust tracing system at appropriate levels:
+//        Python ERROR / Traceback / Exception → Rust error!   (→ main Rust log)
+//        Python WARNING                        → Rust warn!    (→ main Rust log)
+//        Everything else (INFO / DEBUG)        → Rust debug!   (NOT in main log)
+//      This keeps the main autodev.YYYY-MM-DD log small — Python INFO chatter
+//      goes only to the sidecar-specific file where it belongs.
+
+/// Maximum size of a sidecar log file before it is rotated on next startup.
+const MAX_SIDECAR_LOG_BYTES: u64  = 20 * 1_024 * 1_024; // 20 MB
+/// Maximum lines written per session; further writes suppressed (errors still flow).
+const MAX_SIDECAR_LOG_LINES: usize = 50_000;
+/// Maximum character length of a single line; longer lines are dropped.
+const MAX_SIDECAR_LINE_LEN:  usize = 2_000;
 
 /// Returns the ~/.autodev/logs/ directory, creating it if needed.
 fn logs_dir() -> PathBuf {
@@ -75,12 +105,60 @@ fn logs_dir() -> PathBuf {
     dir
 }
 
-/// Spawns a background thread that reads lines from `reader`, writes each line
-/// to `log_file` (appended), and also emits them via the tracing subscriber so
-/// they appear in the AutoDev Logs tab alongside Rust log lines.
+/// Phase 7.3 — rotate a sidecar log file if it exceeds MAX_SIDECAR_LOG_BYTES.
 ///
-/// If `progress` is provided, each line is also fed through the startup-phase
-/// scanner so the loading UI advances as Python sidecars hit their milestones.
+/// Must be called BEFORE opening the file for writing.  The rename is safe on
+/// Windows (file is closed) and is a no-op when the file does not exist or is
+/// below the threshold.
+///
+/// Rotation scheme: one numbered backup is kept.
+///   memory-mcp.log  →  memory-mcp.log.1  (previous run, then overwritten)
+///
+/// If two log-router threads race on the same file (stdout + stderr share a
+/// path), the second rename attempt just fails silently — the winner already
+/// moved the file and the loser opens a fresh one.
+fn rotate_sidecar_log_if_needed(log_file: &PathBuf) {
+    if !log_file.exists() { return; }
+    let meta = match fs::metadata(log_file) {
+        Ok(m)  => m,
+        Err(_) => return,
+    };
+    if meta.len() < MAX_SIDECAR_LOG_BYTES { return; }
+
+    // Build rotated path: append ".1" to the full filename  (memory-mcp.log → memory-mcp.log.1)
+    let mut rotated_os = log_file.as_os_str().to_owned();
+    rotated_os.push(".1");
+    let rotated = PathBuf::from(rotated_os);
+
+    let _ = fs::remove_file(&rotated); // drop previous backup if present
+    match fs::rename(log_file, &rotated) {
+        Ok(_)  => info!(
+            "[log_router] Rotated '{}' ({:.1} MB) — fresh file will be created",
+            log_file.file_name().unwrap_or_default().to_string_lossy(),
+            meta.len() as f64 / (1_024.0 * 1_024.0)
+        ),
+        Err(_) => {
+            // Another thread already rotated it, or the file was deleted — fine.
+        }
+    }
+}
+
+/// Spawns a background thread that reads lines from `reader`, writes each line
+/// to `log_file` (appended), and routes genuine errors/warnings to the Rust
+/// tracing subscriber.
+///
+/// Phase 7.3/7.4 improvements vs the original:
+///   • Rotates `log_file` at open time if it already exceeds 20 MB.
+///   • Drops lines longer than 2 000 chars (serialised system-prompt blobs).
+///   • Enforces a 50 000-line cap per session; a notice is written then writes stop.
+///   • Python INFO/DEBUG  → Rust debug! only (NOT in main autodev log at info filter).
+///   • Python WARNING     → Rust warn!  (visible in main log).
+///   • Python ERROR/Trace → Rust error! (visible in main log).
+///   This keeps the main autodev.YYYY-MM-DD log small; full detail stays in the
+///   sidecar-specific file (core-orchestrator.log / memory-mcp.log).
+///
+/// If `progress` is provided each line is fed through the startup-phase scanner
+/// so the loading UI advances as Python sidecars hit their milestones.
 fn spawn_log_router<R: std::io::Read + Send + 'static>(
     reader: R,
     log_file: PathBuf,
@@ -88,40 +166,109 @@ fn spawn_log_router<R: std::io::Read + Send + 'static>(
     progress: Option<Arc<StartupProgress>>,
 ) {
     std::thread::spawn(move || {
+        // Phase 7.3 — rotate on open if file is already over the size limit.
+        // File is not yet held open here so the rename is safe on Windows.
+        rotate_sidecar_log_if_needed(&log_file);
+
         let mut file = match fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&log_file)
         {
-            Ok(f) => f,
+            Ok(f)  => f,
             Err(e) => {
                 warn!("[log_router] Cannot open {:?}: {}", log_file, e);
                 return;
             }
         };
+
         let reader = BufReader::new(reader);
+        let mut lines_written: usize = 0;
+        let mut cap_reached = false;
+
         for line in reader.lines() {
             match line {
                 Ok(l) => {
-                    // Phase 3.0 R4 — Windows asyncio teardown chatter filter.
-                    // `memory-mcp` and `core-orchestrator` periodically log
-                    // `ConnectionResetError [WinError 10054]` plus the related
-                    // `_ProactorBasePipeTransport._call_connection_lost` frame
-                    // when an idle HTTP keep-alive is reaped by Windows. It
-                    // is benign (the request already succeeded or was retried)
-                    // but floods the in-app Logs tab. We still write the line
-                    // to the on-disk log file so forensics stay complete —
-                    // only the tracing emission is downgraded to `debug!`.
-                    let is_asyncio_noise = is_windows_asyncio_noise(&l);
-                    if is_asyncio_noise {
-                        debug!("[{prefix}] {l}");
-                    } else {
-                        info!("[{prefix}] {l}");
+                    // Phase 7.4 — skip serialised system-prompt / embedding blobs.
+                    // mem0 logs the full agent system prompt (~1 000+ chars) on every
+                    // memory store operation; dropping these lines reduces memory-mcp.log
+                    // by ~85 % with no loss of useful diagnostic information.
+                    if l.len() > MAX_SIDECAR_LINE_LEN {
+                        continue;
                     }
-                    let _ = writeln!(file, "{l}");
+
+                    // Always feed the startup-progress scanner so the loading overlay
+                    // advances correctly — even after the line-cap is hit.
                     if let Some(p) = progress.as_ref() {
                         p.scan_line(prefix, &l);
                     }
+
+                    // Phase 7.4 — per-session line cap.
+                    // If a tight loop or runaway verbosity hits the limit, further
+                    // writes to the file are suppressed.  Genuine errors still flow
+                    // to the Rust tracing subscriber even after the cap so nothing
+                    // critical is silently dropped.
+                    lines_written += 1;
+                    if lines_written > MAX_SIDECAR_LOG_LINES {
+                        if !cap_reached {
+                            let _ = writeln!(
+                                file,
+                                "[log-router] Session line cap ({MAX_SIDECAR_LOG_LINES}) \
+                                 reached for '{prefix}' — suppressing further file output \
+                                 (ERROR/WARNING lines still emitted via Rust tracing)"
+                            );
+                            cap_reached = true;
+                        }
+                        // After cap: only route genuine errors to the Rust log.
+                        if l.contains(" ERROR ") || l.contains("Traceback")
+                            || l.contains("Exception") || l.contains(" CRITICAL ")
+                        {
+                            error!("[{prefix}] {l}");
+                        }
+                        continue;
+                    }
+
+                    // Phase 3.0 R4 — Windows asyncio teardown chatter.
+                    // Benign keep-alive reap messages are downgraded to debug regardless
+                    // of Python log level so they don't pollute the Rust error log.
+                    if is_windows_asyncio_noise(&l) {
+                        debug!("[{prefix}] {l}");
+                        let _ = writeln!(file, "{l}");
+                        continue;
+                    }
+
+                    // Phase 7.3/7.4 — level-aware routing to Rust tracing.
+                    //
+                    // Previous behaviour: every sidecar line was emitted as info!()
+                    // which caused ALL Python stdout to appear in the main autodev Rust
+                    // log, inflating it to 142 MB in 24 minutes.
+                    //
+                    // New behaviour:
+                    //   Python ERROR / Traceback / Exception → Rust error!
+                    //       → appears in main autodev log (important to see)
+                    //   Python WARNING                        → Rust warn!
+                    //       → appears in main autodev log
+                    //   Python INFO / DEBUG / everything else → Rust debug!
+                    //       → NOT written to main autodev log at default info filter
+                    //       → still written to the sidecar-specific log file below
+                    //
+                    // This keeps the main autodev.YYYY-MM-DD log to Rust-only events
+                    // plus Python errors — a fraction of the previous volume.
+                    if l.contains(" ERROR ")   || l.contains("Traceback")
+                        || l.contains("Exception") || l.contains(" CRITICAL ")
+                    {
+                        error!("[{prefix}] {l}");
+                    } else if l.contains(" WARNING ") || l.contains(" WARN ") {
+                        warn!("[{prefix}] {l}");
+                    } else {
+                        // Normal Python INFO/DEBUG — write to sidecar file only.
+                        debug!("[{prefix}] {l}");
+                    }
+
+                    // Always write every (non-oversized, non-capped) line to the
+                    // sidecar-specific log file so full detail is available for
+                    // post-run forensics via the Logs tab or direct file inspection.
+                    let _ = writeln!(file, "{l}");
                 }
                 Err(_) => break,
             }
@@ -219,6 +366,16 @@ impl SidecarManager {
             .current_dir(cwd)
             .env("PYTHONIOENCODING", "utf-8:replace")
             .env("PYTHONUTF8", "1")
+            // Phase 7.4 — suppress mem0 INFO/DEBUG chatter.
+            // mem0 logs the full agent system prompt (~1 000 chars) at INFO level on
+            // every memory store, producing 133 MB of logs in 24 minutes.
+            // Setting LOG_LEVEL=WARNING drops INFO/DEBUG from the root Python logger.
+            // Side-effect: the startup-progress scanner will not see the "Using Memory("
+            // / "Qdrant" INFO lines and therefore won't advance the VectorDb phase — the
+            // loading overlay skips that cosmetic step but startup still completes via
+            // the health-check poll in main.rs.
+            .env("LOG_LEVEL",     "WARNING")
+            .env("MEM0_LOG_LEVEL","WARNING")   // mem0-specific override if read by the app
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()

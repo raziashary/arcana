@@ -67,6 +67,12 @@ interface GraphVisualizationData {
   communities: Community[]
 }
 
+interface BuildProgress {
+  phase: string
+  message: string
+  percent: number
+}
+
 export default function GraphTab() {
   const workspaceDir = useWorkspaceStore(s => s.workspaceDir)
   const loadWorkspaceDir = useWorkspaceStore(s => s.loadWorkspaceDir)
@@ -74,10 +80,17 @@ export default function GraphTab() {
   const [stats, setStats] = useState<GraphStats | null>(null)
   const [communities, setCommunities] = useState<Community[]>([])
   const [isBuilding, setIsBuilding] = useState(false)
+  const [buildProgress, setBuildProgress] = useState<BuildProgress | null>(null)
   const [selectedCommunity, setSelectedCommunity] = useState<number | null>(null)
   const [renderMode, setRenderMode] = useState<'full' | 'community' | 'auto'>('auto')
   const [graphData, setGraphData] = useState<GraphVisualizationData | null>(null)
+  const [selectedNode, setSelectedNode] = useState<string | null>(null)
+  const [isLoadingStats, setIsLoadingStats] = useState(false)
   const transformRef = useRef({ scale: 1, translateX: 0, translateY: 0, isDragging: false, dragStartX: 0, dragStartY: 0 })
+  const selectedNodeRef = useRef<string | null>(null)
+
+  // Keep ref in sync with state so event handlers always see latest value
+  useEffect(() => { selectedNodeRef.current = selectedNode }, [selectedNode])
 
   useEffect(() => {
     // Load workspace directory from storage on mount
@@ -97,14 +110,39 @@ export default function GraphTab() {
     }
   }, [])
 
-  // Render graph whenever data or mode changes
+  useEffect(() => {
+    // Listen for build progress events
+    const unsubscribe = listen<BuildProgress>('graph:build_progress', (event) => {
+      setBuildProgress(event.payload)
+      if (event.payload.phase === 'done') {
+        setIsBuilding(false)
+        setTimeout(() => setBuildProgress(null), 800)
+      }
+    })
+    
+    return () => {
+      unsubscribe.then(fn => fn())
+    }
+  }, [])
+
+  // Setup zoom/pan interactions once on mount — never re-register on selection changes
+  useEffect(() => {
+    if (!svgRef.current) return
+    const cleanup = setupInteractions()
+    return cleanup
+  }, [])
+
+  // Full graph rebuild when data, render mode, or community filter changes
   useEffect(() => {
     if (graphData && svgRef.current) {
       renderGraph()
-      const cleanup = setupInteractions()
-      return cleanup
     }
   }, [graphData, renderMode, selectedCommunity])
+
+  // Fast highlight-only update when selected node changes (no DOM rebuild)
+  useEffect(() => {
+    updateNodeHighlights()
+  }, [selectedNode])
 
   const resetView = () => {
     transformRef.current = { scale: 1, translateX: 0, translateY: 0, isDragging: false, dragStartX: 0, dragStartY: 0 }
@@ -179,20 +217,30 @@ export default function GraphTab() {
   }
 
   const loadGraphStats = async () => {
+    if (isLoadingStats) return
+    setIsLoadingStats(true)
     try {
       console.log('[Graph] Loading graph stats with workspaceDir:', workspaceDir)
       const graphStats = await invoke<GraphStats>('get_graph_stats', { repoPath: workspaceDir })
       console.log('[Graph] Stats loaded:', graphStats)
       setStats(graphStats)
       
-      // Fetch visualization data (no params needed - uses home dir)
-      console.log('[Graph] Fetching visualization data...')
-      const vizData = await invoke<GraphVisualizationData>('get_graph_visualization_data')
-      console.log('[Graph] Visualization data loaded:', vizData)
-      setGraphData(vizData)
-      setCommunities(vizData.communities)
+      // Only fetch visualization data if there are nodes to render
+      if (graphStats.total_nodes > 0) {
+        console.log('[Graph] Fetching visualization data...')
+        const vizData = await invoke<GraphVisualizationData>('get_graph_visualization_data')
+        console.log('[Graph] Visualization data loaded:', vizData)
+        setGraphData(vizData)
+        setCommunities(vizData.communities)
+      } else {
+        console.log('[Graph] No nodes in graph, skipping visualization fetch')
+        setGraphData(null)
+        setCommunities([])
+      }
     } catch (error) {
       console.error('[Graph] Failed to load graph stats:', error)
+    } finally {
+      setIsLoadingStats(false)
     }
   }
 
@@ -203,6 +251,9 @@ export default function GraphTab() {
     const width = svg.clientWidth || 800
     const height = svg.clientHeight || 600
 
+    // Set viewBox for proper zoom/pan
+    svg.setAttribute('viewBox', `0 0 ${width} ${height}`)
+
     console.log(`[Graph] Rendering graph: ${width}x${height}, nodes: ${graphData.nodes.length}, edges: ${graphData.edges.length}`)
 
     // Clear previous content
@@ -210,36 +261,70 @@ export default function GraphTab() {
       svg.removeChild(svg.firstChild)
     }
 
-    // Filter nodes/edges based on render mode
-    let nodesToRender = graphData.nodes.map(n => ({ ...n }))
-    let edgesToRender = graphData.edges
-
-    if (renderMode === 'community' && selectedCommunity !== null) {
-      const communityNodeIds = new Set(
-        graphData.communities
-          .find(c => c.id === selectedCommunity)
-          ?.members || []
-      )
-      nodesToRender = graphData.nodes.filter(n => communityNodeIds.has(n.id)).map(n => ({ ...n }))
-      edgesToRender = graphData.edges.filter(
-        e => communityNodeIds.has(typeof e.source === 'string' ? e.source : e.source.id) &&
-             communityNodeIds.has(typeof e.target === 'string' ? e.target : e.target.id)
-      )
-    }
-
-    // Smart layout: grid when sparse/no edges, force-directed when connected
     const centerX = width / 2
     const centerY = height / 2
+
+    // Compute degrees (centrality) from FULL graph for sizing
+    const degreeMap = new Map<string, number>()
+    graphData.edges.forEach(edge => {
+      const sId = typeof edge.source === 'string' ? edge.source : edge.source.id
+      const tId = typeof edge.target === 'string' ? edge.target : edge.target.id
+      degreeMap.set(sId, (degreeMap.get(sId) || 0) + 1)
+      degreeMap.set(tId, (degreeMap.get(tId) || 0) + 1)
+    })
+
+    // Active community node set (for fading)
+    const activeCommunityNodeIds = new Set<string>()
+    if (selectedCommunity !== null) {
+      const comm = graphData.communities.find(c => c.id === selectedCommunity)
+      if (comm) comm.members.forEach(m => activeCommunityNodeIds.add(m))
+    }
+    const isCommunityMode = selectedCommunity !== null
+
+    // All nodes rendered — community mode fades non-members
+    const nodesToRender = graphData.nodes.map(n => ({ ...n }))
+    const nodeIdSet = new Set(nodesToRender.map(n => n.id))
+    const edgesToRender = graphData.edges.filter(e => {
+      const sId = typeof e.source === 'string' ? e.source : e.source.id
+      const tId = typeof e.target === 'string' ? e.target : e.target.id
+      return nodeIdSet.has(sId) && nodeIdSet.has(tId)
+    })
+
     const numNodes = nodesToRender.length
     const hasEdges = edgesToRender.length > 0
 
+    // Build adjacency and degrees for LAYOUT (subset if community mode)
+    const idToNode = new Map(nodesToRender.map(n => [n.id, n]))
+    const adjacency = new Map<string, string[]>()
+    edgesToRender.forEach(edge => {
+      const sId = typeof edge.source === 'string' ? edge.source : edge.source.id
+      const tId = typeof edge.target === 'string' ? edge.target : edge.target.id
+      if (!adjacency.has(sId)) adjacency.set(sId, [])
+      if (!adjacency.has(tId)) adjacency.set(tId, [])
+      adjacency.get(sId)!.push(tId)
+      adjacency.get(tId)!.push(sId)
+    })
+    const layoutDegrees = new Map(nodesToRender.map(n => [n.id, adjacency.get(n.id)?.length || 0]))
+    const maxDegree = Math.max(1, ...layoutDegrees.values())
+
+    // Pre-compute community centers for radial initialization
+    const communityCenters = new Map<number, { x: number; y: number }>()
+    if (hasEdges) {
+      graphData.communities.forEach((c, i) => {
+        const angle = (i / Math.max(1, graphData.communities.length)) * 2 * Math.PI
+        const radius = Math.min(width, height) * 0.22
+        communityCenters.set(c.id, {
+          x: centerX + radius * Math.cos(angle),
+          y: centerY + radius * Math.sin(angle)
+        })
+      })
+    }
+
     if (!hasEdges) {
-      // GRID LAYOUT for disconnected nodes — uses space efficiently
       const cols = Math.ceil(Math.sqrt(numNodes * (width / height)))
       const rows = Math.ceil(numNodes / cols)
       const cellW = width / (cols + 1)
       const cellH = height / (rows + 1)
-
       nodesToRender.forEach((node, i) => {
         const col = i % cols
         const row = Math.floor(i / cols)
@@ -249,28 +334,34 @@ export default function GraphTab() {
         node.vy = 0
       })
     } else {
-      // FORCE-DIRECTED LAYOUT for connected graphs
-      // Initialize on a circle, then run simulation
-      const radius = Math.min(width, height) * 0.35
+      // Community-aware radial initialization
       nodesToRender.forEach((node, i) => {
-        const angle = (i / numNodes) * 2 * Math.PI
-        node.x = centerX + radius * Math.cos(angle)
-        node.y = centerY + radius * Math.sin(angle)
+        const deg = layoutDegrees.get(node.id) || 0
+        const commCenter = communityCenters.get(node.community || -1)
+        const baseRadius = maxDegree > 0 ? (1 - deg / maxDegree) * 100 : 60
+        const radius = baseRadius * (0.4 + 0.6 * Math.random())
+        const angle = (i / numNodes) * 2 * Math.PI + Math.random() * 0.3
+        if (commCenter) {
+          node.x = commCenter.x + radius * Math.cos(angle)
+          node.y = commCenter.y + radius * Math.sin(angle)
+        } else {
+          node.x = centerX + radius * Math.cos(angle)
+          node.y = centerY + radius * Math.sin(angle)
+        }
         node.vx = 0
         node.vy = 0
       })
 
-      // Build adjacency for fast lookup
-      const idToNode = new Map(nodesToRender.map(n => [n.id, n]))
-      const k = Math.sqrt((width * height) / numNodes) * 0.3
-      const iterations = 80
+      const area = width * height
+      const k = Math.sqrt(area / numNodes) * 0.7
+      const iterations = 300
+      const gravityStrength = 0.03
 
       for (let iter = 0; iter < iterations; iter++) {
-        const cooling = 1 - iter / iterations
-        // Reset forces
+        const temperature = 1 - iter / iterations
         nodesToRender.forEach(n => { n.fx = 0; n.fy = 0 })
 
-        // Repulsion (all pairs)
+        // Repulsion with 3x boost between different communities
         for (let i = 0; i < numNodes; i++) {
           for (let j = i + 1; j < numNodes; j++) {
             const a = nodesToRender[i], b = nodesToRender[j]
@@ -278,7 +369,10 @@ export default function GraphTab() {
             const dy = (b.y! - a.y!) || 0.01
             const d2 = dx * dx + dy * dy
             const d = Math.sqrt(d2)
-            const f = (k * k) / d
+            let f = (k * k * 2.5) / d2
+            if (a.community !== undefined && b.community !== undefined && a.community !== b.community) {
+              f *= 3.0
+            }
             const fx = (dx / d) * f
             const fy = (dy / d) * f
             a.fx! -= fx; a.fy! -= fy
@@ -286,7 +380,6 @@ export default function GraphTab() {
           }
         }
 
-        // Attraction (edges)
         edgesToRender.forEach(edge => {
           const sId = typeof edge.source === 'string' ? edge.source : edge.source.id
           const tId = typeof edge.target === 'string' ? edge.target : edge.target.id
@@ -294,37 +387,63 @@ export default function GraphTab() {
           if (!a || !b) return
           const dx = b.x! - a.x!
           const dy = b.y! - a.y!
-          const d = Math.sqrt(dx * dx + dy * dy) || 1
-          const f = (d * d) / k
-          const fx = (dx / d) * f
-          const fy = (dy / d) * f
+          const dist = Math.sqrt(dx * dx + dy * dy) || 1
+          const f = (dist - k * 0.5) * 0.04
+          const fx = (dx / dist) * f
+          const fy = (dy / dist) * f
           a.fx! += fx; a.fy! += fy
           b.fx! -= fx; b.fy! -= fy
         })
 
-        // Apply forces with cooling
+        nodesToRender.forEach(n => {
+          n.fx! += (centerX - n.x!) * gravityStrength
+          n.fy! += (centerY - n.y!) * gravityStrength
+        })
+
         nodesToRender.forEach(n => {
           const fLen = Math.sqrt(n.fx! * n.fx! + n.fy! * n.fy!) || 1
-          const limit = Math.min(fLen, 30 * cooling)
-          n.x = Math.max(40, Math.min(width - 40, n.x! + (n.fx! / fLen) * limit))
-          n.y = Math.max(40, Math.min(height - 40, n.y! + (n.fy! / fLen) * limit))
+          const limit = Math.min(fLen, 15 * temperature + 2)
+          n.x = Math.max(30, Math.min(width - 30, n.x! + (n.fx! / fLen) * limit))
+          n.y = Math.max(30, Math.min(height - 30, n.y! + (n.fy! / fLen) * limit))
         })
       }
     }
 
-    // Community colors (Winter is Coming theme)
+    // Community colors
     const communityColors: Record<number, string> = {}
     const colors = [THEME.aqua, THEME.accent, THEME.warning, THEME.success, THEME.danger, '#C792EA', '#7FDBCA', '#82AAFF']
     graphData.communities.forEach((c, i) => {
       communityColors[c.id] = colors[i % colors.length]
     })
 
-    // Create main group for zoom/pan
+    // SVG defs: glow filter for selected node
+    const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs')
+    const filter = document.createElementNS('http://www.w3.org/2000/svg', 'filter')
+    filter.setAttribute('id', 'node-glow')
+    filter.setAttribute('x', '-50%')
+    filter.setAttribute('y', '-50%')
+    filter.setAttribute('width', '200%')
+    filter.setAttribute('height', '200%')
+    const feGaussianBlur = document.createElementNS('http://www.w3.org/2000/svg', 'feGaussianBlur')
+    feGaussianBlur.setAttribute('stdDeviation', '3.5')
+    feGaussianBlur.setAttribute('result', 'coloredBlur')
+    const feMerge = document.createElementNS('http://www.w3.org/2000/svg', 'feMerge')
+    const feMergeNode1 = document.createElementNS('http://www.w3.org/2000/svg', 'feMergeNode')
+    feMergeNode1.setAttribute('in', 'coloredBlur')
+    const feMergeNode2 = document.createElementNS('http://www.w3.org/2000/svg', 'feMergeNode')
+    feMergeNode2.setAttribute('in', 'SourceGraphic')
+    feMerge.appendChild(feMergeNode1)
+    feMerge.appendChild(feMergeNode2)
+    filter.appendChild(feGaussianBlur)
+    filter.appendChild(feMerge)
+    defs.appendChild(filter)
+    svg.appendChild(defs)
+
     const mainGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g')
     mainGroup.setAttribute('id', 'main-group')
     svg.appendChild(mainGroup)
 
-    // Create SVG elements for edges
+    // Edge group
     const edgeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g')
     edgeGroup.setAttribute('class', 'edges')
     mainGroup.appendChild(edgeGroup)
@@ -334,61 +453,220 @@ export default function GraphTab() {
       const targetId = typeof edge.target === 'string' ? edge.target : edge.target.id
       const sourceNode = nodesToRender.find(n => n.id === sourceId)
       const targetNode = nodesToRender.find(n => n.id === targetId)
+      if (!sourceNode || !targetNode) return
 
-      if (sourceNode && targetNode) {
-        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
-        line.setAttribute('x1', String(sourceNode.x || centerX))
-        line.setAttribute('y1', String(sourceNode.y || centerY))
-        line.setAttribute('x2', String(targetNode.x || centerX))
-        line.setAttribute('y2', String(targetNode.y || centerY))
-        line.setAttribute('stroke', THEME.accent)
-        line.setAttribute('stroke-width', String(Math.max(1, edge.weight || 1.5)))
-        line.setAttribute('opacity', '0.6')
-        edgeGroup.appendChild(line)
-      }
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+      line.setAttribute('x1', String(sourceNode.x || centerX))
+      line.setAttribute('y1', String(sourceNode.y || centerY))
+      line.setAttribute('x2', String(targetNode.x || centerX))
+      line.setAttribute('y2', String(targetNode.y || centerY))
+      line.setAttribute('stroke', THEME.accent)
+      line.setAttribute('stroke-width', String(Math.max(0.5, (edge.weight || 1.5) * 0.7)))
+
+      const sActive = activeCommunityNodeIds.has(sourceId)
+      const tActive = activeCommunityNodeIds.has(targetId)
+      const edgeOpacity = isCommunityMode
+        ? (sActive && tActive ? 0.6 : 0.03)
+        : 0.25
+      line.setAttribute('opacity', String(edgeOpacity))
+      edgeGroup.appendChild(line)
     })
 
-    // Create SVG elements for nodes
+    // Node group
     const nodeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g')
     nodeGroup.setAttribute('class', 'nodes')
     mainGroup.appendChild(nodeGroup)
 
+    // Hover label group (rendered on top)
+    const hoverLabelGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g')
+    hoverLabelGroup.setAttribute('class', 'hover-labels')
+    hoverLabelGroup.setAttribute('pointer-events', 'none')
+
+    // Helper: get node size by kind + centrality
+    const getNodeSize = (node: VisualizationNode) => {
+      const deg = degreeMap.get(node.id) || 0
+      const kind = node.kind || ''
+      const baseSize = 3 + Math.sqrt(deg) * 1.8
+      if (kind.includes('File')) return baseSize + 6
+      if (kind.includes('Class')) return baseSize + 3
+      return Math.max(2.5, baseSize)
+    }
+
     nodesToRender.forEach((node) => {
       const x = node.x || centerX
       const y = node.y || centerY
+      const sel = selectedNodeRef.current === node.id
+      const kind = node.kind || ''
+      const isFile = kind.includes('File')
+      const isClass = kind.includes('Class')
+      const size = getNodeSize(node)
+      const deg = degreeMap.get(node.id) || 0
 
-      const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
-      circle.setAttribute('cx', String(x))
-      circle.setAttribute('cy', String(y))
-      circle.setAttribute('r', String(node.size || 10))
-      circle.setAttribute('fill', node.community ? communityColors[node.community] : THEME.aqua)
-      circle.setAttribute('opacity', '0.9')
-      circle.setAttribute('stroke', THEME.text)
-      circle.setAttribute('stroke-width', '2')
-      circle.setAttribute('class', 'graph-node')
-      circle.setAttribute('title', `${node.label}\n${node.language}\n${node.file_path}`)
-      circle.style.cursor = 'pointer'
-      nodeGroup.appendChild(circle)
+      const isFaded = isCommunityMode && !activeCommunityNodeIds.has(node.id)
+      const baseOpacity = isFaded ? 0.12 : (sel ? 1.0 : 0.85)
+      const strokeColor = sel ? THEME.warning : THEME.text
+      const strokeWidth = sel ? 3 : (isFile ? 2.5 : 1.5)
 
-      // Add label for larger nodes
-      if (node.size > 12) {
+      let shape: Element
+      if (isFile) {
+        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+        rect.setAttribute('x', String(x - size))
+        rect.setAttribute('y', String(y - size * 0.7))
+        rect.setAttribute('width', String(size * 2))
+        rect.setAttribute('height', String(size * 1.4))
+        rect.setAttribute('rx', String(size * 0.3))
+        shape = rect
+      } else if (isClass) {
+        const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon')
+        const s = size * 1.3
+        poly.setAttribute('points', `${x},${y - s} ${x + s},${y} ${x},${y + s} ${x - s},${y}`)
+        shape = poly
+      } else {
+        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+        circle.setAttribute('cx', String(x))
+        circle.setAttribute('cy', String(y))
+        circle.setAttribute('r', String(Math.max(2, size)))
+        shape = circle
+      }
+
+      const color = node.community !== undefined ? communityColors[node.community] : THEME.aqua
+      shape.setAttribute('fill', color)
+      shape.setAttribute('opacity', String(baseOpacity))
+      shape.setAttribute('stroke', strokeColor)
+      shape.setAttribute('stroke-width', String(strokeWidth))
+      shape.setAttribute('class', `graph-node${sel ? ' graph-node-selected' : ''}`)
+      if (sel) shape.setAttribute('filter', 'url(#node-glow)')
+      ;(shape as any).style.cursor = 'pointer'
+      ;(shape as any).dataset.nodeId = node.id
+
+      const title = document.createElementNS('http://www.w3.org/2000/svg', 'title')
+      title.textContent = `${node.label} (${node.kind}) — degree: ${deg}\n${node.file_path}`
+      shape.appendChild(title)
+
+      shape.addEventListener('click', (e: Event) => {
+        e.stopPropagation()
+        setSelectedNode(node.id)
+      })
+
+      // Hover: highlight + show label
+      shape.addEventListener('mouseenter', () => {
+        shape.setAttribute('stroke', THEME.warning)
+        shape.setAttribute('stroke-width', '3')
+        shape.setAttribute('opacity', '1.0')
+        if (!isFaded) {
+          const label = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+          label.setAttribute('x', String(x))
+          label.setAttribute('y', String(y - size - 6))
+          label.setAttribute('text-anchor', 'middle')
+          label.setAttribute('fill', THEME.text)
+          label.setAttribute('font-size', '12')
+          label.setAttribute('font-weight', 'bold')
+          label.setAttribute('class', 'hover-label')
+          label.textContent = node.label
+          hoverLabelGroup.appendChild(label)
+        }
+      })
+
+      shape.addEventListener('mouseleave', () => {
+        const currentSel = selectedNodeRef.current === node.id
+        shape.setAttribute('stroke', currentSel ? THEME.warning : strokeColor)
+        shape.setAttribute('stroke-width', String(currentSel ? 3 : strokeWidth))
+        shape.setAttribute('opacity', String(currentSel ? 1.0 : baseOpacity))
+        while (hoverLabelGroup.firstChild) {
+          hoverLabelGroup.removeChild(hoverLabelGroup.firstChild)
+        }
+      })
+
+      nodeGroup.appendChild(shape)
+
+      // Permanent labels for important nodes
+      const showLabel = sel || isFile || deg >= 4
+      if (showLabel && !isFaded) {
         const text = document.createElementNS('http://www.w3.org/2000/svg', 'text')
         text.setAttribute('x', String(x))
-        text.setAttribute('y', String(y))
+        text.setAttribute('y', String(y + (isFile ? size * 1.6 : size + 5)))
         text.setAttribute('text-anchor', 'middle')
-        text.setAttribute('dy', '0.3em')
-        text.setAttribute('font-size', '10')
-        text.setAttribute('fill', THEME.bg)
-        text.setAttribute('font-weight', 'bold')
+        text.setAttribute('font-size', sel ? '13' : (isFile ? '11' : '9'))
+        text.setAttribute('fill', THEME.text)
+        text.setAttribute('font-weight', sel || isFile ? 'bold' : 'normal')
         text.setAttribute('pointer-events', 'none')
-        text.textContent = node.label.substring(0, 8)
+        const labelText = isFile ? node.label : node.label.substring(0, 14)
+        text.textContent = labelText
         nodeGroup.appendChild(text)
       }
     })
 
-    // Apply initial transform
+    mainGroup.appendChild(hoverLabelGroup)
+
+    // Apply transform
     const transform = transformRef.current
     mainGroup.setAttribute('transform', `translate(${transform.translateX},${transform.translateY}) scale(${transform.scale})`)
+  }
+
+  // Fast DOM-only highlight update — called when selectedNode changes without rebuilding graph
+  const updateNodeHighlights = () => {
+    if (!svgRef.current || !graphData) return
+    const svg = svgRef.current
+
+    // Remove old selected label
+    const oldLabel = svg.querySelector('#selected-node-label')
+    if (oldLabel) oldLabel.remove()
+
+    svg.querySelectorAll('.graph-node').forEach(el => {
+      const nodeId = (el as any).dataset?.nodeId
+      if (!nodeId) return
+      const isSelected = selectedNode === nodeId
+      const node = graphData.nodes.find(n => n.id === nodeId)
+      if (!node) return
+
+      const kind = node.kind || ''
+      const isFile = kind.includes('File')
+      const isFaded = selectedCommunity !== null && !(() => {
+        const comm = graphData.communities.find(c => c.id === selectedCommunity)
+        return comm?.members.includes(nodeId) ?? false
+      })()
+      const baseOpacity = isFaded ? 0.12 : (isSelected ? 1.0 : 0.85)
+      const strokeWidth = isSelected ? 3 : (isFile ? 2.5 : 1.5)
+      const strokeColor = isSelected ? THEME.warning : THEME.text
+
+      el.setAttribute('stroke', strokeColor)
+      el.setAttribute('stroke-width', String(strokeWidth))
+      el.setAttribute('opacity', String(baseOpacity))
+      if (isSelected) {
+        el.setAttribute('filter', 'url(#node-glow)')
+      } else {
+        el.removeAttribute('filter')
+      }
+    })
+
+    // Add selected label
+    if (selectedNode) {
+      const node = graphData.nodes.find(n => n.id === selectedNode)
+      const shape = svg.querySelector(`[data-node-id="${CSS.escape(selectedNode)}"]`)
+      if (node && shape) {
+        try {
+          const bbox = (shape as SVGGraphicsElement).getBBox()
+          const cx = bbox.x + bbox.width / 2
+          const cy = bbox.y + bbox.height / 2
+          const mainGroup = svg.querySelector('#main-group')
+          if (mainGroup) {
+            const label = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+            label.setAttribute('id', 'selected-node-label')
+            label.setAttribute('x', String(cx))
+            label.setAttribute('y', String(cy - 14))
+            label.setAttribute('text-anchor', 'middle')
+            label.setAttribute('font-size', '13')
+            label.setAttribute('fill', THEME.warning)
+            label.setAttribute('font-weight', 'bold')
+            label.setAttribute('pointer-events', 'none')
+            label.textContent = node.label
+            mainGroup.appendChild(label)
+          }
+        } catch (e) {
+          // getBBox may fail if element not yet rendered
+        }
+      }
+    }
   }
 
   const handleBuildGraph = async () => {
@@ -398,6 +676,7 @@ export default function GraphTab() {
       return
     }
     setIsBuilding(true)
+    setBuildProgress({ phase: 'init', message: 'Starting build...', percent: 5 })
     try {
       console.log('[Graph] Building graph for:', workspaceDir)
       await invoke('build_graph', { repoPath: workspaceDir })
@@ -405,9 +684,8 @@ export default function GraphTab() {
     } catch (error) {
       console.error('Failed to build graph:', error)
       alert(`Failed to build graph: ${error}`)
-    } finally {
-      setIsBuilding(false)
     }
+    // isBuilding is cleared by the graph:build_progress listener when phase === 'done'
   }
 
   const handleUpdateGraph = async () => {
@@ -416,14 +694,22 @@ export default function GraphTab() {
       return
     }
     setIsBuilding(true)
+    setBuildProgress({ phase: 'init', message: 'Starting update...', percent: 5 })
     try {
       await invoke('update_graph', { repoPath: workspaceDir })
       await loadGraphStats()
     } catch (error) {
       console.error('Failed to update graph:', error)
       alert(`Failed to update graph: ${error}`)
-    } finally {
-      setIsBuilding(false)
+    }
+    // isBuilding is cleared by the graph:build_progress listener when phase === 'done'
+  }
+
+  const handleOpenInIde = async (filePath: string, line?: number) => {
+    try {
+      await invoke('open_in_ide', { file: filePath, line: line || 1 })
+    } catch (error) {
+      console.error('Failed to open in IDE:', error)
     }
   }
 
@@ -541,6 +827,8 @@ export default function GraphTab() {
             <svg 
               ref={svgRef} 
               className="graph-svg"
+              viewBox="0 0 800 600"
+              preserveAspectRatio="xMidYMid meet"
             />
           ) : (
             <div className="canvas-placeholder">
@@ -548,6 +836,20 @@ export default function GraphTab() {
               <p className="canvas-placeholder-text">
                 Build a graph to see the visualization
               </p>
+            </div>
+          )}
+          {/* Loading overlay */}
+          {isBuilding && buildProgress && (
+            <div className="graph-loading-overlay">
+              <div className="graph-loading-spinner" />
+              <div className="graph-loading-label">{buildProgress.message}</div>
+              <div className="graph-loading-sub">{buildProgress.phase}</div>
+              <div className="graph-loading-bar">
+                <div 
+                  className="graph-loading-bar-fill" 
+                  style={{ width: `${buildProgress.percent}%` }}
+                />
+              </div>
             </div>
           )}
         </div>
@@ -574,7 +876,8 @@ export default function GraphTab() {
                 <div
                   key={community.id}
                   className={`community-item ${selectedCommunity === community.id ? 'selected' : ''}`}
-                  onClick={() => setSelectedCommunity(community.id)}
+                  onClick={() => setSelectedCommunity(prev => prev === community.id ? null : community.id)}
+                  title={selectedCommunity === community.id ? 'Click to deselect' : 'Click to isolate community'}
                   role="button"
                   tabIndex={0}
                 >
@@ -587,6 +890,94 @@ export default function GraphTab() {
               ))}
             </div>
           </div>
+
+          {/* Node Inspector */}
+          {selectedNode && graphData && (
+            <div className="sidebar-section">
+              <h3>Node Inspector</h3>
+              {(() => {
+                const node = graphData.nodes.find(n => n.id === selectedNode)
+                if (!node) return null
+                const incoming = graphData.edges.filter(e => {
+                  const tId = typeof e.target === 'string' ? e.target : e.target.id
+                  return tId === selectedNode
+                })
+                const outgoing = graphData.edges.filter(e => {
+                  const sId = typeof e.source === 'string' ? e.source : e.source.id
+                  return sId === selectedNode
+                })
+                return (
+                  <div className="node-inspector">
+                    <div className="node-inspector-header">{node.label}</div>
+                    <div className="node-inspector-meta">
+                      <span className="node-inspector-badge">{node.kind}</span>
+                      <span className="node-inspector-badge">{node.language}</span>
+                      {node.community !== undefined && (
+                        <span className="node-inspector-badge">Comm {node.community}</span>
+                      )}
+                    </div>
+                    <div 
+                      className="node-inspector-path"
+                      onClick={() => handleOpenInIde(node.file_path)}
+                      title="Click to open in IDE"
+                    >
+                      {node.file_path}
+                    </div>
+                    {outgoing.length > 0 && (
+                      <div className="node-inspector-section">
+                        <h4>Outgoing ({outgoing.length})</h4>
+                        <div className="node-inspector-edge-list">
+                          {outgoing.slice(0, 8).map((e, i) => {
+                            const targetId = typeof e.target === 'string' ? e.target : e.target.id
+                            const targetNode = graphData.nodes.find(n => n.id === targetId)
+                            return (
+                              <div 
+                                key={i} 
+                                className="node-inspector-edge"
+                                onClick={() => setSelectedNode(targetId)}
+                              >
+                                <span className="node-inspector-edge-dir">→</span>
+                                {targetNode?.label || targetId}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    {incoming.length > 0 && (
+                      <div className="node-inspector-section">
+                        <h4>Incoming ({incoming.length})</h4>
+                        <div className="node-inspector-edge-list">
+                          {incoming.slice(0, 8).map((e, i) => {
+                            const sourceId = typeof e.source === 'string' ? e.source : e.source.id
+                            const sourceNode = graphData.nodes.find(n => n.id === sourceId)
+                            return (
+                              <div 
+                                key={i} 
+                                className="node-inspector-edge"
+                                onClick={() => setSelectedNode(sourceId)}
+                              >
+                                <span className="node-inspector-edge-dir">←</span>
+                                {sourceNode?.label || sourceId}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    <div className="node-inspector-actions">
+                      <button className="btn-small" onClick={() => setSelectedNode(null)}>
+                        Deselect
+                      </button>
+                      <button className="btn-small" onClick={() => handleOpenInIde(node.file_path)}>
+                        Open File
+                      </button>
+                    </div>
+                  </div>
+                )
+              })()}
+            </div>
+          )}
 
           <div className="sidebar-section">
             <h3>Analysis</h3>

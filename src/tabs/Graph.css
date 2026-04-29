@@ -177,7 +177,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: auto;
+  overflow: hidden;
+  position: relative;
 }
 
 .canvas-placeholder {
@@ -304,6 +305,173 @@
 .graph-sidebar::-webkit-scrollbar-thumb:hover,
 .communities-list::-webkit-scrollbar-thumb:hover {
   background: #7FDBCA;
+}
+
+/* Loading overlay */
+.graph-loading-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(1, 22, 39, 0.92);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  z-index: 50;
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+
+.graph-loading-spinner {
+  width: 48px;
+  height: 48px;
+  border: 3px solid #0D3652;
+  border-top-color: #82AAFF;
+  border-radius: 50%;
+  animation: graph-spin 1s linear infinite;
+}
+
+@keyframes graph-spin {
+  to { transform: rotate(360deg); }
+}
+
+.graph-loading-label {
+  color: #D6DEEB;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.graph-loading-sub {
+  color: #637777;
+  font-size: 12px;
+}
+
+.graph-loading-bar {
+  width: 240px;
+  height: 4px;
+  background: #0D3652;
+  transition: width 0.3s ease;
+}
+
+.graph-loading-bar-fill {
+  height: 100%;
+  background: #82AAFF;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+  width: var(--progress-width, 0%);
+}
+
+/* Hover label shown on node mouseenter */
+.hover-label {
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Node inspector panel */
+.node-inspector {
+  background: #01111D;
+  border: 1px solid #0D3652;
+  border-radius: 6px;
+  padding: 12px;
+  margin-top: 8px;
+}
+
+.node-inspector-header {
+  font-size: 13px;
+  font-weight: 600;
+  color: #82AAFF;
+  margin-bottom: 8px;
+  word-break: break-all;
+}
+
+.node-inspector-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.node-inspector-badge {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: #0D3652;
+  color: #D6DEEB;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.node-inspector-path {
+  font-size: 11px;
+  color: #637777;
+  font-family: monospace;
+  margin-bottom: 10px;
+  word-break: break-all;
+  cursor: pointer;
+}
+
+.node-inspector-path:hover {
+  color: #7FDBCA;
+  text-decoration: underline;
+}
+
+.node-inspector-section {
+  margin-top: 10px;
+}
+
+.node-inspector-section h4 {
+  font-size: 11px;
+  color: #637777;
+  margin: 0 0 6px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.node-inspector-edge-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.node-inspector-edge {
+  font-size: 11px;
+  color: #D6DEEB;
+  font-family: monospace;
+  padding: 4px 6px;
+  background: #00233B;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.node-inspector-edge:hover {
+  background: #022C4A;
+}
+
+.node-inspector-edge-dir {
+  color: #82AAFF;
+  font-weight: 600;
+  margin-right: 4px;
+}
+
+.node-inspector-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.node-inspector-actions button {
+  flex: 1;
+  font-size: 11px;
+  padding: 6px;
+}
+
+/* Selected node SVG styling */
+.graph-node-selected {
+  stroke: #FFCB8B !important;
+  stroke-width: 3px !important;
 }
 
 /* SVG styling */

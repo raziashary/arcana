@@ -303,6 +303,33 @@ impl AgentEngine {
             state.add_cost(cost.cost_usd, total_tokens_in, total_tokens_out);
         }
 
+        // Phase 7.5 — Record token usage in analytics DB.
+        // Infer provider from model name (engine only knows the model string).
+        {
+            let analytics_provider = if model.contains("claude") {
+                "anthropic"
+            } else if model.contains("gpt") || model.starts_with("o1") || model.starts_with("o3") {
+                "openai"
+            } else if model.contains("gemini") {
+                "google"
+            } else {
+                "unknown"
+            };
+            let _ = crate::analytics::global()
+                .collector()
+                .record_token_usage(
+                    session_id.to_string(),
+                    "mode1_agent".to_string(),
+                    analytics_provider.to_string(),
+                    model.to_string(),
+                    total_tokens_in as i32,
+                    total_tokens_out as i32,
+                    None,
+                    cost.cost_usd,
+                    "agent_session".to_string(),
+                );
+        }
+
         emit_agent_done(&self.app, AgentDonePayload {
             session_id:  session_id.to_string(),
             message_id:  Uuid::new_v4().to_string(),

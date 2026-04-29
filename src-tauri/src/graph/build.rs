@@ -56,46 +56,42 @@ pub fn build(
     // Reconcile edges
     reconcile_edges(&mut all_edges, &node_ids);
     
-    // Batch upsert nodes to SQLite in a single transaction
+    // Batch upsert nodes to SQLite using a single connection+transaction
     tracing::info!("[GraphBuild] Upserting {} nodes in batch...", all_nodes.len());
-    for node in all_nodes {
-        let schema_node = SchemaNodeInfo {
-            kind: format!("{:?}", node.kind),
-            name: node.name,
-            qualified_name: node.qualified_name,
-            file_path: node.file_path,
-            line_start: node.line_start,
-            line_end: node.line_end,
-            language: node.language,
-            parent_name: node.parent_name,
-            params: node.params,
-            return_type: node.return_type,
-            modifiers: node.modifiers,
-            is_test: node.is_test,
-            file_hash: node.file_hash,
-        };
-        store.upsert_node(&schema_node, agent_author, task_id)?;
-        nodes_upserted += 1;
-    }
+    let schema_nodes: Vec<SchemaNodeInfo> = all_nodes.into_iter().map(|node| SchemaNodeInfo {
+        kind: format!("{:?}", node.kind),
+        name: node.name,
+        qualified_name: node.qualified_name,
+        file_path: node.file_path,
+        line_start: node.line_start,
+        line_end: node.line_end,
+        language: node.language,
+        parent_name: node.parent_name,
+        params: node.params,
+        return_type: node.return_type,
+        modifiers: node.modifiers,
+        is_test: node.is_test,
+        file_hash: node.file_hash,
+    }).collect();
+    store.upsert_nodes_batch(&schema_nodes, agent_author, task_id)?;
+    nodes_upserted = schema_nodes.len();
     tracing::info!("[GraphBuild] Upserted {} nodes", nodes_upserted);
     
-    // Batch upsert edges to SQLite in a single transaction
+    // Batch upsert edges to SQLite using a single connection+transaction
     tracing::info!("[GraphBuild] Upserting {} edges in batch...", all_edges.len());
-    for edge in all_edges {
-        let schema_edge = SchemaEdgeInfo {
-            kind: format!("{:?}", edge.kind),
-            source_qualified: edge.source_qualified,
-            target_qualified: edge.target_qualified,
-            file_path: edge.file_path,
-            line: edge.line,
-            confidence: edge.confidence,
-            confidence_tier: format!("{:?}", edge.confidence_tier),
-            weight: edge.weight,
-            relation: None,
-        };
-        store.upsert_edge(&schema_edge, agent_author, task_id)?;
-        edges_upserted += 1;
-    }
+    let schema_edges: Vec<SchemaEdgeInfo> = all_edges.into_iter().map(|edge| SchemaEdgeInfo {
+        kind: format!("{:?}", edge.kind),
+        source_qualified: edge.source_qualified,
+        target_qualified: edge.target_qualified,
+        file_path: edge.file_path,
+        line: edge.line,
+        confidence: edge.confidence,
+        confidence_tier: format!("{:?}", edge.confidence_tier),
+        weight: edge.weight,
+        relation: None,
+    }).collect();
+    store.upsert_edges_batch(&schema_edges, agent_author, task_id)?;
+    edges_upserted = schema_edges.len();
     tracing::info!("[GraphBuild] Upserted {} edges", edges_upserted);
     
     // Rebuild FTS5 index
