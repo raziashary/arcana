@@ -23,6 +23,7 @@ pub mod mcp_server;
 pub mod plan;
 pub mod subagent;
 pub mod analytics;
+pub mod graph;
 
 // Register all Tauri commands on the builder from within the lib crate.
 // generate_handler! must run here so the __cmd__* macros (produced by
@@ -105,6 +106,13 @@ pub fn register_commands(
             get_dashboard_summary, get_cost_analytics, get_token_usage,
             get_api_failures, predict_monthly_cost, export_costs_csv, export_costs_json,
             get_worker_analytics, get_system_logs,
+        },
+        graph_commands::{
+            build_graph, update_graph, get_graph_stats, export_graph,
+            get_graph_communities, get_graph_report, get_graph_nodes_for_viz,
+            get_graph_edges_for_viz, get_god_nodes, get_surprising_connections,
+            get_suggested_questions, register_repo, unregister_repo, list_repos,
+            merge_all_repos_cmd, delete_graph, open_in_ide, get_graph_visualization_data,
         },
     };
     builder.invoke_handler(tauri::generate_handler![
@@ -298,5 +306,24 @@ pub fn register_commands(
         export_costs_json,
         get_worker_analytics,
         get_system_logs,
+        // Graph Engine (Phase 6)
+        build_graph,
+        update_graph,
+        get_graph_stats,
+        export_graph,
+        get_graph_communities,
+        get_graph_report,
+        get_graph_nodes_for_viz,
+        get_graph_edges_for_viz,
+        get_god_nodes,
+        get_surprising_connections,
+        get_suggested_questions,
+        register_repo,
+        unregister_repo,
+        list_repos,
+        merge_all_repos_cmd,
+        delete_graph,
+        open_in_ide,
+        get_graph_visualization_data,
     ])
 }

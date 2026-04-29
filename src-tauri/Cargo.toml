@@ -83,6 +83,18 @@ sysinfo = "0.33"
 # Task D3: Keep 0.3.4; panic prevention via D1 (sanitized OLLAMA_HOST) + D2 (catch_unwind)
 ollama-rs = { version = "0.3.4", features = ["stream"] }
 
+# Graph Engine — Phase 6
+tree-sitter = "0.22"
+petgraph = "0.6"
+sha2 = "0.10"
+rayon = "1.10"
+ignore = "0.4"
+hex = "0.4"
+notify = "6"
+dirs = "5"
+flate2 = "1"
+base64 = "0.22"
+
 [package.metadata.tauri]
 # This section is required by tauri-build to locate icons and capabilities
 icons = ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]

@@ -24,3 +24,4 @@ pub mod startup_commands;
 pub mod plan_commands;
 pub mod subagent_commands;
 pub mod analytics_commands;
+pub mod graph_commands;
