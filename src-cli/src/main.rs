@@ -7,7 +7,7 @@ mod noninteractive;
 mod output;
 mod repl;
 
-use commands::{agent, analytics, config, logs, plan, system, task, worker};
+use commands::{agent, analytics, config, logs, plan, plugin, system, task, worker};
 use output::{OutputFormat, OutputContext};
 
 #[derive(Parser)]
@@ -105,6 +105,16 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: logs::LogsCmd,
     },
+    /// Manage plugins and the worker marketplace
+    Plugin {
+        #[command(subcommand)]
+        cmd: plugin::PluginCmd,
+    },
+    /// Worker setup token management
+    WorkerSetup {
+        #[command(subcommand)]
+        cmd: plugin::WorkerSetupCmd,
+    },
     /// Launch interactive REPL
     Repl,
 }
@@ -161,6 +171,8 @@ async fn main() -> Result<()> {
         Some(Commands::System { cmd }) => system::run(cmd, ctx).await?,
         Some(Commands::Analytics { cmd }) => analytics::run(cmd, ctx).await?,
         Some(Commands::Logs { cmd }) => logs::run(cmd, ctx).await?,
+        Some(Commands::Plugin { cmd }) => plugin::run_plugin_cmd(cmd, ctx).await?,
+        Some(Commands::WorkerSetup { cmd }) => plugin::run_worker_setup(cmd, ctx).await?,
         Some(Commands::Repl) => repl::run(ctx).await?,
     }
 

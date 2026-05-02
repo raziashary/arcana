@@ -24,6 +24,7 @@ pub mod plan;
 pub mod subagent;
 pub mod analytics;
 pub mod graph;
+pub mod plugin;
 
 // Register all Tauri commands on the builder from within the lib crate.
 // generate_handler! must run here so the __cmd__* macros (produced by
@@ -113,6 +114,13 @@ pub fn register_commands(
             get_graph_edges_for_viz, get_god_nodes, get_surprising_connections,
             get_suggested_questions, register_repo, unregister_repo, list_repos,
             merge_all_repos_cmd, delete_graph, open_in_ide, get_graph_visualization_data,
+        },
+        plugin_commands::{
+            list_plugins, list_installed_plugins, get_plugin,
+            install_plugin, install_plugin_from_yaml, uninstall_plugin,
+            update_plugin, verify_plugin, run_plugin,
+            get_plugin_config, set_plugin_config,
+            generate_setup_token, validate_setup_token,
         },
     };
     builder.invoke_handler(tauri::generate_handler![
@@ -325,5 +333,19 @@ pub fn register_commands(
         delete_graph,
         open_in_ide,
         get_graph_visualization_data,
+        // Plugin system (Phase 5.2)
+        list_plugins,
+        list_installed_plugins,
+        get_plugin,
+        install_plugin,
+        install_plugin_from_yaml,
+        uninstall_plugin,
+        update_plugin,
+        verify_plugin,
+        run_plugin,
+        get_plugin_config,
+        set_plugin_config,
+        generate_setup_token,
+        validate_setup_token,
     ])
 }

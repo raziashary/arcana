@@ -86,6 +86,10 @@ fn print_help() {
         ("system status",            "Show system and sidecar status"),
         ("analytics cost",           "Show cost summary"),
         ("analytics tokens",         "Show token usage"),
+        ("plugin list",              "List marketplace plugins"),
+        ("plugin install <name>",    "Install a plugin"),
+        ("plugin verify <name>",     "Verify plugin dependencies"),
+        ("plugin info <name>",       "Show plugin details"),
         ("help",                     "Show this help"),
         ("exit / quit",              "Exit the REPL"),
     ];
@@ -112,6 +116,7 @@ async fn dispatch(input: &str, ctx: OutputContext) -> Result<()> {
         "plan" => dispatch_plan(rest, ctx).await,
         "system" => dispatch_system(rest, ctx).await,
         "analytics" => dispatch_analytics(rest, ctx).await,
+        "plugin" => dispatch_plugin(rest, ctx).await,
         other => {
             ctx.error(&format!("Unknown command: '{other}'. Type 'help' for available commands."));
             Ok(())
@@ -287,4 +292,49 @@ async fn dispatch_analytics(args: &[&str], ctx: OutputContext) -> Result<()> {
         }
     };
     commands::analytics::run(cmd, ctx).await
+}
+
+async fn dispatch_plugin(args: &[&str], ctx: OutputContext) -> Result<()> {
+    use crate::commands::plugin::{PluginCmd, PluginListArgs, PluginNameArgs, PluginInstallArgs, PluginUninstallArgs, PluginUpdateArgs, PluginRunArgs};
+    let cmd = match args.first().copied() {
+        Some("list") => PluginCmd::List(PluginListArgs { tag: None, installed: false }),
+        Some("install") => {
+            let name = args.get(1).map(|s| s.to_string()).unwrap_or_default();
+            if name.is_empty() {
+                ctx.error("Usage: plugin install <name>");
+                return Ok(());
+            }
+            PluginCmd::Install(PluginInstallArgs { name, file: None })
+        }
+        Some("uninstall") => {
+            let name = args.get(1).map(|s| s.to_string()).unwrap_or_default();
+            PluginCmd::Uninstall(PluginUninstallArgs { name, force: false })
+        }
+        Some("update") => {
+            let name = args.get(1).map(|s| s.to_string()).unwrap_or_else(|| "all".to_string());
+            PluginCmd::Update(PluginUpdateArgs { name })
+        }
+        Some("verify") => {
+            let name = args.get(1).map(|s| s.to_string()).unwrap_or_default();
+            PluginCmd::Verify(PluginNameArgs { name })
+        }
+        Some("info") => {
+            let name = args.get(1).map(|s| s.to_string()).unwrap_or_default();
+            PluginCmd::Info(PluginNameArgs { name })
+        }
+        Some("run") => {
+            let name = args.get(1).map(|s| s.to_string()).unwrap_or_default();
+            let extra = args.get(2..).unwrap_or_default().iter().map(|s| s.to_string()).collect();
+            PluginCmd::Run(PluginRunArgs { name, args: extra })
+        }
+        Some(other) => {
+            ctx.error(&format!("Unknown plugin subcommand: '{other}'"));
+            return Ok(());
+        }
+        None => {
+            ctx.error("Usage: plugin <list|install|uninstall|update|verify|info|run>");
+            return Ok(());
+        }
+    };
+    commands::plugin::run_plugin_cmd(cmd, ctx).await
 }

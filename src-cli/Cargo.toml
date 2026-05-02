@@ -53,3 +53,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Backup / restore
 zip = "2"
+
+# Base64 (for setup token generation)
+base64 = "0.22"

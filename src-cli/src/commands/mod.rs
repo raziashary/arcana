@@ -3,6 +3,7 @@ pub mod analytics;
 pub mod config;
 pub mod logs;
 pub mod plan;
+pub mod plugin;
 pub mod system;
 pub mod task;
 pub mod worker;
