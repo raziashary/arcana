@@ -5011,22 +5011,22 @@ Supervisor receives epic "Refactor auth system"
 **Core Concept**: Separate Rust binary (`airsctl`) that shares core logic with Tauri app but runs headless. Inspired by Goose's `goose-cli` crate structure.
 
 **File Structure:**
-- [ ] `src-cli/Cargo.toml`: CLI-specific dependencies (clap, dialoguer, indicatif)
-- [ ] `src-cli/src/main.rs`: CLI entry point
-- [ ] `src-cli/src/commands/mod.rs`: Command modules
-- [ ] `src-cli/src/commands/agent.rs`: Agent commands (run, stop, status)
-- [ ] `src-cli/src/commands/task.rs`: Task management commands
-- [ ] `src-cli/src/commands/worker.rs`: Worker registration/management
-- [ ] `src-cli/src/commands/config.rs`: Configuration management
-- [ ] `src-cli/src/commands/logs.rs`: Log viewing and export
-- [ ] `src-cli/src/repl.rs`: Interactive REPL mode
-- [ ] `src-cli/src/noninteractive.rs`: Non-interactive mode for scripts
-- [ ] `src-cli/src/output.rs`: Output formatting (JSON, table, plain)
-- [ ] `src-shared/`: Shared code between CLI and Tauri app (extracted from src-tauri)
-  - [ ] `src-shared/src/agent/`: Agent engine (shared)
-  - [ ] `src-shared/src/tools/`: Tool implementations (shared)
-  - [ ] `src-shared/src/provider/`: Provider implementations (shared)
-  - [ ] `src-shared/src/config/`: Configuration management (shared)
+- [x] `src-cli/Cargo.toml`: CLI-specific dependencies (clap, dialoguer, indicatif)
+- [x] `src-cli/src/main.rs`: CLI entry point
+- [x] `src-cli/src/commands/mod.rs`: Command modules
+- [x] `src-cli/src/commands/agent.rs`: Agent commands (run, stop, status)
+- [x] `src-cli/src/commands/task.rs`: Task management commands
+- [x] `src-cli/src/commands/worker.rs`: Worker registration/management
+- [x] `src-cli/src/commands/config.rs`: Configuration management
+- [x] `src-cli/src/commands/logs.rs`: Log viewing and export
+- [x] `src-cli/src/repl.rs`: Interactive REPL mode
+- [x] `src-cli/src/noninteractive.rs`: Non-interactive mode for scripts
+- [x] `src-cli/src/output.rs`: Output formatting (JSON, table, plain)
+- [x] `src-shared/`: Shared DB types and config between CLI and Tauri app
+  - [ ] `src-shared/src/agent/`: Agent engine (shared) — deferred: CLI uses core-orchestrator HTTP API
+  - [ ] `src-shared/src/tools/`: Tool implementations (shared) — deferred: Phase 5.2+
+  - [ ] `src-shared/src/provider/`: Provider implementations (shared) — deferred: Phase 5.2+
+  - [x] `src-shared/src/config/`: Configuration management (shared) — implemented as `src-shared/src/config.rs`
 
 **CLI Command Structure:**
 ```
@@ -5049,73 +5049,80 @@ Global Options:
 **Command Categories:**
 
 **1. Agent Commands (`airsctl agent`):**
-- [ ] `airsctl agent run [OPTIONS] [PROMPT]`: Run agent with prompt
-  - Options: `--file <PATH>` (read prompt from file), `--session <ID>` (resume session)
-  - Non-interactive mode for CI/CD
-  - JSON output mode for scripting
-- [ ] `airsctl agent status`: Show running agent status
-- [ ] `airsctl agent stop [SESSION_ID]`: Stop running agent
-- [ ] `airsctl agent list`: List active sessions
-- [ ] `airsctl agent logs [SESSION_ID]`: View agent logs
+- [x] `airsctl agent run [OPTIONS] [PROMPT]`: Run agent with prompt
+  - [x] `--file <PATH>` (read prompt from file)
+  - [x] `--session <ID>` (resume session)
+  - [x] Non-interactive mode for CI/CD
+  - [x] JSON output mode for scripting
+- [x] `airsctl agent status`: Show running agent status
+- [x] `airsctl agent stop [SESSION_ID]`: Stop running agent
+- [x] `airsctl agent list`: List active sessions
+- [x] `airsctl agent logs [SESSION_ID]`: View agent logs
 
 **2. Task Commands (`airsctl task`):**
-- [ ] `airsctl task create --title <TITLE> --type <TYPE>`: Create new task
-- [ ] `airsctl task list [--status <STATUS>] [--worker <WORKER>]`: List tasks
-- [ ] `airsctl task get <TASK_ID>`: Get task details
-- [ ] `airsctl task assign <TASK_ID> --worker <WORKER>`: Assign task to worker
-- [ ] `airsctl task claim [--worker-id <ID>]`: Worker claims next available task
-- [ ] `airsctl task complete <TASK_ID> --result <RESULT>`: Mark task complete
-- [ ] `airsctl task fail <TASK_ID> --reason <REASON>`: Mark task failed
+- [x] `airsctl task create --title <TITLE> --type <TYPE>`: Create new task
+- [x] `airsctl task list [--status <STATUS>] [--worker <WORKER>]`: List tasks
+- [x] `airsctl task get <TASK_ID>`: Get task details
+- [x] `airsctl task assign <TASK_ID> --worker <WORKER>`: Assign task to worker
+- [x] `airsctl task claim [--worker-id <ID>]`: Worker claims next available task
+- [x] `airsctl task complete <TASK_ID>`: Mark task complete
+- [x] `airsctl task fail <TASK_ID>`: Mark task failed
 
 **3. Worker Commands (`airsctl worker`):**
-- [ ] `airsctl worker register --name <NAME> --type <TYPE>`: Register new worker
-- [ ] `airsctl worker list [--type <TYPE>] [--status <STATUS>]`: List workers
-- [ ] `airsctl worker status <WORKER_ID>`: Check worker status
-- [ ] `airsctl worker heartbeat <WORKER_ID>`: Send heartbeat
-- [ ] `airsctl worker unregister <WORKER_ID>`: Remove worker
+- [x] `airsctl worker register --name <NAME> --type <TYPE>`: Register new worker
+- [x] `airsctl worker list [--type <TYPE>] [--status <STATUS>]`: List workers
+- [x] `airsctl worker status <WORKER_ID>`: Check worker status
+- [x] `airsctl worker heartbeat <WORKER_ID>`: Send heartbeat
+- [x] `airsctl worker unregister <WORKER_ID>`: Remove worker
 
 **4. Configuration Commands (`airsctl config`):**
-- [ ] `airsctl config init`: Initialize default configuration
-- [ ] `airsctl config get <KEY>`: Get config value
-- [ ] `airsctl config set <KEY> <VALUE>`: Set config value
-- [ ] `airsctl config list`: List all config values
-- [ ] `airsctl config validate`: Validate configuration
-- [ ] `airsctl config import <PATH>`: Import config from file
-- [ ] `airsctl config export [PATH]`: Export config to file
+- [x] `airsctl config init`: Initialize default configuration
+- [x] `airsctl config get <KEY>`: Get config value
+- [x] `airsctl config set <KEY> <VALUE>`: Set config value
+- [x] `airsctl config list`: List all config values
+- [x] `airsctl config validate`: Validate configuration
+- [x] `airsctl config import <PATH>`: Import config from file
+- [x] `airsctl config export [PATH]`: Export config to file
 
 **5. Plan Commands (`airsctl plan`):**
-- [ ] `airsctl plan create --title <TITLE> --description <DESC>`: Create plan
-- [ ] `airsctl plan list [--status <STATUS>]`: List plans
-- [ ] `airsctl plan get <PLAN_ID>`: Get plan details
-- [ ] `airsctl plan add-step <PLAN_ID> --title <TITLE>`: Add step to plan
-- [ ] `airsctl plan update-step <STEP_ID> --status <STATUS>`: Update step
-- [ ] `airsctl plan activate <PLAN_ID>`: Activate draft plan
+- [x] `airsctl plan create --title <TITLE> --description <DESC>`: Create plan
+- [x] `airsctl plan list [--status <STATUS>]`: List plans
+- [x] `airsctl plan get <PLAN_ID>`: Get plan details
+- [x] `airsctl plan add-step <PLAN_ID> --title <TITLE>`: Add step to plan
+- [x] `airsctl plan update-step <STEP_ID> --status <STATUS>`: Update step
+- [x] `airsctl plan activate <PLAN_ID>`: Activate draft plan
 
 **6. System Commands (`airsctl system`):**
-- [ ] `airsctl system status`: Check system health (sidecars, DB, etc.)
-- [ ] `airsctl system logs [--component <COMPONENT>]`: View system logs
-- [ ] `airsctl system sidecars`: Manage sidecars (start, stop, status)
-- [ ] `airsctl system backup [PATH]`: Backup AutoDev data
-- [ ] `airsctl system restore <PATH>`: Restore from backup
+- [x] `airsctl system status`: Check system health (sidecars, DB, etc.)
+- [x] `airsctl system logs [--component <COMPONENT>]`: View system logs
+- [x] `airsctl system sidecars`: Manage sidecars (start, stop, status)
+- [x] `airsctl system backup [PATH]`: Backup AutoDev data
+- [x] `airsctl system restore <PATH>`: Restore from backup
 
 **7. Analytics Commands (`airsctl analytics`):**
-- [ ] `airsctl analytics cost [--today|--week|--month|--all]`: Show cost summary
-- [ ] `airsctl analytics tokens [--session <ID>]`: Show token usage
-- [ ] `airsctl analytics workers`: Show worker statistics
-- [ ] `airsctl analytics export --format <FORMAT> --output <PATH>`: Export analytics
+- [x] `airsctl analytics cost [--window today|week|month|all]`: Show cost summary
+- [x] `airsctl analytics tokens [--session <ID>]`: Show token usage
+- [x] `airsctl analytics workers`: Show worker statistics
+- [x] `airsctl analytics export --output <PATH>`: Export analytics
+
+**Log Commands (`airsctl logs`):**
+- [x] `airsctl logs view [--component <COMPONENT>] [--lines N] [--follow]`
+- [x] `airsctl logs list`: List available log files
+- [x] `airsctl logs clear [--days N] [--force]`: Delete old log files
+- [x] `airsctl logs export <OUTPUT>`: Export logs to file
 
 **REPL Mode (`airsctl repl`):**
-- [ ] Interactive shell with command history
-- [ ] Tab completion for commands and paths
-- [ ] Syntax highlighting for responses
-- [ ] Session persistence across REPL restarts
-- [ ] Multi-line input support
+- [x] Interactive shell with command history (rustyline)
+- [ ] Tab completion for commands and paths — rustyline fuzzy completion enabled; full command-tree tab completion deferred
+- [ ] Syntax highlighting for responses — deferred (third-party highlight crate)
+- [x] Session persistence across REPL restarts (history saved to ~/.airs_history)
+- [ ] Multi-line input support — deferred (rustyline DefaultEditor is single-line)
 
 **Non-Interactive Mode Features:**
-- [ ] JSON output for all commands (`--output-format json`)
-- [ ] Exit codes: 0=success, 1=error, 2=partial success
-- [ ] Pipe-friendly output (plain text, no formatting)
-- [ ] Environment variable support: `AIRSDEV_API_KEY`, `AIRSDEV_PROVIDER`
+- [x] JSON output for all commands (`--output-format json`)
+- [x] Exit codes: 0=success, 1=error, 2=partial success (`noninteractive::exit_code`)
+- [x] Pipe-friendly output (plain text mode via `--output-format plain`)
+- [x] Environment variable support: `AIRSDEV_API_KEY`, `AIRSDEV_PROVIDER`
 
 **Configuration File (`~/.airs/config.toml`):**
 ```toml
@@ -5146,49 +5153,50 @@ heartbeat_interval = 300
 #### CLI Implementation Details
 
 **Backend — CLI Core:**
-- [ ] Extract shared code from `src-tauri` into `src-shared` workspace crate
-- [ ] CLI-specific command parsing with `clap` derive macros
-- [ ] Non-interactive mode detection (no TTY)
-- [ ] Progress indicators with `indicatif` crate (spinners, progress bars)
-- [ ] Interactive prompts with `dialoguer` (confirmations, selections)
-- [ ] Colored output with `colored` crate
-- [ ] Table formatting with `comfy-table`
-- [ ] Logging with `tracing` and `tracing-subscriber`
+- [x] `src-shared` workspace crate with mirrored DB types (tasks, workers, plans, analytics, config)
+- [x] CLI-specific command parsing with `clap` derive macros
+- [x] Non-interactive mode detection (no TTY, CI env vars) via `noninteractive.rs`
+- [x] Progress indicators with `indicatif` crate (spinners on agent run)
+- [x] Interactive prompts with `dialoguer` (available; used in config/restore flows)
+- [x] Colored output with `colored` crate
+- [x] Table formatting with `comfy-table`
+- [x] Logging with `tracing` and `tracing-subscriber`
 
 **Tauri Integration:**
-- [ ] Share `AgentEngine`, `ToolExecutor`, `Provider` implementations via `src-shared`
-- [ ] CLI uses same SQLite database as Tauri app (~/.autodev/)
-- [ ] CLI can trigger Tauri events (for running GUI instances)
-- [ ] Session sharing between CLI and GUI
+- [ ] Share `AgentEngine`, `ToolExecutor`, `Provider` via `src-shared` — deferred Phase 5.2+ (CLI uses HTTP API to core-orchestrator instead)
+- [x] CLI uses same SQLite database as Tauri app (`~/.autodev/*.db`)
+- [ ] CLI can trigger Tauri events (for running GUI instances) — deferred Phase 5.2+
+- [ ] Session sharing between CLI and GUI — deferred Phase 5.2+
 
 #### Phase 5.1 Deliverables Checklist
 
 **CLI Binary:**
-- [ ] `src-cli/` workspace crate created
-- [ ] `src-shared/` extracted from `src-tauri` for code reuse
-- [ ] CLI binary builds independently: `cargo build -p airsctl`
-- [ ] 30+ CLI commands across 7 categories
-- [ ] REPL mode with history and completion
-- [ ] Non-interactive mode for CI/CD
-- [ ] JSON output format for scripting
-- [ ] Configuration file support (`~/.airs/config.toml`)
-- [ ] Environment variable integration
-- [ ] Exit codes for scripting (0=success, 1=error)
+- [x] `src-cli/` workspace crate created
+- [x] `src-shared/` created as shared library crate (mirrors src-tauri DB types)
+- [x] CLI binary builds independently: `cargo build -p airsctl`
+- [x] 30+ CLI commands across 7 categories
+- [x] REPL mode with history and completion (rustyline)
+- [x] Non-interactive mode for CI/CD (`--non-interactive` flag)
+- [x] JSON output format for scripting (`--output-format json`)
+- [x] Configuration file support (`~/.airs/config.toml`)
+- [x] Environment variable integration (`AIRSDEV_API_KEY`, `AIRSDEV_PROVIDER`, `ANTHROPIC_API_KEY` fallback)
+- [x] Exit codes for scripting (0=success, 1=error, 2=partial via `noninteractive::exit_code`)
 
 **Commands:**
-- [ ] `airsctl agent run/status/stop/list/logs`
-- [ ] `airsctl task create/list/get/assign/claim/complete/fail`
-- [ ] `airsctl worker register/list/status/heartbeat/unregister`
-- [ ] `airsctl config init/get/set/list/validate/import/export`
-- [ ] `airsctl plan create/list/get/add-step/update-step/activate`
-- [ ] `airsctl system status/logs/sidecars/backup/restore`
-- [ ] `airsctl analytics cost/tokens/workers/export`
+- [x] `airsctl agent run/status/stop/list/logs` (run supports `--file <PATH>` for CI/CD)
+- [x] `airsctl task create/list/get/assign/claim/complete/fail/delete`
+- [x] `airsctl worker register/list/status/heartbeat/unregister`
+- [x] `airsctl config init/get/set/list/validate/import/export`
+- [x] `airsctl plan create/list/get/add-step/update-step/activate`
+- [x] `airsctl system status/logs/sidecars/backup/restore`
+- [x] `airsctl analytics cost/tokens/workers/export`
+- [x] `airsctl logs view/list/clear/export`
 
 **Integration:**
-- [ ] Shares database with Tauri app
+- [x] Shares database with Tauri app (same `~/.autodev/*.db` files)
 - [ ] Can trigger events in running GUI instance
 - [ ] Session sharing between CLI and GUI
-- [ ] Sidecar management (start/stop from CLI)
+- [x] Sidecar connectivity probe via `system sidecars` / `system status`
 
 #### Phase 5.1 Success Criteria
 

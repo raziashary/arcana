@@ -1,0 +1,55 @@
+[package]
+name = "airsctl"
+version = "1.0.0"
+edition = "2021"
+description = "airsctl — AutoDev headless CLI for automation, scripting, and CI/CD"
+authors = ["AIRS Foundry"]
+
+[[bin]]
+name = "airsctl"
+path = "src/main.rs"
+
+[dependencies]
+autodev-shared = { path = "../src-shared" }
+
+# CLI framework
+clap = { version = "4", features = ["derive", "env", "string"] }
+
+# Interactive prompts
+dialoguer = "0.11"
+
+# Progress bars / spinners
+indicatif = "0.17"
+
+# Colored terminal output
+colored = "2"
+
+# Table formatting
+comfy-table = "7"
+
+# REPL / line editing with history
+rustyline = { version = "14", features = ["with-fuzzy"] }
+
+# Serialization
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+toml        = "0.8"
+
+# Async
+tokio  = { version = "1", features = ["full"] }
+futures = "0.3"
+
+# HTTP (for agent run — calls core-orchestrator)
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# Utilities
+chrono   = { version = "0.4", features = ["serde"] }
+uuid     = { version = "1", features = ["v4"] }
+anyhow   = "1"
+
+# Logging
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Backup / restore
+zip = "2"

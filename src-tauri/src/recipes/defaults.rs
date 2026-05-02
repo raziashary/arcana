@@ -244,23 +244,30 @@ fn worker_frontend_recipe() -> Recipe {
 
 ## Build Validation (MANDATORY — execute BEFORE marking qc_review)
 1. Detect the manifest in the working directory IN THIS ORDER:
-   - `package.json`       → Node ecosystem
+   - `package.json`       → Node ecosystem (React/CRA/Vite)
    - `pyproject.toml`     → Python ecosystem (check for `uv.lock`, `poetry.lock`, or bare)
    - `requirements.txt`   → Python (pip) ecosystem
    - `Cargo.toml`         → Rust ecosystem
    - `go.mod`             → Go ecosystem
-2. Run the ecosystem-specific INSTALL command if the sentinel is missing:
+2. Run the ecosystem-specific INSTALL command if `node_modules/` is missing:
    - Node:      `npm install` (or `pnpm install` / `yarn` if lockfile indicates)
    - Python:    `pip install -r requirements.txt` OR `poetry install` OR `uv sync`
    - Rust:      `cargo build`
    - Go:        `go mod tidy`
-3. Run the ecosystem-specific VALIDATE command:
-   - Node:      `npm run build` or `npx tsc --noEmit`
+3. Run the ecosystem-specific BUILD command:
+   - Node (React CRA/Vite): `npm run build`
+     ⚠️ CRITICAL: You MUST run `npm run build`, NOT `npx tsc --noEmit`.
+     `npx tsc --noEmit` only type-checks — it does NOT produce the compiled
+     output that the browser loads. A black screen results if you skip the build.
    - Python:    `python -m pytest` or `poetry run pytest` or `uv run pytest`
    - Rust:      `cargo test`
    - Go:        `go test ./...`
 4. If step 3 exits non-zero: capture stderr to `build.log`, mark `build_failed`.
-5. Only if step 3 exits zero: mark `qc_review`.
+5. If step 3 exits zero (Node only): verify the build output was produced:
+   - Check for `build/index.html` (CRA) OR `dist/index.html` (Vite).
+   - If neither exists: write "npm run build exited 0 but no output directory found"
+     to `build.log` and mark `build_failed`.
+6. Only if step 3 exits zero AND build output is verified: mark `qc_review`.
 
 ## Stop Contract (MANDATORY)
 Once you have either (a) marked a task `qc_review`/`failed`/`build_failed`, or (b) confirmed no runnable tasks, you MUST stop emitting tool_use blocks. The agent loop ends only when you reply with text-only and no tool call. Any further tool call after the task is handed off wastes turns and is considered a failure of this agent.
@@ -278,7 +285,7 @@ qc_review/build_failed.
 - Only modify frontend code (React, TypeScript, Tailwind CSS in src/)
 - Never modify Rust backend or Python sidecar code
 - Follow existing component patterns — monospace/dark aesthetic
-- Always run tsc before marking qc_review
+- Always run `npm run build` (not tsc) before marking qc_review
 
 ## Subagent Protocol (Use sparingly — each subagent costs tokens + time)
 You MAY use spawn_subagent or spawn_parallel_subagents ONLY when a task has ONE of these properties:
@@ -544,10 +551,16 @@ If list_tasks returns tasks:
   a. Read the acceptance criteria carefully
   b. Use grep/glob/read_file to inspect the implementation
   c. Verify: does the implementation satisfy ALL acceptance criteria?
-  d. Run tests if applicable: bash 'cargo check' / 'cargo test' / 'pytest' / 'npx tsc --noEmit'
+  d. Run checks appropriate for the task's domain:
+     - Rust:        bash 'cargo check' or 'cargo test'
+     - Python:      bash 'pytest' or 'uv run pytest'
+     - Frontend:    bash 'npm run build' (MANDATORY — do NOT use npx tsc --noEmit)
+       After `npm run build` exits 0, also verify the output directory exists:
+       glob 'build/index.html' (CRA) or 'dist/index.html' (Vite).
+       If the output directory is missing, treat as a build failure → reject.
   e. If ALL criteria met AND checks pass:
      → update_task_status(id, 'done', assigned_worker)
-  f. If any criterion not met OR tests fail:
+  f. If any criterion not met OR tests/build fail:
      → update_task_status(id, 'assigned', assigned_worker) with rejection notes in the task
        (status 'assigned' lets the worker pick it up again for fixes)
 If list_tasks returns NO tasks:

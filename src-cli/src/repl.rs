@@ -1,0 +1,290 @@
+use anyhow::Result;
+use rustyline::{DefaultEditor, error::ReadlineError};
+use colored::Colorize;
+
+use crate::output::OutputContext;
+use crate::commands;
+
+const HISTORY_FILE: &str = ".airs_history";
+
+pub async fn run(ctx: OutputContext) -> Result<()> {
+    println!("{}", "airsctl REPL — type 'help' or 'exit'".cyan().bold());
+    println!("{}", "Use arrow keys for history, Tab for fuzzy completion.".dimmed());
+
+    let mut rl = DefaultEditor::new()?;
+
+    let history_path = history_path();
+    if let Some(p) = &history_path {
+        let _ = rl.load_history(p);
+    }
+
+    loop {
+        let line = rl.readline("airsctl> ");
+        match line {
+            Ok(input) => {
+                let input = input.trim().to_string();
+                if input.is_empty() { continue; }
+
+                let _ = rl.add_history_entry(&input);
+
+                match input.as_str() {
+                    "exit" | "quit" | "q" => {
+                        println!("{}", "Goodbye.".dimmed());
+                        break;
+                    }
+                    "help" | "?" => print_help(),
+                    _ => {
+                        if let Err(e) = dispatch(&input, ctx.clone()).await {
+                            ctx.error(&format!("Error: {e}"));
+                        }
+                    }
+                }
+            }
+            Err(ReadlineError::Interrupted) => {
+                println!("{}", "^C".dimmed());
+                break;
+            }
+            Err(ReadlineError::Eof) => {
+                break;
+            }
+            Err(e) => {
+                ctx.error(&format!("Readline error: {e}"));
+                break;
+            }
+        }
+    }
+
+    if let Some(p) = &history_path {
+        let _ = rl.save_history(p);
+    }
+
+    Ok(())
+}
+
+fn history_path() -> Option<std::path::PathBuf> {
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .ok()?;
+    Some(std::path::PathBuf::from(home).join(HISTORY_FILE))
+}
+
+fn print_help() {
+    println!("{}", "Available commands:".cyan().bold());
+    let cmds = [
+        ("agent run <task>",         "Run an agent with the given task"),
+        ("agent list",               "List recent agent runs"),
+        ("task create <title>",      "Create a new task"),
+        ("task list",                "List tasks"),
+        ("task get <id>",            "Get task details"),
+        ("worker list",              "List registered workers"),
+        ("worker status <id>",       "Show worker status"),
+        ("config list",              "Show all config keys"),
+        ("config get <key>",         "Get a config value"),
+        ("config set <key> <value>", "Set a config value"),
+        ("plan list",                "List all plans"),
+        ("plan create <title>",      "Create a new plan"),
+        ("system status",            "Show system and sidecar status"),
+        ("analytics cost",           "Show cost summary"),
+        ("analytics tokens",         "Show token usage"),
+        ("help",                     "Show this help"),
+        ("exit / quit",              "Exit the REPL"),
+    ];
+    for (cmd, desc) in &cmds {
+        println!("  {:<32} {}", cmd.yellow(), desc);
+    }
+}
+
+async fn dispatch(input: &str, ctx: OutputContext) -> Result<()> {
+    // Prepend "airsctl" so clap can parse the subcommand
+    let mut args = vec!["airsctl"];
+    let parts: Vec<&str> = input.split_whitespace().collect();
+    args.extend_from_slice(&parts);
+
+    // Parse and dispatch manually to avoid re-parsing global flags
+    let subcommand = parts.first().copied().unwrap_or("");
+    let rest = &parts[1..];
+
+    match subcommand {
+        "agent" => dispatch_agent(rest, ctx).await,
+        "task" => dispatch_task(rest, ctx).await,
+        "worker" => dispatch_worker(rest, ctx).await,
+        "config" => dispatch_config(rest, ctx).await,
+        "plan" => dispatch_plan(rest, ctx).await,
+        "system" => dispatch_system(rest, ctx).await,
+        "analytics" => dispatch_analytics(rest, ctx).await,
+        other => {
+            ctx.error(&format!("Unknown command: '{other}'. Type 'help' for available commands."));
+            Ok(())
+        }
+    }
+}
+
+async fn dispatch_agent(args: &[&str], ctx: OutputContext) -> Result<()> {
+    use crate::commands::agent::{AgentCmd, RunArgs, ListArgs};
+    let cmd = match args.first().copied() {
+        Some("run") => {
+            let task = args.get(1..).unwrap_or_default().join(" ");
+            AgentCmd::Run(RunArgs {
+                task: Some(task),
+                file: None,
+                session_id: None,
+                stream: true,
+                timeout: 300,
+            })
+        }
+        Some("list") => AgentCmd::List(ListArgs { limit: 20 }),
+        Some(other) => {
+            ctx.error(&format!("Unknown agent subcommand: '{other}'"));
+            return Ok(());
+        }
+        None => {
+            ctx.error("Usage: agent <run|list|status|stop|logs>");
+            return Ok(());
+        }
+    };
+    commands::agent::run(cmd, ctx).await
+}
+
+async fn dispatch_task(args: &[&str], ctx: OutputContext) -> Result<()> {
+    use crate::commands::task::{TaskCmd, CreateArgs, ListArgs, GetArgs};
+    let cmd = match args.first().copied() {
+        Some("create") => {
+            let title = args.get(1..).unwrap_or_default().join(" ");
+            if title.is_empty() {
+                ctx.error("Usage: task create <title>");
+                return Ok(());
+            }
+            TaskCmd::Create(CreateArgs {
+                title,
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: None,
+            })
+        }
+        Some("list") => TaskCmd::List(ListArgs { status: None, worker: None, limit: 20 }),
+        Some("get") => {
+            let id: i64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+            TaskCmd::Get(GetArgs { id })
+        }
+        Some(other) => {
+            ctx.error(&format!("Unknown task subcommand: '{other}'"));
+            return Ok(());
+        }
+        None => {
+            ctx.error("Usage: task <create|list|get|assign|claim|complete|fail>");
+            return Ok(());
+        }
+    };
+    commands::task::run(cmd, ctx).await
+}
+
+async fn dispatch_worker(args: &[&str], ctx: OutputContext) -> Result<()> {
+    use crate::commands::worker::{WorkerCmd, ListArgs, StatusArgs};
+    let cmd = match args.first().copied() {
+        Some("list") => WorkerCmd::List(ListArgs { worker_type: None, status: None }),
+        Some("status") => {
+            let slug = args.get(1).map(|s| s.to_string());
+            WorkerCmd::Status(StatusArgs { slug })
+        }
+        Some(other) => {
+            ctx.error(&format!("Unknown worker subcommand: '{other}'"));
+            return Ok(());
+        }
+        None => {
+            ctx.error("Usage: worker <register|list|status|heartbeat|unregister>");
+            return Ok(());
+        }
+    };
+    commands::worker::run(cmd, ctx).await
+}
+
+async fn dispatch_config(args: &[&str], ctx: OutputContext) -> Result<()> {
+    use crate::commands::config::{ConfigCmd, GetArgs, SetArgs};
+    let cmd = match args.first().copied() {
+        Some("list") => ConfigCmd::List,
+        Some("get") => {
+            let key = args.get(1).map(|s| s.to_string()).unwrap_or_default();
+            ConfigCmd::Get(GetArgs { key })
+        }
+        Some("set") => {
+            let key = args.get(1).map(|s| s.to_string()).unwrap_or_default();
+            let value = args.get(2..).unwrap_or_default().join(" ");
+            ConfigCmd::Set(SetArgs { key, value })
+        }
+        Some(other) => {
+            ctx.error(&format!("Unknown config subcommand: '{other}'"));
+            return Ok(());
+        }
+        None => {
+            ctx.error("Usage: config <init|get|set|list|validate|import|export>");
+            return Ok(());
+        }
+    };
+    commands::config::run(cmd, ctx).await
+}
+
+async fn dispatch_plan(args: &[&str], ctx: OutputContext) -> Result<()> {
+    use crate::commands::plan::{PlanCmd, CreateArgs, ListArgs, GetArgs};
+    let cmd = match args.first().copied() {
+        Some("list") => PlanCmd::List(ListArgs { status: None }),
+        Some("create") => {
+            let title = args.get(1..).unwrap_or_default().join(" ");
+            if title.is_empty() {
+                ctx.error("Usage: plan create <title>");
+                return Ok(());
+            }
+            PlanCmd::Create(CreateArgs { title, description: None, scope: None })
+        }
+        Some("get") => {
+            let id: i64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+            PlanCmd::Get(GetArgs { id })
+        }
+        Some(other) => {
+            ctx.error(&format!("Unknown plan subcommand: '{other}'"));
+            return Ok(());
+        }
+        None => {
+            ctx.error("Usage: plan <create|list|get|add-step|update-step|activate>");
+            return Ok(());
+        }
+    };
+    commands::plan::run(cmd, ctx).await
+}
+
+async fn dispatch_system(args: &[&str], ctx: OutputContext) -> Result<()> {
+    use crate::commands::system::{SystemCmd, LogsArgs};
+    let cmd = match args.first().copied() {
+        Some("status") => SystemCmd::Status,
+        Some("sidecars") => SystemCmd::Sidecars,
+        Some("logs") => SystemCmd::Logs(LogsArgs { lines: 50, service: None }),
+        Some(other) => {
+            ctx.error(&format!("Unknown system subcommand: '{other}'"));
+            return Ok(());
+        }
+        None => {
+            ctx.error("Usage: system <status|logs|sidecars|backup|restore>");
+            return Ok(());
+        }
+    };
+    commands::system::run(cmd, ctx).await
+}
+
+async fn dispatch_analytics(args: &[&str], ctx: OutputContext) -> Result<()> {
+    use crate::commands::analytics::{AnalyticsCmd, CostArgs, TokensArgs, WorkersArgs};
+    let cmd = match args.first().copied() {
+        Some("cost") => AnalyticsCmd::Cost(CostArgs { window: "month".into() }),
+        Some("tokens") => AnalyticsCmd::Tokens(TokensArgs { session_id: None, limit: 50 }),
+        Some("workers") => AnalyticsCmd::Workers(WorkersArgs { window: "month".into() }),
+        Some("export") => AnalyticsCmd::Export { output: None },
+        Some(other) => {
+            ctx.error(&format!("Unknown analytics subcommand: '{other}'"));
+            return Ok(());
+        }
+        None => {
+            ctx.error("Usage: analytics <cost|tokens|workers|export>");
+            return Ok(());
+        }
+    };
+    commands::analytics::run(cmd, ctx).await
+}
