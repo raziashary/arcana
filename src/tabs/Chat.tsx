@@ -12,9 +12,10 @@ import { SessionBar }   from '../components/chat/SessionBar'
 import AtFilePicker, { type FileEntry } from '../components/chat/AtFilePicker'
 import { useAgentStore }    from '../stores/agentStore'
 import { useSessionStore }  from '../stores/sessionStore'
-import { useSettingsStore } from '../stores/settingsStore'
+import { useSettingsStore, PA_MODES, type PAMode } from '../stores/settingsStore'
 import { useCostStore }     from '../stores/costStore'
-import PaModeToggle from '../components/chat/PaModeToggle'
+import { useAutodevMdStore } from '../stores/autodevMdStore'
+import { useSidecarStore }   from '../stores/sidecarStore'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 import SkillsPalette from '../components/skills/SkillsPalette'
 import SkillSlashPicker from '../components/skills/SkillSlashPicker'
@@ -66,7 +67,7 @@ function ContextMeter({ modelId, messages }: { modelId: string; messages: { cont
 
   const pct     = Math.min(usedTokens / contextWindow, 1)
   const pctDisp = (pct * 100).toFixed(1)
-  const barColor = pct > 0.9 ? '#FF6363' : pct > 0.75 ? '#FF6363' : pct > 0.5 ? '#FFCB8B' : 'var(--aqua)'
+  const barColor = pct > 0.75 ? 'var(--danger)' : pct > 0.5 ? 'var(--warning)' : 'var(--accent)'
 
   const fmt = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n)
 
@@ -89,6 +90,110 @@ function ContextMeter({ modelId, messages }: { modelId: string; messages: { cont
       </span>
       <span style={{ color: barColor }}>{pctDisp}%</span>
     </span>
+  )
+}
+
+// ─── Chat header — PA mode dropdown + live stats row ────────────────────────
+
+interface ChatHeaderProps { localDir: string; setLocalDir: (d: string) => void }
+
+function ChatHeader({ localDir, setLocalDir }: ChatHeaderProps) {
+  const paMode        = useSettingsStore(s => s.paMode)
+  const setPAMode     = useSettingsStore(s => s.setPAMode)
+  const sidecarStatus = useSidecarStore(s => s.status)
+  const byCategory    = useSkillStore(s => s.byCategory)
+  const globalContent = useAutodevMdStore(s => s.globalContent)
+  const loadGlobal    = useAutodevMdStore(s => s.loadGlobal)
+
+  const [dropdownOpen, setDropdownOpen] = useState(false)
+  const dropRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => { loadGlobal() }, [])
+
+  useEffect(() => {
+    if (!dropdownOpen) return
+    const handler = (e: MouseEvent) => {
+      if (dropRef.current && !dropRef.current.contains(e.target as Node)) setDropdownOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [dropdownOpen])
+
+  const currentMode = PA_MODES.find(m => m.value === paMode) ?? PA_MODES[0]
+  const allSkills   = Object.values(byCategory).flat()
+  const orcCount    = sidecarStatus === 'running' ? 2 : sidecarStatus === 'starting' ? 1 : 0
+  const autodevOk   = globalContent.trim().length > 0
+
+  return (
+    <div
+      className="flex items-center justify-between px-3 shrink-0"
+      style={{ height: '40px', background: 'var(--bg-card)', borderBottom: '1px solid var(--border-1)' }}
+    >
+      {/* Left: PA label + mode dropdown */}
+      <div className="flex items-center gap-2">
+        <span className="font-mono" style={{ fontSize: '10px', color: 'var(--text-4)', letterSpacing: '0.08em' }}>PA</span>
+
+        <div ref={dropRef} style={{ position: 'relative' }}>
+          <button
+            onClick={() => setDropdownOpen(o => !o)}
+            className="flex items-center gap-1 font-mono cursor-pointer"
+            style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-2)', borderRadius: '2px', padding: '3px 8px', fontSize: '11px', color: 'var(--text-1)' }}
+          >
+            <span>{currentMode.icon}</span>
+            <span>{currentMode.label}</span>
+            <span style={{ color: 'var(--text-4)', marginLeft: '2px' }}>&#9662;</span>
+          </button>
+
+          {dropdownOpen && (
+            <div
+              style={{ position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 200, background: 'var(--bg-card)', border: '1px solid var(--border-2)', borderRadius: '2px', minWidth: '240px', boxShadow: '0 4px 16px rgba(0,0,0,0.5)' }}
+            >
+              {PA_MODES.map((m, i) => (
+                <button
+                  key={m.value}
+                  onClick={() => { setPAMode(m.value as PAMode); setDropdownOpen(false) }}
+                  className="flex items-start gap-2 w-full font-mono cursor-pointer"
+                  style={{ background: paMode === m.value ? 'var(--accent-muted)' : 'transparent', border: 'none', borderBottom: i < PA_MODES.length - 1 ? '1px solid var(--border-1)' : 'none', padding: '8px 12px', fontSize: '11px', color: paMode === m.value ? 'var(--accent)' : 'var(--text-1)', textAlign: 'left' }}
+                >
+                  <span style={{ fontSize: '14px', lineHeight: 1 }}>{m.icon}</span>
+                  <div>
+                    <div>{m.label}</div>
+                    <div style={{ fontSize: '10px', color: 'var(--text-3)', marginTop: '2px' }}>{m.description}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Right: live stats */}
+      <div className="flex items-center gap-2 font-mono" style={{ fontSize: '10px', color: 'var(--text-3)' }}>
+        {orcCount > 0 && <span style={{ color: 'var(--info)' }}>{orcCount} MCP</span>}
+        {allSkills.length > 0 && (
+          <>
+            <span style={{ color: 'var(--text-4)' }}>&#183;</span>
+            <span>{allSkills.length} skills</span>
+          </>
+        )}
+        <span style={{ color: 'var(--text-4)' }}>&#183;</span>
+        <span style={{ color: autodevOk ? 'var(--accent)' : 'var(--danger)' }}>
+          AUTODEV.md {autodevOk ? '\u2713' : '\u2717'}
+        </span>
+        {localDir && (
+          <>
+            <span style={{ color: 'var(--text-4)' }}>&#183;</span>
+            <input
+              value={localDir}
+              onChange={e => setLocalDir(e.target.value)}
+              className="font-mono"
+              style={{ background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-4)', fontSize: '10px', width: '120px' }}
+              placeholder="cwd…"
+            />
+          </>
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -339,7 +444,7 @@ export default function ChatTab() {
       {sessionStore.sessions.length === 0 ? (
         <div className="flex flex-col flex-1 items-center justify-center" style={{ color: 'var(--text-2)' }}>
           <div className="text-center">
-            <h1 className="font-mono text-4xl mb-4" style={{ color: '#1a73e8', letterSpacing: '0.05em' }}>
+            <h1 className="font-mono text-4xl mb-4" style={{ color: 'var(--accent)', letterSpacing: '0.05em' }}>
               Oh My AIRS
             </h1>
             <p className="text-sm" style={{ color: 'var(--text-3)' }}>
@@ -350,29 +455,8 @@ export default function ChatTab() {
       ) : (
       <div className="flex flex-col flex-1 overflow-hidden relative">
 
-        {/* Session header bar */}
-        <div
-          className="flex items-center gap-3 px-3.5 py-2 font-mono text-xs shrink-0"
-          style={{
-            background:   'var(--bg-surface)',
-            borderBottom: '1px solid var(--border-1)',
-          }}
-        >
-        <span style={{ color: 'var(--text-3)' }}>cwd:</span>
-        <input
-          className="flex-1 bg-transparent border-none outline-none font-mono text-xs"
-          style={{ color: 'var(--text-2)' }}
-          value={localDir}
-          onChange={e => { setLocalDir(e.target.value); setWorkingDir(e.target.value) }}
-          placeholder="Working directory path…"
-        />
-        <span style={{ color: 'var(--text-3)' }}>
-          {sessionStore.activeSession
-            ? `session: ${sessionStore.activeSession.id.slice(0, 8)}…`
-            : 'no session'}
-        </span>
-        <PaModeToggle />
-      </div>
+        {/* Chat header — PA mode dropdown + live stats */}
+        <ChatHeader localDir={localDir} setLocalDir={d => { setLocalDir(d); setWorkingDir(d) }} />
 
       {/* Messages list */}
       <div className="flex-1 overflow-y-auto px-3.5 py-3 flex flex-col gap-2.5">
@@ -451,12 +535,12 @@ export default function ChatTab() {
             value={input}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
-            placeholder="Send a message… (@ to reference a file, Enter to send)"
+            placeholder="Say something… (@ to reference a file, Enter to send)"
             rows={1}
             style={{
               flex:        1,
               background:  'var(--bg-card)',
-              border:      '1px solid #1d1d1d',
+              border:      '1px solid var(--border-1)',
               borderRadius: '2px',
               padding:     '8px 12px',
               color:       'var(--text-1)',
@@ -485,8 +569,8 @@ export default function ChatTab() {
               aria-label="Cancel"
               className="shrink-0 font-mono text-xs px-3 py-2 rounded-sm cursor-pointer"
               style={{
-                background: '#FF636320',
-                border:     '1px solid #FF636340',
+                background: 'var(--danger-muted)',
+                border:     '1px solid rgba(255,68,68,0.25)',
                 color:      'var(--danger)',
               }}
             >
@@ -499,9 +583,9 @@ export default function ChatTab() {
               disabled={!input.trim() || isStarting}
               className="shrink-0 font-mono text-xs px-3 py-2 rounded-sm cursor-pointer disabled:opacity-40"
               style={{
-                background: 'var(--accent-muted)',
-                border:     '1px solid var(--accent-border)',
-                color:      'var(--accent)',
+                background: 'var(--accent)',
+                border:     '1px solid var(--accent)',
+                color:      '#000',
               }}
             >
               <Send size={14} />

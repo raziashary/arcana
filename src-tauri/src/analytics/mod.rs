@@ -22,7 +22,6 @@ pub use exporter::AnalyticsExporter;
 pub use types::*;
 
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use crate::errors::Result;
 
 /// Global analytics manager — singleton for event collection and queries
@@ -89,29 +88,30 @@ impl AnalyticsManager {
     }
 }
 
-// Global analytics manager instance
+// Global analytics manager instance — OnceLock<Arc<>> requires no locking primitives;
+// safe to call from any context including async tasks.
 use std::sync::OnceLock;
 use rusqlite::Connection;
 
-static ANALYTICS_MANAGER: OnceLock<Mutex<Option<Arc<AnalyticsManager>>>> = OnceLock::new();
+static ANALYTICS_MANAGER: OnceLock<Arc<AnalyticsManager>> = OnceLock::new();
 
-/// Install the global analytics manager
+/// Install the global analytics manager (called once at startup, before any async tasks).
 pub fn install_global(manager: Arc<AnalyticsManager>) {
-    let _ = ANALYTICS_MANAGER.get_or_init(|| Mutex::new(Some(manager)));
+    let _ = ANALYTICS_MANAGER.set(manager);
 }
 
-/// Get the global analytics manager (blocking)
+/// Get the global analytics manager — zero-cost read from OnceLock, never blocks.
+/// Falls back to an in-memory no-op instance if called before install_global.
 pub fn global() -> Arc<AnalyticsManager> {
-    let lock = ANALYTICS_MANAGER.get_or_init(|| Mutex::new(None));
-    let guard = lock.blocking_lock();
-    guard
-        .as_ref()
-        .cloned()
-        .unwrap_or_else(|| Arc::new(AnalyticsManager {
-            db: Arc::new(AnalyticsDb { conn: std::sync::Mutex::new(rusqlite::Connection::open_in_memory().unwrap()) }),
-            collector: Arc::new(AnalyticsCollector::new(Arc::new(AnalyticsDb { conn: std::sync::Mutex::new(rusqlite::Connection::open_in_memory().unwrap()) }))),
-            aggregator: Arc::new(AnalyticsAggregator::new(Arc::new(AnalyticsDb { conn: std::sync::Mutex::new(rusqlite::Connection::open_in_memory().unwrap()) }))),
-            queries: Arc::new(AnalyticsQueries::new(Arc::new(AnalyticsDb { conn: std::sync::Mutex::new(rusqlite::Connection::open_in_memory().unwrap()) }))),
-            exporter: Arc::new(AnalyticsExporter::new(Arc::new(AnalyticsDb { conn: std::sync::Mutex::new(rusqlite::Connection::open_in_memory().unwrap()) }))),
-        }))
+    if let Some(m) = ANALYTICS_MANAGER.get() {
+        return m.clone();
+    }
+    // Pre-init fallback: create a no-op in-memory instance so callers don't panic.
+    Arc::new(AnalyticsManager {
+        db:         Arc::new(AnalyticsDb         { conn: std::sync::Mutex::new(Connection::open_in_memory().unwrap()) }),
+        collector:  Arc::new(AnalyticsCollector ::new(Arc::new(AnalyticsDb { conn: std::sync::Mutex::new(Connection::open_in_memory().unwrap()) }))),
+        aggregator: Arc::new(AnalyticsAggregator::new(Arc::new(AnalyticsDb { conn: std::sync::Mutex::new(Connection::open_in_memory().unwrap()) }))),
+        queries:    Arc::new(AnalyticsQueries   ::new(Arc::new(AnalyticsDb { conn: std::sync::Mutex::new(Connection::open_in_memory().unwrap()) }))),
+        exporter:   Arc::new(AnalyticsExporter  ::new(Arc::new(AnalyticsDb { conn: std::sync::Mutex::new(Connection::open_in_memory().unwrap()) }))),
+    })
 }

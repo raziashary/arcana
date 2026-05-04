@@ -84,6 +84,14 @@ sysinfo = "0.33"
 # Task D3: Keep 0.3.4; panic prevention via D1 (sanitized OLLAMA_HOST) + D2 (catch_unwind)
 ollama-rs = { version = "0.3.4", features = ["stream"] }
 
+# Hook custom_condition expression evaluator — Phase 3.1
+rhai = { version = "1", features = ["sync"] }
+
+# Auto-updater — Phase 5.3
+ed25519-dalek = { version = "2", features = ["std"] }
+semver = "1"
+tempfile = "3"
+
 # Graph Engine — Phase 6
 tree-sitter = "0.22"
 petgraph = "0.6"

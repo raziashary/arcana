@@ -4,39 +4,55 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── CSS Custom Properties — Winter is Coming theme ───────────────────────── */
+/* ── CSS Custom Properties — AutoDev Industrial Dark ─────────────────────── */
 :root {
   /* Backgrounds */
-  --bg-app:           #011627;   /* deep naval — window chrome, empty areas */
-  --bg-surface:       #00233B;   /* panel surface — tab panels, sidebar, cards */
-  --bg-card:          #01111D;   /* elevated surface — modals, dropdowns, overlays */
-  --bg-2:             #022C4A;   /* button surfaces, inline inputs, path displays */
-  --bg-input:         #0D2137;   /* form text fields and textareas */
-  --bg-selected:      #0B3A5C;   /* active list item, selected row */
-  --bg-hover:         #022C4A;   /* hovered rows, buttons, nav items */
+  --bg-app:           #0A0A0A;   /* app root — pure black */
+  --bg-surface:       #0D0D0D;   /* titlebar, tabbar, sidebar, panels */
+  --bg-card:          #111111;   /* message bubbles, cards, modal bodies */
+  --bg-code:          #161616;   /* code blocks, diff views, terminal */
+  --bg-darker:        #0A0A0A;   /* deepest nesting, terminal inner */
+  --bg-2:             #161616;   /* button surfaces, inline inputs — compat */
+  --bg-input:         #111111;   /* form text fields — compat */
+  --bg-selected:      #1A1A1A;   /* active list item, selected row */
+  --bg-hover:         #161616;   /* hover state */
 
   /* Borders */
-  --border-1:         #0D3652;   /* default border */
-  --border-2:         #1A527A;   /* emphasis border on hover / focus */
-  --border:           #0D3652;   /* alias — used by WorkerTable, RecipeEditor, WorkerCreateModal */
+  --border-primary:   #1A1A1A;   /* most borders — subtle */
+  --border-secondary: #222222;   /* heavier outlines, active/focus rings */
+  --border-1:         #1A1A1A;   /* compat alias */
+  --border-2:         #222222;   /* compat alias */
+  --border:           #1A1A1A;   /* compat alias */
 
   /* Accent system */
-  --accent:           #82AAFF;   /* primary action — keywords, CTA buttons */
-  --accent-muted:     #82AAFF15; /* accent tint bg */
-  --accent-border:    #82AAFF30; /* accent-tinted border */
-  --accent-dim:       #82AAFF40; /* accent input focus ring */
-  --aqua:             #7FDBCA;   /* live / active indicator — heartbeat dots */
-  --success:          #ADDB67;   /* approved, done, staged */
-  --danger:           #FF6363;   /* error, rejected, destructive */
-  --warning:          #FFCB8B;   /* in-progress, blocked, needs attention */
-  --info:             #C792EA;   /* neutral callout, QC review, decorators */
-  --gold:             #ECC48D;   /* cost / financial numbers */
+  --accent:           #00FF88;   /* active states, CTAs, success */
+  --accent-muted:     #00FF8812; /* user msg bg, hover tints */
+  --accent-border:    #00FF8825; /* user msg border */
+  --accent-dim:       #00FF8840; /* input focus ring */
+  --aqua:             #00FF88;   /* compat — same as accent */
+  --success:          #00FF88;   /* compat */
+  --danger:           #FF4444;   /* errors, denied, destructive */
+  --danger-muted:     rgba(255,68,68,0.08);
+  --warning:          #FFAA00;   /* in-progress, working, blocked */
+  --warning-muted:    rgba(255,170,0,0.08);
+  --info:             #4477FF;   /* tool names, keywords, links */
+  --info-muted:       rgba(68,119,255,0.08);
+  --gold:             #FFAA00;   /* compat — cost numbers */
+  --green-add:        #00FF88;   /* diff additions */
+  --red-del:          #FF4444;   /* diff deletions */
+  --add-bg:           rgba(0,255,136,0.08);
+  --del-bg:           rgba(255,68,68,0.08);
 
   /* Typography */
-  --text-1:           #D6DEEB;   /* primary — body copy, labels */
-  --text-2:           #637777;   /* secondary — metadata, timestamps */
-  --text-3:           #3D5A6E;   /* tertiary — disabled, placeholders */
-  --text-4:           #1A3A50;   /* deepest dim — separators, very faint labels */
+  --text-primary:     #888888;   /* primary text — intentionally muted */
+  --text-secondary:   #555555;   /* secondary text, sidebar items */
+  --text-muted:       #444444;   /* labels, column headers */
+  --text-dim:         #333333;   /* inactive items, timestamps */
+  --text-bright:      #F0F0F0;   /* code, diff, terminal content */
+  --text-1:           #888888;   /* compat alias */
+  --text-2:           #555555;   /* compat alias */
+  --text-3:           #444444;   /* compat alias */
+  --text-4:           #333333;   /* compat alias */
 
   /* Fonts & radius */
   --font-mono:        'IBM Plex Mono', monospace;
@@ -64,8 +80,8 @@ html, body, #root {
 /* ── Scrollbar ───────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar         { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track   { background: transparent; }
-::-webkit-scrollbar-thumb   { background: #0D3652; border-radius: 2px; }
-::-webkit-scrollbar-thumb:hover { background: #1A527A; }
+::-webkit-scrollbar-thumb   { background: #1A1A1A; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #222222; }
 
 /* ── Focus outline ───────────────────────────────────────────────────────── */
 :focus-visible {
@@ -78,12 +94,12 @@ html, body, #root {
 .font-sans  { font-family: var(--font-sans); }
 
 /* ── Status dot colours — Worker Fleet ──────────────────────────────────── */
-.dot-green  { background: var(--aqua); }    /* active / working — teal pulse */
-.dot-blue   { background: var(--accent); }  /* idle / waiting — periwinkle */
-.dot-yellow { background: var(--warning); } /* blocked / in-progress — amber */
-.dot-red    { background: var(--danger); }  /* error / offline — coral */
-.dot-purple { background: var(--info); }    /* QC review — lavender */
-.dot-dim    { background: #0D3652; }        /* inactive dot */
+.dot-green  { background: var(--accent); }   /* active / working — green */
+.dot-blue   { background: var(--info); }     /* idle / waiting — blue */
+.dot-yellow { background: var(--warning); }  /* blocked / in-progress — amber */
+.dot-red    { background: var(--danger); }   /* error / offline — red */
+.dot-purple { background: var(--info); }     /* QC review — blue */
+.dot-dim    { background: #1A1A1A; }         /* inactive dot */
 
 /* ── Selection ───────────────────────────────────────────────────────────── */
 ::selection {
@@ -104,6 +120,7 @@ html, body, #root {
   display: flex;
   flex: 1;
   overflow: hidden;
+  min-height: 0;
 }
 
 .app-main {

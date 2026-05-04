@@ -1,0 +1,23 @@
+Package: autodev
+Version: @VERSION@
+Architecture: amd64
+Maintainer: AIRS Foundry <support@airs.dev>
+Installed-Size: @INSTALLED_SIZE@
+Depends: libwebkit2gtk-4.1-0 (>= 2.40.0), libgtk-3-0 (>= 3.24.0), libayatana-appindicator3-1 | libappindicator3-1, libssl3 | libssl1.1, ca-certificates
+Recommends: python3 (>= 3.11), git
+Section: devel
+Priority: optional
+Homepage: https://airs.dev/autodev
+Description: AI-powered development assistant with multi-agent workflows
+ AutoDev is a local-first AI development assistant that orchestrates a fleet
+ of specialized AI agents to help with coding, planning, code review, and
+ project management.
+ .
+ Key features:
+  - Multi-agent architecture: PA, Supervisor, Workers, QC
+  - Native LLM provider support (Anthropic, OpenAI, Gemini)
+  - Integrated IDE with git, file browser, and symbol tree
+  - Recipe-based automation for repeatable workflows
+  - MCP (Model Context Protocol) server + client
+  - Graph-based codebase analysis
+  - Auto-updater with signature verification

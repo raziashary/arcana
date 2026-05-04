@@ -137,8 +137,10 @@ function HookRow({
   onRemove:        () => void
 }) {
   const store = useHookStore()
-  const [testResult, setTestResult] = useState<{ outcome: string; output?: string; error?: string } | null>(null)
-  const [testing,    setTesting]    = useState(false)
+  const [testResult,       setTestResult]       = useState<{ outcome: string; output?: string; error?: string } | null>(null)
+  const [testing,          setTesting]          = useState(false)
+  const [customCondition,  setCustomCondition]  = useState(hook.conditions.custom_condition ?? '')
+  const [condSaving,       setCondSaving]       = useState(false)
 
   async function handleTest() {
     setTesting(true)
@@ -151,6 +153,23 @@ function HookRow({
       setTestResult({ outcome: 'failed', error: String(e) })
     } finally {
       setTesting(false)
+    }
+  }
+
+  async function handleSaveCondition() {
+    setCondSaving(true)
+    try {
+      await store.addHook({
+        ...hook,
+        conditions: {
+          ...hook.conditions,
+          custom_condition: customCondition.trim() || undefined,
+        },
+      } as never)
+    } catch (e) {
+      console.error('[hook] save custom_condition failed:', e)
+    } finally {
+      setCondSaving(false)
     }
   }
   return (
@@ -257,7 +276,7 @@ function HookRow({
       {/* Expanded detail */}
       {expanded && (
         <div
-          className="px-4 pb-4 pt-0 text-xs font-mono space-y-1"
+          className="px-4 pb-4 pt-0 text-xs font-mono space-y-2"
           style={{ borderTop: '1px solid var(--border)', color: 'var(--text-3)' }}
         >
           <div className="pt-3">
@@ -266,14 +285,55 @@ function HookRow({
               {JSON.stringify(hook.action, null, 2)}
             </pre>
           </div>
-          {Object.keys(hook.conditions).length > 0 && (
-            <div>
-              <span style={{ color: 'var(--text-2)' }}>Conditions: </span>
-              <pre className="inline whitespace-pre-wrap" style={{ color: 'var(--text-1)' }}>
-                {JSON.stringify(hook.conditions, null, 2)}
-              </pre>
+
+          {/* Structural conditions (read-only display) */}
+          {(() => {
+            const { custom_condition: _cc, ...structural } = hook.conditions
+            return Object.keys(structural).length > 0 ? (
+              <div>
+                <span style={{ color: 'var(--text-2)' }}>Conditions: </span>
+                <pre className="inline whitespace-pre-wrap" style={{ color: 'var(--text-1)' }}>
+                  {JSON.stringify(structural, null, 2)}
+                </pre>
+              </div>
+            ) : null
+          })()}
+
+          {/* Custom condition expression editor */}
+          <div className="space-y-1 pt-1">
+            <div className="flex items-center justify-between">
+              <span style={{ color: 'var(--text-2)' }}>Custom condition <span style={{ color: 'var(--text-3)' }}>(Rhai expression)</span></span>
+              {customCondition !== (hook.conditions.custom_condition ?? '') && (
+                <button
+                  onClick={handleSaveCondition}
+                  disabled={condSaving}
+                  className="text-xs px-2 py-0.5 rounded disabled:opacity-40"
+                  style={{ background: 'var(--accent-muted)', color: 'var(--accent)', border: '1px solid var(--accent-border)' }}
+                >
+                  {condSaving ? 'Saving…' : 'Save'}
+                </button>
+              )}
             </div>
-          )}
+            <textarea
+              value={customCondition}
+              onChange={e => setCustomCondition(e.target.value)}
+              rows={2}
+              spellCheck={false}
+              placeholder={`tool_name == "bash" && command.contains("rm -rf")`}
+              className="w-full rounded px-2 py-1.5 resize-none"
+              style={{
+                background:  'var(--bg-surface)',
+                border:      '1px solid var(--border-2)',
+                color:       'var(--text-1)',
+                fontFamily:  'monospace',
+                fontSize:    '11px',
+              }}
+            />
+            <div style={{ color: 'var(--text-3)', fontSize: '10px' }}>
+              Variables: <code>tool_name</code>, <code>file_path</code>, <code>agent_mode</code>, <code>command</code>, <code>hook_type</code>, <code>session_id</code>, <code>worker_id</code>, <code>task_id</code>, <code>is_error</code>
+            </div>
+          </div>
+
           <div style={{ color: 'var(--text-3)' }}>
             id: {hook.id} · created: {hook.created_at.slice(0, 10)}
           </div>

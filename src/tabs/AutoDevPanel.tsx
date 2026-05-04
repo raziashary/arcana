@@ -99,7 +99,7 @@ function AgentRoster({ tasks }: { tasks: Task[] }) {
             key={worker.id}
             className="flex items-center gap-2"
             style={{
-              borderBottom: '1px solid #111',
+              borderBottom: '1px solid var(--border-1)',
               padding: '7px 10px',
               fontSize: '11px',
             }}
@@ -157,8 +157,8 @@ function TaskCard({
     <div
       className="font-mono text-xs cursor-pointer anim-fade-in"
       style={{
-        background:   '#111',
-        border:       '1px solid #1d1d1d',
+        background:   'var(--bg-card)',
+        border:       '1px solid var(--border-1)',
         borderRadius: '2px',
         marginBottom: '6px',
         transition:   'border-color 0.15s ease, box-shadow 0.15s ease',
@@ -180,17 +180,17 @@ function TaskCard({
             {task.title}
           </div>
           {task.assigned_worker && (
-            <div style={{ fontSize: '10px', color: buildFailedStyle ? '#FFCB8B' : (doneStyle ? '#ADDB67' : '#7FDBCA') }}>
+            <div style={{ fontSize: '10px', color: buildFailedStyle ? 'var(--warning)' : (doneStyle ? 'var(--accent)' : 'var(--accent)') }}>
               {buildFailedStyle ? '⚠ build failed' : (doneStyle ? '✓ done' : task.assigned_worker)}
             </div>
           )}
           {showProgress && (
-            <div style={{ height: 2, background: '#0D3652', borderRadius: 1, marginTop: 5, overflow: 'hidden', position: 'relative' }}>
+            <div style={{ height: 2, background: 'var(--border-1)', borderRadius: 1, marginTop: 5, overflow: 'hidden', position: 'relative' }}>
               {/* Shimmer sweep — continuous animation indicating active work */}
               <div
                 style={{
                   position: 'absolute', top: 0, left: 0, height: '100%',
-                  width: '40%', background: '#7FDBCA', borderRadius: 1,
+                  width: '40%', background: 'var(--accent)', borderRadius: 1,
                   animation: 'shimmer 1.8s ease-in-out infinite',
                 }}
               />
@@ -238,8 +238,8 @@ function TaskCard({
 
 const COL_HEADER_COLORS: Partial<Record<string, string>> = {
   ready:       'var(--accent)',
-  in_progress: '#FFCB8B',
-  qc_review:   '#C792EA',
+  in_progress: 'var(--warning)',
+  qc_review:   'var(--info)',
   done_today:  'var(--success)',
 }
 
@@ -255,8 +255,8 @@ function KanbanColumn({
     <div
       style={{
         flex:         1,
-        background:   '#00233B',
-        border:       '1px solid #0D3652',
+        background:   'var(--bg-surface)',
+        border:       '1px solid var(--border-1)',
         borderRadius: '2px',
         padding:      '8px',
         minHeight:    120,
@@ -284,18 +284,18 @@ function KanbanColumn({
               width:        6,
               height:       6,
               borderRadius: '50%',
-              background:   COL_HEADER_COLORS[colId] ?? '#3D5A6E',
+              background:   COL_HEADER_COLORS[colId] ?? 'var(--text-4)',
             }}
           />
           <span>{label}</span>
         </div>
-        <span style={{ color: '#3D5A6E' }}>{tasks.length}</span>
+        <span style={{ color: 'var(--text-4)' }}>{tasks.length}</span>
       </div>
 
       {/* Tasks */}
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {tasks.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '16px 0', color: '#3D5A6E', fontSize: '10px', fontFamily: 'monospace' }}>
+          <div style={{ textAlign: 'center', padding: '16px 0', color: 'var(--text-4)', fontSize: '10px', fontFamily: 'monospace' }}>
             empty
           </div>
         ) : (
@@ -352,47 +352,47 @@ function MetricsRow({
     {
       label: 'Cost Today',
       value: costUsd != null ? `$${costUsd.toFixed(2)}` : '—',
-      color: '#7FDBCA',
+      color: 'var(--accent)',
     },
     {
       label: 'Tokens',
       value: totalTokens > 0 ? formatTokens(totalTokens) : '—',
-      color: '#637777',
+      color: 'var(--text-2)',
     },
     {
       label: 'Closed',
       value: String(todayDone.length),
-      color: '#637777',
+      color: 'var(--text-2)',
     },
     {
       label: 'Build Failed',
       value: String(todayBuildFailed.length),
-      color: '#FF6363',
+      color: 'var(--danger)',
     },
     {
       label: 'QC Pass Rate',
       value: qcPassRate != null ? `${qcPassRate}%` : '—',
-      color: '#FFCB8B',
+      color: 'var(--warning)',
     },
   ]
 
   return (
     <div
       className="shrink-0 flex gap-2 p-3"
-      style={{ borderTop: '1px solid #0D3652', background: '#011627' }}
+      style={{ borderTop: '1px solid var(--border-1)', background: 'var(--bg-app)' }}
     >
       {metrics.map(m => (
         <div
           key={m.label}
           style={{
             flex:         1,
-            background:   '#00233B',
-            border:       '1px solid #0D3652',
+            background:   'var(--bg-surface)',
+            border:       '1px solid var(--border-1)',
             borderRadius: '2px',
             padding:      '8px 10px',
           }}
         >
-          <div style={{ fontFamily: 'monospace', fontSize: '9px', color: '#3D5A6E', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+          <div style={{ fontFamily: 'monospace', fontSize: '9px', color: 'var(--text-4)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
             {m.label}
           </div>
           <div style={{ fontFamily: 'monospace', fontSize: '16px', color: m.color, marginTop: 2 }}>
@@ -487,14 +487,14 @@ export default function AutoDevTab() {
   return (
     <div
       className="flex flex-col flex-1 overflow-hidden"
-      style={{ background: '#011627', fontFamily: 'IBM Plex Mono, monospace' }}
+      style={{ background: 'var(--bg-app)', fontFamily: 'IBM Plex Mono, monospace' }}
     >
       {/* Panel header */}
       <div
         className="flex items-center justify-between px-4 py-2 shrink-0"
-        style={{ borderBottom: '1px solid #0D3652', background: '#00233B' }}
+        style={{ borderBottom: '1px solid var(--border-1)', background: 'var(--bg-surface)' }}
       >
-        <span style={{ fontSize: '11px', color: '#637777', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+        <span style={{ fontSize: '11px', color: 'var(--text-2)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
           Agent Roster
         </span>
         <div className="flex items-center gap-3">
@@ -502,21 +502,21 @@ export default function AutoDevTab() {
           <div
             className="flex items-center gap-1"
             title={`core-orchestrator: ${sidecarStatus}`}
-            style={{ fontSize: '9px', color: sidecarConnected ? '#7FDBCA' : '#637777', letterSpacing: '0.05em' }}
+            style={{ fontSize: '9px', color: sidecarConnected ? 'var(--accent)' : 'var(--text-2)', letterSpacing: '0.05em' }}
           >
             <span style={{
               width: 5, height: 5, borderRadius: '50%', display: 'inline-block',
-              background: sidecarConnected ? '#7FDBCA'
-                : sidecarStatus === 'starting' ? '#FFCB8B'
-                : '#3D5A6E',
-              boxShadow: sidecarConnected ? '0 0 4px #7FDBCA' : 'none',
+              background: sidecarConnected ? 'var(--accent)'
+                : sidecarStatus === 'starting' ? 'var(--warning)'
+                : 'var(--text-4)',
+              boxShadow: sidecarConnected ? '0 0 4px var(--accent)' : 'none',
             }} />
             <span>{sidecarConnected ? 'LivingAgent' : 'Mode 1'}</span>
           </div>
         <div className="flex gap-2">
           <div className="flex items-center gap-2">
             {lastRefreshed && (
-              <span style={{ fontSize: '9px', color: '#3D5A6E', fontFamily: 'monospace' }}>
+              <span style={{ fontSize: '9px', color: 'var(--text-4)', fontFamily: 'monospace' }}>
                 ↺ {formatLastRefreshed(lastRefreshed)}
               </span>
             )}
@@ -525,8 +525,8 @@ export default function AutoDevTab() {
               className="flex items-center gap-1"
               disabled={isRefreshing}
               style={{
-                background: '#0B3A5C', border: '1px solid #1A527A', borderRadius: 2,
-                padding: '4px 10px', color: isRefreshing ? '#82AAFF' : '#637777',
+                background: 'var(--bg-card)', border: '1px solid var(--border-1)', borderRadius: 2,
+                padding: '4px 10px', color: isRefreshing ? 'var(--accent)' : 'var(--text-2)',
                 fontSize: '10px', cursor: isRefreshing ? 'default' : 'pointer',
                 transition: 'color 0.2s',
               }}
@@ -557,9 +557,9 @@ export default function AutoDevTab() {
       {/* Task board label */}
       <div
         className="flex items-center justify-between px-4 py-2 shrink-0"
-        style={{ borderBottom: '1px solid #0D3652', background: '#00233B' }}
+        style={{ borderBottom: '1px solid var(--border-1)', background: 'var(--bg-surface)' }}
       >
-        <span style={{ fontSize: '11px', color: '#637777', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+        <span style={{ fontSize: '11px', color: 'var(--text-2)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
           Task Board
         </span>
         <button
@@ -571,11 +571,11 @@ export default function AutoDevTab() {
           }}
           className="flex items-center gap-1"
           style={{
-            background:   clearConfirm ? '#FF636320' : '#0B3A5C',
-            border:       clearConfirm ? '1px solid #FF636350' : '1px solid #1A527A',
+            background:   clearConfirm ? 'rgba(255,68,68,0.12)' : 'var(--bg-card)',
+            border:       clearConfirm ? '1px solid rgba(255,68,68,0.3)' : '1px solid var(--border-1)',
             borderRadius: 2,
             padding:      '3px 8px',
-            color:        clearConfirm ? '#FF6363' : '#637777',
+            color:        clearConfirm ? 'var(--danger)' : 'var(--text-2)',
             fontSize:     '10px',
             fontFamily:   'monospace',
             cursor:       'pointer',
@@ -625,7 +625,7 @@ export default function AutoDevTab() {
           borderRadius: '50%',
           background: 'var(--accent)',
           border: 'none',
-          color: '#011627',
+          color: 'var(--bg-app)',
           cursor: 'pointer',
           display: 'flex',
           alignItems: 'center',

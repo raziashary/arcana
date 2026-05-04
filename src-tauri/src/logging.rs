@@ -48,16 +48,26 @@ pub fn init() -> Option<WorkerGuard> {
         Some(dir) => {
             // Phase 7.3 — daily rolling file appender (tracing-appender 0.2).
             //
-            // Files are named:  ~/.autodev/logs/autodev.YYYY-MM-DD
+            // Files are named:  ~/.autodev/logs/autodev-YYYY-MM-DD.log
             // • Rotation happens at midnight (UTC).
             // • Today's file is opened in append mode so multiple restarts on the
             //   same calendar day all write to the same file.
             // • Yesterday's (and earlier) files stay on disk — delete with:
-            //     Remove-Item ~/.autodev/logs/autodev.* -OlderThan (Get-Date).AddDays(-7)
+            //     Remove-Item ~/.autodev/logs/autodev-*.log -OlderThan (Get-Date).AddDays(-7)
             //
             // The non_blocking wrapper moves file I/O to a background thread so
             // the hot log path never blocks an async task or UI event.
-            let file_appender = tracing_appender::rolling::daily(&dir, "autodev");
+            //
+            // NOTE: builder() requires tracing-appender 0.2.3+. Cargo.lock pins 0.2.5.
+            let file_appender = tracing_appender::rolling::RollingFileAppender::builder()
+                .rotation(tracing_appender::rolling::Rotation::DAILY)
+                .filename_prefix("autodev-")
+                .filename_suffix(".log")
+                .build(&dir)
+                .unwrap_or_else(|e| {
+                    eprintln!("[AutoDev] Log appender builder failed ({e}), falling back to default rotation");
+                    tracing_appender::rolling::daily(&dir, "autodev")
+                });
             let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
             let file_layer = fmt::layer()

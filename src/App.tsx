@@ -23,6 +23,9 @@ import { useUiStore }       from './stores/uiStore'
 import { useWorkerStore }   from './stores/workerStore'
 import { useTaskStore }     from './stores/taskStore'
 import { useSidecarStore }  from './stores/sidecarStore'
+import { useUpdateStore }   from './stores/updateStore'
+import { UpdateToast }      from './components/update/UpdateToast'
+import { UpdateDialog }     from './components/update/UpdateDialog'
 
 export type TabId = 'chat' | 'autodev' | 'ide' | 'recipes' | 'graph' | 'dashboard' | 'settings' | 'logs'
 
@@ -31,10 +34,10 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'autodev',   label: 'AutoDev'   },
   { id: 'ide',       label: 'IDE'       },
   { id: 'recipes',   label: 'Recipes'   },
+  { id: 'logs',      label: 'Logs'      },
+  { id: 'settings',  label: 'Settings'  },
   { id: 'graph',     label: 'Graph'     },
   { id: 'dashboard', label: 'Dashboard' },
-  { id: 'settings',  label: 'Settings'  },
-  { id: 'logs',      label: 'Logs'      },
 ]
 
 export default function App() {
@@ -42,9 +45,11 @@ export default function App() {
   const setActiveTab = useUiStore((s) => s.setActiveTab)
   const { loadProviders, loadDefaultSystemPrompt } = useSettingsStore()
   const { loadFromBackend } = useCostStore()
-  const initWorkerEvents = useWorkerStore(s => s.initEventListeners)
-  const initTaskEvents   = useTaskStore(s => s.initEventListeners)
+  const initWorkerEvents  = useWorkerStore(s => s.initEventListeners)
+  const initTaskEvents    = useTaskStore(s => s.initEventListeners)
   const initSidecarEvents = useSidecarStore(s => s.initEventListeners)
+  const initUpdater       = useUpdateStore(s => s.init)
+  const cleanupUpdater    = useUpdateStore(s => s.cleanup)
 
   useEffect(() => {
     loadProviders()
@@ -56,6 +61,9 @@ export default function App() {
     void initWorkerEvents()
     void initTaskEvents()
     void initSidecarEvents()
+    // Phase 5.3 — subscribe to auto-updater events
+    void initUpdater()
+    return () => { cleanupUpdater() }
   }, [])
 
   return (
@@ -85,6 +93,9 @@ export default function App() {
 
       <StatusBar />
       <ToastStack />
+      {/* Phase 5.3 — auto-updater overlay components */}
+      <UpdateToast />
+      <UpdateDialog />
     </div>
   )
 }

@@ -1,0 +1,50 @@
+#!/bin/sh
+# postinst — Post-installation script for the AutoDev .deb package.
+# Phase 5.3 — Platform Installers.
+# Runs as root after dpkg unpacks the package.
+
+set -e
+
+case "$1" in
+  configure)
+    # ── Create ~/.autodev directory structure for all users ─────────────────
+    # We do NOT create it here (per-user dirs should be created at app launch)
+    # but we do set up the system-wide MIME type and desktop file.
+
+    # ── Register MIME type ────────────────────────────────────────────────────
+    if command -v update-mime-database >/dev/null 2>&1; then
+      update-mime-database /usr/share/mime 2>/dev/null || true
+    fi
+
+    # ── Register desktop file ─────────────────────────────────────────────────
+    if command -v update-desktop-database >/dev/null 2>&1; then
+      update-desktop-database /usr/share/applications 2>/dev/null || true
+    fi
+
+    # ── Register icon cache ────────────────────────────────────────────────────
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+      gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
+    fi
+
+    # ── AppArmor profile (if AppArmor is active) ──────────────────────────────
+    if command -v aa-enabled >/dev/null 2>&1 && aa-enabled >/dev/null 2>&1; then
+      if [ -f /etc/apparmor.d/autodev ]; then
+        apparmor_parser -r /etc/apparmor.d/autodev 2>/dev/null || true
+      fi
+    fi
+
+    echo "AutoDev installed successfully. Run 'autodev' or find it in your application menu."
+    ;;
+
+  abort-upgrade|abort-remove|abort-deconfigure)
+    ;;
+
+  *)
+    echo "postinst called with unknown argument: '$1'" >&2
+    exit 0
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

@@ -17,13 +17,17 @@ export type HookType =
 export type HookOutcome = 'executed' | 'blocked' | 'skipped' | 'failed'
 
 export interface HookConditions {
-  tool_name?:       string
-  file_pattern?:    string
-  repo_path?:       string
-  command_pattern?: string
-  session_type?:    string
-  agent_mode?:      string
-  time_range?:      { start_hour: number; end_hour: number; days?: string[] }
+  tool_name?:        string
+  file_pattern?:     string
+  repo_path?:        string
+  command_pattern?:  string
+  session_type?:     string
+  agent_mode?:       string
+  time_range?:       { start_hour: number; end_hour: number; days?: string[] }
+  /** Rhai expression evaluated with context variables.
+   *  Variables: tool_name, file_path, agent_mode, command, hook_type, session_id, worker_id, task_id, is_error
+   *  Example: `tool_name == "bash" && command.contains("rm -rf")` */
+  custom_condition?: string
 }
 
 export type HookAction =

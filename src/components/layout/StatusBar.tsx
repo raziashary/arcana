@@ -1,71 +1,88 @@
-// StatusBar — bottom bar showing active model + today's cost.
-// Design from autodevmockup.html .status-chip + .model-badge + .cost-badge
+// StatusBar — spec Section 2.3.
+// Left: PA mode dot + label. Middle: sidecar/MCP status dots. Right: session token count.
 
 import { useCostStore }     from '../../stores/costStore'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { useSidecarStore }  from '../../stores/sidecarStore'
 
-function formatCost(usd: number): string {
-  if (usd === 0) return '$0.00'
-  if (usd < 0.001) return `$${usd.toFixed(6)}`
-  if (usd < 1)    return `$${usd.toFixed(4)}`
-  return `$${usd.toFixed(2)}`
+const PA_MODE_LABELS: Record<string, string> = {
+  fast:     'Fast Dev',
+  review:   'Review Mode',
+  delegate: 'Delegate',
+}
+
+const PA_MODE_COLORS: Record<string, string> = {
+  fast:     'var(--accent)',
+  review:   'var(--warning)',
+  delegate: 'var(--info)',
+}
+
+function fmtTokens(n: number): string {
+  if (n < 1_000)     return String(n)
+  if (n < 1_000_000) return `${(n / 1_000).toFixed(1)}k`
+  return `${(n / 1_000_000).toFixed(1)}M`
 }
 
 export default function StatusBar() {
-  const costToday    = useCostStore(s => s.costTodayUsd)
-  const tokensIn     = useCostStore(s => s.tokensInToday)
-  const tokensOut    = useCostStore(s => s.tokensOutToday)
-  const activeModel  = useSettingsStore(s => s.activeModel)
-  const activeProvider = useSettingsStore(s => s.activeProvider)
+  const paMode        = useSettingsStore(s => s.paMode)
+  const sidecarStatus = useSidecarStore(s => s.status)
+  const tokensIn      = useCostStore(s => s.tokensInToday)
+  const tokensOut     = useCostStore(s => s.tokensOutToday)
+  const totalTokens   = tokensIn + tokensOut
+
+  const modeColor = PA_MODE_COLORS[paMode] ?? 'var(--text-3)'
+  const modeLabel = PA_MODE_LABELS[paMode]  ?? paMode
+
+  const orchColor = sidecarStatus === 'running'
+    ? 'var(--accent)'
+    : sidecarStatus === 'starting'
+      ? 'var(--warning)'
+      : sidecarStatus.startsWith('error')
+        ? 'var(--danger)'
+        : '#1A1A1A'
 
   return (
     <div
-      className="flex items-center justify-between px-3.5 shrink-0"
+      className="flex items-center justify-between shrink-0"
       style={{
-        background:   'var(--bg-surface)',
-        borderTop:    '1px solid var(--border-1)',
-        height:       '28px',
-        fontSize:     '10px',
-        fontFamily:   'var(--font-mono)',
+        height:     '22px',
+        background: 'var(--bg-surface)',
+        borderTop:  '1px solid var(--border-1)',
+        fontSize:   '10px',
+        fontFamily: 'var(--font-mono)',
+        padding:    '0 12px',
       }}
     >
-      {/* Left: working directory / status */}
-      <div style={{ color: 'var(--text-4)' }}>
-        autodev
+      {/* Left: PA mode indicator */}
+      <div className="flex items-center gap-1.5">
+        <span
+          style={{
+            width: 6, height: 6, borderRadius: '50%',
+            background: modeColor, display: 'inline-block', flexShrink: 0,
+          }}
+        />
+        <span style={{ color: 'var(--text-4)' }}>PA</span>
+        <span style={{ color: 'var(--text-4)' }}>·</span>
+        <span style={{ color: 'var(--text-3)' }}>{modeLabel}</span>
       </div>
 
-      {/* Right: model + cost */}
-      <div className="flex items-center gap-2" style={{ color: 'var(--text-3)' }}>
-        {activeModel && (
-          <span
-            className="px-2 py-0.5"
-            style={{
-              background: 'var(--bg-card)',
-              border:     '1px solid var(--border-2)',
-              borderRadius: '2px',
-              color:      'var(--text-2)',
-            }}
-          >
-            {activeProvider && `${activeProvider}/`}{activeModel}
-          </span>
-        )}
+      {/* Middle: sidecar / MCP status */}
+      <div className="flex items-center gap-2">
+        <span
+          style={{
+            width: 5, height: 5, borderRadius: '50%',
+            background: orchColor, display: 'inline-block',
+          }}
+        />
+        <span style={{ color: 'var(--text-3)' }}>core-orch</span>
+        <span style={{ color: 'var(--text-4)' }}>·</span>
+        <span style={{ color: 'var(--text-4)' }}>autodev</span>
+      </div>
 
-        <span style={{ color: 'var(--accent)', fontSize: '10px' }}>
-          {formatCost(costToday)} today
-        </span>
-
-        {(tokensIn > 0 || tokensOut > 0) && (
-          <span style={{ color: 'var(--text-4)' }}>
-            ↑{formatTokens(tokensIn)} ↓{formatTokens(tokensOut)}
-          </span>
-        )}
+      {/* Right: token count */}
+      <div style={{ color: 'var(--text-3)' }}>
+        {totalTokens > 0 ? `${fmtTokens(totalTokens)} tk` : 'autodev v1.0'}
       </div>
     </div>
   )
-}
-
-function formatTokens(n: number): string {
-  if (n < 1000) return String(n)
-  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}K`
-  return `${(n / 1_000_000).toFixed(1)}M`
 }

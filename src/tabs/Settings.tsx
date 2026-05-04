@@ -16,6 +16,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 import { useRuntimeConfigStore } from '../stores/runtimeConfigStore'
 import HooksSettings from '../components/settings/HooksSettings'
+import UpdateSettings from '../components/settings/UpdateSettings'
 import SidecarPanel from '../components/sidecar/SidecarPanel'
 import McpToolBrowser from '../components/sidecar/McpToolBrowser'
 
@@ -91,6 +92,11 @@ export default function SettingsTab() {
         <div className="pt-4">
           <SectionHeader title="Hooks" />
           <HooksSettings />
+        </div>
+
+        <div className="pt-4">
+          <SectionHeader title="Updates" />
+          <UpdateSettings />
         </div>
 
       </div>

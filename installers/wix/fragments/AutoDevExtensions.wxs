@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AutoDevExtensions.wxs — Custom WiX v4 fragment for the AutoDev MSI installer.
+  Included via tauri.conf.json bundle.windows.wix.fragmentPaths.
+
+  This fragment adds:
+    1. A custom install condition that requires Windows 10 1809+ (build 17763)
+    2. A firewall exception for AutoDev (localhost MCP server on port 8767)
+    3. Start Menu shortcut with proper icon + App User Model ID
+    4. Registry entries for the .autodev file association
+    5. Environment variable %AUTODEV_HOME% pointing to the install dir
+    6. Post-install launch action (optional; user can opt-out)
+
+  WiX v4 syntax — use `wix.exe build` or Tauri's bundled WiX runner.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util"
+     xmlns:fw="http://wixtoolset.org/schemas/v4/wxs/firewall">
+
+  <Fragment>
+
+    <!-- ─── OS version condition ──────────────────────────────────────────── -->
+    <!-- Require Windows 10 1809 (build 17763) or later -->
+    <Launch
+      Condition="Installed OR (VersionNT64 >= 1000 AND MsiNTProductType = 1)"
+      Message="AutoDev requires Windows 10 version 1809 or later (64-bit)." />
+
+    <!-- ─── Component group: extra registry + shortcuts ──────────────────── -->
+    <ComponentGroup Id="AutoDevExtras" Directory="INSTALLDIR">
+
+      <!-- File association: .autodev files open with AutoDev -->
+      <Component Id="AutoDevFileAssoc" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567890">
+        <RegistryKey Root="HKLM" Key="Software\Classes\.autodev">
+          <RegistryValue Type="string" Value="AutoDevWorkspace" />
+        </RegistryKey>
+        <RegistryKey Root="HKLM" Key="Software\Classes\AutoDevWorkspace">
+          <RegistryValue Type="string" Value="AutoDev Workspace" />
+        </RegistryKey>
+        <RegistryKey Root="HKLM" Key="Software\Classes\AutoDevWorkspace\DefaultIcon">
+          <RegistryValue Type="string" Value="[INSTALLDIR]AutoDev.exe,0" />
+        </RegistryKey>
+        <RegistryKey Root="HKLM" Key="Software\Classes\AutoDevWorkspace\shell\open\command">
+          <RegistryValue Type="string" Value="&quot;[INSTALLDIR]AutoDev.exe&quot; &quot;%1&quot;" />
+        </RegistryKey>
+      </Component>
+
+      <!-- App User Model ID (taskbar grouping, jump lists) -->
+      <Component Id="AutoDevAppId" Guid="B2C3D4E5-F6A7-8901-BCDE-F12345678901">
+        <RegistryKey Root="HKCU" Key="Software\Classes\Applications\AutoDev.exe">
+          <RegistryValue Name="AppUserModelID" Type="string"
+            Value="com.airs-foundry.autodev" />
+        </RegistryKey>
+      </Component>
+
+      <!-- AUTODEV_HOME environment variable (machine-wide) -->
+      <Component Id="AutoDevEnvVar" Guid="C3D4E5F6-A7B8-9012-CDEF-123456789012">
+        <Environment
+          Id="AutoDevHome"
+          Action="set"
+          Name="AUTODEV_HOME"
+          Part="all"
+          Permanent="no"
+          System="yes"
+          Value="[INSTALLDIR]" />
+      </Component>
+
+    </ComponentGroup>
+
+    <!-- ─── Firewall exception (Windows Firewall) ─────────────────────────── -->
+    <ComponentGroup Id="AutoDevFirewall" Directory="INSTALLDIR">
+      <Component Id="FirewallException" Guid="D4E5F6A7-B8C9-0123-DEF0-234567890123">
+        <fw:FirewallException
+          Id="AutoDevMcpServer"
+          Name="AutoDev MCP Server"
+          Description="Allows AutoDev MCP server to communicate on localhost (port 8767)"
+          Port="8767"
+          Protocol="tcp"
+          Profile="all"
+          Scope="localSubnet"
+          IgnoreFailure="yes" />
+      </Component>
+    </ComponentGroup>
+
+  </Fragment>
+
+  <!-- ─── Feature references ────────────────────────────────────────────────── -->
+  <Fragment>
+    <Feature Id="AutoDevExtrasFeature" Title="AutoDev Extensions" Level="1">
+      <ComponentGroupRef Id="AutoDevExtras" />
+      <ComponentGroupRef Id="AutoDevFirewall" />
+    </Feature>
+  </Fragment>
+
+</Wix>

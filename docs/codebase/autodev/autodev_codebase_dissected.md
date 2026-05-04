@@ -2674,6 +2674,68 @@ Phase 3.3, intentional lack of inline editing, etc.).
 
 ---
 
+## Auto-Updater System (Phase 5.3)
+
+### Backend: `src-tauri/src/updater/`
+
+The updater is a fully custom Rust module (not `tauri-plugin-updater`) providing:
+
+| File | Role |
+|------|------|
+| `mod.rs` | `UpdaterState` (shared Tauri managed state), `start_background_check` (4-hour ticker), re-exports |
+| `check.rs` | Queries GitHub Releases API, semver comparison, channel filtering (stable/beta/nightly), `PlatformAsset` map |
+| `download.rs` | Streaming HTTP download with Range header resumption, real-time progress events via mpsc channel, `~/.autodev/updates/` cache dir |
+| `verify.rs` | SHA-256 checksum verification (via `sha2`), Ed25519 signature verification (via `ed25519-dalek`), compile-time embedded public key |
+| `patch.rs` | Pure-Rust bsdiff4 reader for delta patches; ADEV magic format header |
+| `install.rs` | Platform-specific install scheduling: Windows (RunOnce batch/.bat), macOS (LaunchAgent plist + shell script), Linux (AppImage copy / pkexec deb install); update history in `~/.autodev/update_history.json` |
+| `persistence.rs` | Pre-update integrity check (config.db, analytics.db, sessions/, plans/, skills/), restore point JSON, post-update cleanup |
+
+**Tauri events emitted:**
+- `updater:available` — new version found by background check
+- `updater:critical` — critical update requiring immediate action
+- `updater:progress` — download progress (DownloadProgress struct)
+- `updater:ready` — download + verification complete
+- `updater:error` — download or verification failure
+
+**8 Tauri commands** registered in `commands/updater_commands.rs`:
+`check_for_update`, `get_cached_update`, `download_update`, `get_download_progress`, `install_update`, `skip_version`, `get_update_history`, `verify_data_integrity`
+
+`UpdaterState` is registered as `.manage(UpdaterState::new())` in `main.rs`. Background check starts in the setup hook via `tauri::async_runtime::spawn`.
+
+### Frontend: Update UI
+
+| File | Role |
+|------|------|
+| `src/stores/updateStore.ts` | Zustand store; subscribes to all 5 Tauri events, exposes `checkForUpdate`, `startDownload`, `installUpdate`, `skipVersion`, `loadHistory`, `verifyIntegrity` |
+| `src/components/update/UpdateToast.tsx` | Non-intrusive bottom-right toast; critical updates use orange variant and disable dismiss |
+| `src/components/update/UpdateDialog.tsx` | Full modal: release notes, download progress bar, speed indicator, signature status, Install & Restart button |
+| `src/components/settings/UpdateSettings.tsx` | Settings panel: current version, last checked, channel selector, manual check trigger, data integrity report, update history viewer |
+
+Both `UpdateToast` and `UpdateDialog` are mounted at the App root (`App.tsx`). `useUpdateStore.init()` called on mount; `cleanup()` on unmount.
+
+### Installer Artifacts
+
+| Platform | Format | Build Script |
+|----------|--------|-------------|
+| Windows | MSI (WiX v4) | `installers/wix/build-msi.ps1` |
+| Windows | NSIS EXE | Tauri built-in |
+| macOS | DMG | `installers/dmg/create-dmg.sh` |
+| Linux | AppImage | `installers/appimage/build-appimage.sh` |
+| Linux | .deb | `installers/deb/` (control, postinst, prerm) |
+| Linux | .rpm | `installers/rpm/autodev.spec` |
+
+**Top-level scripts**: `scripts/build-installers.sh` (OS-detecting orchestrator), `scripts/build-windows.ps1`, `scripts/build-macos.sh`, `scripts/build-linux.sh`
+
+**GitHub Actions**: `.github/workflows/build-release.yml` (multi-platform release on tag push) + `.github/workflows/ci.yml` (PR checks: Rust lint/test, frontend typecheck/lint, build smoke tests on Windows + Linux)
+
+**Custom WiX fragment** (`installers/wix/fragments/AutoDevExtensions.wxs`): firewall exception for port 8767, `.autodev` file association, `AUTODEV_HOME` environment variable.
+
+**Entitlements** (`installers/dmg/entitlements.plist`): WebKit JIT, unsigned executable memory, library validation disabled, network client + server, filesystem read-write, subprocess inherit.
+
+**IT Runbook**: `docs/IT_RUNBOOK.md` covers system requirements, silent install, network requirements, user data layout, auto-updater management, proxy config, uninstall, troubleshooting, and enterprise deployment (Group Policy, MDM, pre-configured API keys).
+
+---
+
 ## Conclusion
 
 This document provides a comprehensive map of the AutoDev codebase. Key architectural principles:
@@ -2683,5 +2745,6 @@ This document provides a comprehensive map of the AutoDev codebase. Key architec
 3. **Event-Driven**: Frontend and backend communicate via typed events
 4. **Extensible Tools**: Tool trait makes adding new capabilities straightforward
 5. **Secure by Default**: API keys in OS keychain, permission system for tools
+6. **Safe Updates**: Pre-update integrity check, Ed25519 signature verification, OS-native install scheduling, user data never touched by installers
 
 For questions or contributions, refer to the implementation files directly - this document is a guide, but the code is the source of truth.

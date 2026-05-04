@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self' blob:; worker-src 'self' blob:"
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost https://api.github.com https://releases.airs.dev; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self' blob:; worker-src 'self' blob:"
     }
   },
   "bundle": {
@@ -36,7 +36,77 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "category": "DeveloperTool",
+    "shortDescription": "AI Agent Desktop Platform",
+    "longDescription": "AutoDev is an AI-powered development assistant that orchestrates multi-agent workflows, manages tasks, and integrates with your development environment.",
+    "copyright": "© 2026 AIRS Foundry. All rights reserved.",
+    "linux": {
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libayatana-appindicator3-1"],
+        "section": "devel",
+        "priority": "optional"
+      },
+      "appimage": {
+        "bundleMediaFramework": true
+      }
+    },
+    "fileAssociations": [
+      {
+        "ext": ["autodev"],
+        "name": "AutoDev Project",
+        "description": "AutoDev Project File",
+        "role": "Editor"
+      }
+    ],
+    "macOS": {
+      "entitlements": "../installers/dmg/entitlements.plist",
+      "exceptionDomain": "",
+      "signingIdentity": null,
+      "hardenedRuntime": true,
+      "minimumSystemVersion": "10.15",
+      "dmg": {
+        "background": "../installers/dmg/background.png",
+        "windowSize": {
+          "width": 660,
+          "height": 400
+        },
+        "windowPosition": {
+          "x": 400,
+          "y": 100
+        },
+        "appPosition": {
+          "x": 180,
+          "y": 170
+        },
+        "applicationFolderPosition": {
+          "x": 480,
+          "y": 170
+        }
+      }
+    },
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "http://timestamp.digicert.com",
+      "tsp": false,
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "wix": {
+        "language": "en-US",
+        "fragmentPaths": ["../installers/wix/fragments/AutoDevExtensions.wxs"],
+        "componentGroupRefs": ["AutoDevExtensions"],
+        "bannerPath": "../installers/wix/assets/banner.bmp",
+        "dialogImagePath": "../installers/wix/assets/dialog.bmp"
+      },
+      "nsis": {
+        "displayLanguageSelector": true,
+        "languages": ["English"],
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "icons/128x128.png"
+      }
+    }
   },
   "plugins": {
     "shell": {

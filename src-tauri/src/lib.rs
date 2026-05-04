@@ -25,6 +25,7 @@ pub mod subagent;
 pub mod analytics;
 pub mod graph;
 pub mod plugin;
+pub mod updater;
 
 // Register all Tauri commands on the builder from within the lib crate.
 // generate_handler! must run here so the __cmd__* macros (produced by
@@ -121,6 +122,12 @@ pub fn register_commands(
             update_plugin, verify_plugin, run_plugin,
             get_plugin_config, set_plugin_config,
             generate_setup_token, validate_setup_token,
+        },
+        updater_commands::{
+            check_for_update, get_cached_update,
+            download_update, get_download_progress,
+            install_update, skip_version,
+            get_update_history, verify_data_integrity,
         },
     };
     builder.invoke_handler(tauri::generate_handler![
@@ -333,6 +340,15 @@ pub fn register_commands(
         delete_graph,
         open_in_ide,
         get_graph_visualization_data,
+        // Auto-updater (Phase 5.3)
+        check_for_update,
+        get_cached_update,
+        download_update,
+        get_download_progress,
+        install_update,
+        skip_version,
+        get_update_history,
+        verify_data_integrity,
         // Plugin system (Phase 5.2)
         list_plugins,
         list_installed_plugins,

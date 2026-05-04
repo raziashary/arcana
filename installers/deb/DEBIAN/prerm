@@ -1,0 +1,27 @@
+#!/bin/sh
+# prerm — Pre-removal script for the AutoDev .deb package.
+# Phase 5.3 — Platform Installers.
+# Runs as root before dpkg removes files.
+
+set -e
+
+case "$1" in
+  remove|upgrade|deconfigure)
+    # ── Stop AutoDev if running ────────────────────────────────────────────────
+    if command -v pkill >/dev/null 2>&1; then
+      pkill -x autodev 2>/dev/null || true
+    fi
+    ;;
+
+  failed-upgrade)
+    ;;
+
+  *)
+    echo "prerm called with unknown argument: '$1'" >&2
+    exit 0
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

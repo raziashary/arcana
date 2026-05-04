@@ -14,6 +14,7 @@ use autodev_lib::skills::SkillRegistry;
 use autodev_lib::agent::ToolRegistry;
 use autodev_lib::agent::builtin_tools;
 use autodev_lib::mcp_server::server::start_mcp_server;
+use autodev_lib::updater::{UpdaterState, UpdateChannel, start_background_check};
 
 fn main() {
     // Capture panics and write them to both stderr and the tracing log file
@@ -73,6 +74,9 @@ fn main() {
     let subagent_mgr = autodev_lib::subagent::SubagentManager::new(orch_client.clone());
     autodev_lib::subagent::manager::install_global(subagent_mgr.clone());
 
+    // Phase 5.3 — auto-updater state
+    let updater_state = UpdaterState::new();
+
     // Clone Arcs for the setup hook (setup runs after app handle is available)
     let app_state_for_setup    = app_state.clone();
     let session_mgr_for_setup  = session_mgr.clone();
@@ -80,6 +84,7 @@ fn main() {
     let orch_client_for_setup  = orch_client.clone();
     let sidecar_mgr_for_setup  = sidecar_mgr.clone();
     let subagent_mgr_for_setup = subagent_mgr.clone();
+    let updater_state_for_setup = updater_state.clone();
 
     // register_commands is defined in the lib crate so generate_handler! runs
     // where the #[tauri::command] __cmd__* macros are in scope.
@@ -94,6 +99,7 @@ fn main() {
             .manage(subagent_mgr)
             .manage(skill_registry_managed)
             .manage(mcp_registry.clone())  // Phase 3.4b — exposed so list_mcp_tools can iterate
+            .manage(updater_state)         // Phase 5.3 — auto-updater state
             .setup(move |app| {
                 // Startup progress state machine — drives the loading overlay.
                 // Attached to SidecarManager so spawn/health transitions + log
@@ -324,6 +330,15 @@ fn main() {
                 });
 
                 app.manage(scheduler);
+
+                // Phase 5.3 — start background update checker (every 4 hours).
+                // Runs on the Tokio async runtime; won't block the UI thread.
+                let updater_state_bg = updater_state_for_setup.clone();
+                let app_handle_bg    = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    start_background_check(updater_state_bg, app_handle_bg, UpdateChannel::Stable).await;
+                });
+
                 Ok(())
             }),
     )

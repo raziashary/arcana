@@ -141,6 +141,11 @@ pub struct HookConditions {
     pub session_type:     Option<String>,   // "pa" | "fleet"
     pub agent_mode:       Option<String>,   // "fast_dev" | "review" | "delegate"
     pub time_range:       Option<TimeRange>,
+    /// Rhai script expression that receives context variables and returns bool.
+    /// Available variables: tool_name, file_path, agent_mode, command, hook_type,
+    ///   session_id, worker_id, task_id, is_error.
+    /// Example: `tool_name == "bash" && command.contains("rm -rf")`
+    pub custom_condition: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# AppRun — AppImage entry point for AutoDev.
+# Phase 5.3 — Platform Installers.
+#
+# Sets up the runtime environment and launches the AutoDev binary.
+# APPDIR is set by the AppImage runtime to the mountpoint of the squashfs.
+
+set -euo pipefail
+
+APPDIR="${APPDIR:-$(dirname "$(readlink -f "$0")")}"
+AUTODEV_BIN="$APPDIR/usr/bin/autodev"
+
+# ─── Library path ─────────────────────────────────────────────────────────────
+
+# Prefer system-installed WebKit/GTK libraries; fall back to bundled ones.
+SYSTEM_LIB="/usr/lib/x86_64-linux-gnu"
+BUNDLED_LIB="$APPDIR/usr/lib"
+
+if [[ -d "$SYSTEM_LIB" ]]; then
+  export LD_LIBRARY_PATH="${BUNDLED_LIB}:${SYSTEM_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+else
+  export LD_LIBRARY_PATH="${BUNDLED_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+
+# ─── GDK / WebKit DMA-BUF sandbox workaround (Tauri v2) ──────────────────────
+# Required on some compositors; disable sandbox if running without privileges.
+if [[ "${AUTODEV_NO_SANDBOX:-}" == "1" ]] || [[ "$(id -u)" -eq 0 ]]; then
+  export WEBKIT_DISABLE_DMABUF_RENDERER=1
+fi
+
+# ─── XDG base directories ─────────────────────────────────────────────────────
+# Point XDG dirs to ~/.autodev/ for portable installations.
+export XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+
+# ─── Launch ───────────────────────────────────────────────────────────────────
+
+exec "$AUTODEV_BIN" "$@"

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=AutoDev
+GenericName=AI Development Assistant
+Comment=AI-powered development assistant with multi-agent workflows
+Exec=/usr/bin/autodev %f
+Icon=autodev
+Type=Application
+Categories=Development;IDE;
+MimeType=application/x-autodev-workspace;
+Keywords=ai;coding;assistant;llm;agent;development;
+StartupWMClass=AutoDev
+StartupNotify=true
+Terminal=false

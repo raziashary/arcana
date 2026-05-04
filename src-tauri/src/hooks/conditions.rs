@@ -1,11 +1,29 @@
 // HookConditionEvaluator — checks whether a HookConfig's conditions match
 // the current HookContext. Phase 3.1
+//
+// custom_condition uses the Rhai scripting engine for expression evaluation.
+// Available variables in scope:
+//   tool_name, file_path, agent_mode, command, hook_type,
+//   session_id, worker_id, task_id, is_error
+// Example: `tool_name == "bash" && command.contains("rm -rf")`
 
 use regex::Regex;
 use glob::Pattern;
 use chrono::Timelike;
+use rhai::{Engine, Scope};
 
 use super::types::{HookConditions, HookContext};
+
+/// Build a sandboxed Rhai engine for condition evaluation.
+/// No file system, no process, no networking — read-only expression evaluation.
+fn build_engine() -> Engine {
+    let mut engine = Engine::new();
+    // Restrict to safe operations: no file/env/process access
+    engine.set_max_expr_depths(32, 16);
+    engine.set_max_operations(10_000);
+    engine.set_max_string_size(4096);
+    engine
+}
 
 pub struct HookConditionEvaluator;
 
@@ -79,6 +97,55 @@ impl HookConditionEvaluator {
             }
         }
 
+        // custom_condition: Rhai expression evaluated with context variables in scope.
+        // Errors (syntax, type, timeout) are treated as `false` (fail-safe).
+        if let Some(ref expr) = cond.custom_condition {
+            if !expr.trim().is_empty() {
+                if !Self::eval_custom(expr, ctx) {
+                    return false;
+                }
+            }
+        }
+
         true
+    }
+
+    /// Evaluate a Rhai expression with hook context variables populated in scope.
+    /// Returns `false` on any error — expressions should never crash the hook system.
+    fn eval_custom(expr: &str, ctx: &HookContext) -> bool {
+        let engine = build_engine();
+        let mut scope = Scope::new();
+
+        // Populate scope with every useful context field as typed variables
+        scope.push("hook_type",  ctx.hook_type.clone());
+        scope.push("session_id", ctx.session_id.clone().unwrap_or_default());
+        scope.push("agent_mode", ctx.agent_mode.clone().unwrap_or_default());
+        scope.push("file_path",  ctx.file_path.clone().unwrap_or_default());
+        scope.push("task_id",    ctx.task_id.clone().unwrap_or_default());
+        scope.push("worker_id",  ctx.worker_id.clone().unwrap_or_default());
+
+        // Tool call fields
+        let (tool_name, command, is_error) = if let Some(ref tc) = ctx.tool_call {
+            let cmd = tc.input.get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            (tc.name.clone(), cmd, tc.is_error)
+        } else {
+            (String::new(), String::new(), false)
+        };
+
+        scope.push("tool_name", tool_name);
+        scope.push("command",   command);
+        scope.push("is_error",  is_error);
+
+        // Evaluate — treat any error as false
+        match engine.eval_expression_with_scope::<bool>(&mut scope, expr) {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::warn!("[hooks] custom_condition eval error: {e} (expr: {expr:?})");
+                false
+            }
+        }
     }
 }
