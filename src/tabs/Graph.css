@@ -214,10 +214,12 @@
 }
 
 .edge-toggle-dot {
-  width: 6px;
-  height: 6px;
+  display: inline-block;
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  opacity: 0.4;
+  opacity: 0.55;
 }
 
 .edge-toggle.active .edge-toggle-dot {
