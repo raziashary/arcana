@@ -12,22 +12,49 @@ import WorkerSetupWizard from './WorkerSetupWizard'
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 
-const s = {
+// Dynamic style helpers — typed functions kept outside `s` so the static
+// `Record<string, React.CSSProperties>` annotation can be applied to `s`.
+const trStyle = (even: boolean): React.CSSProperties => ({
+  background: even ? 'var(--bg-2)' : 'transparent',
+})
+
+type BadgeVariant = 'success' | 'error' | 'warning' | 'info'
+const badgeStyle = (variant: BadgeVariant): React.CSSProperties => ({
+  display:      'inline-block',
+  padding:      '2px 8px',
+  borderRadius: 10,
+  fontSize:     11,
+  fontWeight:   600,
+  background: ({
+    success: 'rgba(39,174,96,0.15)',
+    error:   'rgba(192,57,43,0.15)',
+    warning: 'rgba(243,156,18,0.15)',
+    info:    'rgba(52,152,219,0.15)',
+  } as Record<BadgeVariant, string>)[variant],
+  color: ({
+    success: 'var(--success, #27ae60)',
+    error:   'var(--error, #e74c3c)',
+    warning: 'var(--warning, #f39c12)',
+    info:    'var(--info, #3498db)',
+  } as Record<BadgeVariant, string>)[variant],
+})
+
+const s: Record<string, React.CSSProperties> = {
   root: {
-    display:       'flex',
-    flexDirection: 'column',
-    height:        '100%',
-    background:    'var(--bg-1)',
-    color:         'var(--text-1)',
+    display:        'flex',
+    flexDirection:  'column',
+    height:         '100%',
+    background:     'var(--bg-1)',
+    color:          'var(--text-1)',
   },
   header: {
-    display:     'flex',
-    alignItems:  'center',
-    gap:         12,
-    padding:     '14px 20px',
-    borderBottom:'1px solid var(--border)',
-    background:  'var(--bg-2)',
-    flexShrink:  0,
+    display:      'flex',
+    alignItems:   'center',
+    gap:          12,
+    padding:      '14px 20px',
+    borderBottom: '1px solid var(--border)',
+    background:   'var(--bg-2)',
+    flexShrink:   0,
   },
   title: {
     fontSize:   16,
@@ -35,26 +62,26 @@ const s = {
     margin:     0,
   },
   toolbar: {
-    display:     'flex',
-    gap:         10,
-    padding:     '10px 20px',
-    borderBottom:'1px solid var(--border)',
-    flexShrink:  0,
-    flexWrap:    'wrap',
-    alignItems:  'center',
+    display:      'flex',
+    gap:          10,
+    padding:      '10px 20px',
+    borderBottom: '1px solid var(--border)',
+    flexShrink:   0,
+    flexWrap:     'wrap',
+    alignItems:   'center',
   },
   body: {
-    flex:     1,
-    overflowY:'auto',
-    padding:  16,
-    display:  'flex',
-    flexDirection:'column',
-    gap:      12,
+    flex:           1,
+    overflowY:      'auto',
+    padding:        16,
+    display:        'flex',
+    flexDirection:  'column',
+    gap:            12,
   },
   table: {
-    width:          '100%',
-    borderCollapse: 'collapse',
-    fontSize:       13,
+    width:           '100%',
+    borderCollapse:  'collapse',
+    fontSize:        13,
   },
   th: {
     textAlign:    'left',
@@ -64,33 +91,11 @@ const s = {
     fontWeight:   500,
     whiteSpace:   'nowrap',
   },
-  tr: (even: boolean) => ({
-    background: even ? 'var(--bg-2)' : 'transparent',
-  }),
   td: {
-    padding:      '10px 12px',
-    borderBottom: '1px solid var(--border)',
-    verticalAlign:'middle',
+    padding:       '10px 12px',
+    borderBottom:  '1px solid var(--border)',
+    verticalAlign: 'middle',
   },
-  badge: (variant: 'success' | 'error' | 'warning' | 'info') => ({
-    display:      'inline-block',
-    padding:      '2px 8px',
-    borderRadius: 10,
-    fontSize:     11,
-    fontWeight:   600,
-    background: {
-      success: 'rgba(39,174,96,0.15)',
-      error:   'rgba(192,57,43,0.15)',
-      warning: 'rgba(243,156,18,0.15)',
-      info:    'rgba(52,152,219,0.15)',
-    }[variant],
-    color: {
-      success: 'var(--success, #27ae60)',
-      error:   'var(--error, #e74c3c)',
-      warning: 'var(--warning, #f39c12)',
-      info:    'var(--info, #3498db)',
-    }[variant],
-  }),
   iconBtn: {
     padding:      '5px 12px',
     borderRadius: 6,
@@ -112,10 +117,10 @@ const s = {
     fontWeight:   500,
   },
   sectionTitle: {
-    fontSize:    14,
-    fontWeight:  600,
-    color:       'var(--text-1)',
-    margin:      '0 0 10px 0',
+    fontSize:   14,
+    fontWeight: 600,
+    color:      'var(--text-1)',
+    margin:     '0 0 10px 0',
   },
   statCard: {
     background:   'var(--bg-2)',
@@ -130,9 +135,9 @@ const s = {
     color:      'var(--text-1)',
   },
   statLabel: {
-    fontSize: 12,
-    color:    'var(--text-3)',
-    marginTop:2,
+    fontSize:  12,
+    color:     'var(--text-3)',
+    marginTop: 2,
   },
   verifyPanel: {
     background:   'var(--bg-2)',
@@ -258,7 +263,7 @@ const ITDashboard: React.FC = () => {
             { value: Object.values(verifyResults).filter(r => !r.success).length, label: 'Failing', variant: 'error' as const },
           ].map(stat => (
             <div key={stat.label} style={s.statCard}>
-              <div style={{ ...s.statValue, color: s.badge(stat.variant).color }}>{stat.value}</div>
+              <div style={{ ...s.statValue, color: badgeStyle(stat.variant).color }}>{stat.value}</div>
               <div style={s.statLabel}>{stat.label}</div>
             </div>
           ))}
@@ -294,7 +299,7 @@ const ITDashboard: React.FC = () => {
                   const vr = verifyResults[p.name]
                   const isVerifying = operationLoading[`verify_${p.name}`]
                   return (
-                    <tr key={p.name} style={s.tr(i % 2 === 1)}>
+                    <tr key={p.name} style={trStyle(i % 2 === 1)}>
                       <td style={s.td}>
                         <input
                           type="checkbox"
@@ -310,11 +315,11 @@ const ITDashboard: React.FC = () => {
                       <td style={s.td}>{p.plugin_type}</td>
                       <td style={s.td}>
                         {vr ? (
-                          <span style={s.badge(vr.success ? 'success' : 'error')}>
+                          <span style={badgeStyle(vr.success ? 'success' : 'error')}>
                             {vr.success ? '✓ OK' : '✗ Failed'}
                           </span>
                         ) : (
-                          <span style={s.badge('info')}>Not verified</span>
+                          <span style={badgeStyle('info')}>Not verified</span>
                         )}
                       </td>
                       <td style={s.td}>
@@ -359,7 +364,7 @@ const ITDashboard: React.FC = () => {
                 <span style={{ fontWeight: 500 }}>{name}</span>
                 <span style={{ color: 'var(--text-3)', fontSize: 12 }}>{r.message}</span>
                 {r.checks.filter(c => !c.present && c.required).map(c => (
-                  <span key={c.name} style={{ ...s.badge('error'), marginLeft: 4 }}>{c.name} missing</span>
+                  <span key={c.name} style={{ ...badgeStyle('error'), marginLeft: 4 }}>{c.name} missing</span>
                 ))}
               </div>
             ))}
@@ -381,7 +386,7 @@ const ITDashboard: React.FC = () => {
               </thead>
               <tbody>
                 {notInstalled.map((p, i) => (
-                  <tr key={p.name} style={s.tr(i % 2 === 1)}>
+                  <tr key={p.name} style={trStyle(i % 2 === 1)}>
                     <td style={s.td}>
                       <span style={{ marginRight: 8 }}>{p.icon}</span>
                       <strong>{p.name}</strong>

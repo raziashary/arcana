@@ -78,8 +78,10 @@ pub fn start_skill_watcher(
         }
     });
 
-    // Spawn the async task that consumes reload signals with debouncing
-    tokio::spawn(async move {
+    // Spawn the async task that consumes reload signals with debouncing.
+    // Use tauri::async_runtime::spawn — called from .setup() where no Tokio reactor
+    // is running on the current thread yet.
+    tauri::async_runtime::spawn(async move {
         // Debounce: wait 500 ms after the last event before reloading
         loop {
             // Wait for first signal

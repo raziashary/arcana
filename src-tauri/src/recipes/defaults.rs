@@ -83,7 +83,20 @@ fn supervisor_recipe() -> Recipe {
    worker retries from scratch.
 6. QC review tasks (status='qc_review') are handled by the QC agent — do
    not touch them.
-7. Only when ZERO tasks have status='ready' AND no stalled tasks remain:
+6b. Check for build_failed tasks and apply the retry policy:
+   - If the task has retry_count < 3: reset it to ready so a worker can
+     retry by calling `update_task_status(id, 'ready', assigned_worker=null)`.
+     This clears the worker tag so the task re-enters normal dispatch on the
+     next supervisor tick. Do NOT re-assign directly — let the dispatch logic
+     (step 2) pick the right worker again based on task content.
+   - If retry_count >= 3: leave the task as build_failed. Do NOT reset it.
+     It requires manual inspection. Add a comment in your response noting
+     the task ID and that it has exhausted automatic retries.
+   - For rejected tasks (status='rejected'): treat them as ready for re-dispatch
+     to the SAME worker that originally owned them — use assign_task(id, original_worker).
+     The worker will see the rejection reason in the task board and fix the issue.
+7. Only when ZERO tasks have status='ready' AND no stalled tasks remain
+   AND no build_failed tasks are within retry budget AND no rejected tasks remain:
    STOP IMMEDIATELY.
    - Respond with the single text line: `Board clean — idle.`
    - Do NOT call ANY tool. Do NOT create speculative tasks.
@@ -180,6 +193,81 @@ qc_review/build_failed. Budgeting rules:
   your NEXT call MUST be update_task_status(qc_review or build_failed).
 - If you find yourself past turn 10 and have not yet written the artifact,
   stop discovery and write what you have now.
+
+## Python Project Scaffold (MANDATORY when creating a new Python project)
+Before writing any route handlers or models, verify ALL of the following exist.
+If any are missing, create them FIRST before implementing task logic:
+
+1. `requirements.txt` — must include ALL imports used by the code:
+   - Uses `passlib.context.CryptContext`? → list `passlib[bcrypt]` (NOT just `bcrypt`)
+   - Uses `from pydantic import BaseModel` with `from_attributes = True`? → pin `pydantic>=2.0.0`
+   - Uses `from pydantic import BaseModel` with `orm_mode = True`? → pin `pydantic>=1.10,<2.0`
+   - Uses `from pydantic import EmailStr`? → list `pydantic[email]` (not `email-validator` alone)
+   - Uses JWT? → list `python-jose[cryptography]`
+   - Uses SQLAlchemy? → list `sqlalchemy>=2.0.0`
+   - Uses Alembic? → list `alembic>=1.12.0` AND generate alembic.ini + alembic/env.py (see item 4)
+
+2. `database.py` or equivalent — single source of truth for all SQLAlchemy models.
+   All user lookups MUST use the SQLAlchemy session, NOT an in-memory dict.
+   NEVER mix `users_db = {}` with a SQLAlchemy `User` model — pick one and use it everywhere.
+
+3. `alembic.ini` (if Alembic is in requirements):
+   ```ini
+   [alembic]
+   script_location = alembic
+   sqlalchemy.url = sqlite:///./app.db
+   ```
+   Then `alembic/env.py` must import `Base` from your models:
+   ```python
+   from database import Base
+   target_metadata = Base.metadata
+   ```
+   After creating these, run: `bash('alembic revision --autogenerate -m "initial"')`
+
+4. `main.py` entry point — must call `init_db()` or Alembic at startup.
+
+## Python ORM Rules (MANDATORY — violations cause runtime failures)
+When using SQLAlchemy ORM, the following patterns are FORBIDDEN:
+
+FORBIDDEN — attribute traversal across relationships:
+```python
+# NEVER do this — Event.calendar.user_id is not a valid column expression
+db.query(Event).filter(Event.calendar.user_id == some_id)
+```
+
+CORRECT — always use an explicit JOIN with the related model's column:
+```python
+# Always join explicitly and filter on the related model's column
+db.query(Event).join(Calendar, Calendar.id == Event.calendar_id).filter(
+    Calendar.user_id == some_id
+)
+```
+
+Apply this rule to ALL queries that traverse relationships: GET, PUT, PATCH, DELETE endpoints.
+
+## Python Test Rules (MANDATORY when writing pytest suites)
+1. If `database.py` uses `create_engine` (sync), test fixtures MUST use synchronous teardown:
+   ```python
+   @pytest.fixture(autouse=True)
+   def setup_database():
+       Base.metadata.drop_all(bind=engine)
+       Base.metadata.create_all(bind=engine)
+       yield
+       Base.metadata.drop_all(bind=engine)
+   ```
+   Do NOT use `async with engine.begin()` — this requires `create_async_engine`.
+
+2. Any module-level state (e.g. `users_db = {}`) MUST be reset in the fixture:
+   ```python
+   import main as app_module
+   @pytest.fixture(autouse=True)
+   def reset_state():
+       app_module.users_db.clear()
+       yield
+       app_module.users_db.clear()
+   ```
+
+3. Use `scope="function"` for all database fixtures — never `scope="session"` with mutable state.
 
 ## Constraints
 - Only modify backend code (Python/Rust in core-orchestrator, src-tauri)
@@ -280,6 +368,61 @@ qc_review/build_failed.
 - Once the artifact is written AND Build Validation passes, your NEXT call MUST
   be update_task_status(qc_review or build_failed).
 - If past turn 10 and the artifact isn't written, stop discovery and write.
+
+## Frontend Project Scaffold (MANDATORY when creating a new frontend project)
+Before writing ANY React components, verify ALL scaffold files exist.
+If any are missing, create them FIRST — components written without a scaffold cannot be built.
+
+Run `glob('vite.config.*')` to check. If no result, this is a new project — create:
+
+1. `vite.config.ts` (or `vite.config.js`):
+   ```ts
+   import { defineConfig } from 'vite'
+   import react from '@vitejs/plugin-react'
+   export default defineConfig({
+     plugins: [react()],
+     server: { port: 3000 },
+   })
+   ```
+
+2. `public/index.html`:
+   ```html
+   <!DOCTYPE html>
+   <html lang="en">
+   <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>App</title></head>
+   <body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body>
+   </html>
+   ```
+
+3. `src/main.tsx`:
+   ```tsx
+   import React from 'react'
+   import ReactDOM from 'react-dom/client'
+   import App from './App'
+   ReactDOM.createRoot(document.getElementById('root')!).render(
+     <React.StrictMode><App /></React.StrictMode>
+   )
+   ```
+
+4. `tsconfig.json`:
+   ```json
+   {
+     "compilerOptions": {
+       "target": "ES2020", "lib": ["ES2020", "DOM", "DOM.Iterable"],
+       "module": "ESNext", "moduleResolution": "bundler",
+       "jsx": "react-jsx", "strict": true,
+       "noEmit": true, "skipLibCheck": true
+     },
+     "include": ["src"]
+   }
+   ```
+
+Component placement rules (MANDATORY):
+- ALL component files MUST be written to `src/` or a subdirectory (e.g. `src/components/Calendar.tsx`).
+- NEVER write `.tsx` or `.ts` files to the project root.
+- The entry point is ALWAYS `src/main.tsx` → `src/App.tsx`.
+- After scaffold is confirmed, run `npm install` before writing any component,
+  so that imports resolve when `npm run build` runs during Build Validation.
 
 ## Constraints
 - Only modify frontend code (React, TypeScript, Tailwind CSS in src/)
@@ -546,8 +689,22 @@ You MUST call `list_tasks` with status='qc_review' as your VERY FIRST action in 
 Do NOT rely on memory, previous tick results, or context to decide whether tasks exist.
 The task board changes between ticks. ALWAYS call the tool first.
 
-## Second Step — Review
-If list_tasks returns tasks:
+## Second Step — Build-Failed Pre-Screen (MANDATORY before any LLM review)
+Before spending tokens reviewing code, check each qc_review task for a matching
+`build.log` or `build_guard.log` in the working directory:
+  - If `build.log` exists AND contains "Build Validation Failed" or a non-zero exit:
+    → The code does NOT run. Do NOT read the implementation.
+    → Call: update_task_status(id, 'rejected', assigned_worker,
+        rejection_reason='Build failed before QC — see build.log. Fix the build first.')
+    → Skip to the next task (or idle if no more tasks).
+  - If `build_guard.log` exists:
+    → Same action — the sentinel file guard caught a missing dependency install.
+    → rejection_reason='Dependency sentinel missing — run npm install / pip install and rebuild.'
+
+This pre-screen prevents wasting 90+ seconds of LLM time on code that cannot even run.
+
+## Third Step — Full Review
+For tasks that PASSED the pre-screen (no build failure evidence):
   a. Read the acceptance criteria carefully
   b. Use grep/glob/read_file to inspect the implementation
   c. Verify: does the implementation satisfy ALL acceptance criteria?
@@ -560,20 +717,31 @@ If list_tasks returns tasks:
        If the output directory is missing, treat as a build failure → reject.
   e. If ALL criteria met AND checks pass:
      → update_task_status(id, 'done', assigned_worker)
-  f. If any criterion not met OR tests/build fail:
-     → update_task_status(id, 'assigned', assigned_worker) with rejection notes in the task
-       (status 'assigned' lets the worker pick it up again for fixes)
+  f. If any criterion NOT met OR tests/build fail:
+     → update_task_status(id, 'rejected', assigned_worker,
+         rejection_reason='<SPECIFIC description of exactly which criterion failed and why>')
+     RULES for rejection_reason (MANDATORY):
+       - NEVER leave rejection_reason empty or generic ("failed QC" is NOT acceptable)
+       - State the specific file, line, or criterion that failed
+       - State what was expected vs what was found
+       - Example: "GET /events returns 500 — Event.calendar.user_id is invalid SQLAlchemy
+         syntax. Must use explicit JOIN: join(Calendar, Calendar.id == Event.calendar_id)"
+     The worker READS this reason on their next tick. Vague reasons cause the same
+     mistake to repeat, burning another full LLM invocation cycle.
+
 If list_tasks returns NO tasks:
   g. STOP IMMEDIATELY. Respond with: `No tasks in qc_review — idle.`
      Do NOT call ANY other tool.
 
 ## Stop Contract (MANDATORY)
-After every task decision (done/assigned-with-notes) or after confirming no qc_review tasks VIA THE TOOL, reply with text-only and emit NO further tool_use blocks.
+After every task decision (done/rejected) or after confirming no qc_review tasks VIA THE TOOL,
+reply with text-only and emit NO further tool_use blocks.
 
 ## Standards
 - Zero tolerance for failing tests
 - All acceptance criteria must be explicitly verified — not assumed
-- When rejecting: be specific about exactly what criterion failed and why
+- ALWAYS use status='rejected' (NOT 'assigned') when sending work back — 'rejected' preserves
+  the rejection reason and prevents the QC↔assigned loop
 - Do not mark 'done' unless you have verified the output yourself
 
 ## Subagent Protocol (Preferred for multi-file reviews)

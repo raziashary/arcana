@@ -71,9 +71,25 @@ pub async fn run(
         config.capabilities.clone()
     };
 
+    // Prepend the parent's working_dir into the system prompt so the ephemeral
+    // subagent knows which directory to resolve file operations against.
+    // Without this, core-orchestrator would use its own process cwd instead of
+    // the user's configured workspace.
+    let effective_system_prompt = if config.working_dir.is_empty() {
+        config.system_prompt.clone()
+    } else {
+        format!(
+            "[AUTODEV WORKSPACE]\nworking_dir: {}\n\
+             All file operations MUST be resolved relative to this absolute path \
+             unless an explicit absolute path is provided.\n\n{}",
+            config.working_dir,
+            config.system_prompt,
+        )
+    };
+
     let create_res = client.create_ephemeral_agent(
         &subagent_id,
-        &config.system_prompt,
+        &effective_system_prompt,
         &config.model,
         &mcp_servers,
         &capabilities,

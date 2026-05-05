@@ -732,15 +732,19 @@ pub fn start_watchdog(
     sidecar_mgr: Arc<SidecarManager>,
     client:      Arc<client::OrchestratorClient>,
 ) {
+    // Use tauri::async_runtime::spawn instead of tokio::spawn.
+    // start_watchdog is called from Tauri's synchronous .setup() callback where
+    // no Tokio reactor is running on the current thread yet.  Tauri's spawn
+    // stores a handle to the runtime and works correctly from any thread.
     let mem_mgr    = sidecar_mgr.clone();
     let mem_client = client.clone();
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         memory_watchdog(mem_mgr, mem_client).await;
     });
 
     let orch_mgr    = sidecar_mgr;
     let orch_client = client;
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         orch_watchdog(orch_mgr, orch_client).await;
     });
 }

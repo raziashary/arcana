@@ -1,0 +1,8 @@
+# Cargo workspace configuration
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Linux linker — use lld for faster links and ~60 % lower peak RSS ─────────
+# GitHub CI runners have 7 GB RAM; the default GNU ld OOMs on large crates.
+# lld is installed in both rust-checks and cli-checks via apt-get.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]

@@ -1,14 +1,25 @@
 import { useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { useSessionStore } from "../../stores/sessionStore";
+import { useWorkspaceStore } from "../../stores/workspaceStore";
+import { useSettingsStore } from "../../stores/settingsStore";
 
 export function SessionBar() {
   const { sessions, activeSessionId, createSession, switchSession, deleteSession, renameSession } = useSessionStore();
+  const workspaceDir   = useWorkspaceStore(s => s.workspaceDir);
+  const activeProvider = useSettingsStore(s => s.activeProvider);
+  const activeModel    = useSettingsStore(s => s.activeModel);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
 
   const handleNewSession = async () => {
-    const newId = await createSession();
+    // Pass the configured workspace dir so Mode 1 engine uses the right root.
+    // Fall back to '' only if nothing has been configured yet (Rust will then
+    // use the app's cwd, which is harmless for a first-run blank state).
+    const dir      = workspaceDir || '';
+    const provider = activeProvider ?? 'anthropic';
+    const model    = activeModel    ?? 'claude-sonnet-4-5';
+    const newId    = await createSession(dir, provider, model);
     switchSession(newId);
   };
 
