@@ -21,7 +21,7 @@ export default function TabBar() {
     dragIdx.current = idx
   }
 
-  function handleDragOver(e: React.DragEvent, idx: number) {
+  function handleDragOver(e: React.DragEvent) {
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
   }
@@ -62,7 +62,7 @@ export default function TabBar() {
                 }
               }}
               onDragStart={() => handleDragStart(idx)}
-              onDragOver={e  => handleDragOver(e, idx)}
+              onDragOver={handleDragOver}
               onDrop={e      => handleDrop(e, idx)}
               className="flex items-center gap-1.5 pl-2.5 pr-1 py-1.5 cursor-pointer select-none border-r group"
               style={{

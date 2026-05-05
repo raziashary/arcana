@@ -15,7 +15,6 @@ interface Props {
 
 export default function BreadcrumbNav({ path }: Props) {
   const toggleDir = useIdeStore((s) => s.toggleDir)
-  const openFile  = useIdeStore((s) => s.openFile)
 
   if (!path) return null
 

@@ -1,4 +1,4 @@
-// ITDashboard — Bulk deployment view for IT admins.
+﻿// ITDashboard — Bulk deployment view for IT admins.
 // Shows plugin status across the fleet, allows bulk install / verify,
 // and provides a quick path to generate setup tokens for any worker type.
 // Phase 5.2: Plugin System & Worker Setup.
@@ -6,14 +6,13 @@
 import React, { useEffect, useState } from 'react'
 import {
   usePluginStore,
-  PluginInfo,
   VerifyResult,
 } from '../../stores/pluginStore'
 import WorkerSetupWizard from './WorkerSetupWizard'
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 
-const s: Record<string, React.CSSProperties> = {
+const s = {
   root: {
     display:       'flex',
     flexDirection: 'column',
@@ -168,7 +167,6 @@ const ITDashboard: React.FC = () => {
 
   const installedPlugins = plugins.filter(p => p.installed)
   const notInstalled     = plugins.filter(p => !p.installed)
-  const allVerified      = installedPlugins.every(p => verifyResults[p.name]?.success)
 
   // ── Selection ────────────────────────────────────────────────────────────
 
@@ -388,7 +386,7 @@ const ITDashboard: React.FC = () => {
                       <span style={{ marginRight: 8 }}>{p.icon}</span>
                       <strong>{p.name}</strong>
                     </td>
-                    <td style={s.td} style={{ ...s.td, maxWidth: 280, color: 'var(--text-2)' }}>
+                    <td style={{ ...(s.td as React.CSSProperties), maxWidth: 280, color: 'var(--text-2)' }}>
                       {p.description}
                     </td>
                     <td style={s.td}>
