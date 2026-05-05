@@ -71,6 +71,17 @@ export interface AddHookInput {
   action:     HookAction
 }
 
+/** A pre-built hook template shown in the template gallery. */
+export interface HookTemplate {
+  id:          string
+  name:        string
+  description: string
+  category:    'safety' | 'automation' | 'notifications' | 'logging'
+  hook_type:   HookType
+  conditions:  HookConditions
+  action:      HookAction
+}
+
 // ── Store ──────────────────────────────────────────────────────────────────────
 
 interface HookState {

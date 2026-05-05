@@ -1,12 +1,154 @@
 // HooksSettings — full hooks management panel in the Settings tab.
-// Lists hooks, allows enable/disable/delete, add new hooks, and view logs.
+// Lists hooks, allows enable/disable/delete, add new hooks, view logs.
+// Includes: template gallery (pre-built hooks) + mock-context test interface.
 // Phase 3.1
 
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, ToggleLeft, ToggleRight, ChevronDown, ChevronUp, ScrollText, Play, HelpCircle } from 'lucide-react'
-import { useHookStore, type AddHookInput, type HookConfig, type HookType } from '../../stores/hookStore'
+import {
+  Plus, Trash2, ToggleLeft, ToggleRight, ChevronDown, ChevronUp,
+  ScrollText, Play, HelpCircle, LayoutGrid, X, CheckCircle, AlertCircle,
+  ShieldCheck, Zap, Bell, FileText,
+} from 'lucide-react'
+import {
+  useHookStore,
+  type AddHookInput, type HookConfig, type HookType,
+  type HookConditions, type HookAction, type HookTemplate,
+} from '../../stores/hookStore'
 import HookLogViewer from '../hooks/HookLogViewer'
 import HooksInfoModal from '../hooks/HooksInfoModal'
+
+// ── Static template definitions ───────────────────────────────────────────────
+
+const HOOK_TEMPLATES: HookTemplate[] = [
+  // Safety
+  {
+    id: 'block-rm-rf',
+    name: 'Block rm -rf /',
+    description: 'Prevents accidental root filesystem deletion via shell commands.',
+    category: 'safety',
+    hook_type: 'pre_tool_use',
+    conditions: { command_pattern: 'rm\\s+-rf\\s+/' },
+    action: { type: 'block', message: 'Destructive root deletion blocked by AutoDev' },
+  },
+  {
+    id: 'block-force-push',
+    name: 'Block force push',
+    description: 'Stops --force pushes to any remote branch to prevent history loss.',
+    category: 'safety',
+    hook_type: 'pre_push',
+    conditions: { command_pattern: '--force' },
+    action: { type: 'block', message: 'Force push is disabled. Use --force-with-lease if needed.' },
+  },
+  {
+    id: 'block-env-commit',
+    name: 'Block .env file commits',
+    description: 'Prevents accidental commit of .env or secrets files.',
+    category: 'safety',
+    hook_type: 'pre_commit',
+    conditions: { file_pattern: '**/.env*' },
+    action: { type: 'block', message: '.env files must not be committed. Add to .gitignore.' },
+  },
+  // Automation
+  {
+    id: 'auto-fmt-rust',
+    name: 'Auto-format Rust on save',
+    description: 'Runs `cargo fmt` whenever a .rs file is written.',
+    category: 'automation',
+    hook_type: 'post_file_write',
+    conditions: { file_pattern: '**/*.rs' },
+    action: { type: 'shell', command: 'cargo fmt' },
+  },
+  {
+    id: 'auto-fmt-ts',
+    name: 'Auto-format TypeScript on save',
+    description: 'Runs prettier on .ts/.tsx files after every write.',
+    category: 'automation',
+    hook_type: 'post_file_write',
+    conditions: { file_pattern: '**/*.{ts,tsx}' },
+    action: { type: 'shell', command: 'npx prettier --write "$file_path"' },
+  },
+  {
+    id: 'lint-on-commit',
+    name: 'Clippy lint on commit',
+    description: 'Runs `cargo clippy` before each git commit.',
+    category: 'automation',
+    hook_type: 'pre_commit',
+    conditions: {},
+    action: { type: 'shell', command: 'cargo clippy -- -D warnings', timeout_secs: 60 },
+  },
+  {
+    id: 'webhook-on-plan-complete',
+    name: 'Webhook on plan complete',
+    description: 'Posts to your webhook when a plan finishes.',
+    category: 'automation',
+    hook_type: 'on_plan_complete',
+    conditions: {},
+    action: { type: 'http', url: 'https://hooks.example.com/autodev', method: 'POST' },
+  },
+  // Notifications
+  {
+    id: 'notify-task-done',
+    name: 'Notify on task complete',
+    description: 'Desktop notification when a fleet worker finishes a task.',
+    category: 'notifications',
+    hook_type: 'on_task_complete',
+    conditions: {},
+    action: { type: 'notification', title: 'Task Complete', message: 'A worker finished its task.' },
+  },
+  {
+    id: 'notify-qc-fail',
+    name: 'Notify on QC failure',
+    description: 'Desktop alert when quality control rejects a result.',
+    category: 'notifications',
+    hook_type: 'on_qc_fail',
+    conditions: {},
+    action: { type: 'notification', title: 'QC Failed', message: 'Review required — QC rejected the output.' },
+  },
+  {
+    id: 'notify-error',
+    name: 'Notify on agent error',
+    description: 'Desktop alert when the agent encounters an error.',
+    category: 'notifications',
+    hook_type: 'on_error',
+    conditions: {},
+    action: { type: 'notification', title: 'AutoDev Error', message: 'Agent encountered an error. Check the logs.' },
+  },
+  // Logging
+  {
+    id: 'log-tool-calls',
+    name: 'Log all tool calls',
+    description: 'Appends every tool call to a persistent log file.',
+    category: 'logging',
+    hook_type: 'pre_tool_use',
+    conditions: {},
+    action: { type: 'log', file: '~/.autodev/logs/tools.log', message: '[{{hook_type}}] {{tool_name}}: {{command}}' },
+  },
+  {
+    id: 'log-errors',
+    name: 'Log errors to file',
+    description: 'Captures all agent errors in a dedicated error log.',
+    category: 'logging',
+    hook_type: 'on_error',
+    conditions: {},
+    action: { type: 'log', file: '~/.autodev/logs/errors.log', message: '[{{hook_type}}] {{session_id}}: error' },
+  },
+  {
+    id: 'log-git-events',
+    name: 'Log git activity',
+    description: 'Records all commits and pushes with timestamps.',
+    category: 'logging',
+    hook_type: 'post_commit',
+    conditions: {},
+    action: { type: 'log', file: '~/.autodev/logs/git.log', message: '[{{hook_type}}] commit by session {{session_id}}' },
+  },
+]
+
+const CATEGORY_META = {
+  safety:        { label: 'Safety',        color: 'var(--danger)',  icon: ShieldCheck },
+  automation:    { label: 'Automation',    color: 'var(--aqua)',    icon: Zap         },
+  notifications: { label: 'Notifications', color: 'var(--purple)',  icon: Bell        },
+  logging:       { label: 'Logging',       color: 'var(--text-3)',  icon: FileText    },
+} as const
 
 const HOOK_TYPES: HookType[] = [
   'session_start', 'session_end', 'agent_loop_start', 'agent_loop_end', 'on_error',
@@ -19,14 +161,20 @@ const HOOK_TYPES: HookType[] = [
   'on_qc_review_start', 'on_qc_approve', 'on_qc_fail',
 ]
 
+// ── HooksSettings ─────────────────────────────────────────────────────────────
+
 export default function HooksSettings() {
   const store = useHookStore()
-  const [showAddForm, setShowAddForm] = useState(false)
-  const [showLogs,    setShowLogs]    = useState(false)
-  const [showInfo,    setShowInfo]    = useState(false)
-  const [expandedId,  setExpandedId]  = useState<string | null>(null)
+  const [showAddForm,   setShowAddForm]   = useState(false)
+  const [showLogs,      setShowLogs]      = useState(false)
+  const [showInfo,      setShowInfo]      = useState(false)
+  const [showTemplates, setShowTemplates] = useState(false)
+  const [expandedId,    setExpandedId]    = useState<string | null>(null)
+  const [testHookId,    setTestHookId]    = useState<string | null>(null)
 
   useEffect(() => { store.loadHooks() }, [])
+
+  const testHook = testHookId ? store.hooks.find(h => h.id === testHookId) : null
 
   return (
     <div className="space-y-4">
@@ -51,6 +199,19 @@ export default function HooksSettings() {
             What is Hooks?
           </button>
           <button
+            title="Browse pre-built hook templates"
+            onClick={() => setShowTemplates(f => !f)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-mono"
+            style={{
+              background: showTemplates ? 'var(--accent-muted)' : 'var(--bg-2)',
+              color:      showTemplates ? 'var(--accent)'       : 'var(--text-2)',
+              border: `1px solid ${showTemplates ? 'var(--accent-border)' : 'var(--border)'}`,
+            }}
+          >
+            <LayoutGrid size={12} />
+            Templates
+          </button>
+          <button
             title="View execution logs"
             onClick={() => setShowLogs(l => !l)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-mono"
@@ -70,6 +231,22 @@ export default function HooksSettings() {
           </button>
         </div>
       </div>
+
+      {/* Template gallery */}
+      {showTemplates && (
+        <HookTemplateGallery
+          installedNames={store.hooks.map(h => h.name)}
+          onInstall={async tpl => {
+            await store.addHook({
+              name:       tpl.name,
+              hook_type:  tpl.hook_type,
+              conditions: tpl.conditions,
+              action:     tpl.action,
+            })
+            await store.loadHooks()
+          }}
+        />
+      )}
 
       {/* Add form */}
       {showAddForm && (
@@ -95,7 +272,7 @@ export default function HooksSettings() {
           className="rounded-lg p-6 text-center text-xs font-mono"
           style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', color: 'var(--text-3)' }}
         >
-          No hooks configured. Add one to automate actions at lifecycle events.
+          No hooks configured. Add one or browse Templates to get started.
         </div>
       ) : (
         <div className="space-y-2">
@@ -105,9 +282,10 @@ export default function HooksSettings() {
               hook={hook}
               expanded={expandedId === hook.id}
               onToggleExpand={() => setExpandedId(id => id === hook.id ? null : hook.id)}
-              onEnable={()  => store.enableHook(hook.id)}
-              onDisable={() => store.disableHook(hook.id)}
-              onRemove={() => store.removeHook(hook.id)}
+              onEnable={()    => store.enableHook(hook.id)}
+              onDisable={()   => store.disableHook(hook.id)}
+              onRemove={()    => store.removeHook(hook.id)}
+              onOpenTest={()  => setTestHookId(hook.id)}
             />
           ))}
         </div>
@@ -120,6 +298,346 @@ export default function HooksSettings() {
       )}
 
       {showInfo && <HooksInfoModal onClose={() => setShowInfo(false)} />}
+
+      {/* Test modal */}
+      {testHook && (
+        <HookTestModal
+          hook={testHook}
+          onClose={() => setTestHookId(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── HookTemplateGallery ───────────────────────────────────────────────────────
+
+function HookTemplateGallery({
+  installedNames, onInstall,
+}: {
+  installedNames: string[]
+  onInstall:      (tpl: HookTemplate) => Promise<void>
+}) {
+  const [installing, setInstalling] = useState<string | null>(null)
+  const [filter,     setFilter]     = useState<string>('all')
+
+  const categories = ['all', 'safety', 'automation', 'notifications', 'logging'] as const
+  const filtered = filter === 'all'
+    ? HOOK_TEMPLATES
+    : HOOK_TEMPLATES.filter(t => t.category === filter)
+
+  return (
+    <div
+      className="rounded-lg p-4 space-y-3"
+      style={{ background: 'var(--bg-2)', border: '1px solid var(--accent-border)' }}
+    >
+      <div className="flex items-center justify-between">
+        <span className="font-mono text-xs font-semibold" style={{ color: 'var(--accent)' }}>
+          Template Gallery — {HOOK_TEMPLATES.length} pre-built hooks
+        </span>
+        {/* Category filter pills */}
+        <div className="flex gap-1">
+          {categories.map(cat => (
+            <button
+              key={cat}
+              onClick={() => setFilter(cat)}
+              className="px-2.5 py-0.5 rounded-full text-xs font-mono capitalize"
+              style={{
+                background: filter === cat ? 'var(--accent)'       : 'var(--bg-panel)',
+                color:      filter === cat ? '#011627'             : 'var(--text-3)',
+                border:     filter === cat ? 'none'                : '1px solid var(--border)',
+              }}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {filtered.map(tpl => {
+          const meta      = CATEGORY_META[tpl.category]
+          const Icon      = meta.icon
+          const installed = installedNames.includes(tpl.name)
+          return (
+            <div
+              key={tpl.id}
+              className="rounded p-3 flex items-start gap-3"
+              style={{ background: 'var(--bg-panel)', border: '1px solid var(--border)' }}
+            >
+              <Icon size={14} style={{ color: meta.color, marginTop: 2, flexShrink: 0 }} />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-mono font-semibold" style={{ color: 'var(--text-1)' }}>
+                    {tpl.name}
+                  </span>
+                  <span
+                    className="text-xs px-1.5 rounded"
+                    style={{ background: 'var(--bg-selected)', color: 'var(--accent)', fontFamily: 'monospace', fontSize: '10px' }}
+                  >
+                    {tpl.hook_type}
+                  </span>
+                </div>
+                <p className="text-xs mt-0.5 leading-snug" style={{ color: 'var(--text-3)' }}>
+                  {tpl.description}
+                </p>
+              </div>
+              <button
+                disabled={installed || installing === tpl.id}
+                onClick={async () => {
+                  setInstalling(tpl.id)
+                  try { await onInstall(tpl) } finally { setInstalling(null) }
+                }}
+                className="shrink-0 text-xs px-2.5 py-1 rounded font-mono disabled:opacity-40"
+                style={{
+                  background: installed ? 'var(--bg-selected)' : 'var(--accent)',
+                  color:      installed ? 'var(--success)'     : '#011627',
+                }}
+              >
+                {installed ? '✓ Installed' : installing === tpl.id ? '…' : 'Install'}
+              </button>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ── HookTestModal ─────────────────────────────────────────────────────────────
+
+function HookTestModal({ hook, onClose }: { hook: HookConfig; onClose: () => void }) {
+  const store = useHookStore()
+
+  // Context fields
+  const [toolName,   setToolName]   = useState('')
+  const [command,    setCommand]    = useState('')
+  const [filePath,   setFilePath]   = useState('')
+  const [agentMode,  setAgentMode]  = useState('')
+  const [sessionId,  setSessionId]  = useState('test-session-1')
+  const [workerId,   setWorkerId]   = useState('')
+  const [taskId,     setTaskId]     = useState('')
+  const [isError,    setIsError]    = useState(false)
+
+  const [running,    setRunning]    = useState(false)
+  const [result,     setResult]     = useState<{ outcome: string; output?: string; error?: string } | null>(null)
+
+  async function runTest() {
+    setRunning(true)
+    setResult(null)
+    try {
+      const ctx = {
+        hook_type:  hook.hook_type,
+        timestamp:  new Date().toISOString(),
+        session_id: sessionId || null,
+        agent_mode: agentMode || null,
+        file_path:  filePath  || null,
+        task_id:    taskId    || null,
+        worker_id:  workerId  || null,
+        tool_call:  toolName ? {
+          id:       `test-${Date.now()}`,
+          name:     toolName,
+          input:    { command },
+          result:   null,
+          is_error: isError,
+        } : null,
+        extra: {},
+      }
+      const logs = await store.testHook(hook.id, ctx as Record<string, unknown>)
+      const log  = logs[0]
+      setResult({ outcome: log.outcome, output: log.output, error: log.error })
+    } catch (e) {
+      setResult({ outcome: 'failed', error: String(e) })
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const inp = {
+    background: 'var(--bg-input)', border: '1px solid var(--border)',
+    color: 'var(--text-1)', borderRadius: '4px', padding: '5px 8px',
+    fontSize: '11px', width: '100%', fontFamily: 'monospace',
+  }
+  const lbl = { color: 'var(--text-3)', fontSize: '10px', fontFamily: 'monospace' }
+
+  return (
+    /* Backdrop */
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ background: 'rgba(0,0,0,0.55)' }}
+      onClick={e => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div
+        className="rounded-xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden"
+        style={{ background: 'var(--bg-panel)', border: '1px solid var(--border)' }}
+      >
+        {/* Header */}
+        <div
+          className="flex items-center justify-between px-5 py-4"
+          style={{ borderBottom: '1px solid var(--border)' }}
+        >
+          <div>
+            <div className="font-mono text-sm font-semibold" style={{ color: 'var(--text-1)' }}>
+              Test: {hook.name}
+            </div>
+            <div className="text-xs mt-0.5" style={{ color: 'var(--text-3)' }}>
+              Build a mock context and fire the hook against the real executor
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded hover:opacity-70">
+            <X size={14} style={{ color: 'var(--text-3)' }} />
+          </button>
+        </div>
+
+        {/* Form */}
+        <div className="px-5 py-4 space-y-3">
+          {/* Hook meta — read-only */}
+          <div className="flex items-center gap-2 text-xs font-mono">
+            <span style={{ color: 'var(--text-3)' }}>Event:</span>
+            <span
+              className="px-1.5 rounded"
+              style={{ background: 'var(--bg-selected)', color: 'var(--accent)' }}
+            >
+              {hook.hook_type}
+            </span>
+            <span style={{ color: 'var(--text-3)' }}>Action:</span>
+            <span style={{ color: 'var(--text-2)' }}>{hook.action.type}</span>
+          </div>
+
+          {/* Tool context */}
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <label style={lbl}>tool_name</label>
+              <input value={toolName} onChange={e => setToolName(e.target.value)} style={inp} placeholder="bash" />
+            </div>
+            <div className="space-y-1">
+              <label style={lbl}>command (tool input)</label>
+              <input value={command} onChange={e => setCommand(e.target.value)} style={inp} placeholder="cargo build" />
+            </div>
+          </div>
+
+          {/* File + agent */}
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <label style={lbl}>file_path</label>
+              <input value={filePath} onChange={e => setFilePath(e.target.value)} style={inp} placeholder="/repo/src/main.rs" />
+            </div>
+            <div className="space-y-1">
+              <label style={lbl}>agent_mode</label>
+              <select
+                title="agent_mode"
+                value={agentMode}
+                onChange={e => setAgentMode(e.target.value)}
+                style={inp}
+              >
+                <option value="">(none)</option>
+                <option value="fast_dev">fast_dev</option>
+                <option value="review">review</option>
+                <option value="delegate">delegate</option>
+                <option value="pa">pa</option>
+                <option value="fleet">fleet</option>
+              </select>
+            </div>
+          </div>
+
+          {/* IDs */}
+          <div className="grid grid-cols-3 gap-2">
+            <div className="space-y-1">
+              <label style={lbl}>session_id</label>
+              <input value={sessionId} onChange={e => setSessionId(e.target.value)} style={inp} placeholder="ses-1" />
+            </div>
+            <div className="space-y-1">
+              <label style={lbl}>worker_id</label>
+              <input value={workerId} onChange={e => setWorkerId(e.target.value)} style={inp} placeholder="w-dev" />
+            </div>
+            <div className="space-y-1">
+              <label style={lbl}>task_id</label>
+              <input value={taskId} onChange={e => setTaskId(e.target.value)} style={inp} placeholder="task-1" />
+            </div>
+          </div>
+
+          {/* is_error toggle */}
+          <label className="flex items-center gap-2 cursor-pointer text-xs font-mono" style={{ color: 'var(--text-2)' }}>
+            <input
+              type="checkbox"
+              checked={isError}
+              onChange={e => setIsError(e.target.checked)}
+              className="w-3.5 h-3.5"
+            />
+            is_error (simulate a tool error context)
+          </label>
+
+          {/* Result */}
+          {result && (
+            <div
+              className="rounded p-3 flex items-start gap-2 text-xs font-mono"
+              style={{
+                background: result.outcome === 'executed'
+                  ? 'rgba(173,219,103,0.08)'
+                  : result.outcome === 'skipped'
+                  ? 'rgba(130,170,255,0.08)'
+                  : 'rgba(255,99,99,0.08)',
+                border: `1px solid ${
+                  result.outcome === 'executed' ? 'rgba(173,219,103,0.25)'
+                  : result.outcome === 'skipped' ? 'rgba(130,170,255,0.25)'
+                  : 'rgba(255,99,99,0.25)'
+                }`,
+              }}
+            >
+              {result.outcome === 'executed'
+                ? <CheckCircle size={13} style={{ color: 'var(--success)', flexShrink: 0, marginTop: 1 }} />
+                : <AlertCircle size={13} style={{ color: 'var(--danger)',  flexShrink: 0, marginTop: 1 }} />
+              }
+              <div className="flex-1 min-w-0">
+                <span
+                  className="uppercase font-semibold"
+                  style={{
+                    color: result.outcome === 'executed' ? 'var(--success)'
+                         : result.outcome === 'skipped'  ? 'var(--accent)'
+                         : 'var(--danger)',
+                    fontSize: '10px',
+                  }}
+                >
+                  {result.outcome}
+                </span>
+                {result.output && (
+                  <pre className="mt-1 whitespace-pre-wrap break-all" style={{ color: 'var(--text-2)', fontSize: '10px' }}>
+                    {result.output}
+                  </pre>
+                )}
+                {result.error && (
+                  <pre className="mt-1 whitespace-pre-wrap break-all" style={{ color: 'var(--danger)', fontSize: '10px' }}>
+                    {result.error}
+                  </pre>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div
+          className="flex items-center justify-end gap-2 px-5 py-3"
+          style={{ borderTop: '1px solid var(--border)' }}
+        >
+          <button
+            onClick={onClose}
+            className="px-3 py-1.5 rounded text-xs font-mono"
+            style={{ background: 'var(--bg-panel)', color: 'var(--text-2)', border: '1px solid var(--border)' }}
+          >
+            Close
+          </button>
+          <button
+            onClick={runTest}
+            disabled={running}
+            className="flex items-center gap-1.5 px-4 py-1.5 rounded text-xs font-mono font-semibold disabled:opacity-50"
+            style={{ background: 'var(--accent)', color: '#011627' }}
+          >
+            <Play size={11} />
+            {running ? 'Running…' : 'Run Test'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -127,7 +645,7 @@ export default function HooksSettings() {
 // ── HookRow ───────────────────────────────────────────────────────────────────
 
 function HookRow({
-  hook, expanded, onToggleExpand, onEnable, onDisable, onRemove,
+  hook, expanded, onToggleExpand, onEnable, onDisable, onRemove, onOpenTest,
 }: {
   hook:            HookConfig
   expanded:        boolean
@@ -135,26 +653,11 @@ function HookRow({
   onEnable:        () => void
   onDisable:       () => void
   onRemove:        () => void
+  onOpenTest:      () => void
 }) {
   const store = useHookStore()
-  const [testResult,       setTestResult]       = useState<{ outcome: string; output?: string; error?: string } | null>(null)
-  const [testing,          setTesting]          = useState(false)
   const [customCondition,  setCustomCondition]  = useState(hook.conditions.custom_condition ?? '')
   const [condSaving,       setCondSaving]       = useState(false)
-
-  async function handleTest() {
-    setTesting(true)
-    setTestResult(null)
-    try {
-      const logs = await store.testHook(hook.id, {})
-      const log  = logs[0]
-      setTestResult({ outcome: log.outcome, output: log.output, error: log.error })
-    } catch (e) {
-      setTestResult({ outcome: 'failed', error: String(e) })
-    } finally {
-      setTesting(false)
-    }
-  }
 
   async function handleSaveCondition() {
     setCondSaving(true)
@@ -172,6 +675,7 @@ function HookRow({
       setCondSaving(false)
     }
   }
+
   return (
     <div
       className="rounded-lg overflow-hidden"
@@ -214,10 +718,9 @@ function HookRow({
         {/* Actions */}
         <div className="flex items-center gap-1 shrink-0">
           <button
-            title="Test hook with empty context"
-            onClick={handleTest}
-            disabled={testing}
-            className="p-1.5 rounded hover:opacity-70 disabled:opacity-40"
+            title="Test hook with mock context"
+            onClick={onOpenTest}
+            className="p-1.5 rounded hover:opacity-70"
           >
             <Play size={12} style={{ color: 'var(--accent)' }} />
           </button>
@@ -240,38 +743,6 @@ function HookRow({
           </button>
         </div>
       </div>
-
-      {/* Inline test result */}
-      {testResult && (
-        <div
-          className="px-4 py-2 text-xs font-mono flex items-start gap-2"
-          style={{
-            borderTop:  '1px solid var(--border)',
-            background: testResult.outcome === 'executed' ? 'rgba(173,219,103,0.06)' : 'rgba(255,99,99,0.06)',
-          }}
-        >
-          <span
-            className="shrink-0 uppercase font-semibold"
-            style={{ color: testResult.outcome === 'executed' ? 'var(--success)' : 'var(--danger)', fontSize: '10px' }}
-          >
-            TEST: {testResult.outcome}
-          </span>
-          {testResult.output && (
-            <span style={{ color: 'var(--text-2)', fontSize: '10px' }} className="truncate">{testResult.output}</span>
-          )}
-          {testResult.error && (
-            <span style={{ color: 'var(--danger)', fontSize: '10px' }} className="truncate">{testResult.error}</span>
-          )}
-          <button
-            title="Dismiss test result"
-            onClick={() => setTestResult(null)}
-            className="ml-auto shrink-0 hover:opacity-70"
-            style={{ color: 'var(--text-3)', fontSize: '10px' }}
-          >
-            ✕
-          </button>
-        </div>
-      )}
 
       {/* Expanded detail */}
       {expanded && (
@@ -330,7 +801,8 @@ function HookRow({
               }}
             />
             <div style={{ color: 'var(--text-3)', fontSize: '10px' }}>
-              Variables: <code>tool_name</code>, <code>file_path</code>, <code>agent_mode</code>, <code>command</code>, <code>hook_type</code>, <code>session_id</code>, <code>worker_id</code>, <code>task_id</code>, <code>is_error</code>
+              Variables: <code>tool_name</code>, <code>file_path</code>, <code>agent_mode</code>, <code>command</code>,{' '}
+              <code>hook_type</code>, <code>session_id</code>, <code>worker_id</code>, <code>task_id</code>, <code>is_error</code>
             </div>
           </div>
 
@@ -362,20 +834,20 @@ function actionSummary(hook: HookConfig): string {
 // ── AddHookForm ───────────────────────────────────────────────────────────────
 
 function AddHookForm({ onAdd, onCancel }: { onAdd: (i: AddHookInput) => Promise<void>; onCancel: () => void }) {
-  const [name,      setName]      = useState('')
-  const [hookType,  setHookType]  = useState<HookType>('post_file_write')
+  const [name,       setName]       = useState('')
+  const [hookType,   setHookType]   = useState<HookType>('post_file_write')
   const [actionType, setActionType] = useState<'shell' | 'http' | 'notification' | 'log' | 'block' | 'emit_event'>('shell')
-  const [command,   setCommand]   = useState('')
-  const [url,       setUrl]       = useState('')
-  const [method,    setMethod]    = useState('POST')
+  const [command,    setCommand]    = useState('')
+  const [url,        setUrl]        = useState('')
+  const [method,     setMethod]     = useState('POST')
   const [notifTitle, setNotifTitle] = useState('')
-  const [notifMsg,  setNotifMsg]  = useState('')
-  const [logFile,   setLogFile]   = useState('')
-  const [logMsg,    setLogMsg]    = useState('{{hook_type}} fired')
-  const [blockMsg,  setBlockMsg]  = useState('')
-  const [eventName, setEventName] = useState('')
-  const [saving,    setSaving]    = useState(false)
-  const [error,     setError]     = useState<string | null>(null)
+  const [notifMsg,   setNotifMsg]   = useState('')
+  const [logFile,    setLogFile]    = useState('')
+  const [logMsg,     setLogMsg]     = useState('{{hook_type}} fired')
+  const [blockMsg,   setBlockMsg]   = useState('')
+  const [eventName,  setEventName]  = useState('')
+  const [saving,     setSaving]     = useState(false)
+  const [error,      setError]      = useState<string | null>(null)
 
   async function handleSave() {
     if (!name.trim()) { setError('Name is required'); return }
@@ -394,12 +866,12 @@ function AddHookForm({ onAdd, onCancel }: { onAdd: (i: AddHookInput) => Promise<
 
   function buildAction(): AddHookInput['action'] | null {
     switch (actionType) {
-      case 'shell':        return command ? { type: 'shell', command } : null
-      case 'http':         return url    ? { type: 'http', url, method } : null
+      case 'shell':        return command    ? { type: 'shell', command } : null
+      case 'http':         return url        ? { type: 'http', url, method } : null
       case 'notification': return notifTitle ? { type: 'notification', title: notifTitle, message: notifMsg } : null
-      case 'log':          return logFile ? { type: 'log', file: logFile, message: logMsg } : null
+      case 'log':          return logFile    ? { type: 'log', file: logFile, message: logMsg } : null
       case 'block':        return { type: 'block', message: blockMsg || undefined }
-      case 'emit_event':   return eventName ? { type: 'emit_event', event_name: eventName } : null
+      case 'emit_event':   return eventName  ? { type: 'emit_event', event_name: eventName } : null
       default:             return null
     }
   }
@@ -445,7 +917,6 @@ function AddHookForm({ onAdd, onCancel }: { onAdd: (i: AddHookInput) => Promise<
         </select>
       </div>
 
-      {/* Action-specific fields */}
       {actionType === 'shell' && (
         <div className="space-y-1">
           <label style={labelStyle}>Command</label>
@@ -486,7 +957,7 @@ function AddHookForm({ onAdd, onCancel }: { onAdd: (i: AddHookInput) => Promise<
           </div>
           <div className="space-y-1">
             <label style={labelStyle}>Message template</label>
-            <input title="Log message template" value={logMsg} onChange={e => setLogMsg(e.target.value)} style={inputStyle} placeholder="{{hook_type}} fired" />
+            <input title="Log message template" value={logMsg} onChange={e => setLogMsg(e.target.value)} style={inputStyle} />
           </div>
         </div>
       )}

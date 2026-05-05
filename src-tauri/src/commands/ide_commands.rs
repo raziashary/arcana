@@ -5,8 +5,11 @@
 use crate::commands::workspace_commands::load_workspace_dir;
 use crate::errors::{AutoDevError, Result};
 use crate::ide::{
-    file_reader, file_search, file_tree, symbols,
-    types::{ContentSearchResult, FileContent, FileMetadata, FileSearchResult, FileTreeNode, SymbolTree},
+    file_reader, file_search, file_tree, symbol_nav, symbols,
+    types::{
+        ContentSearchResult, FileContent, FileMetadata, FileSearchResult, FileTreeNode,
+        SymbolDefinition, SymbolReference, SymbolTree,
+    },
     workspace::{self, IdeWorkspaceState},
 };
 
@@ -99,6 +102,135 @@ pub fn search_file_contents(
 pub fn get_symbol_tree(path: String) -> Result<SymbolTree> {
     let workspace = require_workspace()?;
     symbols::extract(&workspace, &path)
+}
+
+// ─── File Mutations ───────────────────────────────────────────────────────────
+
+/// Create a new file at `path` (relative to workspace) with optional initial content.
+#[tauri::command]
+pub fn create_file(path: String, content: Option<String>) -> Result<()> {
+    let workspace = require_workspace()?;
+    let abs = resolve_safe(&workspace, &path)?;
+    if let Some(parent) = abs.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| AutoDevError::Agent(format!("mkdir: {e}")))?;
+    }
+    std::fs::write(&abs, content.unwrap_or_default())
+        .map_err(|e| AutoDevError::Agent(format!("create file: {e}")))?;
+    Ok(())
+}
+
+/// Create a new directory at `path` (relative to workspace).
+#[tauri::command]
+pub fn create_directory(path: String) -> Result<()> {
+    let workspace = require_workspace()?;
+    let abs = resolve_safe(&workspace, &path)?;
+    std::fs::create_dir_all(&abs)
+        .map_err(|e| AutoDevError::Agent(format!("mkdir: {e}")))?;
+    Ok(())
+}
+
+/// Delete the file (or empty directory) at `path` (relative to workspace).
+#[tauri::command]
+pub fn delete_file(path: String) -> Result<()> {
+    let workspace = require_workspace()?;
+    let abs = resolve_safe(&workspace, &path)?;
+    if abs.is_dir() {
+        std::fs::remove_dir_all(&abs)
+            .map_err(|e| AutoDevError::Agent(format!("rmdir: {e}")))?;
+    } else {
+        std::fs::remove_file(&abs)
+            .map_err(|e| AutoDevError::Agent(format!("rm: {e}")))?;
+    }
+    Ok(())
+}
+
+/// Rename or move a file/directory from `old_path` to `new_path` (both relative).
+#[tauri::command]
+pub fn rename_file(old_path: String, new_path: String) -> Result<()> {
+    let workspace = require_workspace()?;
+    let abs_old = resolve_safe(&workspace, &old_path)?;
+    let abs_new = {
+        let p = std::path::Path::new(&workspace).join(&new_path);
+        // Canonicalize the parent to ensure it exists, but don't require the
+        // target itself to exist (it's being created by the rename).
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| AutoDevError::Agent(format!("mkdir for rename: {e}")))?;
+        }
+        p
+    };
+    std::fs::rename(&abs_old, &abs_new)
+        .map_err(|e| AutoDevError::Agent(format!("rename: {e}")))?;
+    Ok(())
+}
+
+/// Move a file/directory from `from_path` to a destination directory `to_dir`,
+/// preserving the original filename.  Both paths are relative to workspace.
+#[tauri::command]
+pub fn move_file(from_path: String, to_dir: String) -> Result<()> {
+    let workspace = require_workspace()?;
+    let abs_from = resolve_safe(&workspace, &from_path)?;
+    let file_name = abs_from
+        .file_name()
+        .ok_or_else(|| AutoDevError::Agent("invalid from_path".into()))?;
+    let abs_to_dir = std::path::Path::new(&workspace).join(&to_dir);
+    std::fs::create_dir_all(&abs_to_dir)
+        .map_err(|e| AutoDevError::Agent(format!("mkdir: {e}")))?;
+    let abs_dest = abs_to_dir.join(file_name);
+    std::fs::rename(&abs_from, &abs_dest)
+        .map_err(|e| AutoDevError::Agent(format!("move: {e}")))?;
+    Ok(())
+}
+
+/// Resolve a workspace-relative path to an absolute path, rejecting traversals
+/// that escape the workspace root.
+fn resolve_safe(workspace: &str, path: &str) -> Result<std::path::PathBuf> {
+    let ws = std::path::Path::new(workspace);
+    let candidate = ws.join(path);
+    // Strip off any ".." components by canonicalizing the parent.
+    // We can't canonicalize the full path if the file doesn't exist yet.
+    let normalized = candidate
+        .components()
+        .fold(std::path::PathBuf::new(), |mut acc, c| {
+            match c {
+                std::path::Component::ParentDir => { acc.pop(); }
+                other => acc.push(other),
+            }
+            acc
+        });
+    if !normalized.starts_with(ws) {
+        return Err(AutoDevError::Agent(
+            format!("path '{}' escapes workspace root", path)
+        ));
+    }
+    Ok(normalized)
+}
+
+// ─── Symbol Navigation ────────────────────────────────────────────────────────
+
+/// Find the definition site of the symbol at `(line, column)` in `path`.
+/// `line` is 1-indexed; `column` is the 0-indexed byte offset within the line.
+/// Returns `null` on the frontend when no definition is found.
+#[tauri::command]
+pub fn resolve_symbol(
+    path:   String,
+    line:   usize,
+    column: usize,
+) -> Result<Option<SymbolDefinition>> {
+    let workspace = require_workspace()?;
+    symbol_nav::resolve_symbol(&workspace, &path, line, column)
+}
+
+/// Find all locations in the workspace where `symbol_name` appears as a whole
+/// word.  Searches source files only; binary files are skipped.
+#[tauri::command]
+pub fn find_symbol_references(
+    symbol_name: String,
+    max_results: Option<usize>,
+) -> Result<Vec<SymbolReference>> {
+    let workspace = require_workspace()?;
+    symbol_nav::find_symbol_references(&workspace, &symbol_name, max_results.unwrap_or(200))
 }
 
 // ─── Workspace state (open tabs, expanded dirs) ───────────────────────────────

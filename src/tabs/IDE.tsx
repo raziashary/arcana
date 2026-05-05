@@ -23,6 +23,7 @@ import { useIdeStore } from '../stores/ideStore'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 import FileTree      from '../components/ide/FileTree'
 import TabBar        from '../components/ide/TabBar'
+import BreadcrumbNav from '../components/ide/BreadcrumbNav'
 import CodeViewer    from '../components/ide/CodeViewer'
 import FileSearch    from '../components/ide/FileSearch'
 import SymbolOutline from '../components/ide/SymbolOutline'
@@ -120,7 +121,10 @@ export default function IDETab() {
           </button>
         </div>
         {activeTab && openTabs.some((t) => t.relativePath === activeTab) ? (
-          <CodeViewer tabPath={activeTab} />
+          <>
+            <BreadcrumbNav path={activeTab} />
+            <CodeViewer tabPath={activeTab} />
+          </>
         ) : (
           <div
             className="flex-1 flex flex-col items-center justify-center"

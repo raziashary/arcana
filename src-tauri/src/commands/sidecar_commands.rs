@@ -192,6 +192,62 @@ pub fn stop_sidecar(
     "stopped".into()
 }
 
+// ─── Restart ─────────────────────────────────────────────────────────────────
+
+/// Stop the full fleet and restart it in the correct order
+/// (memory-mcp-server first, then core-orchestrator).
+/// Waits for health probes on both services before returning.
+#[tauri::command]
+pub async fn restart_sidecar(
+    sidecar: State<'_, Arc<SidecarManager>>,
+    client:  State<'_, Arc<OrchestratorClient>>,
+) -> Result<String, String> {
+    info!("[sidecar_commands] restart_sidecar: stopping fleet");
+    sidecar.stop_all();
+    client.clear_cache();
+
+    // Brief pause to let ports be released by the OS
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // ── memory-mcp-server ────────────────────────────────────────────────────
+    info!("[sidecar_commands] restart_sidecar: starting memory-mcp-server");
+    let mem_cwd = resolve_memory_path(None).map_err(|e| e.to_string())?;
+    sidecar.start_memory(&mem_cwd).map_err(|e| e.to_string())?;
+
+    let mut mem_ok = false;
+    for attempt in 1..=20u32 {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        if client.is_memory_healthy().await {
+            sidecar.mark_memory_running();
+            info!("[sidecar_commands] restart: memory-mcp-server ready after {attempt}s");
+            mem_ok = true;
+            break;
+        }
+    }
+    if !mem_ok {
+        sidecar.mark_memory_error("restart: health check timed out after 20 s");
+        return Err("memory-mcp-server did not become healthy within 20 seconds on restart".into());
+    }
+
+    // ── core-orchestrator ────────────────────────────────────────────────────
+    info!("[sidecar_commands] restart_sidecar: starting core-orchestrator");
+    let orch_cwd = resolve_sidecar_path(None).map_err(|e| e.to_string())?;
+    sidecar.start(&orch_cwd).map_err(|e| e.to_string())?;
+
+    for attempt in 1..=30u32 {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        if client.is_healthy().await {
+            sidecar.mark_running();
+            client.clear_cache();
+            info!("[sidecar_commands] restart: core-orchestrator ready after {attempt}s");
+            return Ok("running".into());
+        }
+    }
+
+    sidecar.mark_error("restart: health check timed out after 30 s");
+    Err("core-orchestrator did not become healthy within 30 seconds on restart".into())
+}
+
 // ─── MCP tool browser (Phase 3.4b) ───────────────────────────────────────────
 
 /// Tool metadata returned to the frontend MCP tool browser. Mirrors the shape

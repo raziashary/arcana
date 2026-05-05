@@ -17,4 +17,5 @@ pub mod file_tree;
 pub mod file_reader;
 pub mod file_search;
 pub mod symbols;
+pub mod symbol_nav;
 pub mod workspace;

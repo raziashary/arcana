@@ -143,6 +143,14 @@ export interface IdeStore {
   closeAllTabs:       () => void
   switchTab:          (relativePath: string) => void
   setSearchOpen:      (open: boolean) => void
+  /** Reorder tabs by moving the tab at `fromIdx` to `toIdx`. */
+  reorderTabs:        (fromIdx: number, toIdx: number) => void
+  // File mutations — each refreshes the tree after success
+  createFile:         (relativePath: string, content?: string) => Promise<void>
+  createDirectory:    (relativePath: string) => Promise<void>
+  deleteFile:         (relativePath: string) => Promise<void>
+  renameFile:         (oldPath: string, newPath: string) => Promise<void>
+  moveFile:           (fromPath: string, toDir: string) => Promise<void>
 }
 
 const RECENT_LIMIT = 20
@@ -321,6 +329,60 @@ export const useIdeStore = create<IdeStore>((set, get) => ({
   },
 
   setSearchOpen: (open: boolean) => set({ searchOpen: open }),
+
+  reorderTabs: (fromIdx: number, toIdx: number) => {
+    set((state) => {
+      const tabs = [...state.openTabs]
+      const [moved] = tabs.splice(fromIdx, 1)
+      tabs.splice(toIdx, 0, moved)
+      return { openTabs: tabs }
+    })
+    void persist(get())
+  },
+
+  // ── File mutations ────────────────────────────────────────────────────────────
+
+  createFile: async (relativePath: string, content?: string) => {
+    await invoke('create_file', { path: relativePath, content: content ?? null })
+    await get().refreshTree()
+  },
+
+  createDirectory: async (relativePath: string) => {
+    await invoke('create_directory', { path: relativePath })
+    await get().refreshTree()
+  },
+
+  deleteFile: async (relativePath: string) => {
+    await invoke('delete_file', { path: relativePath })
+    // Close the tab if it was open
+    const s = get()
+    if (s.openTabs.some(t => t.relativePath === relativePath)) {
+      get().closeTab(relativePath)
+    }
+    await get().refreshTree()
+  },
+
+  renameFile: async (oldPath: string, newPath: string) => {
+    await invoke('rename_file', { oldPath, newPath })
+    const s = get()
+    if (s.openTabs.some(t => t.relativePath === oldPath)) {
+      get().closeTab(oldPath)
+    }
+    await get().refreshTree()
+    // Re-open at new path if it was open before
+    if (s.openTabs.some(t => t.relativePath === oldPath)) {
+      await get().openFile(newPath)
+    }
+  },
+
+  moveFile: async (fromPath: string, toDir: string) => {
+    await invoke('move_file', { fromPath, toDir })
+    const s = get()
+    if (s.openTabs.some(t => t.relativePath === fromPath)) {
+      get().closeTab(fromPath)
+    }
+    await get().refreshTree()
+  },
 }))
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

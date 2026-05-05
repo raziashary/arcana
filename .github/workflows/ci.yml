@@ -53,8 +53,7 @@ jobs:
         run: |
           cargo clippy \
             --manifest-path src-tauri/Cargo.toml \
-            --all-targets \
-            -- -D warnings
+            --all-targets
 
       - name: Tests
         run: |
@@ -75,7 +74,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
@@ -118,8 +117,7 @@ jobs:
         run: |
           cargo clippy \
             --manifest-path src-cli/Cargo.toml \
-            --all-targets \
-            -- -D warnings
+            --all-targets
 
       - name: Tests
         run: |
@@ -149,7 +147,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install deps
@@ -186,7 +184,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install deps

@@ -28,6 +28,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
 use crate::errors::{AutoDevError, Result};
@@ -604,6 +605,28 @@ impl SidecarManager {
         self.stop();
         self.stop_memory();
     }
+
+    // ─── Process-exit detection (for auto-restart watchdog) ───────────────────
+
+    /// Non-blocking check: returns true if the core-orchestrator Child has exited.
+    /// Returns false when no process has been started.
+    pub fn orch_exited(&self) -> bool {
+        if let Some(child) = self.orch_process.lock().unwrap().as_mut() {
+            matches!(child.try_wait(), Ok(Some(_)))
+        } else {
+            false
+        }
+    }
+
+    /// Non-blocking check: returns true if memory-mcp-server Child has exited.
+    /// Returns false when no process has been started.
+    pub fn memory_exited(&self) -> bool {
+        if let Some(child) = self.memory_process.lock().unwrap().as_mut() {
+            matches!(child.try_wait(), Ok(Some(_)))
+        } else {
+            false
+        }
+    }
 }
 
 impl Default for SidecarManager {
@@ -686,4 +709,193 @@ pub fn resolve_memory_path(explicit: Option<&str>) -> std::result::Result<PathBu
 
     error!("[SidecarManager] memory-mcp-server path not found; set AUTODEV_MEMORY_PATH");
     Err("memory-mcp-server path not found. Set AUTODEV_MEMORY_PATH env var or pass an explicit path.".into())
+}
+
+// ─── Auto-restart Watchdog (Phase 3.4B) ──────────────────────────────────────
+//
+// Monitors both sidecar processes and restarts them on failure using
+// exponential backoff.  Tolerates transient health-check failures up to
+// WATCHDOG_UNHEALTHY_THRESHOLD consecutive misses before triggering a restart.
+//
+// Backoff sequence: 2s → 4s → 8s → 16s → 32s → 64s → 120s (capped).
+// The backoff resets to 2s after a successful recovery.
+
+const WATCHDOG_POLL_SECS:        u64  = 10;
+const WATCHDOG_INITIAL_DELAY:    u64  = 90;  // Let startup complete first
+const WATCHDOG_MAX_BACKOFF:      u64  = 120;
+const WATCHDOG_UNHEALTHY_STRIKES: u32 = 3;   // 3 × 10s = 30s of failure
+
+/// Spawn background watchdog tasks that monitor both sidecars and restart on
+/// failure.  Should be called from main.rs after the initial startup sequence
+/// completes.  The tasks run for the lifetime of the Tokio runtime.
+pub fn start_watchdog(
+    sidecar_mgr: Arc<SidecarManager>,
+    client:      Arc<client::OrchestratorClient>,
+) {
+    let mem_mgr    = sidecar_mgr.clone();
+    let mem_client = client.clone();
+    tokio::spawn(async move {
+        memory_watchdog(mem_mgr, mem_client).await;
+    });
+
+    let orch_mgr    = sidecar_mgr;
+    let orch_client = client;
+    tokio::spawn(async move {
+        orch_watchdog(orch_mgr, orch_client).await;
+    });
+}
+
+async fn orch_watchdog(
+    mgr:    Arc<SidecarManager>,
+    client: Arc<client::OrchestratorClient>,
+) {
+    // Wait for the initial fleet startup to complete before monitoring.
+    tokio::time::sleep(Duration::from_secs(WATCHDOG_INITIAL_DELAY)).await;
+    info!("[watchdog] core-orchestrator watchdog active (poll every {}s)", WATCHDOG_POLL_SECS);
+
+    let mut backoff_secs  = 2u64;
+    let mut unhealthy_run = 0u32;
+
+    loop {
+        tokio::time::sleep(Duration::from_secs(WATCHDOG_POLL_SECS)).await;
+
+        // Only watch when the orchestrator was intentionally started.
+        if !matches!(mgr.status(), SidecarStatus::Running | SidecarStatus::Starting) {
+            unhealthy_run = 0;
+            backoff_secs  = 2;
+            continue;
+        }
+
+        // Two-stage failure detection: process exit OR health-probe failure.
+        let exited    = mgr.orch_exited();
+        let unhealthy = !client.is_healthy().await;
+
+        if !exited && !unhealthy {
+            unhealthy_run = 0;
+            backoff_secs  = 2;
+            continue;
+        }
+
+        unhealthy_run += 1;
+        if !exited && unhealthy_run < WATCHDOG_UNHEALTHY_STRIKES {
+            // Tolerate transient failures
+            debug!("[watchdog] orch unhealthy probe #{unhealthy_run}/{WATCHDOG_UNHEALTHY_STRIKES}");
+            continue;
+        }
+
+        warn!(
+            "[watchdog] core-orchestrator failure after {} misses \
+             (exited={exited}, unhealthy={unhealthy}) — restarting in {backoff_secs}s",
+            unhealthy_run
+        );
+        unhealthy_run = 0;
+        mgr.stop();
+        tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+
+        match resolve_sidecar_path(None) {
+            Ok(cwd) => {
+                if let Err(e) = mgr.start(&cwd) {
+                    warn!("[watchdog] orch restart failed: {e}");
+                    backoff_secs = (backoff_secs * 2).min(WATCHDOG_MAX_BACKOFF);
+                    continue;
+                }
+                let mut recovered = false;
+                for attempt in 1..=30u32 {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    if client.is_healthy().await {
+                        mgr.mark_running();
+                        client.clear_cache();
+                        info!("[watchdog] core-orchestrator recovered after {attempt}s");
+                        backoff_secs = 2;
+                        recovered    = true;
+                        break;
+                    }
+                }
+                if !recovered {
+                    warn!("[watchdog] orch recovery timed out — will retry after {}s", backoff_secs * 2);
+                    mgr.mark_error("watchdog: restart health-check timed out");
+                    backoff_secs = (backoff_secs * 2).min(WATCHDOG_MAX_BACKOFF);
+                }
+            }
+            Err(e) => {
+                warn!("[watchdog] orch path resolution failed: {e}");
+                backoff_secs = (backoff_secs * 2).min(WATCHDOG_MAX_BACKOFF);
+            }
+        }
+    }
+}
+
+async fn memory_watchdog(
+    mgr:    Arc<SidecarManager>,
+    client: Arc<client::OrchestratorClient>,
+) {
+    tokio::time::sleep(Duration::from_secs(WATCHDOG_INITIAL_DELAY)).await;
+    info!("[watchdog] memory-mcp-server watchdog active (poll every {}s)", WATCHDOG_POLL_SECS);
+
+    let mut backoff_secs  = 2u64;
+    let mut unhealthy_run = 0u32;
+
+    loop {
+        tokio::time::sleep(Duration::from_secs(WATCHDOG_POLL_SECS)).await;
+
+        if !matches!(mgr.memory_status(), SidecarStatus::Running | SidecarStatus::Starting) {
+            unhealthy_run = 0;
+            backoff_secs  = 2;
+            continue;
+        }
+
+        let exited    = mgr.memory_exited();
+        let unhealthy = !client.is_memory_healthy().await;
+
+        if !exited && !unhealthy {
+            unhealthy_run = 0;
+            backoff_secs  = 2;
+            continue;
+        }
+
+        unhealthy_run += 1;
+        if !exited && unhealthy_run < WATCHDOG_UNHEALTHY_STRIKES {
+            debug!("[watchdog] memory unhealthy probe #{unhealthy_run}/{WATCHDOG_UNHEALTHY_STRIKES}");
+            continue;
+        }
+
+        warn!(
+            "[watchdog] memory-mcp-server failure after {} misses \
+             (exited={exited}, unhealthy={unhealthy}) — restarting in {backoff_secs}s",
+            unhealthy_run
+        );
+        unhealthy_run = 0;
+        mgr.stop_memory();
+        tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+
+        match resolve_memory_path(None) {
+            Ok(cwd) => {
+                if let Err(e) = mgr.start_memory(&cwd) {
+                    warn!("[watchdog] memory restart failed: {e}");
+                    backoff_secs = (backoff_secs * 2).min(WATCHDOG_MAX_BACKOFF);
+                    continue;
+                }
+                let mut recovered = false;
+                for attempt in 1..=20u32 {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    if client.is_memory_healthy().await {
+                        mgr.mark_memory_running();
+                        info!("[watchdog] memory-mcp-server recovered after {attempt}s");
+                        backoff_secs = 2;
+                        recovered    = true;
+                        break;
+                    }
+                }
+                if !recovered {
+                    warn!("[watchdog] memory recovery timed out — will retry after {}s", backoff_secs * 2);
+                    mgr.mark_memory_error("watchdog: restart health-check timed out");
+                    backoff_secs = (backoff_secs * 2).min(WATCHDOG_MAX_BACKOFF);
+                }
+            }
+            Err(e) => {
+                warn!("[watchdog] memory path resolution failed: {e}");
+                backoff_secs = (backoff_secs * 2).min(WATCHDOG_MAX_BACKOFF);
+            }
+        }
+    }
 }

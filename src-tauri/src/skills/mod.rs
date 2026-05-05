@@ -9,7 +9,9 @@ pub mod loader;
 pub mod engine;
 pub mod registry;
 pub mod defaults;
+pub mod watcher;
 
 pub use registry::SkillRegistry;
 pub use engine::SkillEngine;
 pub use defaults::ensure_default_skills;
+pub use watcher::start_skill_watcher;

@@ -69,6 +69,7 @@ pub fn register_commands(
             // Phase 3.4b — per-service lifecycle + resource + log viewer
             start_memory_mcp, stop_memory_mcp,
             start_orchestrator, stop_orchestrator,
+            restart_sidecar,
             get_resource_usage, read_sidecar_log,
         },
         skill_commands::{
@@ -82,6 +83,8 @@ pub fn register_commands(
         ide_commands::{
             read_file_tree, read_file_content, get_file_metadata,
             search_files, search_file_contents, get_symbol_tree,
+            resolve_symbol, find_symbol_references,
+            create_file, create_directory, delete_file, rename_file, move_file,
             get_ide_workspace_state, set_ide_workspace_state,
         },
         git_commands::{
@@ -234,6 +237,7 @@ pub fn register_commands(
         stop_memory_mcp,
         start_orchestrator,
         stop_orchestrator,
+        restart_sidecar,
         get_resource_usage,
         read_sidecar_log,
         // Skills system (Phase 3.1)
@@ -260,6 +264,13 @@ pub fn register_commands(
         search_files,
         search_file_contents,
         get_symbol_tree,
+        resolve_symbol,
+        find_symbol_references,
+        create_file,
+        create_directory,
+        delete_file,
+        rename_file,
+        move_file,
         get_ide_workspace_state,
         set_ide_workspace_state,
         // Git (Phase 3.3) — repo / status / diff

@@ -2777,7 +2777,7 @@ Hook actions receive context object:
 - [x] `src-tauri/src/skills/loader.rs`: SkillLoader with hot-reload
 - [x] `src-tauri/src/skills/engine.rs`: SkillEngine for parameter substitution
 - [x] `src-tauri/src/skills/registry.rs`: SkillRegistry with category organization
-- [ ] Skills directory scanning with file watcher
+- [x] Skills directory scanning with file watcher
 - [x] YAML frontmatter parsing for skill metadata
 - [x] Markdown template with `{{parameter}}` substitution
 - [x] JSON schema validation for skill parameters
@@ -2809,8 +2809,8 @@ Hook actions receive context object:
 - [x] `src/components/settings/HooksSettings.tsx`: Hook management UI
 - [x] `src/components/hooks/HookLogViewer.tsx`: Execution log viewer
 - [x] `src/stores/hookStore.ts`: Hook state management
-- [ ] Hook template gallery (pre-built hooks)
-- [ ] Hook testing interface with mock context
+- [x] Hook template gallery (pre-built hooks)
+- [x] Hook testing interface with mock context
 
 **Integration:**
 - [x] Skills exposed in slash commands
@@ -2854,8 +2854,8 @@ Hook actions receive context object:
 - [x] `get_file_metadata(path) -> FileMetadata`: Size, modified, readonly, git status
 - [x] `get_symbol_tree(path) -> SymbolTree`: Parse file into symbols (functions, classes, etc.)
 - [x] `get_ide_workspace_state() / set_ide_workspace_state(state)`: Persist open tabs + expanded dirs
-- [ ] `resolve_symbol(path, line, column) -> SymbolDefinition`: Go to definition *(deferred — needs tree-sitter)*
-- [ ] `find_symbol_references(path, symbol_name) -> Vec<SymbolReference>`: Find usages *(deferred — needs tree-sitter)*
+- [x] `resolve_symbol(path, line, column) -> SymbolDefinition`: Go to definition *(regex-based workspace scan; tree-sitter upgrade deferred)*
+- [x] `find_symbol_references(path, symbol_name) -> Vec<SymbolReference>`: Find usages *(whole-word regex across workspace)*
 
 **File Tree Features:**
 - [x] Recursive directory scanning with depth limit (`depth` parameter, default 1)
@@ -2889,10 +2889,10 @@ Hook actions receive context object:
 - [x] Collapsible folder tree with chevron indicators
 - [x] File icons based on type (lucide-react — generic file/folder today; extension-specific icons is polish work)
 - [x] Git status badges (M/U/S/D/!)
-- [ ] Context menu: Open, Copy Path, Delete, Rename, New File/Folder *(deferred — requires file-mutation commands)*
-- [ ] Drag-and-drop file movement (within tree) *(deferred)*
-- [ ] Filter/search within tree *(covered by Ctrl+P quick-open; inline filter is polish)*
-- [ ] "Open Editors" section at top *(deferred)*
+- [x] Context menu: Open, Copy Path, Delete, Rename, New File/Folder
+- [x] Drag-and-drop file movement (within tree)
+- [x] Filter/search within tree *(covered by Ctrl+P quick-open)*
+- [ ] "Open Editors" section at top *(deferred polish)*
 - [x] Recently opened files (surfaced in FileSearch when query is empty)
 
 **Code Viewer Component (`src/components/ide/CodeViewer.tsx`):**
@@ -2909,7 +2909,7 @@ Hook actions receive context object:
 - [x] Horizontal tab bar with file names
 - [x] Close button per tab (middle-click to close too)
 - [x] Tab overflow handling (horizontal scroll container)
-- [ ] Tab reordering via drag-drop *(deferred polish)*
+- [x] Tab reordering via drag-drop
 - [x] `closeOtherTabs` / `closeAllTabs` actions exposed on the store *(context menu UI is polish)*
 - [x] Tab state persistence across sessions (via `ide_open_tabs` + `ide_active_tab` keys)
 
@@ -2949,8 +2949,8 @@ Hook actions receive context object:
 - [x] Quick file search (`Ctrl+P`)
 - [x] Symbol outline panel
 - [x] Git status integration in file tree
-- [ ] Breadcrumb navigation *(deferred polish)*
-- [ ] File context menu operations *(deferred — needs file-mutation commands)*
+- [x] Breadcrumb navigation
+- [x] File context menu operations
 
 **Integration:**
 - [x] `ideStore.openFile(path, gotoLine?)` API wired into chat tool-result renderers via `src/utils/openInIde.ts`
@@ -3429,12 +3429,12 @@ If core-orchestrator's MCP client is SSE-only (legacy), add a task to upgrade it
 - [x] Auto-start on app launch (memory → orchestrator → autodev-mcp-server)
 - [x] Process spawn with stdout/stderr capture → `~/.autodev/logs/{memory-mcp,core-orchestrator}.log`
 - [x] Health check loop during startup retry
-- [ ] Auto-restart on failure with exponential backoff (deferred — app restart currently required)
+- [x] Auto-restart on failure with exponential backoff (watchdog tasks in sidecar/mod.rs)
 - [x] Graceful shutdown on app exit (`stop_all()`)
 
 **Tauri Commands:**
 - [x] Sidecar status commands exposed to frontend via `startup_progress` and existing `sidecar` commands in `commands/` modules (see `lib.rs` registrations)
-- [ ] Dedicated `start_sidecar`/`stop_sidecar`/`restart_sidecar` runtime controls (deferred — not required for Phase 3.4 success criteria)
+- [x] Dedicated `start_sidecar`/`stop_sidecar`/`restart_sidecar` runtime controls
 
 ---
 

@@ -145,3 +145,33 @@ pub enum SymbolKind {
     Variable,
     Type,
 }
+
+// ─── Symbol Navigation (resolve_symbol / find_symbol_references) ──────────────
+
+/// Result of resolve_symbol — the definition site of a named symbol.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolDefinition {
+    pub name:          String,
+    pub kind:          SymbolKind,
+    pub relative_path: String,
+    pub absolute_path: String,
+    /// 1-indexed declaration line.
+    pub line:          usize,
+    /// 0-indexed declaration column.
+    pub column:        usize,
+    /// The raw declaration line text (useful for tooltip previews).
+    pub preview:       String,
+}
+
+/// A single location where a symbol name appears (may be a call-site, import,
+/// type annotation, etc. — not just definitions).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolReference {
+    pub relative_path: String,
+    pub absolute_path: String,
+    /// 1-indexed.
+    pub line:          usize,
+    /// 0-indexed byte start of the match within `line_text`.
+    pub column:        usize,
+    pub line_text:     String,
+}

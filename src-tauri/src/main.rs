@@ -7,7 +7,7 @@ use autodev_lib::agent::permission::new_pending_permissions;
 use tauri::Manager;
 use autodev_lib::recipes::runner::RecipeRunner;
 use autodev_lib::recipes::scheduler::RecipeScheduler;
-use autodev_lib::sidecar::SidecarManager;
+use autodev_lib::sidecar::{SidecarManager, start_watchdog};
 use autodev_lib::sidecar::client::OrchestratorClient;
 use autodev_lib::sidecar::startup_progress::{StartupPhase, StartupProgress};
 use autodev_lib::skills::SkillRegistry;
@@ -52,7 +52,8 @@ fn main() {
     let mcp_registry = Arc::new(mcp_registry);
 
     let app_state: Arc<Mutex<AppState>> = Arc::new(Mutex::new(AppState::new()));
-    let skill_registry_managed = skill_registry.clone();
+    let skill_registry_managed   = skill_registry.clone();
+    let skill_registry_for_watch = skill_registry.clone();
 
     let session_mgr: Arc<SessionManager> = Arc::new(
         SessionManager::new().expect("Failed to initialise session database"),
@@ -155,6 +156,11 @@ fn main() {
                 // and `update_task_status` can fire push-based kicks without
                 // needing Tauri `State<>` access.
                 autodev_lib::recipes::scheduler::install_global(scheduler.clone());
+
+                // Phase 3.4B — start sidecar watchdog (auto-restart with exponential backoff).
+                // The watchdog waits 90s before monitoring so the initial startup can complete.
+                // Uses clones — the originals are consumed by the sidecar auto-start block below.
+                start_watchdog(sidecar_mgr_for_setup.clone(), orch_client_for_setup.clone());
 
                 // Auto-start the sidecar fleet on app launch.
                 // Non-blocking — fires and forgets on a background task.
@@ -330,6 +336,20 @@ fn main() {
                 });
 
                 app.manage(scheduler);
+
+                // Phase 3.1 — start skills file watcher.
+                // Watches ~/.autodev/skills/ for .md changes and auto-reloads the
+                // SkillRegistry, emitting "skills:reloaded" with the new skill count.
+                {
+                    let skills_dir = autodev_lib::db::autodev_dir()
+                        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                        .join("skills");
+                    autodev_lib::skills::start_skill_watcher(
+                        skill_registry_for_watch,
+                        skills_dir,
+                        app.handle().clone(),
+                    );
+                }
 
                 // Phase 5.3 — start background update checker (every 4 hours).
                 // Runs on the Tokio async runtime; won't block the UI thread.

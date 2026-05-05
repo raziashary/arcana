@@ -3,6 +3,7 @@
 
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -70,6 +71,8 @@ interface SkillState {
   openPalette:             () => void
   closePalette:            () => void
   addToRecent:             (name: string) => void
+  /** Subscribe to backend "skills:reloaded" events. Returns cleanup fn. */
+  initWatcher:             () => Promise<UnlistenFn>
 }
 
 const MAX_RECENT = 8
@@ -127,5 +130,16 @@ export const useSkillStore = create<SkillState>((set, get) => ({
       const filtered = s.recentSkills.filter(n => n !== name)
       return { recentSkills: [name, ...filtered].slice(0, MAX_RECENT) }
     })
+  },
+
+  initWatcher: async () => {
+    // Listen for the backend "skills:reloaded" event emitted by the Rust
+    // SkillWatcher whenever a .md file changes in ~/.autodev/skills/.
+    // Automatically refreshes byCategory so the palette stays current.
+    const unlisten = await listen<number>('skills:reloaded', (event) => {
+      console.log(`[SkillStore] skills:reloaded — ${event.payload} skills loaded`)
+      get().loadSkills()
+    })
+    return unlisten
   },
 }))

@@ -121,7 +121,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install WiX v4
@@ -179,11 +179,24 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
+      # Expose the secret as an env var so it can be tested in the if: condition below.
+      # GitHub Actions does NOT allow `secrets.*` directly in step if: expressions.
+      - name: Check code-signing cert availability
+        id: check_cert
+        env:
+          CERT_BASE64: ${{ secrets.APPLE_CERT_BASE64 }}
+        run: |
+          if [[ -n "${CERT_BASE64:-}" ]]; then
+            echo "available=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Import code-signing certificate
-        if: ${{ secrets.APPLE_CERT_BASE64 != '' }}
+        if: steps.check_cert.outputs.available == 'true'
         env:
           CERT_BASE64:    ${{ secrets.APPLE_CERT_BASE64 }}
           CERT_PASSWORD:  ${{ secrets.APPLE_CERT_PASSWORD }}
@@ -257,7 +270,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Build AppImage + deb
