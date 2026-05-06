@@ -9,16 +9,16 @@
 // Any failure (unreachable, invoke error) transparently falls back to Mode 1.
 
 use std::sync::{Arc, Mutex};
-use tauri::AppHandle;
+use std::time::Instant;
+use tauri::{AppHandle, Emitter};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::agent::engine::AgentEngine;
-// Phase 3.0 R2 — status push. The `working`/`idle`/`error` transitions emitted
-// from `set_worker_status` already encode the full tick lifecycle (start when
-// the runner sets `working`, end when it sets `idle` or `error`), so we don't
-// need separate tick-start/tick-end events.
-use crate::events::{emit_worker_status, WorkerStatusPayload};
+use crate::events::{
+    emit_worker_status, emit_worker_tick_start, emit_worker_tick_end,
+    WorkerStatusPayload, WorkerTickStartPayload, WorkerTickEndPayload,
+};
 use crate::hooks::ecosystem::Ecosystem;
 use crate::agent::permission::{PendingPermissions, PermissionMode};
 use crate::agent::PAMode;
@@ -171,19 +171,67 @@ impl RecipeRunner {
                             info!("[RecipeRunner] No qc_review tasks in DB — skipping qc-agent tick");
                             self.set_worker_status(worker_slug, "idle");
                             return Ok(());
-                        } else {
-                            let titles: Vec<String> = tasks.iter()
-                                .map(|t| format!("#{}: {}", t.id, t.title))
-                                .collect();
-                            qc_trigger_override = Some(format!(
-                                "{RECIPE_TRIGGER}\n\n[BOARD STATE] {} task(s) awaiting QC review:\n{}",
-                                tasks.len(),
-                                titles.join("\n")
-                            ));
                         }
+
+                        // E.3 — Filter out any build_failed tasks that leaked into
+                        // qc_review (e.g. via reconcile_stranded_task). QC cannot
+                        // meaningfully review code that never installed — skip the
+                        // LLM call entirely when only un-reviewable tasks remain.
+                        let reviewable: Vec<_> = tasks.iter()
+                            .filter(|t| !matches!(t.status, crate::db::tasks::TaskStatus::BuildFailed))
+                            .collect();
+
+                        if reviewable.is_empty() {
+                            info!(
+                                "[RecipeRunner] Only build_failed tasks in qc_review — \
+                                 skipping qc-agent LLM invocation"
+                            );
+                            self.set_worker_status(worker_slug, "idle");
+                            return Ok(());
+                        }
+
+                        let titles: Vec<String> = reviewable.iter()
+                            .map(|t| format!("#{}: {}", t.id, t.title))
+                            .collect();
+                        qc_trigger_override = Some(format!(
+                            "{RECIPE_TRIGGER}\n\n[BOARD STATE] {} task(s) awaiting QC review:\n{}",
+                            reviewable.len(),
+                            titles.join("\n")
+                        ));
                     }
                 }
             }
+
+            // I.1 — Pre-flight task count check for worker-* agents (Mode 2).
+            // If the worker has no assigned/in_progress/rejected tasks it will
+            // immediately return "Board clean — idle." burning a full system-prompt
+            // round-trip. Skip the LLM call entirely in that case.
+            if worker_slug.starts_with("worker-") {
+                let has_work = crate::db::tasks::TasksDb::open().ok().map_or(true, |db| {
+                    let assigned  = db.list_tasks_by_status_and_worker("assigned",    worker_slug).unwrap_or_default();
+                    let in_prog   = db.list_tasks_by_status_and_worker("in_progress", worker_slug).unwrap_or_default();
+                    let rejected  = db.list_tasks_by_status_and_worker("rejected",    worker_slug).unwrap_or_default();
+                    !assigned.is_empty() || !in_prog.is_empty() || !rejected.is_empty()
+                });
+                if !has_work {
+                    info!(
+                        "[RecipeRunner] {} has no actionable tasks — skipping LLM invocation (Mode 2)",
+                        worker_slug
+                    );
+                    self.set_worker_status(worker_slug, "idle");
+                    return Ok(());
+                }
+            }
+
+            // D.1 — Record tick start and notify the frontend. Both the start
+            // timestamp and the Instant are captured here so we can compute
+            // tick_duration_ms for the WorkerStatusPayload on completion.
+            let tick_start = Instant::now();
+            emit_worker_tick_start(&self.app, WorkerTickStartPayload {
+                slug:      worker_slug.to_string(),
+                mode:      "mode2".to_string(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+            });
 
             match self.orch_client.ensure_agent(worker_slug, &model).await {
                 Ok(agent_id) => {
@@ -209,12 +257,25 @@ impl RecipeRunner {
                         .await
                     {
                         Ok(response) => {
+                            let elapsed_ms = tick_start.elapsed().as_millis() as u64;
                             info!(
-                                "[RecipeRunner] LivingAgent tick complete for '{}': {:.200}",
+                                "[RecipeRunner] LivingAgent tick complete for '{}' in {}ms: {:.200}",
                                 worker_slug,
+                                elapsed_ms,
                                 response.trim()
                             );
-                            self.set_worker_status(worker_slug, "idle");
+                            // D.1 — emit tick-end before transitioning to idle
+                            emit_worker_tick_end(&self.app, WorkerTickEndPayload {
+                                slug:      worker_slug.to_string(),
+                                outcome:   "success".to_string(),
+                                timestamp: chrono::Utc::now().to_rfc3339(),
+                            });
+                            // D.2 — include timing in the idle status event
+                            self.set_worker_status_ex(
+                                worker_slug, "idle",
+                                Some(elapsed_ms),
+                                Some("success".to_string()),
+                            );
                             // Phase 7.5 — Record successful Mode 2 tick in analytics DB.
                             // Cost/tokens are tracked by core-orchestrator internally;
                             // we record the completion event so the dashboard shows activity.
@@ -241,6 +302,17 @@ impl RecipeRunner {
                             }
                             // Fix 8c: sentinel-file guard after successful tick.
                             Self::guard_and_validate(worker_slug, std::path::Path::new(&working_dir));
+                            // C.4 — Notify the frontend dashboard that a Mode 2 tick
+                            // completed so it can refresh metrics without waiting for
+                            // the 60-second polling fallback.
+                            if let Some(app) = crate::events::app_handle() {
+                                let _ = app.emit("task:changed", serde_json::json!({
+                                    "task_id":        null,
+                                    "kind":           "worker_tick_complete",
+                                    "status":         null,
+                                    "assigned_worker": worker_slug,
+                                }));
+                            }
                             return Ok(());
                         }
                         Err(e) => {
@@ -249,6 +321,12 @@ impl RecipeRunner {
                                  falling back to Rust AgentEngine",
                                 worker_slug
                             );
+                            // D.1 — emit tick-end on invoke failure before Mode 1 fallback
+                            emit_worker_tick_end(&self.app, WorkerTickEndPayload {
+                                slug:      worker_slug.to_string(),
+                                outcome:   "fallback".to_string(),
+                                timestamp: chrono::Utc::now().to_rfc3339(),
+                            });
                             // Phase 7.7 — record Mode 2 → Mode 1 fallback as a system event.
                             let _ = crate::analytics::global()
                                 .collector()
@@ -268,6 +346,12 @@ impl RecipeRunner {
                          falling back to Rust AgentEngine",
                         worker_slug
                     );
+                    // D.1 — emit tick-end on ensure_agent failure before Mode 1 fallback
+                    emit_worker_tick_end(&self.app, WorkerTickEndPayload {
+                        slug:      worker_slug.to_string(),
+                        outcome:   "fallback".to_string(),
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                    });
                 }
             }
         } else {
@@ -479,6 +563,16 @@ impl RecipeRunner {
     }
 
     fn set_worker_status(&self, slug: &str, status: &str) {
+        self.set_worker_status_ex(slug, status, None, None);
+    }
+
+    fn set_worker_status_ex(
+        &self,
+        slug:             &str,
+        status:           &str,
+        tick_duration_ms: Option<u64>,
+        last_outcome:     Option<String>,
+    ) {
         let previous = if let Ok(db) = WorkersDb::open() {
             if let Ok(Some(worker)) = db.get_by_slug(slug) {
                 let prev = worker.status.clone();
@@ -512,6 +606,8 @@ impl RecipeRunner {
             reason,
             cooldown_seconds,
             timestamp:          chrono::Utc::now().to_rfc3339(),
+            tick_duration_ms,
+            last_outcome,
         });
     }
 

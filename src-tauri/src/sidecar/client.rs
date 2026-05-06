@@ -67,6 +67,10 @@ pub struct OrchestratorClient {
     // single timeout (orch busy with a long LivingAgent call) doesn't
     // unnecessarily trigger a Mode 1 fallback.
     health_fail_count: Arc<AtomicUsize>,
+    // G.1 — startup grace window. core-orchestrator takes ~18s to boot.
+    // Suppress WARN-level logging for health failures during this window
+    // to eliminate the 59-failure noise seen in the May 5 run logs.
+    startup_grace_until: std::time::Instant,
 }
 
 impl OrchestratorClient {
@@ -85,6 +89,10 @@ impl OrchestratorClient {
             agent_cache: Mutex::new(HashMap::new()),
             model_registry_cache: Mutex::new(HashMap::new()),
             health_fail_count: Arc::new(AtomicUsize::new(0)),
+            // 30s grace: core-orchestrator typically boots in ~18s.
+            // Failures logged at DEBUG during this window to keep the log clean.
+            startup_grace_until: std::time::Instant::now()
+                + std::time::Duration::from_secs(30),
         }
     }
 
@@ -237,6 +245,8 @@ impl OrchestratorClient {
             .send()
             .await;
 
+        let in_grace = std::time::Instant::now() < self.startup_grace_until;
+
         match result {
             Ok(r) if r.status().is_success() => {
                 // Reset the debounce counter on any success.
@@ -246,20 +256,39 @@ impl OrchestratorClient {
             Ok(r) => {
                 // Non-2xx response — treat as a failure
                 let count = self.health_fail_count.fetch_add(1, Ordering::Relaxed) + 1;
-                debug!(
-                    "[OrchestratorClient] health check returned HTTP {} (consecutive failures: {}/{})",
-                    r.status(), count, HEALTH_FAIL_THRESHOLD
-                );
+                // G.1 — during grace window, downgrade to DEBUG to avoid startup noise
+                if in_grace {
+                    debug!(
+                        "[OrchestratorClient] health check returned HTTP {} during startup grace \
+                         ({}/{} consecutive failures)",
+                        r.status(), count, HEALTH_FAIL_THRESHOLD
+                    );
+                } else {
+                    debug!(
+                        "[OrchestratorClient] health check returned HTTP {} (consecutive failures: {}/{})",
+                        r.status(), count, HEALTH_FAIL_THRESHOLD
+                    );
+                }
                 // Still optimistic below threshold; unhealthy once threshold is reached.
                 count < HEALTH_FAIL_THRESHOLD
             }
             Err(e) => {
                 let count = self.health_fail_count.fetch_add(1, Ordering::Relaxed) + 1;
                 if count < HEALTH_FAIL_THRESHOLD {
-                    warn!(
-                        "[OrchestratorClient] health check failed ({count}/{HEALTH_FAIL_THRESHOLD}): {e} — \
-                         treating as healthy until threshold reached"
-                    );
+                    // G.1 — suppress WARN during the startup grace window;
+                    // the orchestrator is simply still booting.
+                    if in_grace {
+                        debug!(
+                            "[OrchestratorClient] health check failed during startup grace \
+                             ({}/{HEALTH_FAIL_THRESHOLD}): {e}",
+                            count
+                        );
+                    } else {
+                        warn!(
+                            "[OrchestratorClient] health check failed ({count}/{HEALTH_FAIL_THRESHOLD}): {e} — \
+                             treating as healthy until threshold reached"
+                        );
+                    }
                     true  // still optimistic — orch may just be busy
                 } else {
                     debug!(

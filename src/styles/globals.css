@@ -7,22 +7,22 @@
 /* ── CSS Custom Properties — AutoDev Industrial Dark ─────────────────────── */
 :root {
   /* Backgrounds */
-  --bg-app:           #0A0A0A;   /* app root — pure black */
-  --bg-surface:       #0D0D0D;   /* titlebar, tabbar, sidebar, panels */
-  --bg-card:          #111111;   /* message bubbles, cards, modal bodies */
-  --bg-code:          #161616;   /* code blocks, diff views, terminal */
-  --bg-darker:        #0A0A0A;   /* deepest nesting, terminal inner */
-  --bg-2:             #161616;   /* button surfaces, inline inputs — compat */
-  --bg-input:         #111111;   /* form text fields — compat */
+  --bg-app:           #0f0f17;   /* app root */
+  --bg-surface:       #161622;   /* titlebar, tabbar, sidebar, panels */
+  --bg-card:          #1e1e2e;   /* message bubbles, cards, modal bodies */
+  --bg-code:          #252535;   /* code blocks, diff views, terminal */
+  --bg-darker:        #0f0f17;   /* deepest nesting, terminal inner */
+  --bg-2:             #252535;   /* button surfaces, inline inputs — compat */
+  --bg-input:         #1e1e2e;   /* form text fields — compat */
   --bg-selected:      #1A1A1A;   /* active list item, selected row */
   --bg-hover:         #161616;   /* hover state */
 
   /* Borders */
-  --border-primary:   #1A1A1A;   /* most borders — subtle */
-  --border-secondary: #222222;   /* heavier outlines, active/focus rings */
-  --border-1:         #1A1A1A;   /* compat alias */
-  --border-2:         #222222;   /* compat alias */
-  --border:           #1A1A1A;   /* compat alias */
+  --border-primary:   #2a2a3e;   /* most borders — subtle */
+  --border-secondary: #363658;   /* heavier outlines, active/focus rings */
+  --border-1:         #2a2a3e;   /* compat alias */
+  --border-2:         #363658;   /* compat alias */
+  --border:           #2a2a3e;   /* compat alias */
 
   /* Accent system */
   --accent:           #00FF88;   /* active states, CTAs, success */
@@ -44,15 +44,15 @@
   --del-bg:           rgba(255,68,68,0.08);
 
   /* Typography */
-  --text-primary:     #888888;   /* primary text — intentionally muted */
-  --text-secondary:   #555555;   /* secondary text, sidebar items */
-  --text-muted:       #444444;   /* labels, column headers */
-  --text-dim:         #333333;   /* inactive items, timestamps */
+  --text-primary:     #aaaaaa;   /* primary text */
+  --text-secondary:   rgba(255,255,255,0.7);   /* secondary text, sidebar items */
+  --text-muted:       rgba(255,255,255,0.45);  /* labels, column headers */
+  --text-dim:         rgba(255,255,255,0.3);   /* inactive items, timestamps */
   --text-bright:      #F0F0F0;   /* code, diff, terminal content */
-  --text-1:           #888888;   /* compat alias */
-  --text-2:           #555555;   /* compat alias */
-  --text-3:           #444444;   /* compat alias */
-  --text-4:           #333333;   /* compat alias */
+  --text-1:           #aaaaaa;   /* compat alias */
+  --text-2:           rgba(255,255,255,0.7);   /* compat alias */
+  --text-3:           rgba(255,255,255,0.45);  /* compat alias */
+  --text-4:           rgba(255,255,255,0.3);   /* compat alias */
 
   /* Fonts & radius */
   --font-mono:        'IBM Plex Mono', monospace;

@@ -81,6 +81,8 @@ impl RecipeScheduler {
             previous_status:    None,
             reason:             None,
             cooldown_seconds:   None,
+            tick_duration_ms:   None,
+            last_outcome:       None,
             timestamp:          chrono::Utc::now().to_rfc3339(),
         });
 
@@ -223,6 +225,8 @@ impl RecipeScheduler {
             previous_status:    None,
             reason:             None,
             cooldown_seconds:   None,
+            tick_duration_ms:   None,
+            last_outcome:       None,
             timestamp:          chrono::Utc::now().to_rfc3339(),
         });
 

@@ -221,9 +221,7 @@ fn spawn_log_router<R: std::io::Read + Send + 'static>(
                             cap_reached = true;
                         }
                         // After cap: only route genuine errors to the Rust log.
-                        if l.contains(" ERROR ") || l.contains("Traceback")
-                            || l.contains("Exception") || l.contains(" CRITICAL ")
-                        {
+                        if classify_python_log_level(&l) == "error" {
                             error!("[{prefix}] {l}");
                         }
                         continue;
@@ -255,15 +253,11 @@ fn spawn_log_router<R: std::io::Read + Send + 'static>(
                     //
                     // This keeps the main autodev.YYYY-MM-DD log to Rust-only events
                     // plus Python errors — a fraction of the previous volume.
-                    if l.contains(" ERROR ")   || l.contains("Traceback")
-                        || l.contains("Exception") || l.contains(" CRITICAL ")
-                    {
-                        error!("[{prefix}] {l}");
-                    } else if l.contains(" WARNING ") || l.contains(" WARN ") {
-                        warn!("[{prefix}] {l}");
-                    } else {
-                        // Normal Python INFO/DEBUG — write to sidecar file only.
-                        debug!("[{prefix}] {l}");
+                    match classify_python_log_level(&l) {
+                        "error" => error!("[{prefix}] {l}"),
+                        "warn"  => warn!("[{prefix}] {l}"),
+                        "info"  => info!("[{prefix}] {l}"),
+                        _       => debug!("[{prefix}] {l}"),
                     }
 
                     // Always write every (non-oversized, non-capped) line to the
@@ -285,6 +279,36 @@ fn is_windows_asyncio_noise(line: &str) -> bool {
     // is sufficient — no regex dependency needed.
     line.contains("ConnectionResetError") && line.contains("WinError 10054")
         || line.contains("_ProactorBasePipeTransport._call_connection_lost")
+}
+
+/// J.1 — Map a Python sidecar log line to the Rust tracing level it should
+/// be emitted at. Known transient networking / reconnect patterns are
+/// downgraded from ERROR to DEBUG so they don't drown genuine failures in
+/// the main autodev log. Returns a static string matched in the call site.
+fn classify_python_log_level(line: &str) -> &'static str {
+    // Transient Windows asyncio / trio networking noise — not real errors.
+    if line.contains("ClosedResourceError")
+        || line.contains("WinError 10054")
+        || line.contains("ConnectionResetError")
+        || line.contains("_call_connection_lost")
+        || line.contains("send_nowait")
+    {
+        return "debug";
+    }
+    // Memory MCP reconnect success — informational, not an error.
+    if line.contains("Memory MCP reconnected successfully") {
+        return "info";
+    }
+    // Standard Python log level markers.
+    if line.contains(" ERROR ") || line.contains("Traceback")
+        || line.contains("Exception") || line.contains(" CRITICAL ")
+    {
+        return "error";
+    }
+    if line.contains(" WARNING ") || line.contains(" WARN ") {
+        return "warn";
+    }
+    "debug"
 }
 
 // ─── SidecarManager ───────────────────────────────────────────────────────────

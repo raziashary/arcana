@@ -19,7 +19,8 @@ impl Tool for UpdateTaskStatusTool {
         "Update the status and/or assigned worker for a task on the AutoDev board. \
         Use this to: assign a task to a worker (status='assigned', assigned_worker='worker-backend'), \
         mark as in_progress, escalate to failed, report build failures, or mark as done. \
-        Valid statuses: ready, assigned, in_progress, qc_review, done, failed, build_failed, cancelled."
+        Valid statuses: ready, assigned, in_progress, qc_review, done, failed, build_failed, cancelled, rejected. \
+        Use rejected when QC finds issues — provide a rejection_reason in that field so the worker knows what to fix."
     }
 
     fn input_schema(&self) -> Value {
@@ -32,12 +33,16 @@ impl Tool for UpdateTaskStatusTool {
                 },
                 "status": {
                     "type": "string",
-                    "enum": ["ready", "assigned", "in_progress", "qc_review", "done", "failed", "build_failed", "cancelled"],
+                    "enum": ["ready", "assigned", "in_progress", "qc_review", "done", "failed", "build_failed", "cancelled", "rejected"],
                     "description": "New status for the task"
                 },
                 "assigned_worker": {
                     "type": "string",
                     "description": "Worker slug to assign (e.g. 'worker-backend', 'worker-frontend'). Pass null to unassign."
+                },
+                "rejection_reason": {
+                    "type": "string",
+                    "description": "Required when status='rejected'. Describe exactly what the QC agent found wrong so the worker can fix it."
                 }
             },
             "required": ["id", "status"]
@@ -57,6 +62,7 @@ impl Tool for UpdateTaskStatusTool {
         };
         // null or absent → leave unassigned; string → set assigned_worker
         let assigned_worker = input["assigned_worker"].as_str().map(|s| s.to_string());
+        let rejection_reason = input["rejection_reason"].as_str().map(|s| s.to_string());
 
         // ── State-transition guardrails ───────────────────────────────────────
         //
@@ -85,6 +91,15 @@ impl Tool for UpdateTaskStatusTool {
                  Pass assigned_worker='worker-<slug>' or use `assign_task` for dispatch."
             ));
         }
+        if status == "rejected" {
+            let reason = rejection_reason.as_deref().unwrap_or("").trim();
+            if reason.is_empty() {
+                return ToolResult::error(
+                    "status='rejected' requires a non-empty 'rejection_reason'. \
+                     Describe what failed so the worker knows what to fix."
+                );
+            }
+        }
 
         let db = match TasksDb::open() {
             Ok(db) => db,
@@ -98,7 +113,9 @@ impl Tool for UpdateTaskStatusTool {
             Err(e)      => return ToolResult::error(&format!("Failed to fetch task: {e}")),
         };
 
-        if let Err(e) = db.update_status(id, &status, assigned_worker.as_deref()) {
+        if let Err(e) = db.update_status_with_reason(
+            id, &status, assigned_worker.as_deref(), rejection_reason.as_deref()
+        ) {
             return ToolResult::error(&format!("Failed to update task #{id}: {e}"));
         }
 
@@ -114,6 +131,13 @@ impl Tool for UpdateTaskStatusTool {
                     crate::recipes::scheduler::kick(w);
                 }
             }
+            // Wake the originally assigned worker immediately so they see the rejection
+            // and can begin rework without waiting for the next polling cycle.
+            "rejected"  => {
+                if let Some(ref w) = assigned_worker {
+                    crate::recipes::scheduler::kick(w);
+                }
+            }
             _ => {}
         }
 
@@ -125,12 +149,17 @@ impl Tool for UpdateTaskStatusTool {
             assigned_worker: assigned_worker.clone(),
         });
 
-        // Fire fleet hooks for task lifecycle events
+        // Fire fleet hooks for task lifecycle events.
+        // K.8 — added build_failed (reuses OnTaskFail) and rejected
+        // (reuses OnQcReviewStart) so telemetry and hook consumers observe
+        // these transitions. Previously they fired no hooks.
         let hook_type = match status.as_str() {
-            "assigned" => Some(HookType::OnTaskClaim),
-            "done" => Some(HookType::OnTaskComplete),
-            "failed" => Some(HookType::OnTaskFail),
-            "qc_review" => Some(HookType::OnQcReviewStart),
+            "assigned"     => Some(HookType::OnTaskClaim),
+            "done"         => Some(HookType::OnTaskComplete),
+            "failed"       => Some(HookType::OnTaskFail),
+            "build_failed" => Some(HookType::OnTaskFail),      // K.8
+            "qc_review"    => Some(HookType::OnQcReviewStart),
+            "rejected"     => Some(HookType::OnQcReviewStart), // K.8
             _ => None,
         };
 
@@ -168,12 +197,13 @@ impl Tool for UpdateTaskStatusTool {
         }
 
         ToolResult::success(json!({
-            "task_id":         id,
-            "title":           task.title,
-            "previous_status": task.status.as_str(),
-            "new_status":      status,
-            "assigned_worker": assigned_worker,
-            "message":         format!("✅ Task #{id} updated: status={status}")
+            "task_id":          id,
+            "title":            task.title,
+            "previous_status":  task.status.as_str(),
+            "new_status":       status,
+            "assigned_worker":  assigned_worker,
+            "rejection_reason": rejection_reason,
+            "message":          format!("✅ Task #{id} updated: status={status}")
         }).to_string())
     }
 }

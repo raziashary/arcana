@@ -17,21 +17,15 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use crate::db::tasks::TasksDb;
 use crate::hooks::{HookRegistry, HookType, HookContext, ToolCallContext};
+use crate::recipes::defaults::FLEET_WORKERS;
 use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 
 pub struct AssignTaskTool;
 
-/// The set of worker slugs the Supervisor is allowed to assign to.
-/// Keeping this explicit prevents the LLM from inventing slugs like
-/// `worker-docs` that don't map to a real worker. Changes here must stay
-/// in sync with the worker recipes in `recipes/defaults.rs`.
-const VALID_WORKERS: &[&str] = &[
-    "worker-backend",
-    "worker-frontend",
-    "worker-platform",
-    "worker-mcp",
-    "worker-cleanup",
-];
+/// K.9 — Use the shared FLEET_WORKERS constant so this list stays in sync
+/// with the recipe definitions in defaults.rs. Previously a separate hardcoded
+/// list here could silently drift when new workers were added.
+const VALID_WORKERS: &[&str] = FLEET_WORKERS;
 
 #[async_trait]
 impl Tool for AssignTaskTool {
@@ -96,14 +90,17 @@ impl Tool for AssignTaskTool {
         };
 
         let prev_status = task.status.as_str().to_string();
+        // K.9 — Added 'rejected' to the dispatchable states. Without this, the
+        // supervisor calling assign_task on a QC-rejected task would get a hard
+        // error, breaking the entire Phase A retry path at the tool level.
         let dispatchable = matches!(
             prev_status.as_str(),
-            "ready" | "assigned" | "failed"
+            "ready" | "assigned" | "failed" | "rejected"
         );
         if !dispatchable {
             return ToolResult::error(&format!(
                 "Task #{id} is in status='{prev_status}' and cannot be (re)assigned. \
-                 Only 'ready', 'assigned', or 'failed' tasks may be assigned."
+                 Only 'ready', 'assigned', 'failed', or 'rejected' tasks may be assigned."
             ));
         }
 

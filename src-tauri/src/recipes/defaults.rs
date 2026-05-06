@@ -7,6 +7,16 @@ use crate::errors::Result;
 use super::parser::save_recipe;
 use super::types::{Recipe, RecipePermissionMode};
 
+/// K.9 — Canonical fleet worker slugs. Single source of truth shared by
+/// `assign_task.rs` (VALID_WORKERS) and any other list that must stay in sync.
+pub const FLEET_WORKERS: &[&str] = &[
+    "worker-backend",
+    "worker-frontend",
+    "worker-platform",
+    "worker-mcp",
+    "worker-cleanup",
+];
+
 const SUPERVISOR_RECIPE_ID:      &str = "supervisor-poll";
 const WORKER_BACKEND_RECIPE_ID:  &str = "worker-backend-poll";
 const WORKER_FRONTEND_RECIPE_ID: &str = "worker-frontend-poll";

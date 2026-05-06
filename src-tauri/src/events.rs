@@ -163,6 +163,8 @@ pub struct WorkerStatusPayload {
     pub reason:             Option<String>,
     pub cooldown_seconds:   Option<u32>,
     pub timestamp:          String,
+    pub tick_duration_ms:   Option<u64>,   // wall-clock ms of the last agent tick
+    pub last_outcome:       Option<String>, // "success" | "fallback" | "error"
 }
 
 #[derive(Debug, Serialize, Clone)]

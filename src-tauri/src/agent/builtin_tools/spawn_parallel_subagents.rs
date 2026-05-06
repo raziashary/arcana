@@ -81,6 +81,15 @@ impl Tool for SpawnParallelSubagentsTool {
             return ToolResult::error("'subtasks' must contain at most 10 items");
         }
 
+        // K.11 — Depth guard (same as spawn_subagent).
+        const MAX_SUBAGENT_DEPTH: u32 = 3;
+        if ctx.depth >= MAX_SUBAGENT_DEPTH {
+            return ToolResult::error(format!(
+                "Subagent depth limit ({MAX_SUBAGENT_DEPTH}) reached — \
+                 complete this work directly rather than spawning parallel subagents."
+            ));
+        }
+
         let aggregate = input.get("aggregate_results")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
@@ -120,7 +129,7 @@ impl Tool for SpawnParallelSubagentsTool {
                 timeout_secs:      st.get("timeout_secs").and_then(|v| v.as_u64()).map(|n| n as u32).unwrap_or(0),
                 mcp_servers:       Vec::new(),
                 capabilities:      Vec::new(),
-                depth:             0,
+                depth:             ctx.depth + 1, // K.11 — increment nesting depth
             };
             spawn_inputs.push((config, task_description));
         }

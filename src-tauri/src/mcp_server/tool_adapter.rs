@@ -109,7 +109,20 @@ impl ServerHandler for AutodevMcpServer {
         _ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let tool_name = req.name;
-        let args = req.arguments.unwrap_or_default();
+        let mut args = req.arguments.unwrap_or_default();
+
+        // L.1 — Accept __working_dir per-call so fleet workers target the right
+        // project directory instead of the hardcoded ~/.autodev default.
+        let working_dir = args.remove("__working_dir")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| self.working_dir.clone());
+
+        // L.3 — Accept __session_id so all tool calls from one worker task share
+        // a session, grouping checkpoints for possible rollback.
+        let session_id = args.remove("__session_id")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
         let args = serde_json::Value::Object(args);
 
         let Some(tool) = self.registry.get(&tool_name) else {
@@ -119,11 +132,12 @@ impl ServerHandler for AutodevMcpServer {
             ));
         };
 
-        // Build a synthetic ToolContext — no Tauri session in sidecar mode.
+        // Build a synthetic ToolContext using the per-call overrides.
         let ctx = ToolContext {
-            session_id: uuid::Uuid::new_v4().to_string(),
-            working_dir: self.working_dir.clone(),
+            session_id,
+            working_dir,
             call_id: uuid::Uuid::new_v4().to_string(),
+            depth:   0,
         };
 
         let result = tool.execute(args, &ctx).await;

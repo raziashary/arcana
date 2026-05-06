@@ -21,6 +21,8 @@ const Dashboard: React.FC = () => {
     isLoading,
     error,
     refreshDashboard,
+    startRealtimeUpdates,
+    stopRealtimeUpdates,
     setDateRange,
     exportCsv,
     exportJson,
@@ -30,9 +32,21 @@ const Dashboard: React.FC = () => {
   const [exportPath, setExportPath] = useState<string>('');
   const [showExportDialog, setShowExportDialog] = useState(false);
 
+  // Mount once: load data, start realtime listeners, and add a 60s polling
+  // fallback for Mode 2 LivingAgent ticks that don't emit agent:done.
   useEffect(() => {
     refreshDashboard();
-  }, [refreshDashboard]);
+    startRealtimeUpdates();
+
+    const interval = setInterval(() => {
+      refreshDashboard();
+    }, 60_000);
+
+    return () => {
+      clearInterval(interval);
+      stopRealtimeUpdates();
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleDateRangeChange = (days: number) => {
     const end = new Date();

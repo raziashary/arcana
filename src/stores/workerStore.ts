@@ -23,6 +23,11 @@ export interface Worker {
   description:       string | null
   created_at:        string
   updated_at:        string
+  // D.2/D.3 — tick timing fields populated by worker:tick-start/end events
+  tick_started_at:   string | undefined
+  tick_ended_at:     string | undefined
+  tick_duration_ms:  number | undefined
+  last_outcome:      string | undefined
 }
 
 export type WorkerStatus =
@@ -113,6 +118,7 @@ const _unlistenFns: UnlistenFn[] = []
 
 // Phase 3.0 R2 event payload (matches Rust `WorkerStatusPayload`).
 // Fix 9a: expanded with previous_status, reason, cooldown_seconds.
+// D.2: expanded with tick_duration_ms, last_outcome.
 interface WorkerStatusEvent {
   slug:               string
   status:             WorkerStatus
@@ -120,6 +126,21 @@ interface WorkerStatusEvent {
   reason:             string | null
   cooldown_seconds:   number | null
   timestamp:          string
+  tick_duration_ms:   number | null
+  last_outcome:       string | null
+}
+
+// D.3 — tick boundary events (matches Rust WorkerTickStartPayload / WorkerTickEndPayload)
+interface WorkerTickStartPayload {
+  slug:      string
+  mode:      string
+  timestamp: string
+}
+
+interface WorkerTickEndPayload {
+  slug:      string
+  outcome:   string
+  timestamp: string
 }
 
 export const useWorkerStore = create<WorkerStoreState>((set, get) => ({
@@ -226,10 +247,18 @@ export const useWorkerStore = create<WorkerStoreState>((set, get) => ({
 
     try {
       const unlisten = await listen<WorkerStatusEvent>('worker:status', (event) => {
-        const { slug, status, reason, cooldown_seconds } = event.payload
+        const { slug, status, reason, cooldown_seconds, tick_duration_ms, last_outcome } = event.payload
         set(state => ({
           workers: state.workers.map(w =>
-            w.slug === slug ? { ...w, status } : w
+            w.slug === slug
+              ? {
+                  ...w,
+                  status,
+                  // D.2 — propagate timing info when present in the status event
+                  ...(tick_duration_ms != null ? { tick_duration_ms } : {}),
+                  ...(last_outcome    != null ? { last_outcome }    : {}),
+                }
+              : w
           ),
         }))
         // Fix 9b: emit toast on error or cooldown transitions
@@ -250,6 +279,29 @@ export const useWorkerStore = create<WorkerStoreState>((set, get) => ({
         }
       })
       _unlistenFns.push(unlisten)
+
+      // D.3 — subscribe to tick boundary events for granular per-agent state
+      const unlistenTickStart = await listen<WorkerTickStartPayload>('worker:tick-start', (event) => {
+        const { slug, timestamp } = event.payload
+        set(state => ({
+          workers: state.workers.map(w =>
+            w.slug === slug ? { ...w, tick_started_at: timestamp } : w
+          ),
+        }))
+      })
+      _unlistenFns.push(unlistenTickStart)
+
+      const unlistenTickEnd = await listen<WorkerTickEndPayload>('worker:tick-end', (event) => {
+        const { slug, outcome, timestamp } = event.payload
+        set(state => ({
+          workers: state.workers.map(w =>
+            w.slug === slug
+              ? { ...w, last_outcome: outcome, tick_ended_at: timestamp }
+              : w
+          ),
+        }))
+      })
+      _unlistenFns.push(unlistenTickEnd)
     } catch (e) {
       console.error('[workerStore] Failed to register worker:status listener:', e)
       _listenersInstalled = false  // allow retry

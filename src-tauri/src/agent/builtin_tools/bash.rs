@@ -19,7 +19,7 @@ impl Tool for BashTool {
 
     fn description(&self) -> &str {
         #[cfg(target_os = "windows")]
-        return "Execute a shell command in the working directory. Returns stdout and stderr. Use for running tests, linting, builds, and other shell operations.\n\nPlatform note: The shell is Windows CMD. Avoid Unix-only utilities (`head`, `tail`, `jq`, `grep` in pipes). Use PowerShell-compatible alternatives or run commands separately.";
+        return "Execute a shell command in the working directory. Returns stdout and stderr. Use for running tests, linting, builds, and other shell operations.\n\nIMPORTANT: Do NOT prefix commands with `cd <path> &&` or `Set-Location <path>;` — the working directory is already set to the project root. Write commands directly, e.g. `npm install` not `cd C:\\path && npm install`.\n\nPlatform note: The shell is Windows CMD. Avoid Unix-only utilities (`head`, `tail`, `jq`, `grep` in pipes). Use PowerShell-compatible alternatives or run commands separately.";
         #[cfg(not(target_os = "windows"))]
         return "Execute a shell command in the working directory. Returns stdout and stderr. Use for running tests, linting, builds, and other shell operations.";
     }
@@ -52,7 +52,7 @@ impl Tool for BashTool {
         let timeout_secs = input["timeout_secs"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS);
 
         let command = if cfg!(target_os = "windows") {
-            let rewritten = rewrite_for_windows(&command);
+            let rewritten = rewrite_for_windows(&command, &ctx.working_dir);
             if rewritten != command {
                 tracing::debug!("[BashTool] rewritten command: {} -> {}", command, rewritten);
             }
@@ -82,12 +82,16 @@ impl Tool for BashTool {
             )),
             Ok(Err(e)) => ToolResult::error(format!("Failed to spawn command: {e}")),
             Ok(Ok((stdout, stderr, exit_code))) => {
+                // K.1 — Label stdout and stderr separately so agents can
+                // distinguish build warnings (stderr) from program output.
                 let mut output = String::new();
                 if !stdout.is_empty() {
+                    output.push_str("=== STDOUT ===\n");
                     output.push_str(&stdout);
                 }
                 if !stderr.is_empty() {
                     if !output.is_empty() { output.push('\n'); }
+                    output.push_str("=== STDERR ===\n");
                     output.push_str(&stderr);
                 }
                 // Truncate very long output
@@ -124,6 +128,19 @@ async fn run_command(
     // Normalize the path to handle spaces and special characters on Windows
     let normalized_path = PathBuf::from(working_dir);
 
+    // K.2 — Pre-check existence so agents get a self-diagnosing error
+    // instead of an opaque "Failed to spawn command" from the OS.
+    if !normalized_path.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!(
+                "working_dir does not exist: {}. \
+                 Use list_directory to find the actual project root.",
+                normalized_path.display()
+            ),
+        ));
+    }
+
     cmd.current_dir(&normalized_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -140,8 +157,30 @@ async fn run_command(
 /// Detects common Unix-only utilities in piped commands and rewrites them
 /// to Windows equivalents before spawning the process. Applied only on
 /// `cfg!(target_os = "windows")`.
-fn rewrite_for_windows(cmd: &str) -> String {
+///
+/// Also strips any leading `cd "<working_dir>" &&` or `Set-Location "<working_dir>"; `
+/// prefix that agents generate unnecessarily — the OS-level `current_dir` is already
+/// set to `working_dir` by `run_command`, so these redundant prefixes only cause
+/// Windows path-with-spaces failures.
+fn rewrite_for_windows(cmd: &str, working_dir: &str) -> String {
     let mut out = cmd.to_string();
+
+    // Strip redundant `cd "<working_dir>" &&` or `cd <working_dir> &&` prefix.
+    // Agents frequently generate these even though current_dir is already set.
+    let quoted_cd   = format!("cd \"{}\" && ", working_dir);
+    let unquoted_cd = format!("cd {} && ", working_dir);
+    let set_loc     = format!("Set-Location \"{}\" ; ", working_dir);
+    let set_loc_sl  = format!("Set-Location {} ; ", working_dir);
+    if out.starts_with(&quoted_cd) {
+        out = out[quoted_cd.len()..].to_string();
+    } else if out.starts_with(&unquoted_cd) {
+        out = out[unquoted_cd.len()..].to_string();
+    } else if out.starts_with(&set_loc) {
+        out = out[set_loc.len()..].to_string();
+    } else if out.starts_with(&set_loc_sl) {
+        out = out[set_loc_sl.len()..].to_string();
+    }
+
     // `head -N` → `Select-Object -First N` (PowerShell)
     // Handle both `head -20` and `head -n 20` forms.
     out = out.replace(" | head -n ", " | Select-Object -First ");

@@ -27,6 +27,10 @@ pub struct ToolContext {
     pub session_id:  String,
     pub working_dir: String,
     pub call_id:     String,
+    /// K.11 — Subagent nesting depth (0 = top-level agent, n+1 = subagent
+    /// spawned by an agent at depth n). Spawn tools read this to set the
+    /// child's depth and guard against unbounded recursion.
+    pub depth:       u32,
 }
 
 #[async_trait]

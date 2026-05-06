@@ -46,16 +46,6 @@ const s: Record<string, React.CSSProperties> = {
     flexWrap:    'wrap',
     background:  'var(--bg-1)',
   },
-  filterBtn: (active: boolean) => ({
-    padding:      '4px 14px',
-    borderRadius: 20,
-    border:       `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
-    background:   active ? 'var(--accent)' : 'transparent',
-    color:        active ? '#fff' : 'var(--text-2)',
-    fontSize:     13,
-    cursor:       'pointer',
-    transition:   'all 0.15s',
-  }),
   searchInput: {
     flex:         1,
     padding:      '4px 12px',
@@ -76,17 +66,6 @@ const s: Record<string, React.CSSProperties> = {
     gap:            14,
     alignContent:   'start',
   },
-  card: (installed: boolean) => ({
-    background:   'var(--bg-2)',
-    border:       `1px solid ${installed ? 'var(--accent)' : 'var(--border)'}`,
-    borderRadius: 10,
-    padding:      16,
-    display:      'flex',
-    flexDirection:'column',
-    gap:          10,
-    cursor:       'pointer',
-    transition:   'border-color 0.15s, box-shadow 0.15s',
-  }),
   cardHeader: {
     display:     'flex',
     alignItems:  'center',
@@ -139,18 +118,6 @@ const s: Record<string, React.CSSProperties> = {
     paddingTop:     8,
     borderTop:      '1px solid var(--border)',
   },
-  btn: (variant: 'primary' | 'ghost' | 'danger') => ({
-    padding:      '5px 14px',
-    borderRadius: 6,
-    border:       variant === 'ghost' ? '1px solid var(--border)' : 'none',
-    background:   variant === 'primary' ? 'var(--accent)' :
-                  variant === 'danger'  ? 'var(--error, #c0392b)' :
-                                          'transparent',
-    color:        variant === 'ghost' ? 'var(--text-2)' : '#fff',
-    fontSize:     13,
-    cursor:       'pointer',
-    transition:   'opacity 0.15s',
-  }),
   emptyState: {
     textAlign:  'center',
     padding:    40,
@@ -186,23 +153,61 @@ const s: Record<string, React.CSSProperties> = {
     margin:     0,
     color:      'var(--text-1)',
   },
-  checkRow: (present: boolean, required: boolean) => ({
-    display:     'flex',
-    alignItems:  'center',
-    gap:         10,
-    padding:     '6px 0',
-    borderBottom:'1px solid var(--border)',
-    color:       !present && required ? 'var(--error, #c0392b)' : 'var(--text-2)',
-  }),
-  resultBox: (success: boolean) => ({
-    padding:      12,
-    borderRadius: 8,
-    background:   success ? 'rgba(39,174,96,0.1)' : 'rgba(192,57,43,0.1)',
-    border:       `1px solid ${success ? 'var(--success, #27ae60)' : 'var(--error, #c0392b)'}`,
-    color:        'var(--text-1)',
-    fontSize:     13,
-  }),
 }
+
+const filterBtn = (active: boolean): React.CSSProperties => ({
+  padding:      '4px 14px',
+  borderRadius: 20,
+  border:       `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+  background:   active ? 'var(--accent)' : 'transparent',
+  color:        active ? '#fff' : 'var(--text-2)',
+  fontSize:     13,
+  cursor:       'pointer',
+  transition:   'all 0.15s',
+})
+
+const card = (installed: boolean): React.CSSProperties => ({
+  background:   'var(--bg-2)',
+  border:       `1px solid ${installed ? 'var(--accent)' : 'var(--border)'}`,
+  borderRadius: 10,
+  padding:      16,
+  display:      'flex',
+  flexDirection:'column',
+  gap:          10,
+  cursor:       'pointer',
+  transition:   'border-color 0.15s, box-shadow 0.15s',
+})
+
+const btn = (variant: 'primary' | 'ghost' | 'danger'): React.CSSProperties => ({
+  padding:      '5px 14px',
+  borderRadius: 6,
+  border:       variant === 'ghost' ? '1px solid var(--border)' : 'none',
+  background:   variant === 'primary' ? 'var(--accent)' :
+                variant === 'danger'  ? 'var(--error, #c0392b)' :
+                                        'transparent',
+  color:        variant === 'ghost' ? 'var(--text-2)' : '#fff',
+  fontSize:     13,
+  cursor:       'pointer',
+  transition:   'opacity 0.15s',
+})
+
+const checkRow = (present: boolean, required: boolean): React.CSSProperties => ({
+  display:     'flex',
+  alignItems:  'center',
+  gap:         10,
+  padding:     '6px 0',
+  borderBottom:'1px solid var(--border)',
+  color:       !present && required ? 'var(--error, #c0392b)' : 'var(--text-2)',
+})
+
+const resultBox = (success: boolean): React.CSSProperties => ({
+  padding:      12,
+  borderRadius: 8,
+  background:   success ? 'rgba(39,174,96,0.1)' : 'rgba(192,57,43,0.1)',
+  border:       `1px solid ${success ? 'var(--success, #27ae60)' : 'var(--error, #c0392b)'}`,
+  color:        'var(--text-1)',
+  fontSize:     13,
+})
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
@@ -258,8 +263,6 @@ const PluginManager: React.FC = () => {
     setShowDetail(true)
   }
 
-  const allTags = Array.from(new Set(filteredPlugins.flatMap(p => p.tags))).sort()
-
   return (
     <div style={s.root}>
       {/* Header */}
@@ -275,7 +278,7 @@ const PluginManager: React.FC = () => {
         {(['all', 'installed', 'builtin'] as const).map(f => (
           <button
             key={f}
-            style={s.filterBtn(filter === f)}
+            style={filterBtn(filter === f)}
             onClick={() => setFilter(f)}
           >
             {f.charAt(0).toUpperCase() + f.slice(1)}
@@ -313,7 +316,7 @@ const PluginManager: React.FC = () => {
           return (
             <div
               key={plugin.name}
-              style={s.card(plugin.installed)}
+              style={card(plugin.installed)}
               onClick={() => handleCardClick(plugin)}
             >
               <div style={s.cardHeader}>
@@ -334,7 +337,7 @@ const PluginManager: React.FC = () => {
               <div style={s.cardActions}>
                 {!plugin.installed ? (
                   <button
-                    style={s.btn('primary')}
+                    style={btn('primary')}
                     disabled={isLoading}
                     onClick={e => handleInstall(e, plugin)}
                   >
@@ -343,14 +346,14 @@ const PluginManager: React.FC = () => {
                 ) : (
                   <>
                     <button
-                      style={s.btn('ghost')}
+                      style={btn('ghost')}
                       disabled={operationLoading[`verify_${plugin.name}`]}
                       onClick={e => handleVerify(e, plugin)}
                     >
                       Verify
                     </button>
                     <button
-                      style={s.btn('danger')}
+                      style={btn('danger')}
                       disabled={isLoading}
                       onClick={e => handleUninstall(e, plugin)}
                     >
@@ -359,7 +362,7 @@ const PluginManager: React.FC = () => {
                   </>
                 )}
                 <button
-                  style={{ ...s.btn('ghost'), marginLeft: 'auto' }}
+                  style={{ ...btn('ghost'), marginLeft: 'auto' }}
                   onClick={e => { e.stopPropagation(); handleCardClick(plugin) }}
                 >
                   Details
@@ -435,7 +438,7 @@ const PluginDetailPanel: React.FC<DetailPanelProps> = ({
 
         {/* Install result */}
         {installResult && (
-          <div style={s.resultBox(installResult.success)}>
+          <div style={resultBox(installResult.success)}>
             {installResult.success ? '✓ ' : '✗ '}{installResult.message}
             {installResult.warnings.map((w, i) => (
               <div key={i} style={{ color: 'var(--warning, #f39c12)', marginTop: 4 }}>⚠ {w}</div>
@@ -450,14 +453,14 @@ const PluginDetailPanel: React.FC<DetailPanelProps> = ({
               Dependency Checks
             </div>
             {verifyResult.checks.map(check => (
-              <div key={check.name} style={s.checkRow(check.present, check.required)}>
+              <div key={check.name} style={checkRow(check.present, check.required)}>
                 <span style={{ fontSize: 16 }}>{check.present ? '✓' : check.required ? '✗' : '~'}</span>
                 <span>{check.name}</span>
                 {check.version && <span style={{ color: 'var(--text-3)', fontSize: 12 }}>{check.version}</span>}
                 <span style={{ marginLeft: 'auto', fontSize: 12 }}>{check.message}</span>
               </div>
             ))}
-            <div style={s.resultBox(verifyResult.success)}>
+            <div style={resultBox(verifyResult.success)}>
               {verifyResult.message}
             </div>
           </div>
@@ -466,13 +469,13 @@ const PluginDetailPanel: React.FC<DetailPanelProps> = ({
         {/* Actions */}
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           {!plugin.installed ? (
-            <button style={s.btn('primary')} disabled={loading} onClick={onInstall}>
+            <button style={btn('primary')} disabled={loading} onClick={onInstall}>
               {loading ? 'Installing…' : 'Install'}
             </button>
           ) : (
             <>
-              <button style={s.btn('ghost')} onClick={onVerify}>Verify</button>
-              <button style={s.btn('danger')} onClick={onUninstall}>Uninstall</button>
+              <button style={btn('ghost')} onClick={onVerify}>Verify</button>
+              <button style={btn('danger')} onClick={onUninstall}>Uninstall</button>
             </>
           )}
         </div>

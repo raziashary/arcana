@@ -6,6 +6,7 @@ use tokio::fs;
 use tracing::debug;
 
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
+use crate::hooks::{HookRegistry, HookType, HookContext, ToolCallContext};
 
 pub struct EditFileTool;
 
@@ -67,6 +68,8 @@ impl Tool for EditFileTool {
     }
 
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
+        // Clone before moving into from_value so the hook context below can reference it.
+        let input_for_hook = input.clone();
         let params: EditFileInput = match serde_json::from_value(input) {
             Ok(p) => p,
             Err(e) => return ToolResult::error(format!("Invalid input: {e}")),
@@ -128,6 +131,33 @@ impl Tool for EditFileTool {
         if let Err(e) = fs::write(&file_path, &new_content).await {
             return ToolResult::error(format!("Failed to write file '{}': {}", file_path.display(), e));
         }
+
+        // K.3 — Fire PostFileWrite hook (same as write_file.rs) so the graph
+        // engine, telemetry, and hook consumers observe agent edits.
+        let file_path_str = file_path.to_string_lossy().to_string();
+        let hook_ctx = HookContext {
+            hook_type:  HookType::PostFileWrite.as_str().to_string(),
+            timestamp:  chrono::Utc::now(),
+            session_id: Some(ctx.session_id.clone()),
+            agent_mode: None,
+            tool_call: Some(ToolCallContext {
+                id:       ctx.call_id.clone(),
+                name:     "edit_file".to_string(),
+                input:    input_for_hook,
+                result:   Some(json!({"bytes_written": new_content.len()})),
+                is_error: false,
+            }),
+            file_path:  Some(file_path_str),
+            task_id:    None,
+            worker_id:  None,
+            extra: json!({
+                "bytes_written": new_content.len(),
+                "occurrences_replaced": if params.replace_all { match_count } else { 1 },
+            }),
+        };
+        tokio::spawn(async move {
+            HookRegistry::fire(&HookType::PostFileWrite, &hook_ctx).await;
+        });
 
         let occurrences = if params.replace_all { match_count } else { 1 };
         ToolResult::success(format!(

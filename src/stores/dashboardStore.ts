@@ -3,6 +3,15 @@ import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
+// Matches CostUpdatePayload in events.rs (EVT_COST_UPDATE = "cost:update")
+interface CostUpdatePayload {
+  session_id:  string;
+  tokens_in:   number;
+  tokens_out:  number;
+  cost_usd:    number;
+  total_today: number;
+}
+
 export interface BudgetAlert {
   id: string;
   timestamp: string;
@@ -341,30 +350,37 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
 
   startRealtimeUpdates: async () => {
     if (get().realtimeEnabled) return;
-    
+
     try {
-      // Listen for cost update events
-      const costUnlistener = await listen<{ cost: number }>('analytics:cost-update', (event) => {
+      // Listen for cost update events — event name matches EVT_COST_UPDATE in events.rs
+      const costUnlistener = await listen<CostUpdatePayload>('cost:update', (event) => {
         const { summary } = get();
-        if (summary && event.payload.cost > get().dailyBudget) {
+        if (summary && event.payload.total_today > get().dailyBudget) {
           const alert: BudgetAlert = {
             id: `alert-${Date.now()}`,
             timestamp: new Date().toISOString(),
-            type: event.payload.cost > get().dailyBudget * 1.1 ? 'critical' : 'warning',
-            message: `Daily cost exceeded: $${event.payload.cost.toFixed(2)} / $${get().dailyBudget.toFixed(2)}`,
-            current_cost: event.payload.cost,
+            type: event.payload.total_today > get().dailyBudget * 1.1 ? 'critical' : 'warning',
+            message: `Daily cost exceeded: $${event.payload.total_today.toFixed(2)} / $${get().dailyBudget.toFixed(2)}`,
+            current_cost: event.payload.total_today,
             budget_limit: get().dailyBudget,
           };
           get().addBudgetAlert(alert);
         }
       });
 
-      // Listen for API failure events
-      const failureUnlistener = await listen('analytics:api-failure', () => {
-        get().setApiFailures(24);
+      // Refresh dashboard whenever an agent (Mode 1 PA) finishes a turn
+      const agentDoneUnlistener = await listen('agent:done', () => {
+        get().refreshDashboard();
       });
 
-      realtimeUnlisteners = [costUnlistener, failureUnlistener];
+      // Refresh dashboard when a Mode 2 LivingAgent tick completes
+      const tickUnlistener = await listen<{ kind: string }>('task:changed', (event) => {
+        if (event.payload.kind === 'worker_tick_complete') {
+          get().refreshDashboard();
+        }
+      });
+
+      realtimeUnlisteners = [costUnlistener, agentDoneUnlistener, tickUnlistener];
       set({ realtimeEnabled: true });
     } catch (error) {
       console.error('Failed to start realtime updates:', error);

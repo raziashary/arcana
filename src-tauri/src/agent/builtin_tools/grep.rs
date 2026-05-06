@@ -10,23 +10,26 @@ use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
 
 #[derive(Debug, Serialize)]
 struct GrepMatch {
-    line_number: usize,
-    line_content: String,
+    line_number:     usize,
+    line_content:    String,
     match_positions: Vec<(usize, usize)>,
+    context_before:  Vec<String>,  // K.5 — lines before the match
+    context_after:   Vec<String>,  // K.5 — lines after the match
 }
 
 #[derive(Debug, Serialize)]
 struct GrepFileResult {
-    file: String,
+    file:    String,
     matches: Vec<GrepMatch>,
 }
 
 #[derive(Debug, Serialize)]
 struct GrepOutput {
-    pattern: String,
+    pattern:       String,
     total_matches: usize,
     files_matched: usize,
-    results: Vec<GrepFileResult>,
+    truncated:     bool,           // K.5 — true when max_results was hit
+    results:       Vec<GrepFileResult>,
 }
 
 pub struct GrepTool;
@@ -81,7 +84,7 @@ impl Tool for GrepTool {
                 },
                 "glob": {
                     "type": "string",
-                    "description": "Optional glob pattern to filter files (e.g., '*.rs', '**/*.py')"
+                    "description": "Optional glob pattern to filter files by path (e.g., '*.rs', 'src/**/*.tsx')"
                 },
                 "context_lines": {
                     "type": "integer",
@@ -121,18 +124,28 @@ impl Tool for GrepTool {
 
         debug!("Grepping pattern '{}' in {:?}", params.pattern, search_path);
 
-        // Compile regex pattern
-        let regex = match regex::Regex::new(&params.pattern) {
+        // K.4 — Apply (?i) inline flag for case-insensitive matching instead of
+        // lowercasing the line at match time. The previous to_lowercase() approach
+        // caused match_positions to point into the lowercased string, and uppercase
+        // patterns (e.g. "MyFunction") returned zero results because the regex was
+        // compiled for its original case and matched against a lowercased copy.
+        let pattern_str = if params.case_insensitive {
+            format!("(?i){}", params.pattern)
+        } else {
+            params.pattern.clone()
+        };
+        let regex = match regex::Regex::new(&pattern_str) {
             Ok(r) => r,
             Err(e) => return ToolResult::error(format!("Invalid regex pattern: {e}")),
         };
 
         let mut file_results: Vec<GrepFileResult> = Vec::new();
         let mut total_matches = 0;
+        let mut truncated = false;
         let skip_dirs = ["node_modules", ".git", "target", "dist", "build", ".next", ".cache"];
 
         // Walk directory tree
-        for entry in WalkDir::new(&search_path)
+        'walk: for entry in WalkDir::new(&search_path)
             .follow_links(false)
             .into_iter()
             .filter_entry(|e| {
@@ -152,14 +165,24 @@ impl Tool for GrepTool {
                 continue;
             }
 
-            // Check glob filter if provided
+            // K.6 — Compute relative_path early so the glob filter can match
+            // against the full path (e.g. "src/**/*.tsx") rather than just the
+            // filename. The previous filename-only match made ** path components
+            // silently ineffective.
+            let relative_path = entry.path()
+                .strip_prefix(&search_path)
+                .unwrap_or(entry.path())
+                .to_string_lossy()
+                .replace('\\', "/");
+
             if let Some(glob_pattern) = &params.glob {
                 let file_name = entry.file_name().to_string_lossy();
-                if !glob::Pattern::new(glob_pattern)
-                    .ok()
-                    .map(|p| p.matches(&file_name))
-                    .unwrap_or(false)
-                {
+                // Match against the full relative path first (respects src/**/*.tsx),
+                // then fall back to filename-only for simple patterns like *.rs.
+                let matched = glob::Pattern::new(glob_pattern)
+                    .map(|p| p.matches(&relative_path) || p.matches(file_name.as_ref()))
+                    .unwrap_or(false);
+                if !matched {
                     continue;
                 }
             }
@@ -170,34 +193,35 @@ impl Tool for GrepTool {
                 Err(_) => continue,
             };
 
-            let relative_path = entry.path()
-                .strip_prefix(&search_path)
-                .unwrap_or(entry.path())
-                .to_string_lossy()
-                .replace('\\', "/");
-
             let mut file_matches: Vec<GrepMatch> = Vec::new();
 
-            for (line_num, line) in content.lines().enumerate() {
-                let line_number = line_num + 1;
-                let search_line = if params.case_insensitive {
-                    line.to_lowercase()
-                } else {
-                    line.to_string()
-                };
-
-                if let Some(mat) = regex.find(&search_line) {
+            // K.5 — Pre-split into indexed lines so context windows are O(1).
+            let lines: Vec<&str> = content.lines().collect();
+            for (line_num, line) in lines.iter().enumerate() {
+                // K.4 — Match against original line; regex already has (?i) if needed.
+                if let Some(mat) = regex.find(line) {
                     let match_positions = vec![(mat.start(), mat.end())];
-                    
+
+                    // K.5 — Collect context lines before and after the match.
+                    let ctx_start = line_num.saturating_sub(params.context_lines as usize);
+                    let ctx_end   = (line_num + params.context_lines as usize + 1).min(lines.len());
+                    let context_before: Vec<String> = lines[ctx_start..line_num]
+                        .iter().map(|s| s.to_string()).collect();
+                    let context_after: Vec<String>  = lines[line_num + 1..ctx_end]
+                        .iter().map(|s| s.to_string()).collect();
+
                     file_matches.push(GrepMatch {
-                        line_number,
+                        line_number: line_num + 1,
                         line_content: line.to_string(),
                         match_positions,
+                        context_before,
+                        context_after,
                     });
 
                     total_matches += 1;
 
                     if total_matches >= params.max_results as usize {
+                        truncated = true;
                         break;
                     }
                 }
@@ -210,8 +234,8 @@ impl Tool for GrepTool {
                 });
             }
 
-            if total_matches >= params.max_results as usize {
-                break;
+            if truncated {
+                break 'walk;
             }
         }
 
@@ -219,6 +243,7 @@ impl Tool for GrepTool {
             pattern: params.pattern.clone(),
             total_matches,
             files_matched: file_results.len(),
+            truncated,
             results: file_results,
         };
 

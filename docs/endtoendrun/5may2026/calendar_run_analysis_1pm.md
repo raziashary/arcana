@@ -512,7 +512,7 @@ Frontend components `Calendar.tsx`, `EventForm.tsx`, `Login.tsx`, `Signup.tsx`, 
 
 ### Phase A — Task State Machine: Add `rejected` Status
 
-**Status:** ⬜ Pending  
+**Status:** ✅ Done  
 **Goal:** Give the QC agent a proper `rejected` state to express "failed review with reason" without re-dispatching via `assigned`, which is what caused the QC↔Assigned loop in the May 5 run.
 
 #### A.1 — Add `Rejected` variant to `TaskStatus` enum
@@ -634,7 +634,7 @@ Add a `REJECTED` column to the kanban board between `BUILD_FAILED` and `DONE` so
 
 ### Phase B — Build Command Path Handling (bash.rs)
 
-**Status:** ⬜ Pending  
+**Status:** ✅ Done  
 **Goal:** Prevent agents from generating bare `cd C:\AIRS Foundry\...` chains that break on Windows when the path contains spaces. The tool already sets `current_dir` correctly at the OS level — the fix is preventing redundant and broken `cd` prefixes in the command string.
 
 #### B.1 — Strip redundant `cd <working_dir> &&` from agent commands
@@ -695,7 +695,7 @@ return "Execute a shell command in the working directory. Returns stdout and std
 
 ### Phase C — Dashboard Live Data (No Polling Interval + Wrong Event Names)
 
-**Status:** ⬜ Pending  
+**Status:** ✅ Done  
 **Goal:** Make the dashboard update in real time as agent ticks complete. Two separate bugs to fix: (1) `Dashboard.tsx` never starts the realtime listener, and (2) the event name `analytics:cost-update` in `dashboardStore.ts` does not match the emitted name `cost:update` in `events.rs`.
 
 #### C.1 — Fix event name mismatch in `dashboardStore.ts`
@@ -807,7 +807,7 @@ if let Some(app) = crate::events::app_handle() {
 
 ### Phase D — Agent Toast State Granularity
 
-**Status:** ⬜ Pending  
+**Status:** ✅ Done  
 **Goal:** Surface rich per-agent substates in the toast/roster UI so users see more than just `working → idle`. The QC agent running for 115 seconds with no feedback is the symptom this fixes.
 
 #### D.1 — Emit `worker:tick-start` and `worker:tick-end` events from `runner.rs`
@@ -895,7 +895,7 @@ await listen<WorkerTickEndPayload>('worker:tick-end', (event) => {
 
 ### Phase E — QC Agent: Build-Failed Short-Circuit + Retry Count
 
-**Status:** ⬜ Pending  
+**Status:** ✅ Done  
 **Goal:** Prevent QC from invoking the LLM on tasks that are `build_failed` — it cannot review code that didn't install. Add an auto-retry mechanism so `build_failed` tasks requeue instead of sitting terminal.
 
 #### E.1 — Add `retry_count` column to `tasks` table
@@ -971,7 +971,7 @@ let titles: Vec<String> = reviewable.iter()
 
 ### Phase F — Worker Frontend Scaffold Generation
 
-**Status:** ⬜ Pending  
+**Status:** ✅ Done  
 **Goal:** Ensure worker-frontend generates a complete, runnable Vite project scaffold when creating a new frontend project. The May 5 run generated component files but no `vite.config.js`, `public/index.html`, `tsconfig.json`, or `src/main.tsx` entry point.
 
 #### F.1 — Add scaffold checklist to worker-frontend recipe instructions
@@ -1044,7 +1044,7 @@ Also verify `requirements.txt` package compatibility:
 
 ### Phase G — Startup Health-Check Race Condition
 
-**Status:** ⬜ Pending  
+**Status:** ✅ Done  
 **Goal:** Eliminate the 59 consecutive health-check failures logged at startup, which generate log noise and risk triggering the watchdog restart threshold.
 
 #### G.1 — Add startup grace window to `OrchestratorClient::is_healthy()`
@@ -1098,7 +1098,7 @@ pub async fn is_healthy(&self) -> bool {
 
 ### Phase H — Theme Visibility (CSS)
 
-**Status:** ⬜ Pending  
+**Status:** ✅ Done  
 **Goal:** Fix the near-black dark theme that renders `--text-secondary` illegible. Section 6.8 and Recommendation #6 both identify specific CSS variable values to change.
 
 #### H.1 — Raise `--bg-primary` and `--bg-card` values
@@ -1135,7 +1135,7 @@ Any element setting `opacity: 0.5` on text elements directly (rather than using 
 
 ### Phase I — Idle Agent Pre-Flight LLM Cost Reduction
 
-**Status:** ⬜ Pending  
+**Status:** ✅ Done  
 **Goal:** Before invoking the LLM for a worker recipe tick, perform a lightweight SQLite task-count check. If the worker has zero assigned or in-progress tasks, skip the LLM call entirely. This eliminates the "dead token" invocations observed in Section 8 where `worker-frontend` was re-fired repeatedly and immediately exited with "No tasks assigned — idle", burning tokens on the system prompt and `list_tasks` call before concluding.
 
 #### I.1 — Add pre-flight task count check in `runner.rs` before LLM dispatch
@@ -1183,7 +1183,7 @@ pub fn list_tasks_by_status_and_worker(
 
 ### Phase J — Sidecar Log Noise Filtering
 
-**Status:** ⬜ Pending  
+**Status:** ✅ Done  
 **Goal:** Reduce the ERROR-level log noise from known transient Python connection errors that propagate through the Rust sidecar's log router. Section 6.6 confirms `ClosedResourceError` and `WinError 10054` tracebacks appeared 10+ times per second in the final session phase — these are benign reconnect events that are logged at ERROR by the Python tracebacks but should be DEBUG/WARN on the Rust side.
 
 #### J.1 — Add pattern-based log level downgrade in `sidecar/mod.rs`
@@ -1221,7 +1221,7 @@ log::log!(level, "[{}] {}", process_label, line);
 
 ### Phase K — builtin_tools Code Quality Fixes
 
-**Status:** ⬜ Pending  
+**Status:** ✅ Done  
 **Goal:** Fix silent defects in the Rust builtin tools identified in Section 13. These are not recipe changes — they are code correctness fixes that affect all agents regardless of instruction.
 
 #### K.1 — `bash.rs`: Label stdout and stderr separately in output
@@ -1487,7 +1487,7 @@ let system_prompt = match input.get("task_context").and_then(|v| v.as_str()) {
 
 ### Phase L — MCP Server Fixes
 
-**Status:** ⬜ Pending  
+**Status:** ✅ Done  
 **Goal:** Fix the four critical defects in `src-tauri/src/mcp_server/` identified in Section 13. M1 is the highest severity — it means all fleet file writes currently land in the wrong directory.
 
 #### L.1 — `tool_adapter.rs`: Accept `__working_dir` per-call instead of using hardcoded `~/.autodev`
@@ -1627,6 +1627,8 @@ This section documents findings from a full read of every file in `src-tauri/src
 
 #### T1 · `bash.rs` — `rewrite_for_windows` has no `working_dir` parameter (cannot strip `cd` prefixes)
 
+**Status:** ✅ Done — signature is `fn rewrite_for_windows(cmd: &str, working_dir: &str)` and `execute()` passes `&ctx.working_dir`. Strips `cd "..." &&`, `cd ... &&`, and `Set-Location ...` prefixes.
+
 **File:** `src-tauri/src/agent/builtin_tools/bash.rs`
 
 **Finding:** `execute()` calls `rewrite_for_windows(&command)` at line 55. The function signature is `fn rewrite_for_windows(cmd: &str)` — it receives only the command string, not `working_dir`. This means it **cannot** strip the redundant `cd "<working_dir>" && ` prefix that LLMs frequently prepend to commands. The rewriter is architecturally incapable of performing the fix described in Phase B of Section 12 without first changing this signature.
@@ -1663,6 +1665,8 @@ fn rewrite_for_windows(cmd: &str, working_dir: &str) -> String {
 
 #### T2 · `bash.rs` — stdout and stderr are unlabelled in the returned output
 
+**Status:** ✅ Done — `=== STDOUT ===` / `=== STDERR ===` labels in place (from Phase K.1).
+
 **File:** `src-tauri/src/agent/builtin_tools/bash.rs` lines 85-100
 
 **Finding:** `stdout` and `stderr` are concatenated with a bare newline between them. When a build tool writes diagnostic info to stderr and results to stdout (common in `cargo build`, `npm run build`, `pytest`), the agent cannot distinguish which lines are errors and which are normal output. The structured error suggestion on line 106 only fires for `exit_code == 255 && "is not recognized"` — it misses the common case of a build command that exits 1 with a mixed stdout/stderr stream.
@@ -1687,6 +1691,8 @@ if !stderr.is_empty() {
 
 #### T3 · `bash.rs` — no `working_dir` existence pre-check before spawning
 
+**Status:** ✅ Done — `if !normalized_path.exists()` guard in `run_command()` returns a self-diagnosing `NotFound` error (from Phase K.2).
+
 **File:** `src-tauri/src/agent/builtin_tools/bash.rs` `run_command()` line 127
 
 **Finding:** `cmd.current_dir(&normalized_path)` is called without first checking whether the path exists. If `ctx.working_dir` is empty or a stale path from a previous project session, `cmd.output().await` returns `Err(Os { code: 2, kind: NotFound, ... })` which surfaces as the generic "Failed to spawn command: ..." error. The agent has no way to tell whether the command itself failed or the working directory didn't exist.
@@ -1707,6 +1713,8 @@ if !normalized_path.exists() {
 ---
 
 #### T4 · `edit_file.rs` — `PostFileWrite` hook is NOT fired
+
+**Status:** ✅ Done — `HookRegistry::fire(&HookType::PostFileWrite, ...)` fires in a `tokio::spawn` after every successful `fs::write` in `edit_file.rs` (from Phase K.3). Uses `input_for_hook` clone to avoid borrow-after-move.
 
 **File:** `src-tauri/src/agent/builtin_tools/edit_file.rs` lines 122-140
 
@@ -1747,6 +1755,8 @@ tokio::spawn(async move {
 
 #### T5 · `grep.rs` — `case_insensitive` implementation is broken
 
+**Status:** ✅ Done — regex compiled with `(?i)` prefix when `case_insensitive = true`; `to_lowercase()` line removed; pattern matched against original line (from Phase K.4).
+
 **File:** `src-tauri/src/agent/builtin_tools/grep.rs` lines 183-196
 
 **Finding:** When `case_insensitive = true`, the code lowercases the line (`line.to_lowercase()`) at line 184 but continues to apply the original regex (which was compiled from the original, potentially mixed-case pattern). If the agent passes `pattern: "User"` with `case_insensitive: true`, the regex tries to match `"User"` against a lowercased line containing `"user"` — and finds nothing. The flag is silently broken for all mixed-case patterns.
@@ -1786,6 +1796,8 @@ if let Some(mat) = regex.find(line) {
 
 #### T6 · `grep.rs` — `context_lines` parameter is parsed but never used
 
+**Status:** ✅ Done — `GrepMatch` has `context_before`/`context_after` fields; match loop uses `ctx_start`/`ctx_end` slices of pre-split `lines: Vec<&str>`; `GrepOutput` has `truncated: bool` (from Phase K.5).
+
 **File:** `src-tauri/src/agent/builtin_tools/grep.rs` lines 43-44, 181-204
 
 **Finding:** The `GrepInput` struct deserialises `context_lines: u32` (default 2) and the JSON schema advertises it. However, the match loop at lines 181-204 **never references `params.context_lines`**. The returned `GrepMatch` objects contain only the matched line — no surrounding context. Agents requiring context must issue a separate `read_file` call for every match location, consuming 2-4 extra turns per grep call.
@@ -1814,6 +1826,8 @@ Also add `context_before: Vec<String>` and `context_after: Vec<String>` to `Grep
 ---
 
 #### T7 · `grep.rs` / `glob.rs` — glob filter in grep matches filename only, not full relative path
+
+**Status:** ✅ Done — `relative_path` computed via `strip_prefix(&search_path)` with `\\` → `/` normalisation before the glob filter; `Pattern::matches()` checks full relative path first, then bare filename as fallback (from Phase K.6).
 
 **File:** `src-tauri/src/agent/builtin_tools/grep.rs` lines 156-165
 
@@ -1847,6 +1861,8 @@ For glob.rs, switch to the `globset` crate which handles `**` correctly across p
 ---
 
 #### T8 · `list_tasks_tool.rs` — schema enum missing `build_failed` and `rejected`; output missing key fields
+
+**Status:** ✅ Done — schema enum includes all 9 statuses (`build_failed`, `rejected` present); output includes `rejection_reason`, `retry_count`, `completed_at`; `get_task_tool.rs` created and registered (from Phase K.7).
 
 **File:** `src-tauri/src/agent/builtin_tools/list_tasks_tool.rs` lines 31, 53-65
 
@@ -1890,6 +1906,8 @@ For the missing `get_task` tool, create a new file `src-tauri/src/agent/builtin_
 ---
 
 #### T9 · `update_task_status_tool.rs` — `rejected` status missing from schema, description, hooks, and kick logic
+
+**Status:** ✅ Done — `rejected` in schema enum; description explains when to use `rejected` vs `failed`; kick logic wakes assigned worker on rejection; hook arms fire `OnTaskFail` for `build_failed` and `OnQcReviewStart` for `rejected` (from Phase K.8).
 
 **File:** `src-tauri/src/agent/builtin_tools/update_task_status_tool.rs` lines 22, 35, 110-118, 129-134
 
@@ -1947,6 +1965,8 @@ let hook_type = match status.as_str() {
 
 #### T10 · `assign_task.rs` — `rejected` tasks cannot be re-dispatched; `VALID_WORKERS` is out of sync
 
+**Status:** ✅ Done — `dispatchable` match includes `"rejected"`; `VALID_WORKERS` is `const VALID_WORKERS: &[&str] = FLEET_WORKERS` derived from `crate::recipes::defaults` (from Phase K.9).
+
 **File:** `src-tauri/src/agent/builtin_tools/assign_task.rs` lines 99-108, 28-34
 
 **Finding 1 — `dispatchable` gate at lines 99-108 excludes `"rejected"`:**
@@ -1990,6 +2010,8 @@ const VALID_WORKERS: &[&str] = FLEET_WORKERS;
 
 #### T11 · `spawn_subagent.rs` / `spawn_parallel_subagents.rs` — subagents cannot reach `autodev-mcp-server`
 
+**Status:** ✅ Done — `SubagentManager.spawn()` auto-injects `SubagentConfig::DEFAULT_MCP_SERVER` (`"autodev-mcp-server"`) whenever `config.mcp_servers.is_empty()` (manager.rs lines 77–78). Both tools pass `Vec::new()` which triggers this path. Equivalent to Phase K.10.
+
 **Files:** `spawn_subagent.rs` line 109, `spawn_parallel_subagents.rs` line 121
 
 **Finding:** Both tools hardcode `mcp_servers: Vec::new()`. The `autodev-mcp-server` runs at `http://127.0.0.1:8767/mcp` and exposes all builtin_tools. Subagents launched with an empty `mcp_servers` list have **zero access to any AutoDev tools** unless the parent explicitly passes tool names in the `tools` array — which the LLM often omits. In practice, QC subagents spawned to review 4+ files cannot call `read_file`, `grep`, or `bash` because they have no tool registry. They produce empty or hallucinated reviews.
@@ -2017,6 +2039,8 @@ If the caller also passes explicit `tools`, those become the allowed subset. If 
 ---
 
 #### T12 · `spawn_subagent.rs` — `depth` always 0; subagents can spawn subagents without depth limit
+
+**Status:** ✅ Done — `ToolContext.depth: u32` field added; both spawn tools have `const MAX_SUBAGENT_DEPTH: u32 = 3` guard at top of `execute()`; `SubagentConfig` built with `depth: ctx.depth + 1`. Phase K.11.
 
 **Files:** `spawn_subagent.rs` line 111, `spawn_parallel_subagents.rs` line 123
 
@@ -2056,6 +2080,8 @@ if ctx.depth >= MAX_SUBAGENT_DEPTH {
 
 #### T13 · `spawn_subagent.rs` — `DEFAULT_SUBAGENT_SYSTEM_PROMPT` has no project or task context
 
+**Status:** ✅ Done — `task_context` field added to `spawn_subagent` input schema; three-way system prompt build: `task_context` → custom `system_prompt` → `DEFAULT_SUBAGENT_SYSTEM_PROMPT`. Injects `ctx.working_dir` and task context string when provided. Phase K.12.
+
 **Files:** `spawn_subagent.rs` lines 148-153, `spawn_parallel_subagents.rs` lines 202-207
 
 **Finding:** The default system prompt is:
@@ -2093,6 +2119,8 @@ let system_prompt = if let Some(ctx_str) = input.get("task_context").and_then(|v
 
 #### M1 · `tool_adapter.rs` — `working_dir` hardcoded to `~/.autodev` (all MCP file operations use the wrong path)
 
+**Status:** ✅ Done — `call_tool()` extracts `__working_dir` from args and removes it before tool dispatch; falls back to `self.working_dir` only when absent. `self.working_dir` remains as the server-level default. Phase L.1.
+
 **File:** `src-tauri/src/mcp_server/tool_adapter.rs` lines 32-36
 
 **Finding:** `AutodevMcpServer::new()` resolves `working_dir` as:
@@ -2129,6 +2157,8 @@ Option B: Workers embed `working_dir` in the HTTP request headers or connection 
 
 #### M2 · `tool_adapter.rs` — No authentication on port 8767
 
+**Status:** ✅ Done — `load_or_create_mcp_key()` writes `~/.autodev/mcp.key` on first run; `auth_middleware` validates `Authorization: Bearer <key>` returning 401 on mismatch; router uses `route_layer(middleware::from_fn_with_state(api_key, auth_middleware))`. Phase L.2.
+
 **File:** `src-tauri/src/mcp_server/server.rs` lines 33-58, `tool_adapter.rs` lines 106-131
 
 **Finding:** The server binds to `127.0.0.1:8767` (localhost only). However, there is no token, API key, or session validation in `call_tool()`. Any process running on the same machine (another terminal, a browser extension, a VS Code extension, a malicious package) can POST to `http://127.0.0.1:8767/mcp` and call `write_file`, `bash`, or `update_task_status` with the privileges of the Tauri process.
@@ -2151,6 +2181,8 @@ Workers that connect via `sidecar/client.rs` would read the key from the same fi
 ---
 
 #### M3 · `tool_adapter.rs` — Every MCP call gets a fresh `session_id`; checkpoints cannot be grouped by worker
+
+**Status:** ✅ Done — `call_tool()` extracts `__session_id` from args and removes it before tool dispatch; falls back to a fresh UUID only when absent. Workers passing a stable `__session_id` (e.g. `"worker-backend-task-42"`) get all their checkpoints grouped under one directory. Phase L.3.
 
 **File:** `src-tauri/src/mcp_server/tool_adapter.rs` lines 124-127
 
@@ -2176,6 +2208,8 @@ let session_id = args.get("__session_id")
 ---
 
 #### M4 · `tool_adapter.rs` — All tools including task board management exposed to any MCP caller
+
+**Status:** ✅ Done — `register_for_mcp_worker()` added to `builtin_tools/mod.rs` exposing only file/execution tools + `list_tasks`/`update_task_status`; `start_mcp_server()` builds its own restricted registry via `register_for_mcp_worker` rather than using the passed-in PA registry. `assign_task`, `create_task`, `planner`, `spawn_subagent`, `spawn_parallel_subagents` not exposed. Phase L.4.
 
 **File:** `src-tauri/src/mcp_server/tool_adapter.rs` `list_tools()` lines 66-103
 
@@ -2228,9 +2262,9 @@ Use `register_for_mcp_worker` when initialising the `AutodevMcpServer` registry 
 | T12 | `spawn_subagent.rs` | Subagents | High | `mcp_servers: Vec::new()` — subagents have zero tool access |
 | T13 | `spawn_subagent.rs` | Subagents | Medium | `depth` always 0 — unbounded recursive spawning possible |
 | T14 | `spawn_subagent.rs` | Subagents | Low | Default system prompt has no project/task context |
-| M1 | `tool_adapter.rs` | MCP Server | **Critical** | `working_dir` = `~/.autodev` for all workers — every write lands in wrong directory |
-| M2 | `mcp_server/server.rs` | MCP Server | High | No auth on port 8767 — any local process can call write_file + bash |
-| M3 | `tool_adapter.rs` | MCP Server | Medium | Fresh `session_id` per call — worker checkpoints ungroupable |
-| M4 | `tool_adapter.rs` | MCP Server | Medium | All tools exposed via MCP — workers can call assign_task, spawn_subagent |
+| M1 | `tool_adapter.rs` | MCP Server | **Critical** | ✅ Done — `__working_dir` per-call; falls back to server default (L.1) |
+| M2 | `mcp_server/server.rs` | MCP Server | High | ✅ Done — `~/.autodev/mcp.key` + `auth_middleware` Bearer validation (L.2) |
+| M3 | `tool_adapter.rs` | MCP Server | Medium | ✅ Done — `__session_id` per-call; groups worker checkpoints by task (L.3) |
+| M4 | `tool_adapter.rs` | MCP Server | Medium | ✅ Done — `register_for_mcp_worker()` restricts MCP surface; no assign/spawn (L.4) |
 
 *Critical = silent data corruption or broken core loop. High = significant token waste or broken feature. Medium = quality/UX degradation.*

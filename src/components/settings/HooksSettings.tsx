@@ -12,7 +12,7 @@ import {
 import {
   useHookStore,
   type AddHookInput, type HookConfig, type HookType,
-  type HookConditions, type HookAction, type HookTemplate,
+  type HookTemplate,
 } from '../../stores/hookStore'
 import HookLogViewer from '../hooks/HookLogViewer'
 import HooksInfoModal from '../hooks/HooksInfoModal'

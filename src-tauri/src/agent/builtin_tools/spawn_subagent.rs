@@ -51,6 +51,12 @@ impl Tool for SpawnSubagentTool {
                     "type": "string",
                     "description": "LLM model registry key (optional). Falls back to default fleet model."
                 },
+                "task_context": {
+                    "type": "string",
+                    "description": "Optional: task title + acceptance criteria to orient the subagent. \
+                                   When provided, the subagent receives a system prompt that includes \
+                                   the working directory and this context, producing more targeted output."
+                },
                 "max_turns": {
                     "type": "integer",
                     "description": "Max tool turns. Default 20."
@@ -72,6 +78,16 @@ impl Tool for SpawnSubagentTool {
             _ => return ToolResult::error("'task_description' is required and must not be empty"),
         };
 
+        // K.11 — Guard against unbounded recursion. If the caller is already
+        // a subagent at the depth limit, refuse to spawn further.
+        const MAX_SUBAGENT_DEPTH: u32 = 3;
+        if ctx.depth >= MAX_SUBAGENT_DEPTH {
+            return ToolResult::error(format!(
+                "Subagent depth limit ({MAX_SUBAGENT_DEPTH}) reached — \
+                 complete this work directly rather than spawning a subagent."
+            ));
+        }
+
         let mgr = match subagent::manager::global() {
             Some(m) => m,
             None => return ToolResult::error(
@@ -80,13 +96,26 @@ impl Tool for SpawnSubagentTool {
             ),
         };
 
+        // K.12 — Build a richer system prompt when task_context is provided.
+        // Without context, QC subagents have no knowledge of what they're reviewing.
+        let system_prompt = match (
+            input.get("task_context").and_then(|v| v.as_str()),
+            input.get("system_prompt").and_then(|v| v.as_str()),
+        ) {
+            (Some(task_ctx), _) => format!(
+                "You are an AutoDev subagent. Working directory: {}.\n\
+                 Task context: {}\n\
+                 Perform your assigned subtask and produce a structured summary.",
+                ctx.working_dir, task_ctx
+            ),
+            (None, Some(sp)) => sp.to_string(),
+            (None, None)     => DEFAULT_SUBAGENT_SYSTEM_PROMPT.to_string(),
+        };
+
         let config = SubagentConfig {
             parent_slug:       ctx.session_id.clone(),
             parent_session_id: ctx.session_id.clone(),
-            system_prompt:     input.get("system_prompt")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or(DEFAULT_SUBAGENT_SYSTEM_PROMPT)
-                                    .to_string(),
+            system_prompt,
             tools:             input.get("tools")
                                     .and_then(|v| v.as_array())
                                     .map(|arr| arr.iter()
@@ -108,7 +137,7 @@ impl Tool for SpawnSubagentTool {
                                     .unwrap_or(0),
             mcp_servers:       Vec::new(),
             capabilities:      Vec::new(),
-            depth:             0,
+            depth:             ctx.depth + 1, // K.11 — increment nesting depth
         };
 
         // Spawn (returns immediately) then await the bridge task to drive it

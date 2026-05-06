@@ -15,10 +15,10 @@ impl Tool for ListTasksTool {
     fn name(&self) -> &str { "list_tasks" }
 
     fn description(&self) -> &str {
-        "List all tasks on the AutoDev internal board. Optionally filter by status: \
-        'ready' (unassigned), 'assigned', 'in_progress', 'qc_review', 'done', 'failed', 'cancelled'. \
-        Leave status empty to list all tasks. Returns an array of task objects with id, title, status, \
-        priority, assigned_worker, and acceptance_criteria."
+        "List all tasks on the AutoDev internal board. Optionally filter by status. \
+        Leave status empty to list all tasks. Returns an array of task objects including \
+        id, title, status, priority, assigned_worker, acceptance_criteria, \
+        rejection_reason, and retry_count."
     }
 
     fn input_schema(&self) -> Value {
@@ -27,8 +27,9 @@ impl Tool for ListTasksTool {
             "properties": {
                 "status": {
                     "type": "string",
-                    "description": "Filter by status. One of: ready, assigned, in_progress, qc_review, done, failed, cancelled. Omit to list all.",
-                    "enum": ["ready", "assigned", "in_progress", "qc_review", "done", "failed", "cancelled"]
+                    "description": "Filter by status. Omit to list all.",
+                    "enum": ["ready", "assigned", "in_progress", "qc_review", "done",
+                             "failed", "build_failed", "cancelled", "rejected"]
                 }
             },
             "required": []
@@ -51,17 +52,20 @@ impl Tool for ListTasksTool {
         };
 
         let result = tasks.iter().map(|t| json!({
-            "id":                 t.id,
-            "title":              t.title,
-            "description":        t.description,
-            "priority":           t.priority.as_str(),
-            "task_type":          t.task_type.as_str(),
-            "status":             t.status.as_str(),
+            "id":                  t.id,
+            "title":               t.title,
+            "description":         t.description,
+            "priority":            t.priority.as_str(),
+            "task_type":           t.task_type.as_str(),
+            "status":              t.status.as_str(),
             "acceptance_criteria": t.acceptance_criteria,
-            "assigned_worker":    t.assigned_worker,
-            "created_by":         t.created_by,
-            "created_at":         t.created_at,
-            "updated_at":         t.updated_at,
+            "assigned_worker":     t.assigned_worker,
+            "rejection_reason":    t.rejection_reason,   // K.7 — why QC rejected
+            "retry_count":         t.retry_count,         // K.7 — how many retries
+            "created_by":          t.created_by,
+            "created_at":          t.created_at,
+            "updated_at":          t.updated_at,
+            "completed_at":        t.completed_at,
         })).collect::<Vec<_>>();
 
         ToolResult::success(json!({

@@ -7,7 +7,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 export type TaskPriority = 'p0' | 'p1' | 'p2' | 'p3'
 export type TaskType     = 'feature' | 'bug' | 'refactor' | 'docs' | 'chore'
-export type TaskStatus   = 'ready' | 'assigned' | 'in_progress' | 'qc_review' | 'done' | 'failed' | 'build_failed' | 'cancelled'
+export type TaskStatus   = 'ready' | 'assigned' | 'in_progress' | 'qc_review' | 'done' | 'failed' | 'build_failed' | 'cancelled' | 'rejected'
 
 export interface Task {
   id:                  number
@@ -18,6 +18,8 @@ export interface Task {
   status:              TaskStatus
   acceptance_criteria: string
   assigned_worker:     string | null
+  rejection_reason:    string | null
+  retry_count:         number
   created_by:          string
   created_at:          string
   updated_at:          string

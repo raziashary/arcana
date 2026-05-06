@@ -96,6 +96,8 @@ pub fn update_worker_status(worker_id: i64, status: String) -> Result<()> {
         previous_status:    None,
         reason:             None,
         cooldown_seconds:   None,
+        tick_duration_ms:   None,
+        last_outcome:       None,
         timestamp:          chrono::Utc::now().to_rfc3339(),
     });
     Ok(())

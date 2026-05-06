@@ -51,19 +51,6 @@ const s: Record<string, React.CSSProperties> = {
     gap:         8,
     alignItems:  'center',
   },
-  stepDot: (active: boolean, done: boolean) => ({
-    width:        24,
-    height:       24,
-    borderRadius: '50%',
-    background:   done ? 'var(--success, #27ae60)' : active ? 'var(--accent)' : 'var(--bg-3, #3a3a3a)',
-    color:        done || active ? '#fff' : 'var(--text-3)',
-    display:      'flex',
-    alignItems:   'center',
-    justifyContent:'center',
-    fontSize:     12,
-    fontWeight:   600,
-    transition:   'background 0.2s',
-  }),
   stepLine: {
     flex:       1,
     height:     2,
@@ -80,15 +67,6 @@ const s: Record<string, React.CSSProperties> = {
     gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
     gap:                 10,
   },
-  typeCard: (selected: boolean) => ({
-    padding:      12,
-    borderRadius: 10,
-    border:       `2px solid ${selected ? 'var(--accent)' : 'var(--border)'}`,
-    background:   selected ? 'rgba(var(--accent-rgb, 66,133,244), 0.1)' : 'var(--bg-1)',
-    cursor:       'pointer',
-    transition:   'border-color 0.15s, background 0.15s',
-    textAlign:    'center',
-  }),
   typeIcon: {
     fontSize:    26,
     marginBottom:4,
@@ -128,17 +106,6 @@ const s: Record<string, React.CSSProperties> = {
     wordBreak:    'break-all',
     lineHeight:   1.6,
   },
-  btn: (variant: 'primary' | 'ghost') => ({
-    padding:      '9px 20px',
-    borderRadius: 8,
-    border:       variant === 'ghost' ? '1px solid var(--border)' : 'none',
-    background:   variant === 'primary' ? 'var(--accent)' : 'transparent',
-    color:        variant === 'primary' ? '#fff' : 'var(--text-2)',
-    fontSize:     14,
-    fontWeight:   500,
-    cursor:       'pointer',
-    transition:   'opacity 0.15s',
-  }),
   copyBtn: {
     padding:      '4px 12px',
     borderRadius: 6,
@@ -158,6 +125,42 @@ const s: Record<string, React.CSSProperties> = {
   infoLabel: { color: 'var(--text-3)' },
   infoValue: { color: 'var(--text-1)', fontWeight: 500 },
 }
+
+const stepDot = (active: boolean, done: boolean): React.CSSProperties => ({
+  width:        24,
+  height:       24,
+  borderRadius: '50%',
+  background:   done ? 'var(--success, #27ae60)' : active ? 'var(--accent)' : 'var(--bg-3, #3a3a3a)',
+  color:        done || active ? '#fff' : 'var(--text-3)',
+  display:      'flex',
+  alignItems:   'center',
+  justifyContent:'center',
+  fontSize:     12,
+  fontWeight:   600,
+  transition:   'background 0.2s',
+})
+
+const typeCard = (selected: boolean): React.CSSProperties => ({
+  padding:      12,
+  borderRadius: 10,
+  border:       `2px solid ${selected ? 'var(--accent)' : 'var(--border)'}`,
+  background:   selected ? 'rgba(var(--accent-rgb, 66,133,244), 0.1)' : 'var(--bg-1)',
+  cursor:       'pointer',
+  transition:   'border-color 0.15s, background 0.15s',
+  textAlign:    'center',
+})
+
+const wizBtn = (variant: 'primary' | 'ghost'): React.CSSProperties => ({
+  padding:      '9px 20px',
+  borderRadius: 8,
+  border:       variant === 'ghost' ? '1px solid var(--border)' : 'none',
+  background:   variant === 'primary' ? 'var(--accent)' : 'transparent',
+  color:        variant === 'primary' ? '#fff' : 'var(--text-2)',
+  fontSize:     14,
+  fontWeight:   500,
+  cursor:       'pointer',
+  transition:   'opacity 0.15s',
+})
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -222,7 +225,7 @@ const WorkerSetupWizard: React.FC<Props> = ({ onClose }) => {
         <div style={s.stepIndicator}>
           {['Configure', 'Token', 'Done'].map((name, i) => (
             <React.Fragment key={name}>
-              <div style={s.stepDot(i === stepIndex, i < stepIndex)}>
+              <div style={stepDot(i === stepIndex, i < stepIndex)}>
                 {i < stepIndex ? '✓' : i + 1}
               </div>
               {i < 2 && <div style={s.stepLine} />}
@@ -242,7 +245,7 @@ const WorkerSetupWizard: React.FC<Props> = ({ onClose }) => {
                 {WORKER_TYPES.map(wt => (
                   <div
                     key={wt.id}
-                    style={s.typeCard(workerType === wt.id)}
+                    style={typeCard(workerType === wt.id)}
                     onClick={() => setWorkerType(wt.id)}
                   >
                     <span style={s.typeIcon}>{wt.icon}</span>
@@ -290,9 +293,9 @@ const WorkerSetupWizard: React.FC<Props> = ({ onClose }) => {
             )}
 
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-              <button style={s.btn('ghost')} onClick={onClose}>Cancel</button>
+              <button style={wizBtn('ghost')} onClick={onClose}>Cancel</button>
               <button
-                style={s.btn('primary')}
+                style={wizBtn('primary')}
                 disabled={loading || !workerType}
                 onClick={handleGenerate}
               >
@@ -346,8 +349,8 @@ const WorkerSetupWizard: React.FC<Props> = ({ onClose }) => {
             </div>
 
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-              <button style={s.btn('ghost')} onClick={() => setStep('configure')}>← Back</button>
-              <button style={s.btn('primary')} onClick={() => setStep('done')}>Done ✓</button>
+              <button style={wizBtn('ghost')} onClick={() => setStep('configure')}>← Back</button>
+              <button style={wizBtn('primary')} onClick={() => setStep('done')}>Done ✓</button>
             </div>
           </>
         )}
@@ -364,10 +367,10 @@ const WorkerSetupWizard: React.FC<Props> = ({ onClose }) => {
               </p>
             </div>
             <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
-              <button style={s.btn('ghost')} onClick={() => { setStep('configure'); setToken(null) }}>
+              <button style={wizBtn('ghost')} onClick={() => { setStep('configure'); setToken(null) }}>
                 New Token
               </button>
-              <button style={s.btn('primary')} onClick={onClose}>Close</button>
+              <button style={wizBtn('primary')} onClick={onClose}>Close</button>
             </div>
           </>
         )}

@@ -143,12 +143,14 @@ function TaskCard({
   showProgress,
   doneStyle,
   buildFailedStyle,
+  rejectedStyle,
   onDelete,
 }: {
   task:              Task
   showProgress:      boolean
   doneStyle:         boolean
   buildFailedStyle:  boolean
+  rejectedStyle:     boolean
   onDelete:          (id: number) => void
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -180,8 +182,13 @@ function TaskCard({
             {task.title}
           </div>
           {task.assigned_worker && (
-            <div style={{ fontSize: '10px', color: buildFailedStyle ? 'var(--warning)' : (doneStyle ? 'var(--accent)' : 'var(--accent)') }}>
-              {buildFailedStyle ? '⚠ build failed' : (doneStyle ? '✓ done' : task.assigned_worker)}
+            <div style={{ fontSize: '10px', color: buildFailedStyle ? 'var(--warning)' : rejectedStyle ? '#FF6B35' : (doneStyle ? 'var(--accent)' : 'var(--accent)') }}>
+              {buildFailedStyle ? '⚠ build failed' : rejectedStyle ? '✗ rejected' : (doneStyle ? '✓ done' : task.assigned_worker)}
+            </div>
+          )}
+          {rejectedStyle && task.rejection_reason && (
+            <div style={{ fontSize: '9px', color: '#FF6B35', marginTop: 2, fontStyle: 'italic', lineHeight: 1.4 }}>
+              {task.rejection_reason}
             </div>
           )}
           {showProgress && (
@@ -240,6 +247,7 @@ const COL_HEADER_COLORS: Partial<Record<string, string>> = {
   ready:       'var(--accent)',
   in_progress: 'var(--warning)',
   qc_review:   'var(--info)',
+  rejected:    '#FF6B35',
   done_today:  'var(--success)',
 }
 
@@ -300,9 +308,10 @@ function KanbanColumn({
           </div>
         ) : (
           tasks.map(task => {
-            const showProgress = colId === 'in_progress'
-            const doneStyle = colId === 'done_today' && task.status === 'done'
+            const showProgress   = colId === 'in_progress'
+            const doneStyle      = colId === 'done_today' && task.status === 'done'
             const buildFailedStyle = colId === 'done_today' && task.status === 'build_failed'
+            const rejectedStyle  = colId === 'rejected'
             return (
               <TaskCard
                 key={task.id}
@@ -310,6 +319,7 @@ function KanbanColumn({
                 showProgress={showProgress}
                 doneStyle={doneStyle}
                 buildFailedStyle={buildFailedStyle}
+                rejectedStyle={rejectedStyle}
                 onDelete={onDelete}
               />
             )
@@ -471,6 +481,7 @@ export default function AutoDevTab() {
   const readyTasks     = tasks.filter(t => t.status === 'ready' || t.status === 'assigned')
   const inProgressTasks= tasks.filter(t => t.status === 'in_progress')
   const qcTasks        = tasks.filter(t => t.status === 'qc_review')
+  const rejectedTasks  = tasks.filter(t => t.status === 'rejected')
   const doneTodayTasks = tasks.filter(t =>
     (t.status === 'done' && isToday(t.completed_at)) ||
     (t.status === 'failed' && isToday(t.updated_at)) ||
@@ -481,6 +492,7 @@ export default function AutoDevTab() {
     { colId: 'ready',       label: 'Ready',       tasks: readyTasks      },
     { colId: 'in_progress', label: 'In Progress', tasks: inProgressTasks },
     { colId: 'qc_review',   label: 'QC Review',   tasks: qcTasks         },
+    { colId: 'rejected',    label: 'Rejected',    tasks: rejectedTasks   },
     { colId: 'done_today',  label: 'Done Today',  tasks: doneTodayTasks  },
   ]
 
