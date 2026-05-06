@@ -94,6 +94,16 @@ impl Tool for SpawnParallelSubagentsTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
 
+        // Soft cap on how many subagents run simultaneously. Subtasks are
+        // processed in windows of this size: spawn a batch, await it fully,
+        // then move to the next batch. The pool's hard caps (MAX_GLOBAL_CONCURRENT,
+        // MAX_PER_PARENT) still apply within each batch.
+        let max_concurrent: usize = input.get("max_concurrent")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize)
+            .unwrap_or(5)
+            .max(1);
+
         let mgr = match subagent::manager::global() {
             Some(m) => m,
             None => return ToolResult::error(
@@ -134,23 +144,34 @@ impl Tool for SpawnParallelSubagentsTool {
             spawn_inputs.push((config, task_description));
         }
 
-        // Spawn all subagents (the pool/manager handles back-pressure).
-        let mut spawned_ids = Vec::with_capacity(spawn_inputs.len());
-        for (config, prompt) in spawn_inputs {
-            match mgr.spawn(config, prompt).await {
-                Ok(h) => spawned_ids.push(Ok(h.id)),
-                Err(e) => spawned_ids.push(Err(e.to_string())),
-            }
-        }
+        // Process subtasks in chunks of max_concurrent. Each chunk is fully
+        // spawned and awaited before the next chunk begins, enforcing the soft cap.
+        let mut results: Vec<Result<crate::subagent::SubagentResult, String>> =
+            Vec::with_capacity(spawn_inputs.len());
 
-        // Await all results in parallel (failed spawns short-circuit per index).
-        let result_futs = spawned_ids.into_iter().map(|res| async {
-            match res {
-                Err(e) => Err(e),
-                Ok(id) => mgr.await_result(&id).await.map_err(|e| e.to_string()),
+        for chunk in spawn_inputs.chunks(max_concurrent) {
+            // Spawn every subagent in this chunk (sequential — pool handles back-pressure).
+            let mut chunk_ids: Vec<Result<String, String>> = Vec::with_capacity(chunk.len());
+            for (config, prompt) in chunk {
+                match mgr.spawn(config.clone(), prompt.clone()).await {
+                    Ok(h) => chunk_ids.push(Ok(h.id)),
+                    Err(e) => chunk_ids.push(Err(e.to_string())),
+                }
             }
-        });
-        let results = future::join_all(result_futs).await;
+
+            // Await all subagents in this chunk in parallel.
+            let chunk_futs = chunk_ids.into_iter().map(|id_res| {
+                let mgr = mgr.clone();
+                async move {
+                    match id_res {
+                        Err(e) => Err(e),
+                        Ok(id) => mgr.await_result(&id).await.map_err(|e| e.to_string()),
+                    }
+                }
+            });
+            let chunk_results = future::join_all(chunk_futs).await;
+            results.extend(chunk_results);
+        }
 
         // Build the response, mirroring input ordering.
         let mut total_cost: f64 = 0.0;

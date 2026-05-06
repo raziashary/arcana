@@ -38,6 +38,12 @@ export const SubagentMonitor: React.FC<SubagentMonitorProps> = ({ parentSessionI
   useEffect(() => {
     void startListening();
     void refreshActive(parentSessionId);
+
+    const poll = setInterval(() => {
+      void refreshActive(parentSessionId);
+    }, 5_000);
+
+    return () => clearInterval(poll);
   }, [parentSessionId, startListening, refreshActive]);
 
   // Group active subagents by parent_slug.

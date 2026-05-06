@@ -14,11 +14,17 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
+
+/// How long a terminal (Completed/Failed/Terminated) entry is kept in the
+/// registry before `prune_terminal` sweeps it out. Long enough for the UI
+/// to display the final result card, short enough to prevent unbounded growth.
+const TERMINAL_RETENTION: Duration = Duration::from_secs(60);
 
 use crate::errors::{AutoDevError, Result};
 use crate::events::{emit_subagent_event_global, SubagentEventPayload};
@@ -40,6 +46,9 @@ struct ManagerEntry {
     /// Background task running `bridge::run`. Aborting this future cancels
     /// the SSE stream consumption (used by `abort_subagent`).
     task:     Option<JoinHandle<Result<SubagentResult>>>,
+    /// Set when the entry reaches a terminal state. Used by `prune_terminal`
+    /// to sweep entries older than TERMINAL_RETENTION.
+    terminated_at: Option<Instant>,
 }
 
 pub struct SubagentManager {
@@ -104,12 +113,17 @@ impl SubagentManager {
             pump_manager.pump_events(pump_id, rx).await;
         });
 
+        // Prune stale terminal entries before inserting the new one so the
+        // registry doesn't grow unboundedly over a long session.
+        self.prune_terminal().await;
+
         // Insert into registry.
         self.registry.lock().await.insert(id.clone(), ManagerEntry {
             handle: handle.clone(),
             last_event: None,
             _permit: permit,
             task: Some(task),
+            terminated_at: None,
         });
 
         info!("[SubagentManager] spawned {id} (parent={}, depth={})", config.parent_slug, config.depth);
@@ -153,6 +167,7 @@ impl SubagentManager {
 
     /// List all live subagents, optionally filtered by parent session.
     pub async fn list(&self, parent_session_id: Option<&str>) -> Vec<SubagentSummary> {
+        self.prune_terminal().await;
         let reg = self.registry.lock().await;
         reg.values()
             .filter(|e| {
@@ -270,7 +285,28 @@ impl SubagentManager {
         let mut reg = self.registry.lock().await;
         if let Some(entry) = reg.get_mut(id) {
             entry.handle.status = *status;
+            if status.is_terminal() {
+                entry.terminated_at = Some(Instant::now());
+            }
         }
+    }
+
+    /// Remove registry entries whose terminal status has been held longer
+    /// than TERMINAL_RETENTION. Safe to call frequently — O(n) walk.
+    async fn prune_terminal(&self) {
+        let now = Instant::now();
+        let mut reg = self.registry.lock().await;
+        reg.retain(|id, entry| {
+            if let Some(t) = entry.terminated_at {
+                let stale = now.duration_since(t) > TERMINAL_RETENTION;
+                if stale {
+                    debug!("[SubagentManager] pruned terminal entry {id}");
+                }
+                !stale
+            } else {
+                true // not terminal yet — keep
+            }
+        });
     }
 }
 
