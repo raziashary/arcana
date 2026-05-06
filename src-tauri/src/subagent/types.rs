@@ -60,6 +60,9 @@ impl SubagentConfig {
     pub const DEFAULT_MAX_TURNS: u32 = 20;
     pub const DEFAULT_TIMEOUT_SECS: u32 = 300;
     pub const DEFAULT_MCP_SERVER: &'static str = "autodev-mcp-server";
+    /// Fallback model when the LLM omits the `model` field in a subtask.
+    /// Matches the fleet default used by RecipeRunner.
+    pub const DEFAULT_MODEL: &'static str = "claude-haiku-4-5";
 }
 
 /// Lifecycle state of a subagent. Drives UI status indicators and the

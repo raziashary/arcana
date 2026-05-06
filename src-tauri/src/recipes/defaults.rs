@@ -73,6 +73,16 @@ fn supervisor_recipe() -> Recipe {
 Call `list_tasks` (all statuses). This MUST be the first tool call of every tick.
 Never rely on memory from previous ticks — the board changes between runs.
 
+### Step 1a — Read worker requests (fleet escalation queue)
+Call `list_worker_requests` (status='pending'). For each request:
+- **decompose_audit** → Validate `suggested_tasks` array in payload. Call `create_task` for each sub-task (max 5 per request). Each MUST have title, priority, task_type, acceptance_criteria. Then `assign_task` each individually. Mark request completed.
+- **reassign** → Call `assign_task(id, target_worker)` with reason. Mark request completed.
+- **needs_info** → Mark request acknowledged. The human PA must answer; Supervisor cannot resolve alone. Emit no further action.
+- **report_issue** → Mark request acknowledged. Set the triggering task to `build_failed` (if build-related) or `failed` with notes. Let retry policy handle it.
+- **request_review** → If triggering task is `in_progress`, call `update_task_status(id, 'qc_review')`. Mark request completed.
+
+If any request was handled, STOP after this step — the board state changed. Let the next tick continue.
+
 ### Step 2 — Dispatch READY tasks
 For every task with `status='ready'`:
 - Determine the correct worker using the Routing Matrix below.
@@ -131,6 +141,7 @@ Once ALL of the following are true, STOP:
 - No stalled tasks (no in_progress older than 10 minutes)
 - No build_failed tasks within retry budget
 - No rejected tasks pending re-dispatch
+- No pending worker requests (status='pending')
 
 Reply with the single text line: `Board clean — idle.`
 After that line, emit ZERO further tool calls.
@@ -143,10 +154,11 @@ After that line, emit ZERO further tool calls.
 - NEVER route documentation tasks to worker-cleanup — its 2-minute cadence is unresponsive for docs.
 
 ## Tools
-- list_tasks          — Read the full board (first call every tick)
-- create_task         — Create atomic sub-tasks from epics
-- assign_task         — Atomic dispatch: status='assigned' + worker in one call
-- update_task_status  — Stall resets and edge-case corrections only"#.into(),
+- list_tasks              — Read the full board (first call every tick)
+- list_worker_requests    — Read pending fleet escalation requests (Step 1a)
+- create_task             — Create atomic sub-tasks from epics or decompose_audit payloads
+- assign_task             — Atomic dispatch: status='assigned' + worker in one call
+- update_task_status      — Stall resets, edge-case corrections, and request resolutions"#.into(),
     }
 }
 
@@ -185,7 +197,7 @@ a partial implementation summary there. Read it before starting.
 a. Read the task's acceptance criteria in full before touching any file.
 b. Discovery budget: at most 3 read-only calls (read_file / list_directory / grep / glob)
    to locate target files. If you need more reads, the task is likely an epic —
-   mark failed with note "Epic-sized: requires Supervisor decomposition."
+   call `request_supervisor_action(task_id=<current_task_id>, request_type='decompose_audit', payload={audit_summary:<what_you_found>, suggested_tasks:[{title:<title>, type:<type>, priority:<priority>, acceptance_criteria:<criteria>}, ...]})`. Include the full suggested task payloads so the Supervisor can create them atomically without hallucination.
 c. Write the artifact with ONE write_file or edit_file call covering the complete change.
    Write the correct final version in one shot — avoid multi-step patching.
 d. Run Build Validation (section below). MANDATORY before any status update.
@@ -438,8 +450,8 @@ After scaffold is confirmed: run npm install before writing any component.
 ## Failure Taxonomy
 - Build / type error → fix once, re-run. Still failing → build_failed.
 - Missing dependency → npm install <pkg> and add to package.json. If uncertain → failed with explanation.
-- Scope too large → failed with note "requires Supervisor decomposition."
-- Blocked on API contract → failed with note "awaiting backend interface from worker-backend."
+- Scope too large → call `request_supervisor_action(task_id=<current_task_id>, request_type='decompose_audit', payload={audit_summary:'Scope exceeds single atomic session', suggested_tasks:[{title:<decomposed_subtask_title>, type:<type>, priority:<priority>, acceptance_criteria:<criteria>}, ...]})`. Include full suggested task payloads.
+- Blocked on API contract → call `request_supervisor_action(task_id=<current_task_id>, request_type='report_issue', payload={issue_description:'awaiting backend interface from worker-backend', severity:'blocking'})`.
 
 ## Constraints
 - Modify ONLY frontend code: React/TypeScript/CSS/Tailwind under src/.
@@ -534,7 +546,7 @@ After completing a task, append to AUTODEV_PROGRESS.md:
 ## Failure Taxonomy
 - YAML/TOML parse error → fix syntax, re-validate. Still failing → build_failed.
 - Docker build failure → attach full build log. Base image pull failure → failed with note.
-- Requires elevated permissions → failed with note "requires manual action: <description>."
+- Requires elevated permissions → call `request_supervisor_action(task_id=<current_task_id>, request_type='report_issue', payload={issue_description:'requires manual action: <description>', severity:'high'})`.
 - High blast radius, no approval received → failed with impact assessment attached.
 
 ## Subagent Protocol
@@ -676,7 +688,7 @@ After completing a task, append to AUTODEV_PROGRESS.md:
 - Tool not appearing in tools/list → server is not registering the tool. Debug registration.
 - Roundtrip returns wrong output → implementation bug. Fix and retry once.
 - Build failure → build_failed immediately.
-- Scope too large → failed with note "requires Supervisor decomposition."
+- Scope too large → call `request_supervisor_action(task_id=<current_task_id>, request_type='decompose_audit', payload={audit_summary:'Scope exceeds single atomic session', suggested_tasks:[{title:<decomposed_subtask_title>, type:<type>, priority:<priority>, acceptance_criteria:<criteria>}, ...]})`. Include full suggested task payloads.
 
 ## Constraints
 - Every new tool MUST have a complete and valid inputSchema.
@@ -785,8 +797,8 @@ After completing a task, append to AUTODEV_PROGRESS.md:
 ## Failure Taxonomy
 - Build breaks after removal → revert the specific removal → build_failed with description.
 - Cannot confirm identifier is unused → skip it, note in task comment → done (partial is acceptable).
-- Task requires renaming or refactoring → failed with note "functional change — use worker-backend."
-- Task scope exceeds a lint fix or removal → failed with note "out of scope for worker-cleanup."
+- Task requires renaming or refactoring → call `request_supervisor_action(task_id=<current_task_id>, request_type='reassign', payload={reason:'functional change — use worker-backend', target_worker:'worker-backend'})`.
+- Task scope exceeds a lint fix or removal → call `request_supervisor_action(task_id=<current_task_id>, request_type='report_issue', payload={issue_description:'out of scope for worker-cleanup', severity:'medium'})`.
 
 ## Constraints
 - NEVER act on un-assigned tasks.

@@ -24,10 +24,14 @@ export interface Worker {
   created_at:        string
   updated_at:        string
   // D.2/D.3 — tick timing fields populated by worker:tick-start/end events
-  tick_started_at:   string | undefined
-  tick_ended_at:     string | undefined
-  tick_duration_ms:  number | undefined
-  last_outcome:      string | undefined
+  tick_started_at:    string | undefined
+  tick_ended_at:      string | undefined
+  tick_duration_ms:   number | undefined
+  last_outcome:       string | undefined
+  // D.4 — mode of the currently in-flight tick (cleared on tick-end).
+  // 'mode2' while LivingAgent tick is running; 'mode1' during Rust fallback.
+  // Takes precedence over last_outcome in the badge so mid-tick state is visible.
+  current_tick_mode:  string | undefined
 }
 
 export type WorkerStatus =
@@ -141,6 +145,15 @@ interface WorkerTickEndPayload {
   slug:      string
   outcome:   string
   timestamp: string
+}
+
+// BUG-004 — QC decision event payload (matches Rust QcDecisionPayload).
+interface QcDecisionPayload {
+  task_id:          number
+  task_title:       string
+  decision:         string
+  rejection_reason: string | null
+  worker_slug:      string
 }
 
 export const useWorkerStore = create<WorkerStoreState>((set, get) => ({
@@ -282,10 +295,12 @@ export const useWorkerStore = create<WorkerStoreState>((set, get) => ({
 
       // D.3 — subscribe to tick boundary events for granular per-agent state
       const unlistenTickStart = await listen<WorkerTickStartPayload>('worker:tick-start', (event) => {
-        const { slug, timestamp } = event.payload
+        const { slug, timestamp, mode } = event.payload
         set(state => ({
           workers: state.workers.map(w =>
-            w.slug === slug ? { ...w, tick_started_at: timestamp } : w
+            w.slug === slug
+              ? { ...w, tick_started_at: timestamp, current_tick_mode: mode }
+              : w
           ),
         }))
       })
@@ -296,12 +311,34 @@ export const useWorkerStore = create<WorkerStoreState>((set, get) => ({
         set(state => ({
           workers: state.workers.map(w =>
             w.slug === slug
-              ? { ...w, last_outcome: outcome, tick_ended_at: timestamp }
+              ? { ...w, last_outcome: outcome, tick_ended_at: timestamp, current_tick_mode: undefined }
               : w
           ),
         }))
       })
       _unlistenFns.push(unlistenTickEnd)
+
+      // BUG-004 — QC decision toast event.
+      const unlistenQc = await listen<QcDecisionPayload>('qc:decision', (event) => {
+        const { task_id, task_title, decision, rejection_reason } = event.payload
+        const { addToast } = require('../stores/toastStore')
+        if (decision === 'approved') {
+          addToast({
+            title: `✅ QC passed — Task #${task_id} done`,
+            message: task_title,
+            type: 'success',
+            durationMs: 5000,
+          })
+        } else {
+          addToast({
+            title: `⛔ QC rejected — Task #${task_id}`,
+            message: rejection_reason?.split('\n')[0] ?? 'See board for details',
+            type: 'error',
+            durationMs: 10000,
+          })
+        }
+      })
+      _unlistenFns.push(unlistenQc)
     } catch (e) {
       console.error('[workerStore] Failed to register worker:status listener:', e)
       _listenersInstalled = false  // allow retry

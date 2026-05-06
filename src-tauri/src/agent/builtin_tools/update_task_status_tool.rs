@@ -149,6 +149,19 @@ impl Tool for UpdateTaskStatusTool {
             assigned_worker: assigned_worker.clone(),
         });
 
+        // BUG-004 — QC decision toast event.
+        // When a task moves from qc_review → done / rejected, the QC agent has
+        // rendered its verdict. Surface it as a toast so the user sees progress.
+        if matches!(task.status.as_str(), "qc_review") && matches!(status.as_str(), "done" | "rejected") {
+            crate::events::emit_qc_decision_global(crate::events::QcDecisionPayload {
+                task_id:          id,
+                task_title:       task.title.clone(),
+                decision:         status.clone(),
+                rejection_reason: rejection_reason.clone(),
+                worker_slug:      assigned_worker.clone().unwrap_or_else(|| "qc-agent".into()),
+            });
+        }
+
         // Fire fleet hooks for task lifecycle events.
         // K.8 — added build_failed (reuses OnTaskFail) and rejected
         // (reuses OnQcReviewStart) so telemetry and hook consumers observe

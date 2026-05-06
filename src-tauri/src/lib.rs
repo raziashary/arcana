@@ -190,6 +190,9 @@ pub fn register_commands(
         delete_task,
         clear_all_tasks,
         get_qc_queue,
+        // Worker Requests (Fleet→Supervisor communication)
+        list_worker_requests,
+        resolve_worker_request,
         // AUTODEV.md Instructions
         get_autodev_instructions,
         set_autodev_instructions,

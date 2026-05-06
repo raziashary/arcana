@@ -819,6 +819,7 @@ impl OrchestratorClient {
         }
 
         let url = format!("{}/api/mcp/servers", self.base_url);
+        // No auth header in body — MCP server is localhost-only, no auth required.
         let body = serde_json::json!({
             "id": "autodev-mcp-server",
             "name": "AutoDev MCP Server",
@@ -826,7 +827,9 @@ impl OrchestratorClient {
             "transport": "http",
             "http": {
                 "url": "http://127.0.0.1:8767/mcp",
-                "headers": {"Content-Type": "application/json"}
+                "headers": {
+                    "Content-Type": "application/json"
+                }
             }
         });
 
@@ -874,6 +877,36 @@ impl OrchestratorClient {
                 "MCP server registration failed (HTTP {status}): {}",
                 &text[..text.len().min(400)]
             )))
+        }
+    }
+
+    // ─── Pre-flight MCP health check (BUG-002b safety net) ───────────────────
+
+    /// Lightweight TCP probe to the in-process MCP server on :8767.
+    /// Returns true if the port is accepting connections — a proxy for
+    /// "LivingAgent will be able to discover tools".
+    ///
+    /// Used by `runner.rs` to force an early Mode 1 fallback when the MCP
+    /// server is down, avoiding an expensive tool-less LivingAgent tick.
+    pub async fn mcp_server_healthy(&self) -> bool {
+        use tokio::net::TcpStream;
+        use tokio::time::timeout;
+        match timeout(
+            Duration::from_secs(2),
+            TcpStream::connect("127.0.0.1:8767"),
+        ).await {
+            Ok(Ok(_)) => {
+                debug!("[OrchestratorClient] MCP server TCP probe OK :8767");
+                true
+            }
+            Ok(Err(e)) => {
+                warn!("[OrchestratorClient] MCP server TCP connect failed :8767 — {e}");
+                false
+            }
+            Err(_) => {
+                warn!("[OrchestratorClient] MCP server TCP connect timed out :8767 (>2s)");
+                false
+            }
         }
     }
 

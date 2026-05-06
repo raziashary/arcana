@@ -86,6 +86,9 @@ impl SubagentManager {
         if config.mcp_servers.is_empty() {
             config.mcp_servers.push(SubagentConfig::DEFAULT_MCP_SERVER.to_string());
         }
+        if config.model.is_empty() {
+            config.model = SubagentConfig::DEFAULT_MODEL.to_string();
+        }
 
         let id = slug::generate(&config.parent_slug);
         let handle = SubagentHandle {

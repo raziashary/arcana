@@ -2,7 +2,7 @@
 // Frontend reads tasks via these commands to populate the AutoDev Panel kanban.
 // PA's create_task tool writes directly via TasksDb; these expose read + status updates.
 
-use crate::db::tasks::{Task, TasksDb};
+use crate::db::tasks::{Task, WorkerRequest, TasksDb};
 use crate::errors::Result;
 use crate::events::{emit_task_changed_global, TaskChangedPayload};
 
@@ -99,4 +99,26 @@ pub fn clear_all_tasks() -> Result<()> {
         assigned_worker: None,
     });
     Ok(())
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Worker Requests — Fleet→Supervisor communication queue (UI read + resolve)
+// ════════════════════════════════════════════════════════════════════════════
+
+/// List worker requests, optionally filtered by status (pending | acknowledged | completed | rejected).
+#[tauri::command]
+pub fn list_worker_requests(status: Option<String>) -> Result<Vec<WorkerRequest>> {
+    let db = TasksDb::open()?;
+    db.list_worker_requests(status.as_deref())
+}
+
+/// Manually resolve a worker request from the UI (human override).
+#[tauri::command]
+pub fn resolve_worker_request(
+    id: i64,
+    action: String,
+    note: Option<String>,
+) -> Result<()> {
+    let db = TasksDb::open()?;
+    db.update_worker_request_status(id, &action, note.as_deref())
 }

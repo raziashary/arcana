@@ -18,6 +18,7 @@ pub mod assign_task;
 pub mod planner;
 pub mod spawn_subagent;
 pub mod spawn_parallel_subagents;
+pub mod request_supervisor_action;
 pub mod search_memory;
 pub mod remember_this;
 
@@ -46,6 +47,8 @@ pub fn register_for_mcp_worker(registry: &mut ToolRegistry) {
     registry.register(Arc::new(list_tasks_tool::ListTasksTool));
     registry.register(Arc::new(get_task_tool::GetTaskTool));
     registry.register(Arc::new(update_task_status_tool::UpdateTaskStatusTool));
+    // Worker→Supervisor communication — workers can request action without task-creation power
+    registry.register(Arc::new(request_supervisor_action::RequestSupervisorActionTool));
     // NOT exposed: assign_task, create_task, planner, spawn_subagent, spawn_parallel_subagents
 }
 
@@ -74,6 +77,8 @@ pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
             registry.register(Arc::new(update_task_status_tool::UpdateTaskStatusTool));
             registry.register(Arc::new(assign_task::AssignTaskTool));
             registry.register(Arc::new(create_task::CreateTaskTool));
+            // Worker→Supervisor communication — available in all modes
+            registry.register(Arc::new(request_supervisor_action::RequestSupervisorActionTool));
             // Planner tool — available in all modes for plan management
             registry.register(Arc::new(planner::PlannerTool));
             // Subagent tools — Phase 4.9. Available to PA, Workers, and Supervisor

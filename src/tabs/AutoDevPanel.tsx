@@ -12,6 +12,7 @@ import {
   useTaskStore,
   priorityLabel,
   type Task,
+  type WorkerRequest,
 } from '../stores/taskStore'
 import {
   useWorkerStore,
@@ -94,6 +95,25 @@ function AgentRoster({ tasks }: { tasks: Task[] }) {
                   : worker.status
         const elapsed = active ? elapsedSince(active.updated_at) : '—'
 
+        // Per-worker mode badge.
+        // Priority: current_tick_mode (mid-tick, live) > last_outcome (historical).
+        // current_tick_mode is set on tick-start and cleared on tick-end.
+        const lastOutcome    = worker.last_outcome
+        const currentMode    = worker.current_tick_mode
+        const modeBadge =
+          currentMode === 'mode2'
+            ? { label: 'LA', color: '#7FDBCA', title: 'Mode 2 — LivingAgent (tick in progress)', glow: true }
+          : currentMode === 'mode1'
+            ? { label: 'M1', color: '#FFCB8B', title: 'Mode 1 — Rust Engine (tick in progress)', glow: false }
+          : lastOutcome === 'success'
+            ? { label: 'LA', color: '#7FDBCA', title: 'Mode 2 — LivingAgent (last tick)', glow: false }
+          : lastOutcome === 'mode1_forced'
+            ? { label: 'M1', color: '#FFCB8B', title: 'Mode 1 — Rust Engine (MCP unreachable on pre-flight)', glow: false }
+          : lastOutcome === 'fallback'
+            ? { label: 'M1', color: '#FFCB8B', title: 'Mode 1 — Rust Engine (Mode 2 invoke failed)', glow: false }
+          :   { label: '—',  color: '#3D5A6E', title: 'No tick data yet', glow: false }
+        const hasModeData = !!currentMode || !!lastOutcome
+
         return (
           <div
             key={worker.id}
@@ -111,8 +131,28 @@ function AgentRoster({ tasks }: { tasks: Task[] }) {
                 boxShadow: isWorking ? `0 0 4px ${dotColor}` : 'none',
               }}
             />
-            <div className="shrink-0" style={{ color: '#888', width: 150 }}>
-              {label}
+            {/* Agent name + inline mode indicator (dot + label) right after name */}
+            <div className="shrink-0 flex items-center gap-1" style={{ width: 150 }}>
+              <span style={{ color: '#888' }}>{label}</span>
+              <span
+                title={modeBadge.title}
+                style={{
+                  width: 5, height: 5, borderRadius: '50%', flexShrink: 0,
+                  background:  modeBadge.color,
+                  boxShadow:   modeBadge.glow ? `0 0 4px ${modeBadge.color}` : 'none',
+                  opacity:     hasModeData ? 1 : 0.25,
+                  display:     'inline-block',
+                }}
+              />
+              {hasModeData && (
+                <span style={{
+                  fontSize: '8px', color: modeBadge.color,
+                  fontWeight: 700, fontFamily: 'monospace',
+                  letterSpacing: '0.04em', opacity: 0.9,
+                }}>
+                  {modeBadge.label}
+                </span>
+              )}
             </div>
             <div
               className="flex-1 overflow-hidden"
@@ -414,6 +454,159 @@ function MetricsRow({
   )
 }
 
+// ─── Worker Requests Widget — Fleet→Supervisor escalation queue ───────────────
+
+function WorkerRequestsWidget({
+  requests,
+  onResolve,
+}: {
+  requests: WorkerRequest[]
+  onResolve: (id: number, action: 'completed' | 'rejected', note?: string) => void
+}) {
+  const [expandedId, setExpandedId] = useState<number | null>(null)
+  if (requests.length === 0) return null
+
+  const typeLabel = (t: string) =>
+    t === 'decompose_audit' ? 'Decompose Audit'
+    : t === 'reassign' ? 'Reassign'
+    : t === 'needs_info' ? 'Needs Info'
+    : t === 'report_issue' ? 'Report Issue'
+    : t === 'request_review' ? 'Request Review'
+    : t
+
+  const typeColor = (t: string) =>
+    t === 'decompose_audit' ? '#7FDBCA'
+    : t === 'reassign' ? '#FFCB8B'
+    : t === 'needs_info' ? '#82AAFF'
+    : t === 'report_issue' ? '#FF6363'
+    : t === 'request_review' ? '#C3A6FF'
+    : 'var(--text-4)'
+
+  return (
+    <div
+      style={{
+        borderBottom: '1px solid var(--border-1)',
+        background:   'rgba(127,219,202,0.04)',
+      }}
+    >
+      <div
+        className="flex items-center justify-between px-4 py-2 cursor-pointer"
+        onClick={() => setExpandedId(expandedId === -1 ? null : -1)}
+      >
+        <div className="flex items-center gap-2">
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#FF6363', display: 'inline-block' }} />
+          <span style={{ fontSize: '11px', color: 'var(--text-2)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+            Worker Requests
+          </span>
+          <span
+            style={{
+              fontSize: '9px',
+              background: 'rgba(255,99,99,0.15)',
+              color: '#FF6363',
+              padding: '1px 6px',
+              borderRadius: 4,
+              fontFamily: 'monospace',
+            }}
+          >
+            {requests.length}
+          </span>
+        </div>
+        {expandedId === -1 ? <ChevronDown size={12} color="var(--text-4)" /> : <ChevronRight size={12} color="var(--text-4)" />}
+      </div>
+
+      {expandedId === -1 && (
+        <div className="px-4 pb-3 flex flex-col gap-2">
+          {requests.map(req => {
+            const isOpen = expandedId === req.id
+            let payloadPreview = ''
+            try {
+              const p = JSON.parse(req.payload)
+              if (p.audit_summary) payloadPreview = p.audit_summary as string
+              else if (p.issue_description) payloadPreview = p.issue_description as string
+              else if (p.reason) payloadPreview = p.reason as string
+              else payloadPreview = JSON.stringify(p).slice(0, 120)
+            } catch { payloadPreview = req.payload.slice(0, 120) }
+
+            return (
+              <div
+                key={req.id}
+                style={{
+                  border: '1px solid var(--border-1)',
+                  borderRadius: 2,
+                  background: 'var(--bg-card)',
+                  fontSize: '11px',
+                }}
+              >
+                <div
+                  className="flex items-center justify-between px-3 py-2 cursor-pointer"
+                  onClick={() => setExpandedId(isOpen ? -1 : req.id)}
+                >
+                  <div className="flex items-center gap-2">
+                    <span style={{ color: typeColor(req.request_type), fontWeight: 700, fontFamily: 'monospace', fontSize: '9px' }}>
+                      {typeLabel(req.request_type).toUpperCase()}
+                    </span>
+                    <span style={{ color: 'var(--text-2)' }}>
+                      {req.worker_slug}
+                    </span>
+                    {req.task_id != null && (
+                      <span style={{ color: 'var(--text-4)', fontFamily: 'monospace', fontSize: '9px' }}>
+                        #{req.task_id}
+                      </span>
+                    )}
+                  </div>
+                  {isOpen ? <ChevronDown size={10} color="var(--text-4)" /> : <ChevronRight size={10} color="var(--text-4)" />}
+                </div>
+
+                {isOpen && (
+                  <div className="px-3 pb-3">
+                    <div
+                      style={{ color: 'var(--text-3)', fontSize: '10px', marginBottom: 8, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                    >
+                      {payloadPreview}
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => onResolve(req.id, 'completed')}
+                        style={{
+                          background: 'rgba(127,219,202,0.15)',
+                          border: '1px solid rgba(127,219,202,0.3)',
+                          borderRadius: 2,
+                          padding: '2px 8px',
+                          color: '#7FDBCA',
+                          fontSize: '9px',
+                          fontFamily: 'monospace',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Ack / Complete
+                      </button>
+                      <button
+                        onClick={() => onResolve(req.id, 'rejected', 'Human override — declined')}
+                        style={{
+                          background: 'rgba(255,99,99,0.10)',
+                          border: '1px solid rgba(255,99,99,0.25)',
+                          borderRadius: 2,
+                          padding: '2px 8px',
+                          color: '#FF6363',
+                          fontSize: '9px',
+                          fontFamily: 'monospace',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Decline
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function formatLastRefreshed(d: Date): string {
   const diffMs  = Date.now() - d.getTime()
   const diffSec = Math.floor(diffMs / 1_000)
@@ -424,7 +617,10 @@ function formatLastRefreshed(d: Date): string {
 }
 
 export default function AutoDevTab() {
-  const { tasks, loadTasks, deleteTask } = useTaskStore()
+  const {
+    tasks, loadTasks, deleteTask,
+    workerRequests, loadWorkerRequests, resolveWorkerRequest,
+  } = useTaskStore()
   const workerStore = useWorkerStore()
   const { status: sidecarStatus, isConnected: sidecarConnected } = useSidecarStore()
   const [costUsd,      setCostUsd]      = useState<number | null>(null)
@@ -458,7 +654,7 @@ export default function AutoDevTab() {
     if (isRefreshing) return
     setIsRefreshing(true)
     try {
-      await Promise.all([loadTasks(), loadCost(), workerStore.loadWorkers()])
+      await Promise.all([loadTasks(), loadCost(), workerStore.loadWorkers(), loadWorkerRequests('pending')])
       setLastRefreshed(new Date())
     } finally {
       setIsRefreshing(false)
@@ -469,9 +665,9 @@ export default function AutoDevTab() {
     doRefresh()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-refresh every 3 minutes — enough to stay current without stressing the app.
+  // Auto-refresh every 1 minute — enough to stay current without stressing the app.
   useEffect(() => {
-    const id = setInterval(doRefresh, 180_000)
+    const id = setInterval(doRefresh, 60_000)
     return () => clearInterval(id)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -565,6 +761,12 @@ export default function AutoDevTab() {
 
       {/* Agent roster table */}
       <AgentRoster tasks={tasks} />
+
+      {/* Worker Requests — Fleet→Supervisor escalation queue */}
+      <WorkerRequestsWidget
+        requests={workerRequests}
+        onResolve={(id, action, note) => resolveWorkerRequest(id, action, note)}
+      />
 
       {/* Task board label */}
       <div

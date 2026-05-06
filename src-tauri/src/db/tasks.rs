@@ -8,6 +8,58 @@ use serde::{Deserialize, Serialize};
 use crate::errors::{AutoDevError, Result};
 use super::autodev_dir;
 
+// ─── Worker→Supervisor Request Types ──────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerRequestStatus {
+    Pending,       // Waiting for Supervisor to act
+    Acknowledged,  // Supervisor has seen it and is processing
+    Completed,     // Supervisor fulfilled the request (tasks created, reassigned, etc.)
+    Rejected,      // Supervisor declined the request
+}
+
+impl WorkerRequestStatus {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Pending => "pending",
+            Self::Acknowledged => "acknowledged",
+            Self::Completed => "completed",
+            Self::Rejected => "rejected",
+        }
+    }
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "pending" => Self::Pending,
+            "acknowledged" => Self::Acknowledged,
+            "completed" => Self::Completed,
+            "rejected" => Self::Rejected,
+            _ => Self::Pending,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerRequest {
+    pub id:                i64,
+    pub worker_slug:       String,
+    pub task_id:           Option<i64>,
+    pub request_type:      String,   // "decompose_audit" | "reassign" | "needs_info" | "report_issue" | "request_review"
+    pub payload:           String,   // JSON blob — structured data for the supervisor
+    pub status:            WorkerRequestStatus,
+    pub resolution_note:   Option<String>,
+    pub created_at:        String,
+    pub resolved_at:       Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateWorkerRequestInput {
+    pub worker_slug:  String,
+    pub task_id:      Option<i64>,
+    pub request_type: String,
+    pub payload:      String,
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -163,6 +215,22 @@ impl TasksDb {
             BEGIN
                 UPDATE tasks SET updated_at = datetime('now') WHERE id = NEW.id;
             END;
+
+            CREATE TABLE IF NOT EXISTS worker_requests (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                worker_slug     TEXT    NOT NULL,
+                task_id         INTEGER,
+                request_type    TEXT    NOT NULL,
+                payload         TEXT    NOT NULL DEFAULT '{}',
+                status          TEXT    NOT NULL DEFAULT 'pending',
+                resolution_note TEXT,
+                created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+                resolved_at     TEXT,
+                FOREIGN KEY(task_id) REFERENCES tasks(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_worker_requests_status     ON worker_requests(status);
+            CREATE INDEX IF NOT EXISTS idx_worker_requests_worker    ON worker_requests(worker_slug);
+            CREATE INDEX IF NOT EXISTS idx_worker_requests_task      ON worker_requests(task_id);
             "
         )?;
         // Add columns to existing DBs that predate these migrations.
@@ -309,6 +377,80 @@ impl TasksDb {
         )?;
         Ok(())
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Worker Requests — worker→supervisor communication queue
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    pub fn create_worker_request(&self, input: &CreateWorkerRequestInput) -> Result<WorkerRequest> {
+        self.conn.execute(
+            "INSERT INTO worker_requests (worker_slug, task_id, request_type, payload, status)
+             VALUES (?1, ?2, ?3, ?4, 'pending')",
+            params![
+                input.worker_slug,
+                input.task_id,
+                input.request_type,
+                input.payload,
+            ],
+        )?;
+        let id = self.conn.last_insert_rowid();
+        self.get_worker_request_by_id(id)?.ok_or_else(|| AutoDevError::Agent("Worker request not found after insert".into()))
+    }
+
+    pub fn get_worker_request_by_id(&self, id: i64) -> Result<Option<WorkerRequest>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, worker_slug, task_id, request_type, payload, status,
+                    resolution_note, created_at, resolved_at
+             FROM worker_requests WHERE id = ?1"
+        )?;
+        let req = stmt.query_row(params![id], row_to_worker_request).optional()?;
+        Ok(req)
+    }
+
+    pub fn list_worker_requests(&self, status_filter: Option<&str>) -> Result<Vec<WorkerRequest>> {
+        let (query, values): (&str, Vec<String>) = if let Some(status) = status_filter {
+            (
+                "SELECT id, worker_slug, task_id, request_type, payload, status,
+                        resolution_note, created_at, resolved_at
+                 FROM worker_requests WHERE status = ?1 ORDER BY created_at DESC",
+                vec![status.to_string()],
+            )
+        } else {
+            (
+                "SELECT id, worker_slug, task_id, request_type, payload, status,
+                        resolution_note, created_at, resolved_at
+                 FROM worker_requests ORDER BY created_at DESC",
+                vec![],
+            )
+        };
+        let mut stmt = self.conn.prepare(query)?;
+        let reqs = if values.is_empty() {
+            stmt.query_map([], row_to_worker_request)?.collect::<std::result::Result<Vec<_>, _>>()?
+        } else {
+            stmt.query_map(params![values[0]], row_to_worker_request)?.collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        Ok(reqs)
+    }
+
+    pub fn update_worker_request_status(
+        &self,
+        id: i64,
+        status: &str,
+        resolution_note: Option<&str>,
+    ) -> Result<()> {
+        let resolved_at = if status == "completed" || status == "rejected" {
+            "datetime('now')"
+        } else {
+            "NULL"
+        };
+        let sql = format!(
+            "UPDATE worker_requests SET status = ?1, resolution_note = ?2, resolved_at = {}
+             WHERE id = ?3",
+            resolved_at
+        );
+        self.conn.execute(&sql, params![status, resolution_note, id])?;
+        Ok(())
+    }
 }
 
 fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
@@ -327,5 +469,19 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         created_at:          row.get(11)?,
         updated_at:          row.get(12)?,
         completed_at:        row.get(13)?,
+    })
+}
+
+fn row_to_worker_request(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkerRequest> {
+    Ok(WorkerRequest {
+        id:               row.get(0)?,
+        worker_slug:      row.get(1)?,
+        task_id:          row.get(2)?,
+        request_type:     row.get(3)?,
+        payload:          row.get(4)?,
+        status:           WorkerRequestStatus::from_str(&row.get::<_, String>(5)?),
+        resolution_note:  row.get(6)?,
+        created_at:       row.get(7)?,
+        resolved_at:      row.get(8)?,
     })
 }

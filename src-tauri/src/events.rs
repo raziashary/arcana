@@ -41,6 +41,7 @@ pub const EVT_COST_UPDATE:       &str = "cost:update";
 pub const EVT_WORKER_STATUS:     &str = "worker:status";
 pub const EVT_WORKER_TICK_START: &str = "worker:tick-start";
 pub const EVT_WORKER_TICK_END:   &str = "worker:tick-end";
+pub const EVT_WORKER_REQUEST:    &str = "worker:request";
 
 // Phase 3.0 R1 — task board changes push channel. Emitted from every task DB
 // write path so the AutoDev Panel refreshes without polling.
@@ -54,6 +55,9 @@ pub const EVT_PLAN_CHANGED:      &str = "plan:changed";
 // status transitions (Spawning / Idle / Running / Completed / Failed /
 // Terminated). Fan-out is handled by SubagentManager::pump_events.
 pub const EVT_SUBAGENT_EVENT:    &str = "subagent:event";
+
+// Phase 4.9b — QC approve/reject decisions surfaced as UI toasts.
+pub const EVT_QC_DECISION:       &str = "qc:decision";
 
 // ── Payload types ─────────────────────────────────────────────────────────────
 
@@ -193,6 +197,28 @@ pub fn emit_worker_tick_end(app: &AppHandle, payload: WorkerTickEndPayload) {
     let _ = app.emit(EVT_WORKER_TICK_END, payload);
 }
 
+// ── Worker Request payloads + emit helpers ───────────────────────────────────
+
+#[derive(Debug, Serialize, Clone)]
+pub struct WorkerRequestPayload {
+    pub id:             i64,
+    pub worker_slug:    String,
+    pub task_id:        Option<i64>,
+    pub request_type:   String,
+    pub status:         String,
+    pub payload:        String,
+}
+
+pub fn emit_worker_request(app: &AppHandle, payload: WorkerRequestPayload) {
+    let _ = app.emit(EVT_WORKER_REQUEST, payload);
+}
+
+pub fn emit_worker_request_global(payload: WorkerRequestPayload) {
+    if let Some(app) = app_handle() {
+        emit_worker_request(app, payload);
+    }
+}
+
 // ── Phase 3.0 R1 payloads + emit helpers ─────────────────────────────────────
 
 #[derive(Debug, Serialize, Clone)]
@@ -215,6 +241,13 @@ pub fn emit_task_changed(app: &AppHandle, payload: TaskChangedPayload) {
 pub fn emit_task_changed_global(payload: TaskChangedPayload) {
     if let Some(app) = app_handle() {
         emit_task_changed(app, payload);
+    } else {
+        // BUG-005 — previously silent; now logged so we can detect race conditions
+        // where a task DB write happens before the frontend listener mounts.
+        tracing::warn!(
+            "emit_task_changed_global skipped: AppHandle not installed yet. \
+             Task change may not appear in UI until next poll."
+        );
     }
 }
 
@@ -240,6 +273,27 @@ pub fn emit_plan_changed(app: &AppHandle, payload: PlanChangedPayload) {
 pub fn emit_plan_changed_global(payload: PlanChangedPayload) {
     if let Some(app) = app_handle() {
         emit_plan_changed(app, payload);
+    }
+}
+
+// ── Phase 4.9b QC decision payloads + emit helpers ───────────────────────────
+
+#[derive(Debug, Serialize, Clone)]
+pub struct QcDecisionPayload {
+    pub task_id:          i64,
+    pub task_title:       String,
+    pub decision:         String, // "approved" | "rejected"
+    pub rejection_reason: Option<String>,
+    pub worker_slug:      String,
+}
+
+pub fn emit_qc_decision(app: &AppHandle, payload: QcDecisionPayload) {
+    let _ = app.emit(EVT_QC_DECISION, payload);
+}
+
+pub fn emit_qc_decision_global(payload: QcDecisionPayload) {
+    if let Some(app) = app_handle() {
+        emit_qc_decision(app, payload);
     }
 }
 

@@ -1,13 +1,24 @@
 // Analytics Tauri commands — dashboard data retrieval and export
 use chrono::NaiveDate;
+use std::sync::{Arc, Mutex};
+use tauri::State;
 use crate::analytics::{self, types::*};
 use crate::errors::Result;
+use crate::state::AppState;
 
 #[tauri::command]
-pub fn get_dashboard_summary() -> Result<DashboardSummary> {
+pub fn get_dashboard_summary(
+    state: State<'_, Arc<Mutex<AppState>>>,
+) -> Result<DashboardSummary> {
+    // Read live in-process counters — daily_costs is only populated by yesterday rollup,
+    // so reading it for today would always yield 0.
+    let (live_cost_usd, live_tokens) = {
+        let s = state.lock().unwrap();
+        (s.cost_today_usd, s.tokens_in_today + s.tokens_out_today)
+    };
     let manager = analytics::global();
     let queries = manager.queries();
-    queries.get_dashboard_summary()
+    queries.get_dashboard_summary(live_cost_usd, live_tokens as i64)
 }
 
 #[tauri::command]

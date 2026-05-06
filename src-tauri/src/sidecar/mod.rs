@@ -338,6 +338,9 @@ pub struct SidecarManager {
     // system Redis). AutoDev only probes liveness; it does NOT spawn or stop
     // Redis. Redis is OPTIONAL — its absence disables the warm memory tier
     // and agent card store but does not block fleet startup.
+    // Phase 3.4b fallback: if service-start fails, we try to spawn a standalone
+    // binary and track it here so it is reaped on app shutdown.
+    redis_process:  Mutex<Option<Child>>,
     redis_status:   Mutex<SidecarStatus>,
     // Startup phase tracker — set once the Tauri AppHandle is available
     // (see main.rs setup hook). Log router + status transitions feed this.
@@ -352,6 +355,7 @@ impl SidecarManager {
             memory_process: Mutex::new(None),
             memory_status:  Mutex::new(SidecarStatus::Stopped),
             mcp_status:     Mutex::new(SidecarStatus::Running), // Phase 3.4 — MCP is in-process, starts immediately
+            redis_process:  Mutex::new(None),
             redis_status:   Mutex::new(SidecarStatus::Stopped), // Phase 3.4b — polled, not spawned
             progress:       Mutex::new(None),
         }
@@ -671,13 +675,41 @@ impl SidecarManager {
 
         if started {
             info!("[SidecarManager] Redis/Memurai service started successfully");
-        } else {
-            warn!(
-                "[SidecarManager] Could not start Redis/Memurai — \
-                 install Memurai (https://memurai.com) for warm memory tier support"
-            );
+            return true;
         }
-        started
+
+        // ── Attempt 4: standalone binary fallback (BUG-003) ────────────────────
+        #[cfg(target_os = "windows")]
+        {
+            let binary_paths: &[&str] = &[
+                r"C:\Program Files\Memurai\memurai.exe",
+                r"C:\ProgramData\chocolatey\bin\redis-server.exe",
+            ];
+            for path in binary_paths {
+                if std::path::Path::new(path).exists() {
+                    match std::process::Command::new(path).spawn() {
+                        Ok(child) => {
+                            let pid = child.id();
+                            *self.redis_process.lock().unwrap() = Some(child);
+                            info!(
+                                "[SidecarManager] Redis/Memurai binary started from {} (PID {})",
+                                path, pid
+                            );
+                            return true;
+                        }
+                        Err(e) => {
+                            debug!("[SidecarManager] Failed to spawn {}: {}", path, e);
+                        }
+                    }
+                }
+            }
+        }
+
+        warn!(
+            "[SidecarManager] Could not start Redis/Memurai — \
+             install Memurai (https://memurai.com) for warm memory tier support"
+        );
+        false
     }
 
     /// Terminate managed sidecars (call on app shutdown).

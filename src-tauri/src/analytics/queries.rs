@@ -2,6 +2,7 @@
 use std::sync::Arc;
 use chrono::{Local, NaiveDate, Duration};
 use std::collections::HashMap;
+use tracing::warn;
 use crate::errors::Result;
 use super::db::AnalyticsDb;
 use super::types::*;
@@ -15,62 +16,86 @@ impl AnalyticsQueries {
         Self { db }
     }
 
-    /// Get dashboard summary (today vs yesterday)
-    pub fn get_dashboard_summary(&self) -> Result<DashboardSummary> {
+    /// Get dashboard summary (today vs yesterday).
+    ///
+    /// `live_cost_usd` and `live_tokens` are the real-time in-process AppState
+    /// counters passed from the Tauri command.  We use them for today’s values
+    /// because the `daily_costs` table is only populated by the overnight
+    /// rollup job — reading it for today always yields 0.
+    pub fn get_dashboard_summary(
+        &self,
+        live_cost_usd: f64,
+        live_tokens: i64,
+    ) -> Result<DashboardSummary> {
         let today = Local::now().naive_local().date();
         let yesterday = today - Duration::days(1);
 
-        let today_cost = self.db.get_daily_cost(today)?
-            .map(|r| r.total_cost_usd)
-            .unwrap_or(0.0);
+        // Today: live AppState counters (daily_costs row for today never exists intra-day)
+        let today_cost   = live_cost_usd;
+        let today_tokens = live_tokens;
 
+        // Yesterday: persisted rollup
         let yesterday_cost = self.db.get_daily_cost(yesterday)?
             .map(|r| r.total_cost_usd)
             .unwrap_or(0.0);
+        let yesterday_tokens = self.db.get_daily_cost(yesterday)?
+            .map(|r| r.total_tokens)
+            .unwrap_or(0);
 
         let cost_change_percent = if yesterday_cost > 0.0 {
             ((today_cost - yesterday_cost) / yesterday_cost) * 100.0
         } else {
             0.0
         };
-
-        let today_tokens = self.db.get_daily_cost(today)?
-            .map(|r| r.total_tokens)
-            .unwrap_or(0);
-
-        let yesterday_tokens = self.db.get_daily_cost(yesterday)?
-            .map(|r| r.total_tokens)
-            .unwrap_or(0);
-
         let token_change_percent = if yesterday_tokens > 0 {
             ((today_tokens - yesterday_tokens) as f64 / yesterday_tokens as f64) * 100.0
         } else {
             0.0
         };
 
-        // Phase 7.6 — Pull worker counts from the live WorkersDb instead of hardcoding zeros.
+        // Workers: open workers.db READ-ONLY to avoid write-lock contention.
+        // WorkersDb::open() calls seed_defaults() which needs a write lock.
+        // The recipe scheduler holds that lock on every tick, causing a race
+        // that silently returns (0, 0, 0). A read-only connection never blocks.
         let (total_workers, active_workers, workers_added_today) = {
-            match crate::db::workers::WorkersDb::open() {
-                Ok(wdb) => {
-                    let all = wdb.list().unwrap_or_default();
-                    let total = all.len() as i32;
-                    let active = all.iter()
-                        .filter(|w| w.status != "paused" && w.status != "deleted")
-                        .count() as i32;
-                    let today_str = today.to_string();
-                    let added = all.iter()
-                        .filter(|w| w.created_at.starts_with(&today_str))
-                        .count() as i32;
-                    (total, active, added)
+            use rusqlite::{Connection, OpenFlags};
+            let path_result = crate::db::autodev_dir().map(|d| d.join("workers.db"));
+            match path_result {
+                Ok(path) => match Connection::open_with_flags(
+                    &path,
+                    OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+                ) {
+                    Ok(conn) => {
+                        let today_str = today.to_string();
+                        let total: i32 = conn.query_row(
+                            "SELECT COUNT(*) FROM workers WHERE status != 'deleted'",
+                            [],
+                            |r| r.get(0),
+                        ).unwrap_or(0);
+                        let active: i32 = conn.query_row(
+                            "SELECT COUNT(*) FROM workers \
+                             WHERE status NOT IN ('paused', 'deleted')",
+                            [],
+                            |r| r.get(0),
+                        ).unwrap_or(0);
+                        let added: i32 = conn.query_row(
+                            "SELECT COUNT(*) FROM workers WHERE date(created_at) = ?1",
+                            rusqlite::params![today_str],
+                            |r| r.get(0),
+                        ).unwrap_or(0);
+                        (total, active, added)
+                    }
+                    Err(e) => {
+                        warn!("[DashboardSummary] workers.db read-only open failed: {e}");
+                        (0, 0, 0)
+                    }
+                },
+                Err(e) => {
+                    warn!("[DashboardSummary] autodev_dir resolution failed: {e}");
+                    (0, 0, 0)
                 }
-                Err(_) => (0, 0, 0),
             }
         };
-
-        // Phase 7.6 — Count distinct sessions recorded in token_usage today.
-        let sessions_today = self.db.get_daily_cost(today)?
-            .map(|r| r.session_count)
-            .unwrap_or(0);
 
         Ok(DashboardSummary {
             today_cost,
@@ -82,14 +107,10 @@ impl AnalyticsQueries {
             active_workers,
             total_workers,
             workers_added_today,
-            active_sessions: active_workers,  // proxy: any worker in non-paused state
-            sessions_today,
-            messages_today: self.db.get_daily_cost(today)?
-                .map(|r| r.message_count)
-                .unwrap_or(0),
-            tool_calls_today: self.db.get_daily_cost(today)?
-                .map(|r| r.tool_call_count)
-                .unwrap_or(0),
+            active_sessions: active_workers,
+            sessions_today: 0,
+            messages_today: 0,
+            tool_calls_today: 0,
         })
     }
 

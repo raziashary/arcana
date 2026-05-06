@@ -26,6 +26,22 @@ export interface Task {
   completed_at:        string | null
 }
 
+// ─── Worker Request Types ─────────────────────────────────────────────────────
+
+export type WorkerRequestStatus = 'pending' | 'acknowledged' | 'completed' | 'rejected'
+
+export interface WorkerRequest {
+  id:                number
+  worker_slug:       string
+  task_id:           number | null
+  request_type:      string
+  payload:           string
+  status:            WorkerRequestStatus
+  resolution_note:   string | null
+  created_at:        string
+  resolved_at:       string | null
+}
+
 // Kanban columns ordered for display
 export const KANBAN_COLUMNS: { status: TaskStatus; label: string }[] = [
   { status: 'ready',       label: 'Ready'       },
@@ -49,11 +65,14 @@ export const priorityLabel = (p: TaskPriority) => ({ p0: 'P0', p1: 'P1', p2: 'P2
 interface TaskState {
   tasks:        Task[]
   qcQueue:      { task: Task; ageSeconds: number }[]
+  workerRequests:   WorkerRequest[]
   isLoading:    boolean
   error:        string | null
 
   loadTasks:          ()                                                    => Promise<void>
   loadQcQueue:        ()                                                    => Promise<void>
+  loadWorkerRequests: (status?: WorkerRequestStatus | null)                   => Promise<void>
+  resolveWorkerRequest: (id: number, action: WorkerRequestStatus, note?: string) => Promise<void>
   updateTaskStatus:   (id: number, status: TaskStatus, worker?: string)    => Promise<void>
   deleteTask:         (id: number)                                          => Promise<void>
   tasksByStatus:      (status: TaskStatus)                                  => Task[]
@@ -69,6 +88,7 @@ const _taskUnlistenFns: UnlistenFn[] = []
 export const useTaskStore = create<TaskState>((set, get) => ({
   tasks:     [],
   qcQueue:   [],
+  workerRequests: [],
   isLoading: false,
   error:     null,
 
@@ -112,6 +132,24 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     }
   },
 
+  loadWorkerRequests: async (status) => {
+    try {
+      const reqs = await invoke<WorkerRequest[]>('list_worker_requests', { status: status ?? null })
+      set({ workerRequests: reqs })
+    } catch (e) {
+      console.error('Failed to load worker requests:', e)
+    }
+  },
+
+  resolveWorkerRequest: async (id, action, note) => {
+    try {
+      await invoke('resolve_worker_request', { id, action, note: note ?? null })
+      await get().loadWorkerRequests('pending')
+    } catch (e) {
+      console.error('Failed to resolve worker request:', e)
+    }
+  },
+
   tasksByStatus: (status) => get().tasks.filter(t => t.status === status),
 
   initEventListeners: async () => {
@@ -130,6 +168,12 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         void get().loadTasks()
       })
       _taskUnlistenFns.push(unlisten)
+
+      // Worker request push channel — refresh pending requests live
+      const unlistenReq = await listen('worker:request', () => {
+        void get().loadWorkerRequests('pending')
+      })
+      _taskUnlistenFns.push(unlistenReq)
     } catch (e) {
       console.error('[taskStore] Failed to register task:changed listener:', e)
       _taskListenersInstalled = false

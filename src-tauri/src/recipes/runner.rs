@@ -75,6 +75,11 @@ impl RecipeRunner {
         // We check orchestrator health early because it determines whether we
         // apply the "no tasks" short-circuit below.
         let orch_healthy = self.orch_client.is_healthy().await;
+        info!(
+            "[RecipeRunner] tick dispatch — worker='{}' core-orchestrator={}",
+            worker_slug,
+            if orch_healthy { "reachable → Mode 2 (LivingAgent)" } else { "unreachable → Mode 1 (Rust Engine)" },
+        );
 
         // ── Deterministic no-op short-circuit ──────────────────────────────────
         //
@@ -235,26 +240,51 @@ impl RecipeRunner {
 
             match self.orch_client.ensure_agent(worker_slug, &model).await {
                 Ok(agent_id) => {
-                    // Prepend the active workspace dir to the instructions so the
-                    // LivingAgent's file tools resolve paths against the same root
-                    // the Personal Assistant uses. Without this, Mode 2 workers
-                    // operate on whatever cwd core-orchestrator was launched in
-                    // and ignore the user's configured workspace.
-                    let instructions_with_ws = format!(
-                        "[AUTODEV WORKSPACE]\nworking_dir: {working_dir}\n\
-                         All file operations (read_file, write_file, bash, glob, grep) \
-                         MUST be resolved relative to this absolute path unless the user \
-                         provides another absolute path.\n\n{}",
-                        recipe.instructions
-                    );
-                    info!(
-                        "[RecipeRunner] worker '{}' workspace={}",
-                        worker_slug, working_dir
-                    );
-                    let trigger = qc_trigger_override.as_deref().unwrap_or(RECIPE_TRIGGER);
-                    match self.orch_client
-                        .invoke_worker(&agent_id, &instructions_with_ws, trigger)
-                        .await
+                    // BUG-002b — pre-flight: if the MCP server is unreachable, the
+                    // LivingAgent will have zero tools and burn tokens doing nothing.
+                    // Force an immediate Mode 1 fallback rather than discovering this
+                    // inside the expensive invoke_worker call.
+                    let mcp_up = self.orch_client.mcp_server_healthy().await;
+                    if mcp_up {
+                        info!(
+                            "[RecipeRunner] MCP server healthy for '{}' — \
+                             LivingAgent will have tools via :8767, proceeding Mode 2",
+                            worker_slug
+                        );
+                    }
+                    if !mcp_up {
+                        warn!(
+                            "[RecipeRunner] MCP server unreachable for '{}' — \
+                             forcing Mode 1 fallback immediately (port 8767 not responding)",
+                            worker_slug
+                        );
+                        emit_worker_tick_end(&self.app, WorkerTickEndPayload {
+                            slug:      worker_slug.to_string(),
+                            outcome:   "mode1_forced".to_string(),
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                        });
+                        // Fall through to the Mode 1 block below.
+                    } else {
+                        // Prepend the active workspace dir to the instructions so the
+                        // LivingAgent's file tools resolve paths against the same root
+                        // the Personal Assistant uses. Without this, Mode 2 workers
+                        // operate on whatever cwd core-orchestrator was launched in
+                        // and ignore the user's configured workspace.
+                        let instructions_with_ws = format!(
+                            "[AUTODEV WORKSPACE]\nworking_dir: {working_dir}\n\
+                             All file operations (read_file, write_file, bash, glob, grep) \
+                             MUST be resolved relative to this absolute path unless the user \
+                             provides another absolute path.\n\n{}",
+                            recipe.instructions
+                        );
+                        info!(
+                            "[RecipeRunner] worker '{}' workspace={}",
+                            worker_slug, working_dir
+                        );
+                        let trigger = qc_trigger_override.as_deref().unwrap_or(RECIPE_TRIGGER);
+                        match self.orch_client
+                            .invoke_worker(&agent_id, &instructions_with_ws, trigger)
+                            .await
                     {
                         Ok(response) => {
                             let elapsed_ms = tick_start.elapsed().as_millis() as u64;
@@ -338,8 +368,9 @@ impl RecipeRunner {
                                     Some(serde_json::json!({ "worker": worker_slug }).to_string()),
                                 );
                         }
-                    }
-                }
+                    }   // closes invoke_worker match body
+                    }   // closes else { ... } MCP-healthy branch
+                }       // closes Ok(agent_id) arm
                 Err(e) => {
                     warn!(
                         "[RecipeRunner] ensure_agent failed for '{}': {e}; \
