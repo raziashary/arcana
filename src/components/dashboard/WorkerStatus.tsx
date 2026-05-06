@@ -1,6 +1,7 @@
 // WorkerStatus widget — displays active workers and health with quick actions
 import React, { useState } from 'react';
 import { Users, Plus } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import { DashboardSummary } from '../../stores/dashboardStore';
 import './widgets.css';
 
@@ -11,8 +12,35 @@ interface WorkerStatusProps {
 const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
   const [showWorkerList, setShowWorkerList] = useState(false);
   const [showAddWorker, setShowAddWorker] = useState(false);
+  const [workerName, setWorkerName] = useState('');
+  const [workerType, setWorkerType] = useState('backend');
+  const [addError, setAddError] = useState<string | null>(null);
+  const [addPending, setAddPending] = useState(false);
 
   const healthStatus = summary.active_workers > 0 ? 'healthy' : 'idle';
+
+  const handleCreateWorker = async () => {
+    if (!workerName.trim()) return;
+    setAddPending(true);
+    setAddError(null);
+    try {
+      await invoke('spawn_worker', { name: workerName.trim(), workerType });
+      setShowAddWorker(false);
+      setWorkerName('');
+      setWorkerType('backend');
+    } catch (err) {
+      setAddError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAddPending(false);
+    }
+  };
+
+  const handleCancelAdd = () => {
+    setShowAddWorker(false);
+    setWorkerName('');
+    setWorkerType('backend');
+    setAddError(null);
+  };
 
   // Mock worker list
   const mockWorkers = [
@@ -231,6 +259,8 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
               <input
                 type="text"
                 placeholder="e.g., worker-backend-02"
+                value={workerName}
+                onChange={e => setWorkerName(e.target.value)}
                 style={{
                   width: '100%',
                   padding: '8px',
@@ -250,6 +280,8 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
               </label>
               <select
                 title="Select worker type"
+                value={workerType}
+                onChange={e => setWorkerType(e.target.value)}
                 style={{
                   width: '100%',
                   padding: '8px',
@@ -260,16 +292,23 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
                   fontSize: '12px',
                 }}
               >
-                <option>backend</option>
-                <option>frontend</option>
-                <option>mcp</option>
-                <option>platform</option>
+                <option value="backend">backend</option>
+                <option value="frontend">frontend</option>
+                <option value="mcp">mcp</option>
+                <option value="platform">platform</option>
               </select>
             </div>
 
+            {addError && (
+              <div style={{ color: '#FF6363', fontSize: '11px', marginBottom: '8px' }}>
+                {addError}
+              </div>
+            )}
+
             <div style={{ display: 'flex', gap: '8px' }}>
               <button
-                onClick={() => setShowAddWorker(false)}
+                onClick={handleCancelAdd}
+                disabled={addPending}
                 style={{
                   flex: 1,
                   padding: '8px',
@@ -284,19 +323,21 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
                 Cancel
               </button>
               <button
+                onClick={handleCreateWorker}
+                disabled={addPending || !workerName.trim()}
                 style={{
                   flex: 1,
                   padding: '8px',
-                  background: '#82AAFF',
+                  background: addPending ? '#637777' : '#82AAFF',
                   border: '1px solid #82AAFF',
                   borderRadius: '2px',
                   color: '#011627',
-                  cursor: 'pointer',
+                  cursor: addPending ? 'not-allowed' : 'pointer',
                   fontSize: '12px',
                   fontWeight: 'bold',
                 }}
               >
-                Create
+                {addPending ? 'Creating…' : 'Create'}
               </button>
             </div>
           </div>

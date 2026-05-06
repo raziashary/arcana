@@ -1,13 +1,14 @@
 // CostMeter widget — displays today's cost vs yesterday with trend, budget progress, and drill-down
 import React, { useState } from 'react';
 import { ChevronDown } from 'lucide-react';
-import { DashboardSummary, CostPrediction } from '../../stores/dashboardStore';
+import { DashboardSummary, CostPrediction, TokenUsageAnalytics } from '../../stores/dashboardStore';
 import './widgets.css';
 
 interface CostMeterProps {
   summary: DashboardSummary;
   prediction: CostPrediction | null;
-  dailyBudget?: number; // Optional daily budget limit
+  dailyBudget?: number;
+  tokenUsage?: TokenUsageAnalytics | null;
 }
 
 interface CostBreakdown {
@@ -16,7 +17,7 @@ interface CostBreakdown {
   percentage: number;
 }
 
-const CostMeter: React.FC<CostMeterProps> = ({ summary, prediction, dailyBudget = 50 }) => {
+const CostMeter: React.FC<CostMeterProps> = ({ summary, prediction, dailyBudget = 50, tokenUsage }) => {
   const [showDrilldown, setShowDrilldown] = useState(false);
   
   const getTrendIcon = (percent: number) => {
@@ -35,12 +36,34 @@ const CostMeter: React.FC<CostMeterProps> = ({ summary, prediction, dailyBudget 
   const budgetPercent = (summary.today_cost / dailyBudget) * 100;
   const budgetColor = budgetPercent > 90 ? '#FF6363' : budgetPercent > 75 ? '#FFCB8B' : '#7FDBCA';
 
-  // Mock provider breakdown (in real implementation, would come from backend)
-  const providerBreakdown: CostBreakdown[] = [
-    { provider: 'Anthropic', cost: summary.today_cost * 0.65, percentage: 65 },
-    { provider: 'OpenAI', cost: summary.today_cost * 0.25, percentage: 25 },
-    { provider: 'Google', cost: summary.today_cost * 0.10, percentage: 10 },
-  ];
+  // Derive real provider breakdown from tokenUsage.by_provider.
+  // Approximate cost rates (USD per 1M tokens) — used only for share computation, not absolute cost.
+  const providerRates: Record<string, number> = {
+    anthropic: 3.0, openai: 5.0, google: 0.5, mistral: 1.0, cohere: 1.0,
+  };
+
+  const providerBreakdown: CostBreakdown[] = (() => {
+    const byProvider = tokenUsage?.by_provider ?? {};
+    const entries = Object.entries(byProvider);
+    if (entries.length > 0) {
+      const weightedCosts = entries.map(([p, tokens]) => ({
+        provider: p.charAt(0).toUpperCase() + p.slice(1),
+        weight: (tokens / 1_000_000) * (providerRates[p.toLowerCase()] ?? 2.0),
+      }));
+      const totalWeight = weightedCosts.reduce((s, c) => s + c.weight, 0) || 1;
+      return weightedCosts.map(c => ({
+        provider: c.provider,
+        cost: summary.today_cost * (c.weight / totalWeight),
+        percentage: (c.weight / totalWeight) * 100,
+      }));
+    }
+    // Fallback: proportional split until real provider data arrives
+    return [
+      { provider: 'Anthropic', cost: summary.today_cost * 0.65, percentage: 65 },
+      { provider: 'OpenAI',    cost: summary.today_cost * 0.25, percentage: 25 },
+      { provider: 'Google',    cost: summary.today_cost * 0.10, percentage: 10 },
+    ];
+  })();
 
   return (
     <>

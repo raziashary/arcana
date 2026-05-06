@@ -307,6 +307,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
 
   setDateRange: (start: string, end: string) => {
     set({ dateRange: { start, end } });
+    // Refresh all data against the new range immediately
+    get().refreshDashboard();
   },
 
   exportCsv: async (start: string, end: string, path: string) => {
@@ -354,15 +356,41 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     try {
       // Listen for cost update events — event name matches EVT_COST_UPDATE in events.rs
       const costUnlistener = await listen<CostUpdatePayload>('cost:update', (event) => {
-        const { summary } = get();
-        if (summary && event.payload.total_today > get().dailyBudget) {
+        const { summary, dailyBudget } = get();
+
+        // Optimistically update summary so widgets reflect the new spend immediately
+        // without waiting for the next full refreshDashboard() poll.
+        if (summary) {
+          const newTodayCost = event.payload.total_today;
+          const newTodayTokens = summary.today_tokens
+            + event.payload.tokens_in
+            + event.payload.tokens_out;
+          const costChangePct = summary.yesterday_cost > 0
+            ? ((newTodayCost - summary.yesterday_cost) / summary.yesterday_cost) * 100
+            : 0;
+          const tokenChangePct = summary.yesterday_tokens > 0
+            ? ((newTodayTokens - summary.yesterday_tokens) / summary.yesterday_tokens) * 100
+            : 0;
+          set({
+            summary: {
+              ...summary,
+              today_cost: newTodayCost,
+              today_tokens: newTodayTokens,
+              cost_change_percent: costChangePct,
+              token_change_percent: tokenChangePct,
+            },
+          });
+        }
+
+        // Budget alert check
+        if (event.payload.total_today > dailyBudget) {
           const alert: BudgetAlert = {
             id: `alert-${Date.now()}`,
             timestamp: new Date().toISOString(),
-            type: event.payload.total_today > get().dailyBudget * 1.1 ? 'critical' : 'warning',
-            message: `Daily cost exceeded: $${event.payload.total_today.toFixed(2)} / $${get().dailyBudget.toFixed(2)}`,
+            type: event.payload.total_today > dailyBudget * 1.1 ? 'critical' : 'warning',
+            message: `Daily cost exceeded: $${event.payload.total_today.toFixed(2)} / $${dailyBudget.toFixed(2)}`,
             current_cost: event.payload.total_today,
-            budget_limit: get().dailyBudget,
+            budget_limit: dailyBudget,
           };
           get().addBudgetAlert(alert);
         }

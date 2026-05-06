@@ -397,3 +397,13 @@
   color: var(--text-1);
   font-weight: 500;
 }
+
+/* Empty state placeholder — used when a widget has no data yet */
+.no-data-placeholder {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-4);
+  text-align: center;
+  padding: 12px 0;
+  font-style: italic;
+}

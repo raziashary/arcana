@@ -2,12 +2,13 @@
 import React, { useState } from 'react';
 import { LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { ChevronDown } from 'lucide-react';
-import { DashboardSummary, TokenUsageAnalytics } from '../../stores/dashboardStore';
+import { DashboardSummary, TokenUsageAnalytics, CostAnalytics } from '../../stores/dashboardStore';
 import './widgets.css';
 
 interface TokenUsageProps {
   summary: DashboardSummary;
   analytics: TokenUsageAnalytics | null;
+  costAnalytics?: CostAnalytics | null;
 }
 
 interface DailyTokenData {
@@ -21,7 +22,7 @@ interface ModelUsageData {
   color: string;
 }
 
-const TokenUsage: React.FC<TokenUsageProps> = ({ summary, analytics }) => {
+const TokenUsage: React.FC<TokenUsageProps> = ({ summary, analytics, costAnalytics }) => {
   const [showCharts, setShowCharts] = useState(false);
 
   const formatTokens = (tokens: number) => {
@@ -42,31 +43,50 @@ const TokenUsage: React.FC<TokenUsageProps> = ({ summary, analytics }) => {
     return 'trend-neutral';
   };
 
-  // Mock 7-day token data
-  const sevenDayData: DailyTokenData[] = [
-    { date: 'Mon', tokens: 85000 },
-    { date: 'Tue', tokens: 92000 },
-    { date: 'Wed', tokens: 78000 },
-    { date: 'Thu', tokens: 105000 },
-    { date: 'Fri', tokens: 98000 },
-    { date: 'Sat', tokens: 65000 },
-    { date: 'Sun', tokens: summary.today_tokens },
-  ];
+  // 7-day token trend from real cost analytics data points (last 7 days)
+  const sevenDayData: DailyTokenData[] = (() => {
+    if (costAnalytics && costAnalytics.data_points.length > 0) {
+      return costAnalytics.data_points.slice(-7).map(dp => ({
+        date: new Date(dp.timestamp).toLocaleDateString('en', { weekday: 'short' }),
+        tokens: dp.tokens,
+      }));
+    }
+    // Fallback shape-only placeholder until costAnalytics loads
+    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    return days.map((date, i) => ({ date, tokens: i < 6 ? 0 : summary.today_tokens }));
+  })();
 
-  // Mock model usage breakdown
-  const modelUsage: ModelUsageData[] = [
-    { name: 'Claude 3.5 Sonnet', value: summary.today_tokens * 0.55, color: '#82AAFF' },
-    { name: 'GPT-4o', value: summary.today_tokens * 0.30, color: '#7FDBCA' },
-    { name: 'Gemini 2.0', value: summary.today_tokens * 0.15, color: '#FFCB8B' },
-  ];
+  // Real model distribution from analytics.by_model
+  const MODEL_COLORS = ['#82AAFF', '#7FDBCA', '#FFCB8B', '#ECC48D', '#C792EA'];
+  const modelUsage: ModelUsageData[] = (() => {
+    const byModel = analytics?.by_model ?? {};
+    const entries = Object.entries(byModel).sort(([, a], [, b]) => b - a).slice(0, 5);
+    if (entries.length > 0) {
+      return entries.map(([name, value], i) => ({
+        name,
+        value,
+        color: MODEL_COLORS[i % MODEL_COLORS.length],
+      }));
+    }
+    return [
+      { name: 'claude', value: summary.today_tokens * 0.55, color: MODEL_COLORS[0] },
+      { name: 'gpt',    value: summary.today_tokens * 0.30, color: MODEL_COLORS[1] },
+      { name: 'gemini', value: summary.today_tokens * 0.15, color: MODEL_COLORS[2] },
+    ];
+  })();
 
-  // Mock top sessions
-  const topSessions = [
-    { id: 'session-001', tokens: summary.today_tokens * 0.35, name: 'Code Review Task' },
-    { id: 'session-002', tokens: summary.today_tokens * 0.28, name: 'Documentation' },
-    { id: 'session-003', tokens: summary.today_tokens * 0.20, name: 'Bug Analysis' },
-    { id: 'session-004', tokens: summary.today_tokens * 0.17, name: 'Feature Design' },
-  ];
+  // Real top sessions from analytics.top_sessions
+  const topSessions = (() => {
+    const sessions = analytics?.top_sessions ?? [];
+    if (sessions.length > 0) {
+      return sessions.slice(0, 4).map(s => ({
+        id: s.session_id,
+        tokens: s.tokens,
+        name: s.agent_type || s.session_id.slice(-12),
+      }));
+    }
+    return [] as { id: string; tokens: number; name: string }[];
+  })();
 
   return (
     <>

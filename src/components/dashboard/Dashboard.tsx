@@ -1,5 +1,6 @@
 // Dashboard — Main analytics and cost tracking interface
 import React, { useEffect, useState } from 'react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useDashboardStore } from '../../stores/dashboardStore';
 import CostMeter from './CostMeter';
 import TokenUsage from './TokenUsage';
@@ -142,18 +143,44 @@ const Dashboard: React.FC = () => {
       <div className="dashboard-grid">
         {/* Top row: 4 metric cards */}
         <div className="metrics-row">
-          {summary && <CostMeter summary={summary} prediction={costPrediction} />}
-          {summary && <TokenUsage summary={summary} analytics={tokenUsage} />}
+          {summary && <CostMeter summary={summary} prediction={costPrediction} tokenUsage={tokenUsage} />}
+          {summary && <TokenUsage summary={summary} analytics={tokenUsage} costAnalytics={costAnalytics} />}
           {summary && <WorkerStatus summary={summary} />}
           {summary && <SessionActivity summary={summary} />}
         </div>
 
         {/* Middle row: Charts */}
         <div className="charts-row">
-          {costAnalytics && <div className="chart-container cost-chart">
-            <h3>Cost Trend (7 Days)</h3>
-            {/* Chart will be rendered by CostMeter or separate component */}
-          </div>}
+          {costAnalytics && costAnalytics.data_points.length > 0 && (
+            <div className="chart-container cost-chart">
+              <h3>Cost Trend ({costAnalytics.data_points.length} Days)</h3>
+              <ResponsiveContainer width="100%" height={180}>
+                <BarChart data={costAnalytics.data_points} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#0D3652" />
+                  <XAxis
+                    dataKey="timestamp"
+                    stroke="#637777"
+                    tick={{ fontSize: 10 }}
+                    tickFormatter={(t: string) =>
+                      new Date(t).toLocaleDateString('en', { month: 'short', day: 'numeric' })
+                    }
+                  />
+                  <YAxis
+                    stroke="#637777"
+                    tick={{ fontSize: 10 }}
+                    tickFormatter={(v: number) => `$${v.toFixed(2)}`}
+                  />
+                  <Tooltip
+                    contentStyle={{ background: '#011627', border: '1px solid #0D3652', borderRadius: '2px' }}
+                    labelStyle={{ color: '#D6DEEB', fontSize: '11px' }}
+                    labelFormatter={(t: string) => new Date(t).toLocaleDateString()}
+                    formatter={(v: unknown) => [`$${(v as number).toFixed(4)}`, 'Cost']}
+                  />
+                  <Bar dataKey="cost_usd" fill="#ECC48D" radius={[2, 2, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
           {tokenUsage && <ModelUsage analytics={tokenUsage} />}
         </div>
 

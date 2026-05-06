@@ -22,12 +22,20 @@ const ApiFailures: React.FC<ApiFailuresProps> = ({ analytics }) => {
 
   const recentFailures = analytics.recent_failures.slice(0, 5);
 
-  // Mock provider-specific failure rates
-  const providerRates: ProviderFailureRate[] = [
-    { provider: 'Anthropic', failures: 2, rate: 0.5, trend: -15 },
-    { provider: 'OpenAI', failures: 5, rate: 2.1, trend: 8 },
-    { provider: 'Google', failures: 1, rate: 0.8, trend: -5 },
-  ];
+  // Derive provider failure rates from real analytics.failures_by_provider data.
+  // Rate is computed as each provider's share of total failures across all providers.
+  const providerRates: ProviderFailureRate[] = (() => {
+    const byProvider = analytics.failures_by_provider;
+    const entries = Object.entries(byProvider).sort(([, a], [, b]) => b - a);
+    if (entries.length === 0) return [];
+    const total = entries.reduce((s, [, n]) => s + n, 0) || 1;
+    return entries.map(([provider, failures]) => ({
+      provider: provider.charAt(0).toUpperCase() + provider.slice(1),
+      failures,
+      rate: (failures / total) * 100,
+      trend: undefined,
+    }));
+  })();
 
   const getErrorIcon = (errorType: string) => {
     switch (errorType) {

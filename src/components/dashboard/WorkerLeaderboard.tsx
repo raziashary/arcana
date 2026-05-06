@@ -1,6 +1,7 @@
 // WorkerLeaderboard widget — displays top performing workers with trending indicators
 import React from 'react';
 import { TrendingUp, TrendingDown } from 'lucide-react';
+import { useDashboardStore } from '../../stores/dashboardStore';
 import './widgets.css';
 
 interface Worker {
@@ -14,12 +15,40 @@ interface Worker {
 }
 
 const WorkerLeaderboard: React.FC = () => {
-  // TODO: Connect to worker analytics data
-  const workers: Worker[] = [
-    { rank: 1, name: 'worker-backend-01', successRate: 95, avgDuration: 45, costPerTask: 2.30, successTrend: 5, efficiencyRank: 1 },
-    { rank: 2, name: 'worker-frontend-03', successRate: 92, avgDuration: 38, costPerTask: 1.85, successTrend: -2, efficiencyRank: 2 },
-    { rank: 3, name: 'worker-mcp-01', successRate: 88, avgDuration: 52, costPerTask: 3.10, successTrend: 8, efficiencyRank: 3 },
-  ];
+  const tokenUsage = useDashboardStore(s => s.tokenUsage);
+
+  // Group top_sessions by agent_type to produce per-agent cost and token totals.
+  // Fall back to by_agent_type token-only data when session detail is not yet loaded.
+  const workers: Worker[] = (() => {
+    const sessions = tokenUsage?.top_sessions ?? [];
+    const byType: Record<string, { tokens: number; cost: number; sessions: number }> = {};
+
+    sessions.forEach(s => {
+      const key = s.agent_type || 'unknown';
+      if (!byType[key]) byType[key] = { tokens: 0, cost: 0, sessions: 0 };
+      byType[key].tokens += s.tokens;
+      byType[key].cost += s.cost_usd;
+      byType[key].sessions += 1;
+    });
+
+    // Supplement with by_agent_type if sessions didn't cover a type
+    Object.entries(tokenUsage?.by_agent_type ?? {}).forEach(([type, tokens]) => {
+      if (!byType[type]) byType[type] = { tokens, cost: 0, sessions: 0 };
+    });
+
+    const entries = Object.entries(byType).sort(([, a], [, b]) => b.tokens - a.tokens).slice(0, 3);
+    if (entries.length === 0) return [];
+
+    return entries.map(([name, data], i) => ({
+      rank: i + 1,
+      name,
+      successRate: 100,
+      avgDuration: 0,
+      costPerTask: data.sessions > 0 ? data.cost / data.sessions : 0,
+      successTrend: undefined,
+      efficiencyRank: i === 0 ? 1 : undefined,
+    }));
+  })();
 
   const medals = ['🥇', '🥈', '🥉'];
 
@@ -41,6 +70,9 @@ const WorkerLeaderboard: React.FC = () => {
         <h3>🏆 Worker Efficiency</h3>
       </div>
       <div className="widget-content">
+        {workers.length === 0 ? (
+          <div className="no-data-placeholder">No session data yet</div>
+        ) : null}
         <div className="leaderboard-list">
           {workers.map((worker) => (
             <div key={worker.rank} className="leaderboard-item">
