@@ -11,11 +11,18 @@ use tracing::debug;
 
 pub struct ContextBuilder {
     working_dir: String,
+    session_id:  Option<String>,
 }
 
 impl ContextBuilder {
     pub fn new(working_dir: impl Into<String>) -> Self {
-        Self { working_dir: working_dir.into() }
+        Self { working_dir: working_dir.into(), session_id: None }
+    }
+
+    /// Attach a session ID so memory context can be injected into the prompt.
+    pub fn with_session(mut self, session_id: impl Into<String>) -> Self {
+        self.session_id = Some(session_id.into());
+        self
     }
 
     /// Build the full system prompt including AUTODEV.md contents.
@@ -59,6 +66,7 @@ impl ContextBuilder {
     }
 
     /// Build system prompt for a given PAMode.
+    /// Injects memory context when a session_id is attached via `with_session()`.
     /// Fetches global + repo-specific AUTODEV.md from SQLite config.db.
     /// Falls back to filesystem paths if DB entry is empty.
     pub fn build_system_prompt_with_mode(
@@ -102,6 +110,14 @@ impl ContextBuilder {
 
         if let Some(content) = repo_content {
             parts.push(format!("## Project Instructions (AUTODEV.md)\n\n{content}"));
+        }
+
+        // Phase 4.4 — Memory injection: recall relevant memories from all 3 tiers.
+        // Skipped when no session_id is set (e.g. MCP server, subagent, recipe mode).
+        if let Some(ref sid) = self.session_id {
+            if let Some(memory_block) = crate::memory::build_memory_context(sid, "", repo_path) {
+                parts.push(memory_block);
+            }
         }
 
         parts.join("\n\n---\n\n")

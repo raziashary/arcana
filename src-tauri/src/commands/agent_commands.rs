@@ -67,6 +67,23 @@ pub async fn send_message(
     let user_msg = Message::new_user(&session_id, &user_message);
     session_mgr.append_message(&user_msg)?;
 
+    // Phase 4.1 — store to episodic memory (Tier 1).
+    // Fire-and-forget: errors are logged but don't block the agent.
+    {
+        let sid  = session_id.clone();
+        let msg  = user_message.clone();
+        let wdir = working_dir.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = crate::memory::EpisodicStore::store_user_message(
+                &sid, &msg, Some(&wdir), None,
+            ) {
+                tracing::warn!("[memory] failed to store user message: {e}");
+            }
+            // Rule-based semantic extraction from user messages.
+            crate::memory::SemanticStore::extract_and_store(&msg, &sid, Some(&wdir));
+        });
+    }
+
     // Build conversation history from stored messages (Anthropic format)
     let history = build_history(&session.messages);
 
@@ -158,6 +175,20 @@ pub async fn send_message(
                                 assistant_msg.content = text.clone();
                             }
                         }
+                        // Phase 4.1 — store agent response to episodic memory.
+                        let agent_text = assistant_msg.content.clone();
+                        let sid2  = session_id_c.clone();
+                        let wdir2 = working_dir_c.clone();
+                        std::thread::spawn(move || {
+                            if let Err(e) = crate::memory::EpisodicStore::store_agent_response(
+                                &sid2, &agent_text, None, 0.0, 0, 0,
+                                None, None, Some(&wdir2), None,
+                            ) {
+                                tracing::warn!("[memory] failed to store agent response: {e}");
+                            }
+                            // Phase 4.5 — trigger auto-summarization every N turns.
+                            crate::memory::Summarizer::maybe_summarize(&sid2, Some(&wdir2));
+                        });
                         if let Err(e) = session_mgr_clone.append_message(&assistant_msg) {
                             tracing::error!("Failed to save assistant message: {e}");
                         }

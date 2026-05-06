@@ -623,6 +623,63 @@ impl SidecarManager {
         matches!(self.redis_status.lock().unwrap().clone(), SidecarStatus::Running)
     }
 
+    /// On Windows, attempt to start the Memurai Redis-compatible service if it is
+    /// installed but not yet running. Returns true if the service start command was
+    /// dispatched (does NOT guarantee Redis is listening — caller must re-probe).
+    ///
+    /// Tries in order:
+    ///   1. `net start Memurai`      — standard Windows service start
+    ///   2. `sc start Memurai`       — SC Manager fallback
+    ///   3. `net start redis`        — plain Redis service name (WSL / Chocolatey installs)
+    ///
+    /// This method is intentionally fire-and-forget: it logs success/failure but never
+    /// panics. The caller (check_sidecar_connectivity) retries the TCP PING afterwards.
+    pub async fn try_start_memurai_service(&self) -> bool {
+        // Attempt to start the Memurai service via spawn_blocking so we don't
+        // block the Tokio runtime. Tries three common service names in order.
+        let started = tokio::task::spawn_blocking(|| -> bool {
+            #[cfg(target_os = "windows")]
+            {
+                let attempts: &[(&str, &[&str])] = &[
+                    ("net", &["start", "Memurai"]),
+                    ("sc",  &["start", "Memurai"]),
+                    ("net", &["start", "redis"]),
+                ];
+                for (cmd, args) in attempts {
+                    match std::process::Command::new(cmd).args(*args).output() {
+                        Ok(out) => {
+                            let stdout = String::from_utf8_lossy(&out.stdout);
+                            let stderr = String::from_utf8_lossy(&out.stderr);
+                            // exit 0 OR "already running" both count as success
+                            if out.status.success()
+                                || stdout.to_ascii_lowercase().contains("already")
+                                || stderr.to_ascii_lowercase().contains("already")
+                            {
+                                return true;
+                            }
+                        }
+                        Err(_) => {}
+                    }
+                }
+                false
+            }
+            #[cfg(not(target_os = "windows"))]
+            false
+        })
+        .await
+        .unwrap_or(false);
+
+        if started {
+            info!("[SidecarManager] Redis/Memurai service started successfully");
+        } else {
+            warn!(
+                "[SidecarManager] Could not start Redis/Memurai — \
+                 install Memurai (https://memurai.com) for warm memory tier support"
+            );
+        }
+        started
+    }
+
     /// Terminate managed sidecars (call on app shutdown).
     /// NOTE: Redis is NOT stopped — it is externally managed by the OS.
     pub fn stop_all(&self) {

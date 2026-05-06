@@ -82,7 +82,8 @@ impl AgentEngine {
             return Err(AutoDevError::Agent("Agent was cancelled before start".into()));
         }
 
-        let context_builder = ContextBuilder::new(working_dir);
+        let context_builder = ContextBuilder::new(working_dir)
+            .with_session(session_id);
         let system_prompt   = if let Some(override_str) = system_prompt_override {
             override_str.to_string()
         } else {

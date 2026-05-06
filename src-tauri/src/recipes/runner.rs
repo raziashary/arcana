@@ -373,17 +373,18 @@ impl RecipeRunner {
         let provider_id = match provider_id {
             Some(id) => id,
             None => {
-                error!(
-                    "[RecipeRunner] Cannot run recipe for '{}': \
-                     core-orchestrator is unreachable AND no LLM provider is configured. \
-                     Go to Settings → Provider to add an API key, or wait for the orchestrator to finish starting.",
+                // No local LLM provider configured — Mode 1 is not possible.
+                // Silently stay idle; Mode 2 (core-orchestrator) will handle
+                // this recipe once the orchestrator finishes starting.
+                // Do NOT set status to "error" here — this is a transient
+                // startup condition, not a permanent failure.
+                info!(
+                    "[RecipeRunner] Worker '{}' skipping Mode 1: no LLM provider configured. \
+                     Waiting for core-orchestrator (Mode 2).",
                     worker_slug
                 );
-                self.set_worker_status(worker_slug, "error");
-                return Err(AutoDevError::Agent(
-                    "No LLM provider configured and core-orchestrator is not ready yet. \
-                     Go to Settings → Provider to add an API key.".into()
-                ));
+                self.set_worker_status(worker_slug, "idle");
+                return Ok(());
             }
         };
 

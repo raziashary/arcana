@@ -26,6 +26,7 @@ pub mod analytics;
 pub mod graph;
 pub mod plugin;
 pub mod updater;
+pub mod memory;
 
 // Register all Tauri commands on the builder from within the lib crate.
 // generate_handler! must run here so the __cmd__* macros (produced by
@@ -131,6 +132,15 @@ pub fn register_commands(
             download_update, get_download_progress,
             install_update, skip_version,
             get_update_history, verify_data_integrity,
+        },
+        memory_commands::{
+            get_session_timeline,
+            recall_facts, store_fact_cmd, update_fact_cmd, deactivate_fact,
+            get_user_preferences, search_semantic,
+            get_memory_md, save_memory_md,
+            list_memory_topics, get_memory_topic, save_memory_topic, delete_memory_topic,
+            search_procedural,
+            search_memory, get_memory_stats, summarize_session_cmd,
         },
     };
     builder.invoke_handler(tauri::generate_handler![
@@ -360,6 +370,24 @@ pub fn register_commands(
         skip_version,
         get_update_history,
         verify_data_integrity,
+        // Memory System (Phase 4.1-4.7)
+        get_session_timeline,
+        recall_facts,
+        store_fact_cmd,
+        update_fact_cmd,
+        deactivate_fact,
+        get_user_preferences,
+        search_semantic,
+        get_memory_md,
+        save_memory_md,
+        list_memory_topics,
+        get_memory_topic,
+        save_memory_topic,
+        delete_memory_topic,
+        search_procedural,
+        search_memory,
+        get_memory_stats,
+        summarize_session_cmd,
         // Plugin system (Phase 5.2)
         list_plugins,
         list_installed_plugins,

@@ -16,7 +16,7 @@ use tracing::info;
 
 use crate::agent::ToolRegistry;
 use crate::sidecar::client::OrchestratorClient;
-use crate::sidecar::{resolve_memory_path, resolve_sidecar_path, SidecarManager};
+use crate::sidecar::{resolve_memory_path, resolve_sidecar_path, SidecarManager, SidecarStatus};
 
 // ─── Status ───────────────────────────────────────────────────────────────────
 
@@ -51,7 +51,28 @@ pub async fn check_sidecar_connectivity(
     if redis_ok {
         sidecar.mark_redis_running();
     } else {
-        sidecar.mark_redis_unavailable();
+        // Phase 3.4b — Memurai auto-start:
+        // On the first connectivity check where Redis is unreachable (status == Stopped,
+        // meaning we have never yet attempted a start), try to bring up the Memurai
+        // Windows service automatically. On subsequent failures (status == Error) we
+        // skip the start attempt so we don't spam the log with repeated failed `net start`
+        // calls on every polling interval.
+        let is_first_attempt = matches!(sidecar.redis_status(), SidecarStatus::Stopped);
+        if is_first_attempt {
+            info!("[sidecar_commands] Redis not reachable — attempting Memurai auto-start");
+            if sidecar.try_start_memurai_service().await {
+                // Give the service 2 s to bind before re-probing
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                if client.is_redis_healthy().await {
+                    sidecar.mark_redis_running();
+                } else {
+                    sidecar.mark_redis_unavailable();
+                }
+            } else {
+                sidecar.mark_redis_unavailable();
+            }
+        }
+        // If status was already Error (tried before), leave it as-is — no re-attempt.
     }
 
     // Fleet readiness is still memory + orchestrator + in-process MCP. Redis

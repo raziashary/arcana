@@ -18,6 +18,8 @@ pub mod assign_task;
 pub mod planner;
 pub mod spawn_subagent;
 pub mod spawn_parallel_subagents;
+pub mod search_memory;
+pub mod remember_this;
 
 use std::sync::Arc;
 use super::{PAMode, tool_registry::ToolRegistry};
@@ -79,11 +81,17 @@ pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
             // (that mode exists to keep PA from doing direct execution).
             registry.register(Arc::new(spawn_subagent::SpawnSubagentTool));
             registry.register(Arc::new(spawn_parallel_subagents::SpawnParallelSubagentsTool));
+            // Memory tools (Phase 4.7) — available in all non-delegate modes
+            registry.register(Arc::new(search_memory::SearchMemoryTool));
+            registry.register(Arc::new(remember_this::RememberThisTool));
         }
         PAMode::Delegate => {
             registry.register(Arc::new(create_task::CreateTaskTool));
             // Planner is task management, not file I/O — safe in Delegate mode
             registry.register(Arc::new(planner::PlannerTool));
+            // Memory tools available in Delegate mode — read-only and write facts
+            registry.register(Arc::new(search_memory::SearchMemoryTool));
+            registry.register(Arc::new(remember_this::RememberThisTool));
         }
     }
 }

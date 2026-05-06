@@ -93,10 +93,11 @@ impl RecipeScheduler {
             info!("[RecipeScheduler] Schedule loop started for worker '{}'", slug_owned);
 
             // Gate the first tick until core-orchestrator is reachable (T5.1/T5.2 — E-04 fix).
-            // Polls every 2 s for up to 45 s before proceeding regardless.
-            if !wait_for_orchestrator_ready(&runner, 45).await {
+            // Polls every 2 s for up to 120 s before proceeding regardless.
+            // 120s covers the observed ~106s Python venv cold-boot time.
+            if !wait_for_orchestrator_ready(&runner, 120).await {
                 warn!(
-                    "[RecipeScheduler] Orchestrator not ready after 45s for '{}' — \
+                    "[RecipeScheduler] Orchestrator not ready after 120s for '{}' — \
                      starting schedule anyway (Mode 1 fallback active)",
                     slug_owned
                 );
