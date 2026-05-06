@@ -72,7 +72,10 @@ serde_yaml = "0.9"
 cron = "0.12"
 
 # Native file/folder picker dialogs (for workspace dir selection)
-rfd = { version = "0.15", features = ["tokio"] }
+# Pinned to v0.14 — v0.15 pulls in ashpd v0.11 which conflicts with tauri's
+# transitive ashpd dependency (both tokio + async-std features activated on Linux).
+# AsyncFileDialog API is identical between v0.14 and v0.15.
+rfd = { version = "0.14", features = ["tokio"] }
 
 # git2-rs — Phase 3 (already declared to lock dep version)
 git2 = "0.19"

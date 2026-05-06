@@ -1,9 +1,9 @@
-/// Non-interactive mode utilities for CI/CD scripting.
-///
-/// Exit codes:
-///   0 — success
-///   1 — error (unrecoverable failure)
-///   2 — partial success (some items failed, some succeeded)
+//! Non-interactive mode utilities for CI/CD scripting.
+//!
+//! Exit codes:
+//!   0 — success
+//!   1 — error (unrecoverable failure)
+//!   2 — partial success (some items failed, some succeeded)
 
 /// Detect whether stdin/stdout are a real TTY (vs a pipe or CI environment).
 pub fn is_tty() -> bool {
@@ -27,8 +27,9 @@ pub fn is_tty() -> bool {
     }
     #[cfg(not(windows))]
     {
-        // On Unix: check isatty(1) (stdout)
-        unsafe { libc::isatty(1) == 1 }
+        // On Unix: use std::io::IsTerminal (stable since Rust 1.70 — no libc dep needed).
+        use std::io::IsTerminal;
+        std::io::stdout().is_terminal()
     }
 }
 
