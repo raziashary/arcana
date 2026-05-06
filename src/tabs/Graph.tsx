@@ -32,15 +32,18 @@ const DEFAULT_EDGE_FILTERS: Record<string, boolean> = {
 }
 
 function symbolForKind(kind: string): d3.SymbolType {
-  const k = kind.toLowerCase()
-  if (k.includes('class'))                              return d3.symbolSquare
-  if (k.includes('function') || k.includes('method'))  return d3.symbolCircle
-  if (k.includes('test'))                               return d3.symbolTriangle
-  if (k.includes('type') || k.includes('interface'))    return d3.symbolDiamond
-  if (k.includes('file'))                               return d3.symbolSquare
-  if (k.includes('module') || k.includes('package'))    return d3.symbolWye
-  if (k.includes('import'))                             return d3.symbolCross
-  return d3.symbolCircle
+  switch (kind.toLowerCase()) {
+    case 'file':    return d3.symbolDiamond   // distinct from Class
+    case 'class':   return d3.symbolSquare
+    case 'function':
+    case 'method':  return d3.symbolCircle
+    case 'test':    return d3.symbolTriangle
+    case 'type':    return d3.symbolStar
+    case 'module':
+    case 'package': return d3.symbolWye
+    case 'import':  return d3.symbolCross
+    default:        return d3.symbolCircle
+  }
 }
 
 function nodeRadius(degree: number): number {
@@ -97,6 +100,8 @@ interface GraphVisualizationData {
   nodes: VisualizationNode[]
   edges: VisualizationEdge[]
   communities: Community[]
+  is_aggregated?: boolean
+  total_node_count?: number
 }
 
 interface BuildProgress {
@@ -545,7 +550,7 @@ export default function GraphTab() {
       const graphStats = await invoke<GraphStats>('get_graph_stats', { repoPath: workspaceDir })
       setStats(graphStats)
       if (graphStats.total_nodes > 0) {
-        const vizData = await invoke<GraphVisualizationData>('get_graph_visualization_data')
+        const vizData = await invoke<GraphVisualizationData>('get_graph_visualization_data', { repoPath: workspaceDir })
         setGraphData(vizData)
         setCommunities(vizData.communities)
       } else {
@@ -570,6 +575,8 @@ export default function GraphTab() {
     } catch (err) {
       console.error('[Graph] build_graph:', err)
       alert(`Build failed: ${err}`)
+    } finally {
+      setIsBuilding(false)
     }
   }
 
@@ -583,6 +590,8 @@ export default function GraphTab() {
     } catch (err) {
       console.error('[Graph] update_graph:', err)
       alert(`Update failed: ${err}`)
+    } finally {
+      setIsBuilding(false)
     }
   }
 
@@ -763,6 +772,17 @@ export default function GraphTab() {
           <span className="stat-placeholder">No graph — click ⚡ Build to start</span>
         )}
       </div>
+
+      {/* ── Aggregation notice (shown when >2000 nodes triggers community view) ── */}
+      {graphData?.is_aggregated && (
+        <div className="graph-aggregation-banner">
+          <span className="graph-aggregation-icon">⬡</span>
+          <span className="graph-aggregation-text">
+            Large codebase ({graphData.total_node_count?.toLocaleString()} nodes) — showing community overview.
+            Each node represents a community. Narrow scope or filter to inspect individual files.
+          </span>
+        </div>
+      )}
 
       {/* ── Main content ── */}
       <div className="graph-content">

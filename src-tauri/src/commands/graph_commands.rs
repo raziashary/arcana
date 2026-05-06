@@ -10,7 +10,7 @@ use crate::graph::export::{export_json, export_html, export_svg};
 use crate::graph::registry::{RepoRegistry, RepoEntry, merge_all_repos, MergeStats};
 use crate::graph::incremental::UpdateStats;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildStats {
@@ -55,6 +55,29 @@ pub struct GraphVisualizationData {
     pub nodes: Vec<VisualizationNode>,
     pub edges: Vec<VisualizationEdge>,
     pub communities: Vec<Community>,
+    /// True when total code nodes exceeded NODE_RENDER_LIMIT and the response
+    /// contains community super-nodes instead of individual code nodes.
+    pub is_aggregated: bool,
+    /// Total number of project code nodes in the DB (before any aggregation).
+    pub total_node_count: usize,
+}
+
+// ============================================================================
+// PER-REPO DATABASE PATH HELPER
+// ============================================================================
+
+// Derives a stable, per-repo SQLite path stored under ~/.autodev/graphs/<12-char-hash>.db.
+// Using a hash of the repo path ensures:
+//   1. The DB is always in user's home dir (not inside the repo).
+//   2. Two different repos never share the same DB.
+//   3. The path is filesystem-safe regardless of spaces or Unicode in repo_path.
+fn repo_db_path(repo_path: &str) -> Result<PathBuf> {
+    use sha2::{Sha256, Digest};
+    let home = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
+    let slug = hex::encode(Sha256::digest(repo_path.as_bytes()));
+    let slug = &slug[..12];
+    Ok(home.join(".autodev").join("graphs").join(format!("{}.db", slug)))
 }
 
 // ============================================================================
@@ -99,17 +122,8 @@ pub async fn build_graph(app: AppHandle, repo_path: Option<String>) -> Result<Bu
         percent: 5,
     });
     
-    // Database goes in user's home .autodev directory, NOT repo root
-    let home_dir = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
-    let autodev_dir = home_dir.join(".autodev");
-    
-    // Create .autodev directory if it doesn't exist
-    tracing::debug!("[GraphBuild] Creating .autodev directory at: {:?}", autodev_dir);
-    std::fs::create_dir_all(&autodev_dir)?;
-    tracing::info!("[GraphBuild] .autodev directory ready");
-    
-    let db_path = autodev_dir.join("graph.db");
+    let db_path = repo_db_path(&repo_path)?;
+    std::fs::create_dir_all(db_path.parent().expect("db_path always has parent"))?;
     tracing::debug!("[GraphBuild] Database path: {:?}", db_path);
     
     let start = std::time::Instant::now();
@@ -148,7 +162,7 @@ pub async fn build_graph(app: AppHandle, repo_path: Option<String>) -> Result<Bu
     // STEP 2: Extract code from all files
     tracing::info!("[GraphBuild] Extracting code from {} files...", code_files.len());
     let extract_start = std::time::Instant::now();
-    let extractions = crate::graph::extract::extract_all(&code_files);
+    let extractions = crate::graph::extract::extract_all(&code_files, repo_dir);
     let mut extraction_results = Vec::new();
     let mut extraction_errors = 0;
     
@@ -256,12 +270,8 @@ pub async fn update_graph(app: AppHandle, repo_path: Option<String>) -> Result<U
         percent: 15,
     });
     
-    // Database goes in user's home .autodev directory, NOT repo root
-    let home_dir = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
-    let autodev_dir = home_dir.join(".autodev");
-    std::fs::create_dir_all(&autodev_dir)?;
-    let db_path = autodev_dir.join("graph.db");
+    let db_path = repo_db_path(&repo_path)?;
+    std::fs::create_dir_all(db_path.parent().expect("db_path always has parent"))?;
     let store = GraphStore::open(&db_path)?;
     
     // Perform incremental update
@@ -291,7 +301,7 @@ pub async fn update_graph(app: AppHandle, repo_path: Option<String>) -> Result<U
         percent: 40,
     });
     
-    let stats = crate::graph::incremental::incremental_update(&store, &changed_files, None, None)?;
+    let stats = crate::graph::incremental::incremental_update(&store, &changed_files, repo_dir, None, None)?;
     
     let _ = app.emit("graph:build_progress", BuildProgressPayload {
         phase: "done".to_string(),
@@ -311,18 +321,12 @@ pub async fn update_graph(app: AppHandle, repo_path: Option<String>) -> Result<U
 
 #[tauri::command]
 pub async fn get_graph_stats(repo_path: Option<String>) -> Result<GraphStats> {
-    let _repo_path = repo_path.unwrap_or_else(|| ".".to_string());
-    tracing::info!("[GraphStats] Getting graph stats");
-    
-    // Database is in user's home .autodev directory, NOT repo root
-    let home_dir = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
-    let autodev_dir = home_dir.join(".autodev");
-    
-    // Create .autodev directory if it doesn't exist
-    std::fs::create_dir_all(&autodev_dir)?;
-    
-    let db_path = autodev_dir.join("graph.db");
+    let repo_path = repo_path
+        .and_then(|p| if p.is_empty() || p == "." { None } else { Some(p) })
+        .ok_or_else(|| anyhow::anyhow!("repo_path required for graph stats"))?;
+    tracing::info!("[GraphStats] Getting graph stats for: {}", repo_path);
+    let db_path = repo_db_path(&repo_path)?;
+    std::fs::create_dir_all(db_path.parent().expect("db_path always has parent"))?;
     tracing::debug!("[GraphStats] Database path: {:?}", db_path);
     
     let store = GraphStore::open(&db_path)?;
@@ -371,13 +375,11 @@ pub async fn get_graph_stats(repo_path: Option<String>) -> Result<GraphStats> {
 
 #[tauri::command]
 pub async fn get_graph_communities(repo_path: Option<String>) -> Result<Vec<Community>> {
-    let path = repo_path.unwrap_or_else(|| ".".to_string());
-    let autodev_dir = Path::new(&path).join(".autodev");
-    
-    // Create .autodev directory if it doesn't exist
-    std::fs::create_dir_all(&autodev_dir)?;
-    
-    let db_path = autodev_dir.join("graph.db");
+    let path = repo_path
+        .and_then(|p| if p.is_empty() || p == "." { None } else { Some(p) })
+        .ok_or_else(|| anyhow::anyhow!("repo_path required"))?;
+    let db_path = repo_db_path(&path)?;
+    std::fs::create_dir_all(db_path.parent().expect("db_path always has parent"))?;
     
     let store = GraphStore::open(&db_path)?;
     let communities = run_clustering(&store)?;
@@ -387,13 +389,11 @@ pub async fn get_graph_communities(repo_path: Option<String>) -> Result<Vec<Comm
 
 #[tauri::command]
 pub async fn get_graph_report(repo_path: Option<String>) -> Result<String> {
-    let path = repo_path.unwrap_or_else(|| ".".to_string());
-    let autodev_dir = Path::new(&path).join(".autodev");
-    
-    // Create .autodev directory if it doesn't exist
-    std::fs::create_dir_all(&autodev_dir)?;
-    
-    let db_path = autodev_dir.join("graph.db");
+    let path = repo_path
+        .and_then(|p| if p.is_empty() || p == "." { None } else { Some(p) })
+        .ok_or_else(|| anyhow::anyhow!("repo_path required"))?;
+    let db_path = repo_db_path(&path)?;
+    std::fs::create_dir_all(db_path.parent().expect("db_path always has parent"))?;
     
     let store = GraphStore::open(&db_path)?;
     let report = generate_report(&store)?;
@@ -412,13 +412,11 @@ pub async fn export_graph(
     format: String,
     output_path: Option<String>,
 ) -> Result<()> {
-    let path = repo_path.unwrap_or_else(|| ".".to_string());
-    let autodev_dir = Path::new(&path).join(".autodev");
-    
-    // Create .autodev directory if it doesn't exist
-    std::fs::create_dir_all(&autodev_dir)?;
-    
-    let db_path = autodev_dir.join("graph.db");
+    let path = repo_path
+        .and_then(|p| if p.is_empty() || p == "." { None } else { Some(p) })
+        .ok_or_else(|| anyhow::anyhow!("repo_path required"))?;
+    let db_path = repo_db_path(&path)?;
+    std::fs::create_dir_all(db_path.parent().expect("db_path always has parent"))?;
     let out_path = output_path.unwrap_or_else(|| format!("graph.{}", format));
     
     let store = GraphStore::open(&db_path)?;
@@ -443,13 +441,11 @@ pub async fn get_graph_nodes_for_viz(
     repo_path: Option<String>,
     max_nodes: u32,
 ) -> Result<Vec<serde_json::Value>> {
-    let path = repo_path.unwrap_or_else(|| ".".to_string());
-    let autodev_dir = Path::new(&path).join(".autodev");
-    
-    // Create .autodev directory if it doesn't exist
-    std::fs::create_dir_all(&autodev_dir)?;
-    
-    let db_path = autodev_dir.join("graph.db");
+    let path = repo_path
+        .and_then(|p| if p.is_empty() || p == "." { None } else { Some(p) })
+        .ok_or_else(|| anyhow::anyhow!("repo_path required"))?;
+    let db_path = repo_db_path(&path)?;
+    std::fs::create_dir_all(db_path.parent().expect("db_path always has parent"))?;
     
     let store = GraphStore::open(&db_path)?;
     let all_nodes = store.get_all_nodes_for_graph(max_nodes as i64, 0)?;
@@ -471,13 +467,11 @@ pub async fn get_graph_nodes_for_viz(
 
 #[tauri::command]
 pub async fn get_graph_edges_for_viz(repo_path: Option<String>) -> Result<Vec<serde_json::Value>> {
-    let path = repo_path.unwrap_or_else(|| ".".to_string());
-    let autodev_dir = Path::new(&path).join(".autodev");
-    
-    // Create .autodev directory if it doesn't exist
-    std::fs::create_dir_all(&autodev_dir)?;
-    
-    let db_path = autodev_dir.join("graph.db");
+    let path = repo_path
+        .and_then(|p| if p.is_empty() || p == "." { None } else { Some(p) })
+        .ok_or_else(|| anyhow::anyhow!("repo_path required"))?;
+    let db_path = repo_db_path(&path)?;
+    std::fs::create_dir_all(db_path.parent().expect("db_path always has parent"))?;
     
     let store = GraphStore::open(&db_path)?;
     let all_edges = store.get_all_edges_for_graph(i64::MAX, 0)?;
@@ -502,13 +496,11 @@ pub async fn get_graph_edges_for_viz(repo_path: Option<String>) -> Result<Vec<se
 
 #[tauri::command]
 pub async fn get_god_nodes(repo_path: Option<String>, top_n: Option<u32>) -> Result<Vec<serde_json::Value>> {
-    let path = repo_path.unwrap_or_else(|| ".".to_string());
-    let autodev_dir = Path::new(&path).join(".autodev");
-    
-    // Create .autodev directory if it doesn't exist
-    std::fs::create_dir_all(&autodev_dir)?;
-    
-    let db_path = autodev_dir.join("graph.db");
+    let path = repo_path
+        .and_then(|p| if p.is_empty() || p == "." { None } else { Some(p) })
+        .ok_or_else(|| anyhow::anyhow!("repo_path required"))?;
+    let db_path = repo_db_path(&path)?;
+    std::fs::create_dir_all(db_path.parent().expect("db_path always has parent"))?;
     
     let store = GraphStore::open(&db_path)?;
     let nodes = god_nodes(&store, top_n.unwrap_or(10) as usize)?;
@@ -531,13 +523,11 @@ pub async fn get_surprising_connections(
     repo_path: Option<String>,
     top_n: Option<u32>,
 ) -> Result<Vec<serde_json::Value>> {
-    let path = repo_path.unwrap_or_else(|| ".".to_string());
-    let autodev_dir = Path::new(&path).join(".autodev");
-    
-    // Create .autodev directory if it doesn't exist
-    std::fs::create_dir_all(&autodev_dir)?;
-    
-    let db_path = autodev_dir.join("graph.db");
+    let path = repo_path
+        .and_then(|p| if p.is_empty() || p == "." { None } else { Some(p) })
+        .ok_or_else(|| anyhow::anyhow!("repo_path required"))?;
+    let db_path = repo_db_path(&path)?;
+    std::fs::create_dir_all(db_path.parent().expect("db_path always has parent"))?;
     
     let store = GraphStore::open(&db_path)?;
     let connections = surprising_connections(&store, top_n.unwrap_or(5) as usize)?;
@@ -557,13 +547,11 @@ pub async fn get_surprising_connections(
 
 #[tauri::command]
 pub async fn get_suggested_questions(repo_path: Option<String>) -> Result<Vec<serde_json::Value>> {
-    let path = repo_path.unwrap_or_else(|| ".".to_string());
-    let autodev_dir = Path::new(&path).join(".autodev");
-    
-    // Create .autodev directory if it doesn't exist
-    std::fs::create_dir_all(&autodev_dir)?;
-    
-    let db_path = autodev_dir.join("graph.db");
+    let path = repo_path
+        .and_then(|p| if p.is_empty() || p == "." { None } else { Some(p) })
+        .ok_or_else(|| anyhow::anyhow!("repo_path required"))?;
+    let db_path = repo_db_path(&path)?;
+    std::fs::create_dir_all(db_path.parent().expect("db_path always has parent"))?;
     
     let store = GraphStore::open(&db_path)?;
     let questions = suggest_questions(&store, 5)?;
@@ -614,14 +602,31 @@ pub async fn merge_all_repos_cmd(output_path: String) -> Result<MergeStats> {
 
 #[tauri::command]
 pub async fn delete_graph(repo_path: Option<String>) -> Result<()> {
-    let path = repo_path.unwrap_or_else(|| ".".to_string());
-    let db_path = Path::new(&path).join(".autodev").join("graph.db");
+    let path = repo_path
+        .and_then(|p| if p.is_empty() || p == "." { None } else { Some(p) })
+        .ok_or_else(|| anyhow::anyhow!("repo_path required to delete graph"))?;
+    let db_path = repo_db_path(&path)?;
     
     if db_path.exists() {
         std::fs::remove_file(&db_path)?;
+        tracing::info!("[GraphDelete] Deleted graph DB: {:?}", db_path);
     }
     
     Ok(())
+}
+
+// ============================================================================
+// VISUALIZATION HELPERS
+// ============================================================================
+
+/// Nodes above this count trigger community-aggregated view to avoid serialising
+/// 100MB+ payloads and overwhelming D3 with too many SVG elements.
+const NODE_RENDER_LIMIT: usize = 2000;
+
+/// Mirror of the frontend `nodeRadius()` formula — log-scaled size from degree.
+/// Returns a value in the range [4.0, 22.0].
+fn degree_based_size(degree: usize) -> f32 {
+    (4.0_f32 + (1.0_f32 + degree as f32).ln() * 3.5_f32).min(22.0_f32)
 }
 
 // ============================================================================
@@ -629,12 +634,12 @@ pub async fn delete_graph(repo_path: Option<String>) -> Result<()> {
 // ============================================================================
 
 #[tauri::command]
-pub async fn get_graph_visualization_data() -> Result<GraphVisualizationData> {
-    tracing::info!("[GraphViz] Fetching visualization data");
-    
-    let home_dir = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
-    let db_path = home_dir.join(".autodev").join("graph.db");
+pub async fn get_graph_visualization_data(repo_path: Option<String>) -> Result<GraphVisualizationData> {
+    let repo_path = repo_path
+        .and_then(|p| if p.is_empty() || p == "." { None } else { Some(p) })
+        .ok_or_else(|| anyhow::anyhow!("repo_path required for visualization"))?;
+    tracing::info!("[GraphViz] Fetching visualization data for: {}", repo_path);
+    let db_path = repo_db_path(&repo_path)?;
     
     let store = GraphStore::open(&db_path)?;
     
@@ -691,20 +696,95 @@ pub async fn get_graph_visualization_data() -> Result<GraphVisualizationData> {
         .iter()
         .filter(|node| !node.qualified_name.starts_with("module::"))
         .collect();
-    
+
     // Build set of project node IDs so we can filter edges too
     let project_node_ids: std::collections::HashSet<String> = project_nodes
         .iter()
         .map(|n| n.qualified_name.clone())
         .collect();
-    
+
+    let total_code_count = project_nodes.len();
+
+    // G-10: community-aggregated view for large graphs.
+    // When code nodes exceed NODE_RENDER_LIMIT, emit one super-node per community
+    // and aggregate cross-community edges instead of sending the full detail graph.
+    if total_code_count > NODE_RENDER_LIMIT {
+        let mut node_to_comm: std::collections::HashMap<String, i32> = std::collections::HashMap::new();
+        for node in &all_nodes {
+            if let Some(comm_id) = node.community {
+                node_to_comm.insert(node.qualified_name.clone(), comm_id);
+            }
+        }
+
+        let agg_nodes: Vec<VisualizationNode> = communities.iter().map(|c| {
+            VisualizationNode {
+                id: format!("community::{}", c.id),
+                label: c.name.clone(),
+                kind: "module".to_string(),
+                language: "mixed".to_string(),
+                community: Some(c.id as i64),
+                community_name: Some(c.name.clone()),
+                file_path: String::new(),
+                size: degree_based_size(c.members.len()),
+            }
+        }).collect();
+
+        // Aggregate cross-community edges, deduplicating by (src_comm, tgt_comm, kind).
+        // Direction is normalised (smaller id first) so A→B and B→A merge into one edge.
+        let mut cross_comm: std::collections::HashMap<(i32, i32, String), f32> =
+            std::collections::HashMap::new();
+        for edge in &all_edges {
+            if let (Some(&src_c), Some(&tgt_c)) = (
+                node_to_comm.get(&edge.source_qualified),
+                node_to_comm.get(&edge.target_qualified),
+            ) {
+                if src_c != tgt_c {
+                    let (a, b) = if src_c < tgt_c { (src_c, tgt_c) } else { (tgt_c, src_c) };
+                    *cross_comm.entry((a, b, edge.kind.clone())).or_insert(0.0) += edge.weight;
+                }
+            }
+        }
+
+        let agg_edges: Vec<VisualizationEdge> = cross_comm
+            .into_iter()
+            .map(|((src, tgt, kind), weight)| VisualizationEdge {
+                source: format!("community::{}", src),
+                target: format!("community::{}", tgt),
+                kind,
+                weight,
+            })
+            .collect();
+
+        tracing::info!(
+            "[GraphViz] Large graph ({} nodes) → community view: {} super-nodes, {} cross-edges",
+            total_code_count, agg_nodes.len(), agg_edges.len()
+        );
+        return Ok(GraphVisualizationData {
+            nodes: agg_nodes,
+            edges: agg_edges,
+            communities,
+            is_aggregated: true,
+            total_node_count: total_code_count,
+        });
+    }
+
+    // G-8: precompute degree from project edges so size reflects actual connectivity
+    // rather than a fixed kind-based constant.
+    let mut degree_map: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for edge in &all_edges {
+        if project_node_ids.contains(&edge.source_qualified) {
+            *degree_map.entry(edge.source_qualified.as_str()).or_insert(0) += 1;
+        }
+        if project_node_ids.contains(&edge.target_qualified) {
+            *degree_map.entry(edge.target_qualified.as_str()).or_insert(0) += 1;
+        }
+    }
+
     // Convert nodes to visualization format
     let viz_nodes: Vec<VisualizationNode> = project_nodes
         .iter()
         .map(|node| {
-            // Size based on node kind (files are larger)
-            let size = if node.kind.contains("File") { 15.0 } else { 8.0 };
-            
+            let degree = degree_map.get(node.qualified_name.as_str()).copied().unwrap_or(0);
             VisualizationNode {
                 id: node.qualified_name.clone(),
                 label: node.name.clone(),
@@ -713,11 +793,11 @@ pub async fn get_graph_visualization_data() -> Result<GraphVisualizationData> {
                 community: node.community.map(|c| c as i64),
                 community_name: node.community_name.clone(),
                 file_path: node.file_path.clone(),
-                size,
+                size: degree_based_size(degree),
             }
         })
         .collect();
-    
+
     // Convert edges to visualization format — only include edges where BOTH
     // source and target are project nodes (not filtered-out module:: nodes)
     let viz_edges: Vec<VisualizationEdge> = all_edges
@@ -733,14 +813,16 @@ pub async fn get_graph_visualization_data() -> Result<GraphVisualizationData> {
             weight: edge.weight,
         })
         .collect();
-    
+
     tracing::info!("[GraphViz] ✅ Visualization data ready: {} nodes, {} edges, {} communities",
         viz_nodes.len(), viz_edges.len(), communities.len());
-    
+
     Ok(GraphVisualizationData {
         nodes: viz_nodes,
         edges: viz_edges,
         communities,
+        is_aggregated: false,
+        total_node_count: total_code_count,
     })
 }
 

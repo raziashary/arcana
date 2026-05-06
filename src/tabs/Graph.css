@@ -178,6 +178,27 @@
   font-style: italic;
 }
 
+/* ── Aggregation notice ───────────────────────────────── */
+.graph-aggregation-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 14px;
+  background: rgba(78, 121, 167, 0.12);
+  border-bottom: 1px solid rgba(78, 121, 167, 0.3);
+  font-size: 11px;
+  font-family: 'IBM Plex Mono', monospace;
+  color: var(--text-secondary);
+}
+
+.graph-aggregation-icon {
+  color: #4E79A7;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.graph-aggregation-text { line-height: 1.4; }
+
 /* ── Edge filter bar ──────────────────────────────────── */
 .edge-filter-row {
   display: flex;

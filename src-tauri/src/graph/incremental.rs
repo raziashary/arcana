@@ -100,6 +100,7 @@ pub fn find_dependents(store: &GraphStore, changed_qualified_names: &[String]) -
 pub fn incremental_update(
     store: &GraphStore,
     changed_files: &[PathBuf],
+    repo_root: &Path,
     agent_author: Option<&str>,
     task_id: Option<i64>,
 ) -> Result<UpdateStats> {
@@ -132,7 +133,7 @@ pub fn incremental_update(
     
     // STEP 2: Extract changed files in parallel
     tracing::info!("[IncrementalUpdate] Extracting {} changed files", changed_files.len());
-    let extractions = extract::extract_all(changed_files);
+    let extractions = extract::extract_all(changed_files, repo_root);
     let mut extraction_results = Vec::new();
     let mut changed_qualified_names = Vec::new();
     

@@ -59,7 +59,7 @@ pub fn build(
     // Batch upsert nodes to SQLite using a single connection+transaction
     tracing::info!("[GraphBuild] Upserting {} nodes in batch...", all_nodes.len());
     let schema_nodes: Vec<SchemaNodeInfo> = all_nodes.into_iter().map(|node| SchemaNodeInfo {
-        kind: format!("{:?}", node.kind),
+        kind: format!("{}", node.kind),
         name: node.name,
         qualified_name: node.qualified_name,
         file_path: node.file_path,
@@ -80,13 +80,13 @@ pub fn build(
     // Batch upsert edges to SQLite using a single connection+transaction
     tracing::info!("[GraphBuild] Upserting {} edges in batch...", all_edges.len());
     let schema_edges: Vec<SchemaEdgeInfo> = all_edges.into_iter().map(|edge| SchemaEdgeInfo {
-        kind: format!("{:?}", edge.kind),
+        kind: format!("{}", edge.kind),
         source_qualified: edge.source_qualified,
         target_qualified: edge.target_qualified,
         file_path: edge.file_path,
         line: edge.line,
         confidence: edge.confidence,
-        confidence_tier: format!("{:?}", edge.confidence_tier),
+        confidence_tier: format!("{}", edge.confidence_tier),
         weight: edge.weight,
         relation: None,
     }).collect();

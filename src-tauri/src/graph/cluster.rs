@@ -6,14 +6,14 @@ use crate::errors::Result;
 use super::store::GraphStore;
 
 const EDGE_WEIGHTS: &[(&str, f32)] = &[
-    ("Calls", 1.0),
-    ("ImportsFrom", 0.5),
-    ("Inherits", 0.8),
-    ("Implements", 0.7),
-    ("Contains", 0.3),
-    ("TestedBy", 0.4),
-    ("DependsOn", 0.6),
-    ("References", 0.4),
+    ("CALLS", 1.0),
+    ("IMPORTS_FROM", 0.5),
+    ("INHERITS", 0.8),
+    ("IMPLEMENTS", 0.7),
+    ("CONTAINS", 0.3),
+    ("TESTED_BY", 0.4),
+    ("DEPENDS_ON", 0.6),
+    ("REFERENCES", 0.4),
 ];
 
 const COMMON_WORDS: &[&str] = &[
@@ -58,96 +58,239 @@ pub fn build_adjacency(
     Ok(adjacency)
 }
 
-pub fn detect_communities(
+// ─── Private helpers for community detection ─────────────────────────────────
+
+/// Build adjacency excluding `module::` stub nodes and edges below `min_weight`.
+fn build_filtered_adjacency(
     adjacency: &HashMap<String, Vec<(String, f32)>>,
-) -> HashMap<String, i32> {
-    let mut communities: HashMap<String, i32> = HashMap::new();
-    let mut community_id = 0i32;
-    let mut visited = HashSet::new();
-    
-    // Simple greedy clustering: BFS-based community detection
-    for node in adjacency.keys() {
-        if visited.contains(node) {
+    min_weight: f32,
+) -> HashMap<String, Vec<(String, f32)>> {
+    adjacency
+        .iter()
+        .filter(|(k, _)| !k.starts_with("module::"))
+        .map(|(k, neighbors)| {
+            let filtered: Vec<(String, f32)> = neighbors
+                .iter()
+                .filter(|(t, w)| !t.starts_with("module::") && *w >= min_weight)
+                .cloned()
+                .collect();
+            (k.clone(), filtered)
+        })
+        .collect()
+}
+
+/// BFS connected components over an adjacency map, returning sorted deterministic results.
+fn connected_components_bfs(
+    adjacency: &HashMap<String, Vec<(String, f32)>>,
+) -> Vec<Vec<String>> {
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut components: Vec<Vec<String>> = Vec::new();
+    let mut nodes: Vec<&String> = adjacency.keys().collect();
+    nodes.sort();
+
+    for start in nodes {
+        if visited.contains(start) {
             continue;
         }
-        
-        let mut community_members = Vec::new();
-        let mut queue = vec![node.clone()];
-        
-        while let Some(current) = queue.pop() {
+        let mut component: Vec<String> = Vec::new();
+        let mut stack = vec![start.clone()];
+        while let Some(current) = stack.pop() {
             if visited.contains(&current) {
                 continue;
             }
-            
             visited.insert(current.clone());
-            community_members.push(current.clone());
-            communities.insert(current.clone(), community_id);
-            
+            component.push(current.clone());
             if let Some(neighbors) = adjacency.get(&current) {
-                for (neighbor, _weight) in neighbors {
+                for (neighbor, _) in neighbors {
                     if !visited.contains(neighbor) {
-                        queue.push(neighbor.clone());
+                        stack.push(neighbor.clone());
                     }
                 }
             }
         }
-        
-        if !community_members.is_empty() {
-            community_id += 1;
-        }
+        component.sort();
+        components.push(component);
     }
-    
-    communities
+    components
 }
 
-pub fn split_oversized(
+/// Extract a sub-adjacency from `adjacency` containing only `members` nodes and edges ≥ `min_weight`.
+fn subgraph_filtered(
     adjacency: &HashMap<String, Vec<(String, f32)>>,
-    communities: &HashMap<String, i32>,
-    threshold_fraction: f32,
-) -> HashMap<String, i32> {
-    let total_nodes = adjacency.len() as f32;
-    let threshold_size = (total_nodes * threshold_fraction) as usize;
-    
-    let mut result = communities.clone();
-    let mut community_sizes: HashMap<i32, usize> = HashMap::new();
-    
-    for (_, &comm_id) in communities {
-        *community_sizes.entry(comm_id).or_insert(0) += 1;
-    }
-    
-    for (comm_id, size) in community_sizes {
-        if size > threshold_size && size >= 10 {
-            // Re-cluster this community in isolation
-            let members: Vec<String> = communities
-                .iter()
-                .filter(|(_, &c)| c == comm_id)
-                .map(|(n, _)| n.clone())
-                .collect();
-            
-            let sub_adjacency: HashMap<String, Vec<(String, f32)>> = adjacency
-                .iter()
-                .filter(|(k, _)| members.contains(k))
-                .map(|(k, v)| {
-                    let filtered: Vec<(String, f32)> = v
-                        .iter()
-                        .filter(|(target, _)| members.contains(target))
+    members: &[String],
+    min_weight: f32,
+) -> HashMap<String, Vec<(String, f32)>> {
+    let member_set: HashSet<&String> = members.iter().collect();
+    members
+        .iter()
+        .map(|node| {
+            let neighbors = adjacency
+                .get(node)
+                .map(|ns| {
+                    ns.iter()
+                        .filter(|(t, w)| member_set.contains(t) && *w >= min_weight)
                         .cloned()
-                        .collect();
-                    (k.clone(), filtered)
+                        .collect()
                 })
-                .collect();
-            
-            let sub_communities = detect_communities(&sub_adjacency);
-            let mut new_comm_id = comm_id + 1000;
-            
-            for (node, _) in sub_communities {
-                result.insert(node, new_comm_id);
-                new_comm_id += 1;
+                .unwrap_or_default();
+            (node.clone(), neighbors)
+        })
+        .collect()
+}
+
+/// Assign orphan nodes (id == -2) to the best neighboring community by weighted vote.
+/// Truly isolated nodes with no reachable community get a new unique community each.
+fn reassign_orphans(
+    assignments: &mut HashMap<String, i32>,
+    code_adj: &HashMap<String, Vec<(String, f32)>>,
+    next_id: &mut i32,
+) {
+    let mut orphans: Vec<String> = assignments
+        .iter()
+        .filter(|(_, &id)| id == -2)
+        .map(|(n, _)| n.clone())
+        .collect();
+    orphans.sort();
+
+    for node in &orphans {
+        let mut comm_weight: HashMap<i32, f32> = HashMap::new();
+        if let Some(neighbors) = code_adj.get(node) {
+            for (neighbor, weight) in neighbors {
+                if let Some(&comm_id) = assignments.get(neighbor) {
+                    if comm_id >= 0 {
+                        *comm_weight.entry(comm_id).or_insert(0.0) += weight;
+                    }
+                }
             }
         }
+        let best = comm_weight
+            .iter()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(&id, _)| id);
+
+        if let Some(comm_id) = best {
+            assignments.insert(node.clone(), comm_id);
+        } else {
+            assignments.insert(node.clone(), *next_id);
+            *next_id += 1;
+        }
     }
-    
-    result
+}
+
+/// Assign `module::` stub nodes to the community of their most-frequent importer.
+/// Stubs with no known importers get a new unique community each.
+fn assign_module_nodes(
+    full_adjacency: &HashMap<String, Vec<(String, f32)>>,
+    assignments: &mut HashMap<String, i32>,
+    next_id: &mut i32,
+) {
+    let mut module_nodes: Vec<String> = full_adjacency
+        .keys()
+        .filter(|k| k.starts_with("module::"))
+        .cloned()
+        .collect();
+    module_nodes.sort();
+
+    for node in &module_nodes {
+        let mut comm_votes: HashMap<i32, usize> = HashMap::new();
+        if let Some(neighbors) = full_adjacency.get(node) {
+            for (neighbor, _) in neighbors {
+                if let Some(&comm_id) = assignments.get(neighbor) {
+                    if comm_id >= 0 {
+                        *comm_votes.entry(comm_id).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+        let assigned = comm_votes
+            .iter()
+            .max_by_key(|(_, &v)| v)
+            .map(|(&id, _)| id)
+            .unwrap_or_else(|| {
+                let id = *next_id;
+                *next_id += 1;
+                id
+            });
+        assignments.insert(node.clone(), assigned);
+    }
+}
+
+// ─── Public API ───────────────────────────────────────────────────────────────
+
+/// Multi-phase modularity-aware community detection.
+///
+/// **Phase 1 — Strong-edge connected components:**  
+/// Build adjacency with edges ≥ 0.45 weight (retains IMPORTS_FROM/0.5, CALLS/1.0,
+/// INHERITS/0.8, IMPLEMENTS/0.7, DEPENDS_ON/0.6; drops CONTAINS/0.3 and REFERENCES/0.4).
+/// All `module::` stub nodes are excluded to prevent external imports bridging
+/// unrelated files into a single mega-component.
+///
+/// **Phase 2 — Oversized-component splitting:**  
+/// Any component > max(15, 20% of non-module nodes) is re-clustered on its own
+/// subgraph using only high-coupling edges (≥ 0.65: CALLS, INHERITS, IMPLEMENTS).
+///
+/// **Phase 3 — Orphan re-attachment:**  
+/// Nodes isolated in Phase 1/2 (degree 0 after filtering) are attached to the
+/// best neighbor community by weighted vote in the full non-module adjacency
+/// (which includes CONTAINS edges so functions attach to their parent file's community).
+///
+/// **Phase 4 — Module stub placement:**  
+/// External `module::` nodes are placed in the community of their most common
+/// importer so they appear within the correct community hull in the visualisation.
+pub fn detect_communities(
+    adjacency: &HashMap<String, Vec<(String, f32)>>,
+) -> HashMap<String, i32> {
+    let total_code_nodes = adjacency
+        .keys()
+        .filter(|k| !k.starts_with("module::"))
+        .count();
+
+    // Phase 1: connected components on strong-signal edges only.
+    // Threshold 0.45 cuts CONTAINS(0.3) and REFERENCES(0.4) so parent→child
+    // containment can't collapse the entire graph into one component.
+    let strong_adj = build_filtered_adjacency(adjacency, 0.45);
+    let components = connected_components_bfs(&strong_adj);
+
+    let oversized_threshold = ((total_code_nodes as f32 * 0.20) as usize).max(15);
+    let mut assignments: HashMap<String, i32> = HashMap::new();
+    let mut next_id = 0i32;
+
+    for component in &components {
+        if component.len() > oversized_threshold {
+            // Phase 2: re-split using only high-coupling edges.
+            // Threshold 0.65 keeps CALLS(1.0), INHERITS(0.8), IMPLEMENTS(0.7).
+            let sub_adj = subgraph_filtered(adjacency, component, 0.65);
+            let sub_components = connected_components_bfs(&sub_adj);
+            for sub in &sub_components {
+                if sub.len() >= 2 {
+                    for node in sub {
+                        assignments.insert(node.clone(), next_id);
+                    }
+                    next_id += 1;
+                } else {
+                    // Single-node residual — mark for Phase 3 orphan re-attachment
+                    assignments.insert(sub[0].clone(), -2);
+                }
+            }
+        } else if component.len() >= 2 {
+            for node in component {
+                assignments.insert(node.clone(), next_id);
+            }
+            next_id += 1;
+        } else {
+            // Single-node component — mark for Phase 3
+            assignments.insert(component[0].clone(), -2);
+        }
+    }
+
+    // Phase 3: re-attach orphans via the full non-module adjacency (includes CONTAINS).
+    let code_full_adj = build_filtered_adjacency(adjacency, 0.0);
+    reassign_orphans(&mut assignments, &code_full_adj, &mut next_id);
+
+    // Phase 4: place module:: stubs in the community of their most frequent importer.
+    assign_module_nodes(adjacency, &mut assignments, &mut next_id);
+
+    assignments
 }
 
 pub fn cohesion_score(
@@ -248,8 +391,8 @@ pub fn name_community(
 
 pub fn run_clustering(store: &GraphStore) -> Result<Vec<Community>> {
     let adjacency = build_adjacency(store)?;
+    // detect_communities handles multi-phase splitting and orphan re-attachment internally
     let communities = detect_communities(&adjacency);
-    let communities = split_oversized(&adjacency, &communities, 0.25);
     
     let mut community_map: HashMap<i32, Vec<String>> = HashMap::new();
     for (node, comm_id) in &communities {
