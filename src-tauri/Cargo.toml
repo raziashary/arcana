@@ -72,10 +72,12 @@ serde_yaml = "0.9"
 cron = "0.12"
 
 # Native file/folder picker dialogs (for workspace dir selection)
-# Pinned to v0.14 — v0.15 pulls in ashpd v0.11 which conflicts with tauri's
-# transitive ashpd dependency (both tokio + async-std features activated on Linux).
-# AsyncFileDialog API is identical between v0.14 and v0.15.
-rfd = { version = "0.14", features = ["tokio"] }
+# Pinned to v0.14 with NO tokio feature. rfd's default xdg-portal feature enables
+# ashpd/async-std; adding features= ["tokio"] also enables ashpd/tokio — ashpd
+# compile_error!()s when both runtimes are active simultaneously. Dropping the tokio
+# feature is safe: AsyncFileDialog spawns its dialog on a dedicated thread and the
+# resulting Future is executor-agnostic, so .await works fine in a tokio context.
+rfd = { version = "0.14" }
 
 # git2-rs — Phase 3 (already declared to lock dep version)
 git2 = "0.19"
