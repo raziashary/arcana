@@ -86,6 +86,7 @@ impl ToolExecutor {
             working_dir: self.working_dir.clone(),
             call_id:     call_id.clone(),
             depth:       0,
+            agent_role:  None,
         };
 
         // Emit tool start event for UI
@@ -248,6 +249,7 @@ impl ToolExecutor {
                         working_dir: working_dir.clone(),
                         call_id: call_id.clone(),
                         depth: 0,
+                        agent_role: None,
                     };
 
                     // Emit start event
@@ -311,6 +313,7 @@ impl ToolExecutor {
                     working_dir: self.working_dir.clone(),
                     call_id: call_id.clone(),
                     depth: 0,
+                    agent_role: None,
                 };
 
                 // Emit start event

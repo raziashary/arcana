@@ -163,71 +163,6 @@ impl RecipeRunner {
             info!("[RecipeRunner] core-orchestrator reachable — dispatching '{}' via LivingAgent", worker_slug);
             self.set_worker_status(worker_slug, "working");
 
-            // ── qc-agent pre-flight gate ───────────────────────────────────────────
-            // If no qc_review tasks exist in the local DB, skip the expensive
-            // core-orchestrator invocation entirely and set status to idle.
-            // When tasks DO exist, prepend their titles to the trigger so the
-            // agent has them in-context even if its memory claims otherwise.
-            let mut qc_trigger_override: Option<String> = None;
-            if worker_slug == "qc-agent" {
-                if let Ok(db) = crate::db::tasks::TasksDb::open() {
-                    if let Ok(tasks) = db.list(Some("qc_review")) {
-                        if tasks.is_empty() {
-                            info!("[RecipeRunner] No qc_review tasks in DB — skipping qc-agent tick");
-                            self.set_worker_status(worker_slug, "idle");
-                            return Ok(());
-                        }
-
-                        // E.3 — Filter out any build_failed tasks that leaked into
-                        // qc_review (e.g. via reconcile_stranded_task). QC cannot
-                        // meaningfully review code that never installed — skip the
-                        // LLM call entirely when only un-reviewable tasks remain.
-                        let reviewable: Vec<_> = tasks.iter()
-                            .filter(|t| !matches!(t.status, crate::db::tasks::TaskStatus::BuildFailed))
-                            .collect();
-
-                        if reviewable.is_empty() {
-                            info!(
-                                "[RecipeRunner] Only build_failed tasks in qc_review — \
-                                 skipping qc-agent LLM invocation"
-                            );
-                            self.set_worker_status(worker_slug, "idle");
-                            return Ok(());
-                        }
-
-                        let titles: Vec<String> = reviewable.iter()
-                            .map(|t| format!("#{}: {}", t.id, t.title))
-                            .collect();
-                        qc_trigger_override = Some(format!(
-                            "{RECIPE_TRIGGER}\n\n[BOARD STATE] {} task(s) awaiting QC review:\n{}",
-                            reviewable.len(),
-                            titles.join("\n")
-                        ));
-                    }
-                }
-            }
-
-            // I.1 — Pre-flight task count check for worker-* agents (Mode 2).
-            // If the worker has no assigned/in_progress/rejected tasks it will
-            // immediately return "Board clean — idle." burning a full system-prompt
-            // round-trip. Skip the LLM call entirely in that case.
-            if worker_slug.starts_with("worker-") {
-                let has_work = crate::db::tasks::TasksDb::open().ok().map_or(true, |db| {
-                    let assigned  = db.list_tasks_by_status_and_worker("assigned",    worker_slug).unwrap_or_default();
-                    let in_prog   = db.list_tasks_by_status_and_worker("in_progress", worker_slug).unwrap_or_default();
-                    let rejected  = db.list_tasks_by_status_and_worker("rejected",    worker_slug).unwrap_or_default();
-                    !assigned.is_empty() || !in_prog.is_empty() || !rejected.is_empty()
-                });
-                if !has_work {
-                    info!(
-                        "[RecipeRunner] {} has no actionable tasks — skipping LLM invocation (Mode 2)",
-                        worker_slug
-                    );
-                    self.set_worker_status(worker_slug, "idle");
-                    return Ok(());
-                }
-            }
-
             // D.1 — Record tick start and notify the frontend. Both the start
             // timestamp and the Instant are captured here so we can compute
             // tick_duration_ms for the WorkerStatusPayload on completion.
@@ -245,6 +180,78 @@ impl RecipeRunner {
                     // Force an immediate Mode 1 fallback rather than discovering this
                     // inside the expensive invoke_worker call.
                     let mcp_up = self.orch_client.mcp_server_healthy().await;
+                    // ── qc-agent gate (AFTER ensure_agent so YAML is always created) ─────────
+                    // ensure_agent() above already created/registered the YAML config.
+                    // Now skip the LLM invocation if there are no reviewable tasks.
+                    let mut qc_trigger_override: Option<String> = None;
+                    if worker_slug == "qc-agent" {
+                        if let Ok(db) = crate::db::tasks::TasksDb::open() {
+                            if let Ok(tasks) = db.list(Some("qc_review")) {
+                                if tasks.is_empty() {
+                                    info!("[RecipeRunner] No qc_review tasks in DB — skipping qc-agent tick");
+                                    emit_worker_tick_end(&self.app, WorkerTickEndPayload {
+                                        slug:      worker_slug.to_string(),
+                                        outcome:   "idle".to_string(),
+                                        timestamp: chrono::Utc::now().to_rfc3339(),
+                                    });
+                                    self.set_worker_status(worker_slug, "idle");
+                                    return Ok(());
+                                }
+                                // E.3 — Filter out build_failed tasks that leaked into qc_review.
+                                let reviewable: Vec<_> = tasks.iter()
+                                    .filter(|t| !matches!(t.status, crate::db::tasks::TaskStatus::BuildFailed))
+                                    .collect();
+                                if reviewable.is_empty() {
+                                    info!(
+                                        "[RecipeRunner] Only build_failed tasks in qc_review — \
+                                         skipping qc-agent LLM invocation"
+                                    );
+                                    emit_worker_tick_end(&self.app, WorkerTickEndPayload {
+                                        slug:      worker_slug.to_string(),
+                                        outcome:   "idle".to_string(),
+                                        timestamp: chrono::Utc::now().to_rfc3339(),
+                                    });
+                                    self.set_worker_status(worker_slug, "idle");
+                                    return Ok(());
+                                }
+                                let titles: Vec<String> = reviewable.iter()
+                                    .map(|t| format!("#{}: {}", t.id, t.title))
+                                    .collect();
+                                qc_trigger_override = Some(format!(
+                                    "{RECIPE_TRIGGER}\n\n[BOARD STATE] {} task(s) awaiting QC review:\n{}",
+                                    reviewable.len(),
+                                    titles.join("\n")
+                                ));
+                            }
+                        }
+                    }
+
+                    // I.1 — Pre-flight task count check for worker-* agents (Mode 2).
+                    // ensure_agent() above already created the YAML config (the main goal).
+                    // Now skip the expensive LLM invocation if there are no actionable tasks.
+                    // This must happen AFTER ensure_agent so agent YAMLs are always created.
+                    if worker_slug.starts_with("worker-") {
+                        let has_work = crate::db::tasks::TasksDb::open().ok().map_or(true, |db| {
+                            let assigned  = db.list_tasks_by_status_and_worker("assigned",    worker_slug).unwrap_or_default();
+                            let in_prog   = db.list_tasks_by_status_and_worker("in_progress", worker_slug).unwrap_or_default();
+                            let rejected  = db.list_tasks_by_status_and_worker("rejected",    worker_slug).unwrap_or_default();
+                            !assigned.is_empty() || !in_prog.is_empty() || !rejected.is_empty()
+                        });
+                        if !has_work {
+                            info!(
+                                "[RecipeRunner] {} has no actionable tasks — skipping LLM invocation (Mode 2)",
+                                worker_slug
+                            );
+                            emit_worker_tick_end(&self.app, WorkerTickEndPayload {
+                                slug:      worker_slug.to_string(),
+                                outcome:   "idle".to_string(),
+                                timestamp: chrono::Utc::now().to_rfc3339(),
+                            });
+                            self.set_worker_status(worker_slug, "idle");
+                            return Ok(());
+                        }
+                    }
+
                     if mcp_up {
                         info!(
                             "[RecipeRunner] MCP server healthy for '{}' — \

@@ -120,6 +120,29 @@ impl RecipeScheduler {
                 // Non-fatal: continue to cron loop even if startup tick failed
             }
 
+            // ── MODE 2 CATCH-UP TICK ──────────────────────────────────────────────
+            // If the startup tick fired in Mode 1 fallback (orch was not yet ready),
+            // wait for the orchestrator and fire a Mode 2 tick once it becomes healthy.
+            // This handles the race where some workers (e.g. supervisor, worker-frontend)
+            // start before the orchestrator's optimistic health-check grace window expires
+            // and get a Mode 1 startup tick while others wait and correctly get Mode 2.
+            // Without this catch-up, those workers' agent YAMLs would never be created
+            // until their next cron tick (up to 1–10 minutes later).
+            if !orch_ready {
+                if wait_for_orchestrator_ready(&runner, 90).await {
+                    info!(
+                        "[RecipeScheduler] Orchestrator now ready — firing Mode 2 catch-up tick for '{}'",
+                        slug_owned
+                    );
+                    if let Err(e) = runner.run_recipe(&recipe, &slug_owned).await {
+                        error!(
+                            "[RecipeScheduler] Mode 2 catch-up tick failed for '{}': {e}",
+                            slug_owned
+                        );
+                    }
+                }
+            }
+
             // ── CRON SCHEDULE LOOP ───────────────────────────────────────────────
             // After startup tick, fall back to the worker's configured schedule.
             //

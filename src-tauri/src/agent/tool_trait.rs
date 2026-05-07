@@ -31,6 +31,9 @@ pub struct ToolContext {
     /// spawned by an agent at depth n). Spawn tools read this to set the
     /// child's depth and guard against unbounded recursion.
     pub depth:       u32,
+    /// Agent role (e.g., "supervisor", "worker-backend", "worker-frontend")
+    /// Used by tools like request_supervisor_action to identify the worker.
+    pub agent_role:  Option<String>,
 }
 
 #[async_trait]

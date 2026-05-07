@@ -138,6 +138,7 @@ impl ServerHandler for AutodevMcpServer {
             working_dir,
             call_id: uuid::Uuid::new_v4().to_string(),
             depth:   0,
+            agent_role: None,
         };
 
         let result = tool.execute(args, &ctx).await;

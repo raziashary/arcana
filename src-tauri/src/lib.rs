@@ -48,6 +48,7 @@ pub fn register_commands(
         },
         task_commands::{
             list_tasks, get_task, update_task_status, delete_task, clear_all_tasks, get_qc_queue,
+            list_worker_requests, resolve_worker_request,
         },
         autodev_instructions_commands::{
             get_autodev_instructions, set_autodev_instructions, delete_autodev_instructions,

@@ -29,7 +29,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -94,11 +94,7 @@
         "type": "downloadBootstrapper"
       },
       "wix": {
-        "language": "en-US",
-        "fragmentPaths": ["../installers/wix/fragments/AutoDevExtensions.wxs"],
-        "componentGroupRefs": ["AutoDevExtensions"],
-        "bannerPath": "../installers/wix/assets/banner.bmp",
-        "dialogImagePath": "../installers/wix/assets/dialog.bmp"
+        "language": "en-US"
       },
       "nsis": {
         "displayLanguageSelector": true,

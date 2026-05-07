@@ -31,12 +31,11 @@ param(
     [string]$Channel = "stable"
 )
 
-Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 
-$RepoRoot    = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+$RepoRoot    = Split-Path (Split-Path $PSScriptRoot -Parent)
 $TauriDir    = Join-Path $RepoRoot "src-tauri"
 $CargoToml   = Join-Path $TauriDir "Cargo.toml"
 $DistDir     = Join-Path $RepoRoot "dist"
@@ -51,6 +50,7 @@ function Write-Step([string]$msg) {
 function Assert-Command([string]$cmd, [string]$hint) {
     if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
         Write-Error "Required command not found: '$cmd'. $hint"
+        exit 1
     }
 }
 
@@ -75,7 +75,12 @@ $wixInstalled = (Get-Command "wix" -ErrorAction SilentlyContinue) -or
                 (Get-Command "heat" -ErrorAction SilentlyContinue)
 if (-not $wixInstalled) {
     Write-Host "  Installing WiX v4 as dotnet tool..." -ForegroundColor Yellow
-    dotnet tool install --global wix
+    try {
+        dotnet tool install --global wix
+    } catch {
+        Write-Error "Failed to install WiX v4: $_"
+        exit 1
+    }
 }
 
 if (-not $Version) {
@@ -91,34 +96,72 @@ Write-Host "  Repo root: $RepoRoot"
 
 Write-Step "Installing frontend dependencies"
 Push-Location $RepoRoot
-npm ci --prefer-offline
+try {
+    npm ci --prefer-offline
+} catch {
+    Write-Error "npm ci failed: $_"
+    Pop-Location
+    exit 1
+}
 Pop-Location
 
 # ─── Build Tauri app ─────────────────────────────────────────────────────────
 
 Write-Step "Building Tauri app (release)"
+
+Write-Host "  RepoRoot: $RepoRoot"
+Write-Host "  TauriDir: $TauriDir"
+
 Push-Location $RepoRoot
 
 $env:AUTODEV_CHANNEL = $Channel
 
 # Generate Ed25519 keypair if not already present (dev builds only)
 if (-not $env:AUTODEV_UPDATE_PUBKEY) {
-    Write-Host "  AUTODEV_UPDATE_PUBKEY not set — using dev placeholder" -ForegroundColor Yellow
+    Write-Host "  AUTODEV_UPDATE_PUBKEY not set - using dev placeholder" -ForegroundColor Yellow
 }
 
-npm run tauri -- build --target x86_64-pc-windows-msvc --bundles msi
+try {
+    npm run tauri build
+} catch {
+    Write-Error "Tauri build failed: $_"
+    Pop-Location
+    exit 1
+}
 
 Pop-Location
 
-# ─── Locate built MSI ─────────────────────────────────────────────────────────
+# ─── Locate built NSIS installer ────────────────────────────────────────────────────
 
-$MsiPattern = Join-Path $TauriDir "target\x86_64-pc-windows-msvc\release\bundle\msi\*.msi"
-$MsiFiles   = Get-ChildItem -Path (Split-Path $MsiPattern -Parent) -Filter "*.msi" -ErrorAction SilentlyContinue
-if (-not $MsiFiles) {
-    Write-Error "No MSI found at $MsiPattern — build may have failed"
+Write-Host "  Locating built NSIS installer..."
+$TargetDir = Join-Path $RepoRoot "target"
+$NsisDir = Join-Path $TargetDir "release\bundle\nsis"
+Write-Host "  TargetDir: $TargetDir"
+Write-Host "  NsisDir: $NsisDir"
+
+# Check if target directory exists
+if (-not (Test-Path $TargetDir)) {
+    Write-Error "Target directory not found: $TargetDir - Tauri build may have failed"
+    exit 1
 }
-$Msi = $MsiFiles | Sort-Object LastWriteTime | Select-Object -Last 1
-Write-Host "  MSI: $($Msi.FullName)"
+
+# Check if NSIS directory exists
+if (-not (Test-Path $NsisDir)) {
+    Write-Error "NSIS directory not found: $NsisDir - Tauri build may have failed or used a different target"
+    Write-Host "  Contents of target directory:"
+    Get-ChildItem -Path $TargetDir -Recurse | Select-Object FullName | ForEach-Object { Write-Host "    $($_.FullName)" }
+    exit 1
+}
+
+$NsisFiles = Get-ChildItem -Path $NsisDir -Filter "*.exe" -ErrorAction SilentlyContinue
+if (-not $NsisFiles) {
+    Write-Error "No NSIS installer found at $NsisDir - build may have failed"
+    Write-Host "  Contents of NSIS directory:"
+    Get-ChildItem -Path $NsisDir -Recurse | Select-Object FullName | ForEach-Object { Write-Host "    $($_.FullName)" }
+    exit 1
+}
+$Installer = $NsisFiles | Sort-Object LastWriteTime | Select-Object -Last 1
+Write-Host "  Installer: $($Installer.FullName)"
 
 # ─── Code signing ────────────────────────────────────────────────────────────
 
@@ -127,7 +170,7 @@ if ($Sign) {
 
     $certPath = $env:CERT_PATH
     $certPass = $env:CERT_PASSWORD
-    $tsUrl    = $env:TIMESTAMP_URL ?? "http://timestamp.digicert.com"
+    $tsUrl    = if ($env:TIMESTAMP_URL) { $env:TIMESTAMP_URL } else { "http://timestamp.digicert.com" }
 
     if (-not $certPath) { Write-Error "CERT_PATH env var not set" }
     if (-not $certPass) { Write-Error "CERT_PASSWORD env var not set" }
@@ -145,9 +188,9 @@ if ($Sign) {
         /p   $certPass `
         /d   "AutoDev" `
         /du  "https://airs.dev/autodev" `
-        $Msi.FullName
+        $Installer.FullName
 
-    & $signtool verify /pa /v $Msi.FullName
+    & $signtool verify /pa /v $Installer.FullName
     Write-Host "  Signed successfully" -ForegroundColor Green
 }
 
@@ -155,17 +198,32 @@ if ($Sign) {
 
 Write-Step "Copying to dist/"
 
-New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
+try {
+    New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
+} catch {
+    Write-Error "Failed to create dist directory: $_"
+    exit 1
+}
 
 $ChannelSuffix = if ($Channel -eq "stable") { "" } else { "-$Channel" }
-$DestName      = "autodev_${Version}${ChannelSuffix}_x64_en-US.msi"
+$DestName      = "autodev_${Version}${ChannelSuffix}_x64_en-US.exe"
 $DestPath      = Join-Path $DistDir $DestName
 
-Copy-Item $Msi.FullName $DestPath -Force
+try {
+    Copy-Item $Installer.FullName $DestPath -Force
+} catch {
+    Write-Error "Failed to copy installer to dist: $_"
+    exit 1
+}
 
 # Generate SHA-256 checksum
-$Hash = Get-FileHash $DestPath -Algorithm SHA256
-"$($Hash.Hash.ToLower())  $DestName" | Out-File "${DestPath}.sha256" -Encoding ascii
+try {
+    $Hash = Get-FileHash $DestPath -Algorithm SHA256
+    "$($Hash.Hash.ToLower())  $DestName" | Out-File "${DestPath}.sha256" -Encoding ascii
+} catch {
+    Write-Error "Failed to generate checksum: $_"
+    exit 1
+}
 
 Write-Host ""
 Write-Host "Build complete:" -ForegroundColor Green

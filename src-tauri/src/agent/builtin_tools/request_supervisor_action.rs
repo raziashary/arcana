@@ -84,8 +84,9 @@ impl Tool for RequestSupervisorActionTool {
         };
 
         // Infer worker_slug from the agent role in context, or fail gracefully.
-        let worker_slug = ctx.agent_role.as_ref()
-            .map(|s| s.to_string())
+        let worker_slug = ctx.agent_role
+            .as_ref()
+            .map(|s: &String| s.to_string())
             .unwrap_or_else(|| "unknown".to_string());
 
         let db = match TasksDb::open() {

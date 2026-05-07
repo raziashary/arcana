@@ -237,7 +237,7 @@ impl OrchestratorClient {
     /// On success the counter is reset to 0, so a recovered orch is immediately
     /// treated as healthy on the next check.
     pub async fn is_healthy(&self) -> bool {
-        let url = format!("{}/health", self.base_url);
+        let url = format!("{}/api/system/health", self.base_url);
         let result = self.client
             .get(&url)
             .header("X-API-Key", &self.api_key)
@@ -443,6 +443,11 @@ impl OrchestratorClient {
     }
 
     async fn find_or_create_agent(&self, slug: &str, model: &str) -> Result<String> {
+        // Translate Rust/Anthropic direct-API model IDs to orchestrator registry keys.
+        // The Rust app stores models as "claude-haiku-4-5" (Anthropic API format).
+        // The core-orchestrator registry uses "claude-4-5-haiku" (version-model format).
+        let orch_model = to_orch_model_key(model);
+
         // Ensure we're authenticated before making API calls
         self.ensure_authenticated().await?;
 
@@ -472,12 +477,12 @@ impl OrchestratorClient {
                         // subsequent invokes route through the new model
                         // without restarting core-orchestrator.
                         let current_model = agent["llm_model"].as_str().unwrap_or("");
-                        if current_model != model {
+                        if current_model != orch_model {
                             debug!(
                                 "[OrchestratorClient] agent '{slug}' model drift \
-                                 '{current_model}' → '{model}' — updating YAML"
+                                 '{current_model}' → '{orch_model}' — updating YAML"
                             );
-                            if let Err(e) = self.update_agent_model(id, model).await {
+                            if let Err(e) = self.update_agent_model(id, orch_model).await {
                                 // Non-fatal: log and continue with the old model
                                 // rather than blocking the recipe tick.
                                 tracing::warn!(
@@ -522,7 +527,7 @@ impl OrchestratorClient {
             "job_title":     job_title,
             "gender":        "male",
             "description":   format!("AutoDev fleet worker agent — {slug}"),
-            "llm_model":     model,
+            "llm_model":     orch_model,
             "system_prompt": system_prompt,
             "mcp_servers": ["autodev-mcp-server"],
             "internal_tools": [],
@@ -1088,5 +1093,21 @@ impl OrchestratorClient {
 impl Default for OrchestratorClient {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ─── Model name translation ────────────────────────────────────────────────────
+//
+// The Rust app stores model IDs using Anthropic's direct API format
+// (e.g. "claude-haiku-4-5"), while the core-orchestrator's model registry
+// uses a version-model key convention (e.g. "claude-4-5-haiku").
+// This function translates at the API boundary so the orchestrator accepts
+// the model without a 500 "not found in registry" error.
+fn to_orch_model_key(model: &str) -> &str {
+    match model {
+        "claude-haiku-4-5"  => "claude-4-5-haiku",
+        "claude-sonnet-4-5" => "claude-4-5-sonnet",
+        "claude-opus-4-5"   => "claude-4-5-opus",
+        other               => other,
     }
 }
