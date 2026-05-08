@@ -10,6 +10,8 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { save } from '@tauri-apps/plugin-dialog'
+import { writeTextFile } from '@tauri-apps/plugin-fs'
 import { RefreshCw, ChevronDown, Download, Copy, Check, Trash2, AlertTriangle } from 'lucide-react'
 
 // ─── Log line parser ──────────────────────────────────────────────────────────
@@ -302,17 +304,23 @@ export default function LogsTab() {
 
           {/* Export truncated (visible) */}
           <button
-            onClick={() => {
+            onClick={async () => {
               if (!rawContent) return
-              const blob = new Blob([rawContent], { type: 'text/plain' })
-              const url  = URL.createObjectURL(blob)
-              const a    = document.createElement('a')
-              a.href     = url
-              a.download = `autodev-${selectedDate || 'log'}.log`
-              document.body.appendChild(a)
-              a.click()
-              document.body.removeChild(a)
-              URL.revokeObjectURL(url)
+              try {
+                const defaultPath = `autodev-${selectedDate || 'log'}.log`
+                const filePath = await save({
+                  defaultPath,
+                  filters: [{
+                    name: 'Log Files',
+                    extensions: ['log']
+                  }]
+                })
+                if (filePath) {
+                  await writeTextFile(filePath, rawContent)
+                }
+              } catch (e) {
+                console.error('Failed to export log:', e)
+              }
             }}
             disabled={!rawContent}
             title="Download visible (truncated) log"
@@ -338,15 +346,17 @@ export default function LogsTab() {
               onClick={async () => {
                 try {
                   const full = await invoke<string>('read_log_file_full', { date: selectedDate })
-                  const blob = new Blob([full], { type: 'text/plain' })
-                  const url  = URL.createObjectURL(blob)
-                  const a    = document.createElement('a')
-                  a.href     = url
-                  a.download = `autodev-${selectedDate || 'log'}-FULL.log`
-                  document.body.appendChild(a)
-                  a.click()
-                  document.body.removeChild(a)
-                  URL.revokeObjectURL(url)
+                  const defaultPath = `autodev-${selectedDate || 'log'}-FULL.log`
+                  const filePath = await save({
+                    defaultPath,
+                    filters: [{
+                      name: 'Log Files',
+                      extensions: ['log']
+                    }]
+                  })
+                  if (filePath) {
+                    await writeTextFile(filePath, full)
+                  }
                 } catch (e) {
                   console.error('Failed to download full log:', e)
                 }

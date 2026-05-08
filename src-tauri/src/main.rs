@@ -239,7 +239,7 @@ fn main() {
 
                         // Start core-orchestrator after memory is ready
                         if !orch_already_up {
-                            if let Ok(orch_cwd) = autodev_lib::sidecar::resolve_sidecar_path(None) {
+                            if let Ok(orch_cwd) = autodev_lib::sidecar::resolve_orchestrator_path(None) {
                                 if let Err(e) = sidecar_ref.start(&orch_cwd) {
                                     eprintln!("[AutoDev] Failed to start core-orchestrator: {e}");
                                 } else {

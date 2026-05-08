@@ -753,8 +753,11 @@ impl Default for SidecarManager {
 /// Resolve the core-orchestrator working directory from:
 ///   1. Explicit path string
 ///   2. AUTODEV_SIDECAR_PATH environment variable
-///   3. Relative candidates from the current working directory
-pub fn resolve_sidecar_path(explicit: Option<&str>) -> std::result::Result<PathBuf, String> {
+///   3. Resource directory (same as executable dir for Tauri bundling)
+///   4. NSIS installed location (Windows: %LOCALAPPDATA%\AutoDev\resources\sidecars\)
+///   5. MSI installed location (Windows: %LOCALAPPDATA%\Programs\autodev\sidecars\) - legacy
+///   6. Relative candidates from the current working directory
+pub fn resolve_orchestrator_path(explicit: Option<&str>) -> std::result::Result<PathBuf, String> {
     if let Some(p) = explicit {
         let pb = PathBuf::from(p);
         if pb.exists() {
@@ -771,6 +774,50 @@ pub fn resolve_sidecar_path(explicit: Option<&str>) -> std::result::Result<PathB
         warn!("[SidecarManager] AUTODEV_SIDECAR_PATH={p} does not exist");
     }
 
+    // Check resource directory (same as executable dir for Tauri bundling)
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let resource_path = exe_dir.join("sidecars").join("core-orchestrator");
+            if resource_path.exists() {
+                info!("[SidecarManager] Found core-orchestrator at resource location: {}", resource_path.display());
+                return Ok(resource_path);
+            }
+        }
+    }
+
+    // Check NSIS installed location (Windows: %LOCALAPPDATA%\AutoDev\resources\sidecars\)
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            let nsis_path = PathBuf::from(local_app_data)
+                .join("AutoDev")
+                .join("resources")
+                .join("sidecars")
+                .join("core-orchestrator");
+            if nsis_path.exists() {
+                info!("[SidecarManager] Found core-orchestrator at NSIS installed location: {}", nsis_path.display());
+                return Ok(nsis_path);
+            }
+        }
+    }
+
+    // Check MSI installed location (Windows: %LOCALAPPDATA%\Programs\autodev\sidecars\) - legacy
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            let installed_path = PathBuf::from(local_app_data)
+                .join("Programs")
+                .join("autodev")
+                .join("sidecars")
+                .join("core-orchestrator");
+            if installed_path.exists() {
+                info!("[SidecarManager] Found core-orchestrator at MSI installed location: {}", installed_path.display());
+                return Ok(installed_path);
+            }
+        }
+    }
+
+    // Fallback to relative paths for dev environment
     for rel in &[
         "submodules/core-orchestrator",
         "../submodules/core-orchestrator",
@@ -790,7 +837,10 @@ pub fn resolve_sidecar_path(explicit: Option<&str>) -> std::result::Result<PathB
 /// Resolve the memory-mcp-server working directory from:
 ///   1. Explicit path string
 ///   2. AUTODEV_MEMORY_PATH environment variable
-///   3. Relative candidates from the current working directory
+///   3. Resource directory (same as executable dir for Tauri bundling)
+///   4. NSIS installed location (Windows: %LOCALAPPDATA%\AutoDev\resources\sidecars\)
+///   5. MSI installed location (Windows: %LOCALAPPDATA%\Programs\autodev\sidecars\) - legacy
+///   6. Relative candidates from the current working directory
 pub fn resolve_memory_path(explicit: Option<&str>) -> std::result::Result<PathBuf, String> {
     if let Some(p) = explicit {
         let pb = PathBuf::from(p);
@@ -808,6 +858,50 @@ pub fn resolve_memory_path(explicit: Option<&str>) -> std::result::Result<PathBu
         warn!("[SidecarManager] AUTODEV_MEMORY_PATH={p} does not exist");
     }
 
+    // Check resource directory (same as executable dir for Tauri bundling)
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let resource_path = exe_dir.join("sidecars").join("memory-mcp-server");
+            if resource_path.exists() {
+                info!("[SidecarManager] Found memory-mcp-server at resource location: {}", resource_path.display());
+                return Ok(resource_path);
+            }
+        }
+    }
+
+    // Check NSIS installed location (Windows: %LOCALAPPDATA%\AutoDev\resources\sidecars\)
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            let nsis_path = PathBuf::from(local_app_data)
+                .join("AutoDev")
+                .join("resources")
+                .join("sidecars")
+                .join("memory-mcp-server");
+            if nsis_path.exists() {
+                info!("[SidecarManager] Found memory-mcp-server at NSIS installed location: {}", nsis_path.display());
+                return Ok(nsis_path);
+            }
+        }
+    }
+
+    // Check MSI installed location (Windows: %LOCALAPPDATA%\Programs\autodev\sidecars\) - legacy
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            let installed_path = PathBuf::from(local_app_data)
+                .join("Programs")
+                .join("autodev")
+                .join("sidecars")
+                .join("memory-mcp-server");
+            if installed_path.exists() {
+                info!("[SidecarManager] Found memory-mcp-server at MSI installed location: {}", installed_path.display());
+                return Ok(installed_path);
+            }
+        }
+    }
+
+    // Fallback to relative paths for dev environment
     for rel in &[
         "submodules/memory-mcp-server",
         "../submodules/memory-mcp-server",
@@ -909,7 +1003,7 @@ async fn orch_watchdog(
         mgr.stop();
         tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
 
-        match resolve_sidecar_path(None) {
+        match resolve_orchestrator_path(None) {
             Ok(cwd) => {
                 if let Err(e) = mgr.start(&cwd) {
                     warn!("[watchdog] orch restart failed: {e}");

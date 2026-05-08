@@ -19,6 +19,7 @@ import HooksSettings from '../components/settings/HooksSettings'
 import UpdateSettings from '../components/settings/UpdateSettings'
 import SidecarPanel from '../components/sidecar/SidecarPanel'
 import McpToolBrowser from '../components/sidecar/McpToolBrowser'
+import SubmoduleStatusPanel from '../components/settings/SubmoduleStatusPanel'
 
 export default function SettingsTab() {
   const store          = useSettingsStore()
@@ -43,6 +44,9 @@ export default function SettingsTab() {
 
         <SectionHeader title="Services" />
         <SidecarPanel />
+
+        <SectionHeader title="Submodules" />
+        <SubmoduleStatusPanel />
 
         <SectionHeader title="MCP Tools" />
         <McpToolBrowser />

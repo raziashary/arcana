@@ -70,6 +70,13 @@ Assert-Command "cargo"         "Install Rust from https://rustup.rs"
 Assert-Command "node"          "Install Node.js from https://nodejs.org"
 Assert-Command "npm"           "Install Node.js from https://nodejs.org"
 
+# Clean dist folder
+$DistDir = Join-Path $RepoRoot "dist"
+if (Test-Path $DistDir) {
+    Write-Host "  Cleaning dist folder..."
+    Remove-Item -Path $DistDir -Recurse -Force
+}
+
 # WiX v4 (installed as dotnet tool or standalone)
 $wixInstalled = (Get-Command "wix" -ErrorAction SilentlyContinue) -or
                 (Get-Command "heat" -ErrorAction SilentlyContinue)
@@ -104,6 +111,12 @@ try {
     exit 1
 }
 Pop-Location
+
+# ─── Bundle submodules for installer ──────────────────────────────────────────
+
+Write-Step "Bundling submodules for installer"
+
+powershell -ExecutionPolicy Bypass -File $PSScriptRoot\bundle-sidecars.ps1
 
 # ─── Build Tauri app ─────────────────────────────────────────────────────────
 

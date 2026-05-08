@@ -73,6 +73,8 @@ pub fn register_commands(
             start_orchestrator, stop_orchestrator,
             restart_sidecar,
             get_resource_usage, read_sidecar_log,
+            // Phase 5.3 — installer bundling
+            get_submodule_paths,
         },
         skill_commands::{
             list_skills, get_skill, search_skills, skills_by_category,
@@ -254,6 +256,8 @@ pub fn register_commands(
         restart_sidecar,
         get_resource_usage,
         read_sidecar_log,
+        // Phase 5.3 — installer bundling
+        get_submodule_paths,
         // Skills system (Phase 3.1)
         list_skills,
         get_skill,

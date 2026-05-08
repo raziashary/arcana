@@ -18,7 +18,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # Tauri core
-tauri              = { version = "2", features = ["devtools"] }
+tauri              = { version = "2.11", features = ["devtools"] }
 tauri-plugin-shell = "2"
 
 # Serialization

@@ -37,6 +37,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": [
+      "resources/sidecars"
+    ],
     "category": "DeveloperTool",
     "shortDescription": "AI Agent Desktop Platform",
     "longDescription": "AutoDev is an AI-powered development assistant that orchestrates multi-agent workflows, manages tasks, and integrates with your development environment.",
@@ -107,6 +110,8 @@
   "plugins": {
     "shell": {
       "open": true
-    }
+    },
+    "dialog": {},
+    "fs": {}
   }
 }

@@ -16,7 +16,7 @@ use tracing::info;
 
 use crate::agent::ToolRegistry;
 use crate::sidecar::client::OrchestratorClient;
-use crate::sidecar::{resolve_memory_path, resolve_sidecar_path, SidecarManager, SidecarStatus};
+use crate::sidecar::{resolve_memory_path, resolve_orchestrator_path, SidecarManager, SidecarStatus};
 
 // ─── Status ───────────────────────────────────────────────────────────────────
 
@@ -181,7 +181,7 @@ pub async fn start_sidecar(
         return Ok("running".into());
     }
 
-    let orch_cwd = resolve_sidecar_path(path.as_deref()).map_err(|e| e.to_string())?;
+    let orch_cwd = resolve_orchestrator_path(path.as_deref()).map_err(|e| e.to_string())?;
     sidecar.start(&orch_cwd).map_err(|e| e.to_string())?;
 
     // Poll orchestrator health: up to 30 × 1s attempts
@@ -252,7 +252,7 @@ pub async fn restart_sidecar(
 
     // ── core-orchestrator ────────────────────────────────────────────────────
     info!("[sidecar_commands] restart_sidecar: starting core-orchestrator");
-    let orch_cwd = resolve_sidecar_path(None).map_err(|e| e.to_string())?;
+    let orch_cwd = resolve_orchestrator_path(None).map_err(|e| e.to_string())?;
     sidecar.start(&orch_cwd).map_err(|e| e.to_string())?;
 
     for attempt in 1..=30u32 {
@@ -352,7 +352,7 @@ pub async fn start_orchestrator(
         client.clear_cache();
         return Ok("running".into());
     }
-    let orch_cwd = resolve_sidecar_path(path.as_deref()).map_err(|e| e.to_string())?;
+    let orch_cwd = resolve_orchestrator_path(path.as_deref()).map_err(|e| e.to_string())?;
     sidecar.start(&orch_cwd).map_err(|e| e.to_string())?;
 
     for attempt in 1..=30u32 {
@@ -463,4 +463,85 @@ pub fn read_sidecar_log(service_id: String, tail_lines: Option<usize>) -> Result
     };
 
     Ok(visible.join("\n"))
+}
+
+// ─── Submodule path status (Phase 5.3 — Installer bundling) ─────────────────
+
+/// Status of a submodule (core-orchestrator or memory-mcp-server).
+#[derive(serde::Serialize)]
+pub struct SubmoduleStatus {
+    pub id:          String,
+    pub name:        String,
+    pub path:        String,
+    pub exists:      bool,
+    pub source:      String,  // "installed" | "env_var" | "relative" | "not_found"
+    pub required:    bool,
+}
+
+/// Check if both submodules exist and return their resolved paths.
+/// The frontend uses this to display submodule status in Settings.
+#[tauri::command]
+pub fn get_submodule_paths() -> Vec<SubmoduleStatus> {
+    let orch_result = crate::sidecar::resolve_orchestrator_path(None);
+    let memory_result = crate::sidecar::resolve_memory_path(None);
+
+    let orch_status = match &orch_result {
+        Ok(path) => {
+            let path_str = path.display().to_string();
+            let source = if path_str.contains("Programs") {
+                "installed".to_string()
+            } else if std::env::var("AUTODEV_SIDECAR_PATH").is_ok() {
+                "env_var".to_string()
+            } else {
+                "relative".to_string()
+            };
+            SubmoduleStatus {
+                id:       "core-orchestrator".into(),
+                name:     "Core Orchestrator".into(),
+                path:     path_str,
+                exists:   true,
+                source,
+                required: true,
+            }
+        }
+        Err(_) => SubmoduleStatus {
+            id:       "core-orchestrator".into(),
+            name:     "Core Orchestrator".into(),
+            path:     "not found".into(),
+            exists:   false,
+            source:   "not_found".into(),
+            required: true,
+        },
+    };
+
+    let memory_status = match &memory_result {
+        Ok(path) => {
+            let path_str = path.display().to_string();
+            let source = if path_str.contains("Programs") {
+                "installed".to_string()
+            } else if std::env::var("AUTODEV_MEMORY_PATH").is_ok() {
+                "env_var".to_string()
+            } else {
+                "relative".to_string()
+            };
+            SubmoduleStatus {
+                id:       "memory-mcp-server".into(),
+                name:     "Memory MCP Server".into(),
+                path:     path_str,
+                exists:   true,
+                source,
+                required: true,
+            }
+        }
+        Err(_) => SubmoduleStatus {
+            id:       "memory-mcp-server".into(),
+            name:     "Memory MCP Server".into(),
+            path:     "not found".into(),
+            exists:   false,
+            source:   "not_found".into(),
+            required: true,
+        },
+    };
+
+    vec![orch_status, memory_status]
 }
