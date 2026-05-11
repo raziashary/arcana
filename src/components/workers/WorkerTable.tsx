@@ -45,6 +45,9 @@ const AVAILABLE_MODELS = [
   'gemini-3-flash-thinking',
   'gemini-2.5-pro',
   'gemini-2.5-flash',
+  // DeepSeek v4
+  'deepseek-v4-flash',
+  'deepseek-v4-pro',
 ]
 
 // ─── Status Dot ───────────────────────────────────────────────────────────────

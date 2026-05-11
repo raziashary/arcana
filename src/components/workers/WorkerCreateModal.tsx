@@ -17,6 +17,8 @@ const MODEL_OPTIONS = [
   'gpt-4o-mini',
   'gemini-2.0-flash',
   'gemini-2.0-pro',
+  'deepseek-v4-flash',
+  'deepseek-v4-pro',
 ]
 
 const WORKER_TYPES = Object.keys(WORKER_TYPE_LABELS).filter(t => t !== 'supervisor' && t !== 'qc')
