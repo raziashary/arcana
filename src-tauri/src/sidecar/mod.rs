@@ -390,24 +390,32 @@ impl SidecarManager {
             p.advance(StartupPhase::MemoryStarting);
         }
 
-        let mut child = Command::new("uv")
-            .args(["run", "python", "main.py", "--mode", "dev"])
-            .current_dir(cwd)
-            .env("PYTHONIOENCODING", "utf-8:replace")
-            .env("PYTHONUTF8", "1")
-            // Phase 7.4 — suppress mem0 INFO/DEBUG chatter.
-            // mem0 logs the full agent system prompt (~1 000 chars) at INFO level on
-            // every memory store, producing 133 MB of logs in 24 minutes.
-            // Setting LOG_LEVEL=WARNING drops INFO/DEBUG from the root Python logger.
-            // Side-effect: the startup-progress scanner will not see the "Using Memory("
-            // / "Qdrant" INFO lines and therefore won't advance the VectorDb phase — the
-            // loading overlay skips that cosmetic step but startup still completes via
-            // the health-check poll in main.rs.
-            .env("LOG_LEVEL",     "WARNING")
-            .env("MEM0_LOG_LEVEL","WARNING")   // mem0-specific override if read by the app
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+        let mut cmd = Command::new("uv");
+        cmd.args(["run", "python", "main.py", "--mode", "dev"]);
+        cmd.current_dir(cwd);
+        cmd.env("PYTHONIOENCODING", "utf-8:replace");
+        cmd.env("PYTHONUTF8", "1");
+        // Phase 7.4 — suppress mem0 INFO/DEBUG chatter.
+        // mem0 logs the full agent system prompt (~1 000 chars) at INFO level on
+        // every memory store, producing 133 MB of logs in 24 minutes.
+        // Setting LOG_LEVEL=WARNING drops INFO/DEBUG from the root Python logger.
+        // Side-effect: the startup-progress scanner will not see the "Using Memory("
+        // / "Qdrant" INFO lines and therefore won't advance the VectorDb phase — the
+        // loading overlay skips that cosmetic step but startup still completes via
+        // the health-check poll in main.rs.
+        cmd.env("LOG_LEVEL",     "WARNING");
+        cmd.env("MEM0_LOG_LEVEL","WARNING");   // mem0-specific override if read by the app
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+
+        // Hide console window on Windows (macOS/Linux don't show windows by default)
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+
+        let mut child = cmd.spawn()
             .map_err(|e| AutoDevError::Agent(
                 format!("Failed to spawn memory-mcp-server (is `uv` in PATH?): {e}")
             ))?;
@@ -481,20 +489,28 @@ impl SidecarManager {
             p.advance(StartupPhase::OrchStarting);
         }
 
-        let mut child = Command::new("uv")
-            .args([
-                "run", "uvicorn", "api_gateway.api.main:app",
-                "--host", "127.0.0.1",
-                "--port", "4000",
-                "--log-level", "info",
-            ])
-            .current_dir(cwd)
-            .env("PYTHONIOENCODING", "utf-8:replace")
-            .env("PYTHONUTF8", "1")
-            .env("LITELLM_LOG", "WARNING")  // T7.3 — suppress LiteLLM debug noise
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+        let mut cmd = Command::new("uv");
+        cmd.args([
+            "run", "uvicorn", "api_gateway.api.main:app",
+            "--host", "127.0.0.1",
+            "--port", "4000",
+            "--log-level", "info",
+        ]);
+        cmd.current_dir(cwd);
+        cmd.env("PYTHONIOENCODING", "utf-8:replace");
+        cmd.env("PYTHONUTF8", "1");
+        cmd.env("LITELLM_LOG", "WARNING");  // T7.3 — suppress LiteLLM debug noise
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+
+        // Hide console window on Windows (macOS/Linux don't show windows by default)
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+
+        let mut child = cmd.spawn()
             .map_err(|e| AutoDevError::Agent(
                 format!("Failed to spawn core-orchestrator (is `uv` in PATH?): {e}")
             ))?;
@@ -687,7 +703,16 @@ impl SidecarManager {
             ];
             for path in binary_paths {
                 if std::path::Path::new(path).exists() {
-                    match std::process::Command::new(path).spawn() {
+                    let mut cmd = std::process::Command::new(path);
+
+                    // Hide console window on Windows (macOS/Linux don't show windows by default)
+                    #[cfg(target_os = "windows")]
+                    {
+                        use std::os::windows::process::CommandExt;
+                        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+                    }
+
+                    match cmd.spawn() {
                         Ok(child) => {
                             let pid = child.id();
                             *self.redis_process.lock().unwrap() = Some(child);
