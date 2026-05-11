@@ -9,15 +9,26 @@ use serde::{Deserialize, Serialize};
 pub struct ToolResult {
     pub output:   String,
     pub is_error: bool,
+    /// Optional guidance appended to the tool result content before sending to the LLM.
+    /// Use this for large/noisy results to direct the agent on how to consume them,
+    /// e.g. "Large result — extract only what you need before proceeding."
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
 }
 
 impl ToolResult {
     pub fn success(output: impl Into<String>) -> Self {
-        Self { output: output.into(), is_error: false }
+        Self { output: output.into(), is_error: false, hint: None }
+    }
+
+    /// Like `success` but attaches a hint string that is appended inline to the
+    /// tool result sent to the LLM. Use for large outputs to guide summarisation.
+    pub fn success_with_hint(output: impl Into<String>, hint: impl Into<String>) -> Self {
+        Self { output: output.into(), is_error: false, hint: Some(hint.into()) }
     }
 
     pub fn error(message: impl Into<String>) -> Self {
-        Self { output: message.into(), is_error: true }
+        Self { output: message.into(), is_error: true, hint: None }
     }
 }
 

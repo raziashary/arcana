@@ -73,6 +73,26 @@ impl Tool for ReadFileTool {
             return ToolResult::error("File read blocked by hook");
         }
 
+        // Guard: reject files larger than 256 KB (~64K tokens) when no line range is given.
+        // Reading a 5 MB lock file or binary would fill the entire context window.
+        // Agents that need specific content from large files must use start_line/end_line.
+        let has_range = input["start_line"].as_u64().is_some() || input["end_line"].as_u64().is_some();
+        if !has_range {
+            if let Ok(meta) = std::fs::metadata(&path) {
+                const MAX_BYTES: u64 = 256_000;
+                if meta.len() > MAX_BYTES {
+                    return ToolResult::error(format!(
+                        "File '{}' is {} KB — too large to read in full (limit {} KB). \
+                         Use start_line and end_line to read specific sections, \
+                         or use grep to search for content within the file.",
+                        path.display(),
+                        meta.len() / 1024,
+                        MAX_BYTES / 1024,
+                    ));
+                }
+            }
+        }
+
         match std::fs::read_to_string(&path) {
             Err(e) => ToolResult::error(format!("Cannot read '{}': {e}", path.display())),
             Ok(content) => {

@@ -21,6 +21,9 @@ import {
 } from '../stores/workerStore'
 import { useSidecarStore } from '../stores/sidecarStore'
 import { SubagentMonitor } from '../components/subagent/SubagentMonitor'
+import { LiveMonitorSection } from '../components/autodev/LiveMonitorSection'
+import { useAgentLiveStore }  from '../stores/agentLiveStore'
+import '../components/autodev/LiveMonitor.css'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -42,17 +45,61 @@ function elapsedSince(dateStr: string): string {
   return `${String(diffMin).padStart(2, '0')}:${String(diffSec).padStart(2, '0')}`
 }
 
+// ─── Enhanced status cell — pulls live tool/file info from agentLiveStore ───────
+
+function AgentStatusCell({ agentId, fallbackLabel }: { agentId: string; fallbackLabel: string }) {
+  const agent     = useAgentLiveStore(s => s.agents[agentId])
+  const elapsedMs = agent?.elapsed_since_last_tool_ms ?? 0
+  const isSlowTool = elapsedMs > 120_000
+
+  if (!agent || agent.status === 'idle' || agent.status === 'stopped') {
+    return <span className="status-text status-text--idle">{fallbackLabel}</span>
+  }
+  if (agent.status === 'error') {
+    return (
+      <span className="status-text status-text--error">
+        ⚠ {agent.error_message ?? 'error'}
+      </span>
+    )
+  }
+  if (agent.current_tool) {
+    return (
+      <span className="status-text status-text--active">
+        <span className="status-tool">{agent.current_tool}</span>
+        {agent.current_file && (
+          <>
+            <span className="status-sep"> · </span>
+            <span className="status-file">{agent.current_file}</span>
+            {agent.current_file_diff && (
+              <span className="status-diff"> {agent.current_file_diff}</span>
+            )}
+          </>
+        )}
+        {isSlowTool && <span className="status-slow-warn" title="Tool running > 2 minutes"> ⚠</span>}
+      </span>
+    )
+  }
+  return <span className="status-text">{fallbackLabel}</span>
+}
+
 // ─── Agent Roster (vertical table) — reads from workers.db ─────────────────────
 
 function AgentRoster({ tasks }: { tasks: Task[] }) {
-  const workerStore = useWorkerStore()
-  const [, tick]    = useState(0)
+  const workerStore    = useWorkerStore()
+  const initAgents     = useAgentLiveStore(s => s.initAgents)
+  const [, tick]       = useState(0)
 
   // Re-render every second so elapsed timers update live
   useEffect(() => {
     const id = setInterval(() => tick(n => n + 1), 1_000)
     return () => clearInterval(id)
   }, [])
+
+  // Seed the live store with the current worker list whenever it loads
+  useEffect(() => {
+    const ids = workerStore.workers.map(w => w.slug)
+    if (ids.length > 0) initAgents(ids)
+  }, [workerStore.workers.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const workers = workerStore.workers
 
@@ -154,11 +201,8 @@ function AgentRoster({ tasks }: { tasks: Task[] }) {
                 </span>
               )}
             </div>
-            <div
-              className="flex-1 overflow-hidden"
-              style={{ color: '#444', textOverflow: 'ellipsis', whiteSpace: 'nowrap', overflow: 'hidden' }}
-            >
-              {taskLabel}
+            <div className="flex-1 overflow-hidden">
+              <AgentStatusCell agentId={worker.slug} fallbackLabel={taskLabel} />
             </div>
             <div className="shrink-0" style={{ color: '#555', fontSize: '10px', width: 55 }}>
               {typeLabel}
@@ -767,6 +811,9 @@ export default function AutoDevTab() {
         requests={workerRequests}
         onResolve={(id, action, note) => resolveWorkerRequest(id, action, note)}
       />
+
+      {/* Live Monitor — real-time per-agent state cards */}
+      <LiveMonitorSection />
 
       {/* Task board label */}
       <div

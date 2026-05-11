@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use tracing::warn;
 use rmcp::{
     ErrorData as McpError,
     RoleServer,
@@ -29,10 +30,16 @@ pub struct AutodevMcpServer {
 
 impl AutodevMcpServer {
     pub fn new(registry: Arc<ToolRegistry>) -> Self {
-        let working_dir = std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .map(|p| std::path::PathBuf::from(p).join(".autodev").to_string_lossy().to_string())
-            .unwrap_or_else(|_| ".".to_string());
+        // Default to process cwd, NOT $HOME/.autodev (the AutoDev config dir).
+        // Fleet workers MUST pass __working_dir on every tool call to target the
+        // correct project root. This default is only a last-resort fallback.
+        let working_dir = std::env::current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| {
+                warn!("[autodev-mcp-server] Cannot determine cwd for default working_dir. \
+                       Fleet workers MUST pass __working_dir on every tool call.");
+                ".".to_string()
+            });
         Self { registry, working_dir }
     }
 
@@ -112,7 +119,7 @@ impl ServerHandler for AutodevMcpServer {
         let mut args = req.arguments.unwrap_or_default();
 
         // L.1 — Accept __working_dir per-call so fleet workers target the right
-        // project directory instead of the hardcoded ~/.autodev default.
+        // project directory instead of the process-cwd default.
         let working_dir = args.remove("__working_dir")
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_else(|| self.working_dir.clone());
@@ -122,6 +129,12 @@ impl ServerHandler for AutodevMcpServer {
         let session_id = args.remove("__session_id")
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+        // L.5 — Accept __agent_role so fleet workers can identify themselves.
+        // Required for request_supervisor_action to record the correct worker_slug
+        // instead of falling back to "unknown" for all MCP-originated calls.
+        let agent_role = args.remove("__agent_role")
+            .and_then(|v| v.as_str().map(String::from));
 
         let args = serde_json::Value::Object(args);
 
@@ -138,7 +151,7 @@ impl ServerHandler for AutodevMcpServer {
             working_dir,
             call_id: uuid::Uuid::new_v4().to_string(),
             depth:   0,
-            agent_role: None,
+            agent_role,
         };
 
         let result = tool.execute(args, &ctx).await;

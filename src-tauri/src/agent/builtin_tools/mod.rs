@@ -21,6 +21,9 @@ pub mod spawn_parallel_subagents;
 pub mod request_supervisor_action;
 pub mod search_memory;
 pub mod remember_this;
+pub mod validate;
+pub mod check_file;
+pub mod append_file;
 
 use std::sync::Arc;
 use super::{PAMode, tool_registry::ToolRegistry};
@@ -43,6 +46,8 @@ pub fn register_for_mcp_worker(registry: &mut ToolRegistry) {
     registry.register(Arc::new(list_directory::ListDirectoryTool));
     registry.register(Arc::new(grep::GrepTool));
     registry.register(Arc::new(glob::GlobTool));
+    registry.register(Arc::new(check_file::CheckFileTool));
+    registry.register(Arc::new(append_file::AppendFileTool));
     // Task board — read + own-status updates only
     registry.register(Arc::new(list_tasks_tool::ListTasksTool));
     registry.register(Arc::new(get_task_tool::GetTaskTool));
@@ -71,6 +76,8 @@ pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
             registry.register(Arc::new(list_directory::ListDirectoryTool));
             registry.register(Arc::new(grep::GrepTool));
             registry.register(Arc::new(glob::GlobTool));
+            registry.register(Arc::new(check_file::CheckFileTool));
+            registry.register(Arc::new(append_file::AppendFileTool));
             // Task board tools — recipe agents (Supervisor, Workers) use these directly
             registry.register(Arc::new(list_tasks_tool::ListTasksTool));
             registry.register(Arc::new(get_task_tool::GetTaskTool));

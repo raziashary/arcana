@@ -214,24 +214,25 @@ impl QueryGraphTool {
     }
 }
 
-pub struct SemanticSearchTool;
+pub struct KeywordSearchTool;
 
-impl SemanticSearchTool {
+impl KeywordSearchTool {
     pub fn name() -> &'static str {
-        "semantic_search_nodes"
+        "keyword_search_nodes"
     }
     
     pub fn execute(store: &GraphStore, query: String, top_k: u32) -> Result<Value> {
         let all_nodes = store.get_all_nodes_for_graph(i64::MAX, 0)?;
         
+        let q = query.to_lowercase();
         let mut scored: Vec<_> = all_nodes
             .iter()
             .map(|n| {
                 let mut score = 0.0;
-                if n.name.to_lowercase().contains(&query.to_lowercase()) {
+                if n.name.to_lowercase().contains(&q) {
                     score += 2.0;
                 }
-                if n.file_path.to_lowercase().contains(&query.to_lowercase()) {
+                if n.file_path.to_lowercase().contains(&q) {
                     score += 1.0;
                 }
                 (score, n)
@@ -314,11 +315,12 @@ impl FindPathTool {
     pub fn execute(store: &GraphStore, source: String, target: String) -> Result<Value> {
         let all_edges = store.get_all_edges_for_graph(i64::MAX, 0)?;
         
-        // Simple BFS path finding
-        let mut queue = vec![(source.clone(), vec![source.clone()])];
+        // BFS — guarantees shortest-hop path between source and target
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back((source.clone(), vec![source.clone()]));
         let mut visited = std::collections::HashSet::new();
         
-        while let Some((current, path)) = queue.pop() {
+        while let Some((current, path)) = queue.pop_front() {
             if current == target {
                 return Ok(json!({
                     "path": path,
@@ -335,7 +337,7 @@ impl FindPathTool {
                 if edge.source_qualified == current && !visited.contains(&edge.target_qualified) {
                     let mut new_path = path.clone();
                     new_path.push(edge.target_qualified.clone());
-                    queue.push((edge.target_qualified.clone(), new_path));
+                    queue.push_back((edge.target_qualified.clone(), new_path));
                 }
             }
         }
@@ -817,11 +819,11 @@ impl GetLockedNodesTool {
     }
 }
 
-pub struct BuildGraphTool;
+pub struct GetGraphStatusTool;
 
-impl BuildGraphTool {
+impl GetGraphStatusTool {
     pub fn name() -> &'static str {
-        "build_graph"
+        "get_graph_status"
     }
     
     pub fn execute(store: &GraphStore, _repo_path: String) -> Result<Value> {
@@ -830,8 +832,8 @@ impl BuildGraphTool {
         
         Ok(json!({
             "status": "success",
-            "nodes_extracted": all_nodes.len(),
-            "edges_extracted": all_edges.len(),
+            "node_count": all_nodes.len(),
+            "edge_count": all_edges.len(),
             "timestamp": chrono::Local::now().to_rfc3339()
         }))
     }

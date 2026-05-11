@@ -1,0 +1,509 @@
+/* ════════════════════════════════════════════════════════════════════════════
+   Live Monitor — Fleet agent real-time state
+   All values use design tokens from globals.css.
+   Font: IBM Plex Mono throughout.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Section wrapper ───────────────────────────────────────────────────────── */
+
+.live-monitor-section {
+  flex-shrink: 0;
+  border-top:    1px solid var(--border-1);
+  border-bottom: 1px solid var(--border-1);
+  background:    var(--bg-app);
+  font-family:   var(--font-mono);
+}
+
+/* ── Section header ────────────────────────────────────────────────────────── */
+
+.lm-header {
+  display:         flex;
+  align-items:     center;
+  justify-content: space-between;
+  padding:         8px 12px;
+  height:          32px;
+  box-sizing:      border-box;
+}
+
+.lm-section-label {
+  font-size:      9px;
+  color:          var(--text-4);
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+}
+
+.lm-header-right {
+  display:     flex;
+  align-items: center;
+  gap:         8px;
+}
+
+.lm-last-event {
+  font-size: 10px;
+  color:     var(--text-4);
+}
+
+.lm-collapse-btn {
+  background:  none;
+  border:      none;
+  font-family: var(--font-mono);
+  font-size:   10px;
+  color:       var(--text-4);
+  cursor:      pointer;
+  padding:     0 2px;
+  line-height: 1;
+  transition:  color 0.15s;
+}
+.lm-collapse-btn:hover { color: var(--text-2); }
+
+/* ── Live / Stale / Offline badge ───────────────────────────────────────────── */
+
+.live-badge {
+  display:        flex;
+  align-items:    center;
+  gap:            5px;
+  font-size:      9px;
+  font-family:    var(--font-mono);
+  letter-spacing: 0.05em;
+}
+
+.live-badge--live    { color: var(--accent);  }
+.live-badge--stale   { color: var(--warning); }
+.live-badge--offline { color: var(--danger);  }
+
+/* Pulsing dot — the ◉ character itself pulses via opacity */
+.live-badge--live  { animation: lm-pulse-live    1.5s ease-in-out infinite; }
+.live-badge--stale { animation: lm-pulse-warning 2.0s ease-in-out infinite; }
+
+@keyframes lm-pulse-live {
+  0%, 100% { opacity: 1;   }
+  50%       { opacity: 0.4; }
+}
+@keyframes lm-pulse-warning {
+  0%, 100% { opacity: 1;   }
+  50%       { opacity: 0.5; }
+}
+
+/* ── Card grid ──────────────────────────────────────────────────────────────── */
+
+.live-monitor-grid {
+  display:               grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap:                   8px;
+  padding:               8px 12px 10px;
+}
+
+.lm-empty {
+  grid-column: 1 / -1;
+  font-size:   10px;
+  color:       var(--text-4);
+  padding:     16px 0;
+  text-align:  center;
+}
+
+/* ── Agent live card ────────────────────────────────────────────────────────── */
+
+.agent-live-card {
+  background:    #111111;
+  border:        1px solid var(--border-1);
+  border-radius: 2px;
+  padding:       10px 12px;
+  min-height:    180px;
+  cursor:        pointer;
+  display:       flex;
+  flex-direction: column;
+  gap:           6px;
+  transition:    border-color 0.2s, box-shadow 0.2s, opacity 0.2s;
+  box-sizing:    border-box;
+}
+.agent-live-card:hover {
+  border-color: var(--border-secondary, #222222);
+}
+
+/* State modifiers */
+.agent-live-card--active {
+  border-color: #1e1e1e;
+}
+.agent-live-card--idle {
+  opacity: 0.5;
+}
+.agent-live-card--error {
+  border-color: var(--danger);
+  background:   rgba(255, 68, 68, 0.03);
+}
+.agent-live-card--stopped {
+  opacity: 0.4;
+}
+.agent-live-card--expanded {
+  /* grid-column: span 2 applied inline via React */
+  cursor: pointer;
+}
+
+/* ── Card header ────────────────────────────────────────────────────────────── */
+
+.card-header {
+  display:     flex;
+  align-items: center;
+  gap:         6px;
+}
+
+.card-status-dot {
+  width:         6px;
+  height:        6px;
+  border-radius: 50%;
+  flex-shrink:   0;
+}
+
+.card-agent-name {
+  font-size:  11px;
+  color:      #888888;
+  flex:       1;
+  min-width:  0;
+  overflow:   hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.card-role-badge {
+  font-size:     9px;
+  color:         var(--text-4);
+  background:    #161616;
+  border:        1px solid var(--border-1);
+  padding:       1px 6px;
+  border-radius: 2px;
+  letter-spacing: 0.04em;
+  flex-shrink:   0;
+}
+
+.card-divider {
+  height:     1px;
+  background: var(--border-1);
+  margin:     0 -12px;   /* bleed to card edges */
+  flex-shrink: 0;
+}
+
+/* ── Stage pipeline ─────────────────────────────────────────────────────────── */
+
+.stage-pipeline {
+  display:   flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap:       3px;
+  padding:   2px 0;
+}
+
+.stage-pill-wrapper {
+  display:     flex;
+  align-items: center;
+  gap:         3px;
+}
+
+.stage-sep {
+  font-size: 9px;
+  color:     var(--border-1);
+}
+
+.stage-pill {
+  font-family:   var(--font-mono);
+  font-size:     9px;
+  padding:       2px 7px;
+  border-radius: 2px;
+  border:        1px solid transparent;
+  white-space:   nowrap;
+  transition:    all 0.2s;
+}
+
+.stage-icon {
+  font-size: 8px;
+}
+
+/* Stage states */
+.stage-pill--pending {
+  background:   transparent;
+  border-color: var(--border-1);
+  color:        var(--text-4);
+}
+.stage-pill--done {
+  background:   rgba(0, 255, 136, 0.06);
+  border-color: rgba(0, 255, 136, 0.20);
+  color:        var(--accent);
+}
+.stage-pill--current {
+  background:   rgba(255, 170, 0, 0.06);
+  border-color: rgba(255, 170, 0, 0.25);
+  color:        var(--warning);
+  animation:    stage-pulse 1.2s ease-in-out infinite;
+}
+.stage-pill--error {
+  background:   rgba(255, 68, 68, 0.06);
+  border-color: rgba(255, 68, 68, 0.25);
+  color:        var(--danger);
+}
+.stage-pill--blocked {
+  background:   rgba(255, 170, 0, 0.06);
+  border-color: rgba(255, 170, 0, 0.20);
+  color:        var(--warning);
+  opacity:      0.7;
+}
+
+@keyframes stage-pulse {
+  0%, 100% { border-color: rgba(255, 170, 0, 0.25); }
+  50%       { border-color: rgba(255, 170, 0, 0.55); }
+}
+
+/* ── Current action (tool + file) ───────────────────────────────────────────── */
+
+.card-current-action {
+  display:   flex;
+  flex-direction: column;
+  gap:       2px;
+}
+
+.current-tool-name {
+  font-size: 10px;
+  color:     var(--info);
+}
+
+.current-file-name {
+  font-size:     10px;
+  color:         var(--text-4);
+  overflow:      hidden;
+  white-space:   nowrap;
+  text-overflow: ellipsis;
+  display:       flex;
+  align-items:   center;
+  gap:           5px;
+}
+
+.diff-badge {
+  font-size:     9px;
+  color:         var(--accent);
+  background:    rgba(0, 255, 136, 0.08);
+  padding:       0 4px;
+  border-radius: 2px;
+  border:        1px solid rgba(0, 255, 136, 0.15);
+}
+
+/* ── Token sparkline ────────────────────────────────────────────────────────── */
+
+.token-sparkline {
+  display:    flex;
+  flex-direction: column;
+  gap:        4px;
+  margin-top: 2px;
+}
+
+.token-bar-row {
+  display:     flex;
+  align-items: center;
+  gap:         6px;
+}
+
+.token-bar-bg {
+  flex:          1;
+  height:        3px;
+  background:    var(--border-1);
+  border-radius: 1px;
+  overflow:      hidden;
+}
+
+.token-bar-fg {
+  height:        100%;
+  border-radius: 1px;
+  transition:    width 0.4s ease;
+}
+.token-bar-fg--normal  { background: var(--accent);  }
+.token-bar-fg--warning { background: var(--warning); }
+.token-bar-fg--danger  { background: var(--danger);  }
+
+.token-count {
+  font-size:  10px;
+  color:      var(--text-4);
+  min-width:  32px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.sparkline-bars {
+  display:     flex;
+  align-items: flex-end;
+  gap:         1px;
+  height:      16px;
+}
+
+.spark-bar {
+  width:         3px;
+  min-height:    2px;
+  border-radius: 1px;
+  background:    var(--border-1);
+  transition:    height 0.3s ease;
+  flex-shrink:   0;
+}
+.spark-bar--active {
+  background: var(--accent);
+}
+
+/* ── Mini log tail ──────────────────────────────────────────────────────────── */
+
+.mini-log-tail {
+  background:    #161616;
+  border-radius: 2px;
+  padding:       6px 8px;
+  overflow:      hidden;
+  display:       flex;
+  flex-direction: column;
+  gap:           1px;
+  flex:          1;
+  min-height:    48px;
+  max-height:    52px;   /* 3 lines × ~17px + padding */
+  position:      relative;
+}
+
+/* Expand naturally when card is expanded */
+.agent-live-card--expanded .mini-log-tail {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+/* Fade mask at top when overflowing */
+.mini-log-tail--overflow::before {
+  content:    '';
+  position:   absolute;
+  top:        0;
+  left:       0;
+  right:      0;
+  height:     18px;
+  background: linear-gradient(to bottom, #161616, transparent);
+  pointer-events: none;
+  z-index:    1;
+}
+
+.log-line {
+  display:     flex;
+  align-items: center;
+  gap:         6px;
+  font-family: var(--font-mono);
+  font-size:   10px;
+  min-height:  16px;
+  padding:     0 1px;
+}
+.log-line--empty {
+  color:      var(--text-4);
+  font-style: italic;
+}
+.log-line--error {
+  border-left: 2px solid var(--danger);
+  padding-left: 4px;
+  background:  rgba(255, 68, 68, 0.05);
+}
+.log-line--thought {
+  opacity:    0.6;
+  font-style: italic;
+}
+.log-line:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.log-spinner {
+  width:         8px;
+  height:        8px;
+  border:        1px solid var(--border-1);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  flex-shrink:   0;
+  animation:     log-spin 0.8s linear infinite;
+}
+@keyframes log-spin {
+  to { transform: rotate(360deg); }
+}
+
+.log-time {
+  color:       var(--text-4);
+  min-width:   36px;
+  flex-shrink: 0;
+  font-size:   9px;
+}
+
+.log-tool {
+  color:       var(--info);
+  flex-shrink: 0;
+  min-width:   0;
+}
+
+.log-arg {
+  color:         var(--text-4);
+  flex:          1;
+  min-width:     0;
+  overflow:      hidden;
+  white-space:   nowrap;
+  text-overflow: ellipsis;
+  max-width:     120px;
+}
+
+.log-ok  { color: var(--accent);  margin-left: auto; flex-shrink: 0; }
+.log-err { color: var(--danger);  margin-left: auto; flex-shrink: 0; }
+
+/* ── Error message below log tail ───────────────────────────────────────────── */
+
+.card-error-message {
+  font-size:   9px;
+  color:       var(--danger);
+  padding:     4px 6px;
+  background:  rgba(255, 68, 68, 0.06);
+  border-left: 2px solid var(--danger);
+  border-radius: 1px;
+  word-break:  break-word;
+}
+
+/* ── Expanded footer ────────────────────────────────────────────────────────── */
+
+.card-expanded-footer {
+  display:     flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top:  4px;
+  padding-top: 6px;
+  border-top:  1px solid var(--border-1);
+}
+
+.card-action-btn {
+  background:  none;
+  border:      1px solid var(--border-1);
+  border-radius: 2px;
+  padding:     2px 8px;
+  font-family: var(--font-mono);
+  font-size:   9px;
+  color:       var(--info);
+  cursor:      pointer;
+  transition:  border-color 0.15s;
+}
+.card-action-btn:hover {
+  border-color: var(--info);
+}
+
+.card-task-id {
+  font-size: 9px;
+  color:     var(--text-4);
+}
+
+/* ── Agent Roster enhanced status cell ───────────────────────────────────────── */
+
+.status-text {
+  font-family:   var(--font-mono);
+  font-size:     11px;
+  overflow:      hidden;
+  white-space:   nowrap;
+  text-overflow: ellipsis;
+  display:       flex;
+  align-items:   center;
+  gap:           4px;
+}
+.status-text--idle   { color: var(--text-4); }
+.status-text--error  { color: var(--danger); }
+.status-text--active { color: var(--text-2); }
+
+.status-tool { color: var(--info); }
+.status-sep  { color: var(--text-4); }
+.status-file { color: var(--text-4); }
+.status-diff { color: var(--accent); font-size: 9px; }
+.status-slow-warn { color: var(--warning); }

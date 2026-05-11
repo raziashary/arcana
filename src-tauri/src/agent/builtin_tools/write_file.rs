@@ -4,6 +4,7 @@ use std::path::Path;
 
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
 use crate::hooks::{HookRegistry, HookType, HookContext, ToolCallContext};
+use super::validate;
 
 pub struct WriteFileTool;
 
@@ -85,7 +86,22 @@ impl Tool for WriteFileTool {
                 tokio::spawn(async move {
                     HookRegistry::fire(&HookType::PostFileWrite, &hook_ctx).await;
                 });
-                ToolResult::success(format!("Wrote {} bytes to '{}'", content.len(), path.display()))
+
+                // Option A — Tier 1 syntax validation (always-on, fast).
+                // Appends lint feedback to the success message so the agent can
+                // self-correct without a separate check_file call.
+                let lint_note = match validate::tier1_syntax(&path, &ctx.working_dir).await {
+                    Some(result) if !result.diagnostics.is_empty() => {
+                        format!("\n\n⚠ Lint feedback:\n{}", result.format_inline())
+                    }
+                    _ => String::new(),
+                };
+
+                ToolResult::success(format!(
+                    "Wrote {} bytes to '{}'{lint_note}",
+                    content.len(),
+                    path.display()
+                ))
             }
             Err(e) => ToolResult::error(format!("Cannot write '{}': {e}", path.display())),
         }

@@ -7,6 +7,7 @@ use tracing::debug;
 
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
 use crate::hooks::{HookRegistry, HookType, HookContext, ToolCallContext};
+use super::validate;
 
 pub struct EditFileTool;
 
@@ -91,10 +92,17 @@ impl Tool for EditFileTool {
         let match_count = content.matches(&params.old_string).count();
 
         if match_count == 0 {
+            // Do NOT include a file preview here — it re-injects up to 500 chars of file
+            // content into the agent context on every failed edit attempt, compounding
+            // token cost across retries. The agent already has the file if it read it.
+            // Instead, give the line count so the agent can target read_file(start/end).
+            let line_count = content.lines().count();
             return ToolResult::error(format!(
-                "old_string not found in file. Searched for:\n```\n{}\n```\n\nFile preview (first 500 chars):\n```\n{}\n```",
-                params.old_string,
-                &content.chars().take(500).collect::<String>()
+                "old_string not found in '{}' ({line_count} lines total). \
+                 The text must match exactly including whitespace and indentation. \
+                 Use read_file(path, start_line=X, end_line=Y) to inspect the target area \
+                 before retrying.",
+                params.path
             ));
         }
 
@@ -160,8 +168,19 @@ impl Tool for EditFileTool {
         });
 
         let occurrences = if params.replace_all { match_count } else { 1 };
+
+        // Option A — Tier 1 syntax validation (always-on, fast).
+        // Appended to the success response so the agent knows immediately if
+        // its edit introduced a syntax error, without needing a check_file call.
+        let lint_note = match validate::tier1_syntax(&file_path, &ctx.working_dir).await {
+            Some(result) if !result.diagnostics.is_empty() => {
+                format!("\n\n⚠ Lint feedback:\n{}", result.format_inline())
+            }
+            _ => String::new(),
+        };
+
         ToolResult::success(format!(
-            "✓ Edited {} ({} occurrence{} replaced, {} lines → {} lines)",
+            "✓ Edited {} ({} occurrence{} replaced, {} lines → {} lines){lint_note}",
             params.path,
             occurrences,
             if occurrences == 1 { "" } else { "s" },

@@ -263,9 +263,14 @@ impl AgentEngine {
                 .collect();
 
             tool_results.extend(batch_results.into_iter().map(|(tool_use_id, result)| {
+                // Append hint inline so the LLM reads it as part of the result content.
+                let content = match result.hint {
+                    Some(hint) => format!("{}\n\n[HINT] {}", result.output, hint),
+                    None       => result.output,
+                };
                 MessageContent::ToolResult {
                     tool_use_id,
-                    content: result.output,
+                    content,
                     is_error: result.is_error,
                 }
             }));

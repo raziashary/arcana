@@ -120,13 +120,22 @@ impl Tool for SpawnParallelSubagentsTool {
                     "subtasks[{i}].task_description is required and must not be empty"
                 )),
             };
+            // Always inject working_dir into the system prompt — parallel subagents have
+            // no parent context and would otherwise resolve paths against the wrong root.
+            let base_prompt = st.get("system_prompt")
+                .and_then(|v| v.as_str())
+                .unwrap_or(DEFAULT_SUBAGENT_SYSTEM_PROMPT);
+            let effective_prompt = format!(
+                "[AUTODEV WORKSPACE]\nworking_dir: {}\n\
+                 All file operations MUST be resolved relative to this absolute path \
+                 unless an explicit absolute path is provided.\n\n{}",
+                ctx.working_dir,
+                base_prompt
+            );
             let config = SubagentConfig {
                 parent_slug:       ctx.session_id.clone(),
                 parent_session_id: ctx.session_id.clone(),
-                system_prompt:     st.get("system_prompt")
-                                       .and_then(|v| v.as_str())
-                                       .unwrap_or(DEFAULT_SUBAGENT_SYSTEM_PROMPT)
-                                       .to_string(),
+                system_prompt:     effective_prompt,
                 tools:             st.get("tools")
                                        .and_then(|v| v.as_array())
                                        .map(|arr| arr.iter()

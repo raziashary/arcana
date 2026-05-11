@@ -68,6 +68,9 @@ regex    = "1"
 # YAML (for recipe parsing)
 serde_yaml = "0.9"
 
+# TOML parsing (for validate.rs Tier 1 syntax check)
+toml = "0.8"
+
 # Cron expression parsing (for recipe scheduler)
 cron = "0.12"
 

@@ -97,19 +97,29 @@ impl Tool for SpawnSubagentTool {
         };
 
         // K.12 — Build a richer system prompt when task_context is provided.
-        // Without context, QC subagents have no knowledge of what they're reviewing.
+        // ALL branches inject working_dir — without it, subagents have no idea
+        // which directory to resolve file operations against.
+        let working_dir = &ctx.working_dir;
         let system_prompt = match (
             input.get("task_context").and_then(|v| v.as_str()),
             input.get("system_prompt").and_then(|v| v.as_str()),
         ) {
             (Some(task_ctx), _) => format!(
-                "You are an AutoDev subagent. Working directory: {}.\n\
-                 Task context: {}\n\
-                 Perform your assigned subtask and produce a structured summary.",
-                ctx.working_dir, task_ctx
+                "You are an AutoDev subagent. Working directory: {working_dir}.\n\
+                 Task context: {task_ctx}\n\
+                 Perform your assigned subtask and produce a structured summary."
             ),
-            (None, Some(sp)) => sp.to_string(),
-            (None, None)     => DEFAULT_SUBAGENT_SYSTEM_PROMPT.to_string(),
+            (None, Some(sp)) => format!(
+                "[AUTODEV WORKSPACE]\nworking_dir: {working_dir}\n\
+                 All file operations MUST be resolved relative to this absolute path \
+                 unless an explicit absolute path is provided.\n\n{sp}"
+            ),
+            (None, None) => format!(
+                "[AUTODEV WORKSPACE]\nworking_dir: {working_dir}\n\
+                 All file operations MUST be resolved relative to this absolute path \
+                 unless an explicit absolute path is provided.\n\n\
+                 {DEFAULT_SUBAGENT_SYSTEM_PROMPT}"
+            ),
         };
 
         let config = SubagentConfig {

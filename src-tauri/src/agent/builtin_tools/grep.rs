@@ -49,8 +49,8 @@ struct GrepInput {
     max_results: u32,
 }
 
-fn default_context_lines() -> u32 { 2 }
-fn default_max_results() -> u32 { 100 }
+fn default_context_lines() -> u32 { 1 }   // Reduced from 2 — saves ~10% tokens per result
+fn default_max_results() -> u32 { 30 }    // Reduced from 100 — 100 matches × JSON = 15K tokens
 
 #[async_trait]
 impl Tool for GrepTool {
@@ -88,13 +88,13 @@ impl Tool for GrepTool {
                 },
                 "context_lines": {
                     "type": "integer",
-                    "description": "Number of context lines to show before and after each match. Default: 2",
-                    "default": 2
+                    "description": "Number of context lines to show before and after each match. Default: 1",
+                    "default": 1
                 },
                 "max_results": {
                     "type": "integer",
-                    "description": "Maximum number of matches to return. Default: 100",
-                    "default": 100
+                    "description": "Maximum number of matches to return. Default: 30. Increase for exhaustive searches.",
+                    "default": 30
                 }
             },
             "required": ["pattern"]
@@ -199,8 +199,14 @@ impl Tool for GrepTool {
             let lines: Vec<&str> = content.lines().collect();
             for (line_num, line) in lines.iter().enumerate() {
                 // K.4 — Match against original line; regex already has (?i) if needed.
-                if let Some(mat) = regex.find(line) {
-                    let match_positions = vec![(mat.start(), mat.end())];
+                // Use find_iter (not find) to capture ALL match positions on the line,
+                // not just the first one. Previously grep("import") on a line with
+                // "import os, import sys" would only report one match position.
+                let all_matches: Vec<(usize, usize)> = regex.find_iter(line)
+                    .map(|m| (m.start(), m.end()))
+                    .collect();
+                if !all_matches.is_empty() {
+                    let match_positions = all_matches;
 
                     // K.5 — Collect context lines before and after the match.
                     let ctx_start = line_num.saturating_sub(params.context_lines as usize);
@@ -247,13 +253,25 @@ impl Tool for GrepTool {
             results: file_results,
         };
 
-        let json_output = match serde_json::to_string_pretty(&output) {
+        // Use compact JSON (not pretty-print) — pretty adds ~35% size overhead
+        // and agents don't need human-readable indentation.
+        let json_output = match serde_json::to_string(&output) {
             Ok(j) => j,
             Err(e) => return ToolResult::error(format!("Failed to serialize results: {e}")),
         };
 
         if total_matches == 0 {
             ToolResult::success(format!("No matches found for pattern '{}'", params.pattern))
+        } else if total_matches >= params.max_results as usize {
+            // Result hit the cap — signal the agent to narrow the search if needed
+            ToolResult::success_with_hint(
+                json_output,
+                format!(
+                    "Result capped at {} matches. Extract only what you need; use a more specific \
+                     pattern, path filter, or start_line/end_line with read_file to narrow scope.",
+                    params.max_results
+                ),
+            )
         } else {
             ToolResult::success(json_output)
         }

@@ -94,12 +94,20 @@ impl Tool for BashTool {
                     output.push_str("=== STDERR ===\n");
                     output.push_str(&stderr);
                 }
-                // Truncate very long output
+                // Truncate very long output — keep the TAIL, not the head.
+                // Build output starts with progress lines (noise) and ends with errors (signal).
+                // Showing the tail means the agent sees the actual failure reason.
                 if output.len() > MAX_OUTPUT_BYTES {
+                    let tail_start = output.len() - MAX_OUTPUT_BYTES;
+                    // Walk forward to a newline boundary to avoid cutting mid-line.
+                    let boundary = output[tail_start..].find('\n')
+                        .map(|i| tail_start + i + 1)
+                        .unwrap_or(tail_start);
                     output = format!(
-                        "{}...\n[Output truncated — {} bytes total]",
-                        &output[..MAX_OUTPUT_BYTES],
-                        output.len()
+                        "[⚠ Output truncated — showing last {} bytes of {} bytes total]\n{}",
+                        output.len() - boundary,
+                        output.len(),
+                        &output[boundary..]
                     );
                 }
                 let is_error = exit_code != 0;

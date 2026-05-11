@@ -29,14 +29,15 @@ pub const MCP_SERVER_PORT: u16 = 8767;
 
 /// Start the AutoDev MCP Server as a background Tokio task.
 ///
-/// Returns a `tokio::task::JoinHandle` so the caller can await or abort it.
-/// In practice this is spawned from `main.rs` during app startup and dropped
-/// on app shutdown.
+/// Uses `tauri::async_runtime::spawn` (not `tokio::spawn`) so it is safe to
+/// call from Tauri's synchronous `.setup()` callback, which runs on a thread
+/// that does NOT have an active Tokio runtime context installed. `tokio::spawn`
+/// would panic with "there is no reactor running" in that context.
 ///
 /// The MCP server uses a restricted `register_for_mcp_worker` registry (L.4)
 /// so fleet workers cannot call assign_task, spawn_subagent, etc. via MCP.
-pub fn start_mcp_server(registry: Arc<ToolRegistry>) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
+pub fn start_mcp_server(registry: Arc<ToolRegistry>) -> tauri::async_runtime::JoinHandle<()> {
+    tauri::async_runtime::spawn(async move {
         // L.4 — Build a worker-scoped registry; the passed-in PA registry is
         // intentionally not used here to enforce the restricted tool surface.
         let _ = registry;

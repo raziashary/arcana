@@ -11,9 +11,14 @@ use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
 #[derive(Debug, Serialize)]
 struct GlobFileEntry {
     path: String,
-    size_bytes: u64,
-    modified_at: String,
     is_directory: bool,
+    // size_bytes and modified_at omitted by default — agents rarely need them
+    // and they add significant token cost at 200 results. Pass include_metadata=true
+    // to get them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    size_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    modified_at: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -32,6 +37,8 @@ struct GlobInput {
     path: Option<String>,
     #[serde(default = "default_max_results")]
     max_results: usize,
+    #[serde(default)]
+    include_metadata: bool,   // If true, include size_bytes and modified_at
 }
 
 fn default_max_results() -> usize { 200 }
@@ -65,6 +72,11 @@ impl Tool for GlobTool {
                     "type": "integer",
                     "description": "Maximum number of results to return. Default: 200",
                     "default": 200
+                },
+                "include_metadata": {
+                    "type": "boolean",
+                    "description": "When true, include size_bytes and modified_at in each result. Default: false.",
+                    "default": false
                 }
             },
             "required": ["pattern"]
@@ -132,23 +144,26 @@ impl Tool for GlobTool {
                     Err(_) => continue,
                 };
 
-                let size_bytes = metadata.len();
-                let modified_at = metadata.modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| {
-                        let secs = d.as_secs();
-                        chrono::DateTime::from_timestamp(secs as i64, 0)
-                            .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
-                            .unwrap_or_else(|| "unknown".to_string())
-                    })
-                    .unwrap_or_else(|| "unknown".to_string());
+                let (size_bytes, modified_at) = if params.include_metadata {
+                    let sz = Some(metadata.len());
+                    let mt = metadata.modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| {
+                            chrono::DateTime::from_timestamp(d.as_secs() as i64, 0)
+                                .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+                                .unwrap_or_else(|| "unknown".to_string())
+                        });
+                    (sz, mt)
+                } else {
+                    (None, None)
+                };
 
                 file_entries.push(GlobFileEntry {
                     path: relative_path,
+                    is_directory: metadata.is_dir(),
                     size_bytes,
                     modified_at,
-                    is_directory: metadata.is_dir(),
                 });
 
                 if file_entries.len() >= params.max_results {
@@ -165,13 +180,24 @@ impl Tool for GlobTool {
             files: file_entries,
         };
 
-        let json_output = match serde_json::to_string_pretty(&output) {
+        // Compact JSON — pretty-print adds ~35% size overhead with no benefit to agents.
+        let json_output = match serde_json::to_string(&output) {
             Ok(j) => j,
             Err(e) => return ToolResult::error(format!("Failed to serialize results: {e}")),
         };
 
         if output.total_files == 0 {
             ToolResult::success(format!("No files found matching pattern '{}'", params.pattern))
+        } else if output.total_files >= params.max_results {
+            // Hit the cap — guide the agent to narrow scope
+            ToolResult::success_with_hint(
+                json_output,
+                format!(
+                    "Result capped at {} files. If you need a specific file, use a more precise \
+                     pattern or filter by subdirectory to narrow scope.",
+                    params.max_results
+                ),
+            )
         } else {
             ToolResult::success(json_output)
         }

@@ -25,6 +25,10 @@ impl Tool for ListDirectoryTool {
                 "recursive": {
                     "type":        "boolean",
                     "description": "If true, list recursively (max depth 3). Default: false."
+                },
+                "max_entries": {
+                    "type":        "integer",
+                    "description": "Maximum number of entries to return. Default: 500. Use a lower value on large repos."
                 }
             },
             "required": []
@@ -35,7 +39,8 @@ impl Tool for ListDirectoryTool {
 
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         let path_str = input["path"].as_str().unwrap_or(&ctx.working_dir);
-        let recursive = input["recursive"].as_bool().unwrap_or(false);
+        let recursive   = input["recursive"].as_bool().unwrap_or(false);
+        let max_entries = input["max_entries"].as_u64().unwrap_or(500) as usize;
 
         let base = if Path::new(path_str).is_absolute() {
             Path::new(path_str).to_path_buf()
@@ -51,14 +56,27 @@ impl Tool for ListDirectoryTool {
         }
 
         let mut entries: Vec<serde_json::Value> = Vec::new();
-        collect_entries(&base, &base, 0, if recursive { 3 } else { 1 }, &mut entries);
+        collect_entries(&base, &base, 0, if recursive { 3 } else { 1 }, max_entries, &mut entries);
 
+        let truncated = entries.len() == max_entries;
         let output = json!({
-            "path": base.display().to_string(),
-            "entries": entries,
+            "path":      base.display().to_string(),
+            "entries":   entries,
+            "truncated": truncated,
         });
 
-        ToolResult::success(output.to_string())
+        if truncated {
+            ToolResult::success_with_hint(
+                output.to_string(),
+                format!(
+                    "Output capped at {} entries. Use a more specific path, set recursive=false, \
+                     or lower max_entries to focus on a subdirectory.",
+                    max_entries
+                ),
+            )
+        } else {
+            ToolResult::success(output.to_string())
+        }
     }
 }
 
@@ -69,13 +87,15 @@ const SKIP: &[&str] = &[
 ];
 
 fn collect_entries(
-    root:      &Path,
-    path:      &Path,
-    depth:     usize,
-    max_depth: usize,
-    out:       &mut Vec<serde_json::Value>,
+    root:       &Path,
+    path:       &Path,
+    depth:      usize,
+    max_depth:  usize,
+    max_entries: usize,
+    out:        &mut Vec<serde_json::Value>,
 ) {
     if depth >= max_depth { return; }
+    if out.len() >= max_entries { return; }
 
     let Ok(read) = std::fs::read_dir(path) else { return };
 
@@ -116,7 +136,7 @@ fn collect_entries(
         out.push(obj);
 
         if is_dir {
-            collect_entries(root, &entry_path, depth + 1, max_depth, out);
+            collect_entries(root, &entry_path, depth + 1, max_depth, max_entries, out);
         }
     }
 }

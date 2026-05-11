@@ -133,8 +133,12 @@ impl Tool for UpdateTaskStatusTool {
             }
             // Wake the originally assigned worker immediately so they see the rejection
             // and can begin rework without waiting for the next polling cycle.
+            // Use the input assigned_worker first; fall back to the pre-existing DB value.
+            // This handles QC rejections where the caller omits assigned_worker.
             "rejected"  => {
-                if let Some(ref w) = assigned_worker {
+                let worker_to_kick = assigned_worker.as_deref()
+                    .or_else(|| task.assigned_worker.as_deref());
+                if let Some(w) = worker_to_kick {
                     crate::recipes::scheduler::kick(w);
                 }
             }

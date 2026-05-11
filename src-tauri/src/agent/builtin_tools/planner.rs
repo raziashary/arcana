@@ -21,48 +21,9 @@ impl Tool for PlannerTool {
     fn name(&self) -> &str { "planner" }
 
     fn description(&self) -> &str {
-        r#"Unified planning interface with YAML DSL compiler.
-
-## Available Actions
-
-Use 'action: listActions' to discover all actions, or execute directly:
-
-### Basic Actions
-- listActions: Get schema for all actions
-- create: Create new plan
-- addStep: Add step to plan
-- updateStep: Update step status
-- getPlan: Get plan details
-- listPlans: List plans
-- checkDependencies: Check which steps are unblocked
-- executeTemplate: Create plan from template
-- deletePlan: Delete plan
-- abandonPlan: Abandon plan
-
-### Fleet Actions (for workers/supervisors)
-- breakDownEpic: Convert epic to plan
-- claimItem: Claim next available step
-- createSubplan: Create nested plan
-- submitForQC: Submit for review
-
-## When to Use
-
-Create a plan when task requires 5+ steps or 10+ tool calls.
-
-## YAML DSL Syntax
-
-action: create
-title: "Your plan title"
-description: "What this plan accomplishes"
-scope: personal  # or fleet, epic
-
-## Example Workflow
-
-1. Call planner with listActions to see schemas
-2. Create plan with action: create
-3. Add steps with action: addStep
-4. Update progress with action: updateStep
-"#
+        "YAML DSL planning interface. Pass 'action: listActions' to see all actions and schemas. \
+         Core actions: create, addStep, updateStep, getPlan, listPlans, claimItem, submitForQC. \
+         Use for tasks requiring 5+ steps or 10+ tool calls."
     }
 
     fn input_schema(&self) -> Value {
@@ -146,7 +107,7 @@ impl PlannerCompiler {
                 { "name": "listActions",       "description": "Discover all actions", "read_only": true },
                 { "name": "create",            "description": "Create a new plan", "required": ["title"] },
                 { "name": "addStep",           "description": "Add a step to a plan", "required": ["plan_id", "title"] },
-                { "name": "updateStep",        "description": "Update step status", "required": ["plan_id", "step_index", "status"] },
+                { "name": "updateStep",        "description": "Update step status — pass step_index (0-based position) OR step_id (UUID from addStep)", "required": ["plan_id", "status"], "optional": ["step_index", "step_id"] },
                 { "name": "getPlan",           "description": "Get plan details", "required": ["plan_id"] },
                 { "name": "listPlans",         "description": "List plans", "required": [] },
                 { "name": "checkDependencies", "description": "Check which steps are unblocked", "required": ["plan_id"] },
@@ -227,11 +188,22 @@ impl PlannerCompiler {
     fn update_step(&self, doc: &serde_yaml::Value) -> anyhow::Result<Value> {
         let plan_id = self.get_str(doc, "plan_id")?;
         let items = self.db.list_plan_items(&plan_id)?;
-        let step_index: usize = self.get_usize(doc, "step_index")
-            .ok_or_else(|| anyhow::anyhow!("Missing or invalid 'step_index'"))?;
 
-        let item = items.get(step_index)
-            .ok_or_else(|| anyhow::anyhow!("Step index {step_index} not found in plan {plan_id}"))?;
+        // Accept either step_id (preferred — stable UUID) or step_index (0-based position).
+        // step_id is returned by addStep and is immune to reordering.
+        // step_index is kept for backwards compatibility but is fragile.
+        let item = if let Some(step_id) = self.get_optional_str(doc, "step_id") {
+            items.iter()
+                .find(|i| i.id == step_id)
+                .ok_or_else(|| anyhow::anyhow!("Step id '{step_id}' not found in plan {plan_id}"))?
+        } else {
+            let step_index: usize = self.get_usize(doc, "step_index")
+                .ok_or_else(|| anyhow::anyhow!(
+                    "Either 'step_id' (UUID from addStep) or 'step_index' (0-based position) is required"
+                ))?;
+            items.get(step_index)
+                .ok_or_else(|| anyhow::anyhow!("Step index {step_index} out of range (plan has {} steps)", items.len()))?
+        };
 
         let status_str = self.get_str(doc, "status")?;
         let notes = self.get_optional_str(doc, "notes");
