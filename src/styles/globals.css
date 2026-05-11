@@ -14,8 +14,11 @@
   --bg-darker:        #0f0f17;   /* deepest nesting, terminal inner */
   --bg-2:             #252535;   /* button surfaces, inline inputs — compat */
   --bg-input:         #1e1e2e;   /* form text fields — compat */
-  --bg-selected:      #1A1A1A;   /* active list item, selected row */
+  --bg-selected:      #252535;   /* active list item, selected row */
   --bg-hover:         #161616;   /* hover state */
+  /* Aliases used across Skills, Hooks, Plans, Subagents, Git, Plugin components */
+  --bg-panel:         #1e1e2e;   /* floating modals, command palettes, side drawers */
+  --bg-1:             #1e1e2e;   /* generic component background — same level as card */
 
   /* Borders */
   --border-primary:   #2a2a3e;   /* most borders — subtle */
@@ -29,6 +32,7 @@
   --accent-muted:     #00FF8812; /* user msg bg, hover tints */
   --accent-border:    #00FF8825; /* user msg border */
   --accent-dim:       #00FF8840; /* input focus ring */
+  --accent-rgb:       0, 255, 136; /* RGB components for rgba(var(--accent-rgb), α) usage */
   --aqua:             #00FF88;   /* compat — same as accent */
   --success:          #00FF88;   /* compat */
   --danger:           #FF4444;   /* errors, denied, destructive */
@@ -37,6 +41,8 @@
   --warning-muted:    rgba(255,170,0,0.08);
   --info:             #4477FF;   /* tool names, keywords, links */
   --info-muted:       rgba(68,119,255,0.08);
+  --purple:           #C792EA;   /* notifications category, special accents */
+  --purple-muted:     rgba(199,146,234,0.1);
   --gold:             #FFAA00;   /* compat — cost numbers */
   --green-add:        #00FF88;   /* diff additions */
   --red-del:          #FF4444;   /* diff deletions */
