@@ -28,6 +28,7 @@ pub mod plugin;
 pub mod updater;
 pub mod memory;
 pub mod routing;
+pub mod orphan;
 
 // Register all Tauri commands on the builder from within the lib crate.
 // generate_handler! must run here so the __cmd__* macros (produced by
@@ -147,6 +148,7 @@ pub fn register_commands(
             search_memory, get_memory_stats, summarize_session_cmd,
         },
         routing_commands::{suggest_worker_for_task, get_worker_affinity_stats},
+        orphan_commands::{get_orphaned_tasks, force_release_task},
     };
     builder.invoke_handler(tauri::generate_handler![
         // Agent
@@ -415,5 +417,8 @@ pub fn register_commands(
         // Routing (Ruflo Feature 1 — Semantic Task Routing)
         suggest_worker_for_task,
         get_worker_affinity_stats,
+        // Orphan Detection (Ruflo Feature 2 — PID-Based Orphan Detection)
+        get_orphaned_tasks,
+        force_release_task,
     ])
 }

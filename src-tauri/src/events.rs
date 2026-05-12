@@ -50,6 +50,10 @@ pub const EVT_TASK_CHANGED:      &str = "task:changed";
 // Phase 3.5 — plan changes push channel. Emitted from every plan DB write.
 pub const EVT_PLAN_CHANGED:      &str = "plan:changed";
 
+// Ruflo Feature 2 — PID orphan detection. Fired when the Supervisor poll cycle
+// releases one or more stale tasks back to the ready queue.
+pub const EVT_TASK_ORPHANS_RELEASED: &str = "task:orphans-released";
+
 // Phase 4.9 — subagent lifecycle events. One event per SSE frame received
 // from core-orchestrator's `/api/agents/{id}/invoke/stream`, plus internal
 // status transitions (Spawning / Idle / Running / Completed / Failed /
@@ -315,5 +319,20 @@ pub fn emit_subagent_event(app: &AppHandle, payload: SubagentEventPayload) {
 pub fn emit_subagent_event_global(payload: SubagentEventPayload) {
     if let Some(app) = app_handle() {
         emit_subagent_event(app, payload);
+    }
+}
+
+// ── Ruflo Feature 2 — Orphan detection events ─────────────────────────────────
+
+#[derive(Debug, Serialize, Clone)]
+pub struct OrphansReleasedPayload {
+    pub task_ids: Vec<String>,
+    pub count:    usize,
+}
+
+pub fn emit_orphans_released_global(task_ids: Vec<String>) {
+    if let Some(app) = app_handle() {
+        let count = task_ids.len();
+        let _ = app.emit(EVT_TASK_ORPHANS_RELEASED, OrphansReleasedPayload { task_ids, count });
     }
 }

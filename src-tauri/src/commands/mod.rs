@@ -29,3 +29,4 @@ pub mod plugin_commands;
 pub mod updater_commands;
 pub mod memory_commands;
 pub mod routing_commands;
+pub mod orphan_commands;

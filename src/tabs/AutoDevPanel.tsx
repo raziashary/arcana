@@ -24,6 +24,7 @@ import { SubagentMonitor } from '../components/subagent/SubagentMonitor'
 import { LiveMonitorSection } from '../components/autodev/LiveMonitorSection'
 import { useAgentLiveStore }  from '../stores/agentLiveStore'
 import { WorkerAffinityPanel } from '../components/dashboard/WorkerAffinityPanel'
+import { OrphanAlert } from '../components/dashboard/OrphanAlert'
 import '../components/autodev/LiveMonitor.css'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -803,6 +804,9 @@ export default function AutoDevTab() {
         </div>
         </div> {/* closes flex items-center gap-3 */}
       </div>
+
+      {/* Orphan Alert — shows toast when worker processes die (Ruflo Feature 2) */}
+      <OrphanAlert />
 
       {/* Agent roster table */}
       <AgentRoster tasks={tasks} />

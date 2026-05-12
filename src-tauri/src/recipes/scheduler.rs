@@ -115,6 +115,17 @@ impl RecipeScheduler {
             } else {
                 info!("[RecipeScheduler] Orchestrator still starting — firing STARTUP tick for '{}' (Mode 1 fallback)", slug_owned);
             }
+
+            // Ruflo Feature 2 — run orphan detection before the Supervisor tick
+            // so it sees freshly-released tasks on this poll.
+            if slug_owned == "supervisor" {
+                let released = crate::orphan::reconcile();
+                if !released.is_empty() {
+                    info!("[OrphanDetector] Startup: released {} orphaned tasks: {:?}", released.len(), released);
+                    crate::events::emit_orphans_released_global(released);
+                }
+            }
+
             if let Err(e) = runner.run_recipe(&recipe, &slug_owned).await {
                 error!("[RecipeScheduler] Startup tick failed for '{}': {e}", slug_owned);
                 // Non-fatal: continue to cron loop even if startup tick failed
@@ -180,6 +191,18 @@ impl RecipeScheduler {
 
                 match current_status.as_deref() {
                     Some("idle") | Some("active") | Some("error") => {
+                        // Ruflo Feature 2 — run orphan detection before each Supervisor tick
+                        if slug_owned == "supervisor" {
+                            let released = crate::orphan::reconcile();
+                            if !released.is_empty() {
+                                info!(
+                                    "[OrphanDetector] Released {} orphaned tasks: {:?}",
+                                    released.len(), released
+                                );
+                                crate::events::emit_orphans_released_global(released);
+                            }
+                        }
+
                         // Fire the recipe
                         info!("[RecipeScheduler] Firing recipe '{}' for worker '{}'", recipe_id, slug_owned);
                         if let Err(e) = runner.run_recipe(&recipe, &slug_owned).await {

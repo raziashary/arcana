@@ -302,7 +302,7 @@ worker-frontend |    1 (100%)   |   18 (94%)     |    0          |   94%
 
 **File:** `src-tauri/Cargo.toml`
 
-- [ ] Verify `sysinfo` crate is present; if not, add:
+- [x] Verify `sysinfo` crate is present; if not, add: *(already at `sysinfo = "0.33"` in Cargo.toml)*
 
 ```toml
 [dependencies]
@@ -319,14 +319,14 @@ sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 
 Add PID tracking columns to the `tasks` table. Workers record their own PID when claiming a task.
 
-- [ ] Migration — add to existing schema or as a new migration:
+- [x] Migration — add to existing schema or as a new migration:
 
 ```sql
 ALTER TABLE tasks ADD COLUMN claimed_by_pid INTEGER;
 ALTER TABLE tasks ADD COLUMN claim_host     TEXT;  -- hostname for future multi-machine use
 ```
 
-- [ ] Update `Task` struct in `db/tasks.rs`:
+- [x] Update `Task` struct in `db/tasks.rs`:
 
 ```rust
 pub struct Task {
@@ -336,7 +336,7 @@ pub struct Task {
 }
 ```
 
-- [ ] Add DB functions:
+- [x] Add DB functions:
   - `claim_task_with_pid(task_id: &str, worker_slug: &str, pid: u32) -> Result<()>` — sets `status = 'in_progress'`, `assigned_worker`, `claimed_by_pid`, `claim_host = hostname::get()`
   - `get_orphan_candidates() -> Result<Vec<Task>>` — returns tasks with `status IN ('assigned', 'in_progress') AND claimed_by_pid IS NOT NULL`
   - `release_orphaned_task(task_id: &str, reason: &str) -> Result<()>` — resets `status = 'ready'`, clears `assigned_worker`, `claimed_by_pid`, appends reason to task notes
@@ -348,7 +348,7 @@ pub struct Task {
 **File:** `src-tauri/src/orphan/mod.rs` *(new file)*  
 **File:** `src-tauri/src/orphan/pid_checker.rs` *(new file)*
 
-- [ ] `pid_checker.rs`:
+- [x] `pid_checker.rs`:
 
 ```rust
 use sysinfo::{System, Pid};
@@ -377,7 +377,7 @@ pub fn is_autodev_process(pid: u32) -> bool {
 }
 ```
 
-- [ ] `mod.rs`:
+- [x] `mod.rs`:
 
 ```rust
 pub mod pid_checker;
@@ -450,8 +450,8 @@ impl OrphanDetector {
 
 **File:** `src-tauri/src/state/app_state.rs`
 
-- [ ] Add `pub orphan_detector: Arc<OrphanDetector>` to `AppState`
-- [ ] Initialize in `main.rs` after DB is ready:
+- [x] Add `pub orphan_detector: Arc<OrphanDetector>` to `AppState` *(implemented as a stateless module — `crate::orphan::reconcile()` free function, no AppState field needed)*
+- [x] Initialize in `main.rs` after DB is ready: *(n/a — stateless; called directly from scheduler)*
 
 ```rust
 let orphan_detector = Arc::new(OrphanDetector::new(db.tasks.clone()));
@@ -465,7 +465,7 @@ let orphan_detector = Arc::new(OrphanDetector::new(db.tasks.clone()));
 
 The Supervisor recipe already polls every 2 minutes. We hook orphan detection into the Supervisor's startup tick and each subsequent poll.
 
-- [ ] In the scheduler's Supervisor tick handler (the section that fires before/after `RecipeRunner::run_recipe()`):
+- [x] In the scheduler's Supervisor tick handler (the section that fires before/after `RecipeRunner::run_recipe()`):
 
 ```rust
 // Run orphan detection BEFORE the Supervisor recipe executes
@@ -478,7 +478,7 @@ if !released.is_empty() {
 }
 ```
 
-- [ ] This means orphan detection runs every ~2 minutes (same as Supervisor poll) — no extra timer needed
+- [x] This means orphan detection runs every ~2 minutes (same as Supervisor poll) — no extra timer needed
 
 ---
 
@@ -489,7 +489,7 @@ if !released.is_empty() {
 
 Workers need to record their PID when claiming a task. Expose a new MCP tool `claim_task` that replaces calling `update_task_status` with `in_progress`.
 
-- [ ] Add MCP tool definition in `server.rs`:
+- [x] Add MCP tool definition in `server.rs`:
 
 ```rust
 Tool {
@@ -505,7 +505,7 @@ Tool {
 }
 ```
 
-- [ ] Handler in `tool_adapter.rs`:
+- [x] Handler in `tool_adapter.rs`:
 
 ```rust
 "claim_task" => {
@@ -516,7 +516,7 @@ Tool {
 }
 ```
 
-- [ ] Add `claim_task` to the allowed tools list for worker recipes (not for QC or Supervisor — they use `assign_task`)
+- [x] Add `claim_task` to the allowed tools list for worker recipes (not for QC or Supervisor — they use `assign_task`) *(registered in `register_for_mcp_worker` and `FastDevelopment/Review` modes)*
 
 ---
 
@@ -524,9 +524,9 @@ Tool {
 
 **File:** `src-tauri/src/commands/task_commands.rs`
 
-- [ ] `get_orphaned_tasks() -> Result<Vec<Task>>` — returns current orphan candidates with their PID and age
-- [ ] `force_release_task(task_id: String) -> Result<()>` — manual override for Razi to release a stuck task from the UI
-- [ ] Register in `commands/mod.rs`
+- [x] `get_orphaned_tasks() -> Result<Vec<Task>>` — returns current orphan candidates with their PID and age
+- [x] `force_release_task(task_id: String) -> Result<()>` — manual override for Razi to release a stuck task from the UI
+- [x] Register in `commands/mod.rs`
 
 ---
 
@@ -535,7 +535,7 @@ Tool {
 **File:** `src/stores/agentStore.ts` or `src/stores/dashboardStore.ts`  
 **File:** `src/components/dashboard/OrphanAlert.tsx` *(new file)*
 
-- [ ] Listen for `task:orphans-released` event in the dashboard store:
+- [x] Listen for `task:orphans-released` event in the dashboard store:
 
 ```typescript
 listen('task:orphans-released', (event) => {
@@ -550,8 +550,8 @@ listen('task:orphans-released', (event) => {
 });
 ```
 
-- [ ] `OrphanAlert.tsx` — small toast-style notification in the AutoDev Panel: "⚠️ 2 tasks released — worker process exited unexpectedly. Tasks returned to Ready queue."
-- [ ] Auto-dismiss after 10 seconds
+- [x] `OrphanAlert.tsx` — small toast-style notification in the AutoDev Panel: "⚠️ 2 tasks released — worker process exited unexpectedly. Tasks returned to Ready queue."
+- [x] Auto-dismiss after 10 seconds
 
 ---
 

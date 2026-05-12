@@ -157,6 +157,9 @@ pub struct Task {
     pub created_at:           String,
     pub updated_at:           String,
     pub completed_at:         Option<String>,
+    // PID-based orphan detection (Ruflo Feature 2)
+    pub claimed_by_pid:       Option<i64>,
+    pub claim_host:           Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -257,6 +260,13 @@ impl TasksDb {
         let _ = self.conn.execute_batch(
             "ALTER TABLE tasks ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;"
         );
+        // Ruflo Feature 2 — PID-based orphan detection
+        let _ = self.conn.execute_batch(
+            "ALTER TABLE tasks ADD COLUMN claimed_by_pid INTEGER;"
+        );
+        let _ = self.conn.execute_batch(
+            "ALTER TABLE tasks ADD COLUMN claim_host TEXT;"
+        );
         // Routing history table (Ruflo Feature 1 — semantic task routing)
         self.conn.execute_batch(
             "
@@ -305,7 +315,8 @@ impl TasksDb {
         let mut stmt = self.conn.prepare(
             "SELECT id, title, description, priority, task_type, status,
                     acceptance_criteria, assigned_worker, rejection_reason, retry_count,
-                    created_by, created_at, updated_at, completed_at
+                    created_by, created_at, updated_at, completed_at,
+                    claimed_by_pid, claim_host
              FROM tasks WHERE id = ?1"
         )?;
         let task = stmt.query_row(params![id], row_to_task).optional()?;
@@ -317,7 +328,8 @@ impl TasksDb {
             (
                 "SELECT id, title, description, priority, task_type, status,
                          acceptance_criteria, assigned_worker, rejection_reason, retry_count,
-                         created_by, created_at, updated_at, completed_at
+                         created_by, created_at, updated_at, completed_at,
+                         claimed_by_pid, claim_host
                  FROM tasks WHERE status = ?1 ORDER BY created_at ASC",
                 vec![status.to_string()],
             )
@@ -325,7 +337,8 @@ impl TasksDb {
             (
                 "SELECT id, title, description, priority, task_type, status,
                          acceptance_criteria, assigned_worker, rejection_reason, retry_count,
-                         created_by, created_at, updated_at, completed_at
+                         created_by, created_at, updated_at, completed_at,
+                         claimed_by_pid, claim_host
                  FROM tasks ORDER BY created_at ASC",
                 vec![],
             )
@@ -344,7 +357,8 @@ impl TasksDb {
         let mut stmt = self.conn.prepare(
             "SELECT id, title, description, priority, task_type, status,
                     acceptance_criteria, assigned_worker, rejection_reason, retry_count,
-                    created_by, created_at, updated_at, completed_at
+                    created_by, created_at, updated_at, completed_at,
+                    claimed_by_pid, claim_host
              FROM tasks WHERE status = ?1 AND assigned_worker = ?2 ORDER BY id"
         )?;
         let tasks = stmt.query_map(params![status, worker], row_to_task)?
@@ -493,6 +507,58 @@ impl TasksDb {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // PID-Based Orphan Detection (Ruflo Feature 2)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Claim a task and record the worker's PID for orphan detection.
+    /// Transitions status from `assigned` → `in_progress`.
+    pub fn claim_task_with_pid(&self, id: i64, worker_slug: &str, pid: u32) -> Result<()> {
+        let host = std::env::var("COMPUTERNAME")
+            .or_else(|_| std::env::var("HOSTNAME"))
+            .unwrap_or_else(|_| "unknown".to_string());
+        self.conn.execute(
+            "UPDATE tasks
+             SET status = 'in_progress', assigned_worker = ?1,
+                 claimed_by_pid = ?2, claim_host = ?3,
+                 updated_at = datetime('now')
+             WHERE id = ?4 AND status = 'assigned'",
+            params![worker_slug, pid as i64, host, id],
+        )?;
+        Ok(())
+    }
+
+    /// Returns all tasks in `assigned` or `in_progress` state — candidates for
+    /// orphan checking. Both PID-tracked and non-PID (TTL fallback) tasks included.
+    pub fn get_orphan_candidates(&self) -> Result<Vec<Task>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, description, priority, task_type, status,
+                    acceptance_criteria, assigned_worker, rejection_reason, retry_count,
+                    created_by, created_at, updated_at, completed_at,
+                    claimed_by_pid, claim_host
+             FROM tasks
+             WHERE status IN ('assigned', 'in_progress')
+             ORDER BY updated_at ASC"
+        )?;
+        let tasks = stmt.query_map([], row_to_task)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(tasks)
+    }
+
+    /// Release an orphaned task back to `ready`, clearing assignment and PID data.
+    pub fn release_orphaned_task(&self, id: i64, reason: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tasks
+             SET status = 'ready', assigned_worker = NULL,
+                 claimed_by_pid = NULL, claim_host = NULL,
+                 rejection_reason = ?1,
+                 updated_at = datetime('now')
+             WHERE id = ?2",
+            params![format!("[orphan] {reason}"), id],
+        )?;
+        Ok(())
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // Routing History — Supervisor assignment records for affinity learning
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -630,6 +696,8 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         created_at:          row.get(11)?,
         updated_at:          row.get(12)?,
         completed_at:        row.get(13)?,
+        claimed_by_pid:      row.get(14).unwrap_or(None),
+        claim_host:          row.get(15).unwrap_or(None),
     })
 }
 
