@@ -24,6 +24,7 @@ pub mod remember_this;
 pub mod validate;
 pub mod check_file;
 pub mod append_file;
+pub mod suggest_worker_tool;
 
 use std::sync::Arc;
 use super::{PAMode, tool_registry::ToolRegistry};
@@ -54,6 +55,8 @@ pub fn register_for_mcp_worker(registry: &mut ToolRegistry) {
     registry.register(Arc::new(update_task_status_tool::UpdateTaskStatusTool));
     // Worker→Supervisor communication — workers can request action without task-creation power
     registry.register(Arc::new(request_supervisor_action::RequestSupervisorActionTool));
+    // Routing — Supervisor uses this before assign_task; safe to expose to all workers
+    registry.register(Arc::new(suggest_worker_tool::SuggestWorkerTool));
     // NOT exposed: assign_task, create_task, planner, spawn_subagent, spawn_parallel_subagents
 }
 
@@ -96,6 +99,8 @@ pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
             // Memory tools (Phase 4.7) — available in all non-delegate modes
             registry.register(Arc::new(search_memory::SearchMemoryTool));
             registry.register(Arc::new(remember_this::RememberThisTool));
+            // Routing — suggest_worker for PA-mode routing awareness
+            registry.register(Arc::new(suggest_worker_tool::SuggestWorkerTool));
         }
         PAMode::Delegate => {
             registry.register(Arc::new(create_task::CreateTaskTool));

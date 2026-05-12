@@ -2738,7 +2738,210 @@ All browser tools include:
 
 ---
 
-### 5.6 Summary of Feature Locations
+### 5.6 Web Search Configuration & Capability
+
+**Location:** Configuration in `config.toml`, capability in agent definitions, metrics in `ruflo/src/ruvocal/src/lib/server/metrics.ts`
+
+**Purpose:** Web search is configured as a system capability that enables agents to access the internet for research and information gathering.
+
+**Complete Feature Explanation:**
+
+Unlike the other feature groups documented in this section, Ruflo's web search functionality is not implemented as a dedicated set of MCP tools. Instead, it is a **configuration-based capability** that controls whether agents have internet access for research purposes. Web search is configured via the `web_search` setting in `config.toml` and exposed as a capability (`web-search`) that can be assigned to agent types, particularly researcher agents.
+
+**Configuration Breakdown:**
+
+```toml
+# config.toml
+# Web search enables internet access for research
+# - disabled: No web access
+# - cached: Use cached results when available
+# - live: Always fetch fresh results
+web_search = "cached"
+```
+
+**Type Definition:**
+
+```typescript
+// v3/@claude-flow/codex/src/types.ts
+export type WebSearchMode = 'disabled' | 'cached' | 'live';
+```
+
+**Configuration Validation:**
+
+```typescript
+// v3/@claude-flow/codex/src/validators/index.ts
+const VALID_WEB_SEARCH_MODES = ['disabled', 'cached', 'live'];
+
+// Validate web_search value
+const webSearchMatch = content.match(/web_search\s*=\s*"([^"]+)"/);
+if (webSearchMatch) {
+  const mode = webSearchMatch[1];
+  if (!VALID_WEB_SEARCH_MODES.includes(mode)) {
+    errors.push({
+      path: 'config.toml',
+      message: `Invalid web_search: "${mode}". Valid values: ${VALID_WEB_SEARCH_MODES.join(', ')}`,
+      line: findFieldLine(lines, 'web_search'),
+    });
+  }
+}
+```
+
+**Agent Capability Assignment:**
+
+```typescript
+// v3/@claude-flow/cli/src/commands/agent.ts
+const AGENT_TYPES = [
+  { value: 'coder', label: 'Coder', hint: 'Code development with neural patterns' },
+  { value: 'researcher', label: 'Researcher', hint: 'Research with web access and data analysis' },
+  // ...
+];
+
+function getAgentCapabilities(type: string): string[] {
+  const capabilities: Record<string, string[]> = {
+    coder: ['code-generation', 'refactoring', 'debugging', 'testing'],
+    researcher: ['web-search', 'data-analysis', 'summarization', 'citation'],
+    // ...
+  };
+  return capabilities[type] || [];
+}
+```
+
+**Worker Definition:**
+
+```typescript
+// v3/@claude-flow/plugins/src/workers/index.ts
+static createResearcher(name: string, capabilities?: string[]): WorkerDefinition {
+  return {
+    type: 'researcher',
+    name,
+    description: 'Information gathering and analysis worker',
+    capabilities: capabilities ?? ['web-search', 'documentation-analysis', 'pattern-recognition'],
+    maxConcurrentTasks: 6,
+    timeout: 60000,
+    priority: 40,
+  };
+}
+```
+
+**Known Tools Reference:**
+
+```typescript
+// v3/@claude-flow/guidance/src/manifest-validator.ts
+const KNOWN_TOOLS = new Set([
+  'Read', 'Write', 'Edit', 'MultiEdit', 'Glob', 'Grep',
+  'Bash', 'Task', 'TodoWrite', 'NotebookEdit', 'WebFetch', 'WebSearch',
+  'mcp_memory', 'mcp_swarm', 'mcp_hooks', 'mcp_agent',
+]);
+```
+
+**Metrics Tracking:**
+
+```typescript
+// ruflo/src/ruvocal/src/lib/server/metrics.ts
+webSearch: {
+  requestCount: new Counter({
+    name: "web_search_request_count",
+    help: "Total number of web search requests",
+    registers: [registry],
+  }),
+  pageFetchCount: new Counter({
+    name: "web_search_page_fetch_count",
+    help: "Total number of web search page fetches",
+    registers: [registry],
+  }),
+  pageFetchCountError: new Counter({
+    name: "web_search_page_fetch_count_error",
+    help: "Total number of web search page fetch errors",
+    registers: [registry],
+  }),
+  pageFetchDuration: new Summary({
+    name: "web_search_page_fetch_duration_ms",
+    help: "Duration of web search page fetches in milliseconds",
+    registers: [registry],
+    maxAgeSeconds: 5 * 60,
+    ageBuckets: 5,
+  }),
+  embeddingDuration: new Summary({
+    name: "web_search_embedding_duration_ms",
+    help: "Duration of web search embeddings in milliseconds",
+    registers: [registry],
+    maxAgeSeconds: 5 * 60,
+    ageBuckets: 5,
+  }),
+}
+```
+
+**Configuration Profiles:**
+
+```typescript
+// v3/@claude-flow/codex/src/generators/config-toml.ts
+const defaultProfiles: Record<string, ConfigProfile> = {
+  dev: {
+    approvalPolicy: 'never',
+    sandboxMode: 'danger-full-access',
+    webSearch: 'live',
+  },
+  safe: {
+    approvalPolicy: 'untrusted',
+    sandboxMode: 'read-only',
+    webSearch: 'disabled',
+  },
+  ci: {
+    approvalPolicy: 'never',
+    sandboxMode: 'workspace-write',
+    webSearch: 'cached',
+  },
+};
+```
+
+**Key Components:**
+
+- **Configuration File:** `config.toml` with `web_search` setting
+- **Validation:** Ensures only valid modes ('disabled', 'cached', 'live') are used
+- **Agent Capability:** 'web-search' capability assigned to researcher agents
+- **Known Tools:** WebSearch and WebFetch listed in KNOWN_TOOLS set for tool routing
+- **Metrics:** Prometheus-style metrics for request count, page fetches, duration, and errors
+
+**Web Search Modes:**
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| **disabled** | No web access allowed | Secure environments, offline mode, CI/CD pipelines |
+| **cached** | Use cached results when available | Development, reduced API costs, faster responses |
+| **live** | Always fetch fresh results | Research tasks, real-time data, latest information |
+
+**Agent Types with Web Search:**
+
+| Agent Type | Web Search Capability | Description |
+|-------------|----------------------|-------------|
+| researcher | ✅ Yes | Research with web access and data analysis |
+| coder | ❌ No | Code development with neural patterns |
+| tester | ❌ No | Comprehensive testing with automation |
+| reviewer | ❌ No | Code review with security and quality checks |
+| architect | ❌ No | System design with enterprise patterns |
+
+**Intent Routing:**
+
+```typescript
+// v3/@claude-flow/plugins/examples/ruvector-plugins/intent-router.ts
+{ pattern: 'search find research', category: 'research', 
+  handlers: [{ type: 'agent', name: 'researcher', weight: 1.0 }, { type: 'tool', name: 'WebSearch', weight: 0.8 }], 
+  priority: 8, examples: ['look up', 'research topic'] }
+```
+
+**Important Notes:**
+
+1. **Not MCP Tools:** Web search is not implemented as a set of MCP tools in the v3 codebase. It is a configuration-based capability.
+
+2. **Historical Context:** In archive/v2 code, WebSearch and WebFetch were referenced as tools, but in v3 they are primarily configuration/capability features.
+
+3. **External Integration:** Actual web search functionality may be provided through external MCP servers or integrated services, not through Ruflo's core MCP tools.
+
+4. **Metrics Only:** The metrics in ruvocal track web search operations but do not implement the search functionality itself.
+
+---
+
+### 5.7 Summary of Feature Locations
 
 | Feature Group | Feature | File Location | Lines |
 |---------------|---------|---------------|-------|

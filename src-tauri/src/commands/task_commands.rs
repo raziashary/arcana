@@ -42,6 +42,24 @@ pub fn update_task_status(id: i64, status: String, assigned_worker: Option<Strin
         _ => {}
     }
 
+    // Ruflo Feature 1 — record routing outcome when a task reaches a terminal state.
+    // duration_ms and tokens are 0 here (no timing data available at command level);
+    // the DB UPDATE only touches rows with outcome IS NULL so it's safe to call always.
+    let task_id_str = id.to_string();
+    match status.as_str() {
+        "done" => {
+            let _ = crate::routing::TaskRouter::record_outcome(&task_id_str, "success", 0, 0);
+        }
+        "failed" => {
+            let _ = crate::routing::TaskRouter::record_outcome(&task_id_str, "failure", 0, 0);
+        }
+        "assigned" => {
+            // Reassignment — mark any pending routing row as reassigned
+            let _ = crate::routing::TaskRouter::record_outcome(&task_id_str, "reassigned", 0, 0);
+        }
+        _ => {}
+    }
+
     emit_task_changed_global(TaskChangedPayload {
         task_id: Some(id),
         kind:    "status".into(),

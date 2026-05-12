@@ -23,6 +23,7 @@ import { useSidecarStore } from '../stores/sidecarStore'
 import { SubagentMonitor } from '../components/subagent/SubagentMonitor'
 import { LiveMonitorSection } from '../components/autodev/LiveMonitorSection'
 import { useAgentLiveStore }  from '../stores/agentLiveStore'
+import { WorkerAffinityPanel } from '../components/dashboard/WorkerAffinityPanel'
 import '../components/autodev/LiveMonitor.css'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -805,6 +806,9 @@ export default function AutoDevTab() {
 
       {/* Agent roster table */}
       <AgentRoster tasks={tasks} />
+
+      {/* Worker Affinity — historical routing performance per worker (Ruflo Feature 1) */}
+      <WorkerAffinityPanel />
 
       {/* Worker Requests — Fleet→Supervisor escalation queue */}
       <WorkerRequestsWidget

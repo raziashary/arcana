@@ -5,6 +5,7 @@
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use crate::errors::{AutoDevError, Result};
 use super::autodev_dir;
 
@@ -168,6 +169,22 @@ pub struct CreateTaskInput {
     pub created_by:          Option<String>,
 }
 
+// ─── Routing History ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoutingHistoryEntry {
+    pub id:           String,
+    pub task_id:      String,
+    pub task_title:   String,
+    pub task_type:    String,
+    pub worker_slug:  String,
+    pub assigned_at:  String,
+    pub outcome:      Option<String>,
+    pub outcome_at:   Option<String>,
+    pub duration_ms:  Option<i64>,
+    pub tokens_used:  Option<i64>,
+}
+
 // ─── Repository ───────────────────────────────────────────────────────────────
 
 pub struct TasksDb {
@@ -240,6 +257,29 @@ impl TasksDb {
         let _ = self.conn.execute_batch(
             "ALTER TABLE tasks ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;"
         );
+        // Routing history table (Ruflo Feature 1 — semantic task routing)
+        self.conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS routing_history (
+                id           TEXT PRIMARY KEY,
+                task_id      TEXT NOT NULL,
+                task_title   TEXT NOT NULL,
+                task_type    TEXT NOT NULL,
+                worker_slug  TEXT NOT NULL,
+                assigned_at  TEXT NOT NULL,
+                outcome      TEXT,
+                outcome_at   TEXT,
+                duration_ms  INTEGER,
+                tokens_used  INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_routing_history_worker
+                ON routing_history(worker_slug);
+            CREATE INDEX IF NOT EXISTS idx_routing_history_task_type
+                ON routing_history(task_type);
+            CREATE INDEX IF NOT EXISTS idx_routing_history_outcome
+                ON routing_history(outcome);
+            "
+        )?;
         Ok(())
     }
 
@@ -450,6 +490,127 @@ impl TasksDb {
         );
         self.conn.execute(&sql, params![status, resolution_note, id])?;
         Ok(())
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Routing History — Supervisor assignment records for affinity learning
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    pub fn insert_routing_history(&self, entry: &RoutingHistoryEntry) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO routing_history
+             (id, task_id, task_title, task_type, worker_slug, assigned_at,
+              outcome, outcome_at, duration_ms, tokens_used)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                entry.id,
+                entry.task_id,
+                entry.task_title,
+                entry.task_type,
+                entry.worker_slug,
+                entry.assigned_at,
+                entry.outcome,
+                entry.outcome_at,
+                entry.duration_ms,
+                entry.tokens_used,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_routing_outcome(
+        &self,
+        task_id: &str,
+        outcome: &str,
+        duration_ms: i64,
+        tokens_used: i64,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE routing_history
+             SET outcome = ?1, outcome_at = datetime('now'),
+                 duration_ms = CASE WHEN ?2 > 0 THEN ?2 ELSE duration_ms END,
+                 tokens_used = CASE WHEN ?3 > 0 THEN ?3 ELSE tokens_used END
+             WHERE task_id = ?4 AND outcome IS NULL",
+            params![outcome, duration_ms, tokens_used, task_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_routing_history(&self, limit: i64) -> Result<Vec<RoutingHistoryEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, task_id, task_title, task_type, worker_slug, assigned_at,
+                    outcome, outcome_at, duration_ms, tokens_used
+             FROM routing_history
+             ORDER BY assigned_at DESC LIMIT ?1"
+        )?;
+        let entries = stmt.query_map(params![limit], |row| {
+            Ok(RoutingHistoryEntry {
+                id:          row.get(0)?,
+                task_id:     row.get(1)?,
+                task_title:  row.get(2)?,
+                task_type:   row.get(3)?,
+                worker_slug: row.get(4)?,
+                assigned_at: row.get(5)?,
+                outcome:     row.get(6)?,
+                outcome_at:  row.get(7)?,
+                duration_ms: row.get(8)?,
+                tokens_used: row.get(9)?,
+            })
+        })?.collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(entries)
+    }
+
+    /// Returns per-worker success rate keyed as "{worker_slug}:{task_type}" → rate (0.0–1.0).
+    /// Only workers with at least 1 completed (success or failure) entry are included.
+    pub fn get_worker_success_rates(&self) -> Result<HashMap<String, f64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT worker_slug, task_type,
+                    SUM(CASE WHEN outcome = 'success' THEN 1 ELSE 0 END) AS successes,
+                    SUM(CASE WHEN outcome IN ('success','failure') THEN 1 ELSE 0 END) AS total
+             FROM routing_history
+             WHERE outcome IS NOT NULL
+             GROUP BY worker_slug, task_type
+             HAVING total > 0"
+        )?;
+        let mut map = HashMap::new();
+        let rows = stmt.query_map([], |row| {
+            let worker: String = row.get(0)?;
+            let task_type: String = row.get(1)?;
+            let successes: f64 = row.get::<_, i64>(2)? as f64;
+            let total: f64 = row.get::<_, i64>(3)? as f64;
+            Ok((worker, task_type, successes / total))
+        })?;
+        for row in rows {
+            let (worker, task_type, rate) = row?;
+            map.insert(format!("{worker}:{task_type}"), rate);
+        }
+        Ok(map)
+    }
+
+    /// Aggregate routing_history into per-worker, per-task-type affinity stats.
+    /// Returns rows ordered by worker_slug then task_type.
+    pub fn get_affinity_stats(&self) -> Result<Vec<(String, String, i64, i64, i64, Option<i64>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT worker_slug, task_type,
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN outcome = 'success' THEN 1 ELSE 0 END) AS successes,
+                    SUM(CASE WHEN outcome = 'failure' THEN 1 ELSE 0 END) AS failures,
+                    CAST(AVG(CASE WHEN duration_ms > 0 THEN duration_ms END) AS INTEGER) AS avg_dur
+             FROM routing_history
+             GROUP BY worker_slug, task_type
+             ORDER BY worker_slug, task_type"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, Option<i64>>(5)?,
+            ))
+        })?.collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 }
 

@@ -27,6 +27,7 @@ pub mod graph;
 pub mod plugin;
 pub mod updater;
 pub mod memory;
+pub mod routing;
 
 // Register all Tauri commands on the builder from within the lib crate.
 // generate_handler! must run here so the __cmd__* macros (produced by
@@ -145,6 +146,7 @@ pub fn register_commands(
             search_procedural,
             search_memory, get_memory_stats, summarize_session_cmd,
         },
+        routing_commands::{suggest_worker_for_task, get_worker_affinity_stats},
     };
     builder.invoke_handler(tauri::generate_handler![
         // Agent
@@ -410,5 +412,8 @@ pub fn register_commands(
         set_plugin_config,
         generate_setup_token,
         validate_setup_token,
+        // Routing (Ruflo Feature 1 — Semantic Task Routing)
+        suggest_worker_for_task,
+        get_worker_affinity_stats,
     ])
 }

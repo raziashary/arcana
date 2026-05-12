@@ -108,6 +108,11 @@ impl Tool for AssignTaskTool {
             return ToolResult::error(&format!("Failed to assign task #{id}: {e}"));
         }
 
+        // Ruflo Feature 1 — record this assignment in routing_history so the
+        // affinity scorer can learn from it. Fire-and-forget; a failed record
+        // does not block the assignment.
+        let _ = crate::routing::TaskRouter::record_assignment(&task, &worker_slug);
+
         // Phase 3.0 R1 — push-based dispatch. The supervisor just handed work
         // to a worker; wake that worker *now* instead of waiting up to its
         // cron cadence. This is the fix for the "serialised pickup" symptom
