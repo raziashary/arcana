@@ -14,6 +14,7 @@ import RecipesTab  from './tabs/Recipes'
 import GraphTab    from './tabs/Graph'
 import SettingsTab from './tabs/Settings'
 import LogsTab     from './tabs/Logs'
+import DocsTab     from './tabs/Docs'
 import Dashboard   from './components/dashboard/Dashboard'
 import StartupOverlay from './components/startup/StartupOverlay'
 import ToastStack from './components/ToastStack'
@@ -27,7 +28,7 @@ import { useUpdateStore }   from './stores/updateStore'
 import { UpdateToast }      from './components/update/UpdateToast'
 import { UpdateDialog }     from './components/update/UpdateDialog'
 
-export type TabId = 'chat' | 'autodev' | 'ide' | 'recipes' | 'graph' | 'dashboard' | 'settings' | 'logs'
+export type TabId = 'chat' | 'autodev' | 'ide' | 'recipes' | 'graph' | 'dashboard' | 'settings' | 'logs' | 'docs'
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'chat',      label: 'Chat'      },
@@ -38,6 +39,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'settings',  label: 'Settings'  },
   { id: 'graph',     label: 'Graph'     },
   { id: 'dashboard', label: 'Dashboard' },
+  { id: 'docs',      label: 'Docs'      },
 ]
 
 export default function App() {
@@ -86,6 +88,7 @@ export default function App() {
           {activeTab === 'dashboard' && <Dashboard />}
           {activeTab === 'settings'  && <SettingsTab />}
           {activeTab === 'logs'      && <LogsTab />}
+          {activeTab === 'docs'      && <DocsTab />}
         </div>
 
         <Sidebar />
