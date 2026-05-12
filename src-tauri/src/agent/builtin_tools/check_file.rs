@@ -25,11 +25,13 @@ impl Tool for CheckFileTool {
         "Run lint / syntax / import checks on a file without executing it. \
          Three tiers are available:\n\
          • syntax  — fast in-process parse (JSON/YAML/TOML) or subprocess \
-           (py_compile for .py, node --check for .js). Always runs.\n\
+           (py_compile for .py, node --check for .js/.mjs/.cjs). Always runs.\n\
          • imports — cross-reference imports against requirements.txt / \
-           package.json. Pure Rust, no subprocess. Default: included.\n\
-         • types   — slow type checker (mypy/pyright for Python, tsc for \
-           TypeScript, eslint for JavaScript). Opt-in only.\n\n\
+           package.json. Covers .py, .js, .ts, .tsx, .jsx. Default: included.\n\
+         • types   — slow type checker (mypy/pyright for .py; tsc for .ts/.tsx; \
+           eslint for .js/.jsx). Opt-in only.\n\n\
+         Tiers that have no checker for the given file extension are silently \
+         skipped — only actionable results are returned.\n\n\
          Use after write_file or edit_file reports a syntax error, or before \
          marking a task done to verify the code is clean."
     }
@@ -109,51 +111,33 @@ impl Tool for CheckFileTool {
         let mut has_errors = false;
 
         // Tier 1 — syntax
+        // None means the extension has no checker — skip silently (no noise for .rs, .css, etc.)
         if run_syntax {
-            match validate::tier1_syntax(&path, &ctx.working_dir).await {
-                None => {
-                    let ext = path.extension()
-                        .map(|e| e.to_string_lossy().to_lowercase())
-                        .unwrap_or_default();
-                    sections.push(format!(
-                        "=== Syntax ===\n[unsupported] No syntax checker for .{ext} files.",
-                    ));
-                }
-                Some(result) => {
-                    let status = if result.is_clean() {
-                        format!("[{}] ✓ No syntax errors.", result.checker)
-                    } else {
-                        has_errors = true;
-                        result.format_inline()
-                    };
-                    sections.push(format!("=== Syntax ===\n{status}"));
-                }
+            if let Some(result) = validate::tier1_syntax(&path, &ctx.working_dir).await {
+                let status = if result.is_clean() {
+                    format!("[{}] ✓ No syntax errors.", result.checker)
+                } else {
+                    has_errors = true;
+                    result.format_inline()
+                };
+                sections.push(format!("=== Syntax ===\n{status}"));
             }
         }
 
         // Tier 2 — imports
+        // None means unsupported extension or no manifest found — skip silently.
         if run_imports {
-            match validate::tier2_imports(&path, &ctx.working_dir) {
-                None => {
-                    let ext = path.extension()
-                        .map(|e| e.to_string_lossy().to_lowercase())
-                        .unwrap_or_default();
-                    sections.push(format!(
-                        "=== Imports ===\n[unsupported] No import checker for .{ext} files.",
-                    ));
-                }
-                Some(result) => {
-                    let status = if result.is_clean() {
-                        format!("[{}] ✓ All imports resolvable.", result.checker)
-                    } else {
-                        has_errors = true;
-                        format!(
-                            "{}\n  Hint: add missing packages to requirements.txt or package.json.",
-                            result.format_inline()
-                        )
-                    };
-                    sections.push(format!("=== Imports ===\n{status}"));
-                }
+            if let Some(result) = validate::tier2_imports(&path, &ctx.working_dir) {
+                let status = if result.is_clean() {
+                    format!("[{}] ✓ All imports resolvable.", result.checker)
+                } else {
+                    has_errors = true;
+                    format!(
+                        "{}\n  Hint: add missing packages to requirements.txt or package.json.",
+                        result.format_inline()
+                    )
+                };
+                sections.push(format!("=== Imports ===\n{status}"));
             }
         }
 
@@ -178,6 +162,22 @@ impl Tool for CheckFileTool {
             .unwrap_or(&path)
             .to_string_lossy()
             .replace('\\', "/");
+
+        // If no tier produced output (all checkers returned None for this extension),
+        // surface a concise note rather than returning an empty body.
+        if sections.is_empty() {
+            let ext = path.extension()
+                .map(|e| format!(".{}", e.to_string_lossy().to_lowercase()))
+                .unwrap_or_else(|| "(no extension)".into());
+            return ToolResult::success(format!(
+                "check_file: {display_path}\n\
+                 No checkers available for {ext} files in the requested tiers ({}).\n\
+                 Supported: syntax → .json/.yaml/.toml/.py/.js; \
+                 imports → .py/.js/.ts/.tsx/.jsx; \
+                 types → .py/.ts/.tsx/.js/.jsx",
+                checks.join(", ")
+            ));
+        }
 
         let header = format!(
             "check_file: {} (checks: {})",

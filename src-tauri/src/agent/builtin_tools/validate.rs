@@ -442,12 +442,24 @@ async fn run_checker_subprocess(
                 String::from_utf8_lossy(&out.stderr),
             );
             // Cap output — type checkers can produce thousands of lines.
-            const MAX_CHECKER_BYTES: usize = 4_000;
-            let truncated = if combined.len() > MAX_CHECKER_BYTES {
+            // Show the FIRST N bytes so the earliest (most actionable) errors are
+            // always visible. Previously we showed the last N bytes, which meant
+            // the root-cause error was often cropped out in favour of cascading
+            // downstream errors.
+            const MAX_CHECKER_BYTES: usize = 16_000;
+            let capped = if combined.len() > MAX_CHECKER_BYTES {
+                let safe_end = combined
+                    .char_indices()
+                    .map(|(i, _)| i)
+                    .take_while(|&i| i < MAX_CHECKER_BYTES)
+                    .last()
+                    .unwrap_or(MAX_CHECKER_BYTES);
                 format!(
-                    "[output truncated — showing last {} bytes]\n{}",
-                    MAX_CHECKER_BYTES,
-                    &combined[combined.len() - MAX_CHECKER_BYTES..]
+                    "{}\n[... output truncated — {} bytes total, showing first {}. \
+                     Fix the errors above, then re-run to see remaining issues.]",
+                    &combined[..safe_end],
+                    combined.len(),
+                    safe_end,
                 )
             } else {
                 combined
@@ -456,7 +468,7 @@ async fn run_checker_subprocess(
                 checker: checker.to_string(),
                 diagnostics: vec![LintDiagnostic {
                     severity: "error",
-                    message:  truncated.trim().to_string(),
+                    message:  capped.trim().to_string(),
                     line:     None,
                 }],
             }
@@ -469,16 +481,26 @@ async fn run_checker_subprocess(
 /// Return the Python binary path, preferring a virtual-environment interpreter
 /// over the system Python so that project dependencies are on sys.path.
 pub fn resolve_python(working_dir: &str) -> String {
+    // Common virtual-environment directory names, checked in priority order.
+    // Many tools use non-standard names (.env, env, .venv39, etc.) — cover the
+    // most common ones so `py_compile` doesn't silently fall back to a system
+    // Python that lacks the project's dependencies.
     let candidates: Vec<String> = if cfg!(target_os = "windows") {
         vec![
             format!("{working_dir}\\.venv\\Scripts\\python.exe"),
             format!("{working_dir}\\venv\\Scripts\\python.exe"),
+            format!("{working_dir}\\env\\Scripts\\python.exe"),
+            format!("{working_dir}\\.env\\Scripts\\python.exe"),
             "python".into(),
         ]
     } else {
         vec![
             format!("{working_dir}/.venv/bin/python3"),
             format!("{working_dir}/venv/bin/python3"),
+            format!("{working_dir}/env/bin/python3"),
+            format!("{working_dir}/.env/bin/python3"),
+            format!("{working_dir}/.venv/bin/python"),
+            format!("{working_dir}/venv/bin/python"),
             "python3".into(),
             "python".into(),
         ]

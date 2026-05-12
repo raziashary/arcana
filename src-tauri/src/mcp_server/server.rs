@@ -34,10 +34,25 @@ pub const MCP_SERVER_PORT: u16 = 8767;
 /// that does NOT have an active Tokio runtime context installed. `tokio::spawn`
 /// would panic with "there is no reactor running" in that context.
 ///
-/// The MCP server uses a restricted `register_for_mcp_worker` registry (L.4)
-/// so fleet workers cannot call assign_task, create_task, or planner via MCP.
-/// spawn_subagent / spawn_parallel_subagents ARE available — worker recipes document
-/// Subagent Protocols and the pool hard caps + depth guard prevent runaway fan-out.
+/// The MCP server uses `register_for_mcp_worker` (L.4) — a fleet-scoped registry
+/// that exposes every tool fleet workers need in Mode 2 (the primary execution mode):
+///   • File/exec: read_file, write_file, edit_file, append_file, check_file,
+///                bash, grep, glob, list_directory
+///   • Task board: list_tasks, get_task, create_task, assign_task, update_task_status,
+///                 claim_task, set_task_budget
+///   • Communication: request_supervisor_action, suggest_worker
+///   • QC/analysis: analyze_diff, annotate_file
+///   • Epic/phase: get_epic_progress, get_ready_tasks_in_phase
+///   • Delegation: spawn_subagent, spawn_parallel_subagents (pool hard caps + depth
+///                 guard in SpawnSubagentTool prevent runaway fan-out)
+///   • Planning:   planner (full DSL — workers use claimItem/createSubplan/submitForQC;
+///                 Supervisor uses breakDownEpic)
+///
+/// NOT exposed (intentional):
+///   • create_epic_tool / create_phased_task_tool — Supervisor/PA-only operations
+///   • search_memory / remember_this — workers access memory via mcp-memory server directly
+///   • validate — internal PA utility, not relevant to fleet task execution
+///   • graph_tools / graph_prompts — use GraphStore API, not Tool trait; PA-only analysis
 pub fn start_mcp_server(registry: Arc<ToolRegistry>) -> tauri::async_runtime::JoinHandle<()> {
     tauri::async_runtime::spawn(async move {
         // L.4 — Build a worker-scoped registry; the passed-in PA registry is

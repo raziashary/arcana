@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use crate::db::tasks::TasksDb;
 use crate::hooks::{HookRegistry, HookType, HookContext, ToolCallContext};
+use crate::recipes::defaults::FLEET_WORKERS;
 use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 
 pub struct UpdateTaskStatusTool;
@@ -90,6 +91,17 @@ impl Tool for UpdateTaskStatusTool {
                 "Invalid state: status='{status}' requires assigned_worker to be set. \
                  Pass assigned_worker='worker-<slug>' or use `assign_task` for dispatch."
             ));
+        }
+        // Validate the worker slug is a known fleet worker when explicitly set.
+        // Catches typos like 'backend-worker' before they silently corrupt the board.
+        if let Some(ref w) = assigned_worker {
+            if !FLEET_WORKERS.contains(&w.as_str()) {
+                return ToolResult::error(&format!(
+                    "Unknown worker slug '{w}'. Valid workers: {}. \
+                     Check for typos — worker slugs use the format 'worker-<domain>'.",
+                    FLEET_WORKERS.join(", ")
+                ));
+            }
         }
         if status == "rejected" {
             let reason = rejection_reason.as_deref().unwrap_or("").trim();

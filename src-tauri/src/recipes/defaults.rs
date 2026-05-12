@@ -194,7 +194,7 @@ If missing → do NOT attempt to install it. Use `request_supervisor_action` wit
 
 fn supervisor_recipe() -> Recipe {
     Recipe {
-        version:         "1.1.0".into(),
+        version:         "1.2.0".into(),
         id:              SUPERVISOR_RECIPE_ID.into(),
         title:           "Supervisor — Task Dispatch Loop".into(),
         description:     Some("Polls the task board every minute, dispatches ready tasks, self-heals stalls and build-failed retries.".into()),
@@ -296,7 +296,10 @@ After that line, emit ZERO further tool calls.
 - list_worker_requests    — Read pending fleet escalation requests (Step 1a)
 - create_task             — Create atomic sub-tasks from epics or decompose_audit payloads
 - assign_task             — Atomic dispatch: status='assigned' + worker in one call
-- update_task_status      — Stall resets, edge-case corrections, and request resolutions"#.into(),
+- update_task_status      — Stall resets, edge-case corrections, and request resolutions
+- planner                 — Structured planning YAML DSL. Use `breakDownEpic` to convert
+                            a large task into a tracked plan. Call `action: listActions`
+                            to discover the full action menu."#.into(),
     }
 }
 
@@ -306,7 +309,7 @@ After that line, emit ZERO further tool calls.
 
 fn worker_backend_recipe() -> Recipe {
     Recipe {
-        version:         "1.2.0".into(),
+        version:         "1.3.0".into(),
         id:              WORKER_BACKEND_RECIPE_ID.into(),
         title:           "Worker Backend — Task Execution Loop".into(),
         description:     Some("Polls for tasks assigned to worker-backend and executes them autonomously.".into()),
@@ -459,6 +462,21 @@ Apply this to ALL endpoints: GET, PUT, PATCH, DELETE.
 - NEVER claim a second task while one is in_progress.
 - NEVER hardcode secrets, API keys, passwords, or tokens in any source file.
 
+## Tools
+File/exec:  read_file · write_file · edit_file · append_file · check_file
+            bash · grep · glob · list_directory
+Task board: list_tasks · get_task · update_task_status · claim_task
+Escalation: request_supervisor_action (decompose, reassign, report_issue, request_review)
+QC support: analyze_diff · annotate_file
+Delegation: spawn_subagent · spawn_parallel_subagents (see Subagent Protocol)
+Planning:   planner — YAML DSL for multi-step plans. Key actions for workers:
+              claimItem(plan_id, worker_id)        — pick up the next unblocked step
+              createSubplan(parent_plan_id, title) — scope a sub-plan under a parent
+              updateStep(plan_id, step_id, status) — mark your step done/in_progress
+              submitForQC(plan_id, worker_id)      — signal phase complete for QC review
+              getPlan / listPlans                  — inspect plan state
+            Call 'action: listActions' to see the full action menu.
+
 ## Subagent Protocol (use sparingly — each costs tokens + latency)
 Spawn ONLY when the task requires:
 - More than 3 files read before the first write.
@@ -467,7 +485,8 @@ Spawn ONLY when the task requires:
 
 NEVER spawn for: single-file edits, tasks already in progress, pure code generation
 where the target file is already known.
-When spawning: pass a precise system_prompt and task_description. Wait for result."#,
+When spawning: pass a precise system_prompt and task_description. Wait for result.
+Always include __depth in every tool call (injected in your [AUTODEV WORKSPACE] header)."#,
         universal_env_bootstrap()),
     }
 }
@@ -478,7 +497,7 @@ When spawning: pass a precise system_prompt and task_description. Wait for resul
 
 fn worker_frontend_recipe() -> Recipe {
     Recipe {
-        version:         "1.1.0".into(),
+        version:         "1.2.0".into(),
         id:              WORKER_FRONTEND_RECIPE_ID.into(),
         title:           "Worker Frontend — Task Execution Loop".into(),
         description:     Some("Polls for tasks assigned to worker-frontend and executes them autonomously.".into()),
@@ -613,9 +632,25 @@ After scaffold is confirmed: run npm install before writing any component.
 - NEVER push to main — all output goes to QC review.
 - NEVER claim a second task while one is in_progress.
 
+## Tools
+File/exec:  read_file · write_file · edit_file · append_file · check_file
+            bash · grep · glob · list_directory
+Task board: list_tasks · get_task · update_task_status · claim_task
+Escalation: request_supervisor_action (decompose, reassign, report_issue, request_review)
+QC support: analyze_diff · annotate_file
+Delegation: spawn_subagent · spawn_parallel_subagents (see Subagent Protocol)
+Planning:   planner — YAML DSL for multi-step plans. Key actions for workers:
+              claimItem(plan_id, worker_id)        — pick up the next unblocked step
+              createSubplan(parent_plan_id, title) — scope a sub-plan under a parent
+              updateStep(plan_id, step_id, status) — mark your step done/in_progress
+              submitForQC(plan_id, worker_id)      — signal phase complete for QC review
+              getPlan / listPlans                  — inspect plan state
+            Call 'action: listActions' to see the full action menu.
+
 ## Subagent Protocol (use sparingly)
 Spawn ONLY when: >3 files to read before writing, cross-domain work, or parallel verification.
-NEVER for: single-component edits, tasks already in progress, known target files."#,
+NEVER for: single-component edits, tasks already in progress, known target files.
+Always include __depth in every tool call (injected in your [AUTODEV WORKSPACE] header)."#,
         universal_env_bootstrap()),
     }
 }
@@ -626,7 +661,7 @@ NEVER for: single-component edits, tasks already in progress, known target files
 
 fn worker_platform_recipe() -> Recipe {
     Recipe {
-        version:         "1.2.0".into(),
+        version:         "1.3.0".into(),
         id:              WORKER_PLATFORM_RECIPE_ID.into(),
         title:           "Worker Platform — Infrastructure & CI".into(),
         description:     Some("Handles infrastructure, CI/CD, Docker, and DevOps tasks in supervised mode.".into()),
@@ -706,9 +741,20 @@ After completing a task, append to AUTODEV_PROGRESS.md:
 - Requires elevated permissions → call `request_supervisor_action(task_id=<current_task_id>, request_type='report_issue', payload={issue_description:'requires manual action: <description>', severity:'high'})`.
 - High blast radius, no approval received → failed with impact assessment attached.
 
+## Tools
+File/exec:  read_file · write_file · edit_file · append_file · check_file
+            bash · grep · glob · list_directory
+Task board: list_tasks · get_task · update_task_status · claim_task
+Escalation: request_supervisor_action (decompose, reassign, report_issue, request_review)
+QC support: analyze_diff · annotate_file
+Delegation: spawn_subagent · spawn_parallel_subagents (see Subagent Protocol)
+Planning:   planner — claimItem · createSubplan · updateStep · submitForQC · getPlan · listPlans
+            Call 'action: listActions' for the full menu.
+
 ## Subagent Protocol
 Spawn ONLY when: multi-file infra audit across >3 files, or parallel validation.
-NEVER for: single-file config edits."#,
+NEVER for: single-file config edits.
+Always include __depth in every tool call (injected in your [AUTODEV WORKSPACE] header)."#,
         universal_env_bootstrap()),
     }
 }
@@ -719,7 +765,7 @@ NEVER for: single-file config edits."#,
 
 fn worker_mcp_recipe() -> Recipe {
     Recipe {
-        version:         "1.2.0".into(),
+        version:         "1.3.0".into(),
         id:              WORKER_MCP_RECIPE_ID.into(),
         title:           "Worker MCP — Extensions Builder".into(),
         description:     Some("Builds and maintains MCP server extensions per the MCP 2025-11-05 specification.".into()),
@@ -859,9 +905,20 @@ After completing a task, append to AUTODEV_PROGRESS.md:
 - NEVER embed credentials in server code — read from environment variables only.
 - NEVER skip roundtrip validation. Trust nothing until it is tested end-to-end.
 
+## Tools
+File/exec:  read_file · write_file · edit_file · append_file · check_file
+            bash · grep · glob · list_directory
+Task board: list_tasks · get_task · update_task_status · claim_task
+Escalation: request_supervisor_action (decompose, reassign, report_issue, request_review)
+QC support: analyze_diff · annotate_file
+Delegation: spawn_subagent · spawn_parallel_subagents (see Subagent Protocol)
+Planning:   planner — claimItem · createSubplan · updateStep · submitForQC · getPlan · listPlans
+            Call 'action: listActions' for the full menu.
+
 ## Subagent Protocol
 Spawn ONLY when: >3 files to read before writing, or parallel roundtrip testing of multiple tools.
-NEVER for: single-tool additions with a clear target file."#,
+NEVER for: single-tool additions with a clear target file.
+Always include __depth in every tool call (injected in your [AUTODEV WORKSPACE] header)."#,
         universal_env_bootstrap()),
     }
 }
@@ -872,7 +929,7 @@ NEVER for: single-tool additions with a clear target file."#,
 
 fn worker_cleanup_recipe() -> Recipe {
     Recipe {
-        version:         "1.3.0".into(),
+        version:         "1.4.0".into(),
         id:              WORKER_CLEANUP_RECIPE_ID.into(),
         title:           "Worker Cleanup — Code Quality".into(),
         description:     Some("Handles lint fixes, dead code removal, and housekeeping. Never changes functionality.".into()),
@@ -999,9 +1056,19 @@ After completing a task, append to AUTODEV_PROGRESS.md:
 - NEVER invent cleanup work outside the acceptance criteria.
 - NEVER claim a second task while one is in_progress.
 
+## Tools
+File/exec:  read_file · edit_file · append_file · check_file · bash · grep · glob · list_directory
+Task board: list_tasks · get_task · update_task_status · claim_task
+Escalation: request_supervisor_action (reassign if task needs rename/refactor, report_issue)
+QC support: analyze_diff · annotate_file
+Delegation: spawn_subagent · spawn_parallel_subagents (see Subagent Protocol)
+Planning:   planner — claimItem · updateStep · submitForQC · getPlan
+            Call 'action: listActions' for the full menu.
+
 ## Subagent Protocol
 Spawn ONLY when: scanning >3 large files for dead code simultaneously (parallel grep).
-NEVER for: single-file lint fixes or import removal."#,
+NEVER for: single-file lint fixes or import removal.
+Always include __depth in every tool call (injected in your [AUTODEV WORKSPACE] header)."#,
         universal_env_bootstrap()),
     }
 }
@@ -1012,7 +1079,7 @@ NEVER for: single-file lint fixes or import removal."#,
 
 fn qc_agent_recipe() -> Recipe {
     Recipe {
-        version:         "1.4.0".into(),
+        version:         "1.5.0".into(),
         id:              QC_AGENT_RECIPE_ID.into(),
         title:           "QC Agent — Code Review".into(),
         description:     Some("Reviews completed worker output. Approves (done) or rejects with a specific, actionable reason.".into()),
@@ -1242,6 +1309,11 @@ If 3 or fewer files: review directly. Do not spawn subagents.
 - grep               — Scan changed files for issues
 - read_file          — Inspect implementation
 - bash               — Run tests and build validation
-- update_task_status — Gate decision: 'done' or 'rejected'"#.into(),
+- update_task_status — Gate decision: 'done' or 'rejected'
+- planner            — Inspect plan state for plan-linked tasks (getPlan, listPlans).
+                       Use submitForQC to signal a plan phase is ready for review,
+                       or claimItem to pick up a plan step if QC is plan-driven.
+                       Call 'action: listActions' for the full action menu.
+- spawn_subagent / spawn_parallel_subagents — Parallel per-file review (see Subagent Protocol)"#.into(),
     }
 }

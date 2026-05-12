@@ -49,8 +49,8 @@ struct GrepInput {
     max_results: u32,
 }
 
-fn default_context_lines() -> u32 { 1 }   // Reduced from 2 — saves ~10% tokens per result
-fn default_max_results() -> u32 { 30 }    // Reduced from 100 — 100 matches × JSON = 15K tokens
+fn default_context_lines() -> u32 { 1 }   // 1 line of context — saves tokens vs 2
+fn default_max_results() -> u32 { 100 }   // 100 is the practical floor for real codebases
 
 #[async_trait]
 impl Tool for GrepTool {
@@ -59,10 +59,11 @@ impl Tool for GrepTool {
     }
 
     fn description(&self) -> &str {
-        "Search for a pattern in files using ripgrep. \
-         Returns matching lines with surrounding context. \
-         Searches recursively from the specified path (or current directory). \
-         Automatically skips binary files, .git, node_modules, etc."
+        "Search for a regex pattern in files. Returns matching lines with surrounding context. \
+         Searches recursively from the specified path (or working directory). \
+         Skips binary files, .git, node_modules, target, dist automatically.\n\
+         Default max_results=100. Results include a truncated=true flag when the cap is hit — \
+         narrow the pattern, add a glob filter, or set max_results higher for exhaustive searches."
     }
 
     fn input_schema(&self) -> serde_json::Value {
@@ -93,8 +94,8 @@ impl Tool for GrepTool {
                 },
                 "max_results": {
                     "type": "integer",
-                    "description": "Maximum number of matches to return. Default: 30. Increase for exhaustive searches.",
-                    "default": 30
+                    "description": "Maximum number of matches to return. Default: 100. When the result is capped a truncated=true flag is set — increase max_results or narrow the pattern/path if you need all matches.",
+                    "default": 100
                 }
             },
             "required": ["pattern"]
@@ -263,12 +264,15 @@ impl Tool for GrepTool {
         if total_matches == 0 {
             ToolResult::success(format!("No matches found for pattern '{}'", params.pattern))
         } else if total_matches >= params.max_results as usize {
-            // Result hit the cap — signal the agent to narrow the search if needed
+            // Result hit the cap — signal the agent clearly
             ToolResult::success_with_hint(
                 json_output,
                 format!(
-                    "Result capped at {} matches. Extract only what you need; use a more specific \
-                     pattern, path filter, or start_line/end_line with read_file to narrow scope.",
+                    "Results capped at {} matches (truncated=true). If you need all occurrences: \
+                     (a) narrow the pattern or add a glob filter, \
+                     (b) search a subdirectory with the path parameter, or \
+                     (c) set max_results higher. Avoid raising max_results past 500 — \
+                     large result sets waste context and slow responses.",
                     params.max_results
                 ),
             )

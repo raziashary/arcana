@@ -114,6 +114,53 @@ impl Tool for CreatePhasedTaskTool {
             Err(e) => return ToolResult::error(&format!("Failed to open tasks database: {e}")),
         };
 
+        // ── Validate epic_id ─────────────────────────────────────────────────
+        // epic_id must parse as an integer AND refer to a task with type='epic'.
+        let epic_row_id: i64 = match epic_id.parse::<i64>() {
+            Ok(id) if id > 0 => id,
+            _ => return ToolResult::error(&format!(
+                "'epic_id' must be a positive integer task ID (got '{epic_id}'). \
+                 Use create_epic to create an epic first, then pass its returned task_id here."
+            )),
+        };
+        match db.get_by_id(epic_row_id) {
+            Ok(Some(ref epic)) if epic.task_type == crate::db::tasks::TaskType::Epic => {}
+            Ok(Some(_)) => return ToolResult::error(&format!(
+                "Task #{epic_row_id} exists but is not an Epic. \
+                 Pass the task_id returned by create_epic, not a regular task ID."
+            )),
+            Ok(None) => return ToolResult::error(&format!(
+                "Epic #{epic_row_id} not found. Create it first with create_epic, \
+                 then pass the returned task_id as epic_id."
+            )),
+            Err(e) => return ToolResult::error(&format!("Failed to look up epic #{epic_row_id}: {e}")),
+        }
+
+        // ── Validate blocked_by IDs ──────────────────────────────────────────
+        // Every ID in blocked_by must refer to an existing task.
+        if !blocked_by.is_empty() {
+            let mut invalid: Vec<String> = Vec::new();
+            for blocker_id_str in &blocked_by {
+                match blocker_id_str.parse::<i64>() {
+                    Ok(bid) if bid > 0 => {
+                        match db.get_by_id(bid) {
+                            Ok(None) => invalid.push(format!("#{bid} (not found)")),
+                            Err(e)   => invalid.push(format!("#{bid} (lookup error: {e})")),
+                            Ok(Some(_)) => {}
+                        }
+                    }
+                    _ => invalid.push(format!("'{blocker_id_str}' (not a valid task ID)")),
+                }
+            }
+            if !invalid.is_empty() {
+                return ToolResult::error(&format!(
+                    "blocked_by contains invalid task IDs: {}. \
+                     Use list_tasks or get_task to find the correct IDs.",
+                    invalid.join(", ")
+                ));
+            }
+        }
+
         let task = match db.create_phased_task(CreatePhasedTaskInput {
             epic_id:             epic_id.clone(),
             phase:               phase.clone(),

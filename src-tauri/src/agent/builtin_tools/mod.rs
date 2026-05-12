@@ -89,9 +89,21 @@ pub fn register_for_mcp_worker(registry: &mut ToolRegistry) {
     registry.register(Arc::new(get_ready_tasks_in_phase_tool::GetReadyTasksInPhaseTool));
     // Subagent tools — workers document Subagent Protocols in their recipes.
     // Pool hard caps + depth guard enforce safety; recipes provide cost-advisory guidance.
+    // NOTE: subagent MCP callers must pass __depth on every call so the depth guard
+    // in SpawnSubagentTool reflects actual nesting (tool_adapter.rs reads __depth).
     registry.register(Arc::new(spawn_subagent::SpawnSubagentTool));
     registry.register(Arc::new(spawn_parallel_subagents::SpawnParallelSubagentsTool));
-    // NOT exposed: assign_task, create_task, planner
+    // Task dispatch — Supervisor MUST have assign_task and create_task.
+    // Domain workers (backend, frontend, …) are instructed in their recipes to
+    // use request_supervisor_action(decompose_audit) instead of create_task directly.
+    // assign_task validates worker_slug against VALID_WORKERS and atomically
+    // sets status='assigned', so domain workers calling it would still produce valid
+    // state — the recipe instruction is the authoritatively enforced constraint.
+    registry.register(Arc::new(assign_task::AssignTaskTool));
+    registry.register(Arc::new(create_task::CreateTaskTool));
+    // Planner — designed for all fleet agents (see planner.rs comment).
+    // Supervisor: breakDownEpic, Workers: claimItem / createSubplan / submitForQC.
+    registry.register(Arc::new(planner::PlannerTool));
 }
 
 /// Register tools filtered by PA mode:

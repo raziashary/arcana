@@ -136,6 +136,17 @@ impl ServerHandler for AutodevMcpServer {
         let agent_role = args.remove("__agent_role")
             .and_then(|v| v.as_str().map(String::from));
 
+        // L.6 — Accept __depth so subagents can propagate their nesting depth to
+        // SpawnSubagentTool's guard (`ctx.depth >= MAX_SUBAGENT_DEPTH`).
+        // Without this, MCP calls always see depth=0 and the depth guard never
+        // fires, allowing unbounded subagent nesting until the pool hard-caps hit.
+        // Subagents receive their depth in the [AUTODEV WORKSPACE] header injected
+        // by SubagentBridge and are instructed to forward it on every tool call.
+        let depth: u32 = args.remove("__depth")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u32)
+            .unwrap_or(0);
+
         let args = serde_json::Value::Object(args);
 
         let Some(tool) = self.registry.get(&tool_name) else {
@@ -150,7 +161,7 @@ impl ServerHandler for AutodevMcpServer {
             session_id,
             working_dir,
             call_id: uuid::Uuid::new_v4().to_string(),
-            depth:   0,
+            depth,
             agent_role,
         };
 

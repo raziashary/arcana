@@ -71,19 +71,28 @@ pub async fn run(
         config.capabilities.clone()
     };
 
-    // Prepend the parent's working_dir into the system prompt so the ephemeral
-    // subagent knows which directory to resolve file operations against.
-    // Without this, core-orchestrator would use its own process cwd instead of
-    // the user's configured workspace.
+    // Prepend the parent's working_dir and agent_depth into the system prompt so:
+    //   1. The subagent resolves file paths against the correct project root.
+    //   2. The subagent knows its nesting depth and forwards __depth on every MCP
+    //      tool call so SpawnSubagentTool's depth guard fires correctly.
+    //      Without __depth forwarding, the tool_adapter always sees depth=0 and
+    //      the nesting guard never activates for MCP-originated spawn calls.
     let effective_system_prompt = if config.working_dir.is_empty() {
         config.system_prompt.clone()
     } else {
         format!(
-            "[AUTODEV WORKSPACE]\nworking_dir: {}\n\
+            "[AUTODEV WORKSPACE]\n\
+             working_dir: {}\n\
+             agent_depth: {depth}\n\
              All file operations MUST be resolved relative to this absolute path \
-             unless an explicit absolute path is provided.\n\n{}",
+             unless an explicit absolute path is provided.\n\
+             TOOL CALL REQUIREMENT: Include __depth: {depth} in every \
+             autodev-mcp-server tool call (read_file, write_file, bash, \
+             spawn_subagent, etc.). This is mandatory — it enforces the \
+             subagent nesting depth limit.\n\n{}",
             config.working_dir,
             config.system_prompt,
+            depth = config.depth,
         )
     };
 
