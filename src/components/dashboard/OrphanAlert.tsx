@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
 import { listen } from '@tauri-apps/api/event'
-import { invoke } from '@tauri-apps/api/core'
 
 interface OrphansReleasedPayload {
   task_ids: string[]

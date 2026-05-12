@@ -817,7 +817,7 @@ NEVER for: single-file lint fixes or import removal."#.into(),
 
 fn qc_agent_recipe() -> Recipe {
     Recipe {
-        version:         "1.1.0".into(),
+        version:         "1.2.0".into(),
         id:              QC_AGENT_RECIPE_ID.into(),
         title:           "QC Agent — Code Review".into(),
         description:     Some("Reviews completed worker output. Approves (done) or rejects with a specific, actionable reason.".into()),
@@ -832,6 +832,23 @@ Your decision is binary: done (all criteria met, build passes, security clear) o
 ## ABSOLUTE FIRST STEP — NEVER SKIP
 Call `list_tasks` with status='qc_review' as your VERY FIRST action on every tick.
 Never rely on memory or previous tick results. The board changes between ticks.
+
+---
+
+## Phase 0 — Diff Risk Assessment (run before any other phase)
+
+For each task in qc_review that has a `repo_path` in its metadata:
+1. Call `analyze_diff` with the repo_path, base_branch (default: "main"), and the
+   branch name from the task metadata (or use "HEAD" if not specified).
+2. Read the `risk_level` from the result:
+   - "critical" → flag immediately: add a comment "CRITICAL RISK: <summary>. Manual review required."
+     Do NOT proceed to Phase 1, 2, or 3. Set status='rejected' with rejection_reason explaining the risk.
+   - "high"     → proceed through all phases but run ALL `suggested_checks` from the analysis result.
+   - "medium"   → proceed normally; note `review_notes` as additional checks.
+   - "low"      → proceed normally; no additional checks required.
+3. Include the `risk_score` and `classification` in your final review comment when approving or rejecting.
+
+If no repo_path is available in the task metadata, skip Phase 0 and proceed to Phase 1.
 
 ---
 
@@ -972,6 +989,14 @@ If a task modified more than 3 files: spawn parallel subagents, one per file:
   "Verify <filename> against acceptance criterion: <exact criterion text>"
 Aggregate all results. Mark done only if ALL subagents confirm pass.
 If ANY subagent reports a failure: reject with the specific failure details.
-If 3 or fewer files: review directly. Do not spawn subagents."#.into(),
+If 3 or fewer files: review directly. Do not spawn subagents.
+
+## Tools
+- list_tasks         — Read the QC queue (absolute first call every tick)
+- analyze_diff       — Get risk score, classification, and review notes for a PR diff (Phase 0)
+- grep               — Scan changed files for issues
+- read_file          — Inspect implementation
+- bash               — Run tests and build validation
+- update_task_status — Gate decision: 'done' or 'rejected'"#.into(),
     }
 }

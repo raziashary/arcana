@@ -573,7 +573,7 @@ listen('task:orphans-released', (event) => {
 
 #### 3.1.1 Parser
 
-- [ ] `parser.rs` — Parse raw unified diff text into structured change data:
+- [x] `parser.rs` — Parse raw unified diff text into structured change data:
 
 ```rust
 #[derive(Debug, Serialize, Deserialize)]
@@ -604,7 +604,7 @@ pub struct DiffHunk {
 }
 ```
 
-- [ ] `fn parse_unified_diff(diff_text: &str) -> Result<ParsedDiff>` — standard unified diff parsing:
+- [x] `fn parse_unified_diff(diff_text: &str) -> Result<ParsedDiff>` — standard unified diff parsing:
   - Split on `diff --git` lines to get per-file sections
   - Parse `+++ / ---` headers to extract file paths and rename info
   - Count `+` / `-` lines per hunk
@@ -612,7 +612,7 @@ pub struct DiffHunk {
 
 #### 3.1.2 Risk Scorer (structural, no LLM)
 
-- [ ] `risk_scorer.rs` — Compute a structural risk score from the parsed diff alone (fast, no API call):
+- [x] `risk_scorer.rs` — Compute a structural risk score from the parsed diff alone (fast, no API call):
 
 ```rust
 #[derive(Debug, Serialize, Deserialize)]
@@ -629,7 +629,7 @@ pub struct RiskFactor {
 }
 ```
 
-- [ ] `fn compute_structural_risk(diff: &ParsedDiff) -> StructuralRisk`:
+- [x] `fn compute_structural_risk(diff: &ParsedDiff) -> StructuralRisk`:
 
 | Factor | Weight | Trigger |
 |--------|--------|---------|
@@ -649,7 +649,7 @@ Each factor contributes its weight if triggered, score is a sum clamped to 1.0.
 
 This makes a single LLM call to classify the diff and generate a human-readable summary. Uses the existing `Provider` trait — no new API dependencies.
 
-- [ ] Define output types:
+- [x] Define output types:
 
 ```rust
 #[derive(Debug, Serialize, Deserialize)]
@@ -674,7 +674,7 @@ pub struct DiffClassification {
 }
 ```
 
-- [ ] `async fn classify_diff(provider: &dyn Provider, diff: &ParsedDiff, structural_risk: &StructuralRisk) -> Result<DiffClassification>`:
+- [x] `async fn classify_diff(provider: &dyn Provider, diff: &ParsedDiff, structural_risk: &StructuralRisk) -> Result<DiffClassification>`:
   - Build a compact prompt using the parsed diff summary (NOT the full diff text — too many tokens):
     - File list with line counts
     - Key changed paths
@@ -690,7 +690,7 @@ pub struct DiffClassification {
 
 **File:** `src-tauri/src/diff_analysis/mod.rs`
 
-- [ ] `DiffAnalyzer` struct that wires parser + risk scorer + classifier:
+- [x] `DiffAnalyzer` struct that wires parser + risk scorer + classifier:
 
 ```rust
 pub struct DiffAnalyzer {
@@ -757,14 +757,14 @@ impl DiffAnalyzer {
 
 **File:** `src-tauri/src/commands/diff_commands.rs` *(new file)*
 
-- [ ] `analyze_diff(diff_text: String) -> Result<DiffAnalysisResult>` — takes a raw diff string, returns analysis
-- [ ] `analyze_pr_diff(repo_path: String, base_branch: String, head_branch: String) -> Result<DiffAnalysisResult>` — uses `git/diff.rs` to generate the diff, then calls `DiffAnalyzer::analyze()`:
+- [x] `analyze_diff(diff_text: String) -> Result<DiffAnalysisResult>` — takes a raw diff string, returns analysis
+- [x] `analyze_pr_diff(repo_path: String, base_branch: String, head_branch: String) -> Result<DiffAnalysisResult>` — uses `git/diff.rs` to generate the diff, then calls `DiffAnalyzer::analyze()`:
   - Call `git2::Repository::open(repo_path)`
   - Generate diff between `base_branch..head_branch` using existing `git::diff` module
   - Convert to unified diff string
   - Pass to analyzer
 
-- [ ] Register both in `commands/mod.rs`
+- [x] Register both in `commands/mod.rs`
 
 ---
 
@@ -773,7 +773,7 @@ impl DiffAnalyzer {
 **File:** `src-tauri/src/mcp_server/server.rs`  
 **File:** `src-tauri/src/mcp_server/tool_adapter.rs`
 
-- [ ] Add `analyze_diff` MCP tool available to QC Agent only:
+- [x] Add `analyze_diff` MCP tool available to QC Agent only:
 
 ```rust
 Tool {
@@ -791,8 +791,8 @@ Tool {
 }
 ```
 
-- [ ] Handler routes to `diff_commands::analyze_pr_diff()`
-- [ ] Add `analyze_diff` to the QC Agent's allowed tool list in `server.rs`
+- [x] Handler routes to `diff_commands::analyze_pr_diff()`
+- [x] Add `analyze_diff` to the QC Agent's allowed tool list in `server.rs`
 
 ---
 
@@ -800,7 +800,7 @@ Tool {
 
 **File:** `~/.autodev/recipes/qc-agent.yaml` (the system recipe definition in `src-tauri/src/recipes/`)
 
-- [ ] Update the QC recipe instructions to include the analysis step:
+- [x] Update the QC recipe instructions to include the analysis step:
 
 ```yaml
 instructions: |
@@ -820,14 +820,14 @@ instructions: |
 
 **File:** `src/components/dashboard/DiffAnalysisCard.tsx` *(new file)*
 
-- [ ] Small card component used in the task board when a task is in `qc_review`:
+- [x] Small card component used in the task board when a task is in `qc_review`:
   - Risk level badge (color-coded: green/yellow/orange/red)
   - Classification tag
   - Summary text
   - Collapsible "Review Notes" list
 
-- [ ] Called from the task card component when task status is `qc_review` and `diff_analysis` data is available in the task record
-- [ ] Store the `DiffAnalysisResult` JSON in a new nullable `diff_analysis` TEXT column in `tasks.db` (added as part of this feature's migration)
+- [x] Called from the task card component when task status is `qc_review` and `diff_analysis` data is available in the task record
+- [x] Store the `DiffAnalysisResult` JSON in a new nullable `diff_analysis` TEXT column in `tasks.db` (added as part of this feature's migration)
 
 ---
 

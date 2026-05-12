@@ -160,6 +160,8 @@ pub struct Task {
     // PID-based orphan detection (Ruflo Feature 2)
     pub claimed_by_pid:       Option<i64>,
     pub claim_host:           Option<String>,
+    // Diff risk analysis result (Ruflo Feature 3) — JSON blob from DiffAnalysisResult
+    pub diff_analysis:        Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -267,6 +269,10 @@ impl TasksDb {
         let _ = self.conn.execute_batch(
             "ALTER TABLE tasks ADD COLUMN claim_host TEXT;"
         );
+        // Ruflo Feature 3 — Diff risk scoring result (JSON blob)
+        let _ = self.conn.execute_batch(
+            "ALTER TABLE tasks ADD COLUMN diff_analysis TEXT;"
+        );
         // Routing history table (Ruflo Feature 1 — semantic task routing)
         self.conn.execute_batch(
             "
@@ -316,7 +322,7 @@ impl TasksDb {
             "SELECT id, title, description, priority, task_type, status,
                     acceptance_criteria, assigned_worker, rejection_reason, retry_count,
                     created_by, created_at, updated_at, completed_at,
-                    claimed_by_pid, claim_host
+                    claimed_by_pid, claim_host, diff_analysis
              FROM tasks WHERE id = ?1"
         )?;
         let task = stmt.query_row(params![id], row_to_task).optional()?;
@@ -329,7 +335,7 @@ impl TasksDb {
                 "SELECT id, title, description, priority, task_type, status,
                          acceptance_criteria, assigned_worker, rejection_reason, retry_count,
                          created_by, created_at, updated_at, completed_at,
-                         claimed_by_pid, claim_host
+                         claimed_by_pid, claim_host, diff_analysis
                  FROM tasks WHERE status = ?1 ORDER BY created_at ASC",
                 vec![status.to_string()],
             )
@@ -338,7 +344,7 @@ impl TasksDb {
                 "SELECT id, title, description, priority, task_type, status,
                          acceptance_criteria, assigned_worker, rejection_reason, retry_count,
                          created_by, created_at, updated_at, completed_at,
-                         claimed_by_pid, claim_host
+                         claimed_by_pid, claim_host, diff_analysis
                  FROM tasks ORDER BY created_at ASC",
                 vec![],
             )
@@ -358,7 +364,7 @@ impl TasksDb {
             "SELECT id, title, description, priority, task_type, status,
                     acceptance_criteria, assigned_worker, rejection_reason, retry_count,
                     created_by, created_at, updated_at, completed_at,
-                    claimed_by_pid, claim_host
+                    claimed_by_pid, claim_host, diff_analysis
              FROM tasks WHERE status = ?1 AND assigned_worker = ?2 ORDER BY id"
         )?;
         let tasks = stmt.query_map(params![status, worker], row_to_task)?
@@ -534,7 +540,7 @@ impl TasksDb {
             "SELECT id, title, description, priority, task_type, status,
                     acceptance_criteria, assigned_worker, rejection_reason, retry_count,
                     created_by, created_at, updated_at, completed_at,
-                    claimed_by_pid, claim_host
+                    claimed_by_pid, claim_host, diff_analysis
              FROM tasks
              WHERE status IN ('assigned', 'in_progress')
              ORDER BY updated_at ASC"
@@ -698,6 +704,7 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         completed_at:        row.get(13)?,
         claimed_by_pid:      row.get(14).unwrap_or(None),
         claim_host:          row.get(15).unwrap_or(None),
+        diff_analysis:       row.get(16).unwrap_or(None),
     })
 }
 

@@ -26,6 +26,7 @@ pub mod check_file;
 pub mod append_file;
 pub mod suggest_worker_tool;
 pub mod claim_task_tool;
+pub mod analyze_diff_tool;
 
 use std::sync::Arc;
 use super::{PAMode, tool_registry::ToolRegistry};
@@ -60,6 +61,8 @@ pub fn register_for_mcp_worker(registry: &mut ToolRegistry) {
     registry.register(Arc::new(suggest_worker_tool::SuggestWorkerTool));
     // Orphan detection — workers call this instead of update_task_status(in_progress)
     registry.register(Arc::new(claim_task_tool::ClaimTaskTool));
+    // Diff analysis — QC Agent uses this to score and classify PR diffs before review
+    registry.register(Arc::new(analyze_diff_tool::AnalyzeDiffTool));
     // NOT exposed: assign_task, create_task, planner, spawn_subagent, spawn_parallel_subagents
 }
 
@@ -106,6 +109,8 @@ pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
             registry.register(Arc::new(suggest_worker_tool::SuggestWorkerTool));
             // Orphan detection — claim_task records PID for stale-task recovery
             registry.register(Arc::new(claim_task_tool::ClaimTaskTool));
+            // Diff analysis — available in PA and review modes for manual QC workflows
+            registry.register(Arc::new(analyze_diff_tool::AnalyzeDiffTool));
         }
         PAMode::Delegate => {
             registry.register(Arc::new(create_task::CreateTaskTool));

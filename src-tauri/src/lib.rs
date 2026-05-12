@@ -29,6 +29,7 @@ pub mod updater;
 pub mod memory;
 pub mod routing;
 pub mod orphan;
+pub mod diff_analysis;
 
 // Register all Tauri commands on the builder from within the lib crate.
 // generate_handler! must run here so the __cmd__* macros (produced by
@@ -149,6 +150,7 @@ pub fn register_commands(
         },
         routing_commands::{suggest_worker_for_task, get_worker_affinity_stats},
         orphan_commands::{get_orphaned_tasks, force_release_task},
+        diff_commands::{analyze_diff, analyze_pr_diff},
     };
     builder.invoke_handler(tauri::generate_handler![
         // Agent
@@ -420,5 +422,8 @@ pub fn register_commands(
         // Orphan Detection (Ruflo Feature 2 — PID-Based Orphan Detection)
         get_orphaned_tasks,
         force_release_task,
+        // Diff Risk Scoring (Ruflo Feature 3)
+        analyze_diff,
+        analyze_pr_diff,
     ])
 }
