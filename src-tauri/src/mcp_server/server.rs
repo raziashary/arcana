@@ -35,7 +35,9 @@ pub const MCP_SERVER_PORT: u16 = 8767;
 /// would panic with "there is no reactor running" in that context.
 ///
 /// The MCP server uses a restricted `register_for_mcp_worker` registry (L.4)
-/// so fleet workers cannot call assign_task, spawn_subagent, etc. via MCP.
+/// so fleet workers cannot call assign_task, create_task, or planner via MCP.
+/// spawn_subagent / spawn_parallel_subagents ARE available — worker recipes document
+/// Subagent Protocols and the pool hard caps + depth guard prevent runaway fan-out.
 pub fn start_mcp_server(registry: Arc<ToolRegistry>) -> tauri::async_runtime::JoinHandle<()> {
     tauri::async_runtime::spawn(async move {
         // L.4 — Build a worker-scoped registry; the passed-in PA registry is

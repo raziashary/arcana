@@ -44,9 +44,19 @@ pub fn register_all(registry: &mut ToolRegistry) {
 }
 
 /// Register the restricted tool set exposed via the MCP server to fleet workers.
-/// Workers need file/execution tools and task-board read + status-update access.
-/// Excluded: assign_task, create_task, planner, spawn_subagent, spawn_parallel_subagents.
-/// This prevents workers from stealing other workers' tasks or fan-out spawning via MCP.
+/// Workers need file/execution tools, task-board read + status-update access,
+/// and subagent spawning for the Subagent Protocol documented in their recipes.
+///
+/// Excluded: assign_task, create_task, planner.
+/// - assign_task / create_task: Supervisor-only operations. Workers that bypass
+///   the task-board routing would undermine the QC gate and work-stealing prevention.
+/// - planner: plan compilation is a PA/Supervisor operation, not a per-worker concern.
+///
+/// spawn_subagent / spawn_parallel_subagents ARE included because:
+/// - All worker recipes document a Subagent Protocol that depends on them.
+/// - The SubagentPool hard caps (MAX_GLOBAL=16, MAX_PER_PARENT=10) and the
+///   depth guard (MAX_NESTING_DEPTH=3) in each tool already prevent unbounded
+///   fan-out — recipe-level "use sparingly" is a cost advisory, not the safety net.
 pub fn register_for_mcp_worker(registry: &mut ToolRegistry) {
     // File & execution tools — workers need these for their core task
     registry.register(Arc::new(read_file::ReadFileTool));
@@ -77,7 +87,11 @@ pub fn register_for_mcp_worker(registry: &mut ToolRegistry) {
     // Ruflo Feature 5 — Epic read tools exposed so workers can check phase progress
     registry.register(Arc::new(get_epic_progress_tool::GetEpicProgressTool));
     registry.register(Arc::new(get_ready_tasks_in_phase_tool::GetReadyTasksInPhaseTool));
-    // NOT exposed: assign_task, create_task, planner, spawn_subagent, spawn_parallel_subagents
+    // Subagent tools — workers document Subagent Protocols in their recipes.
+    // Pool hard caps + depth guard enforce safety; recipes provide cost-advisory guidance.
+    registry.register(Arc::new(spawn_subagent::SpawnSubagentTool));
+    registry.register(Arc::new(spawn_parallel_subagents::SpawnParallelSubagentsTool));
+    // NOT exposed: assign_task, create_task, planner
 }
 
 /// Register tools filtered by PA mode:
