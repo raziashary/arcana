@@ -8094,6 +8094,206 @@ Phase 5 Cross-Sub-Phase Integration:
 
 ---
 
+## Phase 11 — Fleet Live Monitor
+
+**Date:** 2026-05  
+**Context:** The AutoDev Panel showed every agent as `Working — polling...` regardless of actual activity. No visibility into which tool was running, which file was being touched, or whether an agent was stuck. This phase adds a live real-time monitoring section directly inside the AutoDev Panel tab.
+
+> **Source document:** `docs/development/ui-specific/fleet_visibility.md`
+
+---
+
+### Phase 11.1 — AutoDev Panel Layout Revision ✅ COMPLETE
+
+New section order inside the AutoDev Panel tab:
+
+```
+┌─ AGENT ROSTER ─────────────────────────────────────────────┐
+│  Enhanced: shows current tool + file inline per row         │
+└────────────────────────────────────────────────────────────┘
+        ↕ 8px gap
+┌─ LIVE MONITOR ──────────────────── [◉ LIVE] [▼] 4s ago ───┐
+│  2×N card grid, one card per agent                          │
+│  Each card: stage pipeline, current tool, file, log tail,   │
+│  token sparkline                                            │
+└────────────────────────────────────────────────────────────┘
+        ↕ 8px gap
+┌─ TASK BOARD ───────────────────────────────────────────────┐
+│  4-column kanban (unchanged)                                │
+└────────────────────────────────────────────────────────────┘
+        ↕ 8px gap
+┌─ METRICS ROW ──────────────────────────────────────────────┐
+│  Cost Today · Tokens · Closed · Build Failed · QC Pass Rate │
+└────────────────────────────────────────────────────────────┘
+```
+
+**Section height policy:**
+- Agent Roster: `min-height: 180px`, auto-grows per row (32px per row)
+- Live Monitor: `220px` collapsed (full cards visible), `32px` when toggled off (header only), `auto` when card focused/expanded
+- Task Board: `320px` fixed
+- Metrics Row: `80px` fixed
+- Total: ~700px at normal state — fits 1080p without inner scrolling
+
+---
+
+### Phase 11.2 — LIVE MONITOR Section ✅ COMPLETE
+
+#### Section Header
+
+| Element | Spec |
+|---|---|
+| `◉ LIVE` badge | Pulsing 6px dot in `var(--accent)` + `IBM Plex Mono 9px` text. CSS `pulse` animation (opacity 1→0.4→1, 1.5s). Shown when ≥1 agent active |
+| `◉ STALE` badge | Dot in `var(--warning)` when last event > 30s ago |
+| `◉ OFFLINE` badge | Dot in `var(--danger)` when sidecars down |
+| `[▼]` toggle | Collapses/expands card grid. State persisted in `localStorage` key `autodev.live_monitor.collapsed` |
+| Last event time | `"4s ago"` — updates every second via `Date.now()` diff |
+
+#### Card Grid
+
+```css
+.live-monitor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+  padding: 8px 0;
+}
+```
+7 agents at 1400px → 4 columns × 2 rows. Idle agent cards shown at `opacity: 0.5` (confirms "QC-AGENT is idle, that's expected").
+
+---
+
+### Phase 11.3 — Agent Live Card ✅ COMPLETE
+
+```
+┌─────────────────────────────────────────────┐
+│  ● WORKER-BACKEND                ⬡ BACKEND  │  ← card header
+│  ─────────────────────────────────────────  │
+│  [claim ✓] [read ✓] [write ●] [test] [push] │  ← stage pipeline
+│  ─────────────────────────────────────────  │
+│  edit_file                                  │  ← current tool
+│  src/api/health.py  +10 -0                  │  ← current file
+│  ─────────────────────────────────────────  │
+│  ████████████████░░░░  8.4k   ∿∿∿∿∿∿∿∿∿   │  ← token bar + sparkline
+│  ─────────────────────────────────────────  │
+│  00:12  read_file  routes.py         ✓      │  ← log tail
+│  00:27  read_file  health.py         ✓      │
+│  ◌       edit_file  health.py               │  ← in-progress spinner
+└─────────────────────────────────────────────┘
+```
+
+**Card states:**
+
+| State | Appearance |
+|---|---|
+| `active` | Full opacity, amber dot, stage pulsing, log tail live |
+| `idle` | `opacity: 0.5`, blue dot, all stages `pending`, sparkline flat |
+| `error` | `border-color: var(--danger)`, red dot, last log line red, error message shown |
+| `working-blocked` | Amber dot, `⊘` blocked stage with tooltip |
+| `stopped` | Gray dot, `opacity: 0.4`, `[▶ Start]` button in footer |
+
+**Card expand behavior:** Click card → expands to `grid-column: span 2`, log tail grows from 3 to 12 lines. Click again or Esc to collapse.
+
+---
+
+### Phase 11.4 — Stage Pipeline ✅ COMPLETE
+
+Worker stage sequence: `[claim] → [read] → [write] → [test] → [push]`  
+Supervisor stage sequence: `[scan] → [think] → [dispatch] → [monitor]`  
+QC Agent stage sequence: `[claim PR] → [read diff] → [review] → [verdict]`
+
+**Stage visual states:**
+
+| State | Visual |
+|---|---|
+| `done` | `rgba(0,255,136,0.06)` background, `rgba(0,255,136,0.20)` border, `var(--accent)` text |
+| `current` | `rgba(255,170,0,0.06)` background, pulsing amber border (1.2s loop) |
+| `pending` | Transparent background, `var(--border-primary)` border, `var(--text-muted)` text |
+| `error` | `rgba(255,68,68,0.06)` background, `var(--danger)` border and text |
+
+Stage pill sizing: `padding: 2px 7px`, `border-radius: 2px`, flex row with `gap: 4px`, `›` separators. Hover tooltip shows stage duration on `done` stages.
+
+---
+
+### Phase 11.5 — Mini Log Tail ✅ COMPLETE
+
+Shows last N tool calls (3 collapsed, 12 expanded).
+
+```
+00:12  read_file  routes.py         ✓
+00:27  read_file  health.py         ✓
+◌       edit_file  health.py
+```
+
+| Element | Spec |
+|---|---|
+| Container | `background: var(--bg-code)` (`#161616`), `padding: 6px 8px` |
+| Timestamp | `IBM Plex Mono 10px`, `color: var(--text-dim)` (`#333333`), 36px width |
+| Tool name | `color: var(--info)` (`#4477FF`) |
+| Argument | `color: var(--text-secondary)`, truncated to 120px, full text in tooltip |
+| `✓` success | `color: var(--accent)`, right-aligned |
+| `✗` error | `color: var(--danger)`, left red border `2px solid var(--danger)` on the line |
+| `◌` spinner | 8×8px CSS border-spin, `border-top-color: var(--accent)`, replaces timestamp |
+| Auto-scroll | New lines append at bottom, tail auto-scrolls |
+
+---
+
+### Phase 11.6 — Token Sparkline ✅ COMPLETE
+
+Combined linear progress bar (session tokens vs budget) + 10-bar 5-second-window activity sparkline.
+
+```
+████████████████░░░░  8,412   ∿∿∿∿∿∿∿∿∿∿
+```
+
+- Token bar: `height: 3px`, `var(--accent)` fill → `var(--warning)` at >70% → `var(--danger)` at >90%
+- Sparkline: 10 bars × 3px wide, height scales 2–16px proportional to `window_tokens`
+- Token count: `IBM Plex Mono 10px`, formatted as `8.4k` when > 1000
+- `agent:token-update` events throttled to 500ms flush interval to avoid render flooding
+
+---
+
+### Phase 11.7 — New Tauri Events ✅ COMPLETE
+
+| Event | Payload | Purpose |
+|---|---|---|
+| ✅ `agent:tool-call-start` | `{ agent_id, tool_call_id, name, args }` | Log tail spinner, status text, elapsed timer, stage advance |
+| ✅ `agent:tool-call-result` | `{ agent_id, tool_call_id, result, is_error, elapsed_ms }` | Log line ✓/✗, timer reset |
+| ✅ `agent:status-change` | `{ agent_id, status }` | Card state |
+| 🆕 `agent:stage-change` | `{ agent_id, stage, status, elapsed_ms?, reason? }` | Stage pill state transitions |
+| 🆕 `agent:token-update` | `{ agent_id, total_tokens, window_tokens }` | Token bar + sparkline |
+| 🆕 `agent:thought-snippet` | `{ agent_id, text }` | Italic dim line in log tail prefixed with `···` |
+| 🆕 `agent:error` | `{ agent_id, error_message, tool_call_id?, is_fatal }` | Card → error state |
+| 🆕 `agent:retry` | `{ agent_id, attempt, max_attempts, reason }` | Status `⚠ retrying (2/3)` |
+
+---
+
+### Phase 11.8 — Rust Backend Emit Points ✅ COMPLETE
+
+- [x] **`engine.rs` — `agent:stage-change`**: `infer_stage_from_tool(tool_name)` maps tool names to stage transitions. Emitted after each tool execution completes. Stage inferences: `list_tasks`/`claim_task` → `claim done`; `read_file`/`grep`/`list_directory` → `read current`; `edit_file`/`write_file` → `write current`; bash with test command → `test current`; `git_commit`/`git_push`/`create_pr` → `push current`; `assign_task` → `dispatch current`.
+- [x] **`streaming.rs` — `agent:token-update`**: Emitted every 20 streamed tokens (not every chunk) to avoid event flood. `window_token_count` reset after each emit.
+- [x] **`engine.rs` — `agent:error`**: Emitted in error handling path with `is_fatal: bool`.
+- [x] **`engine.rs` — `agent:retry`**: Emitted before each retry attempt with `attempt` and `max_attempts`.
+
+---
+
+### Phase 11.9 — Frontend Components & Store ✅ COMPLETE
+
+**New files:**
+- `src/types/live.ts` — `StageStatus`, `Stage`, `LogLine`, `SparklineWindow`, `AgentLiveState`; exported constants `WORKER_STAGES`, `SUPERVISOR_STAGES`, `QC_STAGES`
+- `src/stores/agentLiveStore.ts` — Zustand store with `agents: Record<string, AgentLiveState>`, `isMonitorCollapsed`; actions: `initAgents`, `handleToolCallStart`, `handleToolCallResult`, `handleStageChange`, `handleTokenUpdate`, `handleStatusChange`, `handleError`, `subscribeToEvents`. Token update buffer flushed every 500ms via `setInterval`.
+- `src/components/autodev/LiveMonitorSection.tsx` — section wrapper, header with LIVE/STALE/OFFLINE badge, collapse toggle, card grid
+- `src/components/autodev/AgentLiveCard.tsx` — per-agent card; reads from store slice; manages expand state locally; `grid-column: span 2` when expanded
+- `src/components/autodev/StagePipeline.tsx` — stateless; renders stage pill flex row with `›` separators and hover tooltips
+- `src/components/autodev/MiniLogTail.tsx` — renders last N log lines; auto-scrolls to bottom on new lines; gradient mask above oldest visible line
+- `src/components/autodev/TokenSparkline.tsx` — token bar + 10-bar sparkline; bar color changes at 70% and 90% fill
+
+**Enhanced:**
+- `src/components/autodev/AgentRoster.tsx` — `AgentStatusCell` component reads `agentLiveStore` and shows `{tool_name} · {filename} {diff_stats}` instead of `Working — polling...`. Elapsed timer turns `var(--warning)` after 2 minutes on same tool call.
+
+**11.0 Status**: Fleet Live Monitor fully implemented. Agents in the AutoDev Panel now show real-time tool name, active file, stage progress, token consumption, and last 3 tool call results — all without leaving the AutoDev Panel tab.
+
+---
+
 ## 15. State Machine & Event System Design
 
 ### Dual-Layer State Management
