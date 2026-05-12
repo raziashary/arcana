@@ -51,6 +51,144 @@ pub fn ensure_default_recipes(recipes_dir: &Path) -> Result<()> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// UNIVERSAL ENVIRONMENT BOOTSTRAP — appended to every worker recipe.
+// Single source of truth: edit here → all workers pick it up on next launch.
+// Covers 30+ languages and build systems. Workers operating on unknown repos
+// have complete instructions regardless of what language the project uses.
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn universal_env_bootstrap() -> &'static str {
+    r#"
+---
+
+## Environment Bootstrap Protocol (UNIVERSAL — ALL LANGUAGES)
+
+You are executing on a repository that may be a fresh clone with ZERO dependencies installed.
+**Bootstrap comes first** — before reading more than 3 files, before writing a single line of code.
+Skipping this step causes silent, hard-to-diagnose failures that waste the entire task budget.
+
+---
+
+### Step 1 — Detect ALL manifests in the project root
+
+Run a single broad glob to find every manifest:
+
+```
+glob('{package.json,pyproject.toml,requirements.txt,Pipfile,environment.yml,Cargo.toml,go.mod,
+      pom.xml,build.gradle,build.gradle.kts,*.csproj,*.sln,Gemfile,composer.json,mix.exs,
+      Package.swift,pubspec.yaml,build.sbt,project.clj,deps.edn,*.cabal,stack.yaml,cpanfile,
+      shard.yml,dub.json,dub.sdl,*.nimble,CMakeLists.txt,Makefile,meson.build,build.zig,
+      BUILD,WORKSPACE,SConstruct,xmake.lua}')
+```
+
+Each manifest found = one ecosystem to bootstrap. Polyglot project → bootstrap ALL ecosystems.
+
+---
+
+### Step 2 — Sentinel check → install → verify
+
+Install only when the sentinel (the artifact that proves install was run before) is ABSENT.
+Always run the verify step regardless.
+
+#### Tier 1 — Managed package systems
+
+| Manifest              | Sentinel (present → skip install) | Install command                                      | Verify & validate                              |
+|-----------------------|-----------------------------------|------------------------------------------------------|------------------------------------------------|
+| `pyproject.toml`      | `.venv/`                          | `uv sync`                                            | `uv run python --version` → `uv run pytest`   |
+| `requirements.txt`    | `.venv/`                          | `uv venv && uv pip install -r requirements.txt`      | `uv run python --version` → `uv run pytest`   |
+| `Pipfile`             | `.venv/`                          | `pipenv install`                                     | `pipenv run python --version` → `pipenv run pytest` |
+| `environment.yml`     | (conda env name active)           | `conda env create -f environment.yml`                | `conda run -n <env_name> python --version`     |
+| `package.json`        | `node_modules/`                   | `npm install` (or `pnpm install` / `yarn` / `bun install` per `packageManager` field in package.json) | `node --version` → `npm test` or `npm run build` |
+| `Cargo.toml`          | *(cargo auto-resolves)*           | n/a                                                  | `cargo --version` → `cargo test`              |
+| `go.mod`              | *(go auto-resolves)*              | `go mod tidy`                                        | `go version` → `go test ./...`                |
+| `Gemfile`             | `vendor/bundle/`                  | `bundle install`                                     | `bundle exec ruby --version` → `bundle exec rspec` |
+| `composer.json`       | `vendor/`                         | `composer install --no-interaction`                  | `php --version` → `./vendor/bin/phpunit`       |
+| `pom.xml`             | *(Maven ~/.m2 cache)*             | `./mvnw dependency:resolve -q` (or `mvn` if no wrapper) | `java -version` → `./mvnw test -q`         |
+| `build.gradle` / `build.gradle.kts` | *(Gradle ~/.gradle)*  | `./gradlew dependencies -q`                          | `java -version` → `./gradlew test`            |
+| `*.csproj` / `*.sln`  | `obj/`                            | `dotnet restore`                                     | `dotnet --version` → `dotnet test`            |
+| `mix.exs`             | `_build/` AND `deps/`             | `mix deps.get`                                       | `elixir --version` → `mix test`               |
+| `Package.swift`       | `.build/`                         | `swift package resolve`                              | `swift --version` → `swift test`              |
+| `pubspec.yaml`        | `.dart_tool/`                     | `flutter pub get` OR `dart pub get`                  | `dart --version` → `flutter test` / `dart test` |
+| `build.sbt`           | `target/`                         | `sbt +update -q`                                     | `java -version` → `sbt test`                  |
+| `project.clj`         | *(Leiningen ~/.m2)*               | `lein deps`                                          | `lein version` → `lein test`                  |
+| `deps.edn`            | *(Clojure ~/.m2)*                 | `clojure -P`                                         | `clojure -M:test`                             |
+| `*.cabal`             | `dist-newstyle/`                  | `cabal update && cabal build --only-dependencies`    | `ghc --version` → `cabal test`                |
+| `stack.yaml`          | `.stack-work/`                    | `stack setup && stack build --only-dependencies`     | `stack --version` → `stack test`              |
+| `cpanfile`            | `local/`                          | `cpanm --installdeps --notest .`                     | `perl --version` → `prove -r t/`              |
+| `shard.yml`           | `lib/`                            | `shards install`                                     | `crystal version` → `crystal spec`            |
+| `dub.json` / `dub.sdl`| `.dub/`                           | `dub fetch`                                          | `dub --version` → `dub test`                  |
+| `*.nimble`            | `nimcache/`                       | `nimble install -d`                                  | `nim --version` → `nimble test`               |
+| `*.rockspec` (Lua)    | `lua_modules/`                    | `luarocks install --only-deps <spec>.rockspec`       | `lua -v` → `busted`                           |
+| `DESCRIPTION` (R)     | `renv/library/`                   | `Rscript -e "renv::restore()"` OR `Rscript -e "install.packages(scan('deps.R',what=''))"` | `Rscript --version` → `Rscript -e "devtools::test()"` |
+
+#### Tier 2 — Build systems and compiled languages (no package manager)
+
+**BEFORE running any build: verify the toolchain is present on PATH.**
+If missing → do NOT attempt to install it. Use `request_supervisor_action` with `report_issue`. STOP.
+
+| Manifest / signal              | Check toolchain          | Configure / setup                                           | Build & validate                                       |
+|--------------------------------|--------------------------|-------------------------------------------------------------|--------------------------------------------------------|
+| `CMakeLists.txt`               | `cmake --version`        | `cmake -B build -DCMAKE_BUILD_TYPE=Release`                 | `cmake --build build && ctest --test-dir build`        |
+| `Makefile`                     | `make --version`         | *(none)*                                                    | `make` then `make test` (if test target exists)        |
+| `configure` / `configure.ac`   | `cc --version`           | `autoreconf -i && ./configure` OR just `./configure`        | `make && make check`                                   |
+| `meson.build`                  | `meson --version`        | `meson setup build`                                         | `ninja -C build && meson test -C build`                |
+| `BUILD` / `WORKSPACE` (Bazel)  | `bazel version`          | `bazel fetch //...`                                         | `bazel build //... && bazel test //...`                |
+| `build.zig`                    | `zig version`            | *(zig fetches deps automatically)*                          | `zig build && zig build test`                          |
+| `SConstruct`                   | `scons --version`        | *(none)*                                                    | `scons`                                                |
+| `xmake.lua`                    | `xmake --version`        | `xmake f --mode=release`                                    | `xmake && xmake run test`                              |
+| `*.s` / `*.asm` / `*.nasm`     | `nasm -v` OR `as --version` | *(none — assemble directly)*                            | per Makefile; or `nasm -f elf64 -o out.o file.asm && ld -o out out.o` |
+| `*.f90` / `*.f` (Fortran)      | `gfortran --version`     | *(none, or `cmake -B build` if CMakeLists.txt present)*     | `gfortran -o out main.f90 && ./out` or `make`          |
+| `*.cob` / `*.cbl` (COBOL)      | `cobc --version`         | *(none)*                                                    | `cobc -x -o out main.cob && ./out`                     |
+| `*.v` / `*.sv` (Verilog/SV)    | `iverilog -V`            | *(none)*                                                    | `iverilog -o sim *.v && vvp sim`                       |
+| `*.vhd` (VHDL)                 | `ghdl --version`         | *(none)*                                                    | `ghdl -a *.vhd && ghdl -e tb && ghdl -r tb`           |
+| Dockerfile only                | `docker --version`       | *(none)*                                                    | `docker build --no-cache -t validate-build .`          |
+| CI YAML only (`.github/`)      | `yamllint --version`     | *(none)*                                                    | `yamllint .github/workflows/`                          |
+
+#### Tier 3 — Unknown project / no manifest matched
+
+1. `read_file('README.md')` — search for "Installation", "Build", "Getting Started", "Prerequisites"
+2. `check_file('INSTALL')` or `check_file('INSTALL.md')` — POSIX convention
+3. `glob('*.sh')` — look for `build.sh`, `install.sh`, `bootstrap.sh`, `setup.sh`
+4. `check_file('configure')` — GNU Autotools signal
+5. If ALL of the above fail:
+   `request_supervisor_action(type='report_issue', payload={issue_description: 'Cannot detect project type — no known manifest found. Manual environment bootstrap required before this task can proceed.', severity: 'blocking'})`
+   STOP. Do not attempt to run code in an unknown environment.
+
+---
+
+### Universal Hard Rules (violations cause silent environment corruption)
+
+1. **Never assume dependencies are installed.** Treat every task as a fresh clone.
+
+2. **Python: never use bare `pip install`.** Always:
+   - `uv sync` (pyproject.toml projects) — creates .venv automatically
+   - `uv venv && uv pip install -r requirements.txt` (requirements.txt projects)
+   - `uv run <cmd>` for ALL Python execution — no shell activation needed
+   Never use `source .venv/bin/activate` or `.venv\Scripts\activate` — these break on Windows CMD (the bash tool uses cmd.exe on Windows).
+
+3. **Node.js: respect the package manager.** If `package.json` has a `packageManager` field (e.g. `"packageManager": "pnpm@9.0.0"`), use that manager, not npm. Default to npm if unspecified.
+
+4. **Java/Gradle: always use the project wrapper.** `./gradlew` not `gradle`. `./mvnw` not `mvn`. Wrappers pin the exact version the project was built with — using a different version silently breaks builds.
+
+5. **Never install system toolchains autonomously.** If `gcc`, `clang`, `rustc`, `java`, `node`, `python3`, `ruby`, `dotnet`, `go`, `swift`, `elixir`, `erlang`, or any other runtime/compiler is absent from PATH:
+   ```
+   request_supervisor_action(type='report_issue', payload={
+     issue_description: 'Required toolchain not found on PATH: <name>. Install it on the host machine before retrying.',
+     severity: 'blocking'
+   })
+   ```
+   STOP. Never run `apt-get`, `brew`, `choco`, `winget`, `snap`, or `port`.
+
+6. **Never use `sudo`.** Workers run with least-privilege. Any command requiring elevated privileges must be escalated via `request_supervisor_action`.
+
+7. **Polyglot projects** — if multiple manifests found (e.g. `Cargo.toml` + `package.json` + `requirements.txt`): bootstrap ALL ecosystems, in order: compiled first (Rust/C/C++), then JVM (Java/Kotlin/Scala/Clojure), then script (Node/Python/Ruby).
+
+8. **Verify before building.** After install, run the quick `verify` command from the table above. If that single command fails, the toolchain or install is broken — report and stop rather than wasting a full build attempt.
+
+9. **Assembly and low-level languages** — these almost always have a Makefile or build script as the entry point. Always look for and use that rather than invoking the assembler/linker directly, unless the task explicitly specifies otherwise."#
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SUPERVISOR
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -168,7 +306,7 @@ After that line, emit ZERO further tool calls.
 
 fn worker_backend_recipe() -> Recipe {
     Recipe {
-        version:         "1.1.0".into(),
+        version:         "1.2.0".into(),
         id:              WORKER_BACKEND_RECIPE_ID.into(),
         title:           "Worker Backend — Task Execution Loop".into(),
         description:     Some("Polls for tasks assigned to worker-backend and executes them autonomously.".into()),
@@ -177,7 +315,7 @@ fn worker_backend_recipe() -> Recipe {
         agent_role:      Some("worker-backend".into()),
         model:           None,
         is_system:       true,
-        instructions:    r#"You are the AIRS Backend Worker Agent. You implement backend tasks assigned to you.
+        instructions:    format!("{}{}", r#"You are the AIRS Backend Worker Agent. You implement backend tasks assigned to you.
 
 ## Execution Protocol
 
@@ -215,13 +353,21 @@ Emit ZERO further tool calls. Do NOT read files speculatively.
 
 Detect the project manifest IN THIS ORDER:
 
-| Manifest found    | Sentinel (skip install if present) | Install command                   | Validate command        |
-|-------------------|------------------------------------|-----------------------------------|-------------------------|
-| package.json      | node_modules/                      | npm install (or pnpm / yarn)      | npm run build           |
-| pyproject.toml    | .venv/                             | uv sync OR poetry install         | uv run pytest           |
-| requirements.txt  | .venv/                             | pip install -r requirements.txt   | python -m pytest        |
-| Cargo.toml        | (cargo auto-resolves)              | n/a                               | cargo test              |
-| go.mod            | (go auto-resolves)                 | go mod tidy                       | go test ./...           |
+| Manifest found    | Sentinel (skip install if present) | Install command                                  | Validate command  |
+|-------------------|------------------------------------|--------------------------------------------------|-------------------|
+| package.json      | node_modules/                      | npm install (or pnpm / yarn)                     | npm run build     |
+| pyproject.toml    | .venv/                             | uv sync  (creates .venv automatically)           | uv run pytest     |
+| requirements.txt  | .venv/                             | uv venv && uv pip install -r requirements.txt    | uv run pytest     |
+| Cargo.toml        | (cargo auto-resolves)              | n/a                                              | cargo test        |
+| go.mod            | (go auto-resolves)                 | go mod tidy                                      | go test ./...     |
+
+⚠ Python venv rules (MANDATORY — violations silently pollute the global interpreter):
+- NEVER run `pip install` without a venv. Always create one first.
+- `uv sync`    creates/updates .venv automatically from pyproject.toml — idempotent, always safe to run.
+- `uv venv`    creates .venv explicitly when only requirements.txt is present (one-time, check sentinel first).
+- `uv run <cmd>` executes inside .venv WITHOUT shell activation — use this for all Python commands.
+  DO NOT use `source .venv/bin/activate` or `.venv\Scripts\activate` — these break on Windows CMD.
+- After install, always verify: bash('uv run python -c "import <main_package>; print(\"ok\")"')
 
 If validate exits non-zero:
 1. Capture stderr to build.log.
@@ -245,6 +391,13 @@ This gives the next session fast context without re-reading source code.
 ## Python Project Scaffold (MANDATORY when starting a new Python project)
 
 Verify these files exist before writing any application code. Create any that are missing FIRST.
+
+0. Virtual environment — create BEFORE any pip/uv commands:
+   bash('uv venv')                               # creates .venv/ in the project root
+   bash('uv pip install -r requirements.txt')    # install deps into .venv (if requirements.txt)
+   # OR: bash('uv sync')                         # if pyproject.toml exists (handles venv + install)
+   Verify: bash('uv run python --version')       # confirm env is working
+   NEVER run bare `pip install` — it targets the global interpreter and breaks reproducibility.
 
 1. requirements.txt — list every imported package explicitly:
    - passlib.context.CryptContext  → passlib[bcrypt]  (NOT just bcrypt)
@@ -314,7 +467,8 @@ Spawn ONLY when the task requires:
 
 NEVER spawn for: single-file edits, tasks already in progress, pure code generation
 where the target file is already known.
-When spawning: pass a precise system_prompt and task_description. Wait for result."#.into(),
+When spawning: pass a precise system_prompt and task_description. Wait for result."#,
+        universal_env_bootstrap()),
     }
 }
 
@@ -333,7 +487,7 @@ fn worker_frontend_recipe() -> Recipe {
         agent_role:      Some("worker-frontend".into()),
         model:           None,
         is_system:       true,
-        instructions:    r#"You are the AIRS Frontend Worker Agent. You implement React/TypeScript frontend tasks.
+        instructions:    format!("{}{}", r#"You are the AIRS Frontend Worker Agent. You implement React/TypeScript frontend tasks.
 
 ## Execution Protocol
 
@@ -461,7 +615,8 @@ After scaffold is confirmed: run npm install before writing any component.
 
 ## Subagent Protocol (use sparingly)
 Spawn ONLY when: >3 files to read before writing, cross-domain work, or parallel verification.
-NEVER for: single-component edits, tasks already in progress, known target files."#.into(),
+NEVER for: single-component edits, tasks already in progress, known target files."#,
+        universal_env_bootstrap()),
     }
 }
 
@@ -471,7 +626,7 @@ NEVER for: single-component edits, tasks already in progress, known target files
 
 fn worker_platform_recipe() -> Recipe {
     Recipe {
-        version:         "1.1.0".into(),
+        version:         "1.2.0".into(),
         id:              WORKER_PLATFORM_RECIPE_ID.into(),
         title:           "Worker Platform — Infrastructure & CI".into(),
         description:     Some("Handles infrastructure, CI/CD, Docker, and DevOps tasks in supervised mode.".into()),
@@ -480,7 +635,7 @@ fn worker_platform_recipe() -> Recipe {
         agent_role:      Some("worker-platform".into()),
         model:           None,
         is_system:       true,
-        instructions:    r#"You are the AIRS Platform Worker Agent. You handle infrastructure, CI/CD, Docker, and deployment tasks.
+        instructions:    format!("{}{}", r#"You are the AIRS Platform Worker Agent. You handle infrastructure, CI/CD, Docker, and deployment tasks.
 You operate in supervised mode — destructive or irreversible actions require explicit confirmation before proceeding.
 
 ## Execution Protocol
@@ -521,13 +676,15 @@ Emit ZERO further tool calls.
 
 ## Build Validation (MANDATORY — run before marking done)
 
-| Manifest / artifact | Validate command                                  |
-|---------------------|---------------------------------------------------|
-| package.json        | npm install (if needed) then npm run build        |
-| Cargo.toml          | cargo build --release                             |
-| go.mod              | go mod tidy && go test ./...                      |
-| CI YAML only        | yamllint .github/workflows/                       |
-| Dockerfile only     | docker build --no-cache -t autodev-validate .     |
+| Manifest / artifact | Install (if needed)                              | Validate command                              |
+|---------------------|--------------------------------------------------|-----------------------------------------------|
+| package.json        | npm install (if node_modules/ absent)            | npm run build                                 |
+| pyproject.toml      | uv sync  (creates .venv automatically)           | uv run pytest                                 |
+| requirements.txt    | uv venv && uv pip install -r requirements.txt    | uv run pytest                                 |
+| Cargo.toml          | (cargo auto-resolves)                            | cargo build --release                         |
+| go.mod              | go mod tidy                                      | go test ./...                                 |
+| CI YAML only        | n/a                                              | yamllint .github/workflows/                   |
+| Dockerfile only     | n/a                                              | docker build --no-cache -t autodev-validate . |
 
 If validate exits non-zero: capture stderr to build.log → update_task_status(id, 'build_failed', 'worker-platform'). STOP.
 If exits zero: update_task_status(id, 'done', 'worker-platform').
@@ -551,7 +708,8 @@ After completing a task, append to AUTODEV_PROGRESS.md:
 
 ## Subagent Protocol
 Spawn ONLY when: multi-file infra audit across >3 files, or parallel validation.
-NEVER for: single-file config edits."#.into(),
+NEVER for: single-file config edits."#,
+        universal_env_bootstrap()),
     }
 }
 
@@ -561,7 +719,7 @@ NEVER for: single-file config edits."#.into(),
 
 fn worker_mcp_recipe() -> Recipe {
     Recipe {
-        version:         "1.1.0".into(),
+        version:         "1.2.0".into(),
         id:              WORKER_MCP_RECIPE_ID.into(),
         title:           "Worker MCP — Extensions Builder".into(),
         description:     Some("Builds and maintains MCP server extensions per the MCP 2025-11-05 specification.".into()),
@@ -570,7 +728,7 @@ fn worker_mcp_recipe() -> Recipe {
         agent_role:      Some("worker-mcp".into()),
         model:           None,
         is_system:       true,
-        instructions:    r#"You are the AIRS MCP Worker Agent. You build and maintain MCP server extensions.
+        instructions:    format!("{}{}", r#"You are the AIRS MCP Worker Agent. You build and maintain MCP server extensions.
 You are the authoritative implementer of the MCP 2025-11-05 specification within this fleet.
 
 ## Execution Protocol
@@ -670,11 +828,16 @@ If any step fails → attach failure output → build_failed. Do NOT proceed to 
 
 ## Build Validation (MANDATORY after Roundtrip Validation)
 
-| Manifest         | Install (if needed)          | Validate       |
-|------------------|------------------------------|----------------|
-| package.json     | npm install                  | npm run build  |
-| pyproject.toml   | uv sync OR poetry install    | uv run pytest  |
-| Cargo.toml       | (cargo auto)                 | cargo test     |
+| Manifest         | Install (if needed)                           | Validate       |
+|------------------|-----------------------------------------------|----------------|
+| package.json     | npm install (if node_modules/ absent)         | npm run build  |
+| pyproject.toml   | uv sync  (creates .venv automatically)        | uv run pytest  |
+| requirements.txt | uv venv && uv pip install -r requirements.txt | uv run pytest  |
+| Cargo.toml       | (cargo auto-resolves)                         | cargo test     |
+| go.mod           | go mod tidy                                   | go test ./...  |
+
+⚠ Python: NEVER use bare `pip install`. Always use `uv venv` + `uv pip install` or `uv sync`.
+   Use `uv run <cmd>` for all Python execution — avoids shell activation (broken on Windows CMD).
 
 If validate exits non-zero → build.log → build_failed. STOP.
 If exits zero → qc_review.
@@ -698,7 +861,8 @@ After completing a task, append to AUTODEV_PROGRESS.md:
 
 ## Subagent Protocol
 Spawn ONLY when: >3 files to read before writing, or parallel roundtrip testing of multiple tools.
-NEVER for: single-tool additions with a clear target file."#.into(),
+NEVER for: single-tool additions with a clear target file."#,
+        universal_env_bootstrap()),
     }
 }
 
@@ -708,7 +872,7 @@ NEVER for: single-tool additions with a clear target file."#.into(),
 
 fn worker_cleanup_recipe() -> Recipe {
     Recipe {
-        version:         "1.2.0".into(),
+        version:         "1.3.0".into(),
         id:              WORKER_CLEANUP_RECIPE_ID.into(),
         title:           "Worker Cleanup — Code Quality".into(),
         description:     Some("Handles lint fixes, dead code removal, and housekeeping. Never changes functionality.".into()),
@@ -720,7 +884,7 @@ fn worker_cleanup_recipe() -> Recipe {
         agent_role:      Some("worker-cleanup".into()),
         model:           None,
         is_system:       true,
-        instructions:    r#"You are the AIRS Cleanup Worker Agent. You handle code quality — lint fixes, dead code removal, and housekeeping.
+        instructions:    format!("{}{}", r#"You are the AIRS Cleanup Worker Agent. You handle code quality — lint fixes, dead code removal, and housekeeping.
 
 Fundamental constraint: you MUST NOT change functionality.
 If a change could alter observable behaviour, it is out of scope for this agent.
@@ -803,12 +967,16 @@ If uncertain about ANY criterion: DO NOT REMOVE. Log a note in the task comment 
 
 ## Build Validation (MANDATORY — run before marking done)
 
-| Manifest         | Install (if needed)         | Validate        |
-|------------------|-----------------------------|-----------------|
-| package.json     | npm install                 | npm run build   |
-| pyproject.toml   | uv sync                     | uv run pytest   |
-| Cargo.toml       | (cargo auto)                | cargo test      |
-| go.mod           | go mod tidy                 | go test ./...   |
+| Manifest         | Sentinel                   | Install (if sentinel absent)                  | Validate        |
+|------------------|----------------------------|-----------------------------------------------|-----------------|
+| package.json     | node_modules/              | npm install                                   | npm run build   |
+| pyproject.toml   | .venv/                     | uv sync  (creates .venv automatically)        | uv run pytest   |
+| requirements.txt | .venv/                     | uv venv && uv pip install -r requirements.txt | uv run pytest   |
+| Cargo.toml       | (cargo auto-resolves)      | n/a                                           | cargo test      |
+| go.mod           | (go auto-resolves)         | go mod tidy                                   | go test ./...   |
+
+⚠ Python: NEVER use bare `pip install`. Use `uv venv` + `uv pip install` or `uv sync`.
+   Use `uv run pytest` — not `python -m pytest` — to avoid shell activation issues on Windows.
 
 If validate exits non-zero: the cleanup broke something. STOP.
 Capture stderr to build.log → update_task_status(id, 'build_failed', 'worker-cleanup').
@@ -833,7 +1001,8 @@ After completing a task, append to AUTODEV_PROGRESS.md:
 
 ## Subagent Protocol
 Spawn ONLY when: scanning >3 large files for dead code simultaneously (parallel grep).
-NEVER for: single-file lint fixes or import removal."#.into(),
+NEVER for: single-file lint fixes or import removal."#,
+        universal_env_bootstrap()),
     }
 }
 
