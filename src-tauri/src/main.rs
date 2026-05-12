@@ -14,6 +14,7 @@ use autodev_lib::skills::SkillRegistry;
 use autodev_lib::agent::ToolRegistry;
 use autodev_lib::agent::builtin_tools;
 use autodev_lib::mcp_server::server::start_mcp_server;
+use autodev_lib::mcp_server::health_monitor::McpHealthMonitor;
 use autodev_lib::updater::{UpdaterState, UpdateChannel, start_background_check};
 
 fn main() {
@@ -78,6 +79,11 @@ fn main() {
     // Phase 5.3 — auto-updater state
     let updater_state = UpdaterState::new();
 
+    // Ruflo Feature 6 — MCP Connection Health Monitor.
+    // Polls registered external MCP servers every 30 s and emits
+    // mcp:health-update / mcp:connection-lost / mcp:reconnected events.
+    let mcp_health_monitor = Arc::new(McpHealthMonitor::new(30, 3, 10));
+
     // Clone Arcs for the setup hook (setup runs after app handle is available)
     let app_state_for_setup    = app_state.clone();
     let session_mgr_for_setup  = session_mgr.clone();
@@ -85,7 +91,8 @@ fn main() {
     let orch_client_for_setup  = orch_client.clone();
     let sidecar_mgr_for_setup  = sidecar_mgr.clone();
     let subagent_mgr_for_setup = subagent_mgr.clone();
-    let updater_state_for_setup = updater_state.clone();
+    let updater_state_for_setup   = updater_state.clone();
+    let mcp_health_for_setup      = mcp_health_monitor.clone();
 
     // register_commands is defined in the lib crate so generate_handler! runs
     // where the #[tauri::command] __cmd__* macros are in scope.
@@ -99,8 +106,9 @@ fn main() {
             .manage(orch_client)
             .manage(subagent_mgr)
             .manage(skill_registry_managed)
-            .manage(mcp_registry.clone())  // Phase 3.4b — exposed so list_mcp_tools can iterate
-            .manage(updater_state)         // Phase 5.3 — auto-updater state
+            .manage(mcp_registry.clone())   // Phase 3.4b — exposed so list_mcp_tools can iterate
+            .manage(updater_state)          // Phase 5.3 — auto-updater state
+            .manage(mcp_health_monitor)     // Ruflo Feature 6 — MCP Connection Health Monitor
             .setup(move |app| {
                 // Startup progress state machine — drives the loading overlay.
                 // Attached to SidecarManager so spawn/health transitions + log
@@ -119,6 +127,30 @@ fn main() {
                     // Keep the handle alive for the lifetime of the app
                     // (it will be dropped when the app shuts down)
                 });
+
+                // Ruflo Feature 6 — Start MCP Connection Health Monitor.
+                // Registers the GitHub MCP server (if configured + enabled) and any other
+                // user-configured external MCP servers, then starts the background ping loop.
+                {
+                    let monitor_ref  = mcp_health_for_setup.clone();
+                    let app_for_mcp  = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        // Register GitHub MCP server if the user has it configured
+                        if let Ok(gh_cfg) = autodev_lib::commands::github_mcp_commands::get_github_mcp_config() {
+                            if gh_cfg.enabled {
+                                if let Some(url) = &gh_cfg.server_url {
+                                    monitor_ref.register_server("github-mcp", url).await;
+                                }
+                                // stdio variant — no URL but still registered for display
+                                if gh_cfg.server_url.is_none() {
+                                    monitor_ref.register_server("github-mcp", "stdio://github-mcp").await;
+                                }
+                            }
+                        }
+                        // Start background ping loop (runs forever)
+                        monitor_ref.start_monitoring(app_for_mcp);
+                    });
+                }
 
                 let progress = Arc::new(StartupProgress::new(app.handle().clone()));
                 progress.advance(StartupPhase::Init);

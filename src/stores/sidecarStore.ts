@@ -20,6 +20,27 @@ export type SidecarStatusStr =
   | "running"
   | `error: ${string}`;
 
+// ─── Ruflo Feature 6 — MCP Server Health ─────────────────────────────────────
+
+export type McpConnectionState =
+  | 'connected'
+  | 'degraded'
+  | 'disconnected'
+  | 'reconnecting'
+  | 'not_monitored'
+
+export interface McpServerHealth {
+  server_name:           string
+  endpoint:              string
+  transport:             string       // "http" | "stdio"
+  state:                 McpConnectionState
+  last_ping_at:          string | null
+  last_success_at:       string | null
+  consecutive_failures:  number
+  avg_latency_ms:        number
+  error_message:         string | null
+}
+
 interface StartupProgressPayload {
   phase: string;
   message?: string;
@@ -28,12 +49,16 @@ interface StartupProgressPayload {
 interface SidecarState {
   status: SidecarStatusStr;
   isConnected: boolean;
+  // Ruflo Feature 6 — external MCP server health
+  mcpServerHealth:   McpServerHealth[];
+  mcpDisconnected:   string[];           // server names currently disconnected
 
   // Actions
   loadStatus: () => Promise<void>;
   checkConnectivity: () => Promise<boolean>;
   startSidecar: (path?: string) => Promise<string>;
   stopSidecar: () => Promise<void>;
+  loadMcpHealth: () => Promise<void>;
   initEventListeners: () => Promise<void>;
 }
 
@@ -44,6 +69,8 @@ const _unlistenFns: UnlistenFn[] = [];
 export const useSidecarStore = create<SidecarState>((set, get) => ({
   status: "stopped",
   isConnected: false,
+  mcpServerHealth:  [],
+  mcpDisconnected:  [],
 
   // ── Loaders ──────────────────────────────────────────────────────────────────
 
@@ -93,6 +120,20 @@ export const useSidecarStore = create<SidecarState>((set, get) => ({
     }
   },
 
+  // ── Ruflo Feature 6 — MCP health ─────────────────────────────────────────────
+
+  loadMcpHealth: async () => {
+    try {
+      const health = await invoke<McpServerHealth[]>("get_mcp_health")
+      const disconnected = health
+        .filter(h => h.state === 'disconnected' || h.state === 'reconnecting')
+        .map(h => h.server_name)
+      set({ mcpServerHealth: health, mcpDisconnected: disconnected })
+    } catch (e) {
+      console.error("[sidecarStore] Failed to load MCP health:", e)
+    }
+  },
+
   // ── Event Listeners ──────────────────────────────────────────────────────
   // Task A1: Wire sidecarStore to startup:progress events.
   // Subscribes to Rust startup:progress event and transitions to "running" when
@@ -129,6 +170,45 @@ export const useSidecarStore = create<SidecarState>((set, get) => ({
           clearInterval(pollInterval);
         }
       }, 5000);
+
+      // Ruflo Feature 6 — MCP health event subscriptions
+
+      // Full snapshot from each ping cycle — replace entire health list
+      const unlistenMcpUpdate = await listen<McpServerHealth[]>('mcp:health-update', e => {
+        const disconnected = e.payload
+          .filter(h => h.state === 'disconnected' || h.state === 'reconnecting')
+          .map(h => h.server_name)
+        set({ mcpServerHealth: e.payload, mcpDisconnected: disconnected })
+      })
+      _unlistenFns.push(unlistenMcpUpdate)
+
+      // Connection lost — add to disconnected list and update that server's entry
+      const unlistenLost = await listen<{ server_name: string }>('mcp:connection-lost', e => {
+        set(s => ({
+          mcpDisconnected: s.mcpDisconnected.includes(e.payload.server_name)
+            ? s.mcpDisconnected
+            : [...s.mcpDisconnected, e.payload.server_name],
+          mcpServerHealth: s.mcpServerHealth.map(h =>
+            h.server_name === e.payload.server_name
+              ? { ...h, state: 'disconnected' as McpConnectionState }
+              : h
+          ),
+        }))
+      })
+      _unlistenFns.push(unlistenLost)
+
+      // Reconnected — remove from disconnected list
+      const unlistenReconn = await listen<{ server_name: string }>('mcp:reconnected', e => {
+        set(s => ({
+          mcpDisconnected: s.mcpDisconnected.filter(n => n !== e.payload.server_name),
+          mcpServerHealth: s.mcpServerHealth.map(h =>
+            h.server_name === e.payload.server_name
+              ? { ...h, state: 'connected' as McpConnectionState, consecutive_failures: 0 }
+              : h
+          ),
+        }))
+      })
+      _unlistenFns.push(unlistenReconn)
     } catch (e) {
       console.error("[sidecarStore] Failed to register startup:progress listener:", e);
       _listenersInstalled = false; // allow retry

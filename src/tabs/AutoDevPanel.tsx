@@ -25,6 +25,8 @@ import { LiveMonitorSection } from '../components/autodev/LiveMonitorSection'
 import { useAgentLiveStore }  from '../stores/agentLiveStore'
 import { WorkerAffinityPanel } from '../components/dashboard/WorkerAffinityPanel'
 import { OrphanAlert } from '../components/dashboard/OrphanAlert'
+import { BudgetBar } from '../components/budget/BudgetBar'
+import { EpicsSection } from '../components/dashboard/EpicPhaseView'
 import '../components/autodev/LiveMonitor.css'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -230,6 +232,7 @@ function TaskCard({
   doneStyle,
   buildFailedStyle,
   rejectedStyle,
+  needsInfoStyle,
   onDelete,
 }: {
   task:              Task
@@ -237,6 +240,7 @@ function TaskCard({
   doneStyle:         boolean
   buildFailedStyle:  boolean
   rejectedStyle:     boolean
+  needsInfoStyle:    boolean
   onDelete:          (id: number) => void
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -268,13 +272,45 @@ function TaskCard({
             {task.title}
           </div>
           {task.assigned_worker && (
-            <div style={{ fontSize: '10px', color: buildFailedStyle ? 'var(--warning)' : rejectedStyle ? '#FF6B35' : (doneStyle ? 'var(--accent)' : 'var(--accent)') }}>
-              {buildFailedStyle ? '⚠ build failed' : rejectedStyle ? '✗ rejected' : (doneStyle ? '✓ done' : task.assigned_worker)}
+            <div style={{ fontSize: '10px', color: buildFailedStyle ? 'var(--warning)' : rejectedStyle ? '#FF6B35' : needsInfoStyle ? '#F59E0B' : (doneStyle ? 'var(--accent)' : 'var(--accent)') }}>
+              {buildFailedStyle ? '⚠ build failed' : rejectedStyle ? '✗ rejected' : needsInfoStyle ? '⏸ needs info' : (doneStyle ? '✓ done' : task.assigned_worker)}
             </div>
           )}
           {rejectedStyle && task.rejection_reason && (
             <div style={{ fontSize: '9px', color: '#FF6B35', marginTop: 2, fontStyle: 'italic', lineHeight: 1.4 }}>
               {task.rejection_reason}
+            </div>
+          )}
+          {/* Ruflo Feature 5 — Phase badges for tasks that belong to an epic */}
+          {(task.epic_id || task.phase) && (
+            <div style={{ display: 'flex', gap: 3, marginTop: 3, flexWrap: 'wrap' }}>
+              {task.epic_id && (
+                <span style={{
+                  fontSize: 8, padding: '1px 4px', borderRadius: 2,
+                  background: 'rgba(195,166,255,0.12)', color: '#C3A6FF',
+                  border: '1px solid rgba(195,166,255,0.25)', fontFamily: 'monospace',
+                }}>
+                  epic #{task.epic_id}
+                </span>
+              )}
+              {task.phase && (
+                <span style={{
+                  fontSize: 8, padding: '1px 4px', borderRadius: 2,
+                  background: 'rgba(130,170,255,0.12)', color: '#82AAFF',
+                  border: '1px solid rgba(130,170,255,0.25)', fontFamily: 'monospace',
+                }}>
+                  {task.phase}
+                </span>
+              )}
+              {task.blocked_by && task.blocked_by.length > 0 && (
+                <span style={{
+                  fontSize: 8, padding: '1px 4px', borderRadius: 2,
+                  background: 'rgba(245,158,11,0.12)', color: '#F59E0B',
+                  border: '1px solid rgba(245,158,11,0.25)', fontFamily: 'monospace',
+                }}>
+                  blocked
+                </span>
+              )}
             </div>
           )}
           {showProgress && (
@@ -286,6 +322,18 @@ function TaskCard({
                   width: '40%', background: 'var(--accent)', borderRadius: 1,
                   animation: 'shimmer 1.8s ease-in-out infinite',
                 }}
+              />
+            </div>
+          )}
+          {/* Ruflo Feature 4 — Budget Circuit Breaker: show budget bar when task has a budget */}
+          {(task.budget_max_tokens != null || task.budget_max_usd != null) && (
+            <div style={{ marginTop: 6 }}>
+              <BudgetBar
+                taskId={task.id}
+                maxTokens={task.budget_max_tokens ?? undefined}
+                maxUsd={task.budget_max_usd ?? undefined}
+                maxTurns={task.budget_max_turns ?? undefined}
+                compact
               />
             </div>
           )}
@@ -335,6 +383,7 @@ const COL_HEADER_COLORS: Partial<Record<string, string>> = {
   qc_review:   'var(--info)',
   rejected:    '#FF6B35',
   done_today:  'var(--success)',
+  needs_info:  '#F59E0B',
 }
 
 function KanbanColumn({
@@ -394,10 +443,11 @@ function KanbanColumn({
           </div>
         ) : (
           tasks.map(task => {
-            const showProgress   = colId === 'in_progress'
-            const doneStyle      = colId === 'done_today' && task.status === 'done'
+            const showProgress    = colId === 'in_progress'
+            const doneStyle       = colId === 'done_today' && task.status === 'done'
             const buildFailedStyle = colId === 'done_today' && task.status === 'build_failed'
-            const rejectedStyle  = colId === 'rejected'
+            const rejectedStyle   = colId === 'rejected'
+            const needsInfoStyle  = colId === 'needs_info' || task.status === 'needs_info'
             return (
               <TaskCard
                 key={task.id}
@@ -406,6 +456,7 @@ function KanbanColumn({
                 doneStyle={doneStyle}
                 buildFailedStyle={buildFailedStyle}
                 rejectedStyle={rejectedStyle}
+                needsInfoStyle={needsInfoStyle}
                 onDelete={onDelete}
               />
             )
@@ -813,6 +864,9 @@ export default function AutoDevTab() {
 
       {/* Worker Affinity — historical routing performance per worker (Ruflo Feature 1) */}
       <WorkerAffinityPanel />
+
+      {/* Epics — Phase-based task decomposition view (Ruflo Feature 5) */}
+      <EpicsSection tasks={tasks} />
 
       {/* Worker Requests — Fleet→Supervisor escalation queue */}
       <WorkerRequestsWidget

@@ -31,3 +31,5 @@ pub mod memory_commands;
 pub mod routing_commands;
 pub mod orphan_commands;
 pub mod diff_commands;
+pub mod budget_commands;
+pub mod browser_commands;

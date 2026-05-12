@@ -19,13 +19,15 @@ export interface SkillParameter {
 }
 
 export interface SkillSummary {
-  name:        string
-  description: string
-  category:    SkillCategory
-  tags:        string[]
-  version:     string
-  is_builtin:  boolean
-  param_count: number
+  name:                 string
+  description:          string
+  category:             SkillCategory
+  tags:                 string[]
+  version:              string
+  is_builtin:           boolean
+  param_count:          number
+  /** Capabilities required to run this skill (e.g. ["playwright"]). Set by skill YAML frontmatter. */
+  requires_capability?: string[]
 }
 
 export interface Skill extends SkillSummary {

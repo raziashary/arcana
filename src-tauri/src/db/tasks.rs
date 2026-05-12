@@ -89,19 +89,22 @@ pub enum TaskType {
     Refactor,
     Docs,
     Chore,
+    Epic,    // Ruflo Feature 5 — parent grouping for phased work
 }
 
 impl TaskType {
     pub fn as_str(&self) -> &str {
         match self {
             Self::Feature => "feature", Self::Bug => "bug",
-            Self::Refactor => "refactor", Self::Docs => "docs", Self::Chore => "chore",
+            Self::Refactor => "refactor", Self::Docs => "docs",
+            Self::Chore => "chore", Self::Epic => "epic",
         }
     }
     pub fn from_str(s: &str) -> Self {
         match s {
             "bug" => Self::Bug, "refactor" => Self::Refactor,
-            "docs" => Self::Docs, "chore" => Self::Chore, _ => Self::Feature,
+            "docs" => Self::Docs, "chore" => Self::Chore,
+            "epic" => Self::Epic, _ => Self::Feature,
         }
     }
 }
@@ -118,6 +121,7 @@ pub enum TaskStatus {
     Failed,       // Task failed — needs attention
     Cancelled,    // Manually cancelled
     Rejected,     // QC rejected — worker must rework and resubmit
+    NeedsInfo,    // Budget exceeded or blocked — awaiting Supervisor/human guidance
 }
 
 impl TaskStatus {
@@ -127,7 +131,7 @@ impl TaskStatus {
             Self::InProgress => "in_progress", Self::QcReview => "qc_review",
             Self::Done => "done", Self::BuildFailed => "build_failed",
             Self::Failed => "failed", Self::Cancelled => "cancelled",
-            Self::Rejected => "rejected",
+            Self::Rejected => "rejected", Self::NeedsInfo => "needs_info",
         }
     }
     pub fn from_str(s: &str) -> Self {
@@ -136,7 +140,8 @@ impl TaskStatus {
             "qc_review" => Self::QcReview, "done" => Self::Done,
             "build_failed" => Self::BuildFailed,
             "failed" => Self::Failed, "cancelled" => Self::Cancelled,
-            "rejected" => Self::Rejected, _ => Self::Ready,
+            "rejected" => Self::Rejected, "needs_info" => Self::NeedsInfo,
+            _ => Self::Ready,
         }
     }
 }
@@ -162,6 +167,21 @@ pub struct Task {
     pub claim_host:           Option<String>,
     // Diff risk analysis result (Ruflo Feature 3) — JSON blob from DiffAnalysisResult
     pub diff_analysis:        Option<String>,
+    // Budget Circuit Breaker (Ruflo Feature 4) — None when no budget was set
+    pub budget_max_tokens:    Option<i64>,
+    pub budget_max_usd:       Option<f64>,
+    pub budget_max_turns:     Option<i64>,
+    pub budget_tokens_used:   i64,
+    pub budget_cost_usd:      f64,
+    pub budget_turns_used:    i64,
+    pub budget_exceeded:      bool,
+    pub budget_exceeded_reason: Option<String>,
+    // Phase-Based Task Decomposition (Ruflo Feature 5)
+    pub phase:         Option<String>,       // e.g. "foundation" | "core" | "integration" | "qa"
+    pub phase_order:   Option<i32>,          // 1, 2, 3, 4 — controls sequencing within an epic
+    pub milestone:     Option<String>,       // optional milestone marker for this phase
+    pub epic_id:       Option<String>,       // links subtask back to its parent epic task id
+    pub blocked_by:    Option<Vec<String>>,  // task IDs that must be done before this one starts
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -169,9 +189,40 @@ pub struct CreateTaskInput {
     pub title:               String,
     pub description:         Option<String>,
     pub priority:            String, // "p0" | "p1" | "p2" | "p3"
-    pub task_type:           String, // "feature" | "bug" | "refactor" | "docs" | "chore"
+    pub task_type:           String, // "feature" | "bug" | "refactor" | "docs" | "chore" | "epic"
     pub acceptance_criteria: String,
     pub created_by:          Option<String>,
+}
+
+/// Input for creating a task inside an epic with phase metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreatePhasedTaskInput {
+    pub epic_id:             String,
+    pub phase:               String,
+    pub phase_order:         i32,
+    pub title:               String,
+    pub description:         Option<String>,
+    pub priority:            String,
+    pub task_type:           String,
+    pub acceptance_criteria: String,
+    pub blocked_by:          Vec<String>, // task IDs that must complete first
+    pub milestone:           Option<String>,
+    pub created_by:          Option<String>,
+}
+
+/// Per-phase progress summary for an epic.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhaseSummary {
+    pub phase:            String,
+    pub phase_order:      i32,
+    pub milestone:        Option<String>,
+    pub total_tasks:      i32,
+    pub done_tasks:       i32,
+    pub in_progress_tasks: i32,
+    pub ready_tasks:      i32,
+    pub blocked_tasks:    i32,
+    pub is_complete:      bool,   // true when done_tasks == total_tasks
+    pub is_unlocked:      bool,   // true when previous phase is complete (or this is phase 1)
 }
 
 // ─── Routing History ─────────────────────────────────────────────────────────
@@ -273,6 +324,28 @@ impl TasksDb {
         let _ = self.conn.execute_batch(
             "ALTER TABLE tasks ADD COLUMN diff_analysis TEXT;"
         );
+        // Ruflo Feature 4 — Budget Circuit Breaker columns
+        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN budget_max_tokens INTEGER;");
+        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN budget_max_usd    REAL;");
+        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN budget_max_turns  INTEGER DEFAULT 20;");
+        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN budget_tokens_used INTEGER DEFAULT 0;");
+        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN budget_cost_usd   REAL DEFAULT 0.0;");
+        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN budget_turns_used INTEGER DEFAULT 0;");
+        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN budget_exceeded   INTEGER DEFAULT 0;");
+        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN budget_exceeded_reason TEXT;");
+        // Ruflo Feature 5 — Phase-Based Task Decomposition columns
+        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN phase       TEXT;");
+        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN phase_order INTEGER;");
+        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN milestone   TEXT;");
+        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN epic_id     TEXT;");
+        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN blocked_by  TEXT;");
+        // Indexes for phase queries
+        let _ = self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_epic_id ON tasks(epic_id);"
+        );
+        let _ = self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_phase ON tasks(phase, phase_order);"
+        );
         // Routing history table (Ruflo Feature 1 — semantic task routing)
         self.conn.execute_batch(
             "
@@ -322,7 +395,12 @@ impl TasksDb {
             "SELECT id, title, description, priority, task_type, status,
                     acceptance_criteria, assigned_worker, rejection_reason, retry_count,
                     created_by, created_at, updated_at, completed_at,
-                    claimed_by_pid, claim_host, diff_analysis
+                    claimed_by_pid, claim_host, diff_analysis,
+                    budget_max_tokens, budget_max_usd, budget_max_turns,
+                    COALESCE(budget_tokens_used,0), COALESCE(budget_cost_usd,0.0),
+                    COALESCE(budget_turns_used,0), COALESCE(budget_exceeded,0),
+                    budget_exceeded_reason,
+                    phase, phase_order, milestone, epic_id, blocked_by
              FROM tasks WHERE id = ?1"
         )?;
         let task = stmt.query_row(params![id], row_to_task).optional()?;
@@ -335,7 +413,12 @@ impl TasksDb {
                 "SELECT id, title, description, priority, task_type, status,
                          acceptance_criteria, assigned_worker, rejection_reason, retry_count,
                          created_by, created_at, updated_at, completed_at,
-                         claimed_by_pid, claim_host, diff_analysis
+                         claimed_by_pid, claim_host, diff_analysis,
+                         budget_max_tokens, budget_max_usd, budget_max_turns,
+                         COALESCE(budget_tokens_used,0), COALESCE(budget_cost_usd,0.0),
+                         COALESCE(budget_turns_used,0), COALESCE(budget_exceeded,0),
+                         budget_exceeded_reason,
+                         phase, phase_order, milestone, epic_id, blocked_by
                  FROM tasks WHERE status = ?1 ORDER BY created_at ASC",
                 vec![status.to_string()],
             )
@@ -344,7 +427,12 @@ impl TasksDb {
                 "SELECT id, title, description, priority, task_type, status,
                          acceptance_criteria, assigned_worker, rejection_reason, retry_count,
                          created_by, created_at, updated_at, completed_at,
-                         claimed_by_pid, claim_host, diff_analysis
+                         claimed_by_pid, claim_host, diff_analysis,
+                         budget_max_tokens, budget_max_usd, budget_max_turns,
+                         COALESCE(budget_tokens_used,0), COALESCE(budget_cost_usd,0.0),
+                         COALESCE(budget_turns_used,0), COALESCE(budget_exceeded,0),
+                         budget_exceeded_reason,
+                         phase, phase_order, milestone, epic_id, blocked_by
                  FROM tasks ORDER BY created_at ASC",
                 vec![],
             )
@@ -364,7 +452,12 @@ impl TasksDb {
             "SELECT id, title, description, priority, task_type, status,
                     acceptance_criteria, assigned_worker, rejection_reason, retry_count,
                     created_by, created_at, updated_at, completed_at,
-                    claimed_by_pid, claim_host, diff_analysis
+                    claimed_by_pid, claim_host, diff_analysis,
+                    budget_max_tokens, budget_max_usd, budget_max_turns,
+                    COALESCE(budget_tokens_used,0), COALESCE(budget_cost_usd,0.0),
+                    COALESCE(budget_turns_used,0), COALESCE(budget_exceeded,0),
+                    budget_exceeded_reason,
+                    phase, phase_order, milestone, epic_id, blocked_by
              FROM tasks WHERE status = ?1 AND assigned_worker = ?2 ORDER BY id"
         )?;
         let tasks = stmt.query_map(params![status, worker], row_to_task)?
@@ -540,7 +633,12 @@ impl TasksDb {
             "SELECT id, title, description, priority, task_type, status,
                     acceptance_criteria, assigned_worker, rejection_reason, retry_count,
                     created_by, created_at, updated_at, completed_at,
-                    claimed_by_pid, claim_host, diff_analysis
+                    claimed_by_pid, claim_host, diff_analysis,
+                    budget_max_tokens, budget_max_usd, budget_max_turns,
+                    COALESCE(budget_tokens_used,0), COALESCE(budget_cost_usd,0.0),
+                    COALESCE(budget_turns_used,0), COALESCE(budget_exceeded,0),
+                    budget_exceeded_reason,
+                    phase, phase_order, milestone, epic_id, blocked_by
              FROM tasks
              WHERE status IN ('assigned', 'in_progress')
              ORDER BY updated_at ASC"
@@ -659,6 +757,113 @@ impl TasksDb {
         Ok(map)
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Budget Circuit Breaker — Ruflo Feature 4
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Set the budget caps for a task (called by Supervisor before assigning).
+    pub fn set_task_budget(
+        &self,
+        task_id:    i64,
+        max_tokens: Option<u64>,
+        max_usd:    Option<f64>,
+        max_turns:  Option<u32>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tasks SET budget_max_tokens = ?1, budget_max_usd = ?2,
+             budget_max_turns = ?3, updated_at = datetime('now') WHERE id = ?4",
+            rusqlite::params![
+                max_tokens.map(|t| t as i64),
+                max_usd,
+                max_turns.map(|t| t as i64),
+                task_id,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Persist cumulative budget usage after each agent turn.
+    pub fn update_task_budget_usage(
+        &self,
+        task_id:     i64,
+        tokens_used: u64,
+        cost_usd:    f64,
+        turns_used:  u32,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tasks SET budget_tokens_used = ?1, budget_cost_usd = ?2,
+             budget_turns_used = ?3, updated_at = datetime('now') WHERE id = ?4",
+            rusqlite::params![tokens_used as i64, cost_usd, turns_used as i64, task_id],
+        )?;
+        Ok(())
+    }
+
+    /// Mark a task as budget-exceeded and transition it to needs_info.
+    pub fn mark_task_budget_exceeded(&self, task_id: i64, reason: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tasks SET budget_exceeded = 1, budget_exceeded_reason = ?1,
+             status = 'needs_info', updated_at = datetime('now') WHERE id = ?2",
+            rusqlite::params![reason, task_id],
+        )?;
+        Ok(())
+    }
+
+    /// Read back the current budget usage for a task.
+    pub fn get_task_budget_status(&self, task_id: i64) -> Result<crate::budget::BudgetStatus> {
+        let row = self.conn.query_row(
+            "SELECT budget_tokens_used, budget_cost_usd, budget_turns_used,
+                    budget_exceeded, budget_exceeded_reason
+             FROM tasks WHERE id = ?1",
+            rusqlite::params![task_id],
+            |row| {
+                Ok((
+                    row.get::<_, Option<i64>>(0)?.unwrap_or(0) as u64,
+                    row.get::<_, Option<f64>>(1)?.unwrap_or(0.0),
+                    row.get::<_, Option<i64>>(2)?.unwrap_or(0) as u32,
+                    row.get::<_, Option<i64>>(3)?.unwrap_or(0) != 0,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            },
+        )?;
+        let exceeded_reason = row.4.as_deref().map(|r| match r {
+            "BUDGET_EXCEEDED_TOKENS" => crate::budget::BudgetExceededReason::TokenLimitReached,
+            "BUDGET_EXCEEDED_USD"    => crate::budget::BudgetExceededReason::CostLimitReached,
+            _                        => crate::budget::BudgetExceededReason::TurnLimitReached,
+        });
+        Ok(crate::budget::BudgetStatus {
+            tokens_used: row.0,
+            cost_usd:    row.1,
+            turns_used:  row.2,
+            exceeded:    row.3,
+            exceeded_reason,
+        })
+    }
+
+    /// Aggregate today's budget usage across all tasks for the daily summary.
+    pub fn get_daily_budget_summary(&self) -> Result<crate::budget::DailyBudgetSummary> {
+        let row = self.conn.query_row(
+            "SELECT
+               COALESCE(SUM(CASE WHEN budget_max_tokens IS NOT NULL THEN budget_max_tokens ELSE 0 END), 0),
+               COALESCE(SUM(budget_tokens_used), 0),
+               COALESCE(SUM(CASE WHEN budget_max_usd IS NOT NULL THEN budget_max_usd ELSE 0.0 END), 0.0),
+               COALESCE(SUM(budget_cost_usd), 0.0),
+               COALESCE(SUM(CASE WHEN budget_exceeded = 1 THEN 1 ELSE 0 END), 0),
+               COALESCE(SUM(CASE WHEN budget_max_tokens IS NOT NULL OR budget_max_usd IS NOT NULL THEN 1 ELSE 0 END), 0)
+             FROM tasks
+             WHERE date(created_at) = date('now')",
+            [],
+            |row| Ok(crate::budget::DailyBudgetSummary {
+                total_allocated_tokens: row.get::<_, i64>(0)? as u64,
+                total_spent_tokens:     row.get::<_, i64>(1)? as u64,
+                total_allocated_usd:    row.get(2)?,
+                total_spent_usd:        row.get(3)?,
+                tasks_exceeded:         row.get::<_, i64>(4)? as u32,
+                tasks_with_budget:      row.get::<_, i64>(5)? as u32,
+            }),
+        )?;
+        Ok(row)
+    }
+
     /// Aggregate routing_history into per-worker, per-task-type affinity stats.
     /// Returns rows ordered by worker_slug then task_type.
     pub fn get_affinity_stats(&self) -> Result<Vec<(String, String, i64, i64, i64, Option<i64>)>> {
@@ -684,6 +889,238 @@ impl TasksDb {
         })?.collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     }
+
+    // ─── Ruflo Feature 5 — Phase-Based Task Decomposition ─────────────────────
+
+    /// Create an Epic task — a parent record with task_type='epic'.
+    /// Epic tasks have no assigned_worker and no phase; subtasks link back via epic_id.
+    pub fn create_epic(&self, title: &str, description: Option<&str>, created_by: &str) -> Result<Task> {
+        self.conn.execute(
+            "INSERT INTO tasks (title, description, priority, task_type, status, acceptance_criteria, created_by)
+             VALUES (?1, ?2, 'p1', 'epic', 'ready', 'All subtasks complete', ?3)",
+            params![title, description, created_by],
+        )?;
+        let id = self.conn.last_insert_rowid();
+        self.get_by_id(id)?.ok_or_else(|| AutoDevError::Agent("Epic not found after insert".into()))
+    }
+
+    /// Create a task with full phase metadata and optional blocker list.
+    pub fn create_phased_task(&self, input: CreatePhasedTaskInput) -> Result<Task> {
+        let created_by = input.created_by.unwrap_or_else(|| "supervisor".to_string());
+        let blocked_by_json = if input.blocked_by.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&input.blocked_by)
+                .unwrap_or_else(|_| "[]".to_string()))
+        };
+        // Determine initial status: blocked if there are unresolved blockers, else ready
+        let initial_status = if input.blocked_by.is_empty() { "ready" } else { "needs_info" };
+        self.conn.execute(
+            "INSERT INTO tasks (title, description, priority, task_type, status,
+                               acceptance_criteria, created_by,
+                               epic_id, phase, phase_order, milestone, blocked_by)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                input.title,
+                input.description,
+                input.priority,
+                input.task_type,
+                initial_status,
+                input.acceptance_criteria,
+                created_by,
+                input.epic_id,
+                input.phase,
+                input.phase_order,
+                input.milestone,
+                blocked_by_json,
+            ],
+        )?;
+        let id = self.conn.last_insert_rowid();
+        self.get_by_id(id)?.ok_or_else(|| AutoDevError::Agent("Phased task not found after insert".into()))
+    }
+
+    /// All tasks belonging to an epic, ordered by phase_order then id.
+    pub fn get_epic_tasks(&self, epic_id: &str) -> Result<Vec<Task>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, description, priority, task_type, status,
+                    acceptance_criteria, assigned_worker, rejection_reason, retry_count,
+                    created_by, created_at, updated_at, completed_at,
+                    claimed_by_pid, claim_host, diff_analysis,
+                    budget_max_tokens, budget_max_usd, budget_max_turns,
+                    COALESCE(budget_tokens_used,0), COALESCE(budget_cost_usd,0.0),
+                    COALESCE(budget_turns_used,0), COALESCE(budget_exceeded,0),
+                    budget_exceeded_reason,
+                    phase, phase_order, milestone, epic_id, blocked_by
+             FROM tasks WHERE epic_id = ?1
+             ORDER BY COALESCE(phase_order, 999), id"
+        )?;
+        let tasks = stmt.query_map(params![epic_id], row_to_task)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(tasks)
+    }
+
+    /// Per-phase progress summary for an epic.
+    pub fn get_phase_summary(&self, epic_id: &str) -> Result<Vec<PhaseSummary>> {
+        let tasks = self.get_epic_tasks(epic_id)?;
+
+        // Group by phase
+        let mut phase_map: std::collections::BTreeMap<(i32, String), Vec<&Task>> =
+            std::collections::BTreeMap::new();
+        for task in &tasks {
+            if let (Some(phase), Some(order)) = (&task.phase, task.phase_order) {
+                phase_map.entry((order, phase.clone())).or_default().push(task);
+            }
+        }
+
+        let all_phases: Vec<(i32, String)> = phase_map.keys().cloned().collect();
+        let mut summaries: Vec<PhaseSummary> = Vec::new();
+
+        for (idx, (order, phase)) in all_phases.iter().enumerate() {
+            let phase_tasks = phase_map.get(&(*order, phase.clone())).unwrap();
+            let total        = phase_tasks.len() as i32;
+            let done         = phase_tasks.iter().filter(|t| t.status == TaskStatus::Done).count() as i32;
+            let in_progress  = phase_tasks.iter().filter(|t| t.status == TaskStatus::InProgress).count() as i32;
+            let ready        = phase_tasks.iter().filter(|t| t.status == TaskStatus::Ready || t.status == TaskStatus::Assigned).count() as i32;
+            let blocked      = phase_tasks.iter().filter(|t| t.status == TaskStatus::NeedsInfo && t.blocked_by.as_ref().map_or(false, |b| !b.is_empty())).count() as i32;
+            let is_complete  = total > 0 && done == total;
+
+            // A phase is unlocked if it's the first phase or the previous phase is complete
+            let is_unlocked  = if idx == 0 {
+                true
+            } else {
+                let prev = &all_phases[idx - 1];
+                summaries.iter().find(|s| s.phase == prev.1 && s.phase_order == prev.0)
+                    .map_or(false, |s| s.is_complete)
+            };
+
+            // Milestone: take from any task in this phase that has one
+            let milestone = phase_tasks.iter().find_map(|t| t.milestone.clone());
+
+            summaries.push(PhaseSummary {
+                phase: phase.clone(),
+                phase_order: *order,
+                milestone,
+                total_tasks: total,
+                done_tasks: done,
+                in_progress_tasks: in_progress,
+                ready_tasks: ready,
+                blocked_tasks: blocked,
+                is_complete,
+                is_unlocked,
+            });
+        }
+
+        Ok(summaries)
+    }
+
+    /// Tasks with blocked_by entries where at least one blocker is not yet done.
+    pub fn get_blocked_tasks(&self) -> Result<Vec<Task>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, description, priority, task_type, status,
+                    acceptance_criteria, assigned_worker, rejection_reason, retry_count,
+                    created_by, created_at, updated_at, completed_at,
+                    claimed_by_pid, claim_host, diff_analysis,
+                    budget_max_tokens, budget_max_usd, budget_max_turns,
+                    COALESCE(budget_tokens_used,0), COALESCE(budget_cost_usd,0.0),
+                    COALESCE(budget_turns_used,0), COALESCE(budget_exceeded,0),
+                    budget_exceeded_reason,
+                    phase, phase_order, milestone, epic_id, blocked_by
+             FROM tasks WHERE blocked_by IS NOT NULL AND blocked_by != '[]'"
+        )?;
+        let tasks = stmt.query_map([], row_to_task)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(tasks)
+    }
+
+    /// Called after a task is marked done. Checks all tasks blocked by `completed_task_id`
+    /// — if ALL their blockers are now done, transitions them from needs_info → ready.
+    /// Returns the IDs of tasks that were unblocked.
+    /// Also auto-completes the parent epic if all its subtasks are done.
+    pub fn unblock_ready_tasks(&self, completed_task_id: i64) -> Result<Vec<i64>> {
+        let completed_str = completed_task_id.to_string();
+        let blocked_tasks = self.get_blocked_tasks()?;
+
+        let mut unblocked_ids: Vec<i64> = Vec::new();
+
+        for task in &blocked_tasks {
+            let blockers = match &task.blocked_by {
+                Some(b) => b,
+                None    => continue,
+            };
+            if !blockers.contains(&completed_str) {
+                continue;
+            }
+            // Check if ALL blockers are now done
+            let all_done = blockers.iter().all(|blocker_id| {
+                blocker_id.parse::<i64>().ok()
+                    .and_then(|bid| self.get_by_id(bid).ok().flatten())
+                    .map_or(false, |t| t.status == TaskStatus::Done)
+            });
+            if all_done {
+                // Transition needs_info → ready
+                let _ = self.conn.execute(
+                    "UPDATE tasks SET status = 'ready', updated_at = datetime('now') WHERE id = ?1",
+                    params![task.id],
+                );
+                unblocked_ids.push(task.id);
+                crate::events::emit_task_changed_global(crate::events::TaskChangedPayload {
+                    task_id: Some(task.id),
+                    kind:    "unblocked".into(),
+                    status:  Some("ready".into()),
+                    assigned_worker: task.assigned_worker.clone(),
+                });
+            }
+        }
+
+        // Epic auto-completion: if the completed task has an epic_id,
+        // check if all subtasks of that epic are now done.
+        if let Ok(Some(completed_task)) = self.get_by_id(completed_task_id) {
+            if let Some(ref epic_id) = completed_task.epic_id {
+                let subtasks = self.get_epic_tasks(epic_id)?;
+                if !subtasks.is_empty() && subtasks.iter().all(|t| t.status == TaskStatus::Done) {
+                    // All subtasks done — mark the epic task itself as done
+                    if let Ok(epic_id_int) = epic_id.parse::<i64>() {
+                        let _ = self.conn.execute(
+                            "UPDATE tasks SET status = 'done', completed_at = datetime('now'),
+                                             updated_at = datetime('now')
+                             WHERE id = ?1 AND task_type = 'epic'",
+                            params![epic_id_int],
+                        );
+                        crate::events::emit_task_changed_global(crate::events::TaskChangedPayload {
+                            task_id: Some(epic_id_int),
+                            kind:    "epic_complete".into(),
+                            status:  Some("done".into()),
+                            assigned_worker: None,
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(unblocked_ids)
+    }
+
+    /// Returns tasks in a specific phase that are ready to assign (status = ready | assigned).
+    pub fn get_ready_tasks_in_phase(&self, epic_id: &str, phase: &str) -> Result<Vec<Task>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, description, priority, task_type, status,
+                    acceptance_criteria, assigned_worker, rejection_reason, retry_count,
+                    created_by, created_at, updated_at, completed_at,
+                    claimed_by_pid, claim_host, diff_analysis,
+                    budget_max_tokens, budget_max_usd, budget_max_turns,
+                    COALESCE(budget_tokens_used,0), COALESCE(budget_cost_usd,0.0),
+                    COALESCE(budget_turns_used,0), COALESCE(budget_exceeded,0),
+                    budget_exceeded_reason,
+                    phase, phase_order, milestone, epic_id, blocked_by
+             FROM tasks
+             WHERE epic_id = ?1 AND phase = ?2
+               AND status IN ('ready', 'assigned')
+             ORDER BY COALESCE(phase_order, 999), id"
+        )?;
+        let tasks = stmt.query_map(params![epic_id, phase], row_to_task)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(tasks)
+    }
 }
 
 fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
@@ -705,6 +1142,22 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         claimed_by_pid:      row.get(14).unwrap_or(None),
         claim_host:          row.get(15).unwrap_or(None),
         diff_analysis:       row.get(16).unwrap_or(None),
+        // Ruflo Feature 4 — Budget Circuit Breaker (columns 17–24)
+        budget_max_tokens:         row.get(17).unwrap_or(None),
+        budget_max_usd:            row.get(18).unwrap_or(None),
+        budget_max_turns:          row.get(19).unwrap_or(None),
+        budget_tokens_used:        row.get::<_, i64>(20).unwrap_or(0),
+        budget_cost_usd:           row.get::<_, f64>(21).unwrap_or(0.0),
+        budget_turns_used:         row.get::<_, i64>(22).unwrap_or(0),
+        budget_exceeded:           row.get::<_, i64>(23).unwrap_or(0) != 0,
+        budget_exceeded_reason:    row.get(24).unwrap_or(None),
+        // Ruflo Feature 5 — Phase-Based Task Decomposition (indices 25–29)
+        phase:       row.get(25).unwrap_or(None),
+        phase_order: row.get::<_, Option<i64>>(26).unwrap_or(None).map(|v| v as i32),
+        milestone:   row.get(27).unwrap_or(None),
+        epic_id:     row.get(28).unwrap_or(None),
+        blocked_by:  row.get::<_, Option<String>>(29).unwrap_or(None)
+                         .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()),
     })
 }
 

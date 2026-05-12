@@ -54,6 +54,25 @@ pub const EVT_PLAN_CHANGED:      &str = "plan:changed";
 // releases one or more stale tasks back to the ready queue.
 pub const EVT_TASK_ORPHANS_RELEASED: &str = "task:orphans-released";
 
+// Ruflo Feature 4 — Budget Circuit Breaker. Fired when an agent loop halts
+// because a per-task token, cost, or turn budget has been exhausted.
+pub const EVT_AGENT_BUDGET_EXCEEDED: &str = "agent:budget-exceeded";
+
+// Ruflo Feature 5 — Phase-Based Task Decomposition. Fired when a blocked task
+// is unblocked (all its prerequisites are done) or when an entire phase of an
+// epic is complete (all subtasks in that phase are done).
+pub const EVT_TASK_UNBLOCKED:      &str = "task:unblocked";
+pub const EVT_TASK_PHASE_COMPLETE: &str = "task:phase-complete";
+
+// Ruflo Feature 6 — MCP Connection Health Monitor. Emitted by McpHealthMonitor
+// on each ping cycle and on connection state transitions.
+pub const EVT_MCP_HEALTH_UPDATE:       &str = "mcp:health-update";
+pub const EVT_MCP_CONNECTION_LOST:     &str = "mcp:connection-lost";
+pub const EVT_MCP_CONNECTION_DEGRADED: &str = "mcp:connection-degraded";
+pub const EVT_MCP_RECONNECTED:         &str = "mcp:reconnected";
+pub const EVT_MCP_RECONNECT_FAILED:    &str = "mcp:reconnect-failed";
+pub const EVT_MCP_REQUIRES_RESTART:    &str = "mcp:requires-restart";
+
 // Phase 4.9 — subagent lifecycle events. One event per SSE frame received
 // from core-orchestrator's `/api/agents/{id}/invoke/stream`, plus internal
 // status transitions (Spawning / Idle / Running / Completed / Failed /
@@ -334,5 +353,57 @@ pub fn emit_orphans_released_global(task_ids: Vec<String>) {
     if let Some(app) = app_handle() {
         let count = task_ids.len();
         let _ = app.emit(EVT_TASK_ORPHANS_RELEASED, OrphansReleasedPayload { task_ids, count });
+    }
+}
+
+// ── Ruflo Feature 4 — Budget Circuit Breaker events ───────────────────────────
+
+#[derive(Debug, Serialize, Clone)]
+pub struct BudgetExceededEvent {
+    pub session_id:  String,
+    pub task_id:     Option<i64>,
+    pub reason:      String,   // "BUDGET_EXCEEDED_TOKENS" | "BUDGET_EXCEEDED_USD" | "BUDGET_EXCEEDED_TURNS"
+    pub tokens_used: u64,
+    pub cost_usd:    f64,
+    pub turns_used:  u32,
+}
+
+pub fn emit_budget_exceeded(app: &AppHandle, payload: BudgetExceededEvent) {
+    let _ = app.emit(EVT_AGENT_BUDGET_EXCEEDED, payload);
+}
+
+pub fn emit_budget_exceeded_global(payload: BudgetExceededEvent) {
+    if let Some(app) = app_handle() {
+        emit_budget_exceeded(app, payload);
+    }
+}
+
+// ── Ruflo Feature 5 — Phase-Based Task Decomposition events ───────────────────
+
+/// Emitted for each task that transitions from needs_info → ready when its
+/// blockers have all been completed.
+#[derive(Debug, Serialize, Clone)]
+pub struct TaskUnblockedPayload {
+    pub task_id: i64,
+}
+
+/// Emitted once when the last task in a phase reaches status=done, signalling
+/// that the next phase's tasks may now be assigned.
+#[derive(Debug, Serialize, Clone)]
+pub struct PhaseCompletePayload {
+    pub epic_id:   String,
+    pub phase:     String,
+    pub milestone: Option<String>,
+}
+
+pub fn emit_task_unblocked_global(task_id: i64) {
+    if let Some(app) = app_handle() {
+        let _ = app.emit(EVT_TASK_UNBLOCKED, TaskUnblockedPayload { task_id });
+    }
+}
+
+pub fn emit_phase_complete_global(epic_id: String, phase: String, milestone: Option<String>) {
+    if let Some(app) = app_handle() {
+        let _ = app.emit(EVT_TASK_PHASE_COMPLETE, PhaseCompletePayload { epic_id, phase, milestone });
     }
 }

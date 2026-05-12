@@ -2,9 +2,9 @@
 // Frontend reads tasks via these commands to populate the AutoDev Panel kanban.
 // PA's create_task tool writes directly via TasksDb; these expose read + status updates.
 
-use crate::db::tasks::{Task, WorkerRequest, TasksDb};
+use crate::db::tasks::{Task, WorkerRequest, PhaseSummary, CreatePhasedTaskInput, TasksDb};
 use crate::errors::Result;
-use crate::events::{emit_task_changed_global, TaskChangedPayload};
+use crate::events::{emit_task_changed_global, emit_task_unblocked_global, emit_phase_complete_global, TaskChangedPayload};
 
 /// List all tasks, optionally filtered by status.
 /// Status values: "ready" | "assigned" | "in_progress" | "qc_review" | "done" | "failed" | "cancelled"
@@ -58,6 +58,35 @@ pub fn update_task_status(id: i64, status: String, assigned_worker: Option<Strin
             let _ = crate::routing::TaskRouter::record_outcome(&task_id_str, "reassigned", 0, 0);
         }
         _ => {}
+    }
+
+    // Ruflo Feature 5 — Blocker resolution hook.
+    // When a task completes, unblock any tasks that were waiting on it.
+    // Emit task:unblocked for each newly ready task, and task:phase-complete
+    // if the completing task's phase is now fully done.
+    if status == "done" {
+        let db2 = TasksDb::open()?;
+        if let Ok(unblocked_ids) = db2.unblock_ready_tasks(id) {
+            for tid in &unblocked_ids {
+                emit_task_unblocked_global(*tid);
+            }
+        }
+        // Check if the completed task's phase is fully done
+        if let Ok(Some(completed_task)) = db2.get_by_id(id) {
+            if let (Some(ref epic_id), Some(ref phase)) = (&completed_task.epic_id, &completed_task.phase) {
+                if let Ok(summaries) = db2.get_phase_summary(epic_id) {
+                    if let Some(summary) = summaries.iter().find(|s| &s.phase == phase) {
+                        if summary.is_complete {
+                            emit_phase_complete_global(
+                                epic_id.clone(),
+                                phase.clone(),
+                                summary.milestone.clone(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     emit_task_changed_global(TaskChangedPayload {
@@ -139,4 +168,63 @@ pub fn resolve_worker_request(
 ) -> Result<()> {
     let db = TasksDb::open()?;
     db.update_worker_request_status(id, &action, note.as_deref())
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Epic & Phase Commands — Ruflo Feature 5 (Phase-Based Task Decomposition)
+// ════════════════════════════════════════════════════════════════════════════
+
+/// List all subtasks belonging to an epic, ordered by phase_order then id.
+#[tauri::command]
+pub fn get_epic_tasks(epic_id: String) -> Result<Vec<Task>> {
+    let db = TasksDb::open()?;
+    db.get_epic_tasks(&epic_id)
+}
+
+/// Return per-phase progress summaries for an epic including completion state
+/// and unlock gating so the frontend can render a phased progress view.
+#[tauri::command]
+pub fn get_epic_phase_summary(epic_id: String) -> Result<Vec<PhaseSummary>> {
+    let db = TasksDb::open()?;
+    db.get_phase_summary(&epic_id)
+}
+
+/// Create a subtask inside an epic with full phase metadata.
+/// Called by the Supervisor (or PA in FastDevelopment mode) when decomposing
+/// an epic into phased work. The `blocked_by` list contains string task IDs
+/// that must reach status=done before this task becomes ready.
+#[tauri::command]
+pub fn create_phased_task(
+    epic_id:             String,
+    phase:               String,
+    phase_order:         i32,
+    title:               String,
+    description:         Option<String>,
+    priority:            String,
+    task_type:           String,
+    acceptance_criteria: String,
+    blocked_by:          Vec<String>,
+    milestone:           Option<String>,
+) -> Result<Task> {
+    let db = TasksDb::open()?;
+    let task = db.create_phased_task(CreatePhasedTaskInput {
+        epic_id,
+        phase,
+        phase_order,
+        title,
+        description,
+        priority,
+        task_type,
+        acceptance_criteria,
+        blocked_by,
+        milestone,
+        created_by: None,
+    })?;
+    emit_task_changed_global(TaskChangedPayload {
+        task_id: Some(task.id),
+        kind:    "created".into(),
+        status:  Some(if task.epic_id.is_some() { "needs_info".into() } else { "ready".into() }),
+        assigned_worker: None,
+    });
+    Ok(task)
 }

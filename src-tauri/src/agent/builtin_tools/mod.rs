@@ -27,6 +27,12 @@ pub mod append_file;
 pub mod suggest_worker_tool;
 pub mod claim_task_tool;
 pub mod analyze_diff_tool;
+pub mod set_task_budget_tool;
+// Ruflo Feature 5 — Phase-Based Task Decomposition
+pub mod create_epic_tool;
+pub mod create_phased_task_tool;
+pub mod get_epic_progress_tool;
+pub mod get_ready_tasks_in_phase_tool;
 
 use std::sync::Arc;
 use super::{PAMode, tool_registry::ToolRegistry};
@@ -63,6 +69,11 @@ pub fn register_for_mcp_worker(registry: &mut ToolRegistry) {
     registry.register(Arc::new(claim_task_tool::ClaimTaskTool));
     // Diff analysis — QC Agent uses this to score and classify PR diffs before review
     registry.register(Arc::new(analyze_diff_tool::AnalyzeDiffTool));
+    // Budget management — Supervisor uses this before assigning tasks (Ruflo Feature 4)
+    registry.register(Arc::new(set_task_budget_tool::SetTaskBudgetTool));
+    // Ruflo Feature 5 — Epic read tools exposed so workers can check phase progress
+    registry.register(Arc::new(get_epic_progress_tool::GetEpicProgressTool));
+    registry.register(Arc::new(get_ready_tasks_in_phase_tool::GetReadyTasksInPhaseTool));
     // NOT exposed: assign_task, create_task, planner, spawn_subagent, spawn_parallel_subagents
 }
 
@@ -111,6 +122,13 @@ pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
             registry.register(Arc::new(claim_task_tool::ClaimTaskTool));
             // Diff analysis — available in PA and review modes for manual QC workflows
             registry.register(Arc::new(analyze_diff_tool::AnalyzeDiffTool));
+            // Budget management — available in PA/review so manual workflows can budget tasks
+            registry.register(Arc::new(set_task_budget_tool::SetTaskBudgetTool));
+            // Ruflo Feature 5 — Epic & Phase tools (Supervisor uses these to decompose work)
+            registry.register(Arc::new(create_epic_tool::CreateEpicTool));
+            registry.register(Arc::new(create_phased_task_tool::CreatePhasedTaskTool));
+            registry.register(Arc::new(get_epic_progress_tool::GetEpicProgressTool));
+            registry.register(Arc::new(get_ready_tasks_in_phase_tool::GetReadyTasksInPhaseTool));
         }
         PAMode::Delegate => {
             registry.register(Arc::new(create_task::CreateTaskTool));

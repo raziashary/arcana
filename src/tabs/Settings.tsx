@@ -6,7 +6,7 @@
 // References: DEVELOPMENT_PLAN.md Phase 2.3 — Provider Support & Model Enhancements
 
 import { useEffect, useState } from 'react'
-import { CheckCircle, XCircle, RefreshCw, Eye, EyeOff, RotateCcw, Save, Brain, FolderOpen, X } from 'lucide-react'
+import { CheckCircle, XCircle, RefreshCw, Eye, EyeOff, RotateCcw, Save, Brain, FolderOpen, X, AlertTriangle, Globe } from 'lucide-react'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useWorkerStore } from '../stores/workerStore'
 import { useModelConfigStore, THINKING_MODELS, REASONING_EFFORT_MODELS } from '../stores/modelConfigStore'
@@ -42,6 +42,9 @@ export default function SettingsTab() {
         <SectionHeader title="Demo Mode" />
         <DemoModeCard />
 
+        <SectionHeader title="Default Worker Budget" />
+        <DefaultWorkerBudgetCard />
+
         <SectionHeader title="Services" />
         <SidecarPanel />
 
@@ -50,6 +53,9 @@ export default function SettingsTab() {
 
         <SectionHeader title="MCP Tools" />
         <McpToolBrowser />
+
+        <SectionHeader title="Browser Testing" />
+        <BrowserTestingCard />
 
         <SectionHeader title="Providers" />
 
@@ -304,6 +310,145 @@ function DemoModeCard() {
   )
 }
 
+// ─── Default Worker Budget (Ruflo Feature 4) ────────────────────────────────
+//
+// These values are persisted to ~/.autodev/runtime_config.json and read by
+// the Rust recipe runner when assigning tasks without an explicit budget.
+
+function DefaultWorkerBudgetCard() {
+  const cfg = useRuntimeConfigStore()
+
+  const [tokens,    setTokens]    = useState(100_000)
+  const [usd,       setUsd]       = useState(0.50)
+  const [turns,     setTurns]     = useState(20)
+  const [warnPct,   setWarnPct]   = useState(80)
+  const [saving,    setSaving]    = useState(false)
+  const [saved,     setSaved]     = useState(false)
+  const [error,     setError]     = useState<string | null>(null)
+
+  useEffect(() => {
+    cfg.load()
+  }, [])
+
+  useEffect(() => {
+    if (cfg.config) {
+      setTokens(cfg.config.default_worker_budget_tokens)
+      setUsd(cfg.config.default_worker_budget_usd)
+      setTurns(cfg.config.default_worker_budget_turns)
+      setWarnPct(cfg.config.budget_warn_pct)
+    }
+  }, [cfg.config])
+
+  const handleSave = async () => {
+    setSaving(true)
+    setError(null)
+    try {
+      await cfg.setDefaultWorkerBudget(tokens, usd, turns, warnPct)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const labelStyle = { color: 'var(--text-3)', fontSize: '10px' } as const
+  const inputStyle = {
+    background: 'var(--bg-2)', border: '1px solid var(--border-2)',
+    color: 'var(--text-1)', borderRadius: '2px', padding: '3px 6px',
+    fontFamily: 'monospace', fontSize: '11px', width: 90,
+  } as const
+
+  return (
+    <div
+      className="rounded-sm p-4 space-y-4"
+      style={{ background: 'var(--bg-card)', border: '1px solid var(--border-1)' }}
+    >
+      <div className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
+        Applied when Supervisor assigns a task without an explicit budget.
+        Stored in <span style={{ color: 'var(--accent)' }}>runtime_config.json</span> — available to the Rust engine.
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        {/* Max Tokens */}
+        <div>
+          <div className="font-mono mb-1" style={labelStyle}>MAX TOKENS PER TASK</div>
+          <input
+            type="number" min={1000} max={1_000_000} step={1000}
+            value={tokens}
+            onChange={e => setTokens(Math.max(1000, parseInt(e.target.value) || 1000))}
+            style={inputStyle}
+            title="Max tokens per task"
+          />
+          <div className="font-mono mt-0.5" style={{ ...labelStyle, fontSize: '9px' }}>
+            ceiling: 1,000,000
+          </div>
+        </div>
+
+        {/* Max USD */}
+        <div>
+          <div className="font-mono mb-1" style={labelStyle}>MAX USD PER TASK</div>
+          <input
+            type="number" min={0.01} max={100} step={0.01}
+            value={usd}
+            onChange={e => setUsd(Math.max(0.01, parseFloat(e.target.value) || 0.01))}
+            style={inputStyle}
+            title="Max USD per task"
+          />
+          <div className="font-mono mt-0.5" style={{ ...labelStyle, fontSize: '9px' }}>
+            ceiling: $100.00
+          </div>
+        </div>
+
+        {/* Max Turns */}
+        <div>
+          <div className="font-mono mb-1" style={labelStyle}>MAX TURNS</div>
+          <input
+            type="number" min={1} max={100} step={1}
+            value={turns}
+            onChange={e => setTurns(Math.max(1, parseInt(e.target.value) || 1))}
+            style={inputStyle}
+            title="Max agent turns per task"
+          />
+          <div className="font-mono mt-0.5" style={{ ...labelStyle, fontSize: '9px' }}>
+            ceiling: 100
+          </div>
+        </div>
+
+        {/* Warn % */}
+        <div>
+          <div className="font-mono mb-1" style={labelStyle}>
+            WARN AT &nbsp;<span style={{ color: 'var(--warning)' }}>{warnPct}%</span>
+          </div>
+          <input
+            type="range" min={10} max={100} step={5}
+            value={warnPct}
+            onChange={e => setWarnPct(parseInt(e.target.value))}
+            className="w-full"
+            title={`Warn when ${warnPct}% of budget used`}
+          />
+        </div>
+      </div>
+
+      {error && (
+        <div className="font-mono text-xs" style={{ color: 'var(--danger)' }}>{error}</div>
+      )}
+
+      <div className="flex justify-end">
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="font-mono text-xs px-3 py-1 rounded-sm cursor-pointer disabled:opacity-40 flex items-center gap-1.5"
+          style={{ background: 'var(--accent-muted)', border: '1px solid var(--accent-border)', color: 'var(--accent)' }}
+        >
+          {saving ? 'Saving…' : saved ? 'Saved!' : <><Save size={11} /> Save</>}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ─── GitHub PAT ───────────────────────────────────────────────────────────────
 
 function GitHubPATCard() {
@@ -541,6 +686,217 @@ function GitHubMCPCard() {
       >
         {saving ? 'Saving…' : saved ? 'Saved!' : <><Save size={11} /> Save Config</>}
       </button>
+    </div>
+  )
+}
+
+// ─── Browser Testing (Ruflo Feature 7) ───────────────────────────────────────
+
+interface BrowserInfo      { name: string; installed: boolean }
+interface BrowserAvailability {
+  playwright_installed: boolean
+  playwright_version:   string | null
+  browsers:             BrowserInfo[]
+  npx_available:        boolean
+}
+
+function BrowserTestingCard() {
+  const [avail,       setAvail]       = useState<BrowserAvailability | null>(null)
+  const [loading,     setLoading]     = useState(false)
+  const [installing,  setInstalling]  = useState(false)
+  const [installErr,  setInstallErr]  = useState<string | null>(null)
+  const [stagingUrl,  setStagingUrl]  = useState('http://localhost:3000')
+  const [browserEnabled, setBrowserEnabled] = useState(false)
+
+  const checkAvailability = async () => {
+    setLoading(true)
+    try {
+      const result = await invoke<BrowserAvailability>('check_playwright_available')
+      setAvail(result)
+      if (result.playwright_installed) setBrowserEnabled(true)
+    } catch { /* ignore */ } finally { setLoading(false) }
+  }
+
+  useEffect(() => { void checkAvailability() }, [])
+
+  const handleInstall = async () => {
+    setInstalling(true)
+    setInstallErr(null)
+    try {
+      await invoke('install_playwright_browsers', { browser: 'chromium' })
+      await checkAvailability()
+    } catch (e) {
+      setInstallErr(String(e))
+    } finally {
+      setInstalling(false)
+    }
+  }
+
+  const notInstalled = avail && !avail.playwright_installed
+
+  return (
+    <div
+      className="rounded-sm p-4 space-y-3"
+      style={{ background: 'var(--bg-card)', border: '1px solid var(--border-1)' }}
+    >
+      {/* Playwright not installed banner */}
+      {notInstalled && (
+        <div
+          className="flex items-center gap-2 p-2 rounded-sm"
+          style={{ background: 'rgba(255,203,139,0.08)', border: '1px solid rgba(255,203,139,0.2)' }}
+        >
+          <AlertTriangle size={13} style={{ color: 'var(--warning, #FFCB8B)', flexShrink: 0 }} />
+          <span className="font-mono text-xs" style={{ color: 'var(--warning, #FFCB8B)' }}>
+            Browser testing requires Playwright. Click Install to set it up.
+          </span>
+        </div>
+      )}
+
+      {/* Status row */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Globe size={13} style={{ color: 'var(--text-3)' }} />
+          <span className="font-mono text-xs" style={{ color: 'var(--text-2)' }}>
+            Playwright
+          </span>
+          {avail ? (
+            avail.playwright_installed ? (
+              <span className="font-mono text-xs" style={{ color: 'var(--aqua, #7fdbff)' }}>
+                ✓ {avail.playwright_version ?? 'installed'}
+              </span>
+            ) : (
+              <span className="font-mono text-xs" style={{ color: 'var(--danger, #ff6b6b)' }}>
+                not installed
+              </span>
+            )
+          ) : (
+            <span className="font-mono text-xs" style={{ color: 'var(--text-4)' }}>
+              {loading ? 'checking…' : '—'}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => void checkAvailability()}
+            disabled={loading}
+            title="Re-check"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-4)', padding: 2 }}
+          >
+            <RefreshCw size={10} className={loading ? 'anim-spin' : ''} />
+          </button>
+          {!avail?.playwright_installed && (
+            <button
+              onClick={() => void handleInstall()}
+              disabled={installing || !avail?.npx_available}
+              className="font-mono px-2 py-1 rounded-sm"
+              style={{
+                fontSize: '10px',
+                background: 'rgba(127,219,255,0.08)',
+                border: '1px solid rgba(127,219,255,0.3)',
+                color: 'var(--aqua, #7fdbff)',
+                cursor: installing || !avail?.npx_available ? 'default' : 'pointer',
+                opacity: installing || !avail?.npx_available ? 0.6 : 1,
+              }}
+            >
+              {installing ? 'Installing…' : 'Install Playwright'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Install error */}
+      {installErr && (
+        <div className="font-mono text-xs" style={{ color: 'var(--danger, #ff6b6b)' }}>
+          {installErr}
+        </div>
+      )}
+
+      {/* Browser list */}
+      {avail?.playwright_installed && avail.browsers.length > 0 && (
+        <div className="space-y-1">
+          {avail.browsers.map(b => (
+            <div key={b.name} className="flex items-center gap-2">
+              <span
+                style={{
+                  width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+                  background: b.installed ? 'var(--aqua, #7fdbff)' : 'var(--text-4)',
+                  display: 'inline-block',
+                }}
+              />
+              <span className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
+                {b.name}
+              </span>
+              {!b.installed && (
+                <button
+                  onClick={() => invoke('install_playwright_browsers', { browser: b.name })}
+                  className="font-mono"
+                  style={{
+                    fontSize: '9px', padding: '1px 5px', borderRadius: 2,
+                    background: 'var(--accent-muted)', border: '1px solid var(--border-1)',
+                    color: 'var(--text-3)', cursor: 'pointer',
+                  }}
+                >
+                  install
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Staging URL */}
+      <div className="space-y-1">
+        <label className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
+          Staging URL
+        </label>
+        <input
+          type="url"
+          value={stagingUrl}
+          onChange={e => setStagingUrl(e.target.value)}
+          placeholder="http://localhost:3000"
+          className="w-full font-mono rounded-sm px-2 py-1"
+          style={{
+            fontSize: '11px',
+            background: 'var(--bg-elevated, #1a1a1a)',
+            border: '1px solid var(--border-1)',
+            color: 'var(--text-1)',
+            outline: 'none',
+          }}
+        />
+        <div className="font-mono text-xs" style={{ color: 'var(--text-4)' }}>
+          QC Agent navigates here for visual regression screenshots on high-risk frontend PRs.
+        </div>
+      </div>
+
+      {/* Enable toggle */}
+      <div className="flex items-center justify-between">
+        <span className="font-mono text-xs" style={{ color: 'var(--text-2)' }}>
+          Enable browser testing for frontend PRs
+        </span>
+        <button
+          onClick={() => setBrowserEnabled(v => !v)}
+          disabled={!avail?.playwright_installed}
+          style={{
+            width: 32, height: 18, borderRadius: 9, border: 'none',
+            background: browserEnabled ? 'var(--aqua, #7fdbff)' : 'var(--bg-elevated, #1a1a1a)',
+            cursor: avail?.playwright_installed ? 'pointer' : 'default',
+            position: 'relative', transition: 'background 0.2s',
+            outline: '1px solid var(--border-1)',
+            opacity: avail?.playwright_installed ? 1 : 0.4,
+          }}
+          title={avail?.playwright_installed ? undefined : 'Install Playwright first'}
+        >
+          <span
+            style={{
+              position: 'absolute', top: 3, borderRadius: '50%',
+              width: 12, height: 12,
+              background: browserEnabled ? '#0d1117' : 'var(--text-4)',
+              left: browserEnabled ? 17 : 3,
+              transition: 'left 0.2s',
+            }}
+          />
+        </button>
+      </div>
     </div>
   )
 }

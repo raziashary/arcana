@@ -65,54 +65,63 @@ pub struct SkillParameter {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillFrontmatter {
-    pub name:        String,
-    pub description: String,
-    pub category:    String,
-    pub parameters:  Vec<SkillParameter>,
-    pub version:     String,
-    pub author:      Option<String>,
-    pub tags:        Option<Vec<String>>,
+    pub name:                 String,
+    pub description:          String,
+    pub category:             String,
+    #[serde(default)]
+    pub parameters:           Vec<SkillParameter>,
+    pub version:              String,
+    pub author:               Option<String>,
+    pub tags:                 Option<Vec<String>>,
+    /// Optional list of capabilities required to run this skill (e.g. "playwright").
+    /// The UI shows a ⚠️ Requires setup badge if any capability is unavailable.
+    pub requires_capability:  Option<Vec<String>>,
 }
 
 // ── Full Skill (frontmatter + template body) ──────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Skill {
-    pub name:        String,
-    pub description: String,
-    pub category:    SkillCategory,
-    pub parameters:  Vec<SkillParameter>,
-    pub version:     String,
-    pub author:      String,
-    pub tags:        Vec<String>,
-    pub template:    String,             // Raw markdown body with {{param}} placeholders
-    pub file_path:   String,             // Absolute path to .md file on disk
-    pub is_builtin:  bool,
+    pub name:                String,
+    pub description:         String,
+    pub category:            SkillCategory,
+    pub parameters:          Vec<SkillParameter>,
+    pub version:             String,
+    pub author:              String,
+    pub tags:                Vec<String>,
+    pub template:            String,             // Raw markdown body with {{param}} placeholders
+    pub file_path:           String,             // Absolute path to .md file on disk
+    pub is_builtin:          bool,
+    /// Capabilities required to run this skill (e.g. ["playwright"]).
+    pub requires_capability: Option<Vec<String>>,
 }
 
 // ── Summary (for list API — omits template for efficiency) ────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillSummary {
-    pub name:        String,
-    pub description: String,
-    pub category:    SkillCategory,
-    pub tags:        Vec<String>,
-    pub version:     String,
-    pub is_builtin:  bool,
-    pub param_count: usize,
+    pub name:                String,
+    pub description:         String,
+    pub category:            SkillCategory,
+    pub tags:                Vec<String>,
+    pub version:             String,
+    pub is_builtin:          bool,
+    pub param_count:         usize,
+    /// Propagated from the skill frontmatter — palette shows ⚠️ badge when set.
+    pub requires_capability: Option<Vec<String>>,
 }
 
 impl From<&Skill> for SkillSummary {
     fn from(s: &Skill) -> Self {
         Self {
-            name:        s.name.clone(),
-            description: s.description.clone(),
-            category:    s.category.clone(),
-            tags:        s.tags.clone(),
-            version:     s.version.clone(),
-            is_builtin:  s.is_builtin,
-            param_count: s.parameters.len(),
+            name:                s.name.clone(),
+            description:         s.description.clone(),
+            category:            s.category.clone(),
+            tags:                s.tags.clone(),
+            version:             s.version.clone(),
+            is_builtin:          s.is_builtin,
+            param_count:         s.parameters.len(),
+            requires_capability: s.requires_capability.clone(),
         }
     }
 }

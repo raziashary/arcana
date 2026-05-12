@@ -817,7 +817,7 @@ NEVER for: single-file lint fixes or import removal."#.into(),
 
 fn qc_agent_recipe() -> Recipe {
     Recipe {
-        version:         "1.2.0".into(),
+        version:         "1.3.0".into(),
         id:              QC_AGENT_RECIPE_ID.into(),
         title:           "QC Agent — Code Review".into(),
         description:     Some("Reviews completed worker output. Approves (done) or rejects with a specific, actionable reason.".into()),
@@ -908,6 +908,37 @@ All criteria verified AND all domain checks pass:
 
 Any criterion unmet OR any check fails:
   update_task_status(id, 'rejected', assigned_worker, rejection_reason=<STRUCTURED REASON>)
+
+---
+
+## Phase 4 — Browser Testing (frontend PRs only)
+
+Run this phase only when `worker_type` is `worker-frontend` OR the changed files include `.tsx`, `.ts`, or `.css`.
+
+### 4a. Check for Playwright test files
+```bash
+find . -name "*.spec.ts" -o -name "*.test.ts" -o -name "playwright.config.*" 2>/dev/null | head -10
+```
+
+### 4b. If Playwright test files exist
+Run the tests:
+```bash
+npx playwright test --project=chromium
+```
+- If ALL tests pass → proceed to Phase 3d decision.
+- If ANY test fails → reject immediately with the specific test name, assertion, and line.
+
+### 4c. If no Playwright test files AND risk_level is "high"
+Use the `/browser-test` skill to screenshot the staging URL if available, then check the result manually.
+```bash
+npx playwright screenshot --full-page http://localhost:3000 /tmp/autodev-qc-screenshot.png
+```
+Include the screenshot path in the review comment.
+
+### 4d. Always include in your final review comment
+- Whether browser testing was run and the result
+- Screenshot path if taken
+- `analyze_diff` risk_score from Phase 0
 
 ---
 

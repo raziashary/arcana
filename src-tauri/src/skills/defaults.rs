@@ -39,6 +39,9 @@ pub fn ensure_default_skills() -> Result<()> {
     write(&base.join("fleet").join("qc-review.md"),                QC_REVIEW)?;
     write(&base.join("fleet").join("epic-breakdown.md"),           EPIC_BREAKDOWN)?;
 
+    // ── DevOps (continued) — Ruflo Feature 7 ────────────────────────────────
+    write(&base.join("devops").join("browser-test.md"), BROWSER_TEST)?;
+
     Ok(())
 }
 
@@ -878,4 +881,78 @@ If tasks have dependencies (backend API before frontend can call it):
 
 ## Step 5 — Update Epic
 Update original epic task status to indicate it has been decomposed.
+"#;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DEVOPS SKILLS (continued) — Ruflo Feature 7
+// ─────────────────────────────────────────────────────────────────────────────
+
+const BROWSER_TEST: &str = r#"---
+name: browser-test
+description: Run browser automation tests using Playwright. Use for visual regression testing, E2E tests on frontend PRs, and verifying UI after deployments.
+category: devops
+parameters:
+  - name: url
+    type: string
+    required: false
+    default: "http://localhost:3000"
+    description: URL to navigate to or run tests against
+  - name: test_file
+    type: string
+    required: false
+    default: ""
+    description: Specific Playwright test file or directory to run (leave empty for all tests)
+  - name: screenshot
+    type: boolean
+    required: false
+    default: false
+    description: Take a full-page screenshot of the URL before running tests
+version: "1.0.0"
+author: "AutoDev"
+tags: [testing, playwright, browser, e2e, qc, visual-regression]
+requires_capability: [playwright]
+---
+
+# Browser Test Skill
+
+You have access to Playwright for browser automation via the `bash` tool.
+
+## Setup Check
+First verify Playwright is installed:
+```bash
+npx playwright --version
+```
+If not installed, run: `npx playwright install chromium`
+
+## Screenshot (if screenshot = true)
+Take a full-page screenshot of {{url}}:
+```bash
+npx playwright screenshot --full-page {{url}} /tmp/autodev-screenshot-$(date +%s).png
+```
+Report the saved path in your response.
+
+## Visual Regression / E2E Tests
+{{#if test_file}}
+Run the specified test file or directory:
+```bash
+npx playwright test {{test_file}} --project=chromium
+```
+{{else}}
+Run all Playwright tests in the project:
+```bash
+npx playwright test --project=chromium
+```
+{{/if}}
+
+## Common Patterns
+- Navigate and screenshot: confirms basic rendering is not broken
+- Form fill and submit: verifies critical user flows
+- Assert page title and key content: catches regressions in rendered output
+
+## Output Format
+Always return:
+1. Screenshot path (if taken)
+2. Test pass/fail summary (X passed, Y failed)
+3. For each failure: the test name, selector used, expected value, and actual value
+4. Overall verdict: PASS or FAIL
 "#;

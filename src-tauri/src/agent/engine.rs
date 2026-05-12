@@ -42,6 +42,9 @@ pub struct AgentEngine {
     app:          AppHandle,
     state:        Arc<Mutex<AppState>>,
     session_mgr:  Option<Arc<SessionManager>>,
+    // Ruflo Feature 4 — Budget Circuit Breaker: set via with_task_budget()
+    task_id:      Option<i64>,
+    task_budget:  Option<crate::budget::TaskBudget>,
 }
 
 impl AgentEngine {
@@ -56,12 +59,20 @@ impl AgentEngine {
         let mut registry = ToolRegistry::new();
         builtin_tools::register_for_mode(&mut registry, pa_mode);
 
-        Self { provider, registry, mode, pa_mode, pending, app, state, session_mgr: None }
+        Self { provider, registry, mode, pa_mode, pending, app, state, session_mgr: None, task_id: None, task_budget: None }
     }
 
     /// Set the session manager for persisting messages
     pub fn with_session_manager(mut self, session_mgr: Arc<SessionManager>) -> Self {
         self.session_mgr = Some(session_mgr);
+        self
+    }
+
+    /// Attach a task ID and spending budget so the engine enforces per-task token/cost/turn limits.
+    /// Call this from the recipe runner before run() when executing a worker task.
+    pub fn with_task_budget(mut self, task_id: i64, budget: crate::budget::TaskBudget) -> Self {
+        self.task_id = Some(task_id);
+        self.task_budget = Some(budget);
         self
     }
 
@@ -112,6 +123,8 @@ impl AgentEngine {
         let mut turn = 0;
         let mut total_tokens_in:  u32 = 0;
         let mut total_tokens_out: u32 = 0;
+        // Ruflo Feature 4 — cumulative budget usage tracked across all turns
+        let mut budget_status = crate::budget::BudgetStatus::default();
 
         loop {
             // Fire AgentLoopStart hook at beginning of each turn
@@ -131,6 +144,26 @@ impl AgentEngine {
                 }),
             };
             HookRegistry::fire(&HookType::AgentLoopStart, &loop_ctx).await;
+
+            // Ruflo Feature 4 — Budget Circuit Breaker: pre-emptive halt before spending tokens
+            budget_status.turns_used += 1;
+            if let Some(ref budget) = self.task_budget {
+                if let Some(reason) = budget.check(&budget_status) {
+                    let reason_str = reason.as_event_str().to_string();
+                    crate::events::emit_budget_exceeded(&self.app, crate::events::BudgetExceededEvent {
+                        session_id:  session_id.to_string(),
+                        task_id:     self.task_id,
+                        reason:      reason_str.clone(),
+                        tokens_used: budget_status.tokens_used,
+                        cost_usd:    budget_status.cost_usd,
+                        turns_used:  budget_status.turns_used,
+                    });
+                    if let Some(tid) = self.task_id {
+                        self.escalate_budget_exceeded(tid, &budget_status, &reason_str);
+                    }
+                    return Err(AutoDevError::BudgetExceeded(reason_str));
+                }
+            }
 
             if turn >= MAX_TOOL_TURNS {
                 error!("Max tool turns ({MAX_TOOL_TURNS}) reached for session {session_id}");
@@ -179,6 +212,22 @@ impl AgentEngine {
                 &mut total_tokens_in,
                 &mut total_tokens_out,
             ).await;
+
+            // Ruflo Feature 4 — accumulate token usage into budget_status after each LLM response
+            if let Ok(ref _r) = stream_result {
+                budget_status.tokens_used = (total_tokens_in + total_tokens_out) as u64;
+                budget_status.cost_usd    = CostTracker::calculate(model, total_tokens_in, total_tokens_out).cost_usd;
+                if let Some(tid) = self.task_id {
+                    if let Ok(db) = crate::db::tasks::TasksDb::open() {
+                        let _ = db.update_task_budget_usage(
+                            tid,
+                            budget_status.tokens_used,
+                            budget_status.cost_usd,
+                            budget_status.turns_used,
+                        );
+                    }
+                }
+            }
 
             let response_content = match stream_result {
                 Ok(content) => content,
@@ -416,5 +465,67 @@ impl AgentEngine {
         }
 
         Ok(content_blocks)
+    }
+
+    // ── Ruflo Feature 4 — Budget escalation helper ────────────────────────────
+    // Creates a WorkerRequest of type report_issue and transitions the task to
+    // needs_info so the Supervisor can decide to increase budget, split the task,
+    // or reassign. Infallible — logs on DB failure so the budget halt still works.
+    fn escalate_budget_exceeded(
+        &self,
+        task_id:    i64,
+        status:     &crate::budget::BudgetStatus,
+        reason_str: &str,
+    ) {
+        let budget_limit_str = self.task_budget.as_ref().map(|b| {
+            format!(
+                "{} tokens / ${:.2} USD / {} turns",
+                b.max_tokens.map_or("unlimited".to_string(), |t| t.to_string()),
+                b.max_usd.map_or(0.0, |u| u),
+                b.max_turns.map_or(0, |t| t),
+            )
+        }).unwrap_or_else(|| "unknown".to_string());
+
+        let issue_description = format!(
+            "Budget exceeded on task #{task_id}: halted at {} tokens / ${:.4} USD after {} turns. \
+             Budget limit: {budget_limit_str}. Task needs budget increase or scope reduction.",
+            status.tokens_used, status.cost_usd, status.turns_used,
+        );
+
+        let payload = serde_json::json!({
+            "issue_description": issue_description,
+            "severity": "high",
+            "budget_reason": reason_str,
+            "tokens_used": status.tokens_used,
+            "cost_usd": status.cost_usd,
+            "turns_used": status.turns_used,
+        });
+
+        let req_input = crate::db::tasks::CreateWorkerRequestInput {
+            worker_slug:  "engine".to_string(),
+            task_id:      Some(task_id),
+            request_type: "report_issue".to_string(),
+            payload:      payload.to_string(),
+        };
+
+        match crate::db::tasks::TasksDb::open() {
+            Ok(db) => {
+                if let Err(e) = db.create_worker_request(&req_input) {
+                    error!("[budget] failed to create worker request for task {task_id}: {e}");
+                }
+                if let Err(e) = db.mark_task_budget_exceeded(task_id, reason_str) {
+                    error!("[budget] failed to mark task {task_id} budget-exceeded: {e}");
+                }
+                crate::events::emit_task_changed_global(crate::events::TaskChangedPayload {
+                    task_id:         Some(task_id),
+                    kind:            "budget_exceeded".to_string(),
+                    status:          Some("needs_info".to_string()),
+                    assigned_worker: None,
+                });
+            }
+            Err(e) => {
+                error!("[budget] failed to open tasks DB for escalation on task {task_id}: {e}");
+            }
+        }
     }
 }

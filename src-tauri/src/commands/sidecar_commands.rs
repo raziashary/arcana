@@ -545,3 +545,26 @@ pub fn get_submodule_paths() -> Vec<SubmoduleStatus> {
 
     vec![orch_status, memory_status]
 }
+
+// ─── MCP Connection Health — Ruflo Feature 6 ─────────────────────────────────
+
+/// Return the current health snapshot for all registered external MCP servers.
+/// Called by the Sidecar Panel and status bar to show connection state badges.
+#[tauri::command]
+pub async fn get_mcp_health(
+    monitor: State<'_, Arc<crate::mcp_server::health_monitor::McpHealthMonitor>>,
+) -> Result<Vec<crate::mcp_server::health_monitor::McpServerHealth>, String> {
+    Ok(monitor.get_all_health().await)
+}
+
+/// Manually trigger a reconnect attempt for a named external MCP server.
+/// Called when the user clicks the "Reconnect" button in the Sidecar Panel.
+#[tauri::command]
+pub async fn force_reconnect_mcp(
+    server_name: String,
+    monitor:     State<'_, Arc<crate::mcp_server::health_monitor::McpHealthMonitor>>,
+    app:         tauri::AppHandle,
+) -> Result<(), String> {
+    monitor.force_reconnect(&server_name, &app).await;
+    Ok(())
+}

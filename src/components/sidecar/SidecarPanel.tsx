@@ -23,6 +23,7 @@ import {
   RefreshCw, CheckCircle2, AlertTriangle, Loader2, Circle,
   Play, Square, RotateCcw, Activity, FileText, X, Cpu, HardDrive,
 } from 'lucide-react'
+import { McpHealthPanel } from './McpHealthPanel'
 
 interface ServiceStatus {
   id:       string
@@ -396,6 +397,9 @@ export default function SidecarPanel() {
         falls back to cold tier only. On Windows, install{' '}
         <span style={{ color: 'var(--accent)' }}>Memurai</span> and run it as a service.
       </div>
+
+      {/* ─── Ruflo Feature 6 — External MCP Server Health ─────────────── */}
+      <McpHealthPanel />
 
       {/* ─── Detail Modal ─────────────────────────────────────────────── */}
       {modalService && (

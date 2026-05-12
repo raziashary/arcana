@@ -96,16 +96,17 @@ impl SkillLoader {
         let is_builtin = self.is_builtin_path(path);
 
         Ok(Skill {
-            name:       fm.name,
-            description: fm.description,
+            name:                fm.name,
+            description:         fm.description,
             category,
-            parameters: fm.parameters,
-            version:    fm.version,
-            author:     fm.author.unwrap_or_else(|| "AutoDev".into()),
-            tags:       fm.tags.unwrap_or_default(),
+            parameters:          fm.parameters,
+            version:             fm.version,
+            author:              fm.author.unwrap_or_else(|| "AutoDev".into()),
+            tags:                fm.tags.unwrap_or_default(),
             template,
-            file_path:  path.to_string_lossy().into_owned(),
+            file_path:           path.to_string_lossy().into_owned(),
             is_builtin,
+            requires_capability: fm.requires_capability,
         })
     }
 

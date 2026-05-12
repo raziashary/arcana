@@ -30,6 +30,7 @@ pub mod memory;
 pub mod routing;
 pub mod orphan;
 pub mod diff_analysis;
+pub mod budget;
 
 // Register all Tauri commands on the builder from within the lib crate.
 // generate_handler! must run here so the __cmd__* macros (produced by
@@ -52,6 +53,8 @@ pub fn register_commands(
         task_commands::{
             list_tasks, get_task, update_task_status, delete_task, clear_all_tasks, get_qc_queue,
             list_worker_requests, resolve_worker_request,
+            // Ruflo Feature 5 — Phase-Based Task Decomposition
+            get_epic_tasks, get_epic_phase_summary, create_phased_task,
         },
         autodev_instructions_commands::{
             get_autodev_instructions, set_autodev_instructions, delete_autodev_instructions,
@@ -78,6 +81,8 @@ pub fn register_commands(
             get_resource_usage, read_sidecar_log,
             // Phase 5.3 — installer bundling
             get_submodule_paths,
+            // Ruflo Feature 6 — MCP Connection Health Monitor
+            get_mcp_health, force_reconnect_mcp,
         },
         skill_commands::{
             list_skills, get_skill, search_skills, skills_by_category,
@@ -151,6 +156,8 @@ pub fn register_commands(
         routing_commands::{suggest_worker_for_task, get_worker_affinity_stats},
         orphan_commands::{get_orphaned_tasks, force_release_task},
         diff_commands::{analyze_diff, analyze_pr_diff},
+        budget_commands::{cmd_set_task_budget, get_task_budget_status, get_daily_budget_summary, set_default_worker_budget},
+        browser_commands::{check_playwright_available, install_playwright_browsers},
     };
     builder.invoke_handler(tauri::generate_handler![
         // Agent
@@ -202,6 +209,10 @@ pub fn register_commands(
         // Worker Requests (Fleet→Supervisor communication)
         list_worker_requests,
         resolve_worker_request,
+        // Ruflo Feature 5 — Epic & Phase commands
+        get_epic_tasks,
+        get_epic_phase_summary,
+        create_phased_task,
         // AUTODEV.md Instructions
         get_autodev_instructions,
         set_autodev_instructions,
@@ -264,6 +275,9 @@ pub fn register_commands(
         read_sidecar_log,
         // Phase 5.3 — installer bundling
         get_submodule_paths,
+        // Ruflo Feature 6 — MCP Connection Health Monitor
+        get_mcp_health,
+        force_reconnect_mcp,
         // Skills system (Phase 3.1)
         list_skills,
         get_skill,
@@ -425,5 +439,13 @@ pub fn register_commands(
         // Diff Risk Scoring (Ruflo Feature 3)
         analyze_diff,
         analyze_pr_diff,
+        // Budget Circuit Breaker (Ruflo Feature 4)
+        cmd_set_task_budget,
+        get_task_budget_status,
+        get_daily_budget_summary,
+        set_default_worker_budget,
+        // Browser Automation QC Skill (Ruflo Feature 7)
+        check_playwright_available,
+        install_playwright_browsers,
     ])
 }

@@ -24,11 +24,12 @@ function fmtTokens(n: number): string {
 }
 
 export default function StatusBar() {
-  const paMode        = useSettingsStore(s => s.paMode)
-  const sidecarStatus = useSidecarStore(s => s.status)
-  const tokensIn      = useCostStore(s => s.tokensInToday)
-  const tokensOut     = useCostStore(s => s.tokensOutToday)
-  const totalTokens   = tokensIn + tokensOut
+  const paMode          = useSettingsStore(s => s.paMode)
+  const sidecarStatus   = useSidecarStore(s => s.status)
+  const mcpDisconnected = useSidecarStore(s => s.mcpDisconnected)
+  const tokensIn        = useCostStore(s => s.tokensInToday)
+  const tokensOut       = useCostStore(s => s.tokensOutToday)
+  const totalTokens     = tokensIn + tokensOut
 
   const modeColor = PA_MODE_COLORS[paMode] ?? 'var(--text-3)'
   const modeLabel = PA_MODE_LABELS[paMode]  ?? paMode
@@ -77,6 +78,23 @@ export default function StatusBar() {
         <span style={{ color: 'var(--text-3)' }}>core-orch</span>
         <span style={{ color: 'var(--text-4)' }}>·</span>
         <span style={{ color: 'var(--text-4)' }}>autodev</span>
+
+        {/* Ruflo Feature 6 — MCP disconnected warning */}
+        {mcpDisconnected.length > 0 && (
+          <>
+            <span style={{ color: 'var(--text-4)' }}>·</span>
+            <span
+              title={`MCP disconnected: ${mcpDisconnected.join(', ')}`}
+              style={{
+                color:      'var(--danger, #ff6b6b)',
+                fontWeight: 600,
+                letterSpacing: '0.03em',
+              }}
+            >
+              ⚠ MCP
+            </span>
+          </>
+        )}
       </div>
 
       {/* Right: token count */}

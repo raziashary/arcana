@@ -18,6 +18,10 @@ pub enum AutoDevError {
     #[error("Agent error: {0}")]
     Agent(String),
 
+    // Budget circuit breaker — Ruflo Feature 4
+    #[error("Budget exceeded: {0}")]
+    BudgetExceeded(String),
+
     // Tool execution errors
     #[error("Tool execution error [{tool}]: {message}")]
     ToolExecution { tool: String, message: String },

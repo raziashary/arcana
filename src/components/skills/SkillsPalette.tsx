@@ -3,7 +3,8 @@
 // Phase 3.1
 
 import { useEffect, useRef, useState } from 'react'
-import { Search, X, Clock, Zap, Bug, Server, Users, Plus, ChevronRight } from 'lucide-react'
+import { Search, X, Clock, Zap, Bug, Server, Users, Plus, ChevronRight, AlertTriangle } from 'lucide-react'
+import { invoke } from '@tauri-apps/api/core'
 import { useSkillStore, type Skill, type SkillCategory, type SkillSummary } from '../../stores/skillStore'
 import SkillParameterModal from './SkillParameterModal'
 import SkillCreatorModal from './SkillCreatorModal'
@@ -29,6 +30,8 @@ export default function SkillsPalette({ onInsert }: Props) {
   const [searchResults,  setResults]   = useState<SkillSummary[] | null>(null)
   const [selectedSkill,  setSelected]  = useState<Skill | null>(null)
   const [showCreator,    setShowCreator] = useState(false)
+  // Ruflo Feature 7 — tracks whether Playwright is available for ⚠️ badge display
+  const [playwrightInstalled, setPlaywrightInstalled] = useState<boolean | null>(null)
 
   // Load skills on open
   useEffect(() => {
@@ -39,6 +42,11 @@ export default function SkillsPalette({ onInsert }: Props) {
       setCategory(null)
       setResults(null)
       setSelected(null)
+      // Check playwright availability once per palette open so we can show
+      // ⚠️ Requires setup next to skills that need it
+      invoke<{ playwright_installed: boolean }>('check_playwright_available')
+        .then(r => setPlaywrightInstalled(r.playwright_installed))
+        .catch(() => setPlaywrightInstalled(false))
     }
   }, [store.paletteOpen])
 
@@ -178,6 +186,10 @@ export default function SkillsPalette({ onInsert }: Props) {
                 <SkillRow
                   key={skill.name}
                   skill={skill}
+                  needsSetup={
+                    !!(skill.requires_capability?.includes('playwright') &&
+                       playwrightInstalled === false)
+                  }
                   onClick={() => handleSelectSummary(skill)}
                 />
               ))
@@ -242,7 +254,11 @@ function CategoryBtn({
   )
 }
 
-function SkillRow({ skill, onClick }: { skill: SkillSummary; onClick: () => void }) {
+function SkillRow({ skill, needsSetup, onClick }: {
+  skill:      SkillSummary
+  needsSetup: boolean
+  onClick:    () => void
+}) {
   return (
     <button
       onClick={onClick}
@@ -250,13 +266,24 @@ function SkillRow({ skill, onClick }: { skill: SkillSummary; onClick: () => void
       style={{ borderBottom: '1px solid var(--border)' }}
     >
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="font-mono text-xs font-semibold" style={{ color: 'var(--accent)' }}>
             /{skill.name}
           </span>
           {skill.is_builtin && (
             <span className="text-xs px-1.5 rounded" style={{ background: 'var(--bg-2)', color: 'var(--text-3)' }}>
               builtin
+            </span>
+          )}
+          {/* Ruflo Feature 7 — capability warning badge */}
+          {needsSetup && (
+            <span
+              className="flex items-center gap-1 text-xs px-1.5 rounded"
+              style={{ background: 'rgba(255,203,139,0.12)', color: 'var(--warning, #FFCB8B)', border: '1px solid rgba(255,203,139,0.25)' }}
+              title="Playwright is not installed. Go to Settings > Browser Testing to set it up."
+            >
+              <AlertTriangle size={10} />
+              Requires setup
             </span>
           )}
         </div>

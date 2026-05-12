@@ -845,7 +845,7 @@ instructions: |
 
 **File:** `src-tauri/src/budget/mod.rs` *(new file)*
 
-- [ ] Define budget structures:
+- [x] Define budget structures:
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -908,7 +908,7 @@ impl TaskBudget {
 }
 ```
 
-- [ ] Input validation mirroring ADR-097 — in the command that sets budgets:
+- [x] Input validation mirroring ADR-097 — in the command that sets budgets:
   - Reject `NaN`, `Infinity`, negative values
   - Hard ceiling: `max_tokens` ≤ 1,000,000; `max_usd` ≤ $100.00; `max_turns` ≤ 100
   - Return constant-string errors: `"BUDGET_INVALID_TOKENS"`, `"BUDGET_INVALID_USD"`, `"BUDGET_LIMIT_EXCEEDED"` — no echo of remaining values
@@ -919,7 +919,7 @@ impl TaskBudget {
 
 **File:** `src-tauri/src/db/tasks.rs`
 
-- [ ] Add budget columns to `tasks` table:
+- [x] Add budget columns to `tasks` table:
 
 ```sql
 ALTER TABLE tasks ADD COLUMN budget_max_tokens INTEGER;
@@ -932,7 +932,7 @@ ALTER TABLE tasks ADD COLUMN budget_exceeded   INTEGER DEFAULT 0;  -- boolean
 ALTER TABLE tasks ADD COLUMN budget_exceeded_reason TEXT;
 ```
 
-- [ ] Add DB functions:
+- [x] Add DB functions:
   - `set_task_budget(task_id: &str, budget: &TaskBudget) -> Result<()>`
   - `update_task_budget_usage(task_id: &str, tokens: u64, cost: f64, turns: u32) -> Result<()>` — called after each agent turn
   - `mark_task_budget_exceeded(task_id: &str, reason: &str) -> Result<()>` — sets `budget_exceeded = 1`, updates status
@@ -945,9 +945,9 @@ ALTER TABLE tasks ADD COLUMN budget_exceeded_reason TEXT;
 
 This is the core change. The agent loop currently runs until `stop_reason == "end_turn"` or 20 turns. We add budget checks at the top of each turn.
 
-- [ ] Add `task_budget: Option<TaskBudget>` field to `AgentEngine` struct
-- [ ] Add `budget_status: BudgetStatus` tracking field (cumulative across turns)
-- [ ] At the **start of each loop turn**, before calling the LLM:
+- [x] Add `task_budget: Option<TaskBudget>` field to `AgentEngine` struct
+- [x] Add `budget_status: BudgetStatus` tracking field (cumulative across turns)
+- [x] At the **start of each loop turn**, before calling the LLM:
 
 ```rust
 // Budget check — pre-emptive halt before spending more tokens
@@ -972,7 +972,7 @@ if let Some(ref budget) = self.task_budget {
 }
 ```
 
-- [ ] After each LLM response, accumulate token usage:
+- [x] After each LLM response, accumulate token usage:
 
 ```rust
 self.budget_status.tokens_used += response.usage.input_tokens + response.usage.output_tokens;
@@ -998,7 +998,7 @@ if let Some(ref task_id) = self.task_id {
 
 When budget is exceeded, the task should NOT be marked as `failed` — it should escalate to the Supervisor for guidance. This uses the existing `WorkerRequest` system.
 
-- [ ] In the budget exceeded handler (after the `agent:budget-exceeded` emit):
+- [x] In the budget exceeded handler (after the `agent:budget-exceeded` emit):
   - If the engine has a `task_id`: automatically create a `WorkerRequest` of type `report_issue`:
     ```
     title: "Budget exceeded on task #{task_id}"
@@ -1015,7 +1015,7 @@ When budget is exceeded, the task should NOT be marked as `failed` — it should
 
 The Supervisor needs a tool to set task budgets when assigning work.
 
-- [ ] Add `set_task_budget` MCP tool (Supervisor-only):
+- [x] Add `set_task_budget` MCP tool (Supervisor-only):
 
 ```rust
 Tool {
@@ -1033,7 +1033,7 @@ Tool {
 }
 ```
 
-- [ ] Add to Supervisor-allowed tools list
+- [x] Add to Supervisor-allowed tools list
 
 ---
 
@@ -1041,10 +1041,10 @@ Tool {
 
 **File:** `src-tauri/src/commands/budget_commands.rs` *(new file)*
 
-- [ ] `set_task_budget(task_id: String, budget: TaskBudget) -> Result<()>` — validates input, calls DB
-- [ ] `get_task_budget_status(task_id: String) -> Result<BudgetStatus>` — returns current usage vs limits
-- [ ] `get_daily_budget_summary() -> Result<DailyBudgetSummary>` — aggregates all task budgets for the day: total allocated, total spent, tasks that exceeded
-- [ ] Register in `commands/mod.rs`
+- [x] `set_task_budget(task_id: String, budget: TaskBudget) -> Result<()>` — validates input, calls DB
+- [x] `get_task_budget_status(task_id: String) -> Result<BudgetStatus>` — returns current usage vs limits
+- [x] `get_daily_budget_summary() -> Result<DailyBudgetSummary>` — aggregates all task budgets for the day: total allocated, total spent, tasks that exceeded
+- [x] Register in `commands/mod.rs`
 
 ---
 
@@ -1053,14 +1053,14 @@ Tool {
 **File:** `src/components/dashboard/TaskCard.tsx` (existing component — extend it)  
 **File:** `src/components/budget/BudgetBar.tsx` *(new file)*
 
-- [ ] `BudgetBar.tsx` — a progress bar component:
+- [x] `BudgetBar.tsx` — a progress bar component:
   - Shows token usage vs budget (e.g., "45,232 / 100,000 tokens")
   - Color: green (<50%), yellow (50-80%), orange (80-95%), red (>95%)
   - Also shows cost: "$0.12 / $0.50"
   - Shows "EXCEEDED" badge if `budget_exceeded = true`
 
-- [ ] Render `BudgetBar` inside task cards when task is `in_progress` or `needs_info` with a budget set
-- [ ] Listen for `agent:budget-exceeded` Tauri event in `agentStore.ts` → add a notification to the dashboard
+- [x] Render `BudgetBar` inside task cards when task is `in_progress` or `needs_info` with a budget set
+- [x] Listen for `agent:budget-exceeded` Tauri event in `agentStore.ts` → add a notification to the dashboard
 
 ---
 
@@ -1068,12 +1068,12 @@ Tool {
 
 **File:** `src/tabs/Settings.tsx` or the AIRS AutoDev section of Settings
 
-- [ ] Add "Default Worker Budget" settings group:
+- [x] Add "Default Worker Budget" settings group:
   - `Max Tokens per Task` — number input, default 100,000
   - `Max USD per Task` — number input, default $0.50
   - `Warn at X% of budget` — slider, default 80%
-- [ ] Store in `~/.autodev/autodev.toml` config (already reads from there)
-- [ ] These become the default `TaskBudget` applied when Supervisor assigns a task without an explicit budget
+- [x] Store in `~/.autodev/runtime_config.json` (existing Rust config file)
+- [x] These become the default `TaskBudget` applied when Supervisor assigns a task without an explicit budget
 
 ---
 
@@ -1091,7 +1091,7 @@ Tool {
 
 **File:** `src-tauri/src/db/tasks.rs`
 
-- [ ] Add phase/milestone columns to `tasks` table:
+- [x] Add phase/milestone columns to `tasks` table:
 
 ```sql
 ALTER TABLE tasks ADD COLUMN phase         TEXT;         -- e.g., 'foundation', 'core', 'integration', 'qa'
@@ -1104,7 +1104,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_epic_id ON tasks(epic_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_phase ON tasks(phase, phase_order);
 ```
 
-- [ ] Update `Task` struct:
+- [x] Update `Task` struct:
 
 ```rust
 pub struct Task {
@@ -1117,7 +1117,7 @@ pub struct Task {
 }
 ```
 
-- [ ] Add DB functions:
+- [x] Add DB functions:
   - `get_epic_tasks(epic_id: &str) -> Result<Vec<Task>>` — all tasks in an epic, ordered by `phase_order`, then by `id`
   - `get_phase_summary(epic_id: &str) -> Result<Vec<PhaseSummary>>` — count per phase and their completion status
   - `get_blocked_tasks() -> Result<Vec<Task>>` — tasks with `blocked_by` entries where blocking tasks are not done
@@ -1147,7 +1147,7 @@ pub struct PhaseSummary {
 
 When a task is marked `done`, automatically unblock dependent tasks.
 
-- [ ] In `update_task_status` handler, after status is set to `Done`:
+- [x] In `update_task_status` handler, after status is set to `Done`:
 
 ```rust
 // Unblock dependent tasks
@@ -1182,11 +1182,11 @@ if let Some(epic_id) = &task.epic_id {
 
 The Supervisor uses these tools when decomposing an epic into phases.
 
-- [ ] `create_epic(title, description) -> { epic_id }` — creates a parent record (can reuse tasks table with a special type, or add a minimal `epics` table — see 5.4)
-- [ ] `create_phased_task(epic_id, phase, phase_order, title, priority, task_type, blocked_by[]) -> { task_id }` — creates a task with phase metadata and optional blockers
-- [ ] `get_epic_progress(epic_id) -> { phases: PhaseSummary[] }` — Supervisor checks overall epic state
-- [ ] `get_ready_tasks_in_phase(epic_id, phase) -> { tasks[] }` — returns tasks in a specific phase that are ready to assign (blockers resolved)
-- [ ] Add all four tools to Supervisor-allowed tools list
+- [x] `create_epic(title, description) -> { epic_id }` — creates a parent record (can reuse tasks table with a special type, or add a minimal `epics` table — see 5.4)
+- [x] `create_phased_task(epic_id, phase, phase_order, title, priority, task_type, blocked_by[]) -> { task_id }` — creates a task with phase metadata and optional blockers
+- [x] `get_epic_progress(epic_id) -> { phases: PhaseSummary[] }` — Supervisor checks overall epic state
+- [x] `get_ready_tasks_in_phase(epic_id, phase) -> { tasks[] }` — returns tasks in a specific phase that are ready to assign (blockers resolved)
+- [x] Add all four tools to Supervisor-allowed tools list
 
 ---
 
@@ -1196,7 +1196,7 @@ The Supervisor uses these tools when decomposing an epic into phases.
 
 Epics are not full tasks — they are parent groupings. A minimal approach: reuse tasks with `task_type = 'Epic'` and `status` tracks whether the epic as a whole is done.
 
-- [ ] Add `Epic` variant to `TaskType` enum:
+- [x] Add `Epic` variant to `TaskType` enum:
 
 ```rust
 pub enum TaskType {
@@ -1209,8 +1209,8 @@ pub enum TaskType {
 }
 ```
 
-- [ ] Epic tasks: `assigned_worker = NULL`, `phase = NULL`. Subtasks have `epic_id = epic_task.id`
-- [ ] Epic auto-completes when all subtasks are done: hook in `unblock_ready_tasks` — after resolving blockers, check if all `epic_id` tasks are done and mark the epic task as `Done` if so
+- [x] Epic tasks: `assigned_worker = NULL`, `phase = NULL`. Subtasks have `epic_id = epic_task.id`
+- [x] Epic auto-completes when all subtasks are done: hook in `unblock_ready_tasks` — after resolving blockers, check if all `epic_id` tasks are done and mark the epic task as `Done` if so
 
 ---
 
@@ -1218,10 +1218,10 @@ pub enum TaskType {
 
 **File:** `src-tauri/src/commands/task_commands.rs` (extend existing)
 
-- [ ] `get_epic_tasks(epic_id: String) -> Result<Vec<Task>>`
-- [ ] `get_epic_phase_summary(epic_id: String) -> Result<Vec<PhaseSummary>>`
-- [ ] `create_phased_task(epic_id, phase, phase_order, title, priority, task_type, blocked_by) -> Result<Task>`
-- [ ] Register in `commands/mod.rs`
+- [x] `get_epic_tasks(epic_id: String) -> Result<Vec<Task>>`
+- [x] `get_epic_phase_summary(epic_id: String) -> Result<Vec<PhaseSummary>>`
+- [x] `create_phased_task(epic_id, phase, phase_order, title, priority, task_type, blocked_by) -> Result<Task>`
+- [x] Register in `commands/mod.rs`
 
 ---
 
@@ -1230,7 +1230,7 @@ pub enum TaskType {
 **File:** `src/tabs/AutoDevPanel.tsx` (extend the Task Board section)  
 **File:** `src/components/dashboard/EpicPhaseView.tsx` *(new file)*
 
-- [ ] `EpicPhaseView.tsx` — renders a phased progress view for an epic:
+- [x] `EpicPhaseView.tsx` — renders a phased progress view for an epic:
 
 ```
 EPIC: "Implement /health endpoint with metrics dashboard"
@@ -1241,13 +1241,13 @@ EPIC: "Implement /health endpoint with metrics dashboard"
   [Phase 4: QA]          ░░░░░░░░░░░░   0%  🔒 BLOCKED (waiting for Phase 3)
 ```
 
-- [ ] Clicking a phase expands to show individual task cards within that phase
-- [ ] `BLOCKED` phases show which phase they're waiting on
-- [ ] `✅ MILESTONE` shown when phase reaches its milestone marker
-- [ ] Listens for `task:phase-complete` and `task:unblocked` events to update in real time
+- [x] Clicking a phase expands to show individual task cards within that phase
+- [x] `BLOCKED` phases show which phase they're waiting on
+- [x] `✅ MILESTONE` shown when phase reaches its milestone marker
+- [x] Listens for `task:phase-complete` and `task:unblocked` events to update in real time
 
-- [ ] In the Task Board section of AutoDev Panel, when a task has an `epic_id`, show a small "Epic" badge on the task card that links to the Epic Phase View
-- [ ] Add an "Epics" tab within the AutoDev Panel task board (alongside the existing kanban columns)
+- [x] In the Task Board section of AutoDev Panel, when a task has an `epic_id`, show a small "Epic" badge on the task card that links to the Epic Phase View
+- [x] Add an "Epics" tab within the AutoDev Panel task board (alongside the existing kanban columns)
 
 ---
 
@@ -1265,7 +1265,7 @@ EPIC: "Implement /health endpoint with metrics dashboard"
 
 **File:** `src-tauri/src/mcp_server/health_monitor.rs` *(new file)*
 
-- [ ] Define connection state types:
+- [x] Define connection state types:
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1289,7 +1289,7 @@ pub struct McpServerHealth {
 }
 ```
 
-- [ ] `McpHealthMonitor` struct:
+- [x] `McpHealthMonitor` struct:
 
 ```rust
 pub struct McpHealthMonitor {
@@ -1300,7 +1300,7 @@ pub struct McpHealthMonitor {
 }
 ```
 
-- [ ] `impl McpHealthMonitor`:
+- [x] `impl McpHealthMonitor`:
   - `register_server(name: &str, endpoint: &str)` — adds a server to the registry
   - `unregister_server(name: &str)` — removes from registry (when user removes an MCP config)
   - `get_all_health() -> Vec<McpServerHealth>` — returns current state of all registered servers
@@ -1312,7 +1312,7 @@ pub struct McpHealthMonitor {
 
 **File:** `src-tauri/src/mcp_server/health_monitor.rs`
 
-- [ ] The monitoring task (spawned once on startup, runs forever):
+- [x] The monitoring task (spawned once on startup, runs forever):
 
 ```rust
 async fn monitoring_loop(monitor: Arc<McpHealthMonitor>, app: AppHandle) {
@@ -1332,13 +1332,13 @@ async fn monitoring_loop(monitor: Arc<McpHealthMonitor>, app: AppHandle) {
 }
 ```
 
-- [ ] `async fn ping_server(name: &str) -> Result<PingResult, PingError>`:
+- [x] `async fn ping_server(name: &str) -> Result<PingResult, PingError>`:
   - For HTTP/SSE MCP servers: send `GET /health` or `GET /ping` with 5-second timeout
   - For stdio-based MCP servers: send a `ping` JSON-RPC call
   - Record latency
   - Return `PingResult { latency_ms: u64 }` or `PingError::Timeout | PingError::ConnectionRefused | PingError::InvalidResponse`
 
-- [ ] `async fn process_ping_result(name: &str, result, app: &AppHandle)`:
+- [x] `async fn process_ping_result(name: &str, result, app: &AppHandle)`:
   - On success: reset `consecutive_failures = 0`, update `last_success_at`, `avg_latency_ms`, set state to `Connected`
   - On failure: increment `consecutive_failures`
     - If `consecutive_failures >= threshold` AND previous state was `Connected`: set state to `Disconnected`, emit `mcp:connection-lost`
@@ -1351,7 +1351,7 @@ async fn monitoring_loop(monitor: Arc<McpHealthMonitor>, app: AppHandle) {
 
 **File:** `src-tauri/src/mcp_server/health_monitor.rs`
 
-- [ ] `async fn attempt_reconnect(name: &str, endpoint: &str, app: &AppHandle)`:
+- [x] `async fn attempt_reconnect(name: &str, endpoint: &str, app: &AppHandle)`:
   - Wait `reconnect_delay_secs` before trying
   - Try to re-establish the MCP client connection (reconnect logic depends on transport type):
     - For HTTP: simply retry a ping — if successful, mark as `Connected`
@@ -1365,7 +1365,7 @@ async fn monitoring_loop(monitor: Arc<McpHealthMonitor>, app: AppHandle) {
 
 **File:** `src-tauri/src/main.rs`
 
-- [ ] After sidecar health checks pass (in the `FleetReady` startup phase), start the health monitor:
+- [x] After sidecar health checks pass (in the `FleetReady` startup phase), start the health monitor:
 
 ```rust
 let health_monitor = Arc::new(McpHealthMonitor::new(30, 3, 10));
@@ -1385,7 +1385,7 @@ tokio::spawn(McpHealthMonitor::start_monitoring(
 app_state.mcp_health_monitor = health_monitor;
 ```
 
-- [ ] When user adds/removes an MCP server in Settings: call `health_monitor.register_server()` or `unregister_server()`
+- [x] When user adds/removes an MCP server in Settings: call `health_monitor.register_server()` or `unregister_server()`
 
 ---
 
@@ -1393,7 +1393,7 @@ app_state.mcp_health_monitor = health_monitor;
 
 **File:** `src-tauri/src/events.rs`
 
-- [ ] Add event definitions:
+- [x] Add event definitions:
   - `mcp:health-update` — periodic broadcast of all MCP server states (every ping cycle)
   - `mcp:connection-lost` — `{ server_name, endpoint, consecutive_failures }`
   - `mcp:connection-degraded` — `{ server_name, latency_ms }`
@@ -1407,9 +1407,9 @@ app_state.mcp_health_monitor = health_monitor;
 
 **File:** `src-tauri/src/commands/sidecar_commands.rs` (extend existing)
 
-- [ ] `get_mcp_health() -> Result<Vec<McpServerHealth>>` — returns current health for all registered MCP servers
-- [ ] `force_reconnect_mcp(server_name: String) -> Result<()>` — manual reconnect trigger from UI
-- [ ] Register in `commands/mod.rs`
+- [x] `get_mcp_health() -> Result<Vec<McpServerHealth>>` — returns current health for all registered MCP servers
+- [x] `force_reconnect_mcp(server_name: String) -> Result<()>` — manual reconnect trigger from UI
+- [x] Register in `commands/mod.rs`
 
 ---
 
@@ -1417,30 +1417,30 @@ app_state.mcp_health_monitor = health_monitor;
 
 **File:** `src/stores/sidecarStore.ts` (extend existing)
 
-- [ ] Add to sidecar store state:
+- [x] Add to sidecar store state:
 
 ```typescript
 mcpServerHealth: McpServerHealth[],
 mcpDisconnected: string[],   // server names currently disconnected
 ```
 
-- [ ] Listen for `mcp:health-update` event — update `mcpServerHealth` in store
-- [ ] Listen for `mcp:connection-lost` — add to `mcpDisconnected`, show alert
-- [ ] Listen for `mcp:reconnected` — remove from `mcpDisconnected`
+- [x] Listen for `mcp:health-update` event — update `mcpServerHealth` in store
+- [x] Listen for `mcp:connection-lost` — add to `mcpDisconnected`, show alert
+- [x] Listen for `mcp:reconnected` — remove from `mcpDisconnected`
 
 **File:** `src/components/sidecar/McpHealthPanel.tsx` *(new file or extend McpToolBrowser.tsx)*
 
-- [ ] Show connection state badges next to each MCP server in the Sidecar Panel:
+- [x] Show connection state badges next to each MCP server in the Sidecar Panel:
   - `🟢 Connected (12ms avg)`
   - `🟡 Degraded (2,340ms avg)`
   - `🔴 Disconnected (3 failures) [Reconnect]`
   - `🔄 Reconnecting...`
 
-- [ ] "Reconnect" button calls `invoke('force_reconnect_mcp', { server_name })`
+- [x] "Reconnect" button calls `invoke('force_reconnect_mcp', { server_name })`
 
 **File:** `src/components/layout/StatusBar.tsx` (extend existing)
 
-- [ ] Add a small MCP health indicator to the status bar: if any server is `Disconnected`, show `⚠️ MCP` badge in orange/red
+- [x] Add a small MCP health indicator to the status bar: if any server is `Disconnected`, show `⚠️ MCP` badge in orange/red
 
 ---
 
@@ -1461,7 +1461,7 @@ mcpDisconnected: string[],   // server names currently disconnected
 
 Since browser automation depends on Playwright being installed, we need a detection command so the UI can warn users.
 
-- [ ] `check_playwright_available() -> Result<BrowserAvailability>`:
+- [x] `check_playwright_available() -> Result<BrowserAvailability>`:
 
 ```rust
 #[derive(Debug, Serialize, Deserialize)]
@@ -1473,16 +1473,16 @@ pub struct BrowserAvailability {
 }
 ```
 
-- [ ] Implementation:
+- [x] Implementation:
   - Check `npx playwright --version` — if exit 0, playwright is available
   - Check `npx playwright install --dry-run` to list available browsers
   - Parse output into `BrowserAvailability`
   
-- [ ] `install_playwright_browsers(browser: String) -> Result<()>`:
+- [x] `install_playwright_browsers(browser: String) -> Result<()>`:
   - Runs `npx playwright install {browser}` as a subprocess
   - Streams stdout via `bash` tool pattern (reuse existing `bash.rs` streaming)
   
-- [ ] Register in `commands/mod.rs`
+- [x] Register in `commands/mod.rs`
 
 ---
 
@@ -1492,7 +1492,7 @@ pub struct BrowserAvailability {
 
 The skill is installed as a system skill, similar to how existing system skills are written to disk. It instructs the agent to use the existing `bash` tool to run Playwright commands.
 
-- [ ] Add this skill to the system skill set in `skills/engine.rs` (alongside existing built-in skills):
+- [x] Add this skill to the system skill set in `skills/engine.rs` (alongside existing built-in skills):
 
 ```markdown
 ---
@@ -1548,7 +1548,7 @@ Always return:
 3. Specific failures with selectors and expected vs actual values
 ```
 
-- [ ] The skill file is written to disk during the `Skills` startup phase (same as other system skills)
+- [x] The skill file is written to disk during the `Skills` startup phase (same as other system skills)
 
 ---
 
@@ -1556,7 +1556,7 @@ Always return:
 
 **File:** `~/.autodev/recipes/qc-agent.yaml` (the system QC recipe)
 
-- [ ] Update QC recipe instructions to optionally invoke the browser-test skill for frontend PRs:
+- [x] Update QC recipe instructions to optionally invoke the browser-test skill for frontend PRs:
 
 ```yaml
 instructions: |
@@ -1581,13 +1581,13 @@ instructions: |
 
 **File:** `src/tabs/Settings.tsx`
 
-- [ ] Add a "Browser Testing" settings section within the QC settings group:
+- [x] Add a "Browser Testing" settings section within the QC settings group:
   - Playwright status indicator (calls `check_playwright_available()` on load)
   - "Install Playwright Browsers" button → calls `install_playwright_browsers('chromium')`
   - Staging URL input — the URL QC will navigate to for visual testing (e.g., `http://localhost:3000`)
   - Toggle: "Enable browser testing for frontend PRs" (default: off until Playwright is confirmed installed)
 
-- [ ] If Playwright is not installed, show a banner: "⚠️ Browser testing requires Playwright. Click Install to set it up."
+- [x] If Playwright is not installed, show a banner: "⚠️ Browser testing requires Playwright. Click Install to set it up."
 
 ---
 
@@ -1595,9 +1595,9 @@ instructions: |
 
 **File:** `src-tauri/src/skills/registry.rs`
 
-- [ ] Ensure `browser-test` skill is marked as `is_system = true` so it cannot be deleted from the UI
-- [ ] Mark it as `requires_capability: ["playwright"]` — a new optional field on skills that the skills palette uses to show a warning badge if the capability is not available
-- [ ] In `SkillsPalette.tsx`: if a skill has `requires_capability` and `check_playwright_available()` returns `playwright_installed: false`, show a `⚠️ Requires setup` badge next to the skill name
+- [x] Ensure `browser-test` skill is marked as `is_system = true` so it cannot be deleted from the UI
+- [x] Mark it as `requires_capability: ["playwright"]` — a new optional field on skills that the skills palette uses to show a warning badge if the capability is not available
+- [x] In `SkillsPalette.tsx`: if a skill has `requires_capability` and `check_playwright_available()` returns `playwright_installed: false`, show a `⚠️ Requires setup` badge next to the skill name
 
 ---
 

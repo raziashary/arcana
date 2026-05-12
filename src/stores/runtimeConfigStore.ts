@@ -14,6 +14,11 @@ import { invoke } from "@tauri-apps/api/core";
 
 export interface RuntimeConfig {
   skip_sidecars: boolean;
+  // Ruflo Feature 4 — Default Worker Budget settings
+  default_worker_budget_tokens: number;
+  default_worker_budget_usd:    number;
+  default_worker_budget_turns:  number;
+  budget_warn_pct:              number;
 }
 
 interface RuntimeConfigState {
@@ -24,8 +29,9 @@ interface RuntimeConfigState {
   isLoading: boolean;
   error: string | null;
 
-  load:             () => Promise<void>;
-  setSkipSidecars:  (skip: boolean) => Promise<void>;
+  load:                   () => Promise<void>;
+  setSkipSidecars:        (skip: boolean) => Promise<void>;
+  setDefaultWorkerBudget: (maxTokens: number, maxUsd: number, maxTurns: number, warnPct: number) => Promise<void>;
 }
 
 export const useRuntimeConfigStore = create<RuntimeConfigState>((set, get) => ({
@@ -48,11 +54,18 @@ export const useRuntimeConfigStore = create<RuntimeConfigState>((set, get) => ({
     const prev = get().config;
     try {
       const cfg = await invoke<RuntimeConfig>("set_skip_sidecars", { skip });
-      // `dirty` flips on whenever the user has changed the value during this
-      // session. Even if they toggle it back to its original value we still
-      // keep dirty=true, because the on-disk file has been rewritten and a
-      // restart is the safest way to reach a known-good state.
       set({ config: cfg, dirty: prev?.skip_sidecars !== skip || get().dirty });
+    } catch (err) {
+      set({ error: String(err) });
+    }
+  },
+
+  setDefaultWorkerBudget: async (maxTokens, maxUsd, maxTurns, warnPct) => {
+    try {
+      const cfg = await invoke<RuntimeConfig>("set_default_worker_budget", {
+        maxTokens, maxUsd, maxTurns, warnPct,
+      });
+      set({ config: cfg });
     } catch (err) {
       set({ error: String(err) });
     }
