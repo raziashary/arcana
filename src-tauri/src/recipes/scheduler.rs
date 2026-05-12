@@ -95,10 +95,13 @@ impl RecipeScheduler {
             // Gate the first tick until core-orchestrator is reachable (T5.1/T5.2 — E-04 fix).
             // Polls every 2 s for up to 120 s before proceeding regardless.
             // 120s covers the observed ~106s Python venv cold-boot time.
+            // If still not ready after 120s, the orchestrator is genuinely unreachable
+            // and the startup tick will run via Mode 1 (the only legitimate Mode 1 path).
             if !wait_for_orchestrator_ready(&runner, 120).await {
                 warn!(
                     "[RecipeScheduler] Orchestrator not ready after 120s for '{}' — \
-                     starting schedule anyway (Mode 1 fallback active)",
+                     starting schedule anyway. Mode 1 (Rust AgentEngine) will handle ticks \
+                     until orchestrator becomes reachable.",
                     slug_owned
                 );
             }
@@ -111,9 +114,14 @@ impl RecipeScheduler {
             // before first registration, breaking first-time user experience.
             let orch_ready = runner.is_orchestrator_ready().await;
             if orch_ready {
-                info!("[RecipeScheduler] Orchestrator ready — firing STARTUP tick for '{}'", slug_owned);
+                info!("[RecipeScheduler] Orchestrator ready — firing STARTUP tick for '{}' (Mode 2)", slug_owned);
             } else {
-                info!("[RecipeScheduler] Orchestrator still starting — firing STARTUP tick for '{}' (Mode 1 fallback)", slug_owned);
+                info!(
+                    "[RecipeScheduler] Orchestrator not yet ready — firing STARTUP tick for '{}'. \
+                     Will run via Mode 1 since orchestrator is unreachable. \
+                     Catch-up tick will follow once orchestrator is healthy.",
+                    slug_owned
+                );
             }
 
             // Ruflo Feature 2 — run orphan detection before the Supervisor tick
@@ -132,13 +140,15 @@ impl RecipeScheduler {
             }
 
             // ── MODE 2 CATCH-UP TICK ──────────────────────────────────────────────
-            // If the startup tick fired in Mode 1 fallback (orch was not yet ready),
+            // If the startup tick ran via Mode 1 (orchestrator was not yet ready),
             // wait for the orchestrator and fire a Mode 2 tick once it becomes healthy.
+            // This is essential because agent YAML creation only happens in Mode 2
+            // (via ensure_agent). Workers whose startup tick ran in Mode 1 will not
+            // have their YAMLs created, making them invisible to the fleet until the
+            // catch-up tick runs.
             // This handles the race where some workers (e.g. supervisor, worker-frontend)
-            // start before the orchestrator's optimistic health-check grace window expires
-            // and get a Mode 1 startup tick while others wait and correctly get Mode 2.
-            // Without this catch-up, those workers' agent YAMLs would never be created
-            // until their next cron tick (up to 1–10 minutes later).
+            // start before the orchestrator's cold-boot completes and get a Mode 1
+            // startup tick; the catch-up ensures they reach Mode 2 within 90s of orch readiness.
             if !orch_ready {
                 if wait_for_orchestrator_ready(&runner, 90).await {
                     info!(

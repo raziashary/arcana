@@ -2,11 +2,24 @@
 // Called by RecipeScheduler on each cron tick for autonomous worker agents.
 //
 // Dispatch priority (DEVELOPMENT_PLAN.md §4.1 — Dual-Mode Architecture):
-//   Mode 2: core-orchestrator LivingAgent (21 FSMs, mem0, A2A) — primary
-//   Mode 1: Rust AgentEngine (direct LLM)                      — fallback
+//   Mode 2: core-orchestrator LivingAgent (21 FSMs, mem0, A2A) — PRIMARY
+//   Mode 1: Rust AgentEngine (direct LLM)                      — LAST-RESORT ONLY
 //
-// Mode 2 is used when core-orchestrator responds to /api/system/health.
-// Any failure (unreachable, invoke error) transparently falls back to Mode 1.
+// Mode 2 is THE main mode for fleet workers. Mode 1 is only entered when
+// core-orchestrator is confirmed genuinely unreachable (is_healthy() → false).
+//
+// Transient Mode 2 failures (MCP server blip, ensure_agent error, invoke error)
+// do NOT fall back to Mode 1. They abort the current tick and let the next
+// cron tick retry Mode 2. Reasons:
+//   1. MCP server is in-process — a `:8767` blip means the binary is degraded;
+//      Mode 1 would run tool-less and is no better.
+//   2. ensure_agent failures are typically auth-refresh races — next tick recovers.
+//   3. invoke_worker failures mean the LivingAgent may have already started the
+//      task; running Mode 1 on top risks double-execution and state corruption.
+//
+// The only legitimate Mode 1 path is `orch_healthy == false` at tick entry,
+// which means the orchestrator process genuinely did not respond to the
+// /api/system/health check after the grace-window retry policy in is_healthy().
 
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -252,26 +265,34 @@ impl RecipeRunner {
                         }
                     }
 
-                    if mcp_up {
-                        info!(
-                            "[RecipeRunner] MCP server healthy for '{}' — \
-                             LivingAgent will have tools via :8767, proceeding Mode 2",
-                            worker_slug
-                        );
-                    }
                     if !mcp_up {
+                        // The AutoDev MCP server is an in-process Tokio task in the same
+                        // Tauri binary. If port :8767 is not responding, the server has
+                        // either crashed or hasn't finished binding yet. Either way, Mode 1
+                        // would run without ANY tools and is strictly worse. Abort this tick
+                        // and wait for the next cron cycle — the in-process server will
+                        // almost certainly recover on its own.
                         warn!(
-                            "[RecipeRunner] MCP server unreachable for '{}' — \
-                             forcing Mode 1 fallback immediately (port 8767 not responding)",
+                            "[RecipeRunner] MCP server unreachable for '{}' (port :8767 not responding). \
+                             Aborting tick — will retry next scheduled interval. \
+                             NOT falling back to Mode 1 (tool-less Mode 1 is worse than skipping).",
                             worker_slug
                         );
                         emit_worker_tick_end(&self.app, WorkerTickEndPayload {
                             slug:      worker_slug.to_string(),
-                            outcome:   "mode1_forced".to_string(),
+                            outcome:   "mcp_unavailable".to_string(),
                             timestamp: chrono::Utc::now().to_rfc3339(),
                         });
-                        // Fall through to the Mode 1 block below.
-                    } else {
+                        self.set_worker_status(worker_slug, "idle");
+                        return Ok(());
+                    }
+
+                    info!(
+                        "[RecipeRunner] MCP server healthy for '{}' — \
+                         LivingAgent will have tools via :8767, proceeding Mode 2",
+                        worker_slug
+                    );
+                    {
                         // Prepend the active workspace dir to the instructions so the
                         // LivingAgent's file tools resolve paths against the same root
                         // the Personal Assistant uses. Without this, Mode 2 workers
@@ -353,43 +374,68 @@ impl RecipeRunner {
                             return Ok(());
                         }
                         Err(e) => {
+                            // invoke_worker failed — the LivingAgent may have partially
+                            // executed this task (it could be in_progress). Do NOT fall
+                            // back to Mode 1: that risks double-execution and leaves the
+                            // task in an inconsistent state (Mode 1 and Mode 2 wrote
+                            // different things to the same files). Instead:
+                            //   1. Reconcile any stranded in_progress task → qc_review
+                            //   2. Mark worker error so the UI signals the failure
+                            //   3. Return Err so the scheduler logs it; next cron tick
+                            //      will retry via Mode 2.
                             warn!(
-                                "[RecipeRunner] LivingAgent invoke failed for '{}': {e}; \
-                                 falling back to Rust AgentEngine",
+                                "[RecipeRunner] LivingAgent invoke failed for '{}': {e}. \
+                                 Aborting tick (NOT falling back to Mode 1 — risk of double-execution). \
+                                 Next scheduled tick will retry Mode 2.",
                                 worker_slug
                             );
-                            // D.1 — emit tick-end on invoke failure before Mode 1 fallback
                             emit_worker_tick_end(&self.app, WorkerTickEndPayload {
                                 slug:      worker_slug.to_string(),
-                                outcome:   "fallback".to_string(),
+                                outcome:   "invoke_error".to_string(),
                                 timestamp: chrono::Utc::now().to_rfc3339(),
                             });
-                            // Phase 7.7 — record Mode 2 → Mode 1 fallback as a system event.
+                            // Reconcile any task the LivingAgent left stranded in_progress.
+                            if worker_slug.starts_with("worker-") {
+                                Self::reconcile_stranded_task(worker_slug);
+                            }
+                            // Phase 7.7 — record the invoke error as a system event.
                             let _ = crate::analytics::global()
                                 .collector()
                                 .record_system_event(
                                     "runner".to_string(),
-                                    "mode2_fallback".to_string(),
-                                    format!("Worker '{}' falling back to Mode 1 (invoke error): {e}", worker_slug),
+                                    "mode2_invoke_error".to_string(),
+                                    format!("Worker '{}' Mode 2 invoke failed (tick aborted): {e}", worker_slug),
                                     "warning".to_string(),
                                     Some(serde_json::json!({ "worker": worker_slug }).to_string()),
                                 );
+                            self.set_worker_status(worker_slug, "error");
+                            return Err(AutoDevError::Agent(format!(
+                                "LivingAgent invoke failed for '{worker_slug}': {e}"
+                            )));
                         }
                     }   // closes invoke_worker match body
-                    }   // closes else { ... } MCP-healthy branch
+                    }   // closes MCP-healthy block
                 }       // closes Ok(agent_id) arm
                 Err(e) => {
+                    // ensure_agent failed — typically a transient condition:
+                    // auth token refresh race, orchestrator still warming up,
+                    // or a brief network hiccup. The orchestrator passed is_healthy()
+                    // earlier in this function, so it IS reachable — this is not
+                    // the "genuinely unreachable" case that justifies Mode 1.
+                    // Abort the tick; the next cron cycle will retry Mode 2.
                     warn!(
-                        "[RecipeRunner] ensure_agent failed for '{}': {e}; \
-                         falling back to Rust AgentEngine",
+                        "[RecipeRunner] ensure_agent failed for '{}': {e}. \
+                         Aborting tick (NOT falling back to Mode 1 — orchestrator was healthy). \
+                         Next scheduled tick will retry Mode 2.",
                         worker_slug
                     );
-                    // D.1 — emit tick-end on ensure_agent failure before Mode 1 fallback
                     emit_worker_tick_end(&self.app, WorkerTickEndPayload {
                         slug:      worker_slug.to_string(),
-                        outcome:   "fallback".to_string(),
+                        outcome:   "ensure_agent_error".to_string(),
                         timestamp: chrono::Utc::now().to_rfc3339(),
                     });
+                    self.set_worker_status(worker_slug, "idle");
+                    return Ok(());
                 }
             }
         } else {
