@@ -12,6 +12,7 @@ pub mod autodev_instructions;
 pub mod model_configs;
 pub mod plans;
 pub mod workers;
+pub mod annotations;
 
 use std::path::PathBuf;
 use crate::errors::{AutoDevError, Result};

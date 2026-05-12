@@ -1,0 +1,394 @@
+/* ════════════════════════════════════════════════════════════════════════════
+   IDE Annotation System
+   Gutter icons, selection toolbar, modal, and side panel.
+   All values use design tokens from globals.css.
+   Font: IBM Plex Mono throughout.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Monaco gutter decoration ───────────────────────────────────────────────── */
+
+.ann-gutter-info {
+  background:    var(--info);
+  border-radius: 50%;
+  width:         8px !important;
+  height:        8px !important;
+  margin-left:   5px;
+  margin-top:    4px;
+  cursor:        pointer;
+}
+.ann-gutter-warning {
+  background:    var(--warning);
+  border-radius: 50%;
+  width:         8px !important;
+  height:        8px !important;
+  margin-left:   5px;
+  margin-top:    4px;
+  cursor:        pointer;
+}
+.ann-gutter-blocking {
+  background:    var(--danger);
+  border-radius: 50%;
+  width:         8px !important;
+  height:        8px !important;
+  margin-left:   5px;
+  margin-top:    4px;
+  cursor:        pointer;
+}
+
+/* Line background tint for annotated ranges */
+.ann-line-info     { background: rgba(68, 119, 255, 0.04); }
+.ann-line-warning  { background: rgba(255, 170, 0,  0.04); }
+.ann-line-blocking { background: rgba(255, 68,  68, 0.06); }
+
+/* ── Selection toolbar ──────────────────────────────────────────────────────── */
+
+.selection-toolbar {
+  position:      absolute;
+  z-index:       50;
+  display:       flex;
+  align-items:   center;
+  gap:           2px;
+  background:    #161622;
+  border:        1px solid var(--border-1);
+  border-radius: 4px;
+  padding:       3px 4px;
+  box-shadow:    0 4px 16px rgba(0, 0, 0, 0.5);
+  font-family:   var(--font-mono);
+  pointer-events: auto;
+}
+
+.selection-toolbar-btn {
+  background:    none;
+  border:        1px solid transparent;
+  border-radius: 3px;
+  padding:       3px 8px;
+  font-family:   var(--font-mono);
+  font-size:     10px;
+  cursor:        pointer;
+  white-space:   nowrap;
+  transition:    background 0.12s, border-color 0.12s, color 0.12s;
+  letter-spacing: 0.03em;
+}
+
+.selection-toolbar-btn--ask {
+  color: var(--accent);
+}
+.selection-toolbar-btn--ask:hover {
+  background:    rgba(0, 255, 136, 0.08);
+  border-color:  rgba(0, 255, 136, 0.30);
+}
+
+.selection-toolbar-btn--delegate {
+  color: var(--info);
+}
+.selection-toolbar-btn--delegate:hover {
+  background:    rgba(68, 119, 255, 0.10);
+  border-color:  rgba(68, 119, 255, 0.30);
+}
+
+.selection-toolbar-btn--note {
+  color: var(--text-3);
+}
+.selection-toolbar-btn--note:hover {
+  background:    rgba(255, 255, 255, 0.06);
+  border-color:  var(--border-1);
+  color:         var(--text-2);
+}
+
+.selection-toolbar-sep {
+  width:      1px;
+  height:     14px;
+  background: var(--border-1);
+  flex-shrink: 0;
+}
+
+/* ── Annotation modal ───────────────────────────────────────────────────────── */
+
+.ann-modal-overlay {
+  position:        fixed;
+  inset:           0;
+  z-index:         100;
+  background:      rgba(0, 0, 0, 0.55);
+  display:         flex;
+  align-items:     center;
+  justify-content: center;
+}
+
+.ann-modal {
+  background:    #161622;
+  border:        1px solid var(--border-1);
+  border-radius: 4px;
+  width:         440px;
+  max-width:     90vw;
+  display:       flex;
+  flex-direction: column;
+  gap:           0;
+  font-family:   var(--font-mono);
+  box-shadow:    0 8px 32px rgba(0, 0, 0, 0.6);
+}
+
+.ann-modal-header {
+  display:         flex;
+  align-items:     center;
+  justify-content: space-between;
+  padding:         10px 14px;
+  border-bottom:   1px solid var(--border-1);
+}
+
+.ann-modal-title {
+  font-size:      11px;
+  color:          var(--text-2);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.ann-modal-close {
+  background:  none;
+  border:      none;
+  font-family: var(--font-mono);
+  font-size:   14px;
+  color:       var(--text-4);
+  cursor:      pointer;
+  line-height: 1;
+  padding:     0 2px;
+}
+.ann-modal-close:hover { color: var(--text-2); }
+
+.ann-modal-code-preview {
+  background:    #0f0f17;
+  border-bottom: 1px solid var(--border-1);
+  padding:       8px 14px;
+  font-size:     10px;
+  color:         var(--text-3);
+  max-height:    80px;
+  overflow:      hidden;
+  white-space:   pre;
+  text-overflow: ellipsis;
+  line-height:   1.5;
+}
+
+.ann-modal-location {
+  font-size:  9px;
+  color:      var(--text-4);
+  padding:    5px 14px 0;
+  letter-spacing: 0.04em;
+}
+
+.ann-modal-textarea {
+  background:   transparent;
+  border:       none;
+  outline:      none;
+  resize:       none;
+  width:        100%;
+  padding:      10px 14px;
+  font-family:  var(--font-mono);
+  font-size:    11px;
+  color:        var(--text-1);
+  min-height:   80px;
+  box-sizing:   border-box;
+  line-height:  1.6;
+}
+.ann-modal-textarea::placeholder { color: var(--text-4); }
+
+.ann-modal-footer {
+  display:         flex;
+  align-items:     center;
+  justify-content: space-between;
+  padding:         8px 14px 12px;
+  border-top:      1px solid var(--border-1);
+  gap:             8px;
+}
+
+.ann-modal-severity {
+  display:     flex;
+  align-items: center;
+  gap:         6px;
+  font-size:   10px;
+  color:       var(--text-4);
+}
+
+.ann-modal-severity select {
+  background:  #0f0f17;
+  border:      1px solid var(--border-1);
+  border-radius: 2px;
+  color:       var(--text-2);
+  font-family: var(--font-mono);
+  font-size:   10px;
+  padding:     2px 6px;
+  cursor:      pointer;
+}
+
+.ann-modal-submit {
+  background:    none;
+  border:        1px solid var(--accent);
+  border-radius: 2px;
+  padding:       4px 14px;
+  font-family:   var(--font-mono);
+  font-size:     10px;
+  color:         var(--accent);
+  cursor:        pointer;
+  transition:    background 0.12s;
+  letter-spacing: 0.04em;
+}
+.ann-modal-submit:hover    { background: rgba(0, 255, 136, 0.08); }
+.ann-modal-submit:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── Annotation side panel ──────────────────────────────────────────────────── */
+
+.ann-panel {
+  position:       absolute;
+  right:          0;
+  top:            0;
+  bottom:         0;
+  width:          280px;
+  background:     #0f0f17;
+  border-left:    1px solid var(--border-1);
+  display:        flex;
+  flex-direction: column;
+  font-family:    var(--font-mono);
+  z-index:        10;
+  overflow:       hidden;
+}
+
+.ann-panel-header {
+  display:         flex;
+  align-items:     center;
+  justify-content: space-between;
+  padding:         8px 12px;
+  border-bottom:   1px solid var(--border-1);
+  flex-shrink:     0;
+}
+
+.ann-panel-title {
+  font-size:      9px;
+  color:          var(--text-4);
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+}
+
+.ann-panel-close {
+  background:  none;
+  border:      none;
+  font-family: var(--font-mono);
+  font-size:   13px;
+  color:       var(--text-4);
+  cursor:      pointer;
+  line-height: 1;
+  padding:     0 2px;
+}
+.ann-panel-close:hover { color: var(--text-2); }
+
+.ann-panel-body {
+  flex:       1;
+  overflow-y: auto;
+  padding:    12px;
+  display:    flex;
+  flex-direction: column;
+  gap:        10px;
+}
+
+.ann-panel-meta {
+  font-size:  9px;
+  color:      var(--text-4);
+  line-height: 1.6;
+}
+
+.ann-panel-location {
+  color: var(--info);
+}
+
+.ann-severity-badge {
+  display:       inline-block;
+  font-size:     9px;
+  padding:       1px 6px;
+  border-radius: 2px;
+  border:        1px solid transparent;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.ann-severity-badge--info     { color: var(--info);    border-color: rgba(68,119,255,0.30); background: rgba(68,119,255,0.06); }
+.ann-severity-badge--warning  { color: var(--warning); border-color: rgba(255,170,0,0.30);  background: rgba(255,170,0,0.06); }
+.ann-severity-badge--blocking { color: var(--danger);  border-color: rgba(255,68,68,0.30);  background: rgba(255,68,68,0.06); }
+
+.ann-status-badge {
+  display:       inline-block;
+  font-size:     9px;
+  padding:       1px 6px;
+  border-radius: 2px;
+  border:        1px solid var(--border-1);
+  color:         var(--text-4);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-left:   4px;
+}
+.ann-status-badge--resolved { color: var(--accent); border-color: rgba(0,255,136,0.25); background: rgba(0,255,136,0.05); }
+
+.ann-panel-section-label {
+  font-size:      9px;
+  color:          var(--text-4);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom:  4px;
+}
+
+.ann-panel-prompt {
+  font-size:   11px;
+  color:       var(--text-2);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break:  break-word;
+}
+
+.ann-panel-code {
+  background:    #161622;
+  border:        1px solid var(--border-1);
+  border-radius: 2px;
+  padding:       6px 8px;
+  font-size:     10px;
+  color:         var(--text-3);
+  white-space:   pre;
+  overflow:      hidden;
+  text-overflow: ellipsis;
+  max-height:    64px;
+}
+
+.ann-panel-response {
+  font-size:   11px;
+  color:       var(--text-2);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break:  break-word;
+}
+
+.ann-panel-source {
+  font-size:  9px;
+  color:      var(--text-4);
+}
+.ann-panel-source--qc_agent { color: var(--warning); }
+.ann-panel-source--worker   { color: var(--info); }
+
+.ann-panel-actions {
+  display:     flex;
+  align-items: center;
+  gap:         6px;
+  flex-wrap:   wrap;
+  flex-shrink: 0;
+  padding:     8px 12px 12px;
+  border-top:  1px solid var(--border-1);
+}
+
+.ann-panel-btn {
+  background:    none;
+  border:        1px solid var(--border-1);
+  border-radius: 2px;
+  padding:       3px 10px;
+  font-family:   var(--font-mono);
+  font-size:     9px;
+  cursor:        pointer;
+  transition:    border-color 0.12s, color 0.12s;
+  letter-spacing: 0.04em;
+  color:         var(--text-3);
+}
+.ann-panel-btn:hover           { border-color: var(--text-3); color: var(--text-2); }
+.ann-panel-btn--resolve:hover  { border-color: var(--accent); color: var(--accent); }
+.ann-panel-btn--delete:hover   { border-color: var(--danger); color: var(--danger); }

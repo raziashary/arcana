@@ -3,12 +3,14 @@
 // Phase 2:   start/stop now wired to the real RecipeScheduler (cron engine).
 // See: DEVELOPMENT_PLAN.md Phase 2 — Recipe Execution Engine
 
+use std::path::Path;
 use std::sync::Arc;
 use tauri::State;
 use crate::errors::{AutoDevError, Result};
 use crate::db::workers::{Worker, WorkersDb, slugify};
 use crate::recipes::scheduler::RecipeScheduler;
 use crate::sidecar::client::OrchestratorClient;
+use crate::sidecar::resolve_orchestrator_path;
 use serde::{Deserialize, Serialize};
 
 // ─── Input / Output types ─────────────────────────────────────────────────────
@@ -46,7 +48,17 @@ pub struct UpdateModelSyncResult {
 
 #[tauri::command]
 pub fn list_workers() -> Result<Vec<Worker>> {
-    WorkersDb::open()?.list()
+    let mut workers = WorkersDb::open()?.list()?;
+    // Overlay model values from YAML — the YAML is authoritative; SQLite seed may be stale.
+    if let Ok(orch_dir) = resolve_orchestrator_path(None) {
+        let agents_dir = orch_dir.join("config").join("agents");
+        for worker in &mut workers {
+            if let Some(model) = read_yaml_model(&agents_dir, &worker.slug) {
+                worker.model = model;
+            }
+        }
+    }
+    Ok(workers)
 }
 
 #[tauri::command]
@@ -141,6 +153,22 @@ pub async fn update_worker_model_sync(
         ("pending", format!("Model updated to {} — will sync when core-orchestrator is online", model))
     };
     
+    // Step 3: Write directly to YAML so the file stays in sync regardless of
+    // whether core-orchestrator is running. This is the authoritative source the
+    // agent reads on boot — without this step a "pending" orchestrator sync would
+    // leave the YAML stale until the next tick.
+    if let Ok(orch_dir) = resolve_orchestrator_path(None) {
+        let agents_dir = orch_dir.join("config").join("agents");
+        if let Err(e) = write_yaml_model(&agents_dir, &worker.slug, &model) {
+            tracing::warn!("[update_worker_model_sync] YAML write failed for '{}': {e}", worker.slug);
+        } else {
+            tracing::info!(
+                "[update_worker_model_sync] YAML updated for '{}' → '{}'",
+                worker.slug, model
+            );
+        }
+    }
+
     Ok(UpdateModelSyncResult {
         db_updated: true,
         sync_status: sync_result.0.to_string(),
@@ -187,4 +215,87 @@ pub fn stop_worker_recipe(
     let worker = db.get_by_id(worker_id)?
         .ok_or_else(|| AutoDevError::Agent(format!("Worker id={worker_id} not found")))?;
     scheduler.stop_worker(&worker.slug)
+}
+
+// ─── YAML agent config helpers ────────────────────────────────────────────────
+
+/// Read `llm.model` from `{agents_dir}/{slug}.yaml`. Returns None if the file
+/// doesn't exist or the field is missing — caller falls back to the DB value.
+fn read_yaml_model(agents_dir: &Path, slug: &str) -> Option<String> {
+    let yaml_path = agents_dir.join(format!("{}.yaml", slug));
+    let content = std::fs::read_to_string(&yaml_path).ok()?;
+    let value: serde_yaml::Value = serde_yaml::from_str(&content).ok()?;
+    value.get("llm")?.get("model")?.as_str().map(|s| s.to_string())
+}
+
+/// Surgically rewrite `llm.model` and `llm.provider` in `{agents_dir}/{slug}.yaml`
+/// without disturbing any other fields, comments, or metadata.
+///
+/// Line-by-line replacement: when inside the `llm:` block (detected by the top-level
+/// key) replace the `model:` and `provider:` lines.  All other lines pass through
+/// unchanged, preserving comments, ordering, and the `metadata:` section.
+fn write_yaml_model(agents_dir: &Path, slug: &str, model: &str) -> Result<()> {
+    let yaml_path = agents_dir.join(format!("{}.yaml", slug));
+    let content = std::fs::read_to_string(&yaml_path)
+        .map_err(|e| AutoDevError::Agent(format!("read YAML for '{slug}': {e}")))?;
+
+    let provider = model_to_provider(model);
+    let mut result: Vec<String> = Vec::with_capacity(content.lines().count() + 2);
+    let mut in_llm_block = false;
+    let mut model_written    = false;
+    let mut provider_written = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+
+        // Detect top-level keys (no leading whitespace, ends with ':')
+        if !line.starts_with(' ') && !line.starts_with('\t') {
+            in_llm_block = trimmed.starts_with("llm:");
+            // If we're leaving the llm block and fields were not present, inject them now.
+            if !in_llm_block {
+                // No-op: if the previous block was llm and fields were missing we'd need
+                // more complex handling — for fleet YAMLs they always exist.
+            }
+        }
+
+        if in_llm_block {
+            if trimmed.starts_with("model:") && !model_written {
+                // Preserve the indentation prefix of the original line.
+                let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+                result.push(format!("{}model: {}", indent, model));
+                model_written = true;
+                continue;
+            }
+            if trimmed.starts_with("provider:") && !provider_written {
+                let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+                result.push(format!("{}provider: {}", indent, provider));
+                provider_written = true;
+                continue;
+            }
+        }
+        result.push(line.to_string());
+    }
+
+    let new_content = result.join("\n") + "\n";
+    std::fs::write(&yaml_path, new_content)
+        .map_err(|e| AutoDevError::Agent(format!("write YAML for '{slug}': {e}")))?;
+
+    Ok(())
+}
+
+/// Derive the LiteLLM provider name from a model ID.
+fn model_to_provider(model: &str) -> &str {
+    if model.starts_with("claude") {
+        "anthropic"
+    } else if model.starts_with("deepseek") {
+        "deepseek"
+    } else if model.starts_with("gpt") || model.starts_with("o1") || model.starts_with("o3") || model.starts_with("o4") {
+        "openai"
+    } else if model.starts_with("gemini") {
+        "google"
+    } else if model.starts_with("llama") || model.starts_with("mistral") || model.starts_with("codestral") {
+        "ollama"
+    } else {
+        "openai"
+    }
 }

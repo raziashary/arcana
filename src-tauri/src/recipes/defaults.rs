@@ -708,7 +708,7 @@ NEVER for: single-tool additions with a clear target file."#.into(),
 
 fn worker_cleanup_recipe() -> Recipe {
     Recipe {
-        version:         "1.1.0".into(),
+        version:         "1.2.0".into(),
         id:              WORKER_CLEANUP_RECIPE_ID.into(),
         title:           "Worker Cleanup — Code Quality".into(),
         description:     Some("Handles lint fixes, dead code removal, and housekeeping. Never changes functionality.".into()),
@@ -742,7 +742,33 @@ d. Batch all changes to the same file into ONE edit_file call.
 e. Run Build Validation (section below). MANDATORY.
 f. On validation pass:
    bash('git add -A && git commit -m "chore(cleanup): <what was removed>"')
-   update_task_status(id, 'done', 'worker-cleanup')
+
+### Phase 5 — Functionality Preservation Check (run after commit, before marking done)
+
+Cleanup's #1 rule is MUST NOT change functionality. Verify this automatically:
+
+1. Get the current branch:
+   bash('git rev-parse --abbrev-ref HEAD')
+
+2. Call `analyze_diff` with:
+   - repo_path: root of the repository you modified
+   - base_branch: "main"
+   - head_branch: current branch from step 1
+
+3. Inspect the result:
+   - risk_level "critical" or "high" → STOP. You introduced a functionality change.
+     update_task_status(id, 'rejected', 'worker-cleanup',
+       rejection_reason=
+         'CRITERION FAILED: Cleanup must not change functionality.
+          EXPECTED: risk_level=low or medium, classification=housekeeping/style/dead_code.
+          FOUND: analyze_diff risk_level=<risk_level>, classification=<classification>.
+          Review notes: <review_notes>.
+          FIX: Revert the changes that introduced logic/behaviour differences and resubmit.')
+   - classification contains "logic_change" or "behavior_change" → same rejection above.
+   - risk_level "low" or "medium" AND classification is housekeeping/style/dead_code/formatting →
+     update_task_status(id, 'done', 'worker-cleanup')
+
+Never mark done without passing this check.
 
 ### Step 4 — No work available
 Reply with the single text line: `No tasks assigned — idle.`
@@ -817,7 +843,7 @@ NEVER for: single-file lint fixes or import removal."#.into(),
 
 fn qc_agent_recipe() -> Recipe {
     Recipe {
-        version:         "1.3.0".into(),
+        version:         "1.4.0".into(),
         id:              QC_AGENT_RECIPE_ID.into(),
         title:           "QC Agent — Code Review".into(),
         description:     Some("Reviews completed worker output. Approves (done) or rejects with a specific, actionable reason.".into()),
@@ -942,6 +968,24 @@ Include the screenshot path in the review comment.
 
 ---
 
+## Phase 5 — Inline Annotation (run when REJECTING with a known file location)
+
+After calling update_task_status with status='rejected', if the rejection has a specific file and line range,
+call `annotate_file` to pin the review finding directly in the IDE code viewer:
+
+- file_path: workspace-relative path of the failing file (e.g. "src/components/Button.tsx")
+- start_line / end_line: exact line range of the problematic code
+- note: same CRITERION FAILED text from the rejection_reason (truncate to 300 chars if needed)
+- severity: "blocking" for rejections, "warning" for non-blocking observations
+
+This gives the user inline red markers on the exact lines that failed — far more useful than reading a task card.
+
+Skip this phase when:
+- The rejection is due to a missing file or broken build (no line range to target)
+- No repo_path or workspace context is available in the task metadata
+
+---
+
 ## Rejection Reason Format (MANDATORY)
 
 Vague rejection reasons waste a full worker invocation cycle — the worker cannot fix what it cannot understand.
@@ -1025,6 +1069,7 @@ If 3 or fewer files: review directly. Do not spawn subagents.
 ## Tools
 - list_tasks         — Read the QC queue (absolute first call every tick)
 - analyze_diff       — Get risk score, classification, and review notes for a PR diff (Phase 0)
+- annotate_file      — Pin inline review notes to specific lines in the IDE code viewer (Phase 5)
 - grep               — Scan changed files for issues
 - read_file          — Inspect implementation
 - bash               — Run tests and build validation

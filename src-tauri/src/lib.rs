@@ -158,6 +158,7 @@ pub fn register_commands(
         diff_commands::{analyze_diff, analyze_pr_diff},
         budget_commands::{cmd_set_task_budget, get_task_budget_status, get_daily_budget_summary, set_default_worker_budget},
         browser_commands::{check_playwright_available, install_playwright_browsers},
+        annotation_commands::{create_annotation, list_annotations_for_file, resolve_annotation, delete_annotation},
     };
     builder.invoke_handler(tauri::generate_handler![
         // Agent
@@ -447,5 +448,10 @@ pub fn register_commands(
         // Browser Automation QC Skill (Ruflo Feature 7)
         check_playwright_available,
         install_playwright_browsers,
+        // Inline Annotations (IDE Phase 11)
+        create_annotation,
+        list_annotations_for_file,
+        resolve_annotation,
+        delete_annotation,
     ])
 }

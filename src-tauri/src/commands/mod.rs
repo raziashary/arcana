@@ -33,3 +33,4 @@ pub mod orphan_commands;
 pub mod diff_commands;
 pub mod budget_commands;
 pub mod browser_commands;
+pub mod annotation_commands;

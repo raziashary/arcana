@@ -28,12 +28,19 @@ export function LiveMonitorSection() {
     return () => { cleanupRef.current?.() }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const agentList   = Object.values(agents)
-  const secondsAgo  = Math.floor((Date.now() - lastEventAt) / 1000)
-  const hasActive   = agentList.some(a => a.status === 'active')
-  const isLive      = hasActive && secondsAgo < 30
-  const isStale     = !isLive && secondsAgo < 120
-  const isOffline   = !isLive && !isStale
+  const agentList    = Object.values(agents)
+  const secondsAgo   = Math.floor((Date.now() - lastEventAt) / 1000)
+  const hasActive    = agentList.some(a => a.status === 'active')
+  // "online" = at least one agent is registered and not stopped (sidecars are up)
+  const hasAnyOnline = agentList.length > 0 && agentList.some(a => a.status !== 'stopped')
+
+  const isLive    = hasActive && secondsAgo < 30
+  // STALE only when there WAS recent activity that just went quiet (not blank-slate idle)
+  const isStale   = !isLive && hasActive && secondsAgo < 120
+  // IDLE = agents are up and registered but no tasks are running right now
+  const isIdle    = !isLive && !isStale && hasAnyOnline
+  // OFFLINE = sidecars are down / no agents initialised / all workers stopped
+  const isOffline = !isLive && !isStale && !hasAnyOnline
 
   function timeAgo(): string {
     if (secondsAgo < 60) return `${secondsAgo}s ago`
@@ -49,6 +56,7 @@ export function LiveMonitorSection() {
         <div className="lm-header-right">
           {isLive    && <span className="live-badge live-badge--live">◉ LIVE</span>}
           {isStale   && <span className="live-badge live-badge--stale">◉ STALE</span>}
+          {isIdle    && <span className="live-badge live-badge--idle">◉ IDLE</span>}
           {isOffline && <span className="live-badge live-badge--offline">◉ OFFLINE</span>}
           {!isLive && (
             <span className="lm-last-event">{timeAgo()}</span>

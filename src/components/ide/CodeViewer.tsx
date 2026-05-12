@@ -4,10 +4,14 @@
 // the write_file / edit_file tools. The IDE viewer is therefore read-only,
 // which also simplifies state management and avoids stale-buffer bugs.
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Editor, { loader, type OnMount } from '@monaco-editor/react'
 import * as monaco from 'monaco-editor'
 import { useIdeStore } from '../../stores/ideStore'
+import { useAnnotationStore } from '../../stores/annotationStore'
+import { SelectionToolbar, type AnnotationIntent } from './SelectionToolbar'
+import { AnnotationModal } from './AnnotationModal'
+import { AnnotationPanel } from './AnnotationPanel'
 
 // Configure @monaco-editor/react to use the locally bundled monaco-editor
 // instead of loading it from a CDN. This is required because the Tauri CSP
@@ -15,19 +19,75 @@ import { useIdeStore } from '../../stores/ideStore'
 // cause the editor to hang forever on "Loading...".
 loader.config({ monaco })
 
+interface SelectionState {
+  startLine: number
+  endLine:   number
+  text:      string
+  top:       number
+  left:      number
+}
+
 interface Props {
   tabPath: string
 }
 
 export default function CodeViewer({ tabPath }: Props) {
   const tab = useIdeStore((s) => s.openTabs.find((t) => t.relativePath === tabPath))
-  const editorRef = useRef<Parameters<OnMount>[0] | null>(null)
+  const editorRef      = useRef<Parameters<OnMount>[0] | null>(null)
+  const decorationsRef = useRef<monaco.editor.IEditorDecorationsCollection | null>(null)
+  // Always-current tabPath for use inside stable onMount closures
+  const tabPathRef     = useRef(tabPath)
+  tabPathRef.current   = tabPath
 
-  const handleMount: OnMount = (editor, monaco) => {
+  const [selection,    setSelection]    = useState<SelectionState | null>(null)
+  const [modalIntent,  setModalIntent]  = useState<AnnotationIntent | null>(null)
+  const [editorReady,  setEditorReady]  = useState(false)
+
+  const annotations      = useAnnotationStore((s) => s.byFile[tabPath] ?? [])
+  const activeId         = useAnnotationStore((s) => s.activeId)
+  const activeAnnotation = useAnnotationStore((s) => {
+    if (!s.activeId) return null
+    for (const list of Object.values(s.byFile)) {
+      const found = list.find((a) => a.id === s.activeId)
+      if (found) return found
+    }
+    return null
+  })
+  const { loadForFile } = useAnnotationStore()
+
+  // Load annotations for the current file
+  useEffect(() => {
+    if (tabPath) void loadForFile(tabPath)
+  }, [tabPath])
+
+  // Apply/refresh gutter decorations whenever annotations or editor readiness changes
+  useEffect(() => {
+    const editor = editorRef.current
+    if (!editor) return
+
+    if (!decorationsRef.current) {
+      decorationsRef.current = editor.createDecorationsCollection([])
+    }
+
+    const decors: monaco.editor.IModelDeltaDecoration[] = []
+    for (const ann of annotations) {
+      if (ann.status === 'resolved') continue
+      decors.push({
+        range: new monaco.Range(ann.startLine, 1, ann.endLine, 1),
+        options: {
+          isWholeLine:              true,
+          linesDecorationsClassName: `ann-gutter-${ann.severity}`,
+          className:                `ann-line-${ann.severity}`,
+        },
+      })
+    }
+    decorationsRef.current.set(decors)
+  }, [annotations, editorReady])
+
+  const handleMount: OnMount = (editor, monacoInst) => {
     editorRef.current = editor
 
-    // Apply a theme tuned to the Winter-Is-Coming palette.
-    monaco.editor.defineTheme('autodev-dark', {
+    monacoInst.editor.defineTheme('autodev-dark', {
       base:    'vs-dark',
       inherit: true,
       rules: [
@@ -53,7 +113,46 @@ export default function CodeViewer({ tabPath }: Props) {
         'editorWidget.border':              '#0D3652',
       },
     })
-    monaco.editor.setTheme('autodev-dark')
+    monacoInst.editor.setTheme('autodev-dark')
+
+    // Track selection to show the floating toolbar
+    editor.onDidChangeCursorSelection(() => {
+      const sel = editor.getSelection()
+      if (!sel || sel.isEmpty()) {
+        setSelection(null)
+        return
+      }
+      const text       = editor.getModel()?.getValueInRange(sel) ?? ''
+      const lineHeight = editor.getOption(monacoInst.editor.EditorOption.lineHeight)
+      const scrollTop  = editor.getScrollTop()
+      const layout     = editor.getLayoutInfo()
+      const lineTop    = (sel.startLineNumber - 1) * lineHeight - scrollTop
+      setSelection({
+        startLine: sel.startLineNumber,
+        endLine:   sel.endLineNumber,
+        text,
+        top:  Math.max(lineTop - 34, 4),
+        left: layout.contentLeft + 8,
+      })
+    })
+
+    // Gutter click → open annotation panel for that line
+    editor.onMouseDown((e) => {
+      const MT   = monacoInst.editor.MouseTargetType
+      const type = e.target.type
+      if (
+        type !== MT.GUTTER_LINE_DECORATIONS &&
+        type !== MT.GUTTER_GLYPH_MARGIN &&
+        type !== MT.GUTTER_LINE_NUMBERS
+      ) return
+      const line = e.target.position?.lineNumber
+      if (!line) return
+      const ann = useAnnotationStore.getState().getForFile(tabPathRef.current)
+        .find((a) => a.status !== 'resolved' && line >= a.startLine && line <= a.endLine)
+      if (ann) useAnnotationStore.getState().setActive(ann.id)
+    })
+
+    setEditorReady(true)
   }
 
   // React to gotoLine changes when "Open in IDE from chat" requests a jump.
@@ -98,8 +197,10 @@ export default function CodeViewer({ tabPath }: Props) {
     )
   }
 
+  const showToolbar = selection !== null && modalIntent === null && activeId === null
+
   return (
-    <div className="flex-1 overflow-hidden" style={{ background: '#01111D' }}>
+    <div className="flex-1 overflow-hidden" style={{ position: 'relative', background: '#01111D' }}>
       <Editor
         value={tab.content.content}
         language={tab.content.language}
@@ -124,6 +225,32 @@ export default function CodeViewer({ tabPath }: Props) {
           },
         }}
       />
+
+      {showToolbar && (
+        <SelectionToolbar
+          top={selection.top}
+          left={selection.left}
+          onAction={(intent) => setModalIntent(intent)}
+        />
+      )}
+
+      {modalIntent !== null && selection !== null && (
+        <AnnotationModal
+          filePath={tabPath}
+          startLine={selection.startLine}
+          endLine={selection.endLine}
+          selectedText={selection.text}
+          intent={modalIntent}
+          onClose={() => {
+            setModalIntent(null)
+            setSelection(null)
+          }}
+        />
+      )}
+
+      {activeAnnotation && (
+        <AnnotationPanel annotation={activeAnnotation} />
+      )}
     </div>
   )
 }

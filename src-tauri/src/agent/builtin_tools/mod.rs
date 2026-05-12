@@ -27,6 +27,7 @@ pub mod append_file;
 pub mod suggest_worker_tool;
 pub mod claim_task_tool;
 pub mod analyze_diff_tool;
+pub mod annotate_file_tool;
 pub mod set_task_budget_tool;
 // Ruflo Feature 5 — Phase-Based Task Decomposition
 pub mod create_epic_tool;
@@ -69,6 +70,8 @@ pub fn register_for_mcp_worker(registry: &mut ToolRegistry) {
     registry.register(Arc::new(claim_task_tool::ClaimTaskTool));
     // Diff analysis — QC Agent uses this to score and classify PR diffs before review
     registry.register(Arc::new(analyze_diff_tool::AnalyzeDiffTool));
+    // Inline annotations — QC Agent (and workers) write review notes pinned to specific lines
+    registry.register(Arc::new(annotate_file_tool::AnnotateFileTool));
     // Budget management — Supervisor uses this before assigning tasks (Ruflo Feature 4)
     registry.register(Arc::new(set_task_budget_tool::SetTaskBudgetTool));
     // Ruflo Feature 5 — Epic read tools exposed so workers can check phase progress
@@ -122,6 +125,8 @@ pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
             registry.register(Arc::new(claim_task_tool::ClaimTaskTool));
             // Diff analysis — available in PA and review modes for manual QC workflows
             registry.register(Arc::new(analyze_diff_tool::AnalyzeDiffTool));
+            // Inline annotations — PA can pin review notes to code lines
+            registry.register(Arc::new(annotate_file_tool::AnnotateFileTool));
             // Budget management — available in PA/review so manual workflows can budget tasks
             registry.register(Arc::new(set_task_budget_tool::SetTaskBudgetTool));
             // Ruflo Feature 5 — Epic & Phase tools (Supervisor uses these to decompose work)

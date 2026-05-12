@@ -67,13 +67,15 @@
   letter-spacing: 0.05em;
 }
 
-.live-badge--live    { color: var(--accent);  }
-.live-badge--stale   { color: var(--warning); }
-.live-badge--offline { color: var(--danger);  }
+.live-badge--live    { color: var(--accent);         }
+.live-badge--stale   { color: var(--warning);        }
+.live-badge--idle    { color: var(--text-secondary); }
+.live-badge--offline { color: var(--danger);         }
 
 /* Pulsing dot — the ◉ character itself pulses via opacity */
 .live-badge--live  { animation: lm-pulse-live    1.5s ease-in-out infinite; }
 .live-badge--stale { animation: lm-pulse-warning 2.0s ease-in-out infinite; }
+/* idle has no pulse — intentionally quiet */
 
 @keyframes lm-pulse-live {
   0%, 100% { opacity: 1;   }
