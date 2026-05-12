@@ -7531,6 +7531,569 @@ Phase 5 Cross-Sub-Phase Integration:
 
 ---
 
+## Phase 2.8 — Submodule Integration Bug Fixes
+
+**Date:** 2026-04-15 / 2026-04-16  
+**Context:** First submodule integration test (`submodulestesting.txt`) — partial startup achieved, no agents able to execute any actual work. 11 distinct errors catalogued (E-01 through E-11).
+
+> **Source documents:** `docs/development/runtime-fixes/phase2/part1/phase2submodule.md` + `phase2submodulefix.md` + `phase2/part2/phase2part2bugs.md`
+
+---
+
+### Phase 2.8.1 — Tool Handler Wiring (E-01) ✅ COMPLETE
+
+**Root cause (E-01):** `autodev_tools` configuration never wired from Tauri → API → factory → metadata. All agents booted with `total_tools: 0`. Secondary bug: `get_tool_specs()` returned plain dicts that `add_tools()` silently dropped.
+
+- [x] **T1.1** — Add `autodev_tools: List[str]` field to `AgentCreate` model  
+  **File:** `submodules/core-orchestrator/api_gateway/modules/agents/models.py:41`
+- [x] **T1.2** — Add `autodev_tools` parameter to `create_agent_config_from_request()`  
+  **File:** `submodules/core-orchestrator/src/airs/config/agent_writer.py`
+- [x] **T1.3** — Add `autodev_tools: List[str]` field to `AgentConfig` schema  
+  **File:** `submodules/core-orchestrator/src/airs/config/agent_schema.py`
+- [x] **T1.4** — Read `agent_config.autodev_tools` in `factory.py`, pass to `AgentMetadata(autodev_tools=...)`  
+  **File:** `submodules/core-orchestrator/src/airs/agent/factory.py:440-446`
+- [x] **T1.5** — Add `autodev_tools` array (8 tools: `read_file__autodev`, `write_file__autodev`, `edit_file__autodev`, `bash__autodev`, `list_directory__autodev`, `grep__autodev`, `glob__autodev`, `list_workers__autodev`) to Tauri `ensure_agent` POST body  
+  **File:** `src-tauri/src/sidecar/client.rs:254-264`
+- [x] **T1.6** — Fix `get_tool_specs()` to return `ToolSpec` Pydantic objects (not plain dicts) so `add_tools()` accepts them  
+  **File:** `submodules/core-orchestrator/src/airs/bridges/autodev_handler.py:152-173`
+- [x] **T1.10** — Delete stale agent YAML configs in `config/agents/` so they regenerate with `autodev_tools` populated on next boot (stale YAMLs loaded instead of POST body → zero tools)
+
+> **2.8.1 Success Criteria**: `Handler status: {'autodev_handler': {'registered': True, 'tools': [...]}, 'total_tools': 8}` appears in log on agent init.
+
+---
+
+### Phase 2.8.2 — Redis/Memurai Service (E-02) ✅ COMPLETE
+
+- [x] Ensure Memurai service starts on Windows boot (`Set-Service -Name Memurai -StartupType Automatic`)
+- [x] Verify service name matches what AIRS Code Redis sidecar config expects
+- [x] Add startup check in `sidecar/mod.rs` to verify Redis reachable before spawning agents
+
+---
+
+### Phase 2.8.3 — Cross-Agent Memory Contamination (E-03) ✅ COMPLETE
+
+**Root cause:** `service.py:1318` used `f"headless-{uuid.uuid4()}"` — new random UUID per tick → worker amnesia + cross-agent memory bleed (unscoped memories surfaced in every agent's recall).
+
+- [x] Change headless session_id in `service.py:1318` from random UUID to deterministic stable key:
+  ```python
+  session_id = f"worker-{agent_id}"  # stable across all ticks for this worker
+  ```
+- [x] Extend `stream_manager.py:140` guard to skip `worker-*` prefixed sessions (same as `headless-*`):
+  ```python
+  if session_id.startswith("headless-") or session_id.startswith("worker-"):
+      return
+  ```
+- [x] Fix `mem0_adapter.py:864-867` to exclude unscoped memories:
+  ```python
+  if item_session_id != session_id:  # was: if item_session_id is not None and ...
+      continue
+  ```
+- [x] Add `agent_id` filter to `context_service.py:1826-1835` `_retrieve_recent_conversation()` as defense-in-depth
+
+---
+
+### Phase 2.8.4 — First-Tick Startup Race (E-04) ✅ COMPLETE
+
+- [x] Add startup readiness gate to `RecipeScheduler` — do not fire first tick until `OrchestratorClient::is_healthy()` returns `true`
+- [x] Increase initial recipe delay above measured core-orchestrator boot time (~30s)
+
+---
+
+### Phase 2.8.5 — SSE Headless Broadcast Warnings (E-05) ✅ COMPLETE
+
+- [x] In `api_gateway/core/stream_manager.py`, check session type before SSE broadcast — silently skip headless sessions instead of emitting WARNING on every tick
+
+---
+
+### Phase 2.8.6 — LiteLLM DEBUG Verbosity at Startup (E-06) ✅ COMPLETE
+
+- [x] Set `litellm.suppress_debug_info = True` in `api_gateway/app.py` lifespan startup
+- [x] Configure LiteLLM logger to WARNING level to suppress full request/response payloads during startup burst
+
+---
+
+### Phase 2.8.7 — Unicode Surrogate Encoding (E-11) ✅ COMPLETE
+
+- [x] At `core-orchestrator` startup (in `api_gateway/app.py` or `main.py`), call:
+  ```python
+  sys.stdout.reconfigure(errors='replace')
+  ```
+  Prevents `UnicodeEncodeError: surrogates not allowed` log crashes that hid root cause of E-01.
+
+---
+
+### Phase 2.8.8 — API Key Masking in Logs (E-09) ✅ COMPLETE
+
+- [x] Set LiteLLM log level to INFO or higher — suppresses full request payload dump that exposed `sk-proj-*` keys
+- [x] Mask `api_key` field in Mem0 adapter initialization logging before writing to log file
+
+---
+
+**2.8 Status**: All 11 errors (E-01 through E-11) addressed. On next boot after T1.10 YAML deletion: `total_tools: 8` confirmed; agents call `list_tasks`, supervisor assigns, workers execute. Memory isolation working — each worker has stable `worker-{agent_id}` session lane.
+
+---
+
+## Phase 3.6 — Fleet Run Bug Fixes
+
+**Date:** 2026-04-21 through 2026-04-24  
+**Context:** Four fleet test runs during Phase 3 exposing parallelism, UI status, transport, and QC pipeline issues.
+
+> **Source documents:** `docs/development/runtime-fixes/phase3/` — `fleet-flow-analysis.md` (Apr 21), `fleetflow-phase31.md` (Apr 22), `mcpserverrun.md` (Apr 23), `endtoendrun.md` (Apr 24)
+
+---
+
+### Phase 3.6.1 — Parallelism & Scheduler Cadence (Issue A/C) ✅ COMPLETE
+
+**Root cause A:** Unsynchronized per-worker poll timers. Each recipe has its own interval; `worker-cleanup` had 6.3-min cadence. Parallelism bounded by timer cadence, not task availability.  
+**Root cause C:** Supervisor ticked every 50–60 s; 8 Ready tasks waited ~26 s before ANY assignment. No `task.created` event trigger.
+
+- [x] Wire `create_task` → `scheduler::kick("supervisor")` — supervisor assigns burst within seconds, not 21s
+- [x] Wire `assign_task` → `scheduler::kick(worker)` — workers pick up tasks immediately after assignment
+- [x] Add `task:changed` Tauri events — board stays fresh without 60s `setInterval` as sole driver
+- [x] Normalize worker recipe intervals to `*/1 * * * *` for active workers; `*/2` for cleanup
+- [x] Add startup readiness gate to prevent first-tick failures during core-orchestrator boot window
+
+---
+
+### Phase 3.6.2 — UI Worker Status Display (Issue B/D) ✅ COMPLETE
+
+**Root cause B:** `AgentRoster` status label derived from polling, not from push events. `working` status with no active task fell through to `'Error'` branch.  
+**Root cause D:** `paMode` not a hard session property — fell back to `FastDev` on session rehydrate.
+
+- [x] Add `worker:status` push event emission in `RecipeRunner::set_worker_status()` — UI status pushed, not polled
+- [x] Fix `AutoDevPanel.tsx:77-89` label ladder to handle `'working'` status explicitly (not fall-through to `'Error'`)
+- [x] Persist `paMode` as a durable session property in `sessionStore.ts` so Mode 2 survives tab reloads
+
+---
+
+### Phase 3.6.3 — Mode 1 Badge Stuck After Boot (UI Bug A) ✅ COMPLETE
+
+**Root cause:** `AutoDevPanel.tsx:446-448` called `checkConnectivity()` once on mount. Core-orch not yet healthy → `false` set permanently. No retry, no event subscription.
+
+- [x] Subscribe `sidecarStore` to `startup:progress` events (already available in `startupStore`)
+- [x] Re-probe connectivity when `startup:progress` transitions to `orch_ready` or `fleet_ready`
+- [x] Add retry with exponential backoff on initial connectivity check
+
+---
+
+### Phase 3.6.4 — Windows HTTP Keep-Alive Transport Failures (Issues F/G) ✅ COMPLETE
+
+**Root cause:** Windows silently resets idle HTTP keep-alive connections (WinError 10054). `reqwest` has no retry on pooled connection failure → `error sending request` → fallback to Rust `AgentEngine` → wrong model string → Anthropic 404.
+
+- [x] Add reqwest connection pool tuning: `connection_verbose(true)`, `tcp_keepalive(Some(Duration::from_secs(30)))`, `pool_idle_timeout(Duration::from_secs(60))`
+- [x] Add single retry on `reqwest::Error` for `ECONNRESET`-type failures before falling back to Mode 1
+- [x] Fix `client.rs` to pass correct model string to Rust fallback (`claude-haiku-4-5` not `claude-4-5-haiku`) — see also Phase 7.1
+
+---
+
+### Phase 3.6.5 — MCP Double Registration (Backend Bug C) ✅ COMPLETE
+
+**Root cause:** `autodev-mcp-server` declared in both Python YAML and re-POSTed by Rust `OrchestratorClient::register_mcp_server()`. Python raised `ValueError("already exists")` → HTTP 400 → Rust only treated 409 as idempotent → logged as error.
+
+- [x] Add 400/500 "already exists" idempotency handling in `client.rs::register_mcp_server()` — see also Phase 7.9
+
+---
+
+### Phase 3.6.6 — Windows Bash Tool Compatibility (Issue I) ✅ COMPLETE
+
+**Root cause:** LLM-generated bash commands used Unix-only tools (`head`, `tail`, `grep` with GNU flags) that don't exist on Windows CMD/PowerShell. `bash__autodev` returned `exit_code 255`.
+
+- [x] Add Windows-compatible command substitutions in `bash.rs` tool documentation/hints (PowerShell equivalents)
+- [x] Inject Windows bash compatibility note into worker system prompt
+- [x] Add `bash` command output truncation in `bash.rs` (tail-based) — see also Phase 8 Tools Audit
+
+---
+
+### Phase 3.6.7 — QC Agent Task Visibility (Issue 1) ✅ COMPLETE
+
+**Root cause (`endtoendrun.md`):** `qc-agent`'s `list_tasks` query returned empty for `status='qc_review'` despite tasks visibly in QC REVIEW column. Status value mismatch between task board display and DB query parameter.
+
+- [x] Audit task status string constants — verify `qc_review` DB value matches what `list_tasks_tool.rs` queries and what the qc-agent recipe instructs it to filter on
+- [x] Add status enum validation in `update_task_status_tool.rs` to prevent mismatched string values entering DB
+
+---
+
+### Phase 3.6.8 — Memory Bloat / Recipe Instruction Pollution (Issue 3) ✅ COMPLETE
+
+**Root cause:** Full recipe instructions stored as episodic memories on every tick → ballooning context windows, 2.8–4.5s recall times, high token usage.
+
+- [x] Mark recipe instruction messages with metadata `{"type": "recipe_instruction", "ephemeral": true}` before Mem0 storage
+- [x] Filter `ephemeral: true` memories from recall queries in `mem0_adapter.py`
+- [x] Set TTL of 1 tick on recipe instruction memories (or skip storing entirely via `skip_memory_store=True` flag on the invoke call)
+
+---
+
+**3.6 Status**: All issues from four fleet test runs (Apr 21–24) resolved. Fleet runs consistently: supervisor assigns tasks within seconds of creation, workers execute in parallel, QC pipeline completes, UI status reflects real state.
+
+---
+
+## Phase 6.17 — Graph Engine Bug Fixes (G-1 to G-14)
+
+**Date:** Implemented alongside Phase 6.1–6.16  
+**Context:** 14 specific bug fixes to the graph extraction and visualization pipeline discovered during initial testing. All marked ✅ Done.
+
+> **Source document:** `docs/development/graph/graph_fixes.md`
+
+---
+
+- [x] **G-1 — EdgeKind UPPER_SNAKE_CASE serialization**: Implement `Display` trait for `EdgeKind` in `extract.rs` so SQLite stores `"CALLS"`, `"IMPORTS_FROM"` etc. (not Rust debug format `Calls`, `ImportsFrom`). Used in FTS queries and MCP tool responses.
+- [x] **G-2 — NodeKind Display trait**: Implement `Display` for `NodeKind` in `extract.rs` — consistent string output for `"Function"`, `"Class"`, `"File"`, `"Test"`, `"Module"`, `"Import"`, `"Type"`.
+- [x] **G-3 — ConfidenceTier Display trait**: Implement `Display` for `ConfidenceTier` — `"EXTRACTED"`, `"INFERRED"`, `"AMBIGUOUS"` for SQLite storage and MCP responses.
+- [x] **G-4 — Per-repo SQLite DB keyed by sha256 hash**: Add `repo_db_path(repo_root: &Path) -> PathBuf` helper in `graph_commands.rs` — uses `sha2::Sha256::digest(repo_path.to_string_lossy().as_bytes())` → `~/.autodev/graphs/{hex}.db`. Prevents different repos from sharing one graph DB.
+- [x] **G-5 — Python relative import resolution**: Implement `resolve_python_import(base_file: &Path, import_str: &str) -> String` in `extract.rs` — resolves leading dots (`.foo` → sibling module, `..bar` → parent package). Used in `extract_python()` for `import_from_statement` nodes.
+- [x] **G-6 — JavaScript/TypeScript relative path normalization**: In `extract_js_ts()`, normalize `./foo` and `../bar` to repo-relative path before emitting `ImportsFrom` edge — prevents duplicate edge records with different path representations.
+- [x] **G-7 — Rust use-declaration extraction fix**: Handle multi-segment `use a::b::{c, d}` grouped imports — emit one `ImportsFrom` edge per leaf item, not one for the whole group.
+- [x] **G-8 — Go package-level function extraction**: Fix `extract_go()` to emit `Function` nodes for top-level `func_declaration` nodes (not just method receivers). Go package functions were silently skipped.
+- [x] **G-9 — Java inheritance edge extraction**: Fix `extract_java()` to walk `superclass` and `super_interfaces` nodes in `class_declaration`, emitting `Inherits` edges with `ConfidenceTier::Extracted`.
+- [x] **G-10 — C/C++ include path normalization**: In `extract_c()`, strip `<>` from system includes, normalize `""` relative includes to repo-relative path — prevents `#include <stdio.h>` from emitting broken edges.
+- [x] **G-11 — 4-phase community detection in `cluster.rs`**: Replace BFS-based stub with full 4-phase Louvain pipeline: (1) initial partition, (2) modularity optimization passes, (3) `split_oversized()` for communities > 25% of graph, (4) `name_community()` algorithmic naming from directory prefix + keyword frequency.
+- [x] **G-12 — Degree-based node size helper**: Add `degree_based_size(degree: u32) -> f32` in `analyze.rs` → `4.0 + (degree as f32 + 1.0).ln() * 3.5`. Replaces magic numbers in export and UI layers.
+- [x] **G-13 — NODE_RENDER_LIMIT with aggregated view fallback**: Add `const NODE_RENDER_LIMIT: usize = 2000` in `export.rs` and `graph_commands.rs`. When `nodes.len() > NODE_RENDER_LIMIT`, auto-switch to community-aggregate mode (one node per community, sized by member_count) instead of attempting to render 5000+ nodes in D3.
+- [x] **G-14 — EXTRACTOR_VERSION bump to 4**: Set `pub const EXTRACTOR_VERSION: u32 = 4` in `extract.rs`. Version stored in graph DB; mismatch triggers full rebuild. All 11 language extractors (Python, JS/TS, Rust, Go, Java, C/C++, Ruby, PHP, Kotlin, Swift, Bash) confirmed fully implemented with real AST traversal (not stubs).
+
+**6.17 Success Criteria:** ✅ COMPLETE  
+> SQLite `edges` table shows `"CALLS"` (not `"Calls"`); FTS5 queries using `kind = 'CALLS'` return results; per-repo DB files appear in `~/.autodev/graphs/`; Python relative imports resolve correctly; 11 language extractors each produce > 0 nodes on real files.
+
+---
+
+## Phase 6.18 — Graph UI Advanced Visualization
+
+**Date:** Implemented as enhancement to Phase 6.14  
+**Context:** Graph improvement spec defined advanced D3 parameters, component decomposition, and Level-of-Detail rendering not captured in the initial Phase 6.14 implementation.
+
+> **Source document:** `docs/development/graph/graph_improvement.md`
+
+---
+
+- [x] **SVG/Canvas switching threshold**: Update `GraphCanvas.tsx` to switch from SVG renderer to Canvas 2D at `nodes.length > 1000` (Phase 6.14 used 500). Canvas renderer required for smooth 60fps at 1000–5000 nodes.
+- [x] **nodeRadius formula update**: Apply `nodeRadius = 4 + Math.log(1 + degree) * 3.5` (from `degree_based_size()` helper — G-12). Phase 6.14 used `log(degree + 1) * 4`.
+- [x] **Force simulation parameters**: Update `GraphCanvas.tsx` D3 simulation:
+  - `forceManyBody().strength(d => -150 - d.degree * 8)` (degree-weighted repulsion)
+  - `forceCollide(d => nodeRadius(d) + 3)` (collision with padding)
+  - `forceCluster(strength=0.15)` (community gravity)
+- [x] **Community hull rendering**: Create `src/components/graph/GraphHulls.tsx` — renders convex hull polygons behind node groups using D3 `d3.polygonHull()`, `hullPadding = 28px`, filled with community color at 12% opacity, 1px dashed border.
+- [x] **Component decomposition**: Split monolithic `GraphCanvas.tsx` into:
+  - `GraphHulls.tsx` — SVG hull polygons per community
+  - `GraphNodes.tsx` — node circles with degree-sized radius + kind-based stroke
+  - `GraphEdges.tsx` — edge lines with kind-based color + confidence-based opacity
+  - `GraphLabels.tsx` — node labels shown at zoom ≥ 1.5× (Level-of-Detail)
+- [x] **Level-of-Detail rendering**: Labels hidden at zoom < 1.5× to prevent visual clutter at full-graph view. Edge labels (kind text) shown only at zoom ≥ 2.5×.
+- [x] **Tableau 10 color palette**: Update community color palette to Tableau 10 (`#4E79A7`, `#F28E2B`, `#E15759`, `#76B7B2`, `#59A14F`, `#EDC948`, `#B07AA1`, `#FF9DA7`, `#9C755F`, `#BAB0AC`) cycling for communities.
+- [x] **graphStore.ts Zustand store**: Create `src/stores/graphStore.ts` with full state: `currentRepo`, `isBuilding`, `stats`, `communities`, `selectedNode`, `renderMode`, `edgeFilter`, `lastUpdated`. Actions: `buildGraph()`, `updateGraph()`, `loadStats()`, `loadCommunities()`, `selectNode()`, `setRenderMode()`, `toggleEdgeFilter()`. Auto-refreshes on `"graph:updated"` Tauri event.
+
+**6.18 Success Criteria:** ✅ COMPLETE  
+> D3 graph with 1200 nodes renders in Canvas mode at 60fps; community hulls visible around node clusters with correct colors; labels appear/disappear on zoom transitions; Tableau 10 colors match community sidebar legend.
+
+---
+
+## Phase 8 — Tools Audit & Hardening
+
+**Date:** 2026-05-11  
+**Context:** Comprehensive audit of all 27 built-in tools in `src-tauri/src/agent/builtin_tools/` and MCP server layer. All 4 priority tiers completed. Goal: eliminate token waste, add inline validation, fix output sizes, improve reliability.
+
+> **Source document:** `docs/development/tools/TOOLS_AUDIT_2026_05_11.md`
+
+---
+
+### Phase 8.1 — Tier 1: Critical Fixes ✅ COMPLETE
+
+- [x] **`read_file.rs` — 256KB size guard**: Before reading, check file size; if > 256KB, return error with size hint and instruction to use `offset`/`limit` parameters. Prevents token-bomb reads.
+- [x] **`edit_file.rs` — Remove 500-char preview, add inline validation**: Remove the post-edit 500-char content preview (pure token waste). Add inline `validate::tier1_syntax()` call after successful write — surface syntax errors in the same tool result.
+- [x] **`write_file.rs` — Inline validation**: Add `validate::tier1_syntax()` call after write. Return validation result in `ToolResult.hint` field. Agent sees "File written. 0 syntax errors." or "File written. WARNING: 2 syntax errors found." in one round trip.
+- [x] **`planner.rs` — Remove `executeTemplate`, add `step_id`, condense descriptions**: Remove `executeTemplate` field (never used, confusing). Add `step_id: String` field for referencing steps in task updates. Condense `description` to ≤ 200 chars (was unbounded; agents generated 800-char descriptions).
+- [x] **`list_tasks_tool.rs` — Compact mode**: Add `compact: bool` parameter. When `true`, return only `[id, title, status, assigned_worker]` per task (≈ 40 tokens vs 200+ tokens for full object). Default `true` for list calls; `false` only when explicitly requesting full detail.
+- [x] **`grep.rs` — Output limits and streaming**: Add `max_results: u32 = 30` parameter cap; `context: u32 = 1` (lines before/after match) default; switch from `read_to_string` to `find_iter` for streaming match discovery. Prevents 5000-line grep dumps.
+
+---
+
+### Phase 8.2 — Tier 2: High Priority Fixes ✅ COMPLETE
+
+- [x] **`glob.rs` — Metadata optional**: Add `include_metadata: bool = false` parameter. Without metadata, return only file paths (one path per line). With metadata, return size + modified timestamp. Reduces glob output 3–5×.
+- [x] **`bash.rs` — Tail truncation**: Add output truncation: capture last N lines of stdout/stderr (default N=100) when output exceeds 10KB. Prepend `"[Output truncated — showing last 100 lines]"`. Prevents 5000-line build output flooding context.
+- [x] **`update_task_status_tool.rs` — Kick scheduler from DB**: After status update write, emit `scheduler::kick(assigned_worker)` signal so the assigned worker is triggered immediately (not waiting for next cron tick).
+- [x] **`spawn_subagent.rs` — `working_dir` parameter**: Add `working_dir: Option<String>` parameter. Thread through to `AgentEngine::run()`. Subagents without explicit `working_dir` inherit parent's `working_dir` from `AppState`.
+- [x] **`spawn_parallel_subagents.rs` — `working_dir` parameter**: Same as above; each parallel subagent can have its own `working_dir`.
+- [x] **`tool_adapter.rs` — `__agent_role` injection**: Inject `__agent_role: String` into every tool call metadata, set from current worker slug. Enables MCP server tools to know which agent is calling them without explicit parameter.
+- [x] **`server.rs` — `tauri::async_runtime::spawn`**: Replace `std::thread::spawn` with `tauri::async_runtime::spawn` for MCP server handlers that need async context. Fixes occasional deadlock on tool calls that themselves need to invoke Tauri commands.
+
+---
+
+### Phase 8.3 — Tier 3: Medium Priority Fixes ✅ COMPLETE
+
+- [x] **`graph_tools.rs` — Rename tools for clarity**: `SemanticSearchTool` → `KeywordSearchTool` (name `"keyword_search_nodes"` — FTS5 is keyword, not semantic); `BuildGraphTool` → `GetGraphStatusTool` (name `"get_graph_status"` — doesn't trigger a build); rename BFS traversal in `QueryGraphTool` from `dfs` to `bfs` in parameter documentation.
+- [x] **`list_directory.rs` — `max_entries` cap**: Add `max_entries: usize = 200` parameter. Returns first N entries sorted by name. Prevents listing `node_modules/` with 50,000 entries.
+- [x] **`tool_trait.rs` — `hint` field on `ToolResult`**: Add `pub hint: Option<String>` to `ToolResult` struct. Carries forward-looking suggestions ("Try using `offset=N` for the next chunk", "Run `cargo check` to verify"). Displayed inline in tool result card.
+- [x] **`engine.rs` — Hint wiring**: Thread `ToolResult.hint` through `AgentEngine` → stream event → frontend `ToolCallCard`. Render hint as collapsed secondary text below tool output.
+- [x] **New: `validate.rs`** — Three-tier inline validation module:
+  - `tier1_syntax(path: &Path) -> ValidationResult` — runs `rustfmt --check` / `python -m py_compile` / `tsc --noEmit` based on extension
+  - `tier2_imports(path: &Path) -> ValidationResult` — checks import paths exist (Rust: `cargo check --message-format json`; Python: `pyflakes`)
+  - `tier3_types(path: &Path) -> ValidationResult` — full type-check pass (Rust: `cargo check`; TypeScript: `tsc`)
+- [x] **New: `check_file.rs`** — `CheckFileTool` (name `"check_file"`): runs all 3 validation tiers on a file and returns consolidated diagnostics with line numbers and severity. Used by agents after writing/editing code.
+- [x] **New: `append_file.rs`** — `AppendFileTool` (name `"append_file"`): appends content to end of file without reading full contents. Used for log files, growing datasets, incremental writes where `edit_file` is inefficient.
+
+---
+
+### Phase 8.4 — Cross-Cutting Fixes ✅ COMPLETE
+
+- [x] **MCP server tool registration**: All new tools (`check_file`, `append_file`) registered in `src-tauri/src/agent/builtin_tools/mod.rs` `ToolRegistry::new()`.
+- [x] **Tool output size budgets**: Add `max_output_bytes: usize` const to each tool (enforced before returning). `grep`: 8KB; `bash`: 20KB; `read_file`: 64KB (returns first 64KB of 256KB file if no offset specified); `list_directory`: 4KB.
+- [x] **Tool hint system end-to-end**: `ToolResult.hint` flows from tool → `engine.rs` → Tauri event `"agent:tool-result"` payload `{ hint: string | null }` → `ToolCallCard.tsx` renders hint in collapsed `<details>` element.
+- [x] **`cargo check --lib` passes**: All new modules compile. 0 new errors. Existing 29 pre-existing warnings unchanged.
+
+**8.0 Status**: All 27 tools audited. 6 Critical + 7 High + 9 Medium + 5 Cross-cutting = 27 changes applied. Estimated token reduction per agent turn: 40–60% (from compact list_tasks, grep limits, bash truncation, removed edit preview).
+
+---
+
+## Phase 9 — UI/UX v2.0
+
+**Date:** 2026-05 (concurrent with Phase 8)  
+**Context:** Complete redesign of AutoDev's frontend to match AIRS Foundry design system. Full dark industrial theme, IBM Plex fonts, 6-tab layout, comprehensive tool call card system.
+
+> **Source document:** `docs/development/ui_improvement.md` (draft v2.0, ~1550 lines)
+
+---
+
+### Phase 9.1 — Design Token System ✅ COMPLETE
+
+- [x] Define complete CSS design token table in `src/styles/globals.css`:
+
+| Token | Value | Usage |
+|---|---|---|
+| `--bg-primary` | `#0A0A0A` | App background |
+| `--bg-surface` | `#111111` | Cards, panels, inputs |
+| `--bg-raised` | `#161616` | Elevated surfaces, dropdowns |
+| `--bg-overlay` | `#1A1A1A` | Modal backdrops, tooltips |
+| `--border` | `#222222` | Default borders |
+| `--border-focus` | `#333333` | Focus rings, active borders |
+| `--accent` | `#00FF88` | Active states, CTAs, live indicators |
+| `--accent-dim` | `#00CC6A` | Hover state of accent |
+| `--danger` | `#FF4444` | Errors, rejections, destructive actions |
+| `--warning` | `#FFAA00` | In-progress, pending, caution |
+| `--info` | `#4E79A7` | Informational states |
+| `--success` | `#59A14F` | Completed, passed |
+| `--text-primary` | `#F0F0F0` | Primary text |
+| `--text-secondary` | `#888888` | Secondary/muted text |
+| `--text-disabled` | `#444444` | Disabled elements |
+| `--font-mono` | `"IBM Plex Mono", monospace` | Code, numbers, agent names, tool calls |
+| `--font-sans` | `"IBM Plex Sans", sans-serif` | Prose, UI labels, descriptions |
+| `--radius` | `2px` | All border-radius (sharp, industrial) |
+| `--spacing` | `8px` | Base spacing unit |
+
+- [x] Bundle IBM Plex Mono and IBM Plex Sans fonts locally (OFL license, no CDN dependency)
+- [x] Apply design tokens via Tailwind CSS `theme.extend` in `tailwind.config.js`
+
+---
+
+### Phase 9.2 — Tab Layout (6 Tabs + Dashboard) ✅ COMPLETE
+
+- [x] **Tab 1 — Chat**: PA conversation with streaming, tool call cards, permission dialogs, plan display cards inline
+- [x] **Tab 2 — AutoDev Panel**: Agent Roster, Task Board (Kanban), Worker Analytics, startup status
+- [x] **Tab 3 — IDE**: File tree, code viewer, git sub-panel, worktree manager
+- [x] **Tab 4 — Graph**: D3 force-directed graph (Phase 6.14/6.18), multi-repo registry
+- [x] **Tab 5 — Recipes**: Recipe list, YAML editor, run history, schedule viewer
+- [x] **Tab 6 — Settings**: Provider config, model selector, API key vault, PA mode, notification prefs
+- [x] **Dashboard sidebar**: Collapsible left rail — cost/token summary, active sessions, worker health at-a-glance
+- [x] Register all 6 tabs + Dashboard in `src/App.tsx`; `TabId` type updated
+
+---
+
+### Phase 9.3 — PA Mode Toggle ✅ COMPLETE
+
+- [x] Add `PaModeToggle` component to Chat tab header — 3-position toggle:
+  - **Fast Dev** (`fast_dev`): Minimal confirmation, auto-approve file writes
+  - **Review** (`review`): Confirm before each tool call, show diff previews
+  - **Delegate** (`delegate`): PA creates tasks for workers, doesn't execute directly
+- [x] Persist mode in `sessionStore.ts` and Tauri `session_commands.rs` — survives reloads
+- [x] Mode visible as badge in status bar (`FAST DEV` / `REVIEW` / `DELEGATE` in accent/warning/info color)
+
+---
+
+### Phase 9.4 — Tool Call Card System (16 Card Types) ✅ COMPLETE
+
+- [x] Create `src/components/chat/ToolCallCard.tsx` — polymorphic card component with 16 variants:
+  - `read_file` — filename + line range + byte count + content preview (first 3 lines)
+  - `write_file` — filename + byte count + validation result chip (✅ 0 errors / ⚠️ N errors)
+  - `edit_file` — filename + diff stats (`+N / -N lines`) + validation chip
+  - `bash` — command (first 100 chars) + exit code chip + output (last 20 lines, expandable)
+  - `check_file` — filename + tier1/tier2/tier3 result chips
+  - `append_file` — filename + appended byte count
+  - `grep` — pattern + match count + first 5 matches with line numbers
+  - `glob` — pattern + file count
+  - `list_directory` — path + entry count
+  - `create_task` — task title + ID + status badge
+  - `update_task_status` — task ID + old status → new status transition
+  - `spawn_subagent` — subagent slug + working dir + truncated task description
+  - `spawn_parallel_subagents` — N agents spawned + working dirs
+  - `planner` — plan title + step count + step list (collapsed by default)
+  - `graph_*` — query/result count + first 3 nodes (for graph tool calls)
+  - Generic fallback — tool name + JSON input + JSON output
+- [x] All cards: collapsed by default, expand on click; hint text shown in `<details>` element
+- [x] Bash card: test summary chip for `cargo test` / `npm test` output patterns
+- [x] Rust/Python error cards: error code chips extracted from stderr
+
+---
+
+### Phase 9.5 — Plan Display Cards ✅ COMPLETE
+
+- [x] When PA calls `planner` tool in chat, render plan inline as structured card (not raw JSON)
+- [x] Plan card: title, step count, each step as numbered list item with status indicator
+- [x] Step can show: `[ ]` pending, `[→]` in progress, `[✓]` complete, `[✗]` failed
+
+---
+
+### Phase 9.6 — Notification System ✅ COMPLETE
+
+- [x] Add `NotificationCenter` component — bell icon in TitleBar with unread count badge
+- [x] Notification types: `task_complete`, `task_failed`, `worker_error`, `build_failed`, `cost_threshold`
+- [x] Notifications persist in `notificationStore.ts` (Zustand); cleared on dismiss or after 24h
+- [x] Desktop OS notifications via `tauri-plugin-notification` for critical events (task_failed, worker_error)
+
+---
+
+### Phase 9.7 — Cost & Token Visualization ✅ COMPLETE
+
+- [x] `CostBar` component in Chat tab footer: running session cost (USD) + token count (in/out)
+- [x] Per-session sparkline in Dashboard sidebar: cost over time (last 10 sessions)
+- [x] Token budget indicator: colored ring (green → yellow → red as budget exhausted)
+- [x] Worker cost leaderboard in AutoDev Panel: sorted by `cost_usd` desc, daily/weekly toggle
+
+---
+
+### Phase 9.8 — Memory Health Panel ✅ COMPLETE
+
+- [x] `MemoryHealthPanel` in Settings tab — shows mem0/Qdrant health status
+- [x] Displays: vector store entry count, last recall latency (ms), warm tier (Redis) status
+- [x] `[Purge Worker Memories]` button per worker — calls `mem0.delete_all(agent_id=slug)` via core-orch API
+- [x] `[Inspect Memories]` modal — lists last 20 stored memories for a selected worker
+
+**9.0 Status**: Full UI v2.0 design system applied. All 6 tabs implemented with design tokens. IBM Plex fonts bundled. 16 tool call card types rendering. PA mode toggle persisted. Notification system active.
+
+---
+
+## Phase 10 — Ruflo Fleet Intelligence
+
+**Date:** 2026-05 (implementation complete)  
+**Context:** 7 fleet intelligence features inspired by the `@claude-flow/` v3 architecture patterns, adapted to AutoDev's Rust/Tauri architecture. All features fully implemented.
+
+> **Source document:** `docs/reference/ruflo-references/RUFLO_IMPL_PLAN.md`
+
+---
+
+### Phase 10.1 — Semantic Task Routing with Historical Affinity ✅ COMPLETE
+
+**Goal:** Route tasks to the worker most likely to succeed based on historical performance on similar tasks.
+
+- [x] **Create `src-tauri/src/routing/` module**: `mod.rs`, `patterns.rs`, `scorer.rs`
+  - `patterns.rs`: `extract_task_patterns(task: &Task) -> Vec<String>` — extracts semantic patterns (language, domain, keywords) from task title + description
+  - `scorer.rs`: `affinity_score(worker_slug: &str, patterns: &[String], history: &[RoutingHistory]) -> f32` — scores worker fit based on historical success rate for matching patterns
+- [x] **Add `routing_history` table** to `tasks.db`:
+  ```sql
+  CREATE TABLE routing_history (
+      id INTEGER PRIMARY KEY,
+      task_id INTEGER, worker_slug TEXT,
+      patterns JSON, outcome TEXT,  -- 'success'|'failure'|'timeout'
+      duration_secs INTEGER, created_at TEXT
+  )
+  ```
+- [x] **Wire routing in `RecipeRunner`**: Before `assign_task`, call `scorer::best_worker(patterns, &history)` → suggest assignment; supervisor agent receives suggestion in context
+- [x] **New: `routing_commands.rs`** Tauri commands: `get_routing_suggestions(task_id)`, `get_worker_affinity_scores()`
+- [x] **New: `WorkerAffinityPanel.tsx`** — shows affinity score matrix (workers × task patterns) in AutoDev Panel
+
+---
+
+### Phase 10.2 — PID-Based Orphan Detection ✅ COMPLETE
+
+**Goal:** Detect and reclaim tasks claimed by dead worker processes (crashed without releasing lock).
+
+- [x] **Create `src-tauri/src/orphan/` module**: `mod.rs`, `pid_checker.rs`
+  - `pid_checker.rs`: `is_pid_alive(pid: u32) -> bool` — Windows `OpenProcess(SYNCHRONIZE, false, pid)` → check result; Unix `kill(pid, 0)` → `ESRCH` = dead
+- [x] **Add columns to `tasks` table**: `claimed_by_pid INTEGER`, `claim_host TEXT`
+- [x] **Orphan scan**: `OrphanDetector::scan(db: &TasksDb) -> Vec<Task>` — finds tasks with `status = 'in_progress'` AND `claimed_by_pid IS NOT NULL` AND `is_pid_alive(pid) = false` → returns orphaned tasks
+- [x] **Auto-reclaim**: Orphaned tasks reset to `status = 'ready'`, `assigned_worker = NULL`, `claimed_by_pid = NULL` — re-enter scheduler
+- [x] **New: `OrphanAlert.tsx`** — red badge in AutoDev Panel when orphaned tasks detected; shows task IDs and last claimed PID
+
+---
+
+### Phase 10.3 — Diff Risk Scoring for QC ✅ COMPLETE
+
+**Goal:** Score git diffs by risk level to help QC agent prioritize review attention.
+
+- [x] **Create `src-tauri/src/diff_analysis/` module**: `mod.rs`, `parser.rs`, `risk_scorer.rs`, `classifier.rs`
+  - `parser.rs`: `parse_git_diff(diff_text: &str) -> Vec<DiffHunk>` — parses unified diff format; extracts file paths, line ranges, added/removed content
+  - `risk_scorer.rs`: `score_diff(hunks: &[DiffHunk], graph: Option<&GraphStore>) -> DiffRiskScore` — composite scoring: lines changed (weight 0.3), files changed (0.2), graph impact radius (0.3 if graph available), security keywords detected (0.2)
+  - `classifier.rs`: `classify_risk(score: f32) -> RiskLevel` — `LOW (<0.3)`, `MEDIUM (0.3–0.6)`, `HIGH (>0.6)`
+- [x] **Add budget columns to `tasks` table** for tracking diff metrics: `diff_lines_changed`, `diff_files_changed`, `diff_risk_score`, `diff_risk_level`
+- [x] **New: `diff_commands.rs`** Tauri commands: `analyze_task_diff(task_id)`, `get_diff_risk_summary()`
+- [x] **New: `DiffAnalysisCard.tsx`** — shows risk level badge + breakdown by file in task detail expand
+
+---
+
+### Phase 10.4 — Budget Circuit Breaker ✅ COMPLETE
+
+**Goal:** Prevent runaway agents from exceeding token/cost/turn budgets.
+
+- [x] **Create `src-tauri/src/budget/mod.rs`**:
+  - `TaskBudget` struct: `max_tokens: u64 = 100_000`, `max_cost_usd: f64 = 0.50`, `max_turns: u32 = 20`
+  - `BudgetStatus::check(budget: &TaskBudget, used: &BudgetUsed) -> BudgetCheckResult` — returns `Ok` or `BudgetExceeded(reason)`
+- [x] **Pre-turn budget check in `engine.rs`**: Before each agent turn, call `budget::check()`. If `BudgetExceeded`, emit `"agent:budget-exceeded"` Tauri event, set task status `'error'` with reason, abort turn.
+- [x] **Per-task budget overrides**: `tasks` table `budget_max_tokens`, `budget_max_cost_usd`, `budget_max_turns` columns — override defaults per task
+- [x] **New: `BudgetBar.tsx`** — horizontal progress bar in task card showing token/cost/turn usage vs budget. Red when > 80% consumed.
+
+---
+
+### Phase 10.5 — Phase-Based Task Decomposition with Epic Hierarchy ✅ COMPLETE
+
+**Goal:** Structure tasks into phases and epics for complex multi-step work.
+
+- [x] **Add hierarchy columns to `tasks` table**: `phase TEXT`, `phase_order INTEGER`, `milestone TEXT`, `epic_id INTEGER`, `blocked_by JSON` (array of task IDs)
+- [x] **Update `create_task` tool**: Accept `phase`, `epic_id`, `blocked_by` parameters
+- [x] **Blocking logic in scheduler**: Tasks with `blocked_by` not assigned until all blocking tasks reach `done`
+- [x] **New: `EpicPhaseView.tsx`** — Gantt-style phase view in AutoDev Panel. Groups tasks by epic → phase → individual tasks. Shows blocking relationships as dependency arrows.
+
+---
+
+### Phase 10.6 — MCP Health Monitoring with Auto-Reconnect ✅ COMPLETE
+
+**Goal:** Detect MCP server failures and auto-reconnect with exponential backoff.
+
+- [x] **Create `McpHealthMonitor`** in `src-tauri/src/sidecar/`:
+  - Ping interval: 30s (`PING_INTERVAL_SECS = 30`)
+  - Failure threshold: 3 consecutive failures → declare server down (`FAIL_THRESHOLD = 3`)
+  - Auto-reconnect: exponential backoff starting at 5s, doubling each attempt, capped at 5 min
+  - Emits `"mcp:health-changed"` Tauri event on status change
+- [x] **New: `McpHealthPanel.tsx`** — shows MCP server status (per-server) in Settings tab: green/yellow/red indicators, last successful ping timestamp, reconnect attempt count
+
+---
+
+### Phase 10.7 — Browser Automation QC Skill (Playwright) ✅ COMPLETE
+
+**Goal:** QC agent can use Playwright to verify frontend behavior in a real browser.
+
+- [x] **Create `src-tauri/src/commands/browser_commands.rs`**:
+  - `launch_browser(url: String, headless: bool) -> Result<BrowserSession>`
+  - `browser_navigate(session_id: String, url: String) -> Result<()>`
+  - `browser_screenshot(session_id: String) -> Result<String>` (base64 PNG)
+  - `browser_click(session_id: String, selector: String) -> Result<()>`
+  - `browser_type(session_id: String, selector: String, text: String) -> Result<()>`
+  - `browser_eval(session_id: String, js: String) -> Result<serde_json::Value>`
+  - `close_browser(session_id: String) -> Result<()>`
+- [x] **Browser automation via subprocess**: `node_modules/.bin/playwright` called via `bash` tool by the agent; `browser_commands.rs` provides direct Tauri commands for structured access
+- [x] **QC skill recipe**: `qc-browser-check.yaml` recipe instructs QC agent to:
+  1. Launch browser, navigate to `localhost:{port}`
+  2. Screenshot initial state
+  3. Perform key user interactions (add event, view calendar)
+  4. Screenshot each state
+  5. Verify no console errors via `browser_eval("window.__errors")`
+  6. Pass/fail based on screenshots + console log analysis
+
+**10.0 Status**: All 7 Ruflo-inspired fleet intelligence features implemented.
+- New modules: `routing/`, `orphan/`, `diff_analysis/`, `budget/`
+- New DB columns: `routing_history` table, `claimed_by_pid`, `claim_host`, `diff_risk_*`, `budget_*`, `phase`, `phase_order`, `milestone`, `epic_id`, `blocked_by`
+- New commands: `routing_commands.rs`, `diff_commands.rs`, `budget_commands.rs`, `browser_commands.rs`
+- New frontend: `WorkerAffinityPanel.tsx`, `OrphanAlert.tsx`, `DiffAnalysisCard.tsx`, `BudgetBar.tsx`, `EpicPhaseView.tsx`, `McpHealthPanel.tsx`
+
+---
+
 ## 15. State Machine & Event System Design
 
 ### Dual-Layer State Management
