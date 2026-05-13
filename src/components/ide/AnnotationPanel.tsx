@@ -4,6 +4,7 @@
 
 import { useState } from 'react'
 import { useAnnotationStore, type Annotation } from '../../stores/annotationStore'
+import { useUiStore } from '../../stores/uiStore'
 import './Annotations.css'
 
 interface AnnotationPanelProps {
@@ -11,7 +12,10 @@ interface AnnotationPanelProps {
 }
 
 export function AnnotationPanel({ annotation }: AnnotationPanelProps) {
-  const { resolve, remove, setActive } = useAnnotationStore()
+  const resolve      = useAnnotationStore((s) => s.resolve)
+  const remove       = useAnnotationStore((s) => s.remove)
+  const setActive    = useAnnotationStore((s) => s.setActive)
+  const setActiveTab = useUiStore((s) => s.setActiveTab)
   const [resolveText, setResolveText] = useState('')
   const [resolving, setResolving]     = useState(false)
   const [showResolve, setShowResolve] = useState(false)
@@ -82,11 +86,35 @@ export function AnnotationPanel({ annotation }: AnnotationPanelProps) {
           <div className="ann-panel-prompt">{annotation.prompt}</div>
         </div>
 
-        {/* Response (if any) */}
-        {annotation.response && (
+        {/* PA response (populated after "Ask PA" completes) */}
+        {annotation.response ? (
           <div>
-            <div className="ann-panel-section-label">Response</div>
+            <div className="ann-panel-section-label">PA Response</div>
             <div className="ann-panel-response">{annotation.response}</div>
+          </div>
+        ) : annotation.source === 'user' && annotation.prompt && !annotation.taskId && annotation.status !== 'resolved' ? (
+          // Hint that the response appears in Chat tab
+          <div
+            style={{ fontSize: 10, color: 'var(--text-3)', fontStyle: 'italic', marginTop: 4 }}
+          >
+            Response will appear in the Chat tab and can be reviewed there.
+          </div>
+        ) : null}
+
+        {/* Fleet task link (populated after "Delegate to Fleet" dispatches work) */}
+        {annotation.taskId && (
+          <div>
+            <div className="ann-panel-section-label">Fleet Task</div>
+            <button
+              className="ann-panel-task-link"
+              title="Open AutoDev panel to view this task"
+              onClick={() => {
+                setActive(null)
+                setActiveTab('autodev')
+              }}
+            >
+              ◈ {annotation.taskId}
+            </button>
           </div>
         )}
 

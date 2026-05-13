@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from 'react'
 import Editor, { loader, type OnMount } from '@monaco-editor/react'
 import * as monaco from 'monaco-editor'
 import { useIdeStore } from '../../stores/ideStore'
-import { useAnnotationStore } from '../../stores/annotationStore'
+import { useAnnotationStore, type Annotation } from '../../stores/annotationStore'
 import { SelectionToolbar, type AnnotationIntent } from './SelectionToolbar'
 import { AnnotationModal } from './AnnotationModal'
 import { AnnotationPanel } from './AnnotationPanel'
@@ -31,6 +31,12 @@ interface Props {
   tabPath: string
 }
 
+// Stable empty array — must NOT be inline (`?? []`) inside a Zustand selector.
+// `?? []` creates a new reference on every render; Zustand uses Object.is to
+// compare selector results, so a new `[]` always looks "changed" and triggers
+// another render → infinite loop → "Maximum update depth exceeded".
+const EMPTY_ANNOTATIONS: Annotation[] = []
+
 export default function CodeViewer({ tabPath }: Props) {
   const tab = useIdeStore((s) => s.openTabs.find((t) => t.relativePath === tabPath))
   const editorRef      = useRef<Parameters<OnMount>[0] | null>(null)
@@ -43,7 +49,7 @@ export default function CodeViewer({ tabPath }: Props) {
   const [modalIntent,  setModalIntent]  = useState<AnnotationIntent | null>(null)
   const [editorReady,  setEditorReady]  = useState(false)
 
-  const annotations      = useAnnotationStore((s) => s.byFile[tabPath] ?? [])
+  const annotations      = useAnnotationStore((s) => s.byFile[tabPath] ?? EMPTY_ANNOTATIONS)
   const activeId         = useAnnotationStore((s) => s.activeId)
   const activeAnnotation = useAnnotationStore((s) => {
     if (!s.activeId) return null
@@ -53,12 +59,12 @@ export default function CodeViewer({ tabPath }: Props) {
     }
     return null
   })
-  const { loadForFile } = useAnnotationStore()
+  const loadForFile = useAnnotationStore((s) => s.loadForFile)
 
   // Load annotations for the current file
   useEffect(() => {
     if (tabPath) void loadForFile(tabPath)
-  }, [tabPath])
+  }, [tabPath, loadForFile])
 
   // Apply/refresh gutter decorations whenever annotations or editor readiness changes
   useEffect(() => {

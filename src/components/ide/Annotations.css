@@ -392,3 +392,24 @@
 .ann-panel-btn:hover           { border-color: var(--text-3); color: var(--text-2); }
 .ann-panel-btn--resolve:hover  { border-color: var(--accent); color: var(--accent); }
 .ann-panel-btn--delete:hover   { border-color: var(--danger); color: var(--danger); }
+
+/* Task link button — shown when annotation has been delegated to fleet */
+.ann-panel-task-link {
+  display:       inline-flex;
+  align-items:   center;
+  gap:           4px;
+  background:    none;
+  border:        1px solid var(--border-1);
+  border-radius: 2px;
+  padding:       3px 10px;
+  font-family:   var(--font-mono);
+  font-size:     10px;
+  color:         var(--accent);
+  cursor:        pointer;
+  transition:    border-color 0.12s, background 0.12s;
+  letter-spacing: 0.03em;
+}
+.ann-panel-task-link:hover {
+  border-color: var(--accent);
+  background:   color-mix(in srgb, var(--accent) 10%, transparent);
+}

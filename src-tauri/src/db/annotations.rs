@@ -166,6 +166,14 @@ impl AnnotationsDb {
         Ok(())
     }
 
+    pub fn update_task_id(&self, id: &str, task_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE annotations SET task_id = ?1 WHERE id = ?2",
+            params![task_id, id],
+        ).map_err(|e| AutoDevError::Agent(format!("update_task_id: {e}")))?;
+        Ok(())
+    }
+
     pub fn update_status(&self, id: &str, status: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE annotations SET status = ?1 WHERE id = ?2",

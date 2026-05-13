@@ -23,11 +23,19 @@ interface ContextMenuState {
 // ── FileTree root ─────────────────────────────────────────────────────────────
 
 export default function FileTree() {
-  const {
-    rootTree, expandedDirs, treeLoading, treeError,
-    refreshTree, toggleDir, openFile,
-    activeTab, createFile, createDirectory, deleteFile, renameFile, moveFile,
-  } = useIdeStore()
+  const rootTree        = useIdeStore((s) => s.rootTree)
+  const expandedDirs    = useIdeStore((s) => s.expandedDirs)
+  const treeLoading     = useIdeStore((s) => s.treeLoading)
+  const treeError       = useIdeStore((s) => s.treeError)
+  const activeTab       = useIdeStore((s) => s.activeTab)
+  const refreshTree     = useIdeStore((s) => s.refreshTree)
+  const toggleDir       = useIdeStore((s) => s.toggleDir)
+  const openFile        = useIdeStore((s) => s.openFile)
+  const createFile      = useIdeStore((s) => s.createFile)
+  const createDirectory = useIdeStore((s) => s.createDirectory)
+  const deleteFile      = useIdeStore((s) => s.deleteFile)
+  const renameFile      = useIdeStore((s) => s.renameFile)
+  const moveFile        = useIdeStore((s) => s.moveFile)
 
   const { workspaceDir } = useWorkspaceStore()
 

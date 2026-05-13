@@ -31,7 +31,8 @@ import IdeStatusBar  from '../components/ide/IdeStatusBar'
 import GitPanel      from '../components/git/GitPanel'
 
 export default function IDETab() {
-  const { workspaceDir, loadWorkspaceDir } = useWorkspaceStore()
+  const workspaceDir     = useWorkspaceStore((s) => s.workspaceDir)
+  const loadWorkspaceDir = useWorkspaceStore((s) => s.loadWorkspaceDir)
   const init          = useIdeStore((s) => s.init)
   const activeTab     = useIdeStore((s) => s.activeTab)
   const openTabs      = useIdeStore((s) => s.openTabs)

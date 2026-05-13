@@ -38,12 +38,17 @@ interface AnnotationStore {
   // which annotation is currently open in the panel
   activeId: string | null
 
-  loadForFile: (filePath: string) => Promise<void>
-  create: (input: CreateAnnotationInput) => Promise<Annotation>
-  resolve: (id: string, response?: string) => Promise<void>
-  remove: (id: string) => Promise<void>
-  setActive: (id: string | null) => void
-  getForFile: (filePath: string) => Annotation[]
+  loadForFile:  (filePath: string) => Promise<void>
+  create:       (input: CreateAnnotationInput) => Promise<Annotation>
+  /** Write PA response text without resolving — annotation stays 'open'. */
+  setResponse:  (id: string, response: string) => Promise<void>
+  /** Link a fleet task_id to an annotation after Delegate dispatch. */
+  setTaskId:    (id: string, taskId: string) => Promise<void>
+  /** Mark as resolved (optionally with a resolution note). */
+  resolve:      (id: string, response?: string) => Promise<void>
+  remove:       (id: string) => Promise<void>
+  setActive:    (id: string | null) => void
+  getForFile:   (filePath: string) => Annotation[]
 }
 
 export const useAnnotationStore = create<AnnotationStore>((set, get) => ({
@@ -80,6 +85,32 @@ export const useAnnotationStore = create<AnnotationStore>((set, get) => ({
       return { byFile: { ...s.byFile, [input.filePath]: [...existing, annotation] } }
     })
     return annotation
+  },
+
+  setResponse: async (id: string, response: string) => {
+    await invoke('update_annotation_response', { id, response })
+    set((s) => {
+      const updated: Record<string, Annotation[]> = {}
+      for (const [path, list] of Object.entries(s.byFile)) {
+        updated[path] = list.map((a) =>
+          a.id === id ? { ...a, response } : a
+        )
+      }
+      return { byFile: updated }
+    })
+  },
+
+  setTaskId: async (id: string, taskId: string) => {
+    await invoke('update_annotation_task_id', { id, taskId })
+    set((s) => {
+      const updated: Record<string, Annotation[]> = {}
+      for (const [path, list] of Object.entries(s.byFile)) {
+        updated[path] = list.map((a) =>
+          a.id === id ? { ...a, taskId } : a
+        )
+      }
+      return { byFile: updated }
+    })
   },
 
   resolve: async (id: string, response?: string) => {
