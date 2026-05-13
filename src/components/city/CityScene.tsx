@@ -1,22 +1,27 @@
 export function CityLighting() {
   return (
     <>
-      <ambientLight intensity={0.15} color="#101828" />
+      {/* Ambient: bright enough to see unlit geometry */}
+      <ambientLight intensity={0.7} color="#8899cc" />
+      {/* Primary directional — angled sun */}
       <directionalLight
-        position={[50, 80, 30]}
-        intensity={1.2}
-        color="#E8F0FF"
+        position={[90, 120, 60]}
+        intensity={2.0}
+        color="#ffffff"
         castShadow
         shadow-mapSize-width={2048}
         shadow-mapSize-height={2048}
-        shadow-camera-far={400}
-        shadow-camera-left={-150}
-        shadow-camera-right={150}
-        shadow-camera-top={150}
-        shadow-camera-bottom={-150}
+        shadow-camera-far={500}
+        shadow-camera-left={-200}
+        shadow-camera-right={200}
+        shadow-camera-top={200}
+        shadow-camera-bottom={-200}
       />
-      <hemisphereLight args={['#1a2240', '#0a0a0a', 0.5]} />
-      <fog attach="fog" args={['#050508', 100, 320]} />
+      {/* Fill light from opposite side */}
+      <directionalLight position={[-60, 40, -60]} intensity={0.5} color="#4466aa" />
+      {/* Hemisphere sky/ground */}
+      <hemisphereLight args={['#2a3a6a', '#1a1a2a', 0.8]} />
+      <fog attach="fog" args={['#050508', 120, 380]} />
     </>
   )
 }

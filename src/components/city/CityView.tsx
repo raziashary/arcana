@@ -19,7 +19,6 @@ import { BuildingRaycaster } from './interaction/BuildingRaycaster'
 import { BuildingContextMenu } from './interaction/BuildingContextMenu'
 import { ImpactOverlay } from './impact/ImpactOverlay'
 import { ImpactPanel } from './impact/ImpactPanel'
-import { CityPostProcessing } from './CityPostProcessing'
 import { ErrorBoundary } from '../ErrorBoundary'
 
 const CITY_SIZE = 180
@@ -95,26 +94,24 @@ export function CityView() {
       <ErrorBoundary label="3D City">
       <Canvas
         shadows
+        frameloop="always"
         camera={{
           fov: 45, near: 0.1, far: 2000,
-          // Start with camera looking at city centre so first frame isn't black
           position: [CITY_SIZE / 2, CITY_SIZE * 0.55, CITY_SIZE * 0.85],
         }}
         gl={{ antialias: true, alpha: false }}
         style={{ background: '#050508' }}
+        onCreated={({ camera }) => {
+          // Ensure camera looks at city centre from frame 1
+          camera.lookAt(CITY_SIZE / 2, 0, CITY_SIZE / 2)
+        }}
         onPointerMissed={() => { setSelectedNode(null); setContextMenu(null) }}
       >
-        <Suspense fallback={null}>
           <CityCamera citySize={CITY_SIZE} />
           <CityLighting />
           <CityGround size={CITY_SIZE} />
 
-          {/* Districts (community ground planes) */}
-          {layout.districts.map(district => (
-            <DistrictMesh key={district.communityId} district={district} />
-          ))}
-
-          {/* Regular buildings (instanced for performance) */}
+          {/* Regular buildings (instanced for performance) — no Suspense needed */}
           <BuildingInstances
             nodes={regularNodes}
             layout={layout}
@@ -123,22 +120,7 @@ export function CityView() {
             impactData={impactData}
           />
 
-          {/* God node landmarks (individual meshes) */}
-          {godNodes.map(node => {
-            const bl = layout.buildingPositions.get(node.id)
-            if (!bl) return null
-            return (
-              <GodNodeBuilding
-                key={node.id}
-                node={node}
-                layout={bl}
-                isSelected={selectedNodeId === node.id}
-                impactData={impactData}
-              />
-            )
-          })}
-
-          {/* Worker-locked buildings overlay */}
+          {/* Worker-locked buildings overlay — no Suspense needed */}
           {graphData.nodes
             .filter(n => n.kind === 'worker_locked')
             .map(node => {
@@ -189,11 +171,31 @@ export function CityView() {
             />
           )}
 
-          {/* Post-processing (bloom, SSAO, vignette) */}
-          <CityPostProcessing />
+          {/* Districts — use drei <Text> which suspends for font load; individual boundaries
+              so one suspended label never blanks the whole scene */}
+          {layout.districts.map(district => (
+            <Suspense key={district.communityId} fallback={null}>
+              <DistrictMesh district={district} />
+            </Suspense>
+          ))}
+
+          {/* God node landmarks — also use <Text>; same granular Suspense pattern */}
+          {godNodes.map(node => {
+            const bl = layout.buildingPositions.get(node.id)
+            if (!bl) return null
+            return (
+              <Suspense key={node.id} fallback={null}>
+                <GodNodeBuilding
+                  node={node}
+                  layout={bl}
+                  isSelected={selectedNodeId === node.id}
+                  impactData={impactData}
+                />
+              </Suspense>
+            )
+          })}
 
           {showStats && <Stats />}
-        </Suspense>
       </Canvas>
       </ErrorBoundary>
 

@@ -1,8 +1,10 @@
 // buildingMaterials.ts — Material presets for each node kind + state
 import * as THREE from 'three'
 
+export interface MaterialDef { color: string; emissive: string; metalness: number; roughness: number }
+
 // Base palette
-const MATERIAL_DEFS: Record<string, { color: string; emissive: string; metalness: number; roughness: number }> = {
+const MATERIAL_DEFS: Record<string, MaterialDef> = {
   Function:   { color: '#2a4a7f', emissive: '#0a1a3a', metalness: 0.3, roughness: 0.6 },
   Class:      { color: '#3d7a3d', emissive: '#0f1f0f', metalness: 0.4, roughness: 0.5 },
   Module:     { color: '#5a3d7a', emissive: '#1a0f2a', metalness: 0.2, roughness: 0.7 },
@@ -16,6 +18,10 @@ const MATERIAL_DEFS: Record<string, { color: string; emissive: string; metalness
 
 // Cache materials so we don't recreate them every frame
 const materialCache = new Map<string, THREE.MeshStandardMaterial>()
+
+export function getMaterialDef(kind: string): MaterialDef {
+  return MATERIAL_DEFS[kind] ?? MATERIAL_DEFS.default
+}
 
 export function getMaterialForKind(kind: string): THREE.MeshStandardMaterial {
   const key = kind

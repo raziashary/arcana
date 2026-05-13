@@ -5,7 +5,7 @@ import * as THREE from 'three'
 import type { GraphNode, ImpactData } from '../../../stores/graphStore'
 import type { CityLayout } from '../layout/layoutTypes'
 import { testCoverageColor } from './buildingDimensions'
-import { getMaterialForKind, IMPACT_COLORS } from './buildingMaterials'
+import { getMaterialDef, IMPACT_COLORS } from './buildingMaterials'
 
 interface BuildingInstancesProps {
   nodes: GraphNode[]
@@ -38,8 +38,7 @@ interface KindInstancesProps {
 function KindInstances({ nodes, kind, layout, testedBySet, selectedNodeId, impactData }: KindInstancesProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null!)
   const count = nodes.length
-
-  const baseMat = useMemo(() => getMaterialForKind(kind).clone(), [kind])
+  const def = useMemo(() => getMaterialDef(kind), [kind])
 
   useEffect(() => {
     if (!meshRef.current || count === 0) return
@@ -79,9 +78,7 @@ function KindInstances({ nodes, kind, layout, testedBySet, selectedNodeId, impac
       } else {
         const tc = testCoverageColor(node.id, testedBySet)
         // Blend base material color with coverage tint (slight)
-        color.set(getMaterialForKind(kind).color).lerp(
-          new THREE.Color(tc.r, tc.g, tc.b), 0.15
-        )
+        color.set(def.color).lerp(new THREE.Color(tc.r, tc.g, tc.b), 0.15)
       }
 
       mesh.setColorAt(i, color)
@@ -101,7 +98,12 @@ function KindInstances({ nodes, kind, layout, testedBySet, selectedNodeId, impac
       receiveShadow
     >
       <boxGeometry args={[1, 1, 1]} />
-      <primitive object={baseMat} attach="material" />
+      <meshStandardMaterial
+        color={def.color}
+        emissive={def.emissive}
+        metalness={def.metalness}
+        roughness={def.roughness}
+      />
     </instancedMesh>
   )
 }
