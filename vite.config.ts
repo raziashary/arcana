@@ -11,6 +11,11 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  // Replace __APP_VERSION__ at build time with the version from package.json.
+  // UpdateSettings.tsx uses this to display the running app version.
+  define: {
+    '__APP_VERSION__': JSON.stringify(process.env.npm_package_version ?? '1.0.0'),
+  },
   clearScreen: false,
   server: {
     port: 1420,

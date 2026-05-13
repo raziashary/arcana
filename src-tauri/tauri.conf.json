@@ -69,7 +69,6 @@
       "hardenedRuntime": true,
       "minimumSystemVersion": "10.15",
       "dmg": {
-        "background": "../installers/dmg/background.png",
         "windowSize": {
           "width": 660,
           "height": 400

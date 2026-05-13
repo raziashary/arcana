@@ -2,6 +2,7 @@
 use rusqlite::{Connection, params, OptionalExtension};
 use chrono::{Utc, NaiveDate};
 use serde_json::json;
+use std::collections::HashMap;
 use crate::errors::{AutoDevError, Result};
 use crate::db::autodev_dir;
 use super::types::*;
@@ -426,6 +427,138 @@ impl AnalyticsDb {
             .map_err(|e| AutoDevError::Database(e))?;
 
         Ok(records)
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Live Activity Queries (token_usage table — written in real-time)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Count today's activity directly from the live `token_usage` table.
+    /// Unlike `daily_costs`, this table is written on every API call so it
+    /// has today's data without waiting for the overnight rollup.
+    /// Returns `(sessions_today, messages_today, tool_calls_today)`.
+    pub fn get_today_activity(&self) -> (i32, i32, i32) {
+        let today_str = chrono::Local::now().naive_local().date().to_string();
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(_) => return (0, 0, 0),
+        };
+
+        let sessions: i32 = conn.query_row(
+            "SELECT COUNT(DISTINCT session_id) FROM token_usage WHERE DATE(timestamp) = ?1",
+            params![today_str],
+            |r| r.get(0),
+        ).unwrap_or(0);
+
+        let messages: i32 = conn.query_row(
+            "SELECT COUNT(*) FROM token_usage WHERE DATE(timestamp) = ?1",
+            params![today_str],
+            |r| r.get(0),
+        ).unwrap_or(0);
+
+        let tool_calls: i32 = conn.query_row(
+            "SELECT COUNT(*) FROM token_usage \
+             WHERE DATE(timestamp) = ?1 \
+               AND request_type IN ('tool_use', 'tool', 'function_call')",
+            params![today_str],
+            |r| r.get(0),
+        ).unwrap_or(0);
+
+        (sessions, messages, tool_calls)
+    }
+
+    /// Aggregate the `token_usage` table for a date range.
+    /// Split into one method per query — each method acquires its own Mutex lock
+    /// so the borrow checker can see that `stmt` is fully consumed before `conn`
+    /// drops. This is the same pattern used by all other AnalyticsDb methods.
+    pub fn get_token_usage_for_range(
+        &self,
+        start: NaiveDate,
+        end: NaiveDate,
+    ) -> Result<(i64, i64, i64, Option<i64>,
+                 HashMap<String, i64>,
+                 HashMap<String, i64>,
+                 HashMap<String, i64>,
+                 Vec<SessionTokenUsage>)>
+    {
+        let s = start.to_string();
+        let e = end.to_string();
+        let totals       = self.token_totals(&s, &e);
+        let by_model     = self.token_by_group("model",       &s, &e)?;
+        let by_provider  = self.token_by_group("provider",    &s, &e)?;
+        let by_agent     = self.token_by_group("agent_type",  &s, &e)?;
+        let top_sessions = self.token_top_sessions(&s, &e)?;
+        let (total, prompt, completion, thinking) = totals;
+        Ok((total, prompt, completion, thinking, by_agent, by_model, by_provider, top_sessions))
+    }
+
+    // ── private helpers — one lock/stmt per function (mirrors existing methods) ──
+
+    fn token_totals(&self, start: &str, end: &str) -> (i64, i64, i64, Option<i64>) {
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(_) => return (0, 0, 0, None),
+        };
+        conn.query_row(
+            "SELECT COALESCE(SUM(total_tokens),0), \
+                    COALESCE(SUM(prompt_tokens),0), \
+                    COALESCE(SUM(completion_tokens),0), \
+                    SUM(thinking_tokens) \
+             FROM token_usage \
+             WHERE DATE(timestamp) BETWEEN ?1 AND ?2",
+            params![start, end],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        ).unwrap_or((0, 0, 0, None))
+    }
+
+    fn token_by_group(&self, col: &str, start: &str, end: &str) -> Result<HashMap<String, i64>> {
+        // `col` is always a trusted internal string ("model" | "provider" | "agent_type"),
+        // never user input, so safe to interpolate into the query.
+        let sql = format!(
+            "SELECT {col}, COALESCE(SUM(total_tokens),0) \
+             FROM token_usage \
+             WHERE DATE(timestamp) BETWEEN ?1 AND ?2 \
+             GROUP BY {col} ORDER BY 2 DESC"
+        );
+        let conn = self.conn.lock()
+            .map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {e}")))?;
+        let mut stmt = conn.prepare(&sql)
+            .map_err(|e| AutoDevError::Database(e))?;
+        let rows = stmt.query_map(params![start, end], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        }).map_err(|e| AutoDevError::Database(e))?
+          .collect::<std::result::Result<Vec<_>, _>>()
+          .map_err(|e| AutoDevError::Database(e))?;
+        Ok(rows.into_iter().collect())
+    }
+
+    fn token_top_sessions(&self, start: &str, end: &str) -> Result<Vec<SessionTokenUsage>> {
+        let conn = self.conn.lock()
+            .map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {e}")))?;
+        let mut stmt = conn.prepare(
+            "SELECT session_id, \
+                    COALESCE(SUM(total_tokens),0) AS tokens, \
+                    COALESCE(SUM(cost_usd),0.0)   AS cost, \
+                    MAX(agent_type)               AS agent_type \
+             FROM token_usage \
+             WHERE DATE(timestamp) BETWEEN ?1 AND ?2 \
+             GROUP BY session_id \
+             ORDER BY tokens DESC LIMIT 10",
+        ).map_err(|e| AutoDevError::Database(e))?;
+        // Collect into an owned Vec before stmt/conn drop — same pattern as
+        // get_daily_costs_range and other methods in this file.
+        let rows = stmt.query_map(params![start, end], |r| {
+            Ok(SessionTokenUsage {
+                session_id: r.get(0)?,
+                tokens:     r.get(1)?,
+                cost_usd:   r.get(2)?,
+                agent_type: r.get::<_, Option<String>>(3)?
+                              .unwrap_or_else(|| "unknown".into()),
+            })
+        }).map_err(|e| AutoDevError::Database(e))?
+          .collect::<std::result::Result<Vec<_>, _>>()
+          .map_err(|e| AutoDevError::Database(e))?;
+        Ok(rows)
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

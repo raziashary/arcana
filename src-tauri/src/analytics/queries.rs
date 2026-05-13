@@ -1,7 +1,7 @@
 // Analytics queries — data retrieval for dashboard and reports
 use std::sync::Arc;
-use chrono::{Local, NaiveDate, Duration};
 use std::collections::HashMap;
+use chrono::{Local, NaiveDate, Duration};
 use tracing::warn;
 use crate::errors::Result;
 use super::db::AnalyticsDb;
@@ -97,6 +97,10 @@ impl AnalyticsQueries {
             }
         };
 
+        // Today's session / message / tool-call counts from the live token_usage
+        // table (written in real-time; daily_costs is only a rolled-up snapshot).
+        let (sessions_today, messages_today, tool_calls_today) = self.db.get_today_activity();
+
         Ok(DashboardSummary {
             today_cost,
             yesterday_cost,
@@ -107,10 +111,10 @@ impl AnalyticsQueries {
             active_workers,
             total_workers,
             workers_added_today,
-            active_sessions: active_workers,
-            sessions_today: 0,
-            messages_today: 0,
-            tool_calls_today: 0,
+            active_sessions: sessions_today,
+            sessions_today,
+            messages_today,
+            tool_calls_today,
         })
     }
 
@@ -165,42 +169,30 @@ impl AnalyticsQueries {
         })
     }
 
-    /// Get token usage analytics
+    /// Get token usage analytics.
+    ///
+    /// Queries the live `token_usage` table directly (not the daily_costs rollup)
+    /// so that per-model, per-provider, and per-session breakdowns are real data
+    /// with accurate prompt/completion splits — not estimated ratios.
     pub fn get_token_usage(
         &self,
         start: NaiveDate,
         end: NaiveDate,
     ) -> Result<TokenUsageAnalytics> {
-        let records = self.db.get_daily_costs_range(start, end)?;
-
-        let mut total_tokens = 0i64;
-        let mut by_agent_type: HashMap<String, i64> = HashMap::new();
-        let mut by_model: HashMap<String, i64> = HashMap::new();
-        let mut by_provider: HashMap<String, i64> = HashMap::new();
-
-        for record in records {
-            total_tokens += record.total_tokens;
-
-            for (agent, cost) in &record.agent_type_breakdown {
-                // Estimate tokens from cost (rough approximation)
-                *by_agent_type.entry(agent.clone()).or_insert(0) += (cost * 1000.0) as i64;
-            }
-
-            for (provider, cost) in &record.provider_breakdown {
-                *by_provider.entry(provider.clone()).or_insert(0) += (cost * 1000.0) as i64;
-            }
-        }
+        let (total_tokens, prompt_tokens, completion_tokens, thinking_tokens,
+             by_agent_type, by_model, by_provider, top_sessions) =
+            self.db.get_token_usage_for_range(start, end)?;
 
         Ok(TokenUsageAnalytics {
-            date_range: format!("{} to {}", start, end),
+            date_range:        format!("{} to {}", start, end),
             total_tokens,
-            prompt_tokens: (total_tokens as f64 * 0.6) as i64,  // Rough estimate
-            completion_tokens: (total_tokens as f64 * 0.4) as i64,
-            thinking_tokens: None,
+            prompt_tokens,
+            completion_tokens,
+            thinking_tokens,
             by_agent_type,
             by_model,
             by_provider,
-            top_sessions: Vec::new(),  // TODO: Implement session-level tracking
+            top_sessions,
         })
     }
 
@@ -216,13 +208,25 @@ impl AnalyticsQueries {
             *by_type.entry(failure.error_type.clone()).or_insert(0) += 1;
         }
 
+        // Calculate retry success rate from actual data:
+        //   resolved failures that had at least one retry / total failures with retries
+        let total_with_retries = failures.iter().filter(|f| f.retry_count > 0).count();
+        let resolved_with_retries = failures.iter()
+            .filter(|f| f.retry_count > 0 && f.resolved)
+            .count();
+        let auto_retry_success_rate = if total_with_retries > 0 {
+            resolved_with_retries as f64 / total_with_retries as f64
+        } else {
+            0.0  // No retry history yet — show 0, not a fake 85%
+        };
+
         Ok(ApiFailureAnalytics {
             date_range: format!("Last {} hours", hours),
             total_failures: failures.len() as i32,
             failures_by_provider: by_provider,
             failures_by_type: by_type,
             recent_failures: failures,
-            auto_retry_success_rate: 0.85,  // TODO: Calculate from actual retry data
+            auto_retry_success_rate,
         })
     }
 

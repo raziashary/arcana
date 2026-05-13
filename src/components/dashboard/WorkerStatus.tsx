@@ -1,5 +1,5 @@
 // WorkerStatus widget — displays active workers and health with quick actions
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { Users, Plus } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { DashboardSummary } from '../../stores/dashboardStore';
@@ -9,25 +9,67 @@ interface WorkerStatusProps {
   summary: DashboardSummary;
 }
 
+interface Worker {
+  id: number;
+  name: string;
+  slug: string;
+  worker_type: string;
+  status: string;
+  model: string;
+}
+
 const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
   const [showWorkerList, setShowWorkerList] = useState(false);
-  const [showAddWorker, setShowAddWorker] = useState(false);
-  const [workerName, setWorkerName] = useState('');
-  const [workerType, setWorkerType] = useState('backend');
-  const [addError, setAddError] = useState<string | null>(null);
-  const [addPending, setAddPending] = useState(false);
+  const [showAddWorker,  setShowAddWorker]  = useState(false);
+  const [workerName,     setWorkerName]     = useState('');
+  const [workerType,     setWorkerType]     = useState('backend');
+  const [addError,       setAddError]       = useState<string | null>(null);
+  const [addPending,     setAddPending]     = useState(false);
+
+  // Real worker list loaded on demand from workers.db
+  const [workers,        setWorkers]        = useState<Worker[] | null>(null);
+  const [listLoading,    setListLoading]    = useState(false);
 
   const healthStatus = summary.active_workers > 0 ? 'healthy' : 'idle';
+
+  const loadWorkers = useCallback(async () => {
+    setListLoading(true);
+    try {
+      const list = await invoke<Worker[]>('list_workers');
+      setWorkers(list);
+    } catch (e) {
+      console.error('[WorkerStatus] list_workers failed:', e);
+      setWorkers([]);
+    } finally {
+      setListLoading(false);
+    }
+  }, []);
+
+  const handleOpenList = () => {
+    setShowWorkerList(true);
+    void loadWorkers();
+  };
 
   const handleCreateWorker = async () => {
     if (!workerName.trim()) return;
     setAddPending(true);
     setAddError(null);
     try {
-      await invoke('spawn_worker', { name: workerName.trim(), workerType });
+      await invoke('create_worker', {
+        input: {
+          name:             workerName.trim(),
+          worker_type:      workerType,
+          model:            'claude-sonnet-4-5',
+          primary_repos:    [],
+          polling_interval: null,
+          description:      null,
+        },
+      });
       setShowAddWorker(false);
       setWorkerName('');
       setWorkerType('backend');
+      // Reload list if it was open
+      if (showWorkerList) void loadWorkers();
     } catch (err) {
       setAddError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -41,14 +83,6 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
     setWorkerType('backend');
     setAddError(null);
   };
-
-  // Mock worker list
-  const mockWorkers = [
-    { id: 'worker-backend-01', name: 'Backend Worker 1', status: 'active', tasks: 5 },
-    { id: 'worker-frontend-01', name: 'Frontend Worker 1', status: 'active', tasks: 3 },
-    { id: 'worker-mcp-01', name: 'MCP Worker 1', status: 'idle', tasks: 0 },
-    { id: 'supervisor', name: 'Supervisor', status: 'active', tasks: 2 },
-  ];
 
   return (
     <>
@@ -75,7 +109,7 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
           {/* Quick Action Buttons */}
           <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
             <button
-              onClick={() => setShowWorkerList(true)}
+              onClick={handleOpenList}
               style={{
                 flex: 1,
                 padding: '6px 8px',
@@ -122,14 +156,9 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
       {showWorkerList && (
         <div style={{
           position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(0, 0, 0, 0.7)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
+          top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.7)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
           zIndex: 1000,
         }}>
           <div style={{
@@ -143,23 +172,33 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
             overflowY: 'auto',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ margin: 0, color: '#D6DEEB' }}>All Workers</h3>
+              <h3 style={{ margin: 0, color: '#D6DEEB' }}>
+                All Workers
+                {workers !== null && (
+                  <span style={{ fontSize: '12px', color: '#637777', marginLeft: 8, fontWeight: 'normal' }}>
+                    ({workers.length})
+                  </span>
+                )}
+              </h3>
               <button
                 onClick={() => setShowWorkerList(false)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: '#637777',
-                  cursor: 'pointer',
-                  fontSize: '20px',
-                }}
-              >
-                ✕
-              </button>
+                style={{ background: 'none', border: 'none', color: '#637777', cursor: 'pointer', fontSize: '20px' }}
+              >✕</button>
             </div>
 
-            {/* Worker list */}
-            {mockWorkers.map((worker) => (
+            {listLoading && (
+              <div style={{ color: '#637777', fontSize: '12px', textAlign: 'center', padding: '16px' }}>
+                Loading…
+              </div>
+            )}
+
+            {!listLoading && workers !== null && workers.length === 0 && (
+              <div style={{ color: '#637777', fontSize: '12px', textAlign: 'center', padding: '16px' }}>
+                No workers found.
+              </div>
+            )}
+
+            {!listLoading && workers !== null && workers.map((worker) => (
               <div key={worker.id} style={{
                 display: 'flex',
                 justifyContent: 'space-between',
@@ -175,7 +214,7 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
                     {worker.name}
                   </div>
                   <div style={{ color: '#637777', fontSize: '10px', marginTop: '2px' }}>
-                    {worker.id}
+                    {worker.slug} · {worker.worker_type}
                   </div>
                 </div>
                 <div style={{ textAlign: 'right' }}>
@@ -188,7 +227,7 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
                     {worker.status}
                   </div>
                   <div style={{ color: '#637777', fontSize: '10px' }}>
-                    {worker.tasks} tasks
+                    {worker.model}
                   </div>
                 </div>
               </div>
@@ -218,14 +257,9 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
       {showAddWorker && (
         <div style={{
           position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(0, 0, 0, 0.7)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
+          top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.7)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
           zIndex: 1000,
         }}>
           <div style={{
@@ -240,16 +274,8 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
               <h3 style={{ margin: 0, color: '#D6DEEB' }}>Add New Worker</h3>
               <button
                 onClick={() => setShowAddWorker(false)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: '#637777',
-                  cursor: 'pointer',
-                  fontSize: '20px',
-                }}
-              >
-                ✕
-              </button>
+                style={{ background: 'none', border: 'none', color: '#637777', cursor: 'pointer', fontSize: '20px' }}
+              >✕</button>
             </div>
 
             <div style={{ marginBottom: '12px' }}>
@@ -310,31 +336,24 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
                 onClick={handleCancelAdd}
                 disabled={addPending}
                 style={{
-                  flex: 1,
-                  padding: '8px',
-                  background: '#0B3A5C',
-                  border: '1px solid #1A527A',
-                  borderRadius: '2px',
-                  color: '#637777',
-                  cursor: 'pointer',
-                  fontSize: '12px',
+                  flex: 1, padding: '8px',
+                  background: '#0B3A5C', border: '1px solid #1A527A',
+                  borderRadius: '2px', color: '#637777',
+                  cursor: 'pointer', fontSize: '12px',
                 }}
               >
                 Cancel
               </button>
               <button
-                onClick={handleCreateWorker}
+                onClick={() => void handleCreateWorker()}
                 disabled={addPending || !workerName.trim()}
                 style={{
-                  flex: 1,
-                  padding: '8px',
+                  flex: 1, padding: '8px',
                   background: addPending ? '#637777' : '#82AAFF',
                   border: '1px solid #82AAFF',
-                  borderRadius: '2px',
-                  color: '#011627',
+                  borderRadius: '2px', color: '#011627',
                   cursor: addPending ? 'not-allowed' : 'pointer',
-                  fontSize: '12px',
-                  fontWeight: 'bold',
+                  fontSize: '12px', fontWeight: 'bold',
                 }}
               >
                 {addPending ? 'Creating…' : 'Create'}
