@@ -274,27 +274,37 @@ impl OrchestratorClient {
             }
             Err(e) => {
                 let count = self.health_fail_count.fetch_add(1, Ordering::Relaxed) + 1;
-                if count < HEALTH_FAIL_THRESHOLD {
-                    // G.1 — suppress WARN during the startup grace window;
-                    // the orchestrator is simply still booting.
-                    if in_grace {
-                        debug!(
-                            "[OrchestratorClient] health check failed during startup grace \
-                             ({}/{HEALTH_FAIL_THRESHOLD}): {e}",
-                            count
-                        );
-                    } else {
-                        warn!(
-                            "[OrchestratorClient] health check failed ({count}/{HEALTH_FAIL_THRESHOLD}): {e} — \
-                             treating as healthy until threshold reached"
-                        );
-                    }
+
+                if in_grace {
+                    // G.1 — during the startup grace window, always return true regardless
+                    // of the failure count. The orchestrator is still booting (~18s); we
+                    // must not let 7 concurrent worker startup ticks exhaust the threshold
+                    // and permanently flip all workers to Mode 1 before the server is ready.
+                    debug!(
+                        "[OrchestratorClient] health check failed during startup grace \
+                         ({}/{HEALTH_FAIL_THRESHOLD}): {e} — staying optimistic",
+                        count
+                    );
+                    true
+                } else if count < HEALTH_FAIL_THRESHOLD {
+                    warn!(
+                        "[OrchestratorClient] health check failed ({count}/{HEALTH_FAIL_THRESHOLD}): {e} — \
+                         treating as healthy until threshold reached"
+                    );
                     true  // still optimistic — orch may just be busy
                 } else {
-                    debug!(
-                        "[OrchestratorClient] health check failed {count} consecutive times: {e} — \
-                         declaring unhealthy"
-                    );
+                    // Log once at the exact threshold crossing; suppress repeated noise
+                    // for every subsequent call above the threshold.
+                    if count == HEALTH_FAIL_THRESHOLD {
+                        warn!(
+                            "[OrchestratorClient] health check failed {count} consecutive times: {e} — \
+                             declaring unhealthy, switching workers to Mode 1 fallback"
+                        );
+                    } else {
+                        debug!(
+                            "[OrchestratorClient] health check still failing (count={count}): {e}"
+                        );
+                    }
                     false
                 }
             }
