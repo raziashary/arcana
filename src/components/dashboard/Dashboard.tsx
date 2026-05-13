@@ -9,6 +9,7 @@ import SessionActivity from './SessionActivity';
 import ModelUsage from './ModelUsage';
 import WorkerLeaderboard from './WorkerLeaderboard';
 import ApiFailures from './ApiFailures';
+import { ErrorBoundary } from '../ErrorBoundary';
 import './Dashboard.css';
 
 const Dashboard: React.FC = () => {
@@ -143,51 +144,53 @@ const Dashboard: React.FC = () => {
       <div className="dashboard-grid">
         {/* Top row: 4 metric cards */}
         <div className="metrics-row">
-          {summary && <CostMeter summary={summary} prediction={costPrediction} tokenUsage={tokenUsage} />}
-          {summary && <TokenUsage summary={summary} analytics={tokenUsage} costAnalytics={costAnalytics} />}
-          {summary && <WorkerStatus summary={summary} />}
-          {summary && <SessionActivity summary={summary} />}
+          {summary && <ErrorBoundary label="Cost Meter" inline><CostMeter summary={summary} prediction={costPrediction} tokenUsage={tokenUsage} /></ErrorBoundary>}
+          {summary && <ErrorBoundary label="Token Usage" inline><TokenUsage summary={summary} analytics={tokenUsage} costAnalytics={costAnalytics} /></ErrorBoundary>}
+          {summary && <ErrorBoundary label="Worker Status" inline><WorkerStatus summary={summary} /></ErrorBoundary>}
+          {summary && <ErrorBoundary label="Session Activity" inline><SessionActivity summary={summary} /></ErrorBoundary>}
         </div>
 
         {/* Middle row: Charts */}
         <div className="charts-row">
           {costAnalytics && costAnalytics.data_points.length > 0 && (
-            <div className="chart-container cost-chart">
-              <h3>Cost Trend ({costAnalytics.data_points.length} Days)</h3>
-              <ResponsiveContainer width="100%" height={180}>
-                <BarChart data={costAnalytics.data_points} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#0D3652" />
-                  <XAxis
-                    dataKey="timestamp"
-                    stroke="#637777"
-                    tick={{ fontSize: 10 }}
-                    tickFormatter={(t: string) =>
-                      new Date(t).toLocaleDateString('en', { month: 'short', day: 'numeric' })
-                    }
-                  />
-                  <YAxis
-                    stroke="#637777"
-                    tick={{ fontSize: 10 }}
-                    tickFormatter={(v: number) => `$${v.toFixed(2)}`}
-                  />
-                  <Tooltip
-                    contentStyle={{ background: '#011627', border: '1px solid #0D3652', borderRadius: '2px' }}
-                    labelStyle={{ color: '#D6DEEB', fontSize: '11px' }}
-                    labelFormatter={(t: string) => new Date(t).toLocaleDateString()}
-                    formatter={(v: unknown) => [`$${(v as number).toFixed(4)}`, 'Cost']}
-                  />
-                  <Bar dataKey="cost_usd" fill="#ECC48D" radius={[2, 2, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+            <ErrorBoundary label="Cost Chart" inline>
+              <div className="chart-container cost-chart">
+                <h3>Cost Trend ({costAnalytics.data_points.length} Days)</h3>
+                <ResponsiveContainer width="100%" height={180}>
+                  <BarChart data={costAnalytics.data_points} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#0D3652" />
+                    <XAxis
+                      dataKey="timestamp"
+                      stroke="#637777"
+                      tick={{ fontSize: 10 }}
+                      tickFormatter={(t: string) =>
+                        new Date(t).toLocaleDateString('en', { month: 'short', day: 'numeric' })
+                      }
+                    />
+                    <YAxis
+                      stroke="#637777"
+                      tick={{ fontSize: 10 }}
+                      tickFormatter={(v: number) => `$${v.toFixed(2)}`}
+                    />
+                    <Tooltip
+                      contentStyle={{ background: '#011627', border: '1px solid #0D3652', borderRadius: '2px' }}
+                      labelStyle={{ color: '#D6DEEB', fontSize: '11px' }}
+                      labelFormatter={(t: string) => new Date(t).toLocaleDateString()}
+                      formatter={(v: unknown) => [`$${(v as number).toFixed(4)}`, 'Cost']}
+                    />
+                    <Bar dataKey="cost_usd" fill="#ECC48D" radius={[2, 2, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </ErrorBoundary>
           )}
-          {tokenUsage && <ModelUsage analytics={tokenUsage} />}
+          {tokenUsage && <ErrorBoundary label="Model Usage" inline><ModelUsage analytics={tokenUsage} /></ErrorBoundary>}
         </div>
 
         {/* Bottom row: Leaderboard and Failures */}
         <div className="bottom-row">
-          <WorkerLeaderboard />
-          {apiFailures && <ApiFailures analytics={apiFailures} />}
+          <ErrorBoundary label="Worker Leaderboard" inline><WorkerLeaderboard /></ErrorBoundary>
+          {apiFailures && <ErrorBoundary label="API Failures" inline><ApiFailures analytics={apiFailures} /></ErrorBoundary>}
         </div>
       </div>
 

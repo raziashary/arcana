@@ -38,8 +38,8 @@ export function DistrictMesh({ district }: DistrictMeshProps) {
 
   return (
     <group>
-      {/* Ground fill — slightly above main ground */}
-      <mesh position={[centerX, 0.02, centerZ]} receiveShadow>
+      {/* Ground fill — slightly above main ground, rotated flat (PlaneGeometry is XY by default) */}
+      <mesh position={[centerX, 0.02, centerZ]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
         <planeGeometry args={[width, depth]} />
         <meshStandardMaterial
           color={groundColor}

@@ -27,6 +27,7 @@ import { WorkerAffinityPanel } from '../components/dashboard/WorkerAffinityPanel
 import { OrphanAlert } from '../components/dashboard/OrphanAlert'
 import { BudgetBar } from '../components/budget/BudgetBar'
 import { EpicsSection } from '../components/dashboard/EpicPhaseView'
+import { ErrorBoundary } from '../components/ErrorBoundary'
 import '../components/autodev/LiveMonitor.css'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -857,25 +858,27 @@ export default function AutoDevTab() {
       </div>
 
       {/* Orphan Alert — shows toast when worker processes die (Ruflo Feature 2) */}
-      <OrphanAlert />
+      <ErrorBoundary label="Orphan Alert" inline><OrphanAlert /></ErrorBoundary>
 
       {/* Agent roster table */}
-      <AgentRoster tasks={tasks} />
+      <ErrorBoundary label="Agent Roster" inline><AgentRoster tasks={tasks} /></ErrorBoundary>
 
       {/* Worker Affinity — historical routing performance per worker (Ruflo Feature 1) */}
-      <WorkerAffinityPanel />
+      <ErrorBoundary label="Worker Affinity" inline><WorkerAffinityPanel /></ErrorBoundary>
 
       {/* Epics — Phase-based task decomposition view (Ruflo Feature 5) */}
-      <EpicsSection tasks={tasks} />
+      <ErrorBoundary label="Epics" inline><EpicsSection tasks={tasks} /></ErrorBoundary>
 
       {/* Worker Requests — Fleet→Supervisor escalation queue */}
-      <WorkerRequestsWidget
-        requests={workerRequests}
-        onResolve={(id, action, note) => resolveWorkerRequest(id, action, note)}
-      />
+      <ErrorBoundary label="Worker Requests" inline>
+        <WorkerRequestsWidget
+          requests={workerRequests}
+          onResolve={(id, action, note) => resolveWorkerRequest(id, action, note)}
+        />
+      </ErrorBoundary>
 
       {/* Live Monitor — real-time per-agent state cards */}
-      <LiveMonitorSection />
+      <ErrorBoundary label="Live Monitor" inline><LiveMonitorSection /></ErrorBoundary>
 
       {/* Task board label */}
       <div
@@ -991,7 +994,7 @@ export default function AutoDevTab() {
               ✕
             </button>
           </div>
-          <SubagentMonitor />
+          <ErrorBoundary label="Subagent Monitor" inline><SubagentMonitor /></ErrorBoundary>
         </div>
       )}
     </div>

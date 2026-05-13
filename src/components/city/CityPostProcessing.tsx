@@ -1,27 +1,21 @@
-// CityPostProcessing.tsx — Post-processing effects: Bloom, SSAO, Vignette
-// Uses @react-three/postprocessing
+// CityPostProcessing.tsx — Post-processing effects: Bloom + Vignette
+// Uses @react-three/postprocessing v3 — only use props that exist in this version.
+// Do NOT import from 'postprocessing' directly (not guaranteed to be installed as
+// a direct dep and its enum values differ between major versions).
 import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing'
-import { BlendFunction, KernelSize } from 'postprocessing'
 
 export function CityPostProcessing() {
   return (
-    <EffectComposer multisampling={0}>
-      {/* Bloom: god node beacons and CALLS tubes glow */}
+    <EffectComposer>
+      {/* Bloom: god node beacons and CALLS tubes emit glow */}
       <Bloom
-        intensity={0.4}
-        luminanceThreshold={0.65}
-        luminanceSmoothing={0.85}
-        kernelSize={KernelSize.MEDIUM}
-        mipmapBlur
+        intensity={0.35}
+        luminanceThreshold={0.7}
+        luminanceSmoothing={0.9}
       />
 
-      {/* Vignette: dark edges, cinematic depth */}
-      <Vignette
-        eskil={false}
-        offset={0.12}
-        darkness={0.45}
-        blendFunction={BlendFunction.NORMAL}
-      />
+      {/* Vignette: subtle dark edges for cinematic depth */}
+      <Vignette offset={0.15} darkness={0.4} eskil={false} />
     </EffectComposer>
   )
 }

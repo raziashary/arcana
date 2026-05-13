@@ -92,10 +92,10 @@ export default function App() {
           {activeTab === 'docs'      && <ErrorBoundary label="Docs"><DocsTab /></ErrorBoundary>}
         </div>
 
-        <Sidebar />
+        <ErrorBoundary label="Sidebar" inline><Sidebar /></ErrorBoundary>
       </div>
 
-      <StatusBar />
+      <ErrorBoundary label="StatusBar" inline><StatusBar /></ErrorBoundary>
       <ToastStack />
       {/* Phase 5.3 — auto-updater overlay components */}
       <UpdateToast />

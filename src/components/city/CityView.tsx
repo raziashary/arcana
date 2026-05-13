@@ -20,6 +20,7 @@ import { BuildingContextMenu } from './interaction/BuildingContextMenu'
 import { ImpactOverlay } from './impact/ImpactOverlay'
 import { ImpactPanel } from './impact/ImpactPanel'
 import { CityPostProcessing } from './CityPostProcessing'
+import { ErrorBoundary } from '../ErrorBoundary'
 
 const CITY_SIZE = 180
 const GOD_NODE_DEGREE_THRESHOLD = 15
@@ -91,9 +92,14 @@ export function CityView() {
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      <ErrorBoundary label="3D City">
       <Canvas
         shadows
-        camera={{ fov: 45, near: 0.1, far: 1000 }}
+        camera={{
+          fov: 45, near: 0.1, far: 2000,
+          // Start with camera looking at city centre so first frame isn't black
+          position: [CITY_SIZE / 2, CITY_SIZE * 0.55, CITY_SIZE * 0.85],
+        }}
         gl={{ antialias: true, alpha: false }}
         style={{ background: '#050508' }}
         onPointerMissed={() => { setSelectedNode(null); setContextMenu(null) }}
@@ -189,6 +195,7 @@ export function CityView() {
           {showStats && <Stats />}
         </Suspense>
       </Canvas>
+      </ErrorBoundary>
 
       {/* HTML overlays */}
       <DistrictMinimap layout={layout} citySize={CITY_SIZE} />

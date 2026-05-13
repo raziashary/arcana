@@ -1,6 +1,6 @@
 // BuildingRaycaster.tsx — Click/hover detection on instanced meshes
 // Uses Three.js raycaster with instanceId → node lookup
-import { useCallback, useMemo } from 'react'
+import { useCallback, useMemo, useEffect } from 'react'
 import { useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { GraphNode } from '../../../stores/graphStore'
@@ -101,8 +101,8 @@ export function BuildingRaycaster({
     [getNearestHit, setHoveredNode, gl]
   )
 
-  // Attach event listeners to the canvas
-  useMemo(() => {
+  // Attach event listeners to the canvas — must be useEffect (not useMemo) so cleanup runs
+  useEffect(() => {
     const el = gl.domElement
     el.addEventListener('click', handleClick)
     el.addEventListener('contextmenu', handleRightClick)
