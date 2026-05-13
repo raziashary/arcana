@@ -27,6 +27,7 @@ import { useSidecarStore }  from './stores/sidecarStore'
 import { useUpdateStore }   from './stores/updateStore'
 import { UpdateToast }      from './components/update/UpdateToast'
 import { UpdateDialog }     from './components/update/UpdateDialog'
+import { ErrorBoundary }    from './components/ErrorBoundary'
 
 export type TabId = 'chat' | 'autodev' | 'ide' | 'recipes' | 'graph' | 'dashboard' | 'settings' | 'logs' | 'docs'
 
@@ -80,15 +81,15 @@ export default function App() {
 
       <div className="app-body">
         <div className="app-main">
-          {activeTab === 'chat'      && <ChatTab />}
-          {activeTab === 'autodev'   && <AutoDevTab />}
-          {activeTab === 'ide'       && <IDETab />}
-          {activeTab === 'recipes'   && <RecipesTab />}
-          {activeTab === 'graph'     && <GraphTab />}
-          {activeTab === 'dashboard' && <Dashboard />}
-          {activeTab === 'settings'  && <SettingsTab />}
-          {activeTab === 'logs'      && <LogsTab />}
-          {activeTab === 'docs'      && <DocsTab />}
+          {activeTab === 'chat'      && <ErrorBoundary label="Chat"><ChatTab /></ErrorBoundary>}
+          {activeTab === 'autodev'   && <ErrorBoundary label="AutoDev"><AutoDevTab /></ErrorBoundary>}
+          {activeTab === 'ide'       && <ErrorBoundary label="IDE"><IDETab /></ErrorBoundary>}
+          {activeTab === 'recipes'   && <ErrorBoundary label="Recipes"><RecipesTab /></ErrorBoundary>}
+          {activeTab === 'graph'     && <ErrorBoundary label="Graph"><GraphTab /></ErrorBoundary>}
+          {activeTab === 'dashboard' && <ErrorBoundary label="Dashboard"><Dashboard /></ErrorBoundary>}
+          {activeTab === 'settings'  && <ErrorBoundary label="Settings"><SettingsTab /></ErrorBoundary>}
+          {activeTab === 'logs'      && <ErrorBoundary label="Logs"><LogsTab /></ErrorBoundary>}
+          {activeTab === 'docs'      && <ErrorBoundary label="Docs"><DocsTab /></ErrorBoundary>}
         </div>
 
         <Sidebar />

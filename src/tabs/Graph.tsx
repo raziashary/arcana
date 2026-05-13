@@ -1,9 +1,11 @@
-﻿// Graph tab — code knowledge graph visualization (D3 force-directed)
+﻿// Graph tab — code knowledge graph visualization (D3 force-directed + 3D city)
 
 import * as d3 from 'd3'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { useWorkspaceStore } from '../stores/workspaceStore'
+import { useGraphStore } from '../stores/graphStore'
+import { CityView } from '../components/city/CityView'
 import './Graph.css'
 
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
@@ -113,6 +115,9 @@ export default function GraphTab() {
   const workspaceDir = useWorkspaceStore(s => s.workspaceDir)
   const loadWorkspaceDir = useWorkspaceStore(s => s.loadWorkspaceDir)
 
+  // ── Shared graph store (feeds CityView) ─────────────────────
+  const { viewMode, setViewMode, setGraphData: setStoreGraphData } = useGraphStore()
+
   // ── SVG + D3 refs ───────────────────────────────────────────
   const svgRef   = useRef<SVGSVGElement>(null)
   const simRef   = useRef<d3.Simulation<any, any> | null>(null)
@@ -157,6 +162,13 @@ export default function GraphTab() {
   // Keep refs in sync
   useEffect(() => { selectedNodeRef.current = selectedNode }, [selectedNode])
   useEffect(() => { graphDataRef.current = graphData }, [graphData])
+
+  // Sync graph data to shared store (feeds CityView)
+  useEffect(() => {
+    if (graphData) {
+      setStoreGraphData(graphData as any)
+    }
+  }, [graphData, setStoreGraphData])
 
   // ── Lifecycle effects ───────────────────────────────────────
   useEffect(() => { loadWorkspaceDir() }, [loadWorkspaceDir])
@@ -795,6 +807,21 @@ export default function GraphTab() {
           </div>
           <button className="btn-secondary" onClick={zoomFit} disabled={!hasGraph}>⊡ Fit</button>
           <button className="btn-danger" onClick={handleDeleteGraph} disabled={!hasGraph}>✕</button>
+
+          {/* ── View mode toggle pill ── */}
+          <div className="view-toggle-pill">
+            <button
+              className={`view-toggle-btn${viewMode === 'graph' ? ' active' : ''}`}
+              onClick={() => setViewMode('graph')}
+              title="2D force-directed graph"
+            >⬡ Graph</button>
+            <button
+              className={`view-toggle-btn${viewMode === 'city' ? ' active' : ''}`}
+              onClick={() => setViewMode('city')}
+              title="3D code city"
+              disabled={!hasGraph}
+            >🏙 City</button>
+          </div>
         </div>
 
         <div className="graph-toolbar-row">
@@ -919,6 +946,15 @@ export default function GraphTab() {
 
         {/* Canvas area */}
         <div className="graph-canvas">
+          {/* 3D City View — shown when viewMode === 'city' */}
+          {viewMode === 'city' && hasGraph && (
+            <div style={{ position: 'absolute', inset: 0, zIndex: 1 }}>
+              <CityView />
+            </div>
+          )}
+
+          {/* 2D Graph SVG — hidden (not unmounted) when city view is active to preserve D3 sim */}
+          <div style={{ position: 'absolute', inset: 0, opacity: viewMode === 'city' ? 0 : 1, pointerEvents: viewMode === 'city' ? 'none' : 'auto', transition: 'opacity 0.3s' }}>
           {hasDisplay ? (
             <svg ref={svgRef} className="graph-svg" />
           ) : (
@@ -987,6 +1023,8 @@ export default function GraphTab() {
               <div className="tooltip-degree">degree: {getNodeDegree(tooltip.node.id)}</div>
             </div>
           )}
+
+          </div>{/* end 2D graph wrapper */}
 
           {/* Context menu — position is from mouse event, cannot be static CSS */}
           {ctxMenu && (
