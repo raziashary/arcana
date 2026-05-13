@@ -327,42 +327,26 @@ pub async fn get_graph_stats(repo_path: Option<String>) -> Result<GraphStats> {
     tracing::info!("[GraphStats] Getting graph stats for: {}", repo_path);
     let db_path = repo_db_path(&repo_path)?;
     std::fs::create_dir_all(db_path.parent().expect("db_path always has parent"))?;
-    tracing::debug!("[GraphStats] Database path: {:?}", db_path);
-    
+
     let store = GraphStore::open(&db_path)?;
-    let all_nodes = store.get_all_nodes_for_graph(i64::MAX, 0)?;
-    let all_edges = store.get_all_edges_for_graph(i64::MAX, 0)?;
-    tracing::info!("[GraphStats] Loaded {} nodes and {} edges", all_nodes.len(), all_edges.len());
-    
-    let total_nodes = all_nodes.len();
-    let total_edges = all_edges.len();
+
+    // Use COUNT(*) SQL queries instead of loading all rows — avoids megabyte-scale
+    // payloads just to call `.len()` on the resulting Vec.
+    let (total_nodes, total_edges, total_communities) = store.get_graph_counts()?;
+    tracing::info!("[GraphStats] ✅ {} nodes, {} edges, {} communities", total_nodes, total_edges, total_communities);
+
     let average_degree = if total_nodes > 0 {
         (total_edges as f32 * 2.0) / total_nodes as f32
     } else {
         0.0
     };
-    
-    let max_possible_edges = if total_nodes > 1 {
-        total_nodes * (total_nodes - 1) / 2
-    } else {
-        0
-    };
+    let max_possible_edges = if total_nodes > 1 { total_nodes * (total_nodes - 1) / 2 } else { 0 };
     let graph_density = if max_possible_edges > 0 {
         total_edges as f32 / max_possible_edges as f32
     } else {
         0.0
     };
-    
-    // Count communities from node community fields (already persisted by run_clustering
-    // during build). Avoids re-running the expensive clustering algorithm.
-    let total_communities = all_nodes
-        .iter()
-        .filter_map(|n| n.community)
-        .collect::<std::collections::HashSet<i32>>()
-        .len();
-    
-    tracing::info!("[GraphStats] ✅ Stats complete: {} nodes, {} edges, {} communities", total_nodes, total_edges, total_communities);
-    
+
     Ok(GraphStats {
         total_nodes,
         total_edges,
@@ -565,6 +549,48 @@ pub async fn get_suggested_questions(repo_path: Option<String>) -> Result<Vec<se
         }))
         .collect();
     
+    Ok(result)
+}
+
+// ============================================================================
+// SEARCH COMMAND (FTS5-backed)
+// ============================================================================
+
+/// Full-text search over the code graph — uses the FTS5 index when available
+/// and falls back to LIKE. Returns up to `limit` matching project nodes.
+#[tauri::command]
+pub async fn search_graph_nodes(
+    repo_path: Option<String>,
+    query: String,
+    limit: Option<u32>,
+) -> Result<Vec<serde_json::Value>> {
+    let path = repo_path
+        .and_then(|p| if p.is_empty() || p == "." { None } else { Some(p) })
+        .ok_or_else(|| anyhow::anyhow!("repo_path required for search"))?;
+    if query.trim().is_empty() {
+        return Ok(vec![]);
+    }
+    let db_path = repo_db_path(&path)?;
+    std::fs::create_dir_all(db_path.parent().expect("db_path always has parent"))?;
+
+    let store = GraphStore::open(&db_path)?;
+    let nodes = store.search_nodes(&query, limit.unwrap_or(20) as usize)?;
+
+    let result: Vec<_> = nodes
+        .iter()
+        .map(|n| serde_json::json!({
+            "id":       n.qualified_name,
+            "label":    n.name,
+            "kind":     n.kind,
+            "language": n.language,
+            "file_path": n.file_path,
+            "line":     n.line_start,
+            "community": n.community,
+            "community_name": n.community_name,
+            "size":     4.0_f32, // placeholder — frontend uses its own degree map
+        }))
+        .collect();
+
     Ok(result)
 }
 

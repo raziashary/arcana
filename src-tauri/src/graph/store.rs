@@ -608,6 +608,115 @@ impl GraphStore {
         Ok(json)
     }
     
+    // ── Fast aggregate counts ─────────────────────────────────────────────────
+
+    /// Returns (project_node_count, project_edge_count, community_count) using SQL
+    /// COUNT(*) — avoids loading all rows into memory just to compute lengths.
+    /// "Project" nodes/edges exclude `module::` stubs (external deps).
+    pub fn get_graph_counts(&self) -> Result<(usize, usize, usize)> {
+        let conn = self.get_conn()?;
+        let nodes: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM nodes WHERE qualified_name NOT LIKE 'module::%'",
+            [],
+            |row| row.get(0),
+        )?;
+        let edges: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM edges \
+             WHERE source_qualified NOT LIKE 'module::%' \
+               AND target_qualified NOT LIKE 'module::%'",
+            [],
+            |row| row.get(0),
+        )?;
+        let communities: i64 = conn.query_row(
+            "SELECT COUNT(DISTINCT community) FROM nodes WHERE community IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok((nodes as usize, edges as usize, communities as usize))
+    }
+
+    // ── FTS5-backed node search ───────────────────────────────────────────────
+
+    /// Full-text search over node names, qualified names, and file paths.
+    /// Uses the FTS5 virtual table when available; falls back to LIKE otherwise.
+    /// Excludes `module::` stub nodes.
+    pub fn search_nodes(&self, query: &str, limit: usize) -> Result<Vec<GraphNode>> {
+        let conn = self.get_conn()?;
+
+        // Check whether the FTS table exists.
+        let fts_exists: bool = conn.query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='nodes_fts'",
+            [],
+            |row| row.get(0),
+        ).unwrap_or(false);
+
+        // Collect into a named Vec before leaving the stmt scope — fixes the
+        // "stmt does not live long enough" lifetime error (E0597) that appears
+        // when the last expression in a block borrows a local.
+        let nodes: Vec<GraphNode> = if fts_exists {
+            let mut stmt = conn.prepare(
+                "SELECT n.id, n.kind, n.name, n.qualified_name, n.file_path,
+                        n.line_start, n.line_end, n.language, n.parent_name,
+                        n.params, n.return_type, n.modifiers, n.is_test,
+                        n.file_hash, n.community, n.community_name,
+                        n.agent_author, n.task_id, n.worker_locked, n.worktree
+                 FROM nodes_fts
+                 JOIN nodes n ON nodes_fts.rowid = n.id
+                 WHERE nodes_fts MATCH ?
+                   AND n.qualified_name NOT LIKE 'module::%'
+                 ORDER BY rank
+                 LIMIT ?"
+            )?;
+            let mapped = stmt.query_map(params![query, limit as i64], |row| {
+                Ok(GraphNode {
+                    rowid: row.get(0)?, kind: row.get(1)?, name: row.get(2)?,
+                    qualified_name: row.get(3)?, file_path: row.get(4)?,
+                    line_start: row.get(5)?, line_end: row.get(6)?,
+                    language: row.get(7)?, parent_name: row.get(8)?,
+                    params: row.get(9)?, return_type: row.get(10)?,
+                    modifiers: row.get(11)?, is_test: row.get(12)?,
+                    file_hash: row.get(13)?, community: row.get(14)?,
+                    community_name: row.get(15)?, agent_author: row.get(16)?,
+                    task_id: row.get(17)?, worker_locked: row.get(18)?,
+                    worktree: row.get(19)?,
+                })
+            })?;
+            let collected: rusqlite::Result<Vec<GraphNode>> = mapped.collect();
+            collected?
+        } else {
+            let pattern = format!("%{}%", query);
+            let mut stmt = conn.prepare(
+                "SELECT id, kind, name, qualified_name, file_path,
+                        line_start, line_end, language, parent_name,
+                        params, return_type, modifiers, is_test,
+                        file_hash, community, community_name,
+                        agent_author, task_id, worker_locked, worktree
+                 FROM nodes
+                 WHERE qualified_name NOT LIKE 'module::%'
+                   AND (name LIKE ? OR qualified_name LIKE ? OR file_path LIKE ?)
+                 LIMIT ?"
+            )?;
+            let mapped = stmt.query_map(params![&pattern, &pattern, &pattern, limit as i64], |row| {
+                Ok(GraphNode {
+                    rowid: row.get(0)?, kind: row.get(1)?, name: row.get(2)?,
+                    qualified_name: row.get(3)?, file_path: row.get(4)?,
+                    line_start: row.get(5)?, line_end: row.get(6)?,
+                    language: row.get(7)?, parent_name: row.get(8)?,
+                    params: row.get(9)?, return_type: row.get(10)?,
+                    modifiers: row.get(11)?, is_test: row.get(12)?,
+                    file_hash: row.get(13)?, community: row.get(14)?,
+                    community_name: row.get(15)?, agent_author: row.get(16)?,
+                    task_id: row.get(17)?, worker_locked: row.get(18)?,
+                    worktree: row.get(19)?,
+                })
+            })?;
+            let collected: rusqlite::Result<Vec<GraphNode>> = mapped.collect();
+            collected?
+        };
+
+        Ok(nodes)
+    }
+
     pub fn rebuild_fts_index(&self) -> Result<usize> {
         let mut conn = self.get_conn()?;
         let tx = conn.transaction()?;

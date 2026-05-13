@@ -150,7 +150,7 @@ pub fn hash_file(path: &Path) -> Result<String> {
 // ── Cache Functions ───────────────────────────────────────────────────────
 
 // Bump this whenever the extractor logic changes — invalidates all cached entries.
-const EXTRACTOR_VERSION: u32 = 4;
+const EXTRACTOR_VERSION: u32 = 5;
 
 pub fn load_cached(file_path: &Path, file_hash: &str) -> Option<ExtractionResult> {
     let cache_dir = dirs::home_dir()?.join(".autodev/graph_cache");
@@ -212,8 +212,8 @@ pub fn extract(path: &Path, repo_root: &Path) -> Result<ExtractionResult> {
     let result = match language.as_str() {
         "python" => extract_python(path, &source, &file_hash, repo_root)?,
         "javascript" | "typescript" => extract_js_ts(path, &source, &file_hash)?,
-        "rust" => extract_rust(path, &source, &file_hash)?,
-        "go" => extract_go(path, &source, &file_hash)?,
+        "rust" => extract_rust(path, &source, &file_hash, repo_root)?,
+        "go" => extract_go(path, &source, &file_hash, repo_root)?,
         "java" => extract_java(path, &source, &file_hash)?,
         "cpp" | "c" => extract_c_cpp(path, &source, &file_hash)?,
         "ruby" => extract_ruby(path, &source, &file_hash)?,
@@ -471,7 +471,9 @@ fn extract_python(path: &Path, source: &[u8], file_hash: &str, repo_root: &Path)
 
     // 6. CALLS edge detection — G-11: heuristic second pass for intra-file call sites.
     //    Scans source for `name(` tokens where name matches a function defined in this file.
-    //    Emits one deduplicated CALLS edge per (file → callee) pair.
+    //    Uses line-number bracketing to attribute each call to its enclosing function
+    //    (the last function definition that starts at or before the call site).
+    //    Emits one deduplicated CALLS edge per (caller → callee) pair.
     {
         let known_funcs: std::collections::HashMap<String, String> = result
             .nodes
@@ -481,20 +483,40 @@ fn extract_python(path: &Path, source: &[u8], file_hash: &str, repo_root: &Path)
             .collect();
 
         if !known_funcs.is_empty() {
+            // Sorted (line_start, qualified_name) list for enclosing-function lookup.
+            let mut fn_lines: Vec<(i32, String)> = result
+                .nodes
+                .iter()
+                .filter(|n| matches!(n.kind, NodeKind::Function | NodeKind::Test))
+                .map(|n| (n.line_start, n.qualified_name.clone()))
+                .collect();
+            fn_lines.sort_by_key(|&(l, _)| l);
+
             let call_re = regex::Regex::new(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(").unwrap();
-            let mut emitted: std::collections::HashSet<String> = std::collections::HashSet::new();
+            // emitted: Set<(caller_qname, callee_qname)> — one edge per unique pair
+            let mut emitted: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
 
             for cap in call_re.captures_iter(source_str) {
                 let callee_name = cap.get(1).unwrap().as_str();
                 if let Some(callee_qname) = known_funcs.get(callee_name) {
-                    if emitted.insert(callee_qname.clone()) {
-                        let line = line_of(cap.get(0).unwrap().start());
+                    let call_line = line_of(cap.get(0).unwrap().start());
+                    // Find enclosing function: last entry with line_start ≤ call_line
+                    let idx = fn_lines.partition_point(|&(l, _)| l <= call_line);
+                    let source_qname: String = if idx > 0 {
+                        fn_lines[idx - 1].1.clone()
+                    } else {
+                        file_path.clone() // call appears before any def — attribute to file
+                    };
+                    // Skip self-referential edges (function contains its own name)
+                    if source_qname == *callee_qname { continue; }
+                    let key = (source_qname.clone(), callee_qname.clone());
+                    if emitted.insert(key) {
                         result.edges.push(EdgeInfo {
                             kind: EdgeKind::Calls,
-                            source_qualified: file_path.clone(),
+                            source_qualified: source_qname,
                             target_qualified: callee_qname.clone(),
                             file_path: file_path.clone(),
-                            line,
+                            line: call_line,
                             confidence: 0.8,
                             confidence_tier: ConfidenceTier::Extracted,
                             weight: 1.0,
@@ -663,7 +685,7 @@ fn resolve_js_import(current_file: &Path, specifier: &str) -> Option<PathBuf> {
     None
 }
 
-fn extract_rust(path: &Path, source: &[u8], file_hash: &str) -> Result<ExtractionResult> {
+fn extract_rust(path: &Path, source: &[u8], file_hash: &str, repo_root: &Path) -> Result<ExtractionResult> {
     let mut result = ExtractionResult::default();
     let file_path = path.to_string_lossy().to_string();
     let is_test_file = file_path.contains("/tests/") || file_path.ends_with("_test.rs");
@@ -743,10 +765,131 @@ fn extract_rust(path: &Path, source: &[u8], file_hash: &str) -> Result<Extractio
             confidence_tier: ConfidenceTier::Extracted, weight: 1.0, relation: None });
     }
 
+    // use statements — IMPORTS_FROM edges to intra-project files, or module:: stubs for extern/std.
+    // Handles: `use crate::a::b`, `use super::a`, `use self::a`, `use extern_crate::a`.
+    // Strips leading `pub ` and trailing `as Alias` and `{grouped, items}`.
+    let use_re = regex::Regex::new(r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?\s+)?use\s+([\w:{}*,\s]+)\s*;").unwrap();
+    for cap in use_re.captures_iter(source_str) {
+        let raw_path = cap.get(1).unwrap().as_str().trim();
+        let line = line_of(cap.get(0).unwrap().start());
+        // Expand grouped use: `crate::a::{B, C}` → ["crate::a::B", "crate::a::C"]
+        let expanded = expand_rust_use_path(raw_path);
+        for use_path in expanded {
+            let resolved = resolve_rust_use(path, &use_path, repo_root);
+            let (target, is_ext) = match &resolved {
+                Some(p) => (p.to_string_lossy().to_string(), false),
+                None => (format!("module::{}", use_path), true),
+            };
+            result.edges.push(EdgeInfo {
+                kind: EdgeKind::ImportsFrom,
+                source_qualified: file_path.clone(),
+                target_qualified: target.clone(),
+                file_path: file_path.clone(),
+                line,
+                confidence: if is_ext { 0.7 } else { 1.0 },
+                confidence_tier: if is_ext { ConfidenceTier::Inferred } else { ConfidenceTier::Extracted },
+                weight: 1.0,
+                relation: Some(format!("use {}", use_path)),
+            });
+            if is_ext {
+                let mod_name = use_path.split("::").next().unwrap_or(&use_path);
+                result.nodes.push(NodeInfo {
+                    kind: NodeKind::Module, name: mod_name.to_string(),
+                    qualified_name: target, file_path: file_path.clone(),
+                    line_start: line, line_end: line, language: "rust".to_string(),
+                    parent_name: None, params: None, return_type: None,
+                    modifiers: Some("external".to_string()), is_test: false,
+                    file_hash: file_hash.to_string(),
+                });
+            }
+        }
+    }
+
     Ok(result)
 }
 
-fn extract_go(path: &Path, source: &[u8], file_hash: &str) -> Result<ExtractionResult> {
+// ── Rust use-path helpers ─────────────────────────────────────────────────────
+
+/// Expands a raw `use` path string into a flat list of qualified paths.
+/// Handles grouped imports: `crate::a::{B, C}` → ["crate::a::B", "crate::a::C"].
+/// Strips glob (`*`) and `as Alias` suffixes.
+fn expand_rust_use_path(raw: &str) -> Vec<String> {
+    let raw = raw.trim();
+    if let Some(brace_start) = raw.find('{') {
+        let prefix = raw[..brace_start].trim_end_matches(':');
+        let inner = raw[brace_start + 1..].trim_end_matches('}');
+        return inner
+            .split(',')
+            .map(|item| {
+                let item = item.trim().split(" as ").next().unwrap_or("").trim();
+                if item.is_empty() || item == "*" {
+                    prefix.to_string()
+                } else {
+                    format!("{}::{}", prefix, item)
+                }
+            })
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+    // Strip `as Alias`
+    let path = raw.split(" as ").next().unwrap_or(raw).trim();
+    if path == "*" || path.is_empty() { return vec![]; }
+    vec![path.to_string()]
+}
+
+/// Tries to resolve a Rust use-path to an absolute `.rs` file within the repo.
+/// Maps:
+///   `crate::foo::bar`  → `{src_root}/foo/bar.rs` or `{src_root}/foo/bar/mod.rs`
+///   `super::foo`       → sibling of `path`'s parent dir
+///   `self::foo`        → sibling of `path`
+///
+/// Standard library (`std`, `core`, `alloc`), `extern crate`, and third-party
+/// crate roots are left as `module::` stubs.
+fn resolve_rust_use(current_file: &Path, use_path: &str, repo_root: &Path) -> Option<PathBuf> {
+    let segments: Vec<&str> = use_path.split("::").collect();
+    if segments.is_empty() { return None; }
+
+    // Determine the starting directory based on the path anchor
+    let (base_dir, rest_segments) = match segments[0] {
+        "crate" => {
+            // `crate::` starts from the crate root. Heuristic: look for `src/` under repo_root,
+            // or fall back to repo_root itself (for single-file or workspace member layouts).
+            let src = repo_root.join("src");
+            let crate_root = if src.is_dir() { src } else { repo_root.to_path_buf() };
+            (crate_root, &segments[1..])
+        }
+        "super" => {
+            // `super::` → parent package directory of the current file
+            let parent = current_file.parent()?.parent()?;
+            if !parent.starts_with(repo_root) { return None; }
+            (parent.to_path_buf(), &segments[1..])
+        }
+        "self" => {
+            let dir = current_file.parent()?;
+            (dir.to_path_buf(), &segments[1..])
+        }
+        // External crates and std — not resolvable without Cargo metadata
+        "std" | "core" | "alloc" | "proc_macro" => return None,
+        _ => return None,
+    };
+
+    if rest_segments.is_empty() { return None; }
+
+    // Build candidate path: treat every segment but the last as a directory component,
+    // last segment as a filename (with .rs or /mod.rs).
+    // We walk all intermediate segments as directories, and the final segment as a module.
+    let module_path: PathBuf = rest_segments.iter().fold(base_dir, |p, seg| p.join(seg));
+    // Try as a .rs file
+    let as_file = module_path.with_extension("rs");
+    if as_file.exists() && as_file.starts_with(repo_root) { return Some(as_file); }
+    // Try as a directory module (mod.rs)
+    let as_mod = module_path.join("mod.rs");
+    if as_mod.exists() && as_mod.starts_with(repo_root) { return Some(as_mod); }
+
+    None
+}
+
+fn extract_go(path: &Path, source: &[u8], file_hash: &str, repo_root: &Path) -> Result<ExtractionResult> {
     let mut result = ExtractionResult::default();
     let file_path = path.to_string_lossy().to_string();
     let is_test_file = file_path.ends_with("_test.go");
@@ -797,7 +940,93 @@ fn extract_go(path: &Path, source: &[u8], file_hash: &str) -> Result<ExtractionR
             confidence_tier: ConfidenceTier::Extracted, weight: 1.0, relation: None });
     }
 
+    // Import statements — both single-line and block forms.
+    //   Single: `import "path/to/pkg"`
+    //   Block:  `import (\n    "path/to/pkg"\n    alias "other/pkg"\n)`
+    // Relative imports (`./sub`, `../sibling`) are resolved to actual files.
+    // Package-path imports (e.g. `github.com/…` or Go stdlib) become module:: stubs.
+    let import_spec_re = regex::Regex::new(r#"(?m)"([^"]+)""#).unwrap();
+    // Match single-line: import "…"
+    let single_import_re = regex::Regex::new(r#"(?m)^import\s+"([^"]+)""#).unwrap();
+    // Match block: import ( … ) — capture everything between parens
+    let block_import_re = regex::Regex::new(r"(?ms)^import\s*\(([^)]*)\)").unwrap();
+
+    let mut emit_go_import = |spec: &str, line: i32, result: &mut ExtractionResult| {
+        let resolved = resolve_go_import(path, spec, repo_root);
+        let (target, is_ext) = match &resolved {
+            Some(p) => (p.to_string_lossy().to_string(), false),
+            None => (format!("module::{}", spec), true),
+        };
+        result.edges.push(EdgeInfo {
+            kind: EdgeKind::ImportsFrom, source_qualified: file_path.clone(),
+            target_qualified: target.clone(), file_path: file_path.clone(), line,
+            confidence: if is_ext { 0.7 } else { 1.0 },
+            confidence_tier: if is_ext { ConfidenceTier::Inferred } else { ConfidenceTier::Extracted },
+            weight: 1.0, relation: Some(format!("import \"{}\"", spec)),
+        });
+        if is_ext {
+            let mod_name = spec.split('/').last().unwrap_or(spec);
+            result.nodes.push(NodeInfo {
+                kind: NodeKind::Module, name: mod_name.to_string(),
+                qualified_name: target, file_path: file_path.clone(),
+                line_start: line, line_end: line, language: "go".to_string(),
+                parent_name: None, params: None, return_type: None,
+                modifiers: Some("external".to_string()), is_test: false,
+                file_hash: file_hash.to_string(),
+            });
+        }
+    };
+
+    for cap in single_import_re.captures_iter(source_str) {
+        let spec = cap.get(1).unwrap().as_str();
+        let line = line_of(cap.get(0).unwrap().start());
+        emit_go_import(spec, line, &mut result);
+    }
+    for block_cap in block_import_re.captures_iter(source_str) {
+        let block_start_line = line_of(block_cap.get(0).unwrap().start());
+        let block_body = block_cap.get(1).unwrap().as_str();
+        for spec_cap in import_spec_re.captures_iter(block_body) {
+            let spec = spec_cap.get(1).unwrap().as_str();
+            // Approximate line: block_start_line + newlines before this match
+            let inner_line = block_start_line
+                + block_body[..spec_cap.get(0).unwrap().start()].matches('\n').count() as i32;
+            emit_go_import(spec, inner_line, &mut result);
+        }
+    }
+
     Ok(result)
+}
+
+// ── Go import resolver ────────────────────────────────────────────────────────
+
+/// Resolves a Go import path to an absolute file within the repo.
+/// Only relative imports (`./sub` or `../sibling`) can be resolved without go.mod.
+/// All other import paths (stdlib, github.com/…, etc.) return None → module:: stub.
+fn resolve_go_import(current_file: &Path, import_path: &str, repo_root: &Path) -> Option<PathBuf> {
+    if !import_path.starts_with('.') { return None; }
+    let base = current_file.parent()?;
+    let target_dir = base.join(import_path);
+    // Canonicalize to resolve `../` components
+    let canonical = target_dir.canonicalize().ok()?;
+    if !canonical.starts_with(repo_root) { return None; }
+    // Return the directory itself — the graph will have a File node for each .go file inside.
+    // We point at the first .go file we find as a representative, or the dir path if none.
+    if canonical.is_dir() {
+        // Look for a non-test .go file to use as the target
+        if let Ok(entries) = std::fs::read_dir(&canonical) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.extension().and_then(|e| e.to_str()) == Some("go")
+                    && !p.file_name().and_then(|n| n.to_str()).unwrap_or("").ends_with("_test.go")
+                {
+                    return Some(p);
+                }
+            }
+        }
+        Some(canonical)
+    } else {
+        None
+    }
 }
 
 fn extract_java(path: &Path, source: &[u8], file_hash: &str) -> Result<ExtractionResult> {

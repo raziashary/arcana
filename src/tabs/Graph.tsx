@@ -1,13 +1,12 @@
 ﻿// Graph tab — code knowledge graph visualization (D3 force-directed)
 
-import { useEffect, useState, useRef, useCallback } from 'react'
 import * as d3 from 'd3'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 import './Graph.css'
 
-// ── Visual constants (AutoDev Industrial Dark palette) ──────────────
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 const COMMUNITY_COLORS = [
   '#4E79A7', '#F28E2B', '#59A14F', '#E15759', '#76B7B2',
   '#EDC948', '#B07AA1', '#FF9DA7', '#9C755F', '#BAB0AC',
@@ -147,6 +146,14 @@ export default function GraphTab() {
   const [showAllIn, setShowAllIn] = useState(false)
   const [showAllOut, setShowAllOut] = useState(false)
 
+  // Analysis panel state
+  const [analysisPanel, setAnalysisPanel] = useState<{
+    type: 'god_nodes' | 'connections' | 'questions' | 'report'
+    title: string
+    data: any[]
+    isLoading: boolean
+  } | null>(null)
+
   // Keep refs in sync
   useEffect(() => { selectedNodeRef.current = selectedNode }, [selectedNode])
   useEffect(() => { graphDataRef.current = graphData }, [graphData])
@@ -170,6 +177,54 @@ export default function GraphTab() {
     })
     return () => { unsub.then(fn => fn()) }
   }, [])
+
+  // ── Derived display data (respects renderMode) ───────────────────────
+  // 'auto'      → use whatever the backend returned (may be aggregated)
+  // 'full'      → prefer individual nodes (backend already does this for small graphs)
+  // 'community' → force community super-nodes even when graph is small
+  const displayData = useMemo((): GraphVisualizationData | null => {
+    if (!graphData) return null
+    if (renderMode === 'auto' || renderMode === 'full') return graphData
+
+    // renderMode === 'community' — collapse individual nodes into community super-nodes
+    if (!graphData.is_aggregated) {
+      const commMap = new Map<number, { name: string; members: string[] }>()
+      graphData.nodes.forEach(n => {
+        if (n.community === undefined || n.community === null) return
+        if (!commMap.has(n.community)) {
+          commMap.set(n.community, { name: n.community_name ?? `Community ${n.community}`, members: [] })
+        }
+        commMap.get(n.community)!.members.push(n.id)
+      })
+      const superNodes: VisualizationNode[] = []
+      commMap.forEach((info, id) => {
+        superNodes.push({
+          id: `community::${id}`, label: info.name, kind: 'module', language: 'mixed',
+          community: id, community_name: info.name, file_path: '',
+          size: Math.min(22, 4 + Math.log(1 + info.members.length) * 3.5),
+        })
+      })
+      const edgeMap = new Map<string, VisualizationEdge>()
+      graphData.edges.forEach(e => {
+        const srcId = typeof e.source === 'string' ? e.source : (e.source as VisualizationNode).id
+        const tgtId = typeof e.target === 'string' ? e.target : (e.target as VisualizationNode).id
+        const srcNode = graphData.nodes.find(n => n.id === srcId)
+        const tgtNode = graphData.nodes.find(n => n.id === tgtId)
+        if (!srcNode || !tgtNode) return
+        const sc = srcNode.community, tc = tgtNode.community
+        if (sc === undefined || tc === undefined || sc === tc) return
+        const key = `${sc}|${tc}|${e.kind}`
+        if (!edgeMap.has(key)) edgeMap.set(key, { source: `community::${sc}`, target: `community::${tc}`, kind: e.kind, weight: 0 })
+        edgeMap.get(key)!.weight += e.weight
+      })
+      return {
+        nodes: superNodes, edges: Array.from(edgeMap.values()),
+        communities: graphData.communities, is_aggregated: true,
+        total_node_count: graphData.nodes.length,
+      }
+    }
+    return graphData
+  }, [graphData, renderMode])
 
   // ── D3 force graph init ──────────────────────────────────────
   const applyFocusMode = useCallback((nodeId: string | null) => {
@@ -258,16 +313,16 @@ export default function GraphTab() {
   }, [])
 
   const initD3Graph = useCallback(() => {
-    if (!svgRef.current || !graphData) return
+    if (!svgRef.current || !displayData) return
     if (simRef.current) simRef.current.stop()
 
     const el = svgRef.current
     const W = el.clientWidth || 800
     const H = el.clientHeight || 600
 
-    // Degree map from full graph
+    // Degree map from display edges
     const degMap = new Map<string, number>()
-    graphData.edges.forEach(e => {
+    displayData.edges.forEach(e => {
       const s = typeof e.source === 'string' ? e.source : (e.source as VisualizationNode).id
       const t = typeof e.target === 'string' ? e.target : (e.target as VisualizationNode).id
       degMap.set(s, (degMap.get(s) || 0) + 1)
@@ -275,13 +330,13 @@ export default function GraphTab() {
     })
 
     // Filter nodes by minDegree
-    const nodes: any[] = graphData.nodes
+    const nodes: any[] = displayData.nodes
       .filter(n => (degMap.get(n.id) || 0) >= minDegree || selectedNodeRef.current === n.id)
       .map(n => ({ ...n, _degree: degMap.get(n.id) || 0 }))
     const nodeIds = new Set(nodes.map((n: any) => n.id))
 
     // Filter edges by kind + node availability
-    const edges: any[] = graphData.edges
+    const edges: any[] = displayData.edges
       .filter(e => {
         const s = typeof e.source === 'string' ? e.source : (e.source as VisualizationNode).id
         const t = typeof e.target === 'string' ? e.target : (e.target as VisualizationNode).id
@@ -294,9 +349,10 @@ export default function GraphTab() {
         weight: e.weight,
       }))
 
-    // Community color map
+    // Community color map — keyed by community id, not array position,
+    // so colors are stable across re-renders even if list order changes.
     const commColorMap: Record<number, string> = {}
-    graphData.communities.forEach((c, i) => { commColorMap[c.id] = COMMUNITY_COLORS[i % COMMUNITY_COLORS.length] })
+    displayData.communities.forEach((c) => { commColorMap[c.id] = COMMUNITY_COLORS[c.id % COMMUNITY_COLORS.length] })
 
     // Community-seeded initial positions
     const commIds = [...new Set(nodes.map((n: any) => n.community ?? -1))]
@@ -496,10 +552,10 @@ export default function GraphTab() {
     const selNode = selectedNodeRef.current
     if (selNode) applyFocusMode(selNode)
     else if (selectedCommunity !== null) applyCommunityFilter(selectedCommunity)
-  }, [graphData, edgeFilters, minDegree, selectedCommunity, applyFocusMode, applyCommunityFilter, updateHulls])
+  }, [displayData, edgeFilters, minDegree, selectedCommunity, applyFocusMode, applyCommunityFilter, updateHulls])
 
   useEffect(() => {
-    if (graphData && svgRef.current) initD3Graph()
+    if (displayData && svgRef.current) initD3Graph()
     return () => { if (simRef.current) simRef.current.stop() }
   }, [initD3Graph])
 
@@ -509,23 +565,45 @@ export default function GraphTab() {
     if (!selectedNode) applyCommunityFilter(selectedCommunity)
   }, [selectedCommunity, selectedNode, applyCommunityFilter])
 
+  // FTS5-backed search — queries the SQLite full-text index for the first 20 matches.
+  // Falls back gracefully (the backend handler uses LIKE when FTS index not yet built).
   useEffect(() => {
-    if (!searchQuery.trim() || !graphData) { setSearchResults([]); return }
-    const q = searchQuery.toLowerCase()
-    setSearchResults(graphData.nodes.filter(n =>
-      n.label.toLowerCase().includes(q) || n.file_path.toLowerCase().includes(q)
-    ).slice(0, 10))
-  }, [searchQuery, graphData])
+    if (!searchQuery.trim()) { setSearchResults([]); return }
+    const q = searchQuery.trim()
+    let cancelled = false
+    const run = async () => {
+      try {
+        const results = await invoke<VisualizationNode[]>('search_graph_nodes', {
+          repoPath: workspaceDir,
+          query: q,
+          limit: 20,
+        })
+        if (!cancelled) setSearchResults(results)
+      } catch {
+        // Backend unavailable — fall back to client-side filter on loaded nodes
+        if (!cancelled && graphData) {
+          const ql = q.toLowerCase()
+          setSearchResults(
+            graphData.nodes
+              .filter(n => n.label.toLowerCase().includes(ql) || n.file_path.toLowerCase().includes(ql))
+              .slice(0, 20)
+          )
+        }
+      }
+    }
+    const timer = setTimeout(run, 120) // debounce 120 ms
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [searchQuery, workspaceDir, graphData])
 
   // ── Zoom controls ────────────────────────────────────────────
   const zoomIn  = () => { if (svgRef.current && zoomRef.current) d3.select(svgRef.current).call(zoomRef.current.scaleBy, 1.4) }
   const zoomOut = () => { if (svgRef.current && zoomRef.current) d3.select(svgRef.current).call(zoomRef.current.scaleBy, 0.7) }
   const zoomFit = () => {
-    if (!svgRef.current || !zoomRef.current || !graphData?.nodes.length) return
+    if (!svgRef.current || !zoomRef.current || !displayData?.nodes.length) return
     const el = svgRef.current
     const W = el.clientWidth || 800, H = el.clientHeight || 600
-    const xs = graphData.nodes.map(n => n.x ?? W / 2)
-    const ys = graphData.nodes.map(n => n.y ?? H / 2)
+    const xs = displayData.nodes.map(n => n.x ?? W / 2)
+    const ys = displayData.nodes.map(n => n.y ?? H / 2)
     const x0 = Math.min(...xs), x1 = Math.max(...xs)
     const y0 = Math.min(...ys), y1 = Math.max(...ys)
     const bw = x1 - x0 || 1, bh = y1 - y0 || 1
@@ -534,8 +612,8 @@ export default function GraphTab() {
       .call(zoomRef.current.transform, d3.zoomIdentity.translate(W / 2 - s * (x0 + x1) / 2, H / 2 - s * (y0 + y1) / 2).scale(s))
   }
   const zoomToNode = (nodeId: string) => {
-    if (!svgRef.current || !zoomRef.current || !graphData) return
-    const n = graphData.nodes.find(x => x.id === nodeId)
+    if (!svgRef.current || !zoomRef.current || !displayData) return
+    const n = displayData.nodes.find(x => x.id === nodeId)
     if (!n || n.x === undefined) return
     const el = svgRef.current
     const W = el.clientWidth || 800, H = el.clientHeight || 600
@@ -614,6 +692,55 @@ export default function GraphTab() {
     catch (err) { console.error('[Graph] open_in_ide:', err) }
   }
 
+  const handleGodNodes = async () => {
+    if (!workspaceDir) return
+    setAnalysisPanel({ type: 'god_nodes', title: '🔍 God Nodes', data: [], isLoading: true })
+    try {
+      const data = await invoke<any[]>('get_god_nodes', { repoPath: workspaceDir, topN: 15 })
+      setAnalysisPanel(p => p ? { ...p, data, isLoading: false } : null)
+    } catch (err) {
+      console.error('[Graph] get_god_nodes:', err)
+      setAnalysisPanel(p => p ? { ...p, isLoading: false } : null)
+    }
+  }
+
+  const handleSurprisingConnections = async () => {
+    if (!workspaceDir) return
+    setAnalysisPanel({ type: 'connections', title: '⚡ Surprising Connections', data: [], isLoading: true })
+    try {
+      const data = await invoke<any[]>('get_surprising_connections', { repoPath: workspaceDir, topN: 10 })
+      setAnalysisPanel(p => p ? { ...p, data, isLoading: false } : null)
+    } catch (err) {
+      console.error('[Graph] get_surprising_connections:', err)
+      setAnalysisPanel(p => p ? { ...p, isLoading: false } : null)
+    }
+  }
+
+  const handleSuggestedQuestions = async () => {
+    if (!workspaceDir) return
+    setAnalysisPanel({ type: 'questions', title: '❓ Suggested Questions', data: [], isLoading: true })
+    try {
+      const data = await invoke<any[]>('get_suggested_questions', { repoPath: workspaceDir })
+      setAnalysisPanel(p => p ? { ...p, data, isLoading: false } : null)
+    } catch (err) {
+      console.error('[Graph] get_suggested_questions:', err)
+      setAnalysisPanel(p => p ? { ...p, isLoading: false } : null)
+    }
+  }
+
+  const handleReport = async () => {
+    if (!workspaceDir) return
+    setAnalysisPanel({ type: 'report', title: '📋 Graph Report', data: [], isLoading: true })
+    try {
+      const markdown = await invoke<string>('get_graph_report', { repoPath: workspaceDir })
+      // Wrap the raw markdown string as a single-item array so the panel renders it
+      setAnalysisPanel(p => p ? { ...p, data: [{ markdown }], isLoading: false } : null)
+    } catch (err) {
+      console.error('[Graph] get_graph_report:', err)
+      setAnalysisPanel(p => p ? { ...p, isLoading: false } : null)
+    }
+  }
+
   const getNodeDegree = (nodeId: string) => {
     if (!graphData) return 0
     return graphData.edges.filter(e => {
@@ -638,6 +765,7 @@ export default function GraphTab() {
 
   const ALL_EDGE_KINDS = Object.keys(EDGE_COLORS)
   const hasGraph = Boolean(graphData && graphData.nodes.length > 0)
+  const hasDisplay = Boolean(displayData && displayData.nodes.length > 0)
 
   // ── Render ───────────────────────────────────────────────────
   return (
@@ -773,13 +901,15 @@ export default function GraphTab() {
         )}
       </div>
 
-      {/* ── Aggregation notice (shown when >2000 nodes triggers community view) ── */}
-      {graphData?.is_aggregated && (
+      {/* ── Aggregation notice (shown when community view is active) ── */}
+      {displayData?.is_aggregated && (
         <div className="graph-aggregation-banner">
           <span className="graph-aggregation-icon">⬡</span>
           <span className="graph-aggregation-text">
-            Large codebase ({graphData.total_node_count?.toLocaleString()} nodes) — showing community overview.
-            Each node represents a community. Narrow scope or filter to inspect individual files.
+            {renderMode === 'community'
+              ? `Community view — ${displayData.nodes.length} communities shown. Switch to Full to see individual nodes.`
+              : `Large codebase (${displayData.total_node_count?.toLocaleString()} nodes) — showing community overview. Switch to Full or narrow scope to inspect individual files.`
+            }
           </span>
         </div>
       )}
@@ -789,7 +919,7 @@ export default function GraphTab() {
 
         {/* Canvas area */}
         <div className="graph-canvas">
-          {hasGraph ? (
+          {hasDisplay ? (
             <svg ref={svgRef} className="graph-svg" />
           ) : (
             <div className="canvas-placeholder">
@@ -1001,7 +1131,7 @@ export default function GraphTab() {
             {commOpen && (
               <div className="sidebar-section-body">
                 <div className="communities-list">
-                  {communities.map((c, i) => (
+                  {communities.map((c) => (
                     <div
                       key={c.id}
                       className={`community-item${selectedCommunity === c.id ? ' selected' : ''}`}
@@ -1009,8 +1139,8 @@ export default function GraphTab() {
                       role="button"
                       tabIndex={0}
                     >
-                      {/* community swatch color is runtime-indexed — cannot be static CSS */}
-                      <div className="community-swatch" style={{ background: COMMUNITY_COLORS[i % COMMUNITY_COLORS.length] }} />
+                      {/* community swatch color — pinned to c.id so it never shifts */}
+                      <div className="community-swatch" style={{ background: COMMUNITY_COLORS[c.id % COMMUNITY_COLORS.length] }} />
                       <span className="community-name">{c.name}</span>
                       <span className="community-count">{c.members.length}</span>
                       {/* cohesion color is runtime-computed — cannot be static CSS */}
@@ -1031,11 +1161,92 @@ export default function GraphTab() {
             </div>
             <div className="sidebar-section-body">
               <div className="analysis-btns">
-                <button className="btn-small">🔍 God Nodes</button>
-                <button className="btn-small">⚡ Connections</button>
-                <button className="btn-small">❓ Questions</button>
-                <button className="btn-small">📋 Report</button>
+                <button
+                  className={`btn-small${analysisPanel?.type === 'god_nodes' ? ' active' : ''}`}
+                  onClick={handleGodNodes}
+                  disabled={!hasGraph}
+                  title="Find highly-connected hub nodes"
+                >🔍 God Nodes</button>
+                <button
+                  className={`btn-small${analysisPanel?.type === 'connections' ? ' active' : ''}`}
+                  onClick={handleSurprisingConnections}
+                  disabled={!hasGraph}
+                  title="Find unexpected cross-module connections"
+                >⚡ Connections</button>
+                <button
+                  className={`btn-small${analysisPanel?.type === 'questions' ? ' active' : ''}`}
+                  onClick={handleSuggestedQuestions}
+                  disabled={!hasGraph}
+                  title="Get AI-suggested exploration questions"
+                >❓ Questions</button>
+                <button
+                  className={`btn-small${analysisPanel?.type === 'report' ? ' active' : ''}`}
+                  onClick={handleReport}
+                  disabled={!hasGraph}
+                  title="Generate full graph analysis report"
+                >📋 Report</button>
               </div>
+
+              {/* Analysis results panel */}
+              {analysisPanel && (
+                <div className="analysis-panel">
+                  <div className="analysis-panel-header">
+                    <span className="analysis-panel-title">{analysisPanel.title}</span>
+                    <button className="analysis-panel-close" onClick={() => setAnalysisPanel(null)}>✕</button>
+                  </div>
+                  {analysisPanel.isLoading ? (
+                    <div className="analysis-panel-loading">Analysing…</div>
+                  ) : analysisPanel.data.length === 0 ? (
+                    <div className="analysis-panel-empty">No results found.</div>
+                  ) : analysisPanel.type === 'report' ? (
+                    <pre className="analysis-panel-report">{analysisPanel.data[0]?.markdown}</pre>
+                  ) : analysisPanel.type === 'god_nodes' ? (
+                    <div className="analysis-panel-list">
+                      {analysisPanel.data.map((n: any, i: number) => (
+                        <div
+                          key={i}
+                          className="analysis-panel-item"
+                          onClick={() => { setSelectedNode(n.qualified_name); zoomToNode(n.qualified_name) }}
+                        >
+                          <span className="analysis-item-rank">#{i + 1}</span>
+                          <span className="analysis-item-name">{n.name}</span>
+                          <span className="analysis-item-meta">deg {n.degree}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : analysisPanel.type === 'connections' ? (
+                    <div className="analysis-panel-list">
+                      {analysisPanel.data.map((c: any, i: number) => (
+                        <div key={i} className="analysis-panel-item analysis-panel-item--conn">
+                          <div className="analysis-conn-nodes">
+                            <span
+                              className="analysis-conn-node"
+                              onClick={() => setSelectedNode(c.source)}
+                              title={c.source}
+                            >{c.source.split('::').pop()}</span>
+                            <span className="analysis-conn-arrow">→</span>
+                            <span
+                              className="analysis-conn-node"
+                              onClick={() => setSelectedNode(c.target)}
+                              title={c.target}
+                            >{c.target.split('::').pop()}</span>
+                          </div>
+                          <div className="analysis-conn-why">{c.why}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="analysis-panel-list">
+                      {analysisPanel.data.map((q: any, i: number) => (
+                        <div key={i} className="analysis-panel-item analysis-panel-item--question">
+                          <span className="analysis-question-badge">{q.type}</span>
+                          <span className="analysis-question-text">{q.question}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 

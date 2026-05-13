@@ -128,7 +128,7 @@ pub fn register_commands(
             build_graph, update_graph, get_graph_stats, export_graph,
             get_graph_communities, get_graph_report, get_graph_nodes_for_viz,
             get_graph_edges_for_viz, get_god_nodes, get_surprising_connections,
-            get_suggested_questions, register_repo, unregister_repo, list_repos,
+            get_suggested_questions, search_graph_nodes, register_repo, unregister_repo, list_repos,
             merge_all_repos_cmd, delete_graph, open_in_ide, get_graph_visualization_data,
         },
         plugin_commands::{
@@ -383,6 +383,7 @@ pub fn register_commands(
         get_god_nodes,
         get_surprising_connections,
         get_suggested_questions,
+        search_graph_nodes,
         register_repo,
         unregister_repo,
         list_repos,
