@@ -71,6 +71,14 @@ impl AnalyticsManager {
         self.exporter.clone()
     }
 
+    /// Doc 02 Phase 3.4 — surface the on-disk DB path for the one-shot
+    /// diagnostic log emitted on first dashboard hit. Returns None only
+    /// in the (impossible-since-Phase-1) case that install_global was
+    /// bypassed.
+    pub fn db_path(&self) -> Option<std::path::PathBuf> {
+        Some(self.db.path().to_path_buf())
+    }
+
     /// Start background aggregation job (hourly and daily rollups)
     pub fn start_aggregation_job(&self) {
         let aggregator = self.aggregator.clone();

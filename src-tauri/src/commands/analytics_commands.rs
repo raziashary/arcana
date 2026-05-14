@@ -1,15 +1,37 @@
 // Analytics Tauri commands — dashboard data retrieval and export
 use chrono::NaiveDate;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use tauri::State;
+use tracing::info;
 use crate::analytics::{self, types::*};
 use crate::errors::Result;
 use crate::state::AppState;
+
+// Doc 02 Phase 3.4 — one-shot diagnostic log on first dashboard hit.
+// On-call debugging frequently needs to know "is the dashboard actually
+// hitting the right analytics DB, and how many rows does it have?". This
+// answers both with a single info line the first time the dashboard is
+// queried after host startup. Idempotent via OnceLock — repeated invokes
+// don't reissue the line.
+static FIRST_HIT_LOGGED: OnceLock<()> = OnceLock::new();
+
+fn log_first_hit_once() {
+    let _ = FIRST_HIT_LOGGED.get_or_init(|| {
+        let mgr = analytics::global();
+        let counts = mgr.queries().row_counts_for_diagnostic().unwrap_or_default();
+        let path = mgr.db_path().map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(unknown)".into());
+        info!(
+            "[analytics_commands] first dashboard hit — db_path={path} row_counts={counts:?}"
+        );
+    });
+}
 
 #[tauri::command]
 pub fn get_dashboard_summary(
     state: State<'_, Arc<Mutex<AppState>>>,
 ) -> Result<DashboardSummary> {
+    log_first_hit_once();
     // Read live in-process counters — daily_costs is only populated by yesterday rollup,
     // so reading it for today would always yield 0.
     let (live_cost_usd, live_tokens) = {

@@ -33,6 +33,10 @@ export interface DashboardState {
   dateRange: { start: string; end: string };
   isLoading: boolean;
   error: string | null;
+  // Doc 02 Phase 3.2 — millisecond timestamp of the last successful or
+  // partial refresh. Null until the first refresh attempt completes.
+  // Dashboard.tsx renders this as "Last updated 12s ago".
+  lastRefreshedAt: number | null;
 
   // Budget & Alerts
   dailyBudget: number;
@@ -144,6 +148,15 @@ export interface ExportResult {
 
 let realtimeUnlisteners: Array<() => void> = [];
 
+// Doc 02 Phase 3.1 — uniform error extraction for the per-invoke catches.
+// Tauri rejects with either a string (the Rust error chain stringified) or
+// an Error instance; we coerce both into a short single-line summary.
+function errMsg(e: unknown): string {
+  if (typeof e === 'string') return e
+  if (e instanceof Error)     return e.message
+  return String(e)
+}
+
 export const useDashboardStore = create<DashboardState>((set, get) => ({
   summary: null,
   costAnalytics: null,
@@ -156,92 +169,59 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   },
   isLoading: false,
   error: null,
+  lastRefreshedAt: null,
   dailyBudget: 50,
   budgetAlerts: [],
   realtimeEnabled: false,
 
   refreshDashboard: async () => {
+    // Doc 02 Phase 3.1 — surface backend failures instead of silently
+    // swallowing them into a zeroed dashboard. Each invoke runs to its own
+    // try/catch; failed widgets stay null (which the Dashboard component
+    // renders as "No data yet" per Phase 3.3 below) and their error
+    // messages are aggregated into the store's `error` banner. A widget
+    // succeeding doesn't get clobbered by another widget's failure.
     set({ isLoading: true, error: null });
-    try {
-      const summary = await invoke<DashboardSummary>('get_dashboard_summary').catch(() => ({
-        today_cost: 0,
-        yesterday_cost: 0,
-        cost_change_percent: 0,
-        today_tokens: 0,
-        yesterday_tokens: 0,
-        token_change_percent: 0,
-        active_workers: 0,
-        total_workers: 0,
-        workers_added_today: 0,
-        active_sessions: 0,
-        sessions_today: 0,
-        messages_today: 0,
-        tool_calls_today: 0,
-      }));
-      
-      const { start, end } = get().dateRange;
-      const costAnalytics = await invoke<CostAnalytics>('get_cost_analytics', {
-        start,
-        end,
-        granularity: 'daily',
-      }).catch(() => ({
-        date_range: `${start} to ${end}`,
-        granularity: 'daily',
-        data_points: [],
-        total_cost: 0,
-        average_daily_cost: 0,
-        peak_cost_day: null,
-        lowest_cost_day: null,
-      }));
-      
-      const tokenUsage = await invoke<TokenUsageAnalytics>('get_token_usage', {
-        start,
-        end,
-      }).catch(() => ({
-        date_range: `${start} to ${end}`,
-        total_tokens: 0,
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        thinking_tokens: null,
-        by_agent_type: {},
-        by_model: {},
-        by_provider: {},
-        top_sessions: [],
-      }));
-      
-      const apiFailures = await invoke<ApiFailureAnalytics>('get_api_failures', {
-        hours: 24,
-      }).catch(() => ({
-        date_range: 'Last 24 hours',
-        total_failures: 0,
-        failures_by_provider: {},
-        failures_by_type: {},
-        recent_failures: [],
-        auto_retry_success_rate: 0,
-      }));
-      
-      const costPrediction = await invoke<CostPrediction>('predict_monthly_cost').catch(() => ({
-        current_daily_average: 0,
-        projected_monthly_cost: 0,
-        confidence_percent: 0,
-        based_on_days: 0,
-      }));
+    const { start, end } = get().dateRange;
+    const failures: string[] = [];
 
-      set({
-        summary,
-        costAnalytics,
-        tokenUsage,
-        apiFailures,
-        costPrediction,
-        isLoading: false,
+    let summary: DashboardSummary | null = null;
+    try { summary = await invoke<DashboardSummary>('get_dashboard_summary'); }
+    catch (e) { failures.push(`get_dashboard_summary: ${errMsg(e)}`); }
+
+    let costAnalytics: CostAnalytics | null = null;
+    try {
+      costAnalytics = await invoke<CostAnalytics>('get_cost_analytics', {
+        start, end, granularity: 'daily',
       });
-    } catch (error) {
-      console.error('Dashboard refresh error:', error);
-      set({
-        error: error instanceof Error ? error.message : 'Failed to refresh dashboard',
-        isLoading: false,
-      });
-    }
+    } catch (e) { failures.push(`get_cost_analytics: ${errMsg(e)}`); }
+
+    let tokenUsage: TokenUsageAnalytics | null = null;
+    try {
+      tokenUsage = await invoke<TokenUsageAnalytics>('get_token_usage', { start, end });
+    } catch (e) { failures.push(`get_token_usage: ${errMsg(e)}`); }
+
+    let apiFailures: ApiFailureAnalytics | null = null;
+    try {
+      apiFailures = await invoke<ApiFailureAnalytics>('get_api_failures', { hours: 24 });
+    } catch (e) { failures.push(`get_api_failures: ${errMsg(e)}`); }
+
+    let costPrediction: CostPrediction | null = null;
+    try { costPrediction = await invoke<CostPrediction>('predict_monthly_cost'); }
+    catch (e) { failures.push(`predict_monthly_cost: ${errMsg(e)}`); }
+
+    set({
+      summary,
+      costAnalytics,
+      tokenUsage,
+      apiFailures,
+      costPrediction,
+      isLoading: false,
+      lastRefreshedAt: Date.now(),
+      error: failures.length === 0
+        ? null
+        : `${failures.length} backend call(s) failed: ${failures.join('; ')}`,
+    });
   },
 
   setCostAnalytics: async (start: string, end: string) => {

@@ -3,6 +3,8 @@
 
 pub mod errors;
 pub mod logging;
+// Doc 08 Phase 2/3 — error_kinds taxonomy + log_retention policy.
+pub mod observability;
 pub mod events;
 pub mod state;
 pub mod vault;

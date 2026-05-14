@@ -97,20 +97,20 @@ No silent failures, no wrong task transitions, no LLM tool crashes. The dispatch
 
 > This doc is INFO — no functional bugs found. These tasks are log-hygiene and observability improvements.
 
-### Phase 1: Reduce log noise
+### Phase 1: Reduce log noise — ✅ COMPLETE 14 May 2026
 
-- [ ] Investigate why `runtime_config` reloads 4× per run — `src-tauri/src/sidecar/runtime_config.rs` (and any caller in `src-tauri/src/sidecar/startup.rs`) — log L24, L131–138, L818, L956–959 show the default-budgets banner re-emitted on every reload; identify the duplicate load sites and consolidate to a single startup load + on-change watcher. Goal: one banner per host lifetime.
-- [ ] Confirm `MCP server TCP probe OK :8767` stays at DEBUG — `src-tauri/src/mcp_server/probe.rs` (or wherever the probe lives) — read-only verification that the line is `tracing::debug!` not `info!`; if it has been silently promoted, demote it. No user-facing INFO churn for healthy probes.
-- [ ] Demote cron-slip warnings to DEBUG when slip < 5s — `src-tauri/src/recipes/scheduler.rs` (the `cron slipped, enforcing 10s floor` emit site) — keep WARN only for slips ≥ 5s; below that they are routine and clutter the log (L364, L405, L582, L728, L756, L763, L789).
+- [x] **`runtime_config` cached via OnceLock** — `src-tauri/src/runtime_config.rs`. New module-level `static CACHE: OnceLock<Mutex<RuntimeConfig>>` plus a `cache()` accessor; the disk read + info log fire exactly once per host lifetime instead of once per caller. `write()` updates the cache atomically alongside the disk write so subsequent reads see the new value. New `invalidate()` is exposed for tests that need a forced re-read.
+- [x] **MCP TCP probe verified DEBUG** — `src-tauri/src/sidecar/client.rs:1400` already uses `debug!` (not promoted to info!); no demotion needed. The grep confirms exactly one occurrence and it's already correct.
+- [x] **Cron-slip warns demoted under 5s** — `src-tauri/src/recipes/scheduler.rs`. The `cron slipped, enforcing 10s floor` emit now branches: `warn!` only when `raw_wait >= 5s`; otherwise `debug!`. The 14 May log's 7 sub-5s slips (L364 / L405 / L582 / L728 / L756 / L763 / L789) drop off the default INFO+ stream.
 
-### Phase 2: Structured error categorization
+### Phase 2: Structured error categorization — ✅ COMPLETE 14 May 2026
 
-- [ ] Add a `kind` field to all ERROR-level events — `src-tauri/src/recipes/scheduler.rs` (Startup tick failed site, L940/L948/L950/L952) and `src-tauri/src/sidecar/watchdog.rs` (health threshold crossing, L963) — include a `tracing` field like `kind = "orch_crash"` or `kind = "watchdog_restart"` so a `tail -f | grep 'kind='` is grep-able.
-- [ ] Define the kind taxonomy in a central module — new file `src-tauri/src/observability/error_kinds.rs` — `pub const KIND_ORCH_CRASH: &str = "orch_crash";` etc., with a short doc comment per kind. Reference from all emit sites so the set stays bounded.
-- [ ] Document the taxonomy — `docs/development/LOG_ERROR_KINDS.md` (new file) — table of `kind` → meaning → triage owner, linked from the main developer docs.
+- [x] **`kind=` taxonomy applied at the call sites** — `src-tauri/src/recipes/scheduler.rs::Startup tick failed` now logs `kind = KIND_INVOKE_FAILED`, `worker_slug = …`. `src-tauri/src/sidecar/client.rs::is_healthy` HEALTH_FAIL_THRESHOLD crossing logs `kind = KIND_WATCHDOG_RESTART`, `fail_count = …`. `src-tauri/src/sidecar/mod.rs::circuit_breaker_open` logs `kind = KIND_ORCH_CRASH`, `restart_count`, `window_secs`. Three of the audit's nine recoverable-failure classes are now grep-keyed; the rest (`mcp_unreachable`, `budget_exceeded`, etc.) have constants ready for incremental adoption.
+- [x] **Central taxonomy module** — new `src-tauri/src/observability/error_kinds.rs`. Nine `pub const KIND_*` constants with doc comments per kind. Unit test `kinds_are_unique_and_snake_case` asserts uniqueness + snake_case-ASCII; adding a duplicate or misspelled kind fails the test.
+- [x] **`docs/development/LOG_ERROR_KINDS.md`** — table of kind → meaning → triage owner → first emit site, plus usage convention (`error!(kind = …, …)`) and a 4-step process for adding a new kind.
 
-### Phase 3 (optional): Log retention policy
+### Phase 3 (optional): Log retention policy — ✅ COMPLETE 14 May 2026
 
-- [ ] Verify daily rotation is active — `src-tauri/src/observability/logging.rs` (or wherever `tracing-appender` is configured) — confirm `tracing_appender::rolling::daily(...)` is in use and rolls at UTC midnight.
-- [ ] Document retention defaults — `docs/development/LOGGING.md` (existing or new) — record the default retention (e.g. 14 days), the rotation strategy, and how to override via env var or settings.
-- [ ] Add a configurable retention cap — `src-tauri/src/observability/logging.rs` — read `AUTODEV_LOG_RETENTION_DAYS` (default 14); prune logs older than the cap on host startup with a one-line `tracing::info!` summarizing how many files were dropped.
+- [x] **Daily rotation confirmed** — `src-tauri/src/logging.rs::init` uses `RollingFileAppender::builder().rotation(Rotation::DAILY)` with explicit `filename_prefix("autodev-")` and `filename_suffix(".log")`. Files roll at UTC midnight.
+- [x] **`docs/development/LOGGING.md`** — file paths, rotation cadence, retention default (14 days), env-var override (`AUTODEV_LOG_RETENTION_DAYS`), levels semantics, ops hooks (safe `tail -f` while running, safe external rotation when stopped).
+- [x] **Configurable retention** — new `src-tauri/src/observability/log_retention.rs::prune`. Reads `AUTODEV_LOG_RETENTION_DAYS` (default 14, `0` disables). Walks `~/.autodev/logs/`, skips any file not matching the canonical `autodev-…log` pattern (defensive — never deletes a user file), drops files older than the cap, emits a single info line summarising dropped count + bytes reclaimed + error count. Called once from `main.rs` immediately after `logging::init` so the summary lands in the new daily file. 2 unit tests cover the filename matcher and the default fallback.

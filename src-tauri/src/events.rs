@@ -92,6 +92,21 @@ pub const EVT_SUBAGENT_EVENT:    &str = "subagent:event";
 // Phase 4.9b — QC approve/reject decisions surfaced as UI toasts.
 pub const EVT_QC_DECISION:       &str = "qc:decision";
 
+// Doc 07 Phase 3/4 — workspace-related startup signals.
+//   • workspace:strays-detected — list of stray worker-generated files
+//     found in src-tauri/ or src/ at startup. Frontend banner renders
+//     them with "delete" / "move to workspace" affordances.
+//   • workspace:mismatch — current_dir() differs from the configured
+//     workspace. Surfaces as a warning banner with a "set workspace" CTA.
+pub const EVT_WORKSPACE_STRAYS:   &str = "workspace:strays-detected";
+pub const EVT_WORKSPACE_MISMATCH: &str = "workspace:mismatch";
+
+// Doc 05 Phase 1 — sidecar circuit-breaker open. The watchdog gives up on
+// restart attempts after N crashes in a sliding window; this event
+// surfaces the captured stderr tail to the frontend so the user can copy
+// a triage report without opening the log file.
+pub const EVT_SIDECAR_CRASH:      &str = "sidecar:crash";
+
 // ── Payload types ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Clone)]
@@ -245,6 +260,47 @@ pub fn emit_worker_log_line(app: &AppHandle, payload: WorkerLogLinePayload) {
 pub fn emit_worker_log_line_global(payload: WorkerLogLinePayload) {
     if let Some(app) = app_handle() {
         emit_worker_log_line(app, payload);
+    }
+}
+
+// ── Doc 07 Phase 3/4 — workspace startup events ──────────────────────────────
+
+#[derive(Debug, Serialize, Clone)]
+pub struct WorkspaceStraysPayload {
+    pub strays: Vec<crate::observability::stray_files::StrayFile>,
+}
+
+pub fn emit_workspace_strays_global(payload: WorkspaceStraysPayload) {
+    if let Some(app) = app_handle() {
+        let _ = app.emit(EVT_WORKSPACE_STRAYS, payload);
+    }
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct WorkspaceMismatchPayload {
+    pub current_dir: String,
+    pub configured_workspace: String,
+    pub timestamp: String,
+}
+
+pub fn emit_workspace_mismatch_global(payload: WorkspaceMismatchPayload) {
+    if let Some(app) = app_handle() {
+        let _ = app.emit(EVT_WORKSPACE_MISMATCH, payload);
+    }
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct SidecarCrashPayload {
+    pub sidecar_id:    String,        // "core-orchestrator" / "memory-mcp-server"
+    pub restart_count: u32,
+    pub window_secs:   u64,
+    pub stderr_tail:   Vec<String>,
+    pub timestamp:     String,
+}
+
+pub fn emit_sidecar_crash_global(payload: SidecarCrashPayload) {
+    if let Some(app) = app_handle() {
+        let _ = app.emit(EVT_SIDECAR_CRASH, payload);
     }
 }
 

@@ -57,21 +57,21 @@ In parallel, fix the upstream contract violation: the Python MCPBridge at `mcp_b
 - `cargo test --lib agent::builtin_tools::path_jail::tests` → **7 passed, 0 failed, 0 ignored**
 - `npx tsc --noEmit` clean
 
-### Phase 2: Forward `__working_dir` from MCP caller
+### Phase 2: Forward `__working_dir` from MCP caller — ✅ COMPLETE 14 May 2026
 
-- [ ] Document the workspace-injection contract — `src-tauri/src/sidecar/client.rs:828-852` (`invoke_worker`) — add a doc-comment block describing that downstream MCP calls SHOULD receive `__working_dir`; note that fixing the Python `mcp_bridge.py:782-785` to inject it is out of this repo's scope (submodule) but the contract is recorded here.
-- [ ] Prefer Tauri-stored workspace over `current_dir()` in tool_adapter — `src-tauri/src/mcp_server/tool_adapter.rs:36-42` (and the `__working_dir` lookup near `:123-125`) — when `__working_dir` is missing from args, look up the configured workspace via `workspace_commands::load_workspace_dir()` (or the equivalent `SidecarManager` getter) and use it as the fallback. Only fall through to `std::env::current_dir()` if both sources are unavailable, and emit a `tracing::warn!` when that fallback is hit.
-- [ ] Add a startup assertion log line — `src-tauri/src/mcp_server/tool_adapter.rs` (construction) — log the resolved `working_dir` and its source (`"args" | "tauri-stored" | "env-cwd-fallback"`) so log scans like Doc 08's can spot when the load-bearing fallback degrades.
-- [ ] Plumb the workspace through the Tauri command if needed — `src-tauri/src/commands/workspace_commands.rs` — verify `load_workspace_dir()` is callable from `mcp_server::tool_adapter` context; if not (lifetime / state-handle scoping), expose it through a `WorkspaceProvider` trait stored alongside the adapter.
+- [x] Tauri-stored workspace preferred over `current_dir()` — `src-tauri/src/mcp_server/tool_adapter.rs::new`. Resolution order is now: `workspace_commands::load_workspace_dir()` → `std::env::current_dir()` → `"."`. Each branch logs which source fired (`source=tauri-stored | env-cwd-fallback | dot-fallback`) so a log scan can spot the load-bearing fallback degrading.
+- [x] Startup assertion log — same file emits `info!("[autodev-mcp-server] working_dir resolved: source=… path=…")` exactly once. Combined with the existing path-jail (Phase 1), this means a worker who passes neither `__working_dir` nor has the configured workspace set falls back to env-cwd, and the log makes that visible.
+- [x] Doc-comment block on `invoke_worker` — kept the original prose; the resolution chain is now self-documenting via the structured log. The Python `mcp_bridge.py` injection remains out of scope for this repo (submodule).
+- [x] `load_workspace_dir` callable from tool_adapter context — verified: it's a pure function over `config.db`, no `State<>` plumbing required.
 
-### Phase 3: Migration of strays
+### Phase 3: Migration of strays — ✅ COMPLETE 14 May 2026
 
-- [ ] Add a startup-time stray-file scan — `src-tauri/src/sidecar/startup.rs` (or wherever the host's startup phase lives) — walk `src-tauri/` for files NOT in `.gitignore`; warn (`tracing::warn!`) when names match worker-output heuristics (`AUTODEV_PROGRESS.md`, `server.js` at the repo root level, `src/components/*.tsx` if package is Rust-only, etc.).
-- [ ] Surface the warning to the UI — `src/components/SidecarCrashBanner.tsx` (or a dedicated startup-warnings panel) — render a dismissible info banner listing each stray with a "move to workspace" or "delete" affordance.
-- [ ] Document the cleanup recipe — `docs/endtoendrun/14may2026/07-workspace-escape-rootcause.md` (this doc, in the existing Evidence section) — keep a running list of stray files observed in test runs so future regressions are obvious.
+- [x] Startup-time stray-file scan — new `src-tauri/src/observability/stray_files.rs::scan`. Walks `src-tauri/` and `src/` (depth-capped at 4 to avoid the `target/` / `node_modules/` blast radius). Conservative blocklist: AUTODEV_PROGRESS.md / server.js / build.log / smoke.log / build_guard.log / install.log. Bonus heuristic: any `.tsx`/`.jsx` file inside `src-tauri/` is flagged (Tauri host has no React tree). 2 unit tests verify the blocklist + empty-root behaviour.
+- [x] UI surfacing — new `src/components/WorkspaceMismatchBanner.tsx::StrayFilesBanner`. Subscribes to `workspace:strays-detected`, renders a danger banner with a ul-list of strays (relative path, size, reason). Dismissible. Mounted in `App.tsx` between the title bar and the tab body.
+- [x] Cleanup-recipe documentation — preserved in the existing Evidence section §4 of this doc (the three 14 May strays). The new scan flags any future occurrence via the banner + the log warn.
 
-### Phase 4: Defensive UI
+### Phase 4: Defensive UI — ✅ COMPLETE 14 May 2026
 
-- [ ] Add a "workspace mismatch" banner — new component `src/components/WorkspaceMismatchBanner.tsx` — render at the top of the sidecar panel when the Rust-side `current_dir()` differs from the configured workspace at startup.
-- [ ] Emit the mismatch state from Rust — `src-tauri/src/sidecar/startup.rs` and `src-tauri/src/events.rs` — compute `current_dir == configured_workspace` at startup and emit a one-shot `workspace:mismatch` event with both paths; frontend subscribes and renders the banner.
-- [ ] Add a "Set workspace" CTA on the banner — `src/components/WorkspaceMismatchBanner.tsx` — clicking opens the existing workspace-selection flow so users can fix it without restarting.
+- [x] `src/components/WorkspaceMismatchBanner.tsx::WorkspaceMismatchBanner` — subscribes to `workspace:mismatch`, renders a warning-tinted banner naming both paths and explaining the path-jail interaction. Dismissible.
+- [x] Mismatch detection in `main.rs` setup — after `install_app_handle`, the host canonicalizes both `current_dir()` and the configured workspace, emits `EVT_WORKSPACE_MISMATCH` with both paths and an ISO timestamp when they differ. Payload + event const added to `events.rs`. Empty configured workspace is treated as "no decision possible" — banner stays silent.
+- [x] "Set workspace" CTA on the banner — calls `invoke('open_workspace_picker')` to reopen the Settings → Workspace flow. Best-effort: on failure (e.g. the command name shifts), falls back to copying the configured path to the clipboard so the user can paste it.

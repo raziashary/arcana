@@ -19,6 +19,26 @@ impl Default for RecipePermissionMode {
     fn default() -> Self { Self::Autonomous }
 }
 
+/// Doc 05 Phase 3 — fallback policy declaration.
+///
+/// Controls what the recipe runner does when Mode 2 (core-orchestrator
+/// LivingAgent) is unavailable:
+///   • `Mode2Only` (default) — refuse to run the tick. Logs an explicit
+///     "fallback skipped per policy" line so the log stream makes the
+///     decision auditable. Appropriate for recipes that depend on MCP
+///     tools (most worker recipes).
+///   • `Mode1Capable` — fall through to the Rust `AgentEngine` provider.
+///     Only suitable for recipes whose work fits the Mode 1 capabilities
+///     (no MCP tools, file ops only). The on-disk recipe declares this
+///     when it has been verified to behave under Mode 1.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FallbackPolicy {
+    #[default]
+    Mode2Only,
+    Mode1Capable,
+}
+
 /// A single Recipe — stored as YAML in ~/.autodev/recipes/
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Recipe {
@@ -32,6 +52,10 @@ pub struct Recipe {
     pub agent_role:      Option<String>,           // "supervisor" | "worker-backend" | "qc"
     pub model:           Option<String>,           // model override (default from settings)
     pub is_system:       bool,                     // system recipes cannot be deleted by users
+    // Doc 05 Phase 3 — per-recipe fallback policy. `serde(default)` so
+    // existing on-disk YAML without the field deserializes as Mode2Only.
+    #[serde(default)]
+    pub fallback_policy: FallbackPolicy,
 }
 
 /// Execution state of a recipe run

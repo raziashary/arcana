@@ -47,7 +47,12 @@ export interface SparklineWindow {
   tokens:       number
 }
 
-export type AgentLiveStatus = 'active' | 'idle' | 'error' | 'stopped' | 'starting'
+// Doc 05 Phase 2 — `fallback_idle` is distinct from ordinary `idle` and
+// signals "Mode 1 fallback engaged but skipped per policy / no provider".
+// `mode1_active` flags workers actually running on the Rust AgentEngine.
+export type AgentLiveStatus =
+  | 'active' | 'idle' | 'error' | 'stopped' | 'starting'
+  | 'fallback_idle' | 'mode1_active'
 export type AgentType       = 'supervisor' | 'worker' | 'qc' | 'pa'
 
 export interface AgentLiveState {

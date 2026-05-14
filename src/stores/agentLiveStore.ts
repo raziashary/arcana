@@ -393,10 +393,16 @@ export const useAgentLiveStore = create<AgentLiveStore>((set, get) => ({
         e => {
           // Rust emits status strings like "idle" / "working" / "error".
           // Translate to AgentLiveState's enum (active / idle / error / stopped).
+          // Doc 05 Phase 2 — explicit mapping for the new fallback-mode
+          // statuses so the Live Monitor card can paint them distinctly.
           const mapped =
-            e.payload.status === 'working' ? 'active' :
-            e.payload.status === 'error'   ? 'error'  :
-            e.payload.status === 'stopped' ? 'stopped' : 'idle'
+            e.payload.status === 'working'                  ? 'active'         :
+            e.payload.status === 'error'                    ? 'error'          :
+            e.payload.status === 'stopped'                  ? 'stopped'        :
+            e.payload.status === 'mode1_idle_no_provider'   ? 'fallback_idle'  :
+            e.payload.status === 'fallback_idle'            ? 'fallback_idle'  :
+            e.payload.status === 'mode1_active'             ? 'mode1_active'   :
+            'idle'
           store.handleStatusChange({ agent_id: e.payload.slug, status: mapped as any })
         }
       )

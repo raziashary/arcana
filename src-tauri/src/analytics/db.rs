@@ -10,6 +10,10 @@ use std::sync::Mutex;
 
 pub struct AnalyticsDb {
     pub conn: Mutex<Connection>,
+    // Doc 02 Phase 3.4 — surface the on-disk path so the one-shot
+    // diagnostic log can answer "is this hitting the right DB?" without
+    // re-deriving autodev_dir().
+    pub path: std::path::PathBuf,
 }
 
 impl AnalyticsDb {
@@ -25,9 +29,14 @@ impl AnalyticsDb {
         conn.execute("PRAGMA foreign_keys = ON", [])
             .map_err(|e| AutoDevError::Database(e))?;
 
-        let db = Self { conn: Mutex::new(conn) };
+        let db = Self { conn: Mutex::new(conn), path: db_path };
         db.migrate().await?;
         Ok(db)
+    }
+
+    /// Doc 02 Phase 3.4 — accessor for the diagnostic log.
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
     }
 
     /// Run migrations to create tables if they don't exist

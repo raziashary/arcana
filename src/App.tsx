@@ -28,6 +28,10 @@ import { useUpdateStore }   from './stores/updateStore'
 import { UpdateToast }      from './components/update/UpdateToast'
 import { UpdateDialog }     from './components/update/UpdateDialog'
 import { ErrorBoundary }    from './components/ErrorBoundary'
+// Doc 07 Phase 3/4 — startup banners for stray files + workspace mismatch.
+import { WorkspaceMismatchBanner, StrayFilesBanner } from './components/WorkspaceMismatchBanner'
+// Doc 05 Phase 1 — sidecar crash banner with stderr tail + copy report.
+import { SidecarCrashBanner } from './components/SidecarCrashBanner'
 
 export type TabId = 'chat' | 'autodev' | 'ide' | 'recipes' | 'graph' | 'dashboard' | 'settings' | 'logs' | 'docs'
 
@@ -78,6 +82,19 @@ export default function App() {
         activeTab={activeTab}
         onTabChange={setActiveTab}
       />
+
+      {/* Doc 07 Phase 3/4 — startup-time workspace banners. Both are
+          dismissible and only render on the corresponding one-shot
+          Tauri event from main.rs setup. */}
+      <ErrorBoundary label="Workspace Mismatch Banner" inline>
+        <WorkspaceMismatchBanner />
+      </ErrorBoundary>
+      <ErrorBoundary label="Stray Files Banner" inline>
+        <StrayFilesBanner />
+      </ErrorBoundary>
+      <ErrorBoundary label="Sidecar Crash Banner" inline>
+        <SidecarCrashBanner />
+      </ErrorBoundary>
 
       <div className="app-body">
         <div className="app-main">

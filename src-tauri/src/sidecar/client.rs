@@ -507,7 +507,13 @@ impl OrchestratorClient {
                     // Log once at the exact threshold crossing; suppress repeated noise
                     // for every subsequent call above the threshold.
                     if count == HEALTH_FAIL_THRESHOLD {
+                        // Doc 08 Phase 2 — single legitimate kind for the
+                        // watchdog circuit breaker opening. Same kind is
+                        // reserved for the auto-restart path so dashboards
+                        // can plot both transitions together.
                         warn!(
+                            kind = crate::observability::error_kinds::KIND_WATCHDOG_RESTART,
+                            fail_count = count,
                             "[OrchestratorClient] health check failed {count} consecutive times AND TCP dead: {e} — \
                              declaring unhealthy, switching workers to Mode 1 fallback"
                         );

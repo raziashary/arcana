@@ -1125,7 +1125,12 @@ async fn orch_watchdog(
             } else {
                 format!("last stderr lines:\n{}", &tail_str[..tail_str.len().min(2000)])
             };
+            // Doc 08 Phase 2 — taxonomy: orch_crash is the canonical kind
+            // for "Python sidecar died and we gave up restarting".
             error!(
+                kind = crate::observability::error_kinds::KIND_ORCH_CRASH,
+                restart_count = CIRCUIT_BREAKER_MAX,
+                window_secs   = CIRCUIT_BREAKER_WINDOW.as_secs(),
                 "[watchdog] core-orchestrator crashed {} times in {}s — circuit breaker OPEN. \
                  Pausing restarts; manual intervention required. {}",
                 CIRCUIT_BREAKER_MAX, CIRCUIT_BREAKER_WINDOW.as_secs(), summary
@@ -1134,6 +1139,18 @@ async fn orch_watchdog(
                 "crashed {} times in {}s — stopped restarting. Check Settings → Sidecar logs for the Python traceback.",
                 CIRCUIT_BREAKER_MAX, CIRCUIT_BREAKER_WINDOW.as_secs()
             ));
+            // Doc 05 Phase 1 — surface the captured stderr tail through
+            // a Tauri event so the SidecarCrashBanner can render it
+            // without the user opening the log file.
+            crate::events::emit_sidecar_crash_global(
+                crate::events::SidecarCrashPayload {
+                    sidecar_id:    "core-orchestrator".to_string(),
+                    restart_count: CIRCUIT_BREAKER_MAX as u32,
+                    window_secs:   CIRCUIT_BREAKER_WINDOW.as_secs(),
+                    stderr_tail:   tail.iter().rev().take(40).rev().cloned().collect(),
+                    timestamp:     chrono::Utc::now().to_rfc3339(),
+                }
+            );
             // Sleep long; user must restart the app or fix env / config.
             tokio::time::sleep(Duration::from_secs(60)).await;
             continue;

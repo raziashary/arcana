@@ -22,6 +22,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -83,9 +84,40 @@ fn config_path() -> PathBuf {
     dir.join(FILE_NAME)
 }
 
-/// Read the runtime config. Missing file → defaults. Malformed JSON →
-/// defaults + warning (don't crash the app over a bad config).
-pub fn read() -> RuntimeConfig {
+// Doc 08 P1 — cached runtime config singleton.
+//
+// The 14 May log showed `[runtime_config] loaded …` repeated 4× per run
+// (L24, L131–138, L818, L956–959) because main.rs and several command
+// handlers each independently called `read()`. The values never change at
+// runtime — writes go through `write()` which then refreshes the cache
+// (see `write()` below) — so a single-load + cached pattern is correct.
+//
+// `OnceLock<Mutex<…>>` is used (not just `OnceLock<RuntimeConfig>`) so
+// `write()` can replace the cached value in place without rebuilding the
+// lock; readers always see the latest committed config.
+static CACHE: OnceLock<Mutex<RuntimeConfig>> = OnceLock::new();
+
+fn cache() -> &'static Mutex<RuntimeConfig> {
+    CACHE.get_or_init(|| Mutex::new(load_from_disk()))
+}
+
+/// Force a re-read from disk. Useful only for tests or in-place edits
+/// performed outside the running process (which the app doesn't support).
+/// Production code paths never call this — `write()` keeps the cache in
+/// lockstep with disk on every write.
+#[allow(dead_code)]
+pub fn invalidate() {
+    if let Some(m) = CACHE.get() {
+        if let Ok(mut g) = m.lock() {
+            *g = load_from_disk();
+        }
+    }
+}
+
+/// Disk read + parse — the operation that used to be `read()` directly.
+/// Called once per process from `cache()`; the info log fires exactly once
+/// per host lifetime instead of once per caller.
+fn load_from_disk() -> RuntimeConfig {
     let path = config_path();
     match fs::read_to_string(&path) {
         Ok(text) => match serde_json::from_str::<RuntimeConfig>(&text) {
@@ -108,6 +140,15 @@ pub fn read() -> RuntimeConfig {
     }
 }
 
+/// Read the runtime config. Missing file → defaults. Malformed JSON →
+/// defaults + warning (don't crash the app over a bad config).
+///
+/// Doc 08 P1 — this is now a cheap clone of the process-wide cached
+/// value; the disk read + info log fire only on the first call.
+pub fn read() -> RuntimeConfig {
+    cache().lock().map(|g| g.clone()).unwrap_or_default()
+}
+
 /// Atomically write the runtime config to disk.
 pub fn write(cfg: &RuntimeConfig) -> std::io::Result<()> {
     let path = config_path();
@@ -124,5 +165,12 @@ pub fn write(cfg: &RuntimeConfig) -> std::io::Result<()> {
     }
     fs::rename(&tmp, &path)?;
     info!("[runtime_config] wrote {:?}: {:?}", path, cfg);
+    // Doc 08 P1 — keep the cache in lockstep with the disk write so
+    // subsequent `read()` calls reflect the new value.
+    if let Some(m) = CACHE.get() {
+        if let Ok(mut g) = m.lock() {
+            *g = cfg.clone();
+        }
+    }
     Ok(())
 }

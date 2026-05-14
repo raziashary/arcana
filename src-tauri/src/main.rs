@@ -75,6 +75,19 @@ fn main() {
     // silent log loss from that point on.
     let _log_guard = autodev_lib::logging::init();
 
+    // Doc 08 Phase 3 — prune logs older than the configured retention cap
+    // (default 14d, override via AUTODEV_LOG_RETENTION_DAYS env var).
+    // Idempotent and best-effort; failures log a warning but never block
+    // startup. Runs AFTER logging::init so the prune result lands in the
+    // new daily file.
+    if let Some(home) = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .ok()
+    {
+        let log_dir = std::path::PathBuf::from(home).join(".autodev").join("logs");
+        autodev_lib::observability::log_retention::prune(&log_dir);
+    }
+
     // Initialise recipes (writes default system recipes if absent)
     if let Err(e) = autodev_lib::recipes::init() {
         eprintln!("Warning: Failed to initialise recipes: {e}");
@@ -179,6 +192,46 @@ fn main() {
                 // background subsystems (task-board tools, RecipeRunner,
                 // hooks) can emit Tauri events without State plumbing.
                 autodev_lib::events::install_app_handle(app.handle().clone());
+
+                // Doc 07 Phase 3 — scan src-tauri/ + src/ for stray
+                // worker-generated files left behind by past runs. Emits
+                // a `workspace:strays-detected` event so the SidecarCrashBanner
+                // can render dismissible "delete" affordances per file.
+                // Best-effort: scan failures never block startup.
+                {
+                    let strays = autodev_lib::observability::stray_files::scan(None);
+                    if !strays.is_empty() {
+                        autodev_lib::events::emit_workspace_strays_global(
+                            autodev_lib::events::WorkspaceStraysPayload { strays },
+                        );
+                    }
+                }
+
+                // Doc 07 Phase 4 — compute current_dir vs configured
+                // workspace mismatch and emit a one-shot event. Frontend
+                // banner subscribes and shows a "Set workspace" CTA.
+                {
+                    let configured = autodev_lib::commands::workspace_commands::load_workspace_dir();
+                    let current = std::env::current_dir()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let normalised_eq = !configured.trim().is_empty()
+                        && !current.trim().is_empty()
+                        && std::path::Path::new(&current)
+                            .canonicalize()
+                            .map(|c| c == std::path::Path::new(&configured)
+                                .canonicalize().unwrap_or_default())
+                            .unwrap_or(false);
+                    if !configured.trim().is_empty() && !normalised_eq {
+                        autodev_lib::events::emit_workspace_mismatch_global(
+                            autodev_lib::events::WorkspaceMismatchPayload {
+                                current_dir: current,
+                                configured_workspace: configured,
+                                timestamp: chrono::Utc::now().to_rfc3339(),
+                            }
+                        );
+                    }
+                }
 
                 // Phase 3.4 — start AutoDev MCP Server as an async task.
                 // The server exposes all builtin_tools over Streamable HTTP on 127.0.0.1:8767

@@ -16,6 +16,27 @@ impl AnalyticsQueries {
         Self { db }
     }
 
+    /// Doc 02 Phase 3.4 — row-count snapshot for the one-shot
+    /// diagnostic log emitted on first dashboard hit. Returns a HashMap of
+    /// table name → row count for the tables the dashboard reads. Errors
+    /// are swallowed silently — diagnostic logs must never fail the host.
+    pub fn row_counts_for_diagnostic(&self) -> Result<std::collections::HashMap<String, i64>> {
+        let mut out = std::collections::HashMap::new();
+        let conn = self.db.conn.lock().map_err(|e| {
+            crate::errors::AutoDevError::Agent(format!("Mutex lock failed: {e}"))
+        })?;
+        for table in &["token_usage", "api_failures", "system_events",
+                       "worker_stats", "daily_costs", "hourly_costs"] {
+            let count: i64 = conn.query_row(
+                &format!("SELECT COUNT(*) FROM {table}"),
+                [],
+                |r| r.get(0),
+            ).unwrap_or(-1);
+            out.insert((*table).to_string(), count);
+        }
+        Ok(out)
+    }
+
     /// Get dashboard summary (today vs yesterday).
     ///
     /// `live_cost_usd` and `live_tokens` are the real-time in-process AppState

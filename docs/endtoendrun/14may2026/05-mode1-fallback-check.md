@@ -73,20 +73,20 @@ The crash itself (orch restart at 11:27:12, then full TCP death by 11:27:48) is 
 
 > This doc is mostly INFO — fallback behaviour was correct. These tasks are defensive improvements rather than bug fixes.
 
-### Phase 1: Better orch-crash diagnostics
+### Phase 1: Better orch-crash diagnostics — ✅ COMPLETE 14 May 2026
 
-- [ ] Confirm SidecarCrashBanner is wired to the watchdog circuit-breaker — `src/components/SidecarCrashBanner.tsx` and `src-tauri/src/sidecar/watchdog.rs` — verify that when the breaker opens, the captured stderr tail is forwarded through a Tauri event the banner subscribes to.
-- [ ] Surface the captured stderr tail in the banner UI — `src/components/SidecarCrashBanner.tsx` — render the last ~40 lines of orch stderr inside a collapsible `<details>` block so users can see the Python traceback without opening the log file.
-- [ ] Add a "Copy crash report" button — `src/components/SidecarCrashBanner.tsx` — combine the stderr tail with the surrounding Rust log window (~30s before/after the crossing) and copy to clipboard for issue triage.
+- [x] Watchdog → Tauri event wiring — `src-tauri/src/sidecar/mod.rs` circuit-breaker-open branch + new `EVT_SIDECAR_CRASH` in `events.rs` + `SidecarCrashPayload` + `emit_sidecar_crash_global`. When the breaker opens, the captured stderr tail (last 40 lines) is forwarded along with `restart_count`, `window_secs`, and an RFC-3339 timestamp.
+- [x] New `src/components/SidecarCrashBanner.tsx` — subscribes to `sidecar:crash`. Renders a danger-tinted banner with the failure summary and folds the stderr tail into a `<details>` block so the Python traceback is one click away. Mounted at the top of `App.tsx` between the workspace banners.
+- [x] "Copy crash report" button — bundles the stderr tail with the sidecar id, restart count, window, ISO timestamp, and the host's user-agent string into a markdown-formatted report; writes via `navigator.clipboard.writeText`. Confirmation tick (✓ Copied) flips for 2s.
 
-### Phase 2: Mode 1 graceful degradation
+### Phase 2: Mode 1 graceful degradation — ✅ COMPLETE 14 May 2026
 
-- [ ] Document the "lightweight fallback worker" recipe pattern — `docs/development/MODE1_FALLBACK_RECIPES.md` (new file) — describe a recipe shape where the worker has a self-contained Rust-engine provider config so Mode 1 can still execute minimal tasks; cross-reference `src-tauri/src/recipes/defaults.rs` for the current worker definitions.
-- [ ] Add a startup log line distinguishing "Mode 1 with provider" vs "Mode 1 idle (no provider)" — `src-tauri/src/recipes/runner.rs` (where Mode 1 path is selected) — make it obvious from logs which workers are actually capable of doing work in Mode 1.
-- [ ] Surface "Mode 1 idle" status in the Live Monitor — `src/stores/agentLiveStore.ts` and `src/components/autodev/AgentRosterCard.tsx` — show a distinct visual state for "fallback engaged but no provider", so this is visible to the user rather than indistinguishable from regular idle.
+- [x] New `docs/development/MODE1_FALLBACK_RECIPES.md` documents the two-policy taxonomy (`mode2_only` / `mode1_capable`), why most recipes are `mode2_only` (MCP tool dependency), and a 4-item checklist for promoting a recipe to `mode1_capable`. Cross-references `defaults.rs` and `LOG_ERROR_KINDS.md`.
+- [x] `src-tauri/src/recipes/runner.rs` — new structured log line on the Mode 1 selection branch: `info!(mode = "mode1", mode1_capable = true|false, provider = …, …)`. `grep 'mode1_capable=true'` over a run shows which workers actually ran on the Rust engine.
+- [x] `src/stores/agentLiveStore.ts` `worker:status` listener — explicit mapping for the new statuses `mode1_idle_no_provider` / `fallback_idle` / `mode1_active` → frontend enum. `src/types/live.ts` `AgentLiveStatus` extended with `fallback_idle` and `mode1_active`. `src/components/autodev/AgentLiveCard.tsx` `STATUS_DOT_COLORS` paints both with `var(--warning)` (amber) so they're visually distinct from ordinary blue idle.
 
-### Phase 3 (optional): Per-worker fallback policy
+### Phase 3 (optional): Per-worker fallback policy — ✅ COMPLETE 14 May 2026
 
-- [ ] Add `fallback_policy` field to recipe definitions — `src-tauri/src/recipes/types.rs` (or wherever the recipe struct is defined) — values `"mode1_capable" | "mode2_only"`; default to `"mode2_only"`.
-- [ ] Annotate existing recipes with their fallback policy — `src-tauri/src/recipes/defaults.rs` — mark `worker-cleanup` as `mode1_capable` (simple file ops with a configured Rust-engine provider), leave `worker-frontend` and other MCP-heavy workers as `mode2_only`.
-- [ ] Honour the policy in the runner — `src-tauri/src/recipes/runner.rs` (mode-selection branch) — when Mode 1 is selected, check the recipe's `fallback_policy` and either invoke the Rust engine or short-circuit with an explicit "fallback skipped per policy" log + status emit.
+- [x] `src-tauri/src/recipes/types.rs` — new `FallbackPolicy` enum (`Mode2Only` default, `Mode1Capable`). Added to `Recipe` struct with `#[serde(default)]` so existing on-disk YAML deserializes as `Mode2Only` without migration.
+- [x] `src-tauri/src/recipes/defaults.rs` — every recipe literal now declares `fallback_policy`. 8 recipes default to `Mode2Only` (supervisor, qc-agent, qc-dispatcher, fleet-smoke, worker-backend/frontend/platform/mcp); `worker-cleanup` is the lone `Mode1Capable` per the doc's recommendation.
+- [x] `src-tauri/src/recipes/runner.rs` — after the Mode 2 attempt fails / orch is unreachable, the runner checks `recipe.fallback_policy`. `Mode2Only` recipes emit `worker:tick-end` with `outcome="fallback_skipped_policy"`, set the worker status to `fallback_idle`, log `Mode 1 fallback skipped per policy`, and return without invoking the Rust engine. `Mode1Capable` recipes fall through to the existing provider-resolution code path unchanged.

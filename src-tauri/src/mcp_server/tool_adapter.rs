@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use tracing::warn;
+use tracing::{info, warn};
 use rmcp::{
     ErrorData as McpError,
     RoleServer,
@@ -30,16 +30,44 @@ pub struct AutodevMcpServer {
 
 impl AutodevMcpServer {
     pub fn new(registry: Arc<ToolRegistry>) -> Self {
-        // Default to process cwd, NOT $HOME/.autodev (the AutoDev config dir).
-        // Fleet workers MUST pass __working_dir on every tool call to target the
-        // correct project root. This default is only a last-resort fallback.
-        let working_dir = std::env::current_dir()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| {
-                warn!("[autodev-mcp-server] Cannot determine cwd for default working_dir. \
-                       Fleet workers MUST pass __working_dir on every tool call.");
-                ".".to_string()
-            });
+        // Doc 07 Phase 2 — prefer the Tauri-stored configured workspace
+        // over `std::env::current_dir()`. The latter is `src-tauri/` during
+        // `tauri dev`, which caused the 14 May calendar run's file-escape
+        // bug (worker wrote `server.js` etc. into the repo's src-tauri/).
+        //
+        // Resolution order, with a startup log line documenting which
+        // branch fired:
+        //   1. config.db's `workspace_dir` (set via Settings → Workspace).
+        //   2. `std::env::current_dir()`.
+        //   3. "." with a loud warn — process can't determine its own cwd.
+        let (working_dir, source) = match crate::commands::workspace_commands::load_workspace_dir() {
+            ws if !ws.trim().is_empty() => (ws, "tauri-stored"),
+            _ => match std::env::current_dir() {
+                Ok(p) => {
+                    let s = p.to_string_lossy().to_string();
+                    warn!(
+                        "[autodev-mcp-server] No configured workspace_dir; \
+                         falling back to current_dir={s}. Fleet workers MUST \
+                         pass __working_dir on every tool call to target the \
+                         correct project root."
+                    );
+                    (s, "env-cwd-fallback")
+                }
+                Err(_) => {
+                    warn!(
+                        "[autodev-mcp-server] Cannot determine cwd for default \
+                         working_dir. Tools called without __working_dir will \
+                         resolve against '.'."
+                    );
+                    (".".to_string(), "dot-fallback")
+                }
+            },
+        };
+        // Doc 07 Phase 2 — startup assertion log. A log scan can spot when
+        // the load-bearing fallback degrades from tauri-stored → env-cwd.
+        info!(
+            "[autodev-mcp-server] working_dir resolved: source={source} path={working_dir}"
+        );
         Self { registry, working_dir }
     }
 

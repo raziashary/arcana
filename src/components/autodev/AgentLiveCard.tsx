@@ -23,11 +23,20 @@ interface Props {
 // down). This is what tells the user "the card is ready but nothing happened"
 // vs "the card has been working and is now waiting".
 const STATUS_DOT_COLORS: Record<string, string> = {
-  active:   'var(--accent)',
-  idle:     'var(--info)',
-  error:    'var(--danger)',
-  stopped:  '#555555',
-  starting: 'var(--warning)',
+  active:        'var(--accent)',
+  idle:          'var(--info)',
+  error:         'var(--danger)',
+  stopped:       '#555555',
+  starting:      'var(--warning)',
+  // Doc 05 Phase 2 — distinct visual states for Mode 1 fallback.
+  // fallback_idle: amber dot — fallback engaged but the recipe is
+  //   mode2_only OR no LLM provider is configured. Distinct from ordinary
+  //   idle so the user can tell "this worker is parked on purpose, not
+  //   stuck waiting for events".
+  // mode1_active: warning-tinted accent — worker is genuinely running on
+  //   the Rust AgentEngine. Less common than Mode 2; visible-but-distinct.
+  fallback_idle: 'var(--warning)',
+  mode1_active:  'var(--warning)',
 }
 const UNKNOWN_DOT_COLOR = '#555555'      // gray — never seen alive
 

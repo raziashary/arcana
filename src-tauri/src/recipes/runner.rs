@@ -569,6 +569,32 @@ impl RecipeRunner {
             );
         }
 
+        // Doc 05 Phase 3 — honour the recipe's fallback policy. Mode2Only
+        // recipes refuse to fall through to Mode 1 even if a provider is
+        // configured; Mode1Capable recipes proceed to the AgentEngine path
+        // below. This is enforced AFTER the Mode 2 attempt so a transient
+        // orch hiccup doesn't downgrade a Mode2Only recipe to a buggy
+        // Mode 1 run.
+        if matches!(recipe.fallback_policy,
+                    crate::recipes::types::FallbackPolicy::Mode2Only) {
+            info!(
+                "[RecipeRunner] Worker '{}' Mode 1 fallback skipped per policy \
+                 (recipe.fallback_policy = mode2_only) — staying idle until \
+                 core-orchestrator is reachable.",
+                worker_slug
+            );
+            emit_worker_tick_end(&self.app, WorkerTickEndPayload {
+                slug:      worker_slug.to_string(),
+                outcome:   "fallback_skipped_policy".to_string(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+            });
+            // Doc 05 Phase 2 — distinct status "fallback_idle" so the Live
+            // Monitor can render a different visual state for "fallback
+            // engaged but skipped per policy" vs ordinary idle.
+            self.set_worker_status(worker_slug, "fallback_idle");
+            return Ok(());
+        }
+
         // ── Mode 1: Rust AgentEngine (fallback / standalone) ─────────────────
         // Provider + API key are resolved here (only when Mode 2 is unavailable)
         // so that Mode 2-only setups do not require a Rust provider to be configured.
@@ -585,15 +611,31 @@ impl RecipeRunner {
                 // this recipe once the orchestrator finishes starting.
                 // Do NOT set status to "error" here — this is a transient
                 // startup condition, not a permanent failure.
+                //
+                // Doc 05 Phase 2 — distinct log + status for "Mode 1 idle (no
+                // provider)" vs ordinary idle so log scans + Live Monitor can
+                // both tell which workers are actually capable of fallback work.
                 info!(
-                    "[RecipeRunner] Worker '{}' skipping Mode 1: no LLM provider configured. \
+                    mode = "mode1",
+                    mode1_capable = false,
+                    "[RecipeRunner] Worker '{}' Mode 1 idle: no LLM provider configured. \
                      Waiting for core-orchestrator (Mode 2).",
                     worker_slug
                 );
-                self.set_worker_status(worker_slug, "idle");
+                self.set_worker_status(worker_slug, "mode1_idle_no_provider");
                 return Ok(());
             }
         };
+        // Doc 05 Phase 2 — log the positive case too so a `grep mode1_capable`
+        // across the run shows which workers actually ran on the Rust engine.
+        info!(
+            mode = "mode1",
+            mode1_capable = true,
+            provider = provider_id.as_str(),
+            "[RecipeRunner] Worker '{}' Mode 1 ACTIVE (provider='{}')",
+            worker_slug,
+            provider_id,
+        );
 
         let api_key = if provider_id != "ollama" {
             VaultManager::get(&provider_key(&provider_id))?

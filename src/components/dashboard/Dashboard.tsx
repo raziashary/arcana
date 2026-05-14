@@ -12,6 +12,45 @@ import ApiFailures from './ApiFailures';
 import { ErrorBoundary } from '../ErrorBoundary';
 import './Dashboard.css';
 
+// Doc 02 Phase 3.2 — humanise a millisecond timestamp into "Xs ago" /
+// "Xm ago" / "Xh ago". Resolution caps at hours because the dashboard
+// polls every 60s — any age beyond that strongly implies the polling
+// fallback is broken too.
+function formatAgo(ts: number): string {
+  const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1_000))
+  if (diffSec < 5)   return 'just now'
+  if (diffSec < 60)  return `${diffSec}s ago`
+  const diffMin = Math.floor(diffSec / 60)
+  if (diffMin < 60)  return `${diffMin}m ago`
+  const diffHr = Math.floor(diffMin / 60)
+  return `${diffHr}h ago`
+}
+
+// Doc 02 Phase 3.3 — uniform "No data yet" placeholder rendered when a
+// widget's payload is null (refresh failed) instead of forcing the widget
+// to fabricate zeros. Visually distinct from a real $0.00 reading.
+function EmptyWidget({ label }: { label: string }) {
+  return (
+    <div style={{
+      background: 'var(--bg-surface)',
+      border:     '1px dashed var(--border-1)',
+      borderRadius: 3,
+      padding:    '14px 18px',
+      color:      'var(--text-3)',
+      fontFamily: 'monospace',
+      fontSize:   '11px',
+      minHeight:  60,
+      display:    'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap:        6,
+    }}>
+      <span style={{ opacity: 0.6 }}>—</span>
+      <span>{label}: no data yet</span>
+    </div>
+  )
+}
+
 const Dashboard: React.FC = () => {
   const {
     summary,
@@ -22,6 +61,7 @@ const Dashboard: React.FC = () => {
     dateRange,
     isLoading,
     error,
+    lastRefreshedAt,
     refreshDashboard,
     startRealtimeUpdates,
     stopRealtimeUpdates,
@@ -30,6 +70,14 @@ const Dashboard: React.FC = () => {
     exportJson,
     clearError,
   } = useDashboardStore();
+
+  // Doc 02 Phase 3.2 — re-render once a second so the "Last updated"
+  // label stays current without the user touching anything.
+  const [, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(id);
+  }, []);
 
   const [exportPath, setExportPath] = useState<string>('');
   const [showExportDialog, setShowExportDialog] = useState(false);
@@ -124,8 +172,29 @@ const Dashboard: React.FC = () => {
             />
           </div>
           <div className="dashboard-actions">
-            <button className="btn-refresh" onClick={refreshDashboard} disabled={isLoading}>
-              {isLoading ? 'Refreshing...' : 'Refresh'}
+            {/* Doc 02 Phase 3.2 — last-refreshed-at label so the user can
+                tell whether the Refresh click round-tripped. */}
+            {lastRefreshedAt !== null && (
+              <span
+                style={{
+                  fontSize: '11px',
+                  color: 'var(--text-3)',
+                  fontFamily: 'monospace',
+                  marginRight: 8,
+                }}
+                title={new Date(lastRefreshedAt).toISOString()}
+              >
+                ↺ {formatAgo(lastRefreshedAt)}
+              </span>
+            )}
+            <button
+              className="btn-refresh"
+              onClick={() => { if (!isLoading) refreshDashboard() }}
+              disabled={isLoading}
+              style={{ cursor: isLoading ? 'wait' : 'pointer' }}
+              title={isLoading ? 'Refresh in flight…' : 'Reload all widgets'}
+            >
+              {isLoading ? 'Refreshing…' : 'Refresh'}
             </button>
             <button className="btn-export" onClick={() => setShowExportDialog(true)}>
               Export
@@ -142,16 +211,31 @@ const Dashboard: React.FC = () => {
       )}
 
       <div className="dashboard-grid">
-        {/* Top row: 4 metric cards */}
+        {/* Top row: 4 metric cards. Doc 02 Phase 3.3 — every widget
+            renders an explicit "No data yet" card when its source payload
+            is null (refresh failed) instead of fabricating a misleading
+            $0.00 / 0 tokens / 0 workers reading. */}
         <div className="metrics-row">
-          {summary && <ErrorBoundary label="Cost Meter" inline><CostMeter summary={summary} prediction={costPrediction} tokenUsage={tokenUsage} /></ErrorBoundary>}
-          {summary && <ErrorBoundary label="Token Usage" inline><TokenUsage summary={summary} analytics={tokenUsage} costAnalytics={costAnalytics} /></ErrorBoundary>}
-          {summary && <ErrorBoundary label="Worker Status" inline><WorkerStatus summary={summary} /></ErrorBoundary>}
-          {summary && <ErrorBoundary label="Session Activity" inline><SessionActivity summary={summary} /></ErrorBoundary>}
+          {summary
+            ? <ErrorBoundary label="Cost Meter" inline><CostMeter summary={summary} prediction={costPrediction} tokenUsage={tokenUsage} /></ErrorBoundary>
+            : <EmptyWidget label="Cost" />}
+          {summary
+            ? <ErrorBoundary label="Token Usage" inline><TokenUsage summary={summary} analytics={tokenUsage} costAnalytics={costAnalytics} /></ErrorBoundary>
+            : <EmptyWidget label="Tokens" />}
+          {summary
+            ? <ErrorBoundary label="Worker Status" inline><WorkerStatus summary={summary} /></ErrorBoundary>
+            : <EmptyWidget label="Workers" />}
+          {summary
+            ? <ErrorBoundary label="Session Activity" inline><SessionActivity summary={summary} /></ErrorBoundary>
+            : <EmptyWidget label="Sessions" />}
         </div>
 
         {/* Middle row: Charts */}
         <div className="charts-row">
+          {!costAnalytics && <EmptyWidget label="Cost trend" />}
+          {costAnalytics && costAnalytics.data_points.length === 0 && (
+            <EmptyWidget label="Cost trend" />
+          )}
           {costAnalytics && costAnalytics.data_points.length > 0 && (
             <ErrorBoundary label="Cost Chart" inline>
               <div className="chart-container cost-chart">
@@ -184,13 +268,17 @@ const Dashboard: React.FC = () => {
               </div>
             </ErrorBoundary>
           )}
-          {tokenUsage && <ErrorBoundary label="Model Usage" inline><ModelUsage analytics={tokenUsage} /></ErrorBoundary>}
+          {tokenUsage
+            ? <ErrorBoundary label="Model Usage" inline><ModelUsage analytics={tokenUsage} /></ErrorBoundary>
+            : <EmptyWidget label="Model usage" />}
         </div>
 
         {/* Bottom row: Leaderboard and Failures */}
         <div className="bottom-row">
           <ErrorBoundary label="Worker Leaderboard" inline><WorkerLeaderboard /></ErrorBoundary>
-          {apiFailures && <ErrorBoundary label="API Failures" inline><ApiFailures analytics={apiFailures} /></ErrorBoundary>}
+          {apiFailures
+            ? <ErrorBoundary label="API Failures" inline><ApiFailures analytics={apiFailures} /></ErrorBoundary>
+            : <EmptyWidget label="API failures" />}
         </div>
       </div>
 

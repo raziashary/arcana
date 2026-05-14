@@ -12,7 +12,7 @@ use chrono::Utc;
 use cron::Schedule;
 use tauri::async_runtime;
 use async_runtime::JoinHandle;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 // Phase 7.7 — used for metadata JSON in record_system_event calls
 use serde_json;
 
@@ -135,7 +135,17 @@ impl RecipeScheduler {
             }
 
             if let Err(e) = runner.run_recipe(&recipe, &slug_owned).await {
-                error!("[RecipeScheduler] Startup tick failed for '{}': {e}", slug_owned);
+                // Doc 08 Phase 2 — kind taxonomy. Startup tick failures
+                // almost always trace back to either the orch sidecar dying
+                // mid-startup or an invoke-level connection blip; both fit
+                // KIND_INVOKE_FAILED. tail -f | grep 'kind=invoke_failed'
+                // surfaces every occurrence regardless of slug.
+                error!(
+                    kind = crate::observability::error_kinds::KIND_INVOKE_FAILED,
+                    worker_slug = slug_owned.as_str(),
+                    "[RecipeScheduler] Startup tick failed for '{}': {e}",
+                    slug_owned
+                );
                 // Non-fatal: continue to cron loop even if startup tick failed
             }
 
@@ -183,10 +193,24 @@ impl RecipeScheduler {
                 let wait_dur = raw_wait.max(Duration::from_secs(MIN_TICK_SECS));
 
                 if raw_wait < Duration::from_secs(MIN_TICK_SECS) {
-                    warn!(
-                        "[RecipeScheduler] Worker '{}' — cron slipped ({:?}), enforcing {}s floor",
-                        slug_owned, raw_wait, MIN_TICK_SECS
-                    );
+                    // Doc 08 P1.3 — demote sub-5s cron slips to DEBUG. Slips
+                    // below 5s are routine "the previous tick finished right
+                    // at the next cron boundary" events (L364, L405, L582,
+                    // L728, L756, L763, L789 in the 14 May log) — the floor
+                    // guard absorbs them silently. WARN-level is reserved
+                    // for slips ≥ 5s where the worker is genuinely behind
+                    // and the user might want to investigate.
+                    if raw_wait >= Duration::from_secs(5) {
+                        warn!(
+                            "[RecipeScheduler] Worker '{}' — cron slipped ({:?}), enforcing {}s floor",
+                            slug_owned, raw_wait, MIN_TICK_SECS
+                        );
+                    } else {
+                        debug!(
+                            "[RecipeScheduler] Worker '{}' — cron slipped ({:?}), enforcing {}s floor",
+                            slug_owned, raw_wait, MIN_TICK_SECS
+                        );
+                    }
                 } else {
                     info!("[RecipeScheduler] Worker '{}' — next fire in {:?}", slug_owned, wait_dur);
                 }

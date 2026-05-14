@@ -201,16 +201,36 @@ Bad work now fails loudly *before* reaching qc_review.
 
 Full task list in [09](09-work-product-audit.md).
 
-### Phase 5 — Observability & log hygiene (optional polish)
+### Phase 5 — Observability & log hygiene ✅ COMPLETE — 14 May 2026
 
-| Task | File | What |
-|---|---|---|
-| Consolidate `runtime_config` reload | search for `runtime_config: [runtime_config] loaded` (4×/run) | One load, share via `OnceLock` |
-| Demote sub-5s cron-slip warns | [`src-tauri/src/recipes/scheduler.rs`](src-tauri/src/recipes/scheduler.rs) cron-slip warn site | Log at DEBUG below 5s; WARN only when slip > 5s |
-| Structured error `kind=` tags | new `src-tauri/src/error_kinds.rs` module | Taxonomy: `orch_crash`, `watchdog_restart`, `mcp_unreachable`, `tool_failed`, `budget_exceeded`. Add to all ERROR log lines. |
-| Workspace-mismatch banner | [`src/components/sidecar/SidecarPanel.tsx`](src/components/sidecar/SidecarPanel.tsx) | If `current_dir()` differs from configured workspace at startup, show banner |
+Every audit task from docs 02 / 05 / 07 / 08 is now landed. The whole 108-task
+roadmap from the original audit is closed.
 
-Full task list in [05](05-mode1-fallback-check.md) Phase 1-3, [07](07-workspace-escape-rootcause.md) Phase 3-4, [08](08-log-error-scan.md).
+| Task | File | What | Status |
+|---|---|---|---|
+| `runtime_config` cached via OnceLock | [`runtime_config.rs`](../../../src-tauri/src/runtime_config.rs) | Single disk read + info line per host lifetime; `write()` keeps the cache in lockstep | ✅ |
+| Sub-5s cron-slip warns demoted | [`recipes/scheduler.rs`](../../../src-tauri/src/recipes/scheduler.rs) | `warn!` only when `raw_wait >= 5s`; `debug!` below. Drops 7 noise lines from the 14 May run | ✅ |
+| Structured `kind=` taxonomy | new [`observability/error_kinds.rs`](../../../src-tauri/src/observability/error_kinds.rs) + [`docs/development/LOG_ERROR_KINDS.md`](../../../docs/development/LOG_ERROR_KINDS.md) | 9 constants; first three applied at scheduler / health / watchdog call sites | ✅ |
+| Log retention | new [`observability/log_retention.rs`](../../../src-tauri/src/observability/log_retention.rs) + [`docs/development/LOGGING.md`](../../../docs/development/LOGGING.md) | 14-day default, `AUTODEV_LOG_RETENTION_DAYS` override, `0` disables. Called from `main.rs` after `logging::init` | ✅ |
+| Sidecar crash banner + event | new `EVT_SIDECAR_CRASH` + [`SidecarCrashBanner.tsx`](../../../src/components/SidecarCrashBanner.tsx) | Watchdog circuit-breaker open emits `sidecar:crash` with the captured stderr tail; banner folds it into a `<details>` block + "Copy crash report" | ✅ |
+| `FallbackPolicy` per recipe | [`recipes/types.rs`](../../../src-tauri/src/recipes/types.rs) + `defaults.rs` + `runner.rs` | New enum (`Mode2Only` / `Mode1Capable`). `worker-cleanup` flagged Mode1Capable; others default to Mode2Only. Runner refuses Mode 1 fallback for Mode2Only recipes with explicit "fallback skipped per policy" log | ✅ |
+| Mode 1 capable vs idle distinction | [`runner.rs`](../../../src-tauri/src/recipes/runner.rs) + [`agentLiveStore.ts`](../../../src/stores/agentLiveStore.ts) + [`AgentLiveCard.tsx`](../../../src/components/autodev/AgentLiveCard.tsx) | New `mode1_active` / `fallback_idle` statuses; amber dot in the Live Monitor. Structured `mode1_capable=true|false` log field for grep | ✅ |
+| `MODE1_FALLBACK_RECIPES.md` doc | new [`docs/development/MODE1_FALLBACK_RECIPES.md`](../../../docs/development/MODE1_FALLBACK_RECIPES.md) | Documents the two-policy taxonomy + 4-item checklist for promoting a recipe to Mode1Capable | ✅ |
+| Prefer Tauri-stored workspace in tool_adapter | [`mcp_server/tool_adapter.rs`](../../../src-tauri/src/mcp_server/tool_adapter.rs) | Resolution order tauri-stored → env-cwd → "."; startup `info!` records which branch fired | ✅ |
+| Stray-file scan at startup | new [`observability/stray_files.rs`](../../../src-tauri/src/observability/stray_files.rs) + [`StrayFilesBanner`](../../../src/components/WorkspaceMismatchBanner.tsx) | Walks `src-tauri/` + `src/` for AUTODEV_PROGRESS.md / server.js / .tsx-in-src-tauri etc.; emits `workspace:strays-detected`; banner lists each with reason | ✅ |
+| Workspace-mismatch banner | new `EVT_WORKSPACE_MISMATCH` + [`WorkspaceMismatchBanner.tsx`](../../../src/components/WorkspaceMismatchBanner.tsx) | `main.rs` canonicalizes current_dir vs configured workspace at setup and emits the event when they differ; banner offers "Set workspace" CTA | ✅ |
+| Dashboard error surfacing | [`dashboardStore.ts`](../../../src/stores/dashboardStore.ts) + [`Dashboard.tsx`](../../../src/components/dashboard/Dashboard.tsx) | Per-invoke try/catch; failed widgets stay null and render `<EmptyWidget>`. `lastRefreshedAt` field + 1s tick effect for the "X ago" label. One-shot first-hit analytics log via `OnceLock` | ✅ |
+
+**Verification (full Phase 5 run):**
+- `cargo check` clean (only pre-existing warnings)
+- `cargo test --lib observability` → **5 passed, 0 failed** (new — error_kinds + log_retention + stray_files)
+- `cargo test --lib agent::builtin_tools::path_jail::tests` → **7 passed, 0 failed**
+- `cargo test --lib agent::builtin_tools::build_evidence` → **6 passed, 0 failed**
+- `cargo test --lib agent::builtin_tools::e2e_probe` → **1 passed, 0 failed**
+- `cargo test --lib subagent` → **11 passed, 0 failed**
+- `npx tsc --noEmit` clean (exit 0)
+
+Full task lists in [02](02-dashboard-not-live.md) Phase 3, [05](05-mode1-fallback-check.md) Phase 1-3, [07](07-workspace-escape-rootcause.md) Phase 2-4, [08](08-log-error-scan.md) Phase 1-3.
 
 ---
 
