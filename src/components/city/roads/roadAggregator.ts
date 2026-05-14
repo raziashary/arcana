@@ -52,9 +52,9 @@ export function aggregateImportRoads(
     roads.push({
       from: srcCenter,
       to: tgtCenter,
-      width: Math.max(2.0, Math.log(1 + count) * 2.5),
+      width: Math.max(2.5, Math.log(1 + count) * 2.5),
       laneCount: Math.min(count, 6),
-      color: '#1a1f2e',
+      color: '#3a5fff',
       srcCommunity: srcComm,
       tgtCommunity: tgtComm,
       edgeCount: count,

@@ -32,11 +32,11 @@ export function CityGround({ size = 180 }: { size?: number }) {
       {/* Base ground */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[size / 2, -0.02, size / 2]} receiveShadow>
         <planeGeometry args={[size + 20, size + 20]} />
-        <meshStandardMaterial color="#0f0f12" roughness={0.95} metalness={0.05} />
+        <meshStandardMaterial color="#0a0a0e" roughness={0.95} metalness={0.05} />
       </mesh>
-      {/* Grid lines overlay using wireframe */}
+      {/* Grid lines overlay — muted so roads/districts dominate the visual hierarchy */}
       <gridHelper
-        args={[size + 20, Math.floor((size + 20) / 5), '#232330', '#1a1a26']}
+        args={[size + 20, Math.floor((size + 20) / 5), '#16161e', '#101018']}
         position={[size / 2, 0, size / 2]}
       />
     </group>
