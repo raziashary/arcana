@@ -43,6 +43,11 @@ pub const EVT_WORKER_TICK_START: &str = "worker:tick-start";
 pub const EVT_WORKER_TICK_END:   &str = "worker:tick-end";
 pub const EVT_WORKER_REQUEST:    &str = "worker:request";
 
+// Doc 06 Phase 3 — free-form one-line breadcrumb pushed into a worker's
+// Live Monitor card. Used by the qc-agent skip path to leave a visible
+// "idle — no qc_review tasks" trail instead of an empty card body.
+pub const EVT_WORKER_LOG_LINE:   &str = "worker:log-line";
+
 // Phase 3.0 R1 — task board changes push channel. Emitted from every task DB
 // write path so the AutoDev Panel refreshes without polling.
 pub const EVT_TASK_CHANGED:      &str = "task:changed";
@@ -223,6 +228,24 @@ pub fn emit_worker_tick_start(app: &AppHandle, payload: WorkerTickStartPayload) 
 
 pub fn emit_worker_tick_end(app: &AppHandle, payload: WorkerTickEndPayload) {
     let _ = app.emit(EVT_WORKER_TICK_END, payload);
+}
+
+// ── Doc 06 Phase 3 — worker log-line breadcrumb ───────────────────────────────
+#[derive(Debug, Serialize, Clone)]
+pub struct WorkerLogLinePayload {
+    pub slug:      String,
+    pub text:      String,
+    pub timestamp: String,
+}
+
+pub fn emit_worker_log_line(app: &AppHandle, payload: WorkerLogLinePayload) {
+    let _ = app.emit(EVT_WORKER_LOG_LINE, payload);
+}
+
+pub fn emit_worker_log_line_global(payload: WorkerLogLinePayload) {
+    if let Some(app) = app_handle() {
+        emit_worker_log_line(app, payload);
+    }
 }
 
 // ── Worker Request payloads + emit helpers ───────────────────────────────────

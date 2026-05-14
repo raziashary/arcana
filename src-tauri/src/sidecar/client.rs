@@ -58,12 +58,14 @@ fn extract_usage(
             let pin  = obj.get("prompt_tokens").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
             let pout = obj.get("completion_tokens").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
             if pin > 0 || pout > 0 {
+                debug!("[extract_usage] branch=dict_split prompt={pin} completion={pout}");
                 return (pin, pout);
             }
             // Some providers only report total_tokens; split 70/30 in favor of input.
             let total = obj.get("total_tokens").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
             if total > 0 {
                 let pin = (total as f64 * 0.7) as u32;
+                debug!("[extract_usage] branch=dict_total_70_30 total={total} pin={pin} pout={}", total - pin);
                 return (pin, total - pin);
             }
         }
@@ -72,13 +74,19 @@ fn extract_usage(
             let total = total as u32;
             if total > 0 {
                 let pin = (total as f64 * 0.7) as u32;
+                debug!("[extract_usage] branch=int_total_70_30 total={total} pin={pin} pout={}", total - pin);
                 return (pin, total - pin);
             }
         }
     }
     // Char-length fallback — see doc comment above for the multiplier rationale.
+    // Doc 02 Phase 2 task 2.3: log which branch fired so future audits can tell
+    // whether real `tokens_used` is arriving from core-orchestrator or whether
+    // the char/4 fallback is doing all the work (the answer determines whether
+    // billing numbers are accurate or merely proportional).
     let est_in  = ((prompt_chars / 4) as u32).saturating_mul(4);
     let est_out = (response_chars / 4) as u32;
+    debug!("[extract_usage] branch=char_fallback prompt_chars={prompt_chars} response_chars={response_chars} est_in={est_in} est_out={est_out}");
     (est_in, est_out)
 }
 
@@ -901,6 +909,154 @@ impl OrchestratorClient {
             tokens_in,
             tokens_out,
             model,
+        })
+    }
+
+    /// Streaming variant of `invoke_worker` for Mode 2 main-worker ticks.
+    ///
+    /// Doc 01 Phase 3+ / Doc 06 Phase 3 follow-up: the original
+    /// `invoke_worker` issues a unary POST to `/api/agents/{id}/invoke` and
+    /// returns only the final response — meaning the Live Monitor card's
+    /// per-tool body stays blank for the whole tick. We were forced to defer
+    /// "main worker tool-call streaming" because all per-tool visibility
+    /// flowed through the subagent SSE channel.
+    ///
+    /// This method opens an SSE stream against
+    /// `/api/agents/{id}/invoke/stream` (already exposed by core-orchestrator
+    /// — bridge.rs uses it for explicitly-spawned subagents), parses frames
+    /// using the existing `subagent::bridge::parse_event_frame`, and re-emits
+    /// each parsed `SubagentEvent` on the **same** `subagent:event` channel
+    /// using the worker slug as `subagent_id`. The frontend's
+    /// `agentLiveStore.subscribeToEvents` listener already routes that
+    /// channel into `handleToolCallStart` / `handleToolCallResult`, so the
+    /// main worker card lights up with the same fidelity as a subagent
+    /// without any new frontend wiring.
+    ///
+    /// Returns the same `WorkerInvokeResult` shape as `invoke_worker` so the
+    /// caller (recipes::runner) is a drop-in swap — final text comes from
+    /// the SSE `final` frame (falling back to accumulated tokens if the
+    /// stream closes without one), and token usage comes from the SSE
+    /// `cost` frame (falling back to the char/4 heuristic via
+    /// `extract_usage`).
+    pub async fn invoke_worker_streaming(
+        &self,
+        agent_id:     &str,
+        instructions: &str,
+        trigger:      &str,
+        worker_slug:  &str,
+    ) -> Result<WorkerInvokeResult> {
+        use crate::events::{emit_subagent_event_global, SubagentEventPayload};
+        use crate::subagent::bridge::{find_frame_end, parse_event_frame};
+        use crate::subagent::SubagentEvent;
+        use futures::StreamExt;
+
+        self.ensure_authenticated().await?;
+
+        let prompt = format!(
+            "[AUTODEV RECIPE INSTRUCTIONS]\n{instructions}\n\n[EXECUTION TRIGGER]\n{trigger}"
+        );
+        let prompt_len = prompt.len();
+
+        debug!(
+            "[OrchestratorClient] invoke_worker_streaming agent='{agent_id}' \
+             slug='{worker_slug}' prompt_len={prompt_len}"
+        );
+
+        // The SSE endpoint is the same one the subagent bridge uses. Re-use
+        // it directly so the protocol stays in one place.
+        let resp = self.invoke_agent_stream_raw(agent_id, &prompt).await?;
+
+        let mut byte_stream = resp.bytes_stream();
+        let mut buf = Vec::<u8>::new();
+
+        // Accumulators — mirror SubagentBridge::consume_stream behaviour.
+        let mut accumulated_text = String::new();
+        let mut last_final_text  = String::new();
+        let mut cost_usd:   f64 = 0.0;
+        let mut tokens_in:  u32 = 0;
+        let mut tokens_out: u32 = 0;
+        // model_seen — currently the SSE stream from core-orchestrator
+        // doesn't carry a `model` field per-frame, so we leave this None
+        // and let the runner re-resolve from the worker's configured model.
+        // Keeping the slot makes it trivial to wire if the upstream adds it.
+        let model_seen: Option<String> = None;
+
+        while let Some(chunk_res) = byte_stream.next().await {
+            let chunk = chunk_res
+                .map_err(|e| AutoDevError::Agent(format!("SSE chunk read: {e}")))?;
+            buf.extend_from_slice(&chunk);
+
+            loop {
+                let Some(end) = find_frame_end(&buf) else { break };
+                let frame_bytes: Vec<u8> = buf.drain(..end).collect();
+                let trailer_len = if buf.starts_with(b"\r\n\r\n") || buf.starts_with(b"\n\n") {
+                    if buf.starts_with(b"\r\n\r\n") { 4 } else { 2 }
+                } else { 0 };
+                buf.drain(..trailer_len);
+
+                let frame = String::from_utf8_lossy(&frame_bytes).to_string();
+                if frame.trim().is_empty() { continue; }
+
+                // Parse using the bridge's existing logic but key the resulting
+                // event by the *worker slug*, not the agent_id. The frontend
+                // listener uses `subagent_id` as the agent_id when routing
+                // into the Live Monitor card store, so the worker's card is
+                // the one that fills in.
+                if let Some(evt) = parse_event_frame(&frame, worker_slug) {
+                    match &evt {
+                        SubagentEvent::Token { text, .. } => {
+                            accumulated_text.push_str(text);
+                        }
+                        SubagentEvent::Final { text, .. } => {
+                            last_final_text = text.clone();
+                        }
+                        SubagentEvent::Cost { cost_usd: c, tokens_in: ti, tokens_out: to_, .. } => {
+                            cost_usd  = *c;
+                            tokens_in = *ti;
+                            tokens_out = *to_;
+                        }
+                        _ => {}
+                    }
+                    emit_subagent_event_global(SubagentEventPayload {
+                        subagent_id: worker_slug.to_string(),
+                        event:       evt,
+                    });
+                }
+            }
+        }
+
+        // Final text: prefer the explicit `final` frame; fall back to the
+        // accumulated token stream. The latter is what the user already
+        // sees on the card, so the recipe runner getting it back keeps
+        // record_token_usage / qc_review reconciliation in sync.
+        let content = if !last_final_text.is_empty() {
+            last_final_text
+        } else if !accumulated_text.is_empty() {
+            accumulated_text
+        } else {
+            "[LivingAgent stream returned no content]".to_string()
+        };
+
+        // If the orchestrator didn't emit a `cost` frame, fall back to the
+        // same char/4 heuristic invoke_worker uses so analytics stay
+        // non-zero (and debug logs continue to expose which branch fired).
+        let (final_tokens_in, final_tokens_out) = if tokens_in == 0 && tokens_out == 0 {
+            extract_usage(None, prompt_len, content.len())
+        } else {
+            (tokens_in, tokens_out)
+        };
+
+        // `cost_usd` is currently surfaced via record_token_usage downstream;
+        // we don't return it through WorkerInvokeResult because invoke_worker
+        // doesn't either — the runner recomputes cost from the (tokens_in,
+        // tokens_out, model) tuple via crate::analytics::cost::compute_cost.
+        let _ = cost_usd;
+
+        Ok(WorkerInvokeResult {
+            content,
+            tokens_in:  final_tokens_in,
+            tokens_out: final_tokens_out,
+            model:      model_seen,
         })
     }
 

@@ -23,6 +23,7 @@ import { useSidecarStore } from '../stores/sidecarStore'
 import { SubagentMonitor } from '../components/subagent/SubagentMonitor'
 import { LiveMonitorSection } from '../components/autodev/LiveMonitorSection'
 import { useAgentLiveStore }  from '../stores/agentLiveStore'
+import { useUiStore }         from '../stores/uiStore'
 import { WorkerAffinityPanel } from '../components/dashboard/WorkerAffinityPanel'
 import { OrphanAlert } from '../components/dashboard/OrphanAlert'
 import { BudgetBar } from '../components/budget/BudgetBar'
@@ -92,7 +93,6 @@ function AgentStatusCell({ agentId, fallbackLabel }: { agentId: string; fallback
 
 function AgentRoster({ tasks }: { tasks: Task[] }) {
   const workerStore    = useWorkerStore()
-  const initAgents     = useAgentLiveStore(s => s.initAgents)
   const [, tick]       = useState(0)
 
   // Re-render every second so elapsed timers update live
@@ -101,11 +101,13 @@ function AgentRoster({ tasks }: { tasks: Task[] }) {
     return () => clearInterval(id)
   }, [])
 
-  // Seed the live store with the current worker list whenever it loads
-  useEffect(() => {
-    const ids = workerStore.workers.map(w => w.slug)
-    if (ids.length > 0) initAgents(ids)
-  }, [workerStore.workers.length]) // eslint-disable-line react-hooks/exhaustive-deps
+  // NOTE: `initAgents()` used to live in this component, which raced with
+  // `LiveMonitorSection.subscribeToEvents()` — STARTUP `worker:tick-start`
+  // events fired before this component had a chance to seed the slug list,
+  // and `handleStatusChange` silently dropped them. The init call has been
+  // promoted to the top-level `AutoDevTab` mount (search for `initAgents`
+  // there), and `handleStatusChange` now auto-creates unknown agents as a
+  // belt-and-suspenders fallback. See docs/endtoendrun/14may2026/01.
 
   const workers = workerStore.workers
 
@@ -567,9 +569,19 @@ function WorkerRequestsWidget({
   onResolve,
 }: {
   requests: WorkerRequest[]
-  onResolve: (id: number, action: 'completed' | 'rejected', note?: string) => void
+  onResolve: (id: number, action: 'completed' | 'rejected', note?: string) => void | Promise<void>
 }) {
-  const [expandedId, setExpandedId] = useState<number | null>(null)
+  // Doc 03 Phase 1: state split. Previously a single `expandedId` carried
+  // two orthogonal interactions — `-1` meant "panel open" and any other
+  // number meant "row N open". Clicking a row set it to req.id, which made
+  // the panel-open guard false and unmounted the entire list. That's the
+  // bug screenshot users reported: clicking the chevron collapses the panel.
+  const [panelOpen,     setPanelOpen]     = useState(false)
+  const [openRequestId, setOpenRequestId] = useState<number | null>(null)
+  // Doc 03 Phase 3: per-row inline error string for resolve failures.
+  const [rowError,      setRowError]      = useState<{ id: number; message: string } | null>(null)
+  const [pendingId,     setPendingId]     = useState<number | null>(null)
+
   if (requests.length === 0) return null
 
   const typeLabel = (t: string) =>
@@ -588,6 +600,22 @@ function WorkerRequestsWidget({
     : t === 'request_review' ? '#C3A6FF'
     : 'var(--text-4)'
 
+  const handleResolve = async (
+    id: number,
+    action: 'completed' | 'rejected',
+    note?: string,
+  ) => {
+    setPendingId(id)
+    setRowError(null)
+    try {
+      await onResolve(id, action, note)
+    } catch (e) {
+      setRowError({ id, message: String(e instanceof Error ? e.message : e) })
+    } finally {
+      setPendingId(null)
+    }
+  }
+
   return (
     <div
       style={{
@@ -597,7 +625,7 @@ function WorkerRequestsWidget({
     >
       <div
         className="flex items-center justify-between px-4 py-2 cursor-pointer"
-        onClick={() => setExpandedId(expandedId === -1 ? null : -1)}
+        onClick={() => setPanelOpen(o => !o)}
       >
         <div className="flex items-center gap-2">
           <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#FF6363', display: 'inline-block' }} />
@@ -617,21 +645,35 @@ function WorkerRequestsWidget({
             {requests.length}
           </span>
         </div>
-        {expandedId === -1 ? <ChevronDown size={12} color="var(--text-4)" /> : <ChevronRight size={12} color="var(--text-4)" />}
+        {panelOpen ? <ChevronDown size={12} color="var(--text-4)" /> : <ChevronRight size={12} color="var(--text-4)" />}
       </div>
 
-      {expandedId === -1 && (
+      {panelOpen && (
         <div className="px-4 pb-3 flex flex-col gap-2">
           {requests.map(req => {
-            const isOpen = expandedId === req.id
+            const isOpen = openRequestId === req.id
+
+            // Compute a short single-line preview from the JSON payload.
+            // Shown ONLY when the row is collapsed — when expanded we show
+            // the fully parsed JSON below to satisfy doc 03 Phase 2.
             let payloadPreview = ''
+            let parsedPayload: unknown = null
+            let parseError = false
             try {
-              const p = JSON.parse(req.payload)
-              if (p.audit_summary) payloadPreview = p.audit_summary as string
-              else if (p.issue_description) payloadPreview = p.issue_description as string
-              else if (p.reason) payloadPreview = p.reason as string
-              else payloadPreview = JSON.stringify(p).slice(0, 120)
-            } catch { payloadPreview = req.payload.slice(0, 120) }
+              parsedPayload = JSON.parse(req.payload)
+              const p = parsedPayload as Record<string, unknown>
+              if (p && typeof p === 'object') {
+                if (typeof p.audit_summary === 'string') payloadPreview = p.audit_summary
+                else if (typeof p.issue_description === 'string') payloadPreview = p.issue_description
+                else if (typeof p.reason === 'string') payloadPreview = p.reason
+                else payloadPreview = JSON.stringify(p).slice(0, 120)
+              } else {
+                payloadPreview = String(parsedPayload).slice(0, 120)
+              }
+            } catch {
+              parseError = true
+              payloadPreview = req.payload.slice(0, 120)
+            }
 
             return (
               <div
@@ -645,9 +687,9 @@ function WorkerRequestsWidget({
               >
                 <div
                   className="flex items-center justify-between px-3 py-2 cursor-pointer"
-                  onClick={() => setExpandedId(isOpen ? -1 : req.id)}
+                  onClick={() => setOpenRequestId(isOpen ? null : req.id)}
                 >
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
                     <span style={{ color: typeColor(req.request_type), fontWeight: 700, fontFamily: 'monospace', fontSize: '9px' }}>
                       {typeLabel(req.request_type).toUpperCase()}
                     </span>
@@ -659,20 +701,57 @@ function WorkerRequestsWidget({
                         #{req.task_id}
                       </span>
                     )}
+                    {/* Doc 03 Phase 2: show the short preview ONLY when the
+                        row is collapsed. When expanded, the full parsed JSON
+                        renders below — the preview would be redundant. */}
+                    {!isOpen && payloadPreview && (
+                      <span
+                        className="truncate"
+                        style={{
+                          color:    'var(--text-3)',
+                          fontSize: '10px',
+                          flex:     1,
+                        }}
+                        title={payloadPreview}
+                      >
+                        — {payloadPreview}
+                      </span>
+                    )}
                   </div>
                   {isOpen ? <ChevronDown size={10} color="var(--text-4)" /> : <ChevronRight size={10} color="var(--text-4)" />}
                 </div>
 
                 {isOpen && (
                   <div className="px-3 pb-3">
+                    {/* Doc 03 Phase 2: full parsed JSON payload in a <pre>
+                        when the row is open. Falls back to the raw string
+                        when parsing fails so we never hide data from the user. */}
                     <div
-                      style={{ color: 'var(--text-3)', fontSize: '10px', marginBottom: 8, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                      className="font-mono"
+                      style={{
+                        color:        'var(--text-3)',
+                        fontSize:     '10px',
+                        background:   'var(--bg-deep, #0f0f0f)',
+                        border:       '1px solid var(--border-1)',
+                        borderRadius: 2,
+                        padding:      '6px 8px',
+                        marginBottom: 8,
+                        maxHeight:    '240px',
+                        overflow:     'auto',
+                        whiteSpace:   'pre-wrap',
+                        wordBreak:    'break-word',
+                      }}
                     >
-                      {payloadPreview}
+                      {parseError
+                        ? req.payload
+                        : JSON.stringify(parsedPayload, null, 2)}
                     </div>
-                    <div className="flex gap-2">
+
+                    {/* Doc 03 Phase 3: Acknowledge / Reject buttons. */}
+                    <div className="flex items-center gap-2">
                       <button
-                        onClick={() => onResolve(req.id, 'completed')}
+                        disabled={pendingId === req.id}
+                        onClick={() => handleResolve(req.id, 'completed')}
                         style={{
                           background: 'rgba(127,219,202,0.15)',
                           border: '1px solid rgba(127,219,202,0.3)',
@@ -681,13 +760,15 @@ function WorkerRequestsWidget({
                           color: '#7FDBCA',
                           fontSize: '9px',
                           fontFamily: 'monospace',
-                          cursor: 'pointer',
+                          cursor: pendingId === req.id ? 'wait' : 'pointer',
+                          opacity: pendingId === req.id ? 0.6 : 1,
                         }}
                       >
-                        Ack / Complete
+                        {pendingId === req.id ? 'Acknowledging…' : 'Acknowledge'}
                       </button>
                       <button
-                        onClick={() => onResolve(req.id, 'rejected', 'Human override — declined')}
+                        disabled={pendingId === req.id}
+                        onClick={() => handleResolve(req.id, 'rejected', 'Human override — declined')}
                         style={{
                           background: 'rgba(255,99,99,0.10)',
                           border: '1px solid rgba(255,99,99,0.25)',
@@ -696,12 +777,29 @@ function WorkerRequestsWidget({
                           color: '#FF6363',
                           fontSize: '9px',
                           fontFamily: 'monospace',
-                          cursor: 'pointer',
+                          cursor: pendingId === req.id ? 'wait' : 'pointer',
+                          opacity: pendingId === req.id ? 0.6 : 1,
                         }}
                       >
-                        Decline
+                        Reject
                       </button>
                     </div>
+
+                    {/* Doc 03 Phase 3: inline error string on resolve failure.
+                        Does not collapse the row — the user keeps the
+                        context they need to retry. */}
+                    {rowError?.id === req.id && (
+                      <div
+                        className="font-mono"
+                        style={{
+                          color:      'var(--danger, #FF6363)',
+                          fontSize:   '10px',
+                          marginTop:  6,
+                        }}
+                      >
+                        Failed: {rowError.message}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -776,6 +874,46 @@ export default function AutoDevTab() {
     const id = setInterval(doRefresh, 60_000)
     return () => clearInterval(id)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Seed the live-monitor agent registry as early as possible — at the
+  // top-level `AutoDevTab` mount, NOT inside the deep `AgentRoster` child.
+  // Previously `initAgents` lived in AgentRoster and raced with
+  // `LiveMonitorSection.subscribeToEvents()`: STARTUP `worker:tick-start`
+  // events fired ~1ms after Rust boot and were silently dropped because
+  // `state.agents` was still empty. `agentLiveStore.handleStatusChange`
+  // now auto-creates unknown agents as a belt-and-suspenders fallback,
+  // but seeding here keeps the slug-set authoritative.
+  //
+  // Dep array uses a stable hash of the slug set rather than `.length`
+  // so a worker rename or replacement re-seeds correctly.
+  const initAgents       = useAgentLiveStore(s => s.initAgents)
+  const setAgentModel    = useAgentLiveStore(s => s.setAgentModel)
+  const workerSlugKey    = workerStore.workers.map(w => w.slug).sort().join(',')
+  // Doc 01 Phase 3 — also push each worker's `model` field into the live
+  // store so AgentLiveCard can render a model badge without re-querying
+  // workerStore on every render.
+  const workerModelKey   = workerStore.workers.map(w => `${w.slug}:${w.model}`).sort().join(',')
+  useEffect(() => {
+    const ids = workerStore.workers.map(w => w.slug)
+    if (ids.length > 0) initAgents(ids)
+    workerStore.workers.forEach(w => setAgentModel(w.slug, w.model ?? null))
+  }, [workerSlugKey, workerModelKey, initAgents, setAgentModel])
+
+  // Doc 06 Phase 3 — react to "jump to qc_review column" pulses from the
+  // QC card. The card increments `taskColumnPulse.nonce`; this effect
+  // scrolls the matching column into view and adds a brief pulse class.
+  const taskColumnPulse = useUiStore(s => s.taskColumnPulse)
+  useEffect(() => {
+    if (!taskColumnPulse.colId || taskColumnPulse.nonce === 0) return
+    const el = document.querySelector<HTMLElement>(
+      `[data-kanban-col="${taskColumnPulse.colId}"]`
+    )
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })
+    el.classList.add('kanban-col-pulse')
+    const t = setTimeout(() => el.classList.remove('kanban-col-pulse'), 1500)
+    return () => clearTimeout(t)
+  }, [taskColumnPulse.nonce, taskColumnPulse.colId])
 
   // Column definitions — matches mockup's 4-column layout
   // "Ready" merges ready + assigned (both are pre-work states)
@@ -937,13 +1075,17 @@ export default function AutoDevTab() {
           }}
         >
           {COLS.map(col => (
-            <KanbanColumn
-              key={col.colId}
-              colId={col.colId}
-              label={col.label}
-              tasks={col.tasks}
-              onDelete={deleteTask}
-            />
+            // Doc 06 Phase 3 — wrapper carries `data-kanban-col` so the
+            // QC card's "jump to qc_review" click handler can locate this
+            // column without prop-drilling refs through KanbanColumn.
+            <div key={col.colId} data-kanban-col={col.colId}>
+              <KanbanColumn
+                colId={col.colId}
+                label={col.label}
+                tasks={col.tasks}
+                onDelete={deleteTask}
+              />
+            </div>
           ))}
         </div>
       </div>

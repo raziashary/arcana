@@ -91,24 +91,22 @@ Two complementary fixes; do both:
 
 ## Atomic implementation tasks
 
-### Phase 1: Lazy slug registration in `agentLiveStore`
+### Phase 1: Lazy slug registration in `agentLiveStore` — ✅ COMPLETE 14 May 2026
 
-- [ ] Replace silent `if (!agent) return state` with lazy-create — `src/stores/agentLiveStore.ts:200-210` (`handleStatusChange`) — when `state.agents[agent_id]` is undefined, call `makeInitialAgent(agent_id)` and merge into `state.agents`, then apply the status update on the freshly created record instead of returning `state` unchanged.
-- [ ] Apply the same lazy-create pattern to `handleToolCallStart` — `src/stores/agentLiveStore.ts` (tool-call-start handler) — auto-insert the agent record on first event so a `worker:tool-call-start` arriving before `initAgents()` is not dropped.
-- [ ] Apply the same lazy-create pattern to `handleToolCallResult` — `src/stores/agentLiveStore.ts` (tool-call-result handler) — same auto-insert behaviour to keep paired start/result events consistent.
-- [ ] Move `initAgents()` invocation out of `AgentRoster` — `src/tabs/AutoDevPanel.tsx:105-108` — remove the local `useEffect` and call `initAgents()` once at the top-level mount (either in `App.tsx` or in `AutoDevPanel`'s root effect) immediately after `workerStore.loadWorkers()` resolves.
-- [ ] Update the dep array to detect slug-set changes — `src/tabs/AutoDevPanel.tsx` (the new top-level effect) — use `workers.map(w => w.slug).sort().join(',')` instead of `workers.length` so late-added or renamed workers re-register.
+- [x] Replaced silent `if (!agent) return state` with lazy-create in all three handlers — `src/stores/agentLiveStore.ts` `handleStatusChange` / `handleToolCallStart` / `handleToolCallResult`. Each now reads `state.agents[agent_id] ?? makeInitialAgent(agent_id)` and applies its update on the (possibly fresh) record. STARTUP `worker:tick-start` events are no longer dropped.
+- [x] Moved `initAgents()` invocation out of `AgentRoster` to top-level `AutoDevTab` effect — `src/tabs/AutoDevPanel.tsx`. The deep-mount race with `subscribeToEvents()` is gone.
+- [x] Dep array uses a stable slug-set hash — `src/tabs/AutoDevPanel.tsx` `workerSlugKey = workers.map(w=>w.slug).sort().join(',')` — late-added or renamed workers re-seed.
 
-### Phase 2: Bridge Mode 2 tool-call events
+### Phase 2: Bridge Mode 2 tool-call events — ✅ COMPLETE 14 May 2026
 
-> See also [02-dashboard-not-live.md](02-dashboard-not-live.md) — same upstream issue (Mode 2 LivingAgent ticks do not emit `agent:tool-call-*` events to the frontend).
+> See also [02-dashboard-not-live.md](02-dashboard-not-live.md) — `worker:tick-end` listener was added there too, which refreshes the Dashboard on every Mode 2 tick.
 
-- [ ] Add a `worker:tool-call-start` Tauri event listener — `src/stores/agentLiveStore.ts` (`subscribeToEvents` near line 235) — translate Mode 2 SSE tool events (already pumped by `SubagentManager` via `events.rs:85 EVT_SUBAGENT_EVENT`) into the same `handleToolCallStart` path used by Mode 1.
-- [ ] Add a paired `worker:tool-call-result` listener — `src/stores/agentLiveStore.ts` (`subscribeToEvents`) — mirror the start listener so result/error frames update `current_tool` and append `log_lines`.
-- [ ] Verify the Rust-side bridge exists — `src-tauri/src/events.rs` and `src-tauri/src/sidecar/subagent_manager.rs` — confirm `EVT_SUBAGENT_EVENT` is re-emitted as `worker:tool-call-start` / `worker:tool-call-result` with the slug as `agent_id`; if not, add the re-emit (read-only inspection first, then a thin adapter file in the events module).
+- [x] Verified the Rust-side bridge — `src-tauri/src/subagent/manager.rs:277` already pumps every `SubagentEvent` to the `subagent:event` channel via `emit_subagent_event_global`. No Rust adapter was added because the same effect is achievable with one frontend listener — keeps the bridge in one place.
+- [x] Subscribed to `subagent:event` in `agentLiveStore` — `src/stores/agentLiveStore.ts` `subscribeToEvents`. Translates `kind: "tool_start" | "tool_end" | "status" | "error"` into the existing handlers using the subagent slug as `agent_id`. Tool-call result frames pair to the most recent matching `running` log line by `tool_name`.
+- [x] Forward-work note: this covers *explicitly spawned subagents*. Mode 2 main-worker tool streaming would require switching `OrchestratorClient::invoke_worker` to SSE — flagged as Phase 3+ in the index.
 
-### Phase 3: UI polish
+### Phase 3: UI polish — ✅ COMPLETE 14 May 2026
 
-- [ ] Show the worker model (haiku / sonnet) on each card — `src/components/autodev/AgentRosterCard.tsx` (or wherever the card body renders) — read `worker.model` from `workerStore.workers` and render a small badge next to the slug.
-- [ ] Show last 3 tool names instead of "no activity yet" — `src/components/autodev/AgentRosterCard.tsx` — derive a rolling `recentTools: string[]` from `agent.log_lines` (or add a dedicated `recent_tools` field to `AgentLiveState`) and render the tail when no current tool is in flight.
-- [ ] Distinguish "intentionally idle" from "never received an event" — `src/components/autodev/AgentRosterCard.tsx` — gray dot vs amber dot depending on whether the agent has ever transitioned past `unknown`.
+- [x] Worker model badge on each card — `src/components/autodev/AgentLiveCard.tsx`. A `shortModelName()` helper compresses registry keys (`claude-haiku-4-5`, `claude-sonnet-4-5-thinking`, `deepseek-v4-pro` …) to a 5–8-char chip (`haiku` / `sonnet` / `sonnet⊕` / `deepseek`). Full model string lives in the `title` attribute for hover. Wiring: `AutoDevTab` calls a new `agentLiveStore.setAgentModel(slug, model)` action for every worker on slug/model change (dep: `workerModelKey`), so re-binding a worker to a new model updates the chip live without a full re-render.
+- [x] Recent-tools tail when nothing is in flight — `src/components/autodev/AgentLiveCard.tsx`. New `recentTools` memo walks `agent.log_lines` backwards collecting up to 3 *distinct* tool names. Rendered as compact chips below the current-action row only when `current_tool` is null AND the tail is non-empty — keeps freshly-mounted cards genuinely empty (matched to the "never seen alive" dot below) and post-tick cards informative.
+- [x] Gray vs blue dot for unknown vs intentionally-idle — `src/types/live.ts` + `src/stores/agentLiveStore.ts` + `src/components/autodev/AgentLiveCard.tsx`. New `has_ever_been_active: boolean` flag on `AgentLiveState` flips to `true` the first time any handler observes real activity (`handleToolCallStart`, or `handleStatusChange` to `'active' | 'starting'`). Card's dot uses `UNKNOWN_DOT_COLOR = '#555555'` (gray) when `status === 'idle' && !has_ever_been_active`, else the existing palette. Combined with Doc 06 Phase 3's "idle — no qc_review tasks" breadcrumb, "stuck idle" and "intentionally idle" are now visually distinct.

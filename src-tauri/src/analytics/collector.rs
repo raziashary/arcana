@@ -1,6 +1,7 @@
 // Analytics collector — event ingestion pipeline for token usage, costs, and system events
 use std::sync::Arc;
 use chrono::Utc;
+use tracing::debug;
 use crate::errors::Result;
 use super::db::AnalyticsDb;
 use super::types::*;
@@ -43,6 +44,17 @@ impl AnalyticsCollector {
             request_type,
         };
 
+        // Doc 02 Phase 2 task 2.4: log every insert at DEBUG so future audits
+        // can tell write-side from read-side failures at a glance. The
+        // previous run produced zero such lines in the log — proof the writes
+        // never reached the DB. After Phase 1 + 2 we should see one of these
+        // per Mode 1 / Mode 2 tick.
+        debug!(
+            "[analytics] insert token_usage session={} model={} prompt={} completion={} total={} cost_usd={:.6}",
+            record.session_id, record.model,
+            record.prompt_tokens, record.completion_tokens, record.total_tokens,
+            record.cost_usd
+        );
         self.db.insert_token_usage(&record)
     }
 

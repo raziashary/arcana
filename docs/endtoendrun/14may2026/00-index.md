@@ -97,20 +97,51 @@ Without these, the next end-to-end test will eat the dev server again or generat
 
 Full atomic task lists in [02](02-dashboard-not-live.md) Phase 1 and [07](07-workspace-escape-rootcause.md) Phase 1.
 
-### Phase 2 — UI un-stuck (visible improvements during next run)
+### Phase 2 — UI un-stuck (visible improvements during next run) ✅ COMPLETE — 14 May 2026
 
-Workers run, but the user can't see them.
+Workers run, AND the user can now see them.
 
-| Task | File | What |
-|---|---|---|
-| Lazy slug registration | [`src/stores/agentLiveStore.ts:200`](src/stores/agentLiveStore.ts:200) (`handleStatusChange` and siblings) | Auto-create agent record if missing instead of silent `return state` |
-| Earlier `initAgents` call | [`src/tabs/AutoDevPanel.tsx`](src/tabs/AutoDevPanel.tsx) | Move `initAgents()` to mount, before `subscribeToEvents()` could fire |
-| Bridge `worker:tick-end` to Dashboard widgets | [`src/stores/dashboardStore.ts`](src/stores/dashboardStore.ts) | Subscribe to `worker:tick-end` and refresh DB-backed summary |
-| Worker Requests state split | [`src/tabs/AutoDevPanel.tsx:565-714`](src/tabs/AutoDevPanel.tsx:565) | Split `expandedId` into `panelOpen: boolean` and `openRequestId: number \| null` |
-| Render payload JSON in expanded row | [`src/tabs/AutoDevPanel.tsx`](src/tabs/AutoDevPanel.tsx) | `<pre>` block when row open |
-| Acknowledge / Reject buttons | [`src/tabs/AutoDevPanel.tsx`](src/tabs/AutoDevPanel.tsx) | Wire to existing `resolve_worker_request` Tauri command |
+| Task | File | What | Status |
+|---|---|---|---|
+| Lazy slug registration | [`src/stores/agentLiveStore.ts`](../../../src/stores/agentLiveStore.ts) `handleStatusChange` / `handleToolCallStart` / `handleToolCallResult` | All three handlers auto-create the agent record via `makeInitialAgent(id)` on first event; STARTUP `worker:tick-start` events are no longer dropped | ✅ |
+| Earlier `initAgents` call | [`src/tabs/AutoDevPanel.tsx`](../../../src/tabs/AutoDevPanel.tsx) (top-level `AutoDevTab` effect, slug-set key) | Moved from deep `AgentRoster` mount up to the top-level `AutoDevTab` effect; dep uses sorted slug-set hash so renames/replacements re-seed | ✅ |
+| Bridge Mode 2 subagent tool-call events | [`src/stores/agentLiveStore.ts`](../../../src/stores/agentLiveStore.ts) `subscribeToEvents` | Translates `subagent:event` (tagged enum `tool_start`/`tool_end`/`status`/`error`) into the same `handleToolCallStart` / `handleToolCallResult` / `handleStatusChange` / `handleError` paths so subagent activity lights up Live Monitor cards | ✅ |
+| Real values in `record_worker_stats` | [`src-tauri/src/recipes/runner.rs`](../../../src-tauri/src/recipes/runner.rs) Mode 2 success branch | `cost.cost_usd` instead of `0.0`, `(elapsed_ms+59_999)/60_000` (ceiling) instead of `0` for both time_spent and avg_duration; wrapped in `if let Err … warn!` | ✅ |
+| Debug-log `extract_usage` chosen branch | [`src-tauri/src/sidecar/client.rs:50-86`](../../../src-tauri/src/sidecar/client.rs) | Every branch (`dict_split` / `dict_total_70_30` / `int_total_70_30` / `char_fallback`) logs which one fired with its numbers, so future audits can tell estimate vs. real | ✅ |
+| Debug-log every analytics insert | [`src-tauri/src/analytics/collector.rs`](../../../src-tauri/src/analytics/collector.rs) `record_token_usage` | One `debug!` per insert with session/model/prompt/completion/total/cost — separates write-side from read-side failures in the next audit | ✅ |
+| Bridge `worker:tick-end` to Dashboard widgets | [`src/stores/dashboardStore.ts`](../../../src/stores/dashboardStore.ts) `startRealtimeUpdates` | New listener on `worker:tick-end` calling `refreshDashboard()`; DB-backed widgets refresh within ~1s of a Mode 2 tick instead of waiting up to 60s | ✅ |
+| Worker Requests state split | [`src/tabs/AutoDevPanel.tsx`](../../../src/tabs/AutoDevPanel.tsx) `WorkerRequestsWidget` | `expandedId` removed; replaced with `panelOpen: boolean` + `openRequestId: number\|null`. Clicking a row no longer unmounts the list. | ✅ |
+| Render payload JSON in expanded row | [`src/tabs/AutoDevPanel.tsx`](../../../src/tabs/AutoDevPanel.tsx) `WorkerRequestsWidget` | Expanded row shows `<pre>` with `JSON.stringify(parsed, null, 2)`; falls back to raw string on parse error. Collapsed row keeps the truncated single-line preview. | ✅ |
+| Acknowledge / Reject buttons | [`src/tabs/AutoDevPanel.tsx`](../../../src/tabs/AutoDevPanel.tsx) `WorkerRequestsWidget` | Both buttons call `resolveWorkerRequest(id, 'completed'\|'rejected', note?)` → `invoke('resolve_worker_request', …)`. Per-row pending state, inline error message on failure, row stays open so user can retry. | ✅ |
+| QC agent slug parity (read-only check) | [`src-tauri/src/db/workers.rs:178`](../../../src-tauri/src/db/workers.rs), [`src-tauri/src/recipes/defaults.rs:1112`](../../../src-tauri/src/recipes/defaults.rs) | Confirmed: both sides use canonical `qc-agent`. No mismatch. QC card will register correctly once the lazy-create path is exercised. | ✅ |
+
+**Verification:**
+- `cargo check` clean (only pre-existing warnings)
+- `cargo test --lib agent::builtin_tools::path_jail::tests` → **7 passed, 0 failed** (Phase 1 tests still green)
+- `npx tsc --noEmit` clean (exit 0)
 
 Full task lists in [01](01-live-monitor-stale.md), [02](02-dashboard-not-live.md) Phase 2, [03](03-worker-requests-dropdown.md), [06](06-qc-agent-no-visibility.md).
+
+**Deferred items from Phase 2 — ALL COMPLETED 14 May 2026:**
+
+| Originally deferred | Now landed in | Notes |
+|---|---|---|
+| Doc 01 Phase 3 — model badge | `src/components/autodev/AgentLiveCard.tsx` + new `agentLiveStore.setAgentModel` | `shortModelName()` compresses registry keys to friendly chips; full id in `title` |
+| Doc 01 Phase 3 — recent-tools tail | `src/components/autodev/AgentLiveCard.tsx` | Last 3 distinct tool names, shown only when nothing is in flight |
+| Doc 01 Phase 3 — gray vs blue idle dot | `src/types/live.ts` + `agentLiveStore.ts` + `AgentLiveCard.tsx` | New `has_ever_been_active` flag; gray when never seen alive, info-blue when intentionally idle |
+| Doc 06 Phase 3 — reviewing #N | `agentLiveStore.parseTaskId` + `AgentLiveCard.tsx` | Parses `get_task` / `update_task_status` args; writes `agent.task_id`; rendered on QC card |
+| Doc 06 Phase 3 — idle breadcrumb | `src-tauri/src/events.rs` (new `EVT_WORKER_LOG_LINE`) + `recipes/runner.rs` + `agentLiveStore.ts` (`worker:log-line` listener) | Distinct messages for "no qc_review tasks" vs "only build_failed tasks" |
+| Doc 06 Phase 3 — qc_review count chip | `AgentLiveCard.tsx` | QC-card-only chip, live count via `useTaskStore`, click jumps to column |
+| Doc 06 Phase 3 — link to qc_review column | `uiStore.taskColumnPulse` + `AutoDevPanel.tsx` effect + `LiveMonitor.css` keyframe | scrollIntoView + 1.5s accent-glow pulse on the existing kanban column |
+| Mode 2 *main-worker* SSE tool-call streaming | `OrchestratorClient::invoke_worker_streaming` (`src-tauri/src/sidecar/client.rs`); `recipes/runner.rs` swap; `subagent::bridge::{find_frame_end, parse_event_frame}` made `pub(crate)` | Worker tick now emits per-tool frames on `subagent:event` keyed by worker slug; Live Monitor card body fills in real time |
+
+> Doc 03 Phase 3's "locate the Tauri command" task remained intentionally a no-op: `src-tauri/src/commands/task_commands.rs:172` already defines `resolve_worker_request` with the signature the frontend invokes. Verified during Phase 2 and re-confirmed here.
+
+**Verification (Phase 3 follow-up):**
+- `cargo check` clean (only pre-existing warnings)
+- `cargo test --lib agent::builtin_tools::path_jail::tests` → **7 passed, 0 failed**
+- `cargo test --lib subagent::bridge::tests` → **5 passed, 0 failed**
+- `npx tsc --noEmit` clean (exit 0)
 
 ### Phase 3 — Per-task headless QC (the user's idea, big throughput win)
 

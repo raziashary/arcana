@@ -30,7 +30,9 @@ use uuid::Uuid;
 use crate::agent::engine::AgentEngine;
 use crate::events::{
     emit_worker_status, emit_worker_tick_start, emit_worker_tick_end,
+    emit_worker_log_line,
     WorkerStatusPayload, WorkerTickStartPayload, WorkerTickEndPayload,
+    WorkerLogLinePayload,
 };
 use crate::hooks::ecosystem::Ecosystem;
 use crate::agent::permission::{PendingPermissions, PermissionMode};
@@ -220,6 +222,13 @@ impl RecipeRunner {
                             if let Ok(tasks) = db.list(Some("qc_review")) {
                                 if tasks.is_empty() {
                                     info!("[RecipeRunner] No qc_review tasks in DB — skipping qc-agent tick");
+                                    // Doc 06 Phase 3 — leave a visible breadcrumb on the QC card so
+                                    // "intentionally idle" doesn't look like "stuck idle".
+                                    emit_worker_log_line(&self.app, WorkerLogLinePayload {
+                                        slug:      worker_slug.to_string(),
+                                        text:      "idle — no qc_review tasks".to_string(),
+                                        timestamp: chrono::Utc::now().to_rfc3339(),
+                                    });
                                     emit_worker_tick_end(&self.app, WorkerTickEndPayload {
                                         slug:      worker_slug.to_string(),
                                         outcome:   "idle".to_string(),
@@ -237,6 +246,14 @@ impl RecipeRunner {
                                         "[RecipeRunner] Only build_failed tasks in qc_review — \
                                          skipping qc-agent LLM invocation"
                                     );
+                                    // Doc 06 Phase 3 — distinct breadcrumb from the
+                                    // "no qc_review tasks" case so the user can tell
+                                    // why the QC agent is parked.
+                                    emit_worker_log_line(&self.app, WorkerLogLinePayload {
+                                        slug:      worker_slug.to_string(),
+                                        text:      "idle — only build_failed tasks awaiting QC".to_string(),
+                                        timestamp: chrono::Utc::now().to_rfc3339(),
+                                    });
                                     emit_worker_tick_end(&self.app, WorkerTickEndPayload {
                                         slug:      worker_slug.to_string(),
                                         outcome:   "idle".to_string(),
@@ -329,8 +346,19 @@ impl RecipeRunner {
                             worker_slug, working_dir
                         );
                         let trigger = qc_trigger_override.as_deref().unwrap_or(RECIPE_TRIGGER);
+                        // Doc 01 Phase 3+ / Doc 06 Phase 3 follow-up: use the
+                        // streaming variant so per-tool SSE frames from the
+                        // LivingAgent re-emit on subagent:event keyed by the
+                        // worker slug. The Live Monitor card's body now
+                        // shows the actual tools being called instead of
+                        // staying empty during the multi-minute tick.
                         match self.orch_client
-                            .invoke_worker(&agent_id, &instructions_with_ws, trigger)
+                            .invoke_worker_streaming(
+                                &agent_id,
+                                &instructions_with_ws,
+                                trigger,
+                                worker_slug,
+                            )
                             .await
                     {
                         Ok(result) => {
@@ -418,18 +446,30 @@ impl RecipeRunner {
                                 Some("success".to_string()),
                             );
                             // Phase 7.5 — Record successful Mode 2 tick in analytics DB.
-                            // Cost/tokens are tracked by core-orchestrator internally;
-                            // we record the completion event so the dashboard shows activity.
-                            let _ = crate::analytics::global()
+                            //
+                            // Doc 02 Phase 2 task 2.2: populate with real values so the
+                            // worker leaderboard widget shows actual per-worker spend
+                            // and timing instead of zeros. `cost.cost_usd` and
+                            // `elapsed_ms` are already computed above; we just had
+                            // to stop hard-coding 0.0 / 0 here.
+                            //
+                            // `time_spent_minutes` uses ceiling division by 60_000 so a
+                            // sub-minute tick records 1, not 0 (zero-min ticks would
+                            // make the leaderboard's "avg duration" stat misleading).
+                            let time_spent_min = ((elapsed_ms + 59_999) / 60_000) as i32;
+                            if let Err(e) = crate::analytics::global()
                                 .collector()
                                 .record_worker_stats(
                                     worker_slug.to_string(),
-                                    1, // tasks_completed (1 successful tick)
-                                    0, // tasks_failed
-                                    0, // time_spent_minutes — not tracked in Mode 2
-                                    0.0, // cost — tracked by core-orchestrator
-                                    0,   // avg_task_duration_minutes
-                                );
+                                    1,                  // tasks_completed (1 successful tick)
+                                    0,                  // tasks_failed
+                                    time_spent_min,     // time_spent_minutes (real)
+                                    cost.cost_usd,      // cost (real, from CostTracker above)
+                                    time_spent_min,     // avg_task_duration_minutes
+                                )
+                            {
+                                warn!("[Mode2] record_worker_stats failed for '{worker_slug}': {e}");
+                            }
                             // Same stranded-task safety net as the Mode 1 path —
                             // see the long comment at the reconcile call below.
                             // Without this, a Mode 2 LivingAgent that finishes

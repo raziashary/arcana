@@ -274,7 +274,11 @@ async fn consume_stream(
 
 /// Locate the byte offset *just before* the blank-line separator (`\n\n` or
 /// `\r\n\r\n`). Returns None if the buffer does not yet contain a full frame.
-fn find_frame_end(buf: &[u8]) -> Option<usize> {
+///
+/// Re-exported as `pub(crate)` so the main-worker SSE bridge in
+/// `sidecar::client::invoke_worker_streaming` can reuse the framing logic
+/// without duplicating it (Doc 01 Phase 3+ / Doc 06 Phase 3 follow-up).
+pub(crate) fn find_frame_end(buf: &[u8]) -> Option<usize> {
     // Search for "\r\n\r\n" first (CRLF), then "\n\n" (LF). Prefer earliest.
     let mut earliest: Option<usize> = None;
     if let Some(i) = find_subsequence(buf, b"\r\n\r\n") {
@@ -303,7 +307,12 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 ///   data: {"type": "token", "text": "Hi"}
 ///
 /// Returns None for unknown / unparseable frames (logged at debug level).
-fn parse_event_frame(frame: &str, subagent_id: &str) -> Option<SubagentEvent> {
+///
+/// Re-exported as `pub(crate)` so the main-worker SSE bridge in
+/// `sidecar::client::invoke_worker_streaming` can emit `SubagentEvent`s
+/// keyed by the worker slug, reusing all of the existing per-kind
+/// translation logic.
+pub(crate) fn parse_event_frame(frame: &str, subagent_id: &str) -> Option<SubagentEvent> {
     let mut event_name: Option<String> = None;
     let mut data_lines: Vec<&str> = Vec::new();
 

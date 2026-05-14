@@ -66,6 +66,17 @@ export interface AgentLiveState {
   last_event_at:             number        // Date.now()
   task_id:                   number | null
   elapsed_since_last_tool_ms: number
+
+  // ── Doc 01 Phase 3 — UI polish fields ─────────────────────────────────────
+  // Resolved from workerStore at agent-init time. `null` when the agent is a
+  // synthetic subagent slug (no workerStore row) or the model hasn't been
+  // wired yet. Displayed as a small badge next to the agent_type chip.
+  model:                     string | null
+  // Flips to `true` the first time the agent receives ANY live event
+  // (tool_start, stage current, status='active'). Used to distinguish
+  // "blank-slate idle — never received an event" (gray dot) from
+  // "intentionally idle — tick ended cleanly" (blue dot).
+  has_ever_been_active:      boolean
 }
 
 // ── Tauri event payload types ─────────────────────────────────────────────────

@@ -110,20 +110,20 @@ to reason about.
 
 ## Atomic implementation tasks
 
-### Phase 1: State split
+### Phase 1: State split — ✅ COMPLETE 14 May 2026
 
-- [ ] Replace `expandedId` with two independent state slots — `src/tabs/AutoDevPanel.tsx:565-714` (inline `WorkerRequestsWidget`) — declare `const [panelOpen, setPanelOpen] = useState(false)` and `const [openRequestId, setOpenRequestId] = useState<number | null>(null)`; remove the `expandedId` declaration entirely.
-- [ ] Rewire the outer header chevron — `src/tabs/AutoDevPanel.tsx:599-621` — change `onClick` to `() => setPanelOpen(o => !o)` and the visual chevron condition to use `panelOpen`.
-- [ ] Rewire the outer list render guard — `src/tabs/AutoDevPanel.tsx:623` — change the guard from `expandedId === -1 && …` to `panelOpen && …` so opening a row no longer unmounts the list.
-- [ ] Rewire the per-row chevron — `src/tabs/AutoDevPanel.tsx:646-664` — change `onClick` to `() => setOpenRequestId(isOpen ? null : req.id)` and update `const isOpen = openRequestId === req.id`.
+- [x] Replaced `expandedId` with two independent state slots in `WorkerRequestsWidget` — `src/tabs/AutoDevPanel.tsx`. `panelOpen: boolean` + `openRequestId: number | null`.
+- [x] Outer header chevron now toggles `panelOpen` (`setPanelOpen(o => !o)`) and the chevron icon condition uses `panelOpen`.
+- [x] Outer list render guard now reads `panelOpen && (…)`, so clicking a row no longer unmounts the list.
+- [x] Per-row chevron toggles `openRequestId` (`setOpenRequestId(isOpen ? null : req.id)`), with `isOpen = openRequestId === req.id`.
 
-### Phase 2: Show payload JSON when row expanded
+### Phase 2: Show payload JSON when row expanded — ✅ COMPLETE 14 May 2026
 
-- [ ] Render the `payload` JSON in a `<pre>` block — `src/tabs/AutoDevPanel.tsx` (inside the per-request item, where `isOpen` is true) — parse `req.payload` with a try/catch (it is a JSON string per `src/stores/taskStore.ts:77-83`), pretty-print with `JSON.stringify(parsed, null, 2)`, and render in a monospaced `<pre className="text-xs whitespace-pre-wrap">`. Fall back to raw string on parse error.
-- [ ] Hide the locally computed `payloadPreview` when the row is open — `src/tabs/AutoDevPanel.tsx:627-634` — only show the truncated preview when `!isOpen`; full payload renders below.
+- [x] Parsed payload JSON renders in a monospace `<pre>` when expanded — `src/tabs/AutoDevPanel.tsx`. `try { parsed = JSON.parse(req.payload) } catch { parseError = true }`, pretty-printed via `JSON.stringify(parsed, null, 2)`, raw string fallback on parse error. `max-height: 240px` with overflow scroll so huge payloads don't blow up the layout.
+- [x] Single-line preview moved into the collapsed-row header — `src/tabs/AutoDevPanel.tsx`. Hidden when row is open (full JSON renders below); shown as `— <preview>` with `title` attribute for the full text on hover.
 
-### Phase 3: Add resolve actions
+### Phase 3: Add resolve actions — ✅ COMPLETE 14 May 2026
 
-- [ ] Add "Acknowledge" / "Reject" buttons — `src/tabs/AutoDevPanel.tsx` (inside the per-request expanded body) — render two buttons that call `invoke('resolve_worker_request', { id: req.id, resolution: 'ack' | 'reject' })`, then trigger `loadWorkerRequests('pending')` to refresh.
-- [ ] Confirm or add the Tauri command — `src-tauri/src/commands/` (read-only: locate `resolve_worker_request`; if missing, file a follow-up task to expose it) — verify the command signature matches `{ id: i64, resolution: String }` and returns `Result<(), String>`.
-- [ ] Surface action errors to the user — `src/tabs/AutoDevPanel.tsx` — show a small inline error string under the buttons on `invoke` failure; do not collapse the row on success — instead remove the item from the local list or refresh in place.
+- [x] Added "Acknowledge" / "Reject" buttons — `src/tabs/AutoDevPanel.tsx`. Each calls `resolveWorkerRequest(id, 'completed' | 'rejected', note?)` which invokes the existing Tauri command via `useTaskStore`. Per-row `pendingId` state — button shows `Acknowledging…` and is disabled during the round-trip.
+- [x] Confirmed the Tauri command exists — `src-tauri/src/commands/task_commands.rs:172` defines `resolve_worker_request(id: i64, action: String, note: Option<String>) -> Result<()>`. Signature matches the frontend invocation in `src/stores/taskStore.ts:197-199`. No new command needed.
+- [x] Inline error UX on resolve failure — `src/tabs/AutoDevPanel.tsx`. On `invoke` failure the row stays open; a `Failed: <message>` line appears under the buttons in danger color. Users can retry without losing context. Successful resolve refreshes the list (handled by the store's `resolveWorkerRequest` re-querying).

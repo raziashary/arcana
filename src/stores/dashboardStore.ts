@@ -408,7 +408,24 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         }
       });
 
-      realtimeUnlisteners = [costUnlistener, agentDoneUnlistener, tickUnlistener];
+      // Index Phase 2: subscribe directly to `worker:tick-end` for live
+      // Dashboard refresh after Mode 2 ticks. Rust emits this event
+      // unconditionally on every successful and failed Mode 2 worker tick
+      // (see src-tauri/src/recipes/runner.rs `emit_worker_tick_end`),
+      // independent of the `task:changed` channel above. Without this
+      // subscription the DB-backed widgets (cost trend, leaderboard,
+      // failures) wait up to 60s for the polling fallback before showing
+      // numbers from the tick that just completed.
+      const workerTickEndUnlistener = await listen('worker:tick-end', () => {
+        get().refreshDashboard();
+      });
+
+      realtimeUnlisteners = [
+        costUnlistener,
+        agentDoneUnlistener,
+        tickUnlistener,
+        workerTickEndUnlistener,
+      ];
       set({ realtimeEnabled: true });
     } catch (error) {
       console.error('Failed to start realtime updates:', error);

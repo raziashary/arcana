@@ -509,3 +509,31 @@
 .status-file { color: var(--text-4); }
 .status-diff { color: var(--accent); font-size: 9px; }
 .status-slow-warn { color: var(--warning); }
+
+
+/* ── Doc 06 Phase 3 — Kanban column pulse highlight ─────────────────────────
+   Triggered by the QC card's "jump to qc_review" click. The accent-tinted
+   box-shadow flashes briefly, scrollIntoView centres the column. */
+.kanban-col-pulse {
+  animation: kanban-col-pulse-anim 1.5s ease-out;
+  border-radius: 4px;
+}
+@keyframes kanban-col-pulse-anim {
+  0%   { box-shadow: 0 0 0 2px var(--accent), 0 0 12px var(--accent); }
+  60%  { box-shadow: 0 0 0 2px var(--accent), 0 0 12px var(--accent); }
+  100% { box-shadow: 0 0 0 0 transparent, 0 0 0 transparent; }
+}
+
+/* ── Doc 01 Phase 3 — model + QC count badges in card header ───────────── */
+.card-model-badge {
+  font-family: var(--font-mono);
+}
+.card-qc-count-chip {
+  font-family: var(--font-mono);
+  user-select: none;
+}
+.card-qc-count-chip:hover {
+  filter: brightness(1.15);
+}
+.card-qc-reviewing { font-family: var(--font-mono); }
+.card-recent-tools { font-family: var(--font-mono); }
