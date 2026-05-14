@@ -15,6 +15,7 @@ import { GodNodeBuilding } from './buildings/GodNodeBuilding'
 import { WorkerLockedBuilding } from './buildings/WorkerLockedBuilding'
 import { AggregateRoads } from './roads/GroundRoad'
 import { CallsArcs } from './roads/CallsArc'
+import { SelectionRoads } from './roads/SelectionRoads'
 import { TrafficParticles } from './particles/TrafficParticles'
 import { BuildingRaycaster } from './interaction/BuildingRaycaster'
 import { BuildingContextMenu } from './interaction/BuildingContextMenu'
@@ -147,14 +148,24 @@ export function CityView() {
             })
           }
 
-          {/* Aggregate import roads (between districts) */}
+          {/* Aggregate import roads (between districts) — always visible */}
           <AggregateRoads
             edges={graphData.edges}
             nodes={graphData.nodes}
             layout={layout}
           />
 
-          {/* CALLS arcs — visible when a node is selected or showCalls is on */}
+          {/* Per-node typed roads — IMPORTS_FROM, DEPENDS_ON, INHERITS, TESTED_BY,
+              SEMANTICALLY_SIMILAR — appear only when a building is selected */}
+          {selectedNodeId && (
+            <SelectionRoads
+              selectedNodeId={selectedNodeId}
+              edges={graphData.edges}
+              layout={layout}
+            />
+          )}
+
+          {/* CALLS arcs — global toggle shows all; selection shows only connected */}
           {(showCalls || selectedNodeId) && (
             <CallsArcs
               edges={graphData.edges}

@@ -9,7 +9,7 @@ interface InheritsBridgeProps {
   targetPos: THREE.Vector3
 }
 
-function InheritsBridge({ sourcePos, targetPos }: InheritsBridgeProps) {
+export function InheritsBridge({ sourcePos, targetPos }: InheritsBridgeProps) {
   const geometry = useMemo(() => {
     const archHeight = 4.0
 
@@ -26,15 +26,15 @@ function InheritsBridge({ sourcePos, targetPos }: InheritsBridgeProps) {
   }, [sourcePos, targetPos])
 
   return (
-    <mesh geometry={geometry} castShadow>
+    <mesh geometry={geometry} castShadow frustumCulled={false}>
       <meshStandardMaterial
-        color="#B07AA1"
-        emissive="#3d1f3d"
-        emissiveIntensity={0.3}
+        color="#9966cc"
+        emissive="#3d1166"
+        emissiveIntensity={0.4}
         metalness={0.4}
         roughness={0.6}
         transparent
-        opacity={0.75}
+        opacity={0.85}
       />
     </mesh>
   )
@@ -55,13 +55,13 @@ export function TestedByRoad({ sourcePos, targetPos }: TestedByRoadProps) {
   }, [sourcePos, targetPos])
 
   return (
-    <mesh geometry={geometry}>
+    <mesh geometry={geometry} frustumCulled={false}>
       <meshStandardMaterial
-        color="#F28E2B"
-        emissive="#aa5500"
-        emissiveIntensity={0.2}
+        color="#cc6622"
+        emissive="#882200"
+        emissiveIntensity={0.4}
         transparent
-        opacity={0.5}
+        opacity={0.80}
       />
     </mesh>
   )
