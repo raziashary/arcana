@@ -58,7 +58,7 @@ export function CityCamera({ citySize = 180 }: CityCameraProps) {
     <MapControls
       ref={controlsRef}
       target={cityCenter}
-      minDistance={3}
+      minDistance={0.5}
       maxDistance={citySize * 1.8}
       minPolarAngle={Math.PI / 12}
       maxPolarAngle={Math.PI / 2.1}

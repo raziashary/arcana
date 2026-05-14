@@ -44,7 +44,7 @@ export function DistrictMesh({ district }: DistrictMeshProps) {
         <meshStandardMaterial
           color={groundColor}
           transparent
-          opacity={0.06}
+          opacity={0.40}
           roughness={0.9}
           metalness={0.0}
           side={THREE.DoubleSide}
@@ -75,18 +75,20 @@ export function DistrictMesh({ district }: DistrictMeshProps) {
       </mesh>
 
       {/* District name billboard */}
-      <Billboard position={[centerX, 2.5, centerZ]} follow lockX={false} lockY={false} lockZ={false}>
+      <Billboard position={[centerX, 4.0, centerZ]} follow lockX={false} lockY={false} lockZ={false}>
         <Text
-          fontSize={Math.max(1.2, Math.min(width, depth) * 0.07)}
+          fontSize={Math.max(3.0, Math.min(width, depth) * 0.18)}
           color={color}
-          fillOpacity={0.7}
+          fillOpacity={0.9}
           anchorX="center"
           anchorY="middle"
-          outlineWidth={0.04}
+          outlineWidth={0.15}
           outlineColor="#000000"
-          outlineOpacity={0.8}
-          maxWidth={width * 0.9}
+          outlineOpacity={1.0}
+          maxWidth={width * 0.95}
           textAlign="center"
+          depthOffset={-2}
+          renderOrder={10}
         >
           {label}
         </Text>

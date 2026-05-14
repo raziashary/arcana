@@ -3,6 +3,7 @@ import { Suspense, useMemo, useCallback, useState } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { Stats } from '@react-three/drei'
 import { useGraphStore } from '../../stores/graphStore'
+import type { GraphNode } from '../../stores/graphStore'
 import { computeCityLayout } from './layout/cityLayout'
 import type { CityLayout } from './layout/layoutTypes'
 import { CityCamera } from './CityCamera'
@@ -25,10 +26,11 @@ const CITY_SIZE = 180
 const GOD_NODE_DEGREE_THRESHOLD = 15
 
 export function CityView() {
-  const { graphData, selectedNodeId, setSelectedNode, impactData } = useGraphStore()
+  const { graphData, selectedNodeId, setSelectedNode, impactData, hoveredNodeId } = useGraphStore()
   const [showStats, setShowStats] = useState(false)
   const [showCalls, setShowCalls] = useState(false)
   const [contextMenu, setContextMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null)
+  const [cursorPos, setCursorPos] = useState({ x: 0, y: 0 })
 
   // Compute layout from graph data (memoized so it only recomputes when data changes)
   const layout: CityLayout | null = useMemo(() => {
@@ -39,6 +41,13 @@ export function CityView() {
       graphData.edges,
       CITY_SIZE
     )
+  }, [graphData])
+
+  // Fast node lookup for hover tooltip
+  const nodeMap = useMemo(() => {
+    const m = new Map<string, GraphNode>()
+    graphData?.nodes.forEach(n => m.set(n.id, n))
+    return m
   }, [graphData])
 
   // Compute degree maps for building dimensions
@@ -89,14 +98,22 @@ export function CityView() {
     )
   }
 
+  const hoveredNode = hoveredNodeId ? nodeMap.get(hoveredNodeId) : null
+  const totalDegree = hoveredNode
+    ? (degreeMap.inDeg.get(hoveredNode.id) || 0) + (degreeMap.outDeg.get(hoveredNode.id) || 0)
+    : 0
+
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+    <div
+      style={{ position: 'relative', width: '100%', height: '100%' }}
+      onMouseMove={(e) => setCursorPos({ x: e.clientX, y: e.clientY })}
+    >
       <ErrorBoundary label="3D City">
       <Canvas
         shadows
         frameloop="always"
         camera={{
-          fov: 45, near: 0.1, far: 2000,
+          fov: 45, near: 0.05, far: 3000,
           position: [CITY_SIZE / 2, CITY_SIZE * 0.55, CITY_SIZE * 0.85],
         }}
         gl={{ antialias: true, alpha: false }}
@@ -201,6 +218,38 @@ export function CityView() {
 
       {/* HTML overlays */}
       <DistrictMinimap layout={layout} citySize={CITY_SIZE} />
+
+      {/* Hover tooltip */}
+      {hoveredNode && (
+        <div style={{
+          position: 'fixed',
+          left: cursorPos.x + 14,
+          top: cursorPos.y - 8,
+          background: '#111111',
+          border: '1px solid #222222',
+          borderRadius: 3,
+          padding: '7px 11px',
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 11,
+          color: '#888888',
+          zIndex: 1000,
+          pointerEvents: 'none',
+          maxWidth: 300,
+          lineHeight: 1.5,
+        }}>
+          <div style={{ color: '#f0f0f0', fontWeight: 600, marginBottom: 2 }}>
+            {hoveredNode.label || hoveredNode.id.split('::').pop() || hoveredNode.id}
+          </div>
+          <div>{hoveredNode.kind}{hoveredNode.language ? ` · ${hoveredNode.language}` : ''}</div>
+          {hoveredNode.file_path && (
+            <div style={{ color: '#4477ff', marginTop: 2 }}>{hoveredNode.file_path}</div>
+          )}
+          {(hoveredNode.line_start || hoveredNode.line_end) && (
+            <div>L{hoveredNode.line_start}–{hoveredNode.line_end}</div>
+          )}
+          <div style={{ marginTop: 2 }}>degree: {totalDegree}</div>
+        </div>
+      )}
 
       {contextMenu && (
         <BuildingContextMenu

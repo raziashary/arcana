@@ -37,10 +37,12 @@ function GroundRoad({ road }: GroundRoadProps) {
     <mesh geometry={geometry} receiveShadow>
       <meshStandardMaterial
         color={color}
+        emissive="#1a2a5a"
+        emissiveIntensity={0.5}
         transparent
-        opacity={0.3}
-        roughness={0.9}
-        metalness={0.0}
+        opacity={0.65}
+        roughness={0.7}
+        metalness={0.1}
         side={THREE.DoubleSide}
         depthWrite={false}
       />

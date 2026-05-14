@@ -114,7 +114,6 @@ export function computeCityLayout(
       const bw = buildingNode.x1 - buildingNode.x0
       const bd = buildingNode.y1 - buildingNode.y0
 
-      const inDeg = inDegreeMap.get(nodeId) || 0
       const outDeg = outDegreeMap.get(nodeId) || 0
       const bh = buildingHeight(node, outDeg)
 
@@ -122,9 +121,11 @@ export function computeCityLayout(
         nodeId,
         x: bx + bw / 2,   // center
         z: bz + bd / 2,
-        width: clamp(bw * 0.8, 0.6, buildingWidth(inDeg)),
-        depth: clamp(bd * 0.8, 0.6, buildingDepth(outDeg)),
-        height: bh,
+        // Fill 75% of the treemap cell — cell size already encodes node weight
+        width: Math.max(0.5, bw * 0.75),
+        depth: Math.max(0.5, bd * 0.75),
+        // Triple height so buildings read from overview zoom
+        height: clamp(bh * 3, 1.5, 80),
         districtId: communityId,
       }
 
