@@ -11,3 +11,9 @@
 pub mod tool_adapter;
 pub mod server;
 pub mod health_monitor;
+pub mod port_status;
+
+// Re-export the small port-resolution surface so other modules can target
+// the actually-bound port without depending on the server module's internals.
+pub use server::{current_mcp_port, is_ready};
+pub use port_status::{McpPortStatus, snapshot as port_snapshot};

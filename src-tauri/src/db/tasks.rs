@@ -758,6 +758,21 @@ impl TasksDb {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // Diff Risk Analysis — Ruflo Feature 3
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Store a serialized DiffAnalysisResult JSON on a task so the QC review
+    /// outcome is available later for audit and so the AutoDev panel can render
+    /// the risk card without re-running the analysis on every refresh.
+    pub fn set_task_diff_analysis(&self, task_id: i64, analysis_json: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tasks SET diff_analysis = ?1, updated_at = datetime('now') WHERE id = ?2",
+            params![analysis_json, task_id],
+        )?;
+        Ok(())
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // Budget Circuit Breaker — Ruflo Feature 4
     // ═══════════════════════════════════════════════════════════════════════════
 

@@ -16,23 +16,96 @@
 //   POST /api/agents/{id}/invoke      — run LivingAgent, returns AgentInvokeResponse (requires JWT)
 
 use std::collections::HashMap;
-use std::sync::{atomic::{AtomicUsize, Ordering}, Arc, Mutex};
+use std::sync::{atomic::{AtomicBool, AtomicUsize, Ordering}, Arc, Mutex};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use crate::errors::{AutoDevError, Result};
 
+/// Result of a Mode 2 LivingAgent invocation. Carries both the response content
+/// and an approximation of token usage so the recipe runner can record analytics
+/// and update the cost meter without modifying core-orchestrator.
+#[derive(Debug, Clone)]
+pub struct WorkerInvokeResult {
+    pub content:    String,
+    pub tokens_in:  u32,
+    pub tokens_out: u32,
+    /// Model reported by core-orchestrator's response metadata (if any).
+    /// May be in core-orchestrator's normalized key format (e.g. "anthropic_claude_sonnet").
+    pub model:      Option<String>,
+}
+
+/// Extract token usage from core-orchestrator's `response.metadata.tokens_used`,
+/// with a char-length fallback when the field is missing or zero.
+///
+/// `tokens_used` is typed `Optional[int]` in the submodule but actually receives
+/// a dict `{prompt_tokens, completion_tokens, total_tokens, cached_tokens}`
+/// (living_agent.py:1948). Pydantic may coerce, drop, or pass the dict through —
+/// we handle every shape we've seen.
+///
+/// Fallback estimate uses 1 token ≈ 4 chars and adds a 4× context-multiplier on
+/// the input side to account for the system prompt, tools schema, mem0 recall,
+/// and previous-turn context that LivingAgent layers on top of our recipe prompt.
+/// This is approximate but proportional — far better than the previous zero.
+fn extract_usage(
+    tokens_used: Option<&serde_json::Value>,
+    prompt_chars: usize,
+    response_chars: usize,
+) -> (u32, u32) {
+    // Try dict shape first: {prompt_tokens, completion_tokens, total_tokens}
+    if let Some(v) = tokens_used {
+        if let Some(obj) = v.as_object() {
+            let pin  = obj.get("prompt_tokens").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+            let pout = obj.get("completion_tokens").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+            if pin > 0 || pout > 0 {
+                return (pin, pout);
+            }
+            // Some providers only report total_tokens; split 70/30 in favor of input.
+            let total = obj.get("total_tokens").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+            if total > 0 {
+                let pin = (total as f64 * 0.7) as u32;
+                return (pin, total - pin);
+            }
+        }
+        // Int shape (matches the Pydantic schema literally).
+        if let Some(total) = v.as_u64() {
+            let total = total as u32;
+            if total > 0 {
+                let pin = (total as f64 * 0.7) as u32;
+                return (pin, total - pin);
+            }
+        }
+    }
+    // Char-length fallback — see doc comment above for the multiplier rationale.
+    let est_in  = ((prompt_chars / 4) as u32).saturating_mul(4);
+    let est_out = (response_chars / 4) as u32;
+    (est_in, est_out)
+}
+
 const BASE_URL: &str = "http://127.0.0.1:4000";
 const MEMORY_URL: &str = "http://127.0.0.1:8000";  // memory-mcp-server base URL
 const API_KEY: &str = "dev-key-123";               // matches core-orchestrator .env API_KEYS[0]
-const HEALTH_TIMEOUT_SECS: u64 = 5;               // Phase 7.8 — raised from 3s to give busy orch more time
+// Phase 8.3 — bumped from 5s to 10s so a busy event loop running 3 parallel
+// LivingAgent invokes still has time to schedule the lightweight /health route.
+const HEALTH_TIMEOUT_SECS: u64 = 10;
 const INVOKE_TIMEOUT_SECS: u64 = 600;              // 10-minute ceiling per recipe tick
 
-// Phase 7.8 — consecutive-failure debounce threshold.
+// Phase 8.3 — Use the lightweight /health route (api_gateway/modules/ops/router.py)
+// instead of the heavy /api/system/health route which calls
+// SystemMCPServer._get_system_health() and competes with active LivingAgent
+// invokes for event-loop time. /health is a trivial 4-line handler that just
+// returns {"status":"ok","time":now} with NO dependencies, so it answers
+// instantly even while the orchestrator is mid-invoke. Auth middleware exempts
+// both paths (see api_gateway/api/middleware/auth.py:44).
+const HEALTH_PATH: &str = "/health";
+
+// Phase 8.3 — consecutive-failure debounce threshold.
 // is_healthy() must see this many consecutive failures before returning false.
-// This prevents a single timeout (orch busy with a long LivingAgent call) from
-// triggering a Mode 1 fallback and wasting a full recipe tick.
-const HEALTH_FAIL_THRESHOLD: usize = 3;
+// Bumped from 3 → 6 so a single tight-CPU burst (e.g. supervisor decomposing
+// 11 tasks in one tick) cannot prematurely flip every worker to Mode 1.
+// At 3s polling cadence, 6 misses = ~18s of true unresponsiveness required
+// before the fleet falls back.
+const HEALTH_FAIL_THRESHOLD: usize = 6;
 
 // ─── OrchestratorClient ───────────────────────────────────────────────────────
 
@@ -71,6 +144,14 @@ pub struct OrchestratorClient {
     // Suppress WARN-level logging for health failures during this window
     // to eliminate the 59-failure noise seen in the May 5 run logs.
     startup_grace_until: std::time::Instant,
+    // Fleet-ready latch — flipped the first time a health check returns
+    // *truly* OK (real 2xx response, not a grace-window optimistic true).
+    // Once set it never resets, even if orch later crashes — the watchdog
+    // and existing failure logic handle subsequent state. The recipe
+    // runner reads this to gate its very first dispatch tick, killing
+    // the burst of `ensure_agent failed: service-login` warnings that
+    // happens when workers fire while orch is still booting.
+    first_health_success: Arc<AtomicBool>,
 }
 
 impl OrchestratorClient {
@@ -93,6 +174,26 @@ impl OrchestratorClient {
             // Failures logged at DEBUG during this window to keep the log clean.
             startup_grace_until: std::time::Instant::now()
                 + std::time::Duration::from_secs(30),
+            first_health_success: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// True once `is_healthy()` or `is_healthy_strict()` has observed at
+    /// least one real 2xx /health response. The recipe runner uses this to
+    /// hold the first dispatch tick until core-orchestrator has *actually*
+    /// finished booting — avoiding the cold-start burst of failed
+    /// service-login calls when workers fire during the grace window.
+    pub fn has_ever_been_healthy(&self) -> bool {
+        self.first_health_success.load(Ordering::Acquire)
+    }
+
+    /// Record a confirmed-healthy probe. Called from both `is_healthy()`
+    /// and `is_healthy_strict()` on real 2xx success. Idempotent; ignores
+    /// repeat calls so we don't pay an atomic store on every poll.
+    fn record_health_success(&self) {
+        if !self.first_health_success.load(Ordering::Acquire) {
+            self.first_health_success.store(true, Ordering::Release);
+            info!("[OrchestratorClient] core-orchestrator confirmed healthy — fleet dispatch latch released");
         }
     }
 
@@ -272,11 +373,54 @@ impl OrchestratorClient {
     ///
     /// On success the counter is reset to 0, so a recovered orch is immediately
     /// treated as healthy on the next check.
+    /// Strict version of `is_healthy` that returns false on any failure —
+    /// no grace window, no "stay optimistic". Used for the initial "is the
+    /// orchestrator already running externally?" probe at app startup,
+    /// where being wrong leads us to wrongly mark the sidecar as Running
+    /// and queue worker dispatches that all fail at auth-login.
+    pub async fn is_healthy_strict(&self) -> bool {
+        let url = format!("{}{}", self.base_url, HEALTH_PATH);
+        match self.client
+            .get(&url)
+            .timeout(Duration::from_secs(HEALTH_TIMEOUT_SECS))
+            .send()
+            .await
+        {
+            Ok(r) if r.status().is_success() => {
+                // Trip the fleet-ready latch — this is a real, non-optimistic success.
+                self.record_health_success();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Last-resort liveness check used when `/health` timed out: does the
+    /// orchestrator's port even accept a TCP connection? If yes, the
+    /// process is alive — its event loop is just temporarily saturated by
+    /// a long LivingAgent invoke. Returning true here keeps the fleet on
+    /// Mode 2 instead of falling back to Mode 1, which would queue parallel
+    /// LLM work and starve the event loop further.
+    ///
+    /// 2-second budget — plenty for a localhost TCP handshake; short enough
+    /// that we don't compound the perceived hang.
+    async fn tcp_liveness(&self) -> bool {
+        use tokio::net::TcpStream;
+        use tokio::time::timeout;
+        // Parse "http://127.0.0.1:4000" → "127.0.0.1:4000"
+        let addr = self.base_url
+            .trim_start_matches("http://")
+            .trim_start_matches("https://");
+        matches!(
+            timeout(Duration::from_secs(2), TcpStream::connect(addr)).await,
+            Ok(Ok(_))
+        )
+    }
+
     pub async fn is_healthy(&self) -> bool {
-        let url = format!("{}/api/system/health", self.base_url);
+        let url = format!("{}{}", self.base_url, HEALTH_PATH);
         let result = self.client
             .get(&url)
-            .header("X-API-Key", &self.api_key)
             .timeout(Duration::from_secs(HEALTH_TIMEOUT_SECS))
             .send()
             .await;
@@ -287,6 +431,8 @@ impl OrchestratorClient {
             Ok(r) if r.status().is_success() => {
                 // Reset the debounce counter on any success.
                 self.health_fail_count.store(0, Ordering::Relaxed);
+                // Trip the fleet-ready latch (idempotent after first success).
+                self.record_health_success();
                 true
             }
             Ok(r) => {
@@ -329,16 +475,37 @@ impl OrchestratorClient {
                     );
                     true  // still optimistic — orch may just be busy
                 } else {
+                    // Phase 8.3 — Before declaring orch dead, ask the network
+                    // whether port 4000 still accepts TCP connections. If yes,
+                    // the process is alive and just saturated by a long
+                    // LivingAgent invoke (common during big supervisor ticks
+                    // or 3 concurrent worker invokes). Returning true here
+                    // keeps the fleet on Mode 2 — falling back to Mode 1 in
+                    // this scenario would only add more concurrent LLM work
+                    // and starve the event loop further.
+                    if self.tcp_liveness().await {
+                        if count == HEALTH_FAIL_THRESHOLD {
+                            warn!(
+                                "[OrchestratorClient] /health failed {count}× but TCP :4000 is alive — \
+                                 keeping Mode 2; orchestrator is busy, not dead. ({e})"
+                            );
+                        } else {
+                            debug!(
+                                "[OrchestratorClient] /health failing (count={count}) but TCP alive — staying on Mode 2"
+                            );
+                        }
+                        return true;
+                    }
                     // Log once at the exact threshold crossing; suppress repeated noise
                     // for every subsequent call above the threshold.
                     if count == HEALTH_FAIL_THRESHOLD {
                         warn!(
-                            "[OrchestratorClient] health check failed {count} consecutive times: {e} — \
+                            "[OrchestratorClient] health check failed {count} consecutive times AND TCP dead: {e} — \
                              declaring unhealthy, switching workers to Mode 1 fallback"
                         );
                     } else {
                         debug!(
-                            "[OrchestratorClient] health check still failing (count={count}): {e}"
+                            "[OrchestratorClient] health check still failing (count={count}, TCP dead): {e}"
                         );
                     }
                     false
@@ -663,7 +830,7 @@ impl OrchestratorClient {
         agent_id:     &str,
         instructions: &str,
         trigger:      &str,
-    ) -> Result<String> {
+    ) -> Result<WorkerInvokeResult> {
         // Ensure we're authenticated before making API calls
         self.ensure_authenticated().await?;
 
@@ -672,6 +839,7 @@ impl OrchestratorClient {
         let prompt = format!(
             "[AUTODEV RECIPE INSTRUCTIONS]\n{instructions}\n\n[EXECUTION TRIGGER]\n{trigger}"
         );
+        let prompt_len = prompt.len();
 
         // Note: session_id query param removed - core-orchestrator doesn't require it
         // for stateless recipe execution and returns 404 if session doesn't exist
@@ -697,7 +865,7 @@ impl OrchestratorClient {
             )));
         }
 
-        // Parse AgentInvokeResponse → response (StructuredResponse) → content
+        // Parse AgentInvokeResponse → response (StructuredResponse) → content + usage
         let parsed: serde_json::Value = resp
             .json()
             .await
@@ -710,7 +878,30 @@ impl OrchestratorClient {
             .unwrap_or("[LivingAgent returned no content]")
             .to_string();
 
-        Ok(content)
+        // Phase 8.2 — Mode 2 cost extraction.
+        // The LivingAgent's StreamBroker populates `response.metadata.tokens_used`
+        // (living_agent.py:1948). The field is declared Optional[int] in the
+        // submodule's Pydantic model but the actual value is a dict
+        // {prompt_tokens, completion_tokens, total_tokens, cached_tokens}.
+        // We try BOTH shapes defensively and fall back to a char/4 estimate
+        // when the field is None/zero — accurate enough to surface non-zero
+        // Mode 2 spend on the cost meter, and self-correcting once the
+        // submodule's tokens_used populates reliably.
+        let metadata = parsed.get("response").and_then(|r| r.get("metadata"));
+        let tokens_used = metadata.and_then(|m| m.get("tokens_used"));
+        let model = metadata
+            .and_then(|m| m.get("model"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let (tokens_in, tokens_out) = extract_usage(tokens_used, prompt_len, content.len());
+
+        Ok(WorkerInvokeResult {
+            content,
+            tokens_in,
+            tokens_out,
+            model,
+        })
     }
 
     // ─── Retry wrapper for invoke_worker (Fix 6b) ─────────────────────────────
@@ -914,6 +1105,11 @@ impl OrchestratorClient {
         }
 
         let url = format!("{}/api/mcp/servers", self.base_url);
+        // Read the actual bound port from the in-process MCP server so the
+        // registration follows the port fallback applied at startup (8767 →
+        // 8768/8769/8770 when 8767 was held by a previous instance).
+        let mcp_port = crate::mcp_server::current_mcp_port();
+        let mcp_url  = format!("http://127.0.0.1:{}/mcp", mcp_port);
         // No auth header in body — MCP server is localhost-only, no auth required.
         let body = serde_json::json!({
             "id": "autodev-mcp-server",
@@ -921,7 +1117,7 @@ impl OrchestratorClient {
             "type": "autodev",
             "transport": "http",
             "http": {
-                "url": "http://127.0.0.1:8767/mcp",
+                "url": mcp_url,
                 "headers": {
                     "Content-Type": "application/json"
                 }
@@ -938,68 +1134,122 @@ impl OrchestratorClient {
 
         let status = resp.status();
         if status.is_success() {
-            info!("[OrchestratorClient] autodev-mcp-server registered with core-orchestrator");
-            Ok(())
-        } else if status.as_u16() == 409 {
-            // Already registered — idempotent
-            info!("[OrchestratorClient] autodev-mcp-server already registered (409)");
-            Ok(())
-        } else if status.as_u16() == 400 || status.as_u16() == 500 {
-            // Phase 7.9 — treat 400 and 500 with "already exists" body as idempotent.
-            // core-orchestrator currently returns HTTP 500 (instead of 409) when the
-            // server is already registered, which was incorrectly propagated as a Rust
-            // error and logged as a failure. Read the body and check for the sentinel.
-            let text = resp.text().await.unwrap_or_default();
-            let lower = text.to_ascii_lowercase();
-            if lower.contains("already exists")
-                || lower.contains("already registered")
-                || lower.contains("duplicate")
-            {
-                info!(
-                    "[OrchestratorClient] autodev-mcp-server already registered \
-                     (HTTP {} — idempotent)", status.as_u16()
-                );
-                Ok(())
-            } else {
-                Err(AutoDevError::Agent(format!(
-                    "MCP server registration failed (HTTP {status}): {}",
-                    &text[..text.len().min(400)]
-                )))
-            }
-        } else {
-            let text = resp.text().await.unwrap_or_default();
-            Err(AutoDevError::Agent(format!(
+            info!("[OrchestratorClient] autodev-mcp-server registered with core-orchestrator on port {mcp_port}");
+            return Ok(());
+        }
+
+        // If the server entry already exists on disk from a previous run,
+        // POST returns 409 (or 400/500 with "already exists" body). The
+        // stored URL may now be stale (port fallback after Windows TIME_WAIT
+        // bumped us from 8767 → 8768), so we follow up with a PUT to
+        // refresh the URL on the orchestrator side. Without this, the
+        // orchestrator would happily forward LivingAgent tool calls to a
+        // dead port forever.
+        let code  = status.as_u16();
+        let text  = resp.text().await.unwrap_or_default();
+        let lower = text.to_ascii_lowercase();
+        let is_already_exists = code == 409
+            || ((code == 400 || code == 500)
+                && (lower.contains("already exists")
+                    || lower.contains("already registered")
+                    || lower.contains("duplicate")));
+
+        if !is_already_exists {
+            return Err(AutoDevError::Agent(format!(
                 "MCP server registration failed (HTTP {status}): {}",
                 &text[..text.len().min(400)]
-            )))
+            )));
+        }
+
+        info!(
+            "[OrchestratorClient] autodev-mcp-server already registered (HTTP {} — \
+             upserting URL to refresh port to {})",
+            code, mcp_port
+        );
+        let put_url = format!("{}/api/mcp/servers/autodev-mcp-server", self.base_url);
+        let put_body = serde_json::json!({
+            "transport": "http",
+            "http": {
+                "url": mcp_url,
+                "headers": { "Content-Type": "application/json" }
+            }
+        });
+        let put_resp = self.client
+            .put(&put_url)
+            .header("Authorization", self.get_auth_header())
+            .json(&put_body)
+            .send()
+            .await;
+        match put_resp {
+            Ok(r) if r.status().is_success() => {
+                info!("[OrchestratorClient] autodev-mcp-server URL refreshed to {}", mcp_url);
+                Ok(())
+            }
+            Ok(r) => {
+                // PUT failed — log but don't fail the whole startup. If the
+                // port hadn't actually changed, the existing entry is still
+                // correct. The next /invoke will surface the real problem.
+                let put_status = r.status();
+                let put_text = r.text().await.unwrap_or_default();
+                warn!(
+                    "[OrchestratorClient] PUT refresh failed (HTTP {}): {} — \
+                     proceeding with existing URL; this is fine unless the port changed",
+                    put_status, &put_text[..put_text.len().min(200)]
+                );
+                Ok(())
+            }
+            Err(e) => {
+                warn!(
+                    "[OrchestratorClient] PUT refresh transport error: {} — \
+                     proceeding with existing URL", e
+                );
+                Ok(())
+            }
         }
     }
 
     // ─── Pre-flight MCP health check (BUG-002b safety net) ───────────────────
 
-    /// Lightweight TCP probe to the in-process MCP server on :8767.
-    /// Returns true if the port is accepting connections — a proxy for
-    /// "LivingAgent will be able to discover tools".
+    /// Lightweight TCP probe to the in-process MCP server. Returns true if
+    /// the port is accepting connections — a proxy for "LivingAgent will be
+    /// able to discover tools". Uses `current_mcp_port()` so the probe
+    /// targets the actual bound port (8767 by default, may fall back to
+    /// 8768/8769/8770 after a Windows TIME_WAIT collision).
     ///
-    /// Used by `runner.rs` to force an early Mode 1 fallback when the MCP
-    /// server is down, avoiding an expensive tool-less LivingAgent tick.
+    /// Short-circuits to `true` when the in-process server has not finished
+    /// binding yet — the runner uses this signal to gate Mode 2 dispatch,
+    /// and reporting false here would force an unnecessary Mode 1 fallback
+    /// for the first few seconds of every cold start.
+    ///
+    /// Used by `runner.rs` to abort a tick when the MCP server is down,
+    /// avoiding an expensive tool-less LivingAgent tick.
     pub async fn mcp_server_healthy(&self) -> bool {
         use tokio::net::TcpStream;
         use tokio::time::timeout;
+
+        // Bind not finished yet — optimistically allow the tick. The next
+        // failure will be the orchestrator's invoke call, which is handled.
+        if !crate::mcp_server::is_ready() {
+            debug!("[OrchestratorClient] MCP server not yet bound — assuming healthy for this tick");
+            return true;
+        }
+
+        let port = crate::mcp_server::current_mcp_port();
+        let addr = format!("127.0.0.1:{}", port);
         match timeout(
             Duration::from_secs(2),
-            TcpStream::connect("127.0.0.1:8767"),
+            TcpStream::connect(&addr),
         ).await {
             Ok(Ok(_)) => {
-                debug!("[OrchestratorClient] MCP server TCP probe OK :8767");
+                debug!("[OrchestratorClient] MCP server TCP probe OK :{}", port);
                 true
             }
             Ok(Err(e)) => {
-                warn!("[OrchestratorClient] MCP server TCP connect failed :8767 — {e}");
+                warn!("[OrchestratorClient] MCP server TCP connect failed :{} — {}", port, e);
                 false
             }
             Err(_) => {
-                warn!("[OrchestratorClient] MCP server TCP connect timed out :8767 (>2s)");
+                warn!("[OrchestratorClient] MCP server TCP connect timed out :{} (>2s)", port);
                 false
             }
         }

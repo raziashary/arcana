@@ -43,16 +43,6 @@ impl Tool for ClaimTaskTool {
             _ => return ToolResult::error("'task_id' must be a positive integer"),
         };
 
-        // Worker identity comes from the __agent_role passed by the MCP client.
-        // Fall back to "unknown" to avoid a hard failure, but log for visibility.
-        let worker_slug = ctx.agent_role.as_deref().unwrap_or("unknown").to_string();
-        if worker_slug == "unknown" {
-            tracing::warn!(
-                "[claim_task] __agent_role not set for task #{task_id} — \
-                 orphan detection will use 'unknown' as worker slug"
-            );
-        }
-
         let db = match TasksDb::open() {
             Ok(db) => db,
             Err(e) => return ToolResult::error(format!("Failed to open tasks database: {e}")),
@@ -71,6 +61,34 @@ impl Tool for ClaimTaskTool {
                  Only assigned tasks can be claimed.",
                 task.status.as_str()
             ));
+        }
+
+        // Worker identity resolution.
+        //
+        // Source of truth ORDER:
+        //   1. `task.assigned_worker` — set atomically by assign_task /
+        //      assign_tasks, definitively names who owns this task.
+        //   2. `ctx.agent_role` — the MCP request's `__agent_role` field,
+        //      passed by the LivingAgent. The Python bridge doesn't always
+        //      forward this through to the rmcp call (the source of the
+        //      "__agent_role not set" warnings in the logs).
+        //
+        // Previous behaviour preferred (2) and overwrote `assigned_worker`
+        // with "unknown" when MCP didn't pass it — causing the kanban to
+        // show "unknown" on in_progress cards even though the Ready column
+        // had named the worker correctly a second earlier. That cascaded
+        // into the worker-affinity panel and live monitor losing the link
+        // between agent and task. Prefer the DB value; only fall back to
+        // ctx if the task somehow has no assigned_worker (shouldn't happen
+        // after assign_task ran, but guard anyway).
+        let worker_slug = task.assigned_worker.clone()
+            .or_else(|| ctx.agent_role.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+        if worker_slug == "unknown" {
+            tracing::warn!(
+                "[claim_task] task #{task_id} has no assigned_worker AND \
+                 __agent_role is missing — orphan detection will use 'unknown'"
+            );
         }
 
         let pid = std::process::id();

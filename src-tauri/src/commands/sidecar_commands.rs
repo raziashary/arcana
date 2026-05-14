@@ -123,7 +123,10 @@ pub fn get_full_sidecar_status(
             name:     "AutoDev MCP Server".into(),
             status:   sidecar.mcp_status().to_string(),
             required: true,
-            port:     8767,
+            // Reflect the actual bound port — startup may fall back from
+            // 8767 to 8768/8769/8770 when the preferred port is held in
+            // Windows TIME_WAIT after a rapid restart.
+            port:     crate::mcp_server::current_mcp_port(),
             note:     "Canonical Rust builtin_tools via Streamable HTTP (in-process)".into(),
         },
         ServiceStatus {
@@ -135,6 +138,27 @@ pub fn get_full_sidecar_status(
             note:     "Warm memory tier + agent card store (optional — core-orch falls back to cold tier if missing)".into(),
         },
     ]
+}
+
+/// Snapshot of the in-process MCP server's port binding state, including
+/// any port-conflict diagnostics (which PID is holding 8767, whether it's
+/// a ghost socket from a crashed previous instance). The Settings panel
+/// uses this for a live indicator and conflict banner.
+#[tauri::command]
+pub fn get_mcp_port_status() -> crate::mcp_server::McpPortStatus {
+    crate::mcp_server::port_snapshot()
+}
+
+/// Snapshot of the last stderr lines captured from a sidecar's subprocess.
+/// Used to render the actual Python traceback in a UI banner when a sidecar
+/// crashes, instead of leaving the user staring at "Mode 1 fallback" with no
+/// explanation. `id` accepts "core-orchestrator" or "memory-mcp-server".
+#[tauri::command]
+pub fn get_sidecar_stderr_tail(
+    id:      String,
+    sidecar: State<'_, Arc<SidecarManager>>,
+) -> Vec<String> {
+    sidecar.stderr_tail(&id)
 }
 
 // ─── Start ────────────────────────────────────────────────────────────────────

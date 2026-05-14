@@ -443,6 +443,28 @@ pub fn kick(worker_slug: &str) {
     }
 }
 
+/// Kick the Supervisor plus every domain worker so freshly-unblocked or
+/// freshly-routed tasks dispatch on the next event-loop tick instead of
+/// waiting up to one cron cycle. Used by the blocker-resolution hook
+/// (Ruflo Feature 5) — when a task completes and unblocks dependent work,
+/// we don't know in advance which worker will end up owning each unblocked
+/// task, so we kick the whole fleet and let the Supervisor route.
+pub fn kick_all_workers() {
+    // Keep this in sync with the worker recipe ids in defaults.rs. Adding
+    // a new worker only requires extending this list.
+    for slug in &[
+        "supervisor",
+        "worker-backend",
+        "worker-frontend",
+        "worker-platform",
+        "worker-mcp",
+        "worker-cleanup",
+        "qc-agent",
+    ] {
+        kick(slug);
+    }
+}
+
 // ─── Cron expression helpers ──────────────────────────────────────────────────
 
 /// Convert standard 5-field POSIX cron to 6-field (prepend seconds = 0).

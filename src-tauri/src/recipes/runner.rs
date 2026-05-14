@@ -24,7 +24,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::agent::engine::AgentEngine;
@@ -84,6 +84,24 @@ impl RecipeRunner {
     /// Execute a recipe for the given worker slug.
     /// Updates worker status in DB: idle → working → idle/error.
     pub async fn run_recipe(&self, recipe: &Recipe, worker_slug: &str) -> Result<()> {
+        // ── Fleet-ready latch ───────────────────────────────────────────────────
+        // Hold the very first tick until core-orchestrator has been
+        // confirmed-healthy at least once. Without this, every worker fires
+        // its startup tick during the grace window (when `is_healthy()` is
+        // optimistically true) and burns 7 × `ensure_agent failed:
+        // service-login` warnings in the first 10s of every cold start.
+        // Once the latch trips, all subsequent ticks proceed with the
+        // normal grace-window health logic — so a single transient orch
+        // blip mid-session never blocks dispatch.
+        if !self.orch_client.has_ever_been_healthy() {
+            debug!(
+                "[RecipeRunner] holding tick for '{}' — orch not yet confirmed healthy (fleet-ready latch closed)",
+                worker_slug
+            );
+            self.set_worker_status(worker_slug, "idle");
+            return Ok(());
+        }
+
         // ── Mode 2 health check (needed for dispatch routing decision) ──────────
         // We check orchestrator health early because it determines whether we
         // apply the "no tasks" short-circuit below.
@@ -267,16 +285,17 @@ impl RecipeRunner {
 
                     if !mcp_up {
                         // The AutoDev MCP server is an in-process Tokio task in the same
-                        // Tauri binary. If port :8767 is not responding, the server has
+                        // Tauri binary. If the port isn't responding, the server has
                         // either crashed or hasn't finished binding yet. Either way, Mode 1
                         // would run without ANY tools and is strictly worse. Abort this tick
                         // and wait for the next cron cycle — the in-process server will
                         // almost certainly recover on its own.
+                        let mcp_port = crate::mcp_server::current_mcp_port();
                         warn!(
-                            "[RecipeRunner] MCP server unreachable for '{}' (port :8767 not responding). \
+                            "[RecipeRunner] MCP server unreachable for '{}' (port :{} not responding). \
                              Aborting tick — will retry next scheduled interval. \
                              NOT falling back to Mode 1 (tool-less Mode 1 is worse than skipping).",
-                            worker_slug
+                            worker_slug, mcp_port
                         );
                         emit_worker_tick_end(&self.app, WorkerTickEndPayload {
                             slug:      worker_slug.to_string(),
@@ -289,8 +308,8 @@ impl RecipeRunner {
 
                     info!(
                         "[RecipeRunner] MCP server healthy for '{}' — \
-                         LivingAgent will have tools via :8767, proceeding Mode 2",
-                        worker_slug
+                         LivingAgent will have tools via :{}, proceeding Mode 2",
+                        worker_slug, crate::mcp_server::current_mcp_port()
                     );
                     {
                         // Prepend the active workspace dir to the instructions so the
@@ -314,14 +333,70 @@ impl RecipeRunner {
                             .invoke_worker(&agent_id, &instructions_with_ws, trigger)
                             .await
                     {
-                        Ok(response) => {
+                        Ok(result) => {
                             let elapsed_ms = tick_start.elapsed().as_millis() as u64;
+                            let response = result.content.clone();
                             info!(
                                 "[RecipeRunner] LivingAgent tick complete for '{}' in {}ms: {:.200}",
                                 worker_slug,
                                 elapsed_ms,
                                 response.trim()
                             );
+
+                            // Phase 8.2 — Mode 2 cost tracking.
+                            // core-orchestrator returns approximate tokens in
+                            // response.metadata.tokens_used; the client falls
+                            // back to a char/4 estimate when that field is
+                            // unpopulated. Either way we now have non-zero
+                            // numbers to bill against the worker's model.
+                            let tokens_in  = result.tokens_in;
+                            let tokens_out = result.tokens_out;
+                            let cost = crate::cost::tracker::CostTracker::calculate(
+                                &model, tokens_in, tokens_out
+                            );
+                            // Roll into the in-process AppState so the
+                            // StatusBar / Sidebar / TabBar cost meter (which
+                            // reads `cost_today_usd`) reflects Mode 2 spend
+                            // alongside Mode 1 PA spend.
+                            {
+                                let mut s = self.state.lock().unwrap();
+                                s.add_cost(cost.cost_usd, tokens_in, tokens_out);
+                            }
+                            // Persist into the analytics DB so the Dashboard's
+                            // get_dashboard_summary picks it up across restarts.
+                            let analytics_provider = if model.contains("claude") {
+                                "anthropic"
+                            } else if model.contains("gpt") || model.starts_with("o1") || model.starts_with("o3") {
+                                "openai"
+                            } else if model.contains("gemini") {
+                                "google"
+                            } else {
+                                "unknown"
+                            };
+                            let _ = crate::analytics::global()
+                                .collector()
+                                .record_token_usage(
+                                    format!("mode2-{}-{}", worker_slug, chrono::Utc::now().timestamp_millis()),
+                                    "mode2_worker".to_string(),
+                                    analytics_provider.to_string(),
+                                    model.clone(),
+                                    tokens_in as i32,
+                                    tokens_out as i32,
+                                    None,
+                                    cost.cost_usd,
+                                    format!("worker_tick:{}", worker_slug),
+                                );
+                            // Live-broadcast a cost:update so the Dashboard
+                            // and any other cost listeners refresh immediately
+                            // rather than waiting for the 60s polling fallback.
+                            let total_today = self.state.lock().unwrap().cost_today_usd;
+                            crate::events::emit_cost_update(&self.app, crate::events::CostUpdatePayload {
+                                session_id:  format!("mode2:{}", worker_slug),
+                                tokens_in,
+                                tokens_out,
+                                cost_usd:    cost.cost_usd,
+                                total_today,
+                            });
                             // D.1 — emit tick-end before transitioning to idle
                             emit_worker_tick_end(&self.app, WorkerTickEndPayload {
                                 slug:      worker_slug.to_string(),

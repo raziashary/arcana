@@ -42,10 +42,13 @@ impl Tool for AnalyzeDiffTool {
                 "head_branch": {
                     "type": "string",
                     "description": "Head branch to diff to (e.g. 'feature/my-pr')"
+                },
+                "task_id": {
+                    "type": "integer",
+                    "description": "Optional. When provided, the analysis JSON is persisted to tasks.diff_analysis so the AutoDev panel can render the risk card alongside the task. Pass the QC task you are reviewing."
                 }
             },
-            "required": ["repo_path", "base_branch", "head_branch"],
-            "additionalProperties": false
+            "required": ["repo_path", "base_branch", "head_branch"]
         })
     }
 
@@ -92,10 +95,35 @@ impl Tool for AnalyzeDiffTool {
                     result.lines_added,
                     result.lines_deleted,
                 );
-                match serde_json::to_string(&result) {
-                    Ok(json) => ToolResult::success_with_hint(json, summary),
-                    Err(e) => ToolResult::error(format!("Failed to serialize result: {e}")),
+                let json = match serde_json::to_string(&result) {
+                    Ok(j)  => j,
+                    Err(e) => return ToolResult::error(format!("Failed to serialize result: {e}")),
+                };
+                // If the caller passed a task_id, persist the analysis on that
+                // task so the AutoDev panel's DiffAnalysisCard can render it
+                // without re-running the LLM. Failure to persist is non-fatal —
+                // the tool result still includes the JSON for the agent to use.
+                if let Some(task_id) = input.get("task_id").and_then(|v| v.as_i64()) {
+                    if let Ok(db) = crate::db::tasks::TasksDb::open() {
+                        if let Err(e) = db.set_task_diff_analysis(task_id, &json) {
+                            tracing::warn!(
+                                "[analyze_diff] persist to task #{task_id} failed: {e}"
+                            );
+                        } else {
+                            // Push the kanban a fresh task:changed so any open
+                            // DiffAnalysisCard refreshes immediately.
+                            crate::events::emit_task_changed_global(
+                                crate::events::TaskChangedPayload {
+                                    task_id: Some(task_id),
+                                    kind:    "diff_analysis".into(),
+                                    status:  None,
+                                    assigned_worker: None,
+                                }
+                            );
+                        }
+                    }
                 }
+                ToolResult::success_with_hint(json, summary)
             }
             Err(e) => ToolResult::error(format!("Diff analysis failed: {e}")),
         }

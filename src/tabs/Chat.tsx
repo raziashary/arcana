@@ -6,8 +6,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { Send, Square, Zap } from 'lucide-react'
-import MessageBubble    from '../components/chat/MessageBubble'
-import PermissionDialog from '../components/chat/PermissionDialog'
+import MessageBubble        from '../components/chat/MessageBubble'
+import InlinePermissionCard from '../components/chat/PermissionDialog'
+import RunningToolsPill     from '../components/chat/RunningToolsPill'
 import { SessionBar }   from '../components/chat/SessionBar'
 import AtFilePicker, { type FileEntry } from '../components/chat/AtFilePicker'
 import { useAgentStore }    from '../stores/agentStore'
@@ -199,7 +200,8 @@ function ChatHeader({ localDir, setLocalDir }: ChatHeaderProps) {
 
 export default function ChatTab() {
   const messages      = useAgentStore(s => s.messages)
-  const isStreaming   = useAgentStore(s => s.isStreaming)
+  const isStreaming        = useAgentStore(s => s.isStreaming)
+  const pendingPermission  = useAgentStore(s => s.pendingPermission)
   const sessionStore  = useSessionStore()
   const settingsStore = useSettingsStore()
   const skillStore    = useSkillStore()
@@ -232,10 +234,13 @@ export default function ChatTab() {
     useWorkspaceStore.getState().loadWorkspaceDir()
   }, [])
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll to bottom on new messages, but also when the inline
+  // permission card / running-tools pill flips into view — without these
+  // extra dependencies, the pill and card render below the fold and the
+  // user has to scroll manually to see why the chat seems frozen.
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+  }, [messages, pendingPermission, isStreaming])
 
   // Ref to hold active unlisteners so they can be cleaned up on unmount
   const unlistenersRef = useRef<(() => void)[]>([])
@@ -483,11 +488,20 @@ export default function ChatTab() {
           />
         ))}
 
+        {/* Running-tools status pill — shows tool name + spinner when the
+            agent is mid-tick. Hidden when idle. Sits inline with the
+            messages so the user can see what's happening without an
+            obscuring modal. */}
+        <RunningToolsPill />
+
+        {/* Inline permission card — replaces the old centered-modal
+            PermissionDialog. Renders only when a permission request is
+            pending, in the same stream as the messages, so the user can
+            scroll context next to the request. */}
+        <InlinePermissionCard />
+
         <div ref={messagesEndRef} />
       </div>
-
-      {/* Permission dialog overlay */}
-      <PermissionDialog />
 
       {/* Input area */}
       <div

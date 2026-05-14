@@ -1,12 +1,20 @@
-// PermissionDialog — modal overlay for tool execution approval.
-// Appears when agent:permission-request event fires in ManualApproval mode.
-// User can Allow, Deny, or Allow Always.
+// InlinePermissionCard — tool-execution approval prompt rendered inline in
+// the chat stream (NOT as a centered modal overlay).
+//
+// Earlier versions of this component rendered as a full-screen modal that
+// obscured the assistant's last message and felt jarring. Inline rendering
+// matches the way most agentic IDEs surface tool-use decisions: as a card
+// in the conversation flow, immediately after the assistant's response,
+// so the user can read the context and the requested tool side-by-side.
+//
+// Returns null when no permission is pending — the caller can drop this
+// component into the message list unconditionally.
 
 import { invoke } from '@tauri-apps/api/core'
-import { Shield } from 'lucide-react'
+import { Shield, Terminal } from 'lucide-react'
 import { useAgentStore } from '../../stores/agentStore'
 
-export default function PermissionDialog() {
+export default function InlinePermissionCard() {
   const pendingPermission = useAgentStore(s => s.pendingPermission)
 
   if (!pendingPermission) return null
@@ -18,90 +26,114 @@ export default function PermissionDialog() {
         response,
       })
     } finally {
-      // Clear dialog and resume streaming
+      // Clear card and resume streaming
       useAgentStore.setState({ pendingPermission: null, isStreaming: true })
     }
   }
 
+  // Pretty-print the input. Cap each value at ~200 chars so long file
+  // contents don't blow up the card height.
+  const inputPreview = JSON.stringify(pendingPermission.input, null, 2)
+
   return (
     <div
-      className="absolute inset-0 flex items-end justify-center pb-16 z-50"
-      style={{ background: 'rgba(0,0,0,0.6)' }}
+      className="rounded-sm font-mono self-start max-w-4xl w-full my-1"
+      style={{
+        background:  'var(--bg-surface)',
+        border:      '1px solid var(--warning)',
+        borderLeft:  '3px solid var(--warning)',
+        fontSize:    '12px',
+      }}
     >
+      {/* Header */}
       <div
-        className="w-full max-w-lg rounded-sm"
+        className="flex items-center gap-1.5 px-3 py-2"
+        style={{ borderBottom: '1px solid var(--border-1)' }}
+      >
+        <Shield size={12} color="var(--warning)" />
+        <span style={{
+          color:          'var(--warning)',
+          letterSpacing:  '0.08em',
+          fontSize:       '10px',
+          textTransform:  'uppercase',
+          fontWeight:     600,
+        }}>
+          Permission required
+        </span>
+        <span style={{ color: 'var(--text-4)' }}>·</span>
+        <Terminal size={11} color="var(--info)" />
+        <span style={{ color: 'var(--info)' }}>{pendingPermission.toolName}</span>
+      </div>
+
+      {/* Input preview */}
+      <div
+        className="px-3 py-2 overflow-auto whitespace-pre-wrap break-all"
         style={{
-          background: 'var(--bg-surface)',
-          border:     '1px solid var(--border-1)',
-          padding:    '16px',
+          background: 'var(--bg-app)',
+          color:      'var(--text-2)',
+          fontSize:   '11px',
+          maxHeight:  '180px',
+          lineHeight: 1.5,
         }}
       >
-        {/* Header */}
-        <div className="flex items-center gap-2 mb-3">
-          <Shield size={16} color="var(--warning)" />
-          <span
-            className="font-mono text-xs"
-            style={{ color: 'var(--warning)', letterSpacing: '0.08em' }}
-          >
-            PERMISSION REQUIRED
-          </span>
-        </div>
+        {inputPreview}
+      </div>
 
-        {/* Tool name */}
-        <div className="mb-2">
-          <span className="font-mono text-xs" style={{ color: 'var(--info)' }}>
-            {pendingPermission.toolName}
-          </span>
-        </div>
-
-        {/* Input preview */}
+      {/* Description (optional) */}
+      {pendingPermission.description && (
         <div
-          className="font-mono text-xs mb-4 rounded-sm p-2 overflow-auto max-h-32"
+          className="px-3 py-1.5"
           style={{
-            background: 'var(--bg-app)',
-            border:     '1px solid var(--border-1)',
-            color:      'var(--text-2)',
+            color:        'var(--text-3)',
+            fontSize:     '11px',
+            borderTop:    '1px solid var(--border-1)',
           }}
         >
-          {JSON.stringify(pendingPermission.input, null, 2)}
+          {pendingPermission.description}
         </div>
+      )}
 
-        {/* Buttons */}
-        <div className="flex gap-2 justify-end">
-          <button
-            onClick={() => respond('deny')}
-            className="font-mono text-xs px-3 py-1.5 rounded-sm cursor-pointer"
-            style={{
-              background: 'var(--bg-card)',
-              border:     '1px solid var(--border-2)',
-              color:      'var(--danger)',
-            }}
-          >
-            Deny
-          </button>
-          <button
-            onClick={() => respond('allow_always')}
-            className="font-mono text-xs px-3 py-1.5 rounded-sm cursor-pointer"
-            style={{
-              background: 'var(--bg-card)',
-              border:     '1px solid var(--border-2)',
-              color:      'var(--text-2)',
-            }}
-          >
-            Allow Always
-          </button>
-          <button
-            onClick={() => respond('allow')}
-            className="font-mono text-xs px-3 py-1.5 rounded-sm cursor-pointer"
-            style={{
-              background: 'var(--accent-muted)',
-              border:     '1px solid var(--accent-border)',
-              color:      'var(--accent)',
-            }}
-          >
-            Allow
-          </button>
-        </div>
+      {/* Actions */}
+      <div
+        className="flex gap-2 justify-end px-3 py-2"
+        style={{ borderTop: '1px solid var(--border-1)' }}
+      >
+        <button
+          onClick={() => respond('deny')}
+          className="font-mono px-3 py-1 rounded-sm cursor-pointer"
+          style={{
+            background: 'var(--bg-card)',
+            border:     '1px solid var(--border-2)',
+            color:      'var(--danger)',
+            fontSize:   '11px',
+          }}
+        >
+          Deny
+        </button>
+        <button
+          onClick={() => respond('allow_always')}
+          className="font-mono px-3 py-1 rounded-sm cursor-pointer"
+          style={{
+            background: 'var(--bg-card)',
+            border:     '1px solid var(--border-2)',
+            color:      'var(--text-2)',
+            fontSize:   '11px',
+          }}
+        >
+          Allow Always
+        </button>
+        <button
+          onClick={() => respond('allow')}
+          className="font-mono px-3 py-1 rounded-sm cursor-pointer"
+          style={{
+            background: 'var(--accent-muted)',
+            border:     '1px solid var(--accent-border)',
+            color:      'var(--accent)',
+            fontSize:   '11px',
+          }}
+        >
+          Allow
+        </button>
       </div>
     </div>
   )

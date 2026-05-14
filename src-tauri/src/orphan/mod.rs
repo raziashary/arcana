@@ -50,24 +50,55 @@ fn reconcile_inner() -> crate::errors::Result<Vec<String>> {
 
 fn check_task(task: &Task) -> Option<String> {
     if let Some(pid) = task.claimed_by_pid {
-        if !pid_checker::is_pid_alive(pid as u32) {
+        let pid = pid as u32;
+
+        // Multi-machine safety: if the claim was made on a different host,
+        // this orphan detector can't reason about the PID — the same PID on
+        // a different machine is a totally unrelated process. Skip the
+        // liveness check and fall through to the TTL fallback below so we
+        // don't incorrectly release another machine's in-flight work.
+        let current_host = current_hostname();
+        let same_host = task.claim_host
+            .as_deref()
+            .map(|h| h.eq_ignore_ascii_case(&current_host))
+            .unwrap_or(true); // missing host metadata → treat as local (back-compat)
+
+        if !same_host {
+            // Different machine claimed it; rely on TTL only.
+        } else if !pid_checker::is_pid_alive(pid) {
             return Some(format!("host process PID {} exited", pid));
+        } else if !pid_checker::is_autodev_process(pid) {
+            // PID alive but isn't an AutoDev process — the OS recycled the
+            // PID to something unrelated after our worker died. Treat as
+            // orphan so the task isn't stranded behind a ghost claim.
+            return Some(format!(
+                "PID {} is alive but is not an AutoDev process (PID reuse suspected)",
+                pid
+            ));
+        } else {
+            return None; // PID alive, name matches → still our worker
         }
-        return None; // PID alive — not orphaned
     }
 
     // TTL fallback for tasks without a recorded PID (pre-PID tasks or
-    // tasks assigned via direct DB edits / UI drag-drop)
+    // tasks assigned via direct DB edits / UI drag-drop) AND for tasks
+    // claimed on a different host where we can't validate the PID locally.
     let updated = chrono::DateTime::parse_from_rfc3339(&task.updated_at).ok()?;
     let age_hours = chrono::Utc::now()
         .signed_duration_since(updated.with_timezone(&chrono::Utc))
         .num_hours();
     if age_hours > STALE_TTL_HOURS {
         return Some(format!(
-            "no PID recorded and task is {}h stale (TTL fallback)",
+            "no local PID validation possible and task is {}h stale (TTL fallback)",
             age_hours
         ));
     }
 
     None
+}
+
+fn current_hostname() -> String {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "unknown".to_string())
 }

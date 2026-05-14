@@ -51,6 +51,8 @@ export interface Task {
   milestone?:    string | null
   epic_id?:      string | null
   blocked_by?:   string[] | null
+  // Ruflo Feature 3 — Diff Risk Scoring (populated by analyze_diff_tool when task_id is passed)
+  diff_analysis?: string | null
 }
 
 // ─── Phase Summary (Ruflo Feature 5) ─────────────────────────────────────────

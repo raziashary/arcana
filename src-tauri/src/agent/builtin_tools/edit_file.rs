@@ -86,7 +86,22 @@ impl Tool for EditFileTool {
 
         let content = match fs::read_to_string(&file_path).await {
             Ok(c) => c,
-            Err(e) => return ToolResult::error(format!("Failed to read file '{}': {}", file_path.display(), e)),
+            Err(e) => {
+                // If the file doesn't exist, point the agent at `write_file` instead.
+                // Workers bootstrapping a project commonly try edit_file first; failing
+                // with a bare I/O error encourages a retry loop on a doomed path.
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    return ToolResult::error(format!(
+                        "File '{}' does not exist. To create a new file, call \
+                         `write_file(path='{}', content=...)` instead — edit_file only \
+                         modifies existing files.",
+                        file_path.display(), params.path
+                    ));
+                }
+                return ToolResult::error(format!(
+                    "Failed to read file '{}': {}", file_path.display(), e
+                ));
+            }
         };
 
         let match_count = content.matches(&params.old_string).count();

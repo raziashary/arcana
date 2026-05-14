@@ -261,6 +261,46 @@ export const useAgentLiveStore = create<AgentLiveStore>((set, get) => ({
         e => store.handleError(e.payload))
     )
 
+    // Mode 2 (LivingAgent via core-orchestrator) doesn't emit the agent:*
+    // events above — those are emitted by the in-process Rust AgentEngine
+    // (Mode 1 / PA chat). Without bridging Mode 2 worker activity into the
+    // same store, the Live Monitor sat at "IDLE" forever even though
+    // workers were clearly running per the Agent Roster.
+    //
+    // Map Rust's worker:tick-start / worker:tick-end / worker:status
+    // events onto the same handleStatusChange path so workers light up
+    // green when they're mid-tick and go grey when they finish.
+    unlisteners.push(
+      listen<{ slug: string; mode: string; timestamp: string }>(
+        'worker:tick-start',
+        e => store.handleStatusChange({ agent_id: e.payload.slug, status: 'active' })
+      )
+    )
+    unlisteners.push(
+      listen<{ slug: string; outcome: string; timestamp: string }>(
+        'worker:tick-end',
+        e => store.handleStatusChange({
+          agent_id: e.payload.slug,
+          // outcome 'success' / 'mcp_unavailable' / 'error' — map error to error state
+          status: e.payload.outcome.startsWith('error') ? 'error' : 'idle',
+        })
+      )
+    )
+    unlisteners.push(
+      listen<{ slug: string; status: string }>(
+        'worker:status',
+        e => {
+          // Rust emits status strings like "idle" / "working" / "error".
+          // Translate to AgentLiveState's enum (active / idle / error / stopped).
+          const mapped =
+            e.payload.status === 'working' ? 'active' :
+            e.payload.status === 'error'   ? 'error'  :
+            e.payload.status === 'stopped' ? 'stopped' : 'idle'
+          store.handleStatusChange({ agent_id: e.payload.slug, status: mapped as any })
+        }
+      )
+    )
+
     // Flush token buffer to store every 500ms to avoid overwhelming React
     tokenFlushTimer = setInterval(() => {
       const entries = Object.entries(tokenBuffer)

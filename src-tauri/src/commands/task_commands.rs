@@ -43,19 +43,21 @@ pub fn update_task_status(id: i64, status: String, assigned_worker: Option<Strin
     }
 
     // Ruflo Feature 1 — record routing outcome when a task reaches a terminal state.
-    // duration_ms and tokens are 0 here (no timing data available at command level);
-    // the DB UPDATE only touches rows with outcome IS NULL so it's safe to call always.
+    // `record_outcome_auto` computes duration_ms as now - assigned_at from the
+    // pending routing_history row, so the affinity scorer ranks workers by both
+    // success rate AND speed. Token counts remain 0 here (the recipe runner
+    // tracks per-tick tokens separately via analytics::record_token_usage).
     let task_id_str = id.to_string();
     match status.as_str() {
         "done" => {
-            let _ = crate::routing::TaskRouter::record_outcome(&task_id_str, "success", 0, 0);
+            let _ = crate::routing::TaskRouter::record_outcome_auto(&task_id_str, "success");
         }
         "failed" => {
-            let _ = crate::routing::TaskRouter::record_outcome(&task_id_str, "failure", 0, 0);
+            let _ = crate::routing::TaskRouter::record_outcome_auto(&task_id_str, "failure");
         }
         "assigned" => {
             // Reassignment — mark any pending routing row as reassigned
-            let _ = crate::routing::TaskRouter::record_outcome(&task_id_str, "reassigned", 0, 0);
+            let _ = crate::routing::TaskRouter::record_outcome_auto(&task_id_str, "reassigned");
         }
         _ => {}
     }
@@ -69,6 +71,12 @@ pub fn update_task_status(id: i64, status: String, assigned_worker: Option<Strin
         if let Ok(unblocked_ids) = db2.unblock_ready_tasks(id) {
             for tid in &unblocked_ids {
                 emit_task_unblocked_global(*tid);
+            }
+            // Ruflo Feature 5 — kick the fleet so unblocked tasks dispatch on
+            // the next event-loop tick instead of waiting up to a full cron
+            // cycle. Skipped when nothing was unblocked.
+            if !unblocked_ids.is_empty() {
+                crate::recipes::scheduler::kick_all_workers();
             }
         }
         // Check if the completed task's phase is fully done

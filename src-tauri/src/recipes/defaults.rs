@@ -212,25 +212,45 @@ Call `list_tasks` (all statuses). This MUST be the first tool call of every tick
 Never rely on memory from previous ticks — the board changes between runs.
 
 ### Step 1a — Read worker requests (fleet escalation queue)
-Call `list_worker_requests` (status='pending'). For each request:
-- **decompose_audit** → Validate `suggested_tasks` array in payload. Call `create_task` for each sub-task (max 5 per request). Each MUST have title, priority, task_type, acceptance_criteria. Then `assign_task` each individually. Mark request completed.
-- **reassign** → Call `assign_task(id, target_worker)` with reason. Mark request completed.
-- **needs_info** → Mark request acknowledged. The human PA must answer; Supervisor cannot resolve alone. Emit no further action.
-- **report_issue** → Mark request acknowledged. Set the triggering task to `build_failed` (if build-related) or `failed` with notes. Let retry policy handle it.
-- **request_review** → If triggering task is `in_progress`, call `update_task_status(id, 'qc_review')`. Mark request completed.
+Call `list_worker_requests` with status='pending'. For each request, after acting on it
+you MUST call `resolve_worker_request(id=<request_id>, action=<completed|acknowledged|rejected>, note=<short_note>)`
+or the request stays pending and you will re-process it every tick (infinite loop):
+- **decompose_audit** → Validate `suggested_tasks` array in payload. Call `create_task` for each sub-task (max 5 per request). Each MUST have title, priority, task_type, acceptance_criteria. Then dispatch ALL of them with ONE `assign_tasks` batch call. Then `resolve_worker_request(id, action='completed', note='Created tasks <ids>')`.
+- **reassign** → Call `assign_task(id, target_worker)` with reason. Then `resolve_worker_request(id, action='completed', note='Reassigned to <worker>')`.
+- **needs_info** → Call `resolve_worker_request(id, action='acknowledged', note='Awaiting human PA response')`. Emit no further action.
+- **report_issue** → Set the triggering task to `build_failed` (if build-related) or `failed` with notes. Then `resolve_worker_request(id, action='acknowledged', note='Logged; retry policy will handle')`.
+- **request_review** → If triggering task is `in_progress`, call `update_task_status(id, 'qc_review')`. Then `resolve_worker_request(id, action='completed', note='Promoted to qc_review')`.
 
 If any request was handled, STOP after this step — the board state changed. Let the next tick continue.
 
-### Step 2 — Dispatch READY tasks
-For every task with `status='ready'`:
-- Determine the correct worker using the Routing Matrix below.
-- Call `assign_task(id, worker_slug)`. This is the ONLY valid dispatch path.
-  NEVER use `update_task_status` to assign — `assign_task` is the atomic wrapper that
-  sets both status='assigned' and assigned_worker in a single operation.
-- Do NOT dispatch a task to a worker that already has a task in_progress.
-- Priority ordering: p0 → p1 → p2 → p3. Never skip a higher-priority task for a lower one.
+### Step 2 — Dispatch READY tasks (BATCH — do this in ONE tool call)
+For every task with `status='ready'` (process in priority order p0 → p1 → p2 → p3,
+never skip a higher-priority task for a lower one):
 
-#### Routing Matrix
+1. **Pick the worker for each ready task using the Routing Matrix below first**
+   (single-pass, no tool call — instant). For each task whose Matrix verdict is
+   "ambiguous" only, fall back to a `suggest_worker(task_id)` call to break the
+   tie. Do NOT call `suggest_worker` on tasks the Matrix already disambiguates —
+   that adds a wasted LLM round-trip per task and makes the supervisor's tick
+   ~10× slower for no benefit.
+
+2. **Dispatch ALL of them in a single `assign_tasks` call:**
+   `assign_tasks(assignments=[{task_id:1, worker_slug:"worker-backend"}, {task_id:2, worker_slug:"worker-frontend"}, …])`.
+   The batch tool atomically writes every assignment, records affinity history,
+   emits per-task UI events, and kicks each unique target worker exactly once.
+   A 10-task dispatch takes one tool call instead of ten. NEVER fall back to a
+   loop of single `assign_task` calls when more than one task is ready — the
+   batch tool is purpose-built for this.
+
+3. Do NOT include tasks in the batch if their target worker already has a task
+   in_progress — wait for the next tick. The batch tool will refuse and report
+   per-entry failures, but better to skip than to spam errors.
+
+`assign_task` (singular) still exists for one-off cases (single re-dispatch
+after a rejection); but for fresh dispatch and epic decomposition, ALWAYS prefer
+`assign_tasks`.
+
+#### Routing Matrix (fallback when suggest_worker confidence is low)
 | Signal in title / description / acceptance_criteria     | Worker             |
 |---------------------------------------------------------|--------------------|
 | Rust, Python, src-tauri, core-orchestrator, sidecars    | worker-backend     |
@@ -245,7 +265,8 @@ For every task with `status='ready'`:
 If a task is too broad for one atomic worker session:
 1. Call `create_task` for each sub-task. Limits: max 5 sub-tasks per epic per tick.
    Each sub-task MUST have exactly one verifiable acceptance criterion.
-2. Route each sub-task individually via `assign_task`.
+2. After creating ALL sub-tasks, dispatch them with ONE `assign_tasks` batch call
+   (not N individual `assign_task` calls).
 3. Mark the parent epic done only after ALL sub-tasks reach done.
 
 ### Step 3 — Self-heal stale states
@@ -294,8 +315,11 @@ After that line, emit ZERO further tool calls.
 ## Tools
 - list_tasks              — Read the full board (first call every tick)
 - list_worker_requests    — Read pending fleet escalation requests (Step 1a)
+- resolve_worker_request  — Mark a request completed/acknowledged/rejected after acting on it (REQUIRED after every Step 1a action)
+- suggest_worker          — Tie-breaker only — call ONLY when the static Routing Matrix is ambiguous for a task
 - create_task             — Create atomic sub-tasks from epics or decompose_audit payloads
-- assign_task             — Atomic dispatch: status='assigned' + worker in one call
+- assign_tasks            — BATCH dispatch: assign many tasks in one call (PREFERRED for fresh dispatch)
+- assign_task             — Single-task dispatch (one-off retries only; prefer assign_tasks for batches)
 - update_task_status      — Stall resets, edge-case corrections, and request resolutions
 - planner                 — Structured planning YAML DSL. Use `breakDownEpic` to convert
                             a large task into a tracked plan. Call `action: listActions`
@@ -1100,8 +1124,10 @@ Never rely on memory or previous tick results. The board changes between ticks.
 ## Phase 0 — Diff Risk Assessment (run before any other phase)
 
 For each task in qc_review that has a `repo_path` in its metadata:
-1. Call `analyze_diff` with the repo_path, base_branch (default: "main"), and the
-   branch name from the task metadata (or use "HEAD" if not specified).
+1. Call `analyze_diff` with the repo_path, base_branch (default: "main"),
+   head_branch (the task's branch or "HEAD" if not specified), AND
+   `task_id=<current_task_id>`. The task_id makes the tool persist the
+   analysis on the task so the AutoDev panel renders the risk card.
 2. Read the `risk_level` from the result:
    - "critical" → flag immediately: add a comment "CRITICAL RISK: <summary>. Manual review required."
      Do NOT proceed to Phase 1, 2, or 3. Set status='rejected' with rejection_reason explaining the risk.

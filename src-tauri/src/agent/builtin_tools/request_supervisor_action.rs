@@ -83,16 +83,30 @@ impl Tool for RequestSupervisorActionTool {
             _ => return ToolResult::error("'payload' must be a JSON object"),
         };
 
-        // Infer worker_slug from the agent role in context, or fail gracefully.
-        let worker_slug = ctx.agent_role
-            .as_ref()
-            .map(|s: &String| s.to_string())
-            .unwrap_or_else(|| "unknown".to_string());
-
         let db = match TasksDb::open() {
             Ok(db) => db,
             Err(e) => return ToolResult::error(&format!("Failed to open tasks database: {e}")),
         };
+
+        // Worker identity resolution — same pattern as claim_task.
+        // Source of truth ORDER:
+        //   1. `task.assigned_worker` from the task this request is *about*
+        //      (passed as task_id). Authoritative — assign_task wrote it.
+        //   2. `ctx.agent_role` — MCP __agent_role; the Python bridge
+        //      occasionally drops this on the floor.
+        //   3. "unknown" — last resort, logged for visibility.
+        let task_assigned_worker = task_id
+            .and_then(|tid| db.get_by_id(tid).ok().flatten())
+            .and_then(|t| t.assigned_worker);
+        let worker_slug = task_assigned_worker
+            .or_else(|| ctx.agent_role.clone())
+            .unwrap_or_else(|| {
+                tracing::warn!(
+                    "[request_supervisor_action] no assigned_worker on task and \
+                     no __agent_role — recording request as 'unknown'"
+                );
+                "unknown".to_string()
+            });
 
         let request = match db.create_worker_request(&CreateWorkerRequestInput {
             worker_slug: worker_slug.clone(),

@@ -111,7 +111,7 @@ pub fn validate_budget(
     }
     if let Some(t) = max_turns {
         if t == 0 || t > BUDGET_MAX_TURNS_CEILING {
-            return Err("BUDGET_INVALID_TOKENS");
+            return Err("BUDGET_INVALID_TURNS");
         }
     }
     Ok(TaskBudget { max_tokens, max_usd, max_turns })

@@ -26,6 +26,7 @@ import { useAgentLiveStore }  from '../stores/agentLiveStore'
 import { WorkerAffinityPanel } from '../components/dashboard/WorkerAffinityPanel'
 import { OrphanAlert } from '../components/dashboard/OrphanAlert'
 import { BudgetBar } from '../components/budget/BudgetBar'
+import { DiffAnalysisCard } from '../components/dashboard/DiffAnalysisCard'
 import { EpicsSection } from '../components/dashboard/EpicPhaseView'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import '../components/autodev/LiveMonitor.css'
@@ -367,6 +368,13 @@ function TaskCard({
           <pre style={{ color: 'var(--text-2)', fontSize: '10px', whiteSpace: 'pre-wrap', fontFamily: 'inherit', lineHeight: 1.5 }}>
             {task.acceptance_criteria}
           </pre>
+          {/* Ruflo Feature 3 — QC diff risk card. Renders when analyze_diff_tool
+              persisted a result on this task (typically during QC review). */}
+          {task.diff_analysis && (
+            <div style={{ marginTop: 8 }}>
+              <DiffAnalysisCard diffAnalysisJson={task.diff_analysis} />
+            </div>
+          )}
           <div style={{ color: 'var(--text-4)', fontSize: '9px', marginTop: 6 }}>
             created {new Date(task.created_at).toLocaleString()} by {task.created_by}
           </div>
@@ -776,6 +784,9 @@ export default function AutoDevTab() {
   const inProgressTasks= tasks.filter(t => t.status === 'in_progress')
   const qcTasks        = tasks.filter(t => t.status === 'qc_review')
   const rejectedTasks  = tasks.filter(t => t.status === 'rejected')
+  // Tasks that the Supervisor or a worker has escalated for human / budget input —
+  // surfacing them keeps stuck work visible instead of invisibly buried beneath Done.
+  const needsInfoTasks = tasks.filter(t => t.status === 'needs_info')
   const doneTodayTasks = tasks.filter(t =>
     (t.status === 'done' && isToday(t.completed_at)) ||
     (t.status === 'failed' && isToday(t.updated_at)) ||
@@ -786,6 +797,7 @@ export default function AutoDevTab() {
     { colId: 'ready',       label: 'Ready',       tasks: readyTasks      },
     { colId: 'in_progress', label: 'In Progress', tasks: inProgressTasks },
     { colId: 'qc_review',   label: 'QC Review',   tasks: qcTasks         },
+    { colId: 'needs_info',  label: 'Needs Info',  tasks: needsInfoTasks  },
     { colId: 'rejected',    label: 'Rejected',    tasks: rejectedTasks   },
     { colId: 'done_today',  label: 'Done Today',  tasks: doneTodayTasks  },
   ]

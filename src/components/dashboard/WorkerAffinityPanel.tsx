@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 
 interface WorkerAffinityStats {
   worker_slug: string
@@ -40,7 +41,14 @@ export function WorkerAffinityPanel() {
     }
   }, [])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    void load()
+    // Affinity stats change every time a task is assigned, completed, or
+    // reassigned — refresh on the existing task:changed channel instead of
+    // only on mount, so the panel never displays stale success rates.
+    const unlistenPromise = listen('task:changed', () => { void load() })
+    return () => { void unlistenPromise.then(fn => fn()) }
+  }, [load])
 
   // Group stats by worker_slug
   const byWorker = stats.reduce<Record<string, WorkerAffinityStats[]>>((acc, s) => {

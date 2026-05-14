@@ -73,6 +73,11 @@ pub const EVT_MCP_RECONNECTED:         &str = "mcp:reconnected";
 pub const EVT_MCP_RECONNECT_FAILED:    &str = "mcp:reconnect-failed";
 pub const EVT_MCP_REQUIRES_RESTART:    &str = "mcp:requires-restart";
 
+// In-process MCP server port conflict. Emitted ONCE at startup when the
+// preferred port (8767) is held by another process and we had to fall
+// back to 8768/8769/8770. Payload is `McpPortStatus`.
+pub const EVT_MCP_PORT_CONFLICT:       &str = "mcp:port-conflict";
+
 // Phase 4.9 — subagent lifecycle events. One event per SSE frame received
 // from core-orchestrator's `/api/agents/{id}/invoke/stream`, plus internal
 // status transitions (Spawning / Idle / Running / Completed / Failed /

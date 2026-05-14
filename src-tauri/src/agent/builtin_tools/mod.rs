@@ -15,6 +15,7 @@ pub mod list_tasks_tool;
 pub mod get_task_tool;
 pub mod update_task_status_tool;
 pub mod assign_task;
+pub mod assign_tasks_batch;
 pub mod planner;
 pub mod spawn_subagent;
 pub mod spawn_parallel_subagents;
@@ -34,6 +35,9 @@ pub mod create_epic_tool;
 pub mod create_phased_task_tool;
 pub mod get_epic_progress_tool;
 pub mod get_ready_tasks_in_phase_tool;
+// Supervisor escalation queue tools — required by the Supervisor recipe Step 1a.
+pub mod list_worker_requests_tool;
+pub mod resolve_worker_request_tool;
 
 use std::sync::Arc;
 use super::{PAMode, tool_registry::ToolRegistry};
@@ -100,10 +104,18 @@ pub fn register_for_mcp_worker(registry: &mut ToolRegistry) {
     // sets status='assigned', so domain workers calling it would still produce valid
     // state — the recipe instruction is the authoritatively enforced constraint.
     registry.register(Arc::new(assign_task::AssignTaskTool));
+    registry.register(Arc::new(assign_tasks_batch::AssignTasksBatchTool));
     registry.register(Arc::new(create_task::CreateTaskTool));
     // Planner — designed for all fleet agents (see planner.rs comment).
     // Supervisor: breakDownEpic, Workers: claimItem / createSubplan / submitForQC.
     registry.register(Arc::new(planner::PlannerTool));
+    // Supervisor escalation queue — read pending requests + mark them resolved.
+    // The supervisor recipe Step 1a calls these every tick; without them the
+    // Supervisor cannot drain the queue and worker escalations pile up forever.
+    // Safe to expose to all workers — reading and resolving requests is idempotent
+    // and the resolve action requires an explicit request id.
+    registry.register(Arc::new(list_worker_requests_tool::ListWorkerRequestsTool));
+    registry.register(Arc::new(resolve_worker_request_tool::ResolveWorkerRequestTool));
 }
 
 /// Register tools filtered by PA mode:
@@ -132,6 +144,7 @@ pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
             registry.register(Arc::new(get_task_tool::GetTaskTool));
             registry.register(Arc::new(update_task_status_tool::UpdateTaskStatusTool));
             registry.register(Arc::new(assign_task::AssignTaskTool));
+            registry.register(Arc::new(assign_tasks_batch::AssignTasksBatchTool));
             registry.register(Arc::new(create_task::CreateTaskTool));
             // Worker→Supervisor communication — available in all modes
             registry.register(Arc::new(request_supervisor_action::RequestSupervisorActionTool));
@@ -160,6 +173,10 @@ pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
             registry.register(Arc::new(create_phased_task_tool::CreatePhasedTaskTool));
             registry.register(Arc::new(get_epic_progress_tool::GetEpicProgressTool));
             registry.register(Arc::new(get_ready_tasks_in_phase_tool::GetReadyTasksInPhaseTool));
+            // Supervisor escalation queue tools — also available in PA modes
+            // so Razi can manually drain the queue from chat if needed.
+            registry.register(Arc::new(list_worker_requests_tool::ListWorkerRequestsTool));
+            registry.register(Arc::new(resolve_worker_request_tool::ResolveWorkerRequestTool));
         }
         PAMode::Delegate => {
             registry.register(Arc::new(create_task::CreateTaskTool));

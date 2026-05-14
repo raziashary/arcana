@@ -276,8 +276,13 @@ fn main() {
                     }
 
                     // ── Phase 1: Check if sidecars are already running externally ──────────
+                    // Use the STRICT health probe here so a previous-instance
+                    // ghost socket or a grace-window optimistic check doesn't
+                    // make us think a dead orchestrator is running — that
+                    // caused workers to queue auth-login calls against a port
+                    // that never accepted them, with no path to recovery.
                     let mem_already_up = orch_probe.is_memory_healthy().await;
-                    let orch_already_up = orch_probe.is_healthy().await;
+                    let orch_already_up = orch_probe.is_healthy_strict().await;
 
                     if mem_already_up {
                         sidecar_ref.mark_memory_running();

@@ -254,7 +254,12 @@ impl McpHealthMonitor {
                 };
 
                 if new_state == McpConnectionState::Degraded && prev_state != McpConnectionState::Degraded {
-                    // Emit degraded event
+                    // Transition into Degraded BEFORE dropping the guard.
+                    // Earlier this assignment happened after an early return,
+                    // so the state field stayed on the previous value and
+                    // every subsequent ping kept re-emitting the degraded
+                    // event because prev_state never advanced.
+                    health.state = McpConnectionState::Degraded;
                     drop(guard);
                     let _ = app.emit(crate::events::EVT_MCP_CONNECTION_DEGRADED, &serde_json::json!({
                         "server_name": name,

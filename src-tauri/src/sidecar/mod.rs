@@ -23,16 +23,71 @@
 pub mod client;
 pub mod startup_progress;
 
+use std::collections::VecDeque;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
+
+/// Maximum number of stderr lines retained per sidecar for crash diagnostics.
+/// Larger values bloat memory on a runaway sidecar; smaller values miss the
+/// part of the Python traceback that names the actual error.
+const STDERR_TAIL_LEN: usize = 60;
+
+/// Type alias — the rolling stderr buffer the log router writes into and the
+/// watchdog / Tauri commands read for crash banners.
+pub type StderrTail = Arc<Mutex<VecDeque<String>>>;
+
+fn new_stderr_tail() -> StderrTail {
+    Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_TAIL_LEN)))
+}
+
+fn push_stderr_line(tail: &StderrTail, line: String) {
+    let mut q = tail.lock().unwrap();
+    if q.len() >= STDERR_TAIL_LEN {
+        q.pop_front();
+    }
+    q.push_back(line);
+}
 
 use crate::errors::{AutoDevError, Result};
 use startup_progress::{StartupPhase, StartupProgress};
+
+/// Environment variables that belong to the Python sidecars and MUST NOT be
+/// inherited from AutoDev's parent process. The parent's dotenvy loads
+/// `autodev/.env` to populate Rust-side config; any list/dict-typed values
+/// (e.g. `CORS_ORIGINS=["..."]`) get mangled by dotenvy's quote handling and
+/// arrive at the subprocess as malformed JSON, which crashes pydantic-settings.
+///
+/// Concrete failure observed:
+///   `CORS_ORIGINS=["http://localhost:3000"]` in the parent .env →
+///   dotenvy strips the inner quotes → subprocess sees `["http://localhost:3000"]`
+///   shaped as `[`-truncated → pydantic_settings.sources.SettingsError on import →
+///   core-orchestrator never binds :4000 → the entire fleet stalls in Mode 1.
+///
+/// Removing these vars from the inherited block forces the Python sidecars to
+/// read them from their own `.env` files (which they already do, via python-dotenv).
+const ORCH_ONLY_ENV_VARS: &[&str] = &[
+    "CORS_ORIGINS",
+    "API_KEYS",
+    "ALLOWED_MIME",
+    "AIRS_API_KEY",        // shared between orch + memory; orch reads from its own .env
+    "DATABASE_URL",        // orch-specific
+    "REDIS_URL",           // orch + memory; each reads from its own .env
+    "MEM0_API_KEY",        // memory-mcp internal
+];
+
+/// Strip Python-sidecar-only env vars from a Command so the subprocess
+/// reads them from its own .env instead of inheriting potentially-mangled
+/// values from the parent dotenvy load.
+fn strip_inherited_orch_env(cmd: &mut Command) {
+    for key in ORCH_ONLY_ENV_VARS {
+        cmd.env_remove(key);
+    }
+}
 
 // ─── SidecarStatus ────────────────────────────────────────────────────────────
 
@@ -165,7 +220,9 @@ fn spawn_log_router<R: std::io::Read + Send + 'static>(
     log_file: PathBuf,
     prefix: &'static str,
     progress: Option<Arc<StartupProgress>>,
+    stderr_tail: Option<StderrTail>,
 ) {
+    let is_stderr_stream = prefix.contains("ERR");
     std::thread::spawn(move || {
         // Phase 7.3 — rotate on open if file is already over the size limit.
         // File is not yet held open here so the rename is safe on Windows.
@@ -202,6 +259,15 @@ fn spawn_log_router<R: std::io::Read + Send + 'static>(
                     // advances correctly — even after the line-cap is hit.
                     if let Some(p) = progress.as_ref() {
                         p.scan_line(prefix, &l);
+                    }
+
+                    // Capture stderr into the rolling tail buffer so the UI can
+                    // show the actual Python traceback when the sidecar crashes
+                    // instead of just "Mode 1 fallback" with no explanation.
+                    if is_stderr_stream {
+                        if let Some(tail) = stderr_tail.as_ref() {
+                            push_stderr_line(tail, l.clone());
+                        }
                     }
 
                     // Phase 7.4 — per-session line cap.
@@ -329,9 +395,14 @@ pub struct SidecarManager {
     // core-orchestrator (port 4000)
     orch_process:   Mutex<Option<Child>>,
     orch_status:    Mutex<SidecarStatus>,
+    // Rolling stderr buffer for the orchestrator. Populated by the log
+    // router; read by the watchdog (to detect crash signatures) and by the
+    // Tauri command `get_sidecar_last_error` (for the UI banner).
+    orch_stderr_tail: StderrTail,
     // memory-mcp-server (port 8000) — must be running before core-orchestrator
     memory_process: Mutex<Option<Child>>,
     memory_status:  Mutex<SidecarStatus>,
+    memory_stderr_tail: StderrTail,
     // autodev-mcp-server (port 8767) — in-process Tokio task, tracked for fleet readiness
     mcp_status:     Mutex<SidecarStatus>,
     // Redis / Memurai (port 6379) — externally managed (Windows service or
@@ -350,15 +421,30 @@ pub struct SidecarManager {
 impl SidecarManager {
     pub fn new() -> Self {
         Self {
-            orch_process:   Mutex::new(None),
-            orch_status:    Mutex::new(SidecarStatus::Stopped),
-            memory_process: Mutex::new(None),
-            memory_status:  Mutex::new(SidecarStatus::Stopped),
-            mcp_status:     Mutex::new(SidecarStatus::Running), // Phase 3.4 — MCP is in-process, starts immediately
-            redis_process:  Mutex::new(None),
-            redis_status:   Mutex::new(SidecarStatus::Stopped), // Phase 3.4b — polled, not spawned
-            progress:       Mutex::new(None),
+            orch_process:       Mutex::new(None),
+            orch_status:        Mutex::new(SidecarStatus::Stopped),
+            orch_stderr_tail:   new_stderr_tail(),
+            memory_process:     Mutex::new(None),
+            memory_status:      Mutex::new(SidecarStatus::Stopped),
+            memory_stderr_tail: new_stderr_tail(),
+            mcp_status:         Mutex::new(SidecarStatus::Running), // Phase 3.4 — MCP is in-process, starts immediately
+            redis_process:      Mutex::new(None),
+            redis_status:       Mutex::new(SidecarStatus::Stopped), // Phase 3.4b — polled, not spawned
+            progress:           Mutex::new(None),
         }
+    }
+
+    /// Snapshot the last few stderr lines from a sidecar so the UI can show
+    /// the actual Python traceback when a crash banner appears. `id` accepts
+    /// "core-orchestrator" or "memory-mcp-server".
+    pub fn stderr_tail(&self, id: &str) -> Vec<String> {
+        let tail = match id {
+            "core-orchestrator" => &self.orch_stderr_tail,
+            "memory-mcp-server" => &self.memory_stderr_tail,
+            _ => return Vec::new(),
+        };
+        let q = tail.lock().unwrap();
+        q.iter().cloned().collect()
     }
 
     /// Attach the startup-progress tracker. Called once from main.rs after the
@@ -393,6 +479,10 @@ impl SidecarManager {
         let mut cmd = Command::new("uv");
         cmd.args(["run", "python", "main.py", "--mode", "dev"]);
         cmd.current_dir(cwd);
+        // CRITICAL: clear list/dict-typed env vars that dotenvy mangles before
+        // they reach the Python subprocess. Without this, pydantic-settings
+        // crashes on import (see ORCH_ONLY_ENV_VARS doc comment above).
+        strip_inherited_orch_env(&mut cmd);
         cmd.env("PYTHONIOENCODING", "utf-8:replace");
         cmd.env("PYTHONUTF8", "1");
         // Phase 7.4 — suppress mem0 INFO/DEBUG chatter.
@@ -423,10 +513,10 @@ impl SidecarManager {
         let log_dir = logs_dir();
         let progress = self.progress();
         if let Some(stdout) = child.stdout.take() {
-            spawn_log_router(stdout, log_dir.join("memory-mcp.log"), "memory-mcp", progress.clone());
+            spawn_log_router(stdout, log_dir.join("memory-mcp.log"), "memory-mcp", progress.clone(), None);
         }
         if let Some(stderr) = child.stderr.take() {
-            spawn_log_router(stderr, log_dir.join("memory-mcp.log"), "memory-mcp ERR", progress);
+            spawn_log_router(stderr, log_dir.join("memory-mcp.log"), "memory-mcp ERR", progress, Some(self.memory_stderr_tail.clone()));
         }
 
         *self.memory_process.lock().unwrap() = Some(child);
@@ -497,6 +587,11 @@ impl SidecarManager {
             "--log-level", "info",
         ]);
         cmd.current_dir(cwd);
+        // CRITICAL: clear list/dict-typed env vars that dotenvy mangles before
+        // they reach the Python subprocess. Without this, pydantic-settings
+        // crashes on import with `SettingsError: error parsing value for
+        // field "CORS_ORIGINS"` and core-orchestrator never binds :4000.
+        strip_inherited_orch_env(&mut cmd);
         cmd.env("PYTHONIOENCODING", "utf-8:replace");
         cmd.env("PYTHONUTF8", "1");
         cmd.env("LITELLM_LOG", "WARNING");  // T7.3 — suppress LiteLLM debug noise
@@ -518,10 +613,10 @@ impl SidecarManager {
         let log_dir = logs_dir();
         let progress = self.progress();
         if let Some(stdout) = child.stdout.take() {
-            spawn_log_router(stdout, log_dir.join("core-orchestrator.log"), "core-orch", progress.clone());
+            spawn_log_router(stdout, log_dir.join("core-orchestrator.log"), "core-orch", progress.clone(), None);
         }
         if let Some(stderr) = child.stderr.take() {
-            spawn_log_router(stderr, log_dir.join("core-orchestrator.log"), "core-orch ERR", progress);
+            spawn_log_router(stderr, log_dir.join("core-orchestrator.log"), "core-orch ERR", progress, Some(self.orch_stderr_tail.clone()));
         }
 
         *self.orch_process.lock().unwrap() = Some(child);
@@ -979,6 +1074,14 @@ async fn orch_watchdog(
 
     let mut backoff_secs  = 2u64;
     let mut unhealthy_run = 0u32;
+    // Circuit breaker — record each restart attempt timestamp. If we hit
+    // CIRCUIT_BREAKER_MAX restarts inside CIRCUIT_BREAKER_WINDOW, stop
+    // retrying and surface a permanent-error state with the captured
+    // stderr tail so the user can fix the underlying problem instead of
+    // watching the same crash loop forever.
+    const CIRCUIT_BREAKER_MAX:    usize = 3;
+    const CIRCUIT_BREAKER_WINDOW: Duration = Duration::from_secs(300);
+    let mut restart_history: VecDeque<Instant> = VecDeque::with_capacity(CIRCUIT_BREAKER_MAX + 1);
 
     loop {
         tokio::time::sleep(Duration::from_secs(WATCHDOG_POLL_SECS)).await;
@@ -1007,10 +1110,40 @@ async fn orch_watchdog(
             continue;
         }
 
+        // Circuit-breaker check: drop entries older than the window, then
+        // bail out if we've already restarted too many times recently.
+        let now = Instant::now();
+        while let Some(t) = restart_history.front() {
+            if now.duration_since(*t) > CIRCUIT_BREAKER_WINDOW { restart_history.pop_front(); }
+            else { break; }
+        }
+        if restart_history.len() >= CIRCUIT_BREAKER_MAX {
+            let tail = mgr.stderr_tail("core-orchestrator");
+            let tail_str = tail.iter().rev().take(15).rev().cloned().collect::<Vec<_>>().join("\n");
+            let summary = if tail_str.is_empty() {
+                "no stderr captured".to_string()
+            } else {
+                format!("last stderr lines:\n{}", &tail_str[..tail_str.len().min(2000)])
+            };
+            error!(
+                "[watchdog] core-orchestrator crashed {} times in {}s — circuit breaker OPEN. \
+                 Pausing restarts; manual intervention required. {}",
+                CIRCUIT_BREAKER_MAX, CIRCUIT_BREAKER_WINDOW.as_secs(), summary
+            );
+            mgr.mark_error(&format!(
+                "crashed {} times in {}s — stopped restarting. Check Settings → Sidecar logs for the Python traceback.",
+                CIRCUIT_BREAKER_MAX, CIRCUIT_BREAKER_WINDOW.as_secs()
+            ));
+            // Sleep long; user must restart the app or fix env / config.
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            continue;
+        }
+        restart_history.push_back(now);
+
         warn!(
             "[watchdog] core-orchestrator failure after {} misses \
-             (exited={exited}, unhealthy={unhealthy}) — restarting in {backoff_secs}s",
-            unhealthy_run
+             (exited={exited}, unhealthy={unhealthy}) — restart attempt {}/{} in {backoff_secs}s",
+            unhealthy_run, restart_history.len(), CIRCUIT_BREAKER_MAX
         );
         unhealthy_run = 0;
         mgr.stop();

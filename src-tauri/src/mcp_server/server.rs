@@ -1,31 +1,120 @@
 // server.rs — Streamable HTTP transport for the AutoDev MCP Server.
 //
-// Binds to 127.0.0.1:8767 and exposes a single /mcp endpoint that handles
-// both POST (client → server) and GET (server → client SSE stream) per the
-// MCP 2025-03-26 Streamable HTTP specification.
+// Binds to 127.0.0.1:8767 (preferred) and exposes a single /mcp endpoint that
+// handles both POST (client → server) and GET (server → client SSE stream)
+// per the MCP 2025-03-26 Streamable HTTP specification.
 //
 // The server is started as an in-process Tokio task inside the Tauri app,
 // sharing the same binary and ToolRegistry as the PA-mode AgentEngine.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU16, Ordering};
 
 use rmcp::transport::streamable_http_server::{
     StreamableHttpService,
     session::local::LocalSessionManager,
 };
+use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::TcpListener;
 use tracing::{info, warn, error};
 
 use crate::agent::ToolRegistry;
 use super::tool_adapter::AutodevMcpServer;
 
-/// Port the AutoDev MCP Server listens on. Adjacent to core-orchestrator (4000)
-/// and memory-mcp-server (8000).
+/// Preferred port the AutoDev MCP Server listens on. Adjacent to
+/// core-orchestrator (4000) and memory-mcp-server (8000). May be bumped at
+/// runtime to one of the alternates below if 8767 is held by a previous
+/// instance in Windows TIME_WAIT — see `bind_with_fallback`.
 pub const MCP_SERVER_PORT: u16 = 8767;
+
+/// Alternate ports tried in order when 8767 cannot be bound even with
+/// SO_REUSEADDR. Keep this short — the goal is to recover from the rare
+/// case where another process truly owns 8767, not to scan a wide range.
+const MCP_PORT_FALLBACKS: &[u16] = &[8768, 8769, 8770];
+
+/// Holds the actual port the MCP server bound to once `start_mcp_server`
+/// finishes its bind dance. 0 means "not bound yet". Readers (the
+/// OrchestratorClient health probe and registration call) consult this
+/// instead of hard-coding 8767 so they follow port fallback automatically.
+static BOUND_PORT: AtomicU16 = AtomicU16::new(0);
+
+/// Set once the server is fully listening — used by code paths that want
+/// to wait for readiness rather than poll the port.
+static READY: OnceLock<()> = OnceLock::new();
+
+/// Returns the actual port the MCP server is bound to, or the preferred
+/// default `MCP_SERVER_PORT` when bind has not finished yet. Callers that
+/// need the real port for HTTP requests should always go through this.
+pub fn current_mcp_port() -> u16 {
+    let p = BOUND_PORT.load(Ordering::Acquire);
+    if p == 0 { MCP_SERVER_PORT } else { p }
+}
+
+/// True once the server is listening (regardless of which port it picked).
+pub fn is_ready() -> bool {
+    READY.get().is_some()
+}
 
 // ---------------------------------------------------------------------------
 // Server startup — no auth; localhost-only, in-process transport.
 // ---------------------------------------------------------------------------
+
+/// Build a TCP listener with SO_REUSEADDR set BEFORE bind so we survive
+/// the Windows TIME_WAIT window after a previous instance closed. Without
+/// this flag, Windows holds the port unavailable for up to 2 minutes after
+/// the previous process exits, which stalls the entire fleet on every
+/// hot-reload / restart. Returns the bound listener or an io::Error.
+fn bind_reusable(addr: SocketAddr) -> std::io::Result<TcpListener> {
+    let domain = if addr.is_ipv4() { Domain::IPV4 } else { Domain::IPV6 };
+    let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+    socket.set_nonblocking(true)?;
+    // SO_REUSEADDR semantics differ by platform:
+    //   - Linux/macOS: allow rebind while old sockets linger in TIME_WAIT.
+    //   - Windows:     allow rebind to a port held in TIME_WAIT.
+    // On Windows we deliberately do NOT also set SO_EXCLUSIVEADDRUSE; the
+    // socket is bound to 127.0.0.1 only, so cross-user hijack is moot.
+    socket.set_reuse_address(true)?;
+    socket.bind(&addr.into())?;
+    // 128 is plenty — this is an in-process server, no public traffic.
+    socket.listen(128)?;
+    TcpListener::from_std(socket.into())
+}
+
+/// Try the preferred port first, then walk the fallback list. The first
+/// port that binds wins. If everything fails we return the final error so
+/// the caller can drop into a slow-retry loop.
+fn bind_with_fallback() -> std::io::Result<TcpListener> {
+    let mut last_err: Option<std::io::Error> = None;
+    let ports = std::iter::once(MCP_SERVER_PORT).chain(MCP_PORT_FALLBACKS.iter().copied());
+    for port in ports {
+        let addr: SocketAddr = ([127, 0, 0, 1], port).into();
+        match bind_reusable(addr) {
+            Ok(listener) => {
+                BOUND_PORT.store(port, Ordering::Release);
+                if port != MCP_SERVER_PORT {
+                    warn!(
+                        "[autodev-mcp-server] Preferred port {} unavailable; bound to fallback {} instead",
+                        MCP_SERVER_PORT, port
+                    );
+                }
+                return Ok(listener);
+            }
+            Err(e) => {
+                warn!(
+                    "[autodev-mcp-server] Failed to bind to 127.0.0.1:{}: {} — trying next",
+                    port, e
+                );
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| std::io::Error::new(
+        std::io::ErrorKind::AddrInUse,
+        "no preferred or fallback ports available",
+    )))
+}
 
 /// Start the AutoDev MCP Server as a background Tokio task.
 ///
@@ -62,78 +151,42 @@ pub fn start_mcp_server(registry: Arc<ToolRegistry>) -> tauri::async_runtime::Jo
         crate::agent::builtin_tools::register_for_mcp_worker(&mut mcp_registry);
         let mcp_registry = Arc::new(mcp_registry);
 
-        let bind_addr = format!("127.0.0.1:{}", MCP_SERVER_PORT);
-
-        // Retry binding to handle Windows TIME_WAIT (OS error 10048 / WSAEADDRINUSE)
-        // that occurs when the app restarts quickly after a crash.
-        //
-        // Strategy — two phases:
-        //   Phase 1 (fast): up to 5 attempts with exponential backoff (500ms→4s = 7.5s total).
-        //                   Covers brief port-release delays after a clean shutdown.
-        //   Phase 2 (slow): if fast retries are exhausted, retry every 30s indefinitely.
-        //                   Windows TIME_WAIT can last 30–120s; this phase ensures the server
-        //                   recovers without requiring an app restart.
-        let mut listener_opt: Option<TcpListener> = None;
-
-        // Phase 1 — fast retries
-        'fast: for attempt in 1u32..=5 {
-            match TcpListener::bind(&bind_addr).await {
-                Ok(l) => {
-                    if attempt > 1 {
-                        info!(
-                            "[autodev-mcp-server] Bound to {} on attempt {}",
-                            bind_addr, attempt
-                        );
-                    }
-                    listener_opt = Some(l);
-                    break 'fast;
-                }
-                Err(e) if attempt < 5 => {
-                    let delay_ms = 500u64 * (1 << (attempt - 1)); // 500, 1000, 2000, 4000 ms
-                    warn!(
-                        "[autodev-mcp-server] Failed to bind to {} (attempt {}/5): {}. \
-                         Retrying in {}ms (port may be in TIME_WAIT after restart)…",
-                        bind_addr, attempt, e, delay_ms
-                    );
-                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
-                }
-                Err(e) => {
-                    warn!(
-                        "[autodev-mcp-server] Fast retries exhausted for {} (last error: {}). \
-                         Switching to slow-retry mode (30s interval) — will recover once the \
-                         OS releases the port from TIME_WAIT. Fleet workers continue in Mode 1 \
-                         until then.",
-                        bind_addr, e
-                    );
-                }
-            }
-        }
-
-        // Phase 2 — slow retry loop (runs only if Phase 1 exhausted without binding)
-        if listener_opt.is_none() {
-            loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-                match TcpListener::bind(&bind_addr).await {
-                    Ok(l) => {
-                        info!(
-                            "[autodev-mcp-server] Recovered — bound to {} after TIME_WAIT cleared. \
-                             Fleet workers can now use Mode 2 tooling.",
-                            bind_addr
-                        );
-                        listener_opt = Some(l);
-                        break;
-                    }
-                    Err(e) => {
-                        warn!(
-                            "[autodev-mcp-server] Port {} still in TIME_WAIT: {} — retry in 30s",
-                            bind_addr, e
-                        );
+        // Bind with SO_REUSEADDR + port fallback. If the preferred port AND
+        // every fallback are unavailable (rare — usually means another app
+        // owns them), drop into a slow-retry loop so the server eventually
+        // recovers once the OS releases at least one of them.
+        let listener = match bind_with_fallback() {
+            Ok(l) => l,
+            Err(e) => {
+                warn!(
+                    "[autodev-mcp-server] All preferred and fallback ports unavailable \
+                     (last error: {}). Entering slow-retry loop (30s interval) — fleet \
+                     workers will idle until a port becomes available.",
+                    e
+                );
+                loop {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+                    match bind_with_fallback() {
+                        Ok(l) => {
+                            info!(
+                                "[autodev-mcp-server] Recovered — bound to port {}",
+                                current_mcp_port()
+                            );
+                            break l;
+                        }
+                        Err(e) => {
+                            warn!(
+                                "[autodev-mcp-server] Still unable to bind: {} — retry in 30s",
+                                e
+                            );
+                        }
                     }
                 }
             }
-        }
+        };
 
-        let listener = listener_opt.expect("loop guarantees Some or early return");
+        let port = current_mcp_port();
+        let bind_addr = format!("127.0.0.1:{}", port);
 
         let service = StreamableHttpService::new(
             move || Ok(AutodevMcpServer::new(mcp_registry.clone())),
@@ -149,6 +202,24 @@ pub fn start_mcp_server(registry: Arc<ToolRegistry>) -> tauri::async_runtime::Jo
             "[autodev-mcp-server] Listening on http://{}/mcp — fleet workers can connect here",
             bind_addr
         );
+        let _ = READY.set(());
+
+        // If we ended up on a fallback port, capture the conflict and tell
+        // the UI exactly what's holding the preferred port — including
+        // whether it's a ghost socket from a previous crashed instance.
+        // Emitted via the app handle the events module stashes globally so
+        // we don't need a Tauri State here.
+        let status = super::port_status::snapshot();
+        if status.fallback_active {
+            warn!(
+                "[autodev-mcp-server] Port conflict on {}: {}",
+                status.preferred_port, status.message
+            );
+            if let Some(app) = crate::events::app_handle() {
+                use tauri::Emitter;
+                let _ = app.emit(crate::events::EVT_MCP_PORT_CONFLICT, &status);
+            }
+        }
 
         if let Err(e) = axum::serve(listener, router).await {
             error!("[autodev-mcp-server] Server error: {}", e);
