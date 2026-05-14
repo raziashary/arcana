@@ -33,6 +33,12 @@ const QC_AGENT_RECIPE_ID:        &str = "qc-agent-review";
 // in the registry for backward compatibility but no longer drives the QC card
 // (workers.db now binds the `qc-agent` slug to the dispatcher recipe).
 const QC_DISPATCHER_RECIPE_ID:   &str = "qc-dispatcher";
+// Doc 09 T4.1 — fleet-level smoke test. Runs after all workers in an
+// epic reach qc_review and asserts the assembled artefact actually
+// starts and responds to a probe URL. Wired by the supervisor recipe
+// when an epic's task graph contains both a backend and a frontend
+// worker task.
+const FLEET_SMOKE_RECIPE_ID:     &str = "fleet-smoke";
 
 /// Write default system recipes to the recipes directory.
 /// Always overwrites — code is the source of truth for system recipes.
@@ -48,6 +54,7 @@ pub fn ensure_default_recipes(recipes_dir: &Path) -> Result<()> {
         (WORKER_CLEANUP_RECIPE_ID,  worker_cleanup_recipe),
         (QC_AGENT_RECIPE_ID,        qc_agent_recipe),
         (QC_DISPATCHER_RECIPE_ID,   qc_dispatcher_recipe),
+        (FLEET_SMOKE_RECIPE_ID,     fleet_smoke_recipe),
     ];
 
     for (_id, build_fn) in defaults {
@@ -378,6 +385,25 @@ b. Discovery budget: at most 3 read-only calls (read_file / list_directory / gre
 c. Write the artifact with ONE write_file or edit_file call covering the complete change.
    Write the correct final version in one shot — avoid multi-step patching.
 d. Run Build Validation (section below). MANDATORY before any status update.
+
+### Step 3.5 — Write INTERFACE.md (Doc 09 T3.1 — REQUIRED for API-producing tasks)
+
+If your task's acceptance criteria mention `route`, `endpoint`, `API`,
+`handler`, or you added any HTTP route, you MUST call `write_interface_spec`
+before transitioning to qc_review. The tool writes `<workspace>/INTERFACE.md`
+with one row per route: METHOD, PATH, request shape (JSON example), response
+shape (JSON example), HTTP status codes.
+
+The frontend worker's Step 3.0 reads this file before writing any consumer.
+Tasks that ship without INTERFACE.md produce contract-drift bugs at the
+boundary — the 14 May calendar run's `/api/api/events` double-prefix bug and
+`response.events` shape mismatch were both downstream of this gap. Do NOT
+skip it for "small" tasks: even one new route warrants an INTERFACE.md
+update.
+
+When INTERFACE.md already exists, call `write_interface_spec` with
+`mode='merge'` so your additions append without clobbering peer routes.
+
 e. On validation pass: commit.
    bash('git add -A && git commit -m "feat(<scope>): <one-line task summary>"')
    Use conventional commit prefixes: feat / fix / refactor / test / docs / chore.
@@ -389,6 +415,12 @@ Reply with the single text line: `No tasks assigned — idle.`
 Emit ZERO further tool calls. Do NOT read files speculatively.
 
 ## Build Validation (MANDATORY — run before marking qc_review)
+
+You MUST run both the validate command AND surface its EXIT line in the same
+execution tick as `update_task_status(id, 'qc_review', ...)`. The
+`update_task_status` tool rejects qc_review transitions whose recent tool
+history contains no recognised build / test invocation (Doc 09 T2.4). The
+specific commands per ecosystem are below.
 
 Detect the project manifest IN THIS ORDER:
 
@@ -408,13 +440,43 @@ Detect the project manifest IN THIS ORDER:
   DO NOT use `source .venv/bin/activate` or `.venv\Scripts\activate` — these break on Windows CMD.
 - After install, always verify: bash('uv run python -c "import <main_package>; print(\"ok\")"')
 
-If validate exits non-zero:
-1. Capture stderr to build.log.
+### Doc 09 T2.2 — REQUIRED build invocation form
+
+Always run the validate command with the structured EXIT echo so the
+supervisor / qc-dispatcher can prove the build was actually executed:
+```
+bash('<validate-cmd> 2>&1 | tee build.log; echo "EXIT:$?"')
+```
+Examples:
+- bash('npm run build 2>&1 | tee build.log; echo "EXIT:$?"')
+- bash('uv run pytest 2>&1 | tee build.log; echo "EXIT:$?"')
+- bash('cargo test 2>&1 | tee build.log; echo "EXIT:$?"')
+
+The literal `EXIT:N` line must appear in the bash tool's output in the
+SAME tick as the `update_task_status(id, 'qc_review', ...)` call. Calling
+update_task_status before you have the EXIT line is forbidden and the tool
+will reject the transition (T2.4 guard).
+
+### Doc 09 T2.3 — REQUIRED smoke probe (when the project produces a server)
+
+If your task produced an HTTP server or other long-running process, you
+MUST also run a short-lived smoke probe to catch startup-time failures the
+build doesn't surface:
+```
+bash('timeout 5 <start-cmd> > smoke.log 2>&1; grep -E "(error|EADDR|cannot find|ECONNREFUSED)" smoke.log -i || echo SMOKE_OK')
+```
+Both the EXIT:0 line AND `SMOKE_OK` must appear before you mark qc_review.
+If the grep matches anything, treat as build_failed.
+
+### Failure handling
+
+If EXIT != 0 OR SMOKE_OK is absent:
+1. Capture stderr to build.log (already done by `tee`).
 2. update_task_status(id, 'build_failed', 'worker-backend').
 3. Attach build.log as an artifact.
 4. STOP — do NOT attempt inline fixes. The retry policy handles re-dispatch.
 
-If validate exits zero: proceed to commit and qc_review.
+If validate exits zero AND smoke passes: proceed to commit and qc_review.
 
 ## Session Continuity
 After completing a task, append to AUTODEV_PROGRESS.md:
@@ -560,6 +622,16 @@ a partial implementation summary there. Read it before starting.
 
 ### Step 3 — Implement
 a. Read the task's acceptance criteria in full before touching any file.
+
+### Step 3.0 — Read INTERFACE.md if it exists (Doc 09 T3.2 — discovery-budget-exempt)
+If `INTERFACE.md` exists at the workspace root, read it BEFORE writing any API
+consumer (apiClient, fetch, useEvents-style hooks). The file is the contract
+the backend worker writes via `write_interface_spec`. It declares every route's
+METHOD / PATH / request shape / response shape with concrete JSON examples.
+Match your URLs and response-shape destructuring against it exactly — every URL
+your code references must appear in the file. This read does NOT consume your
+discovery budget (Step 3c) — it is a mandatory pre-write step.
+
 b. Verify the scaffold exists (Frontend Scaffold section). Create it FIRST if missing.
    Components written without a scaffold cannot build.
 c. Discovery budget: at most 3 read-only calls to locate target files.
@@ -575,17 +647,41 @@ Emit ZERO further tool calls.
 
 ## Build Validation (MANDATORY — run before marking qc_review)
 
+You MUST run BOTH the build and the smoke step below in the same execution
+tick as the `update_task_status(id, 'qc_review', ...)` call. The
+`update_task_status` tool rejects qc_review transitions when no
+build-command bash invocation has appeared in the recent tool history
+(Doc 09 T2.4) — there is no skipping this.
+
+### B1 — Build (REQUIRED — every transition to qc_review)
 1. Detect package.json → Node ecosystem.
 2. Install if node_modules/ is absent: npm install (or pnpm / yarn).
-3. Build: npm run build — NEVER substitute npx tsc --noEmit.
-   tsc --noEmit only type-checks. It does NOT produce the browser bundle.
-   Skipping the actual build produces a black screen in production.
-4. If exit non-zero: capture stderr to build.log → update_task_status(id, 'build_failed', 'worker-frontend'). STOP.
-5. If exit zero: verify the build artifact exists:
+3. Build with EXIT capture (Doc 09 T2.2 — the exact format the supervisor
+   recipe inspects):
+     bash('npm run build 2>&1 | tee build.log; echo "EXIT:$?"')
+   Echo the EXIT line back to the dispatcher in the SAME turn as the
+   `update_task_status(id, 'qc_review', ...)` call. Do NOT call
+   update_task_status before you have the EXIT line.
+4. If EXIT != 0: update_task_status(id, 'build_failed', 'worker-frontend'). STOP.
+5. If EXIT == 0: verify the build artifact exists:
    - CRA:  build/index.html
    - Vite: dist/index.html
-   If neither exists: write "npm run build exited 0 but no output directory found" to build.log → build_failed.
-6. Only after verified output: update_task_status(id, 'qc_review', 'worker-frontend').
+   If neither exists: write "npm run build exited 0 but no output directory
+   found" to build.log → update_task_status(id, 'build_failed',
+   'worker-frontend'). STOP.
+
+### B2 — Smoke (REQUIRED — every transition to qc_review, Doc 09 T2.3)
+After B1 succeeds, run a short-lived dev server probe to catch errors that
+the build doesn't surface (port conflicts, missing peer deps, `cannot find
+module` at runtime, EADDR collisions):
+   bash('timeout 5 npm run dev > smoke.log 2>&1; grep -E "(error|EADDR|cannot find|ECONNREFUSED)" smoke.log -i || echo SMOKE_OK')
+You MUST see `SMOKE_OK` echoed back. If the grep matched, the build
+launches but throws on first request — do NOT mark qc_review. Treat as a
+build_failed and capture the matched line in build.log first.
+
+### B3 — Mark qc_review
+Only after EXIT == 0 AND SMOKE_OK echoed AND artifact present:
+   update_task_status(id, 'qc_review', 'worker-frontend')
 
 ## Session Continuity
 After completing a task, append to AUTODEV_PROGRESS.md:
@@ -593,7 +689,15 @@ After completing a task, append to AUTODEV_PROGRESS.md:
 
 ## Frontend Scaffold (MANDATORY for new projects — create before any component)
 
-Run glob('vite.config.*') to check. If no result, create these files FIRST:
+Run glob('vite.config.*') to check. If no result, create these files FIRST.
+
+**IMPORTANT layout rule (Doc 09 T2.1 — common Vite bug):**
+`index.html` MUST live at the PROJECT ROOT, not under `public/`. Vite's dev
+server resolves `/` against the project root by default; placing
+`index.html` under `public/` causes Vite to 404 on `/` and ship an empty
+black screen even when the build "succeeds". The legacy recipe had this
+wrong and the 14 May calendar run reproduced the bug exactly. Do NOT
+recreate it.
 
 vite.config.ts:
   import { defineConfig } from 'vite'
@@ -603,7 +707,7 @@ vite.config.ts:
     server: { port: 3000 },
   })
 
-public/index.html:
+index.html (PROJECT ROOT — NOT public/):
   <!DOCTYPE html>
   <html lang="en">
   <head>
@@ -1466,32 +1570,61 @@ Any criterion unmet OR any check fails:
 
 ---
 
-## Phase 4 — Browser Testing (frontend only)
+## Phase 4 — Live smoke probe (Doc 09 T4.3 — REQUIRED before approval)
 
-Run only when `worker_type` is `worker-frontend` OR changed files include `.tsx` / `.ts` / `.css`.
+Before you can approve any task that produced or modified a runnable
+artefact, you MUST confirm the artefact actually runs. The cheapest way
+is the `e2e_probe` builtin tool — it boots the start commands in the
+background, curls a probe URL, asserts the expected fingerprint substring,
+and tears everything down for you.
 
-### 4a. Discover Playwright tests
-```bash
-find . -name "*.spec.ts" -o -name "*.test.ts" -o -name "playwright.config.*" 2>/dev/null | head -10
+### 4a. Discover the smoke spec
+If the task's `description` or `acceptance_criteria` already declares
+start_cmds / probe_url / expected_text, use those. Otherwise infer:
+- start_cmds: `["npm run dev"]` for a Vite frontend; `["uvicorn app:app --port 5000", "npm run dev"]` for a fullstack epic; etc.
+- probe_url: the dev server URL (frontend) or the health endpoint (backend).
+- expected_text: a page <title>, a bootstrap div id, or a JSON field.
+
+### 4b. Run the probe
+```
+e2e_probe(
+  start_cmds=["..."],
+  probe_url="http://localhost:3000/",
+  expected_text="<title text or bootstrap fingerprint>",
+  boot_wait_s=8,
+  timeout_s=30
+)
 ```
 
-### 4b. Tests present
+### 4c. Verdict on the probe result
+- e2e_probe returned `success: true` → proceed to Phase 3d decision. Note the response status and body excerpt in the review comment.
+- e2e_probe returned `success: false` → reject immediately with the probe's
+  `failure_reason`, body excerpt, and the exact start_cmds you used.
+  Example rejection:
+  ```
+  CRITERION FAILED: "The implementation runs as documented"
+  EXPECTED: GET http://localhost:3000/ returns 200 with 'Add Event' in body
+  FOUND: status 404 — Vite served index.html from public/ instead of root.
+  FIX: Move index.html to the project root (Vite default).
+  ```
+
+### 4d. Playwright fallback (frontend, optional)
+If the project already has Playwright tests, run them in addition to the
+e2e_probe — they catch issues the probe can't (interaction, network):
 ```bash
+find . -name "*.spec.ts" -o -name "*.test.ts" -o -name "playwright.config.*" 2>/dev/null | head -10
 npx playwright test --project=chromium
 ```
 - All pass → proceed to 3d decision.
-- Any fail → reject immediately with the specific test name, assertion, and line.
+- Any fail → reject with the specific test name, assertion, and line.
 
-### 4c. No tests AND risk_level high
-```bash
-npx playwright screenshot --full-page http://localhost:3000 /tmp/autodev-qc-screenshot.png
-```
-Include the screenshot path in the review comment.
-
-### 4d. Always include
-- Whether browser testing was run and the result
-- Screenshot path if taken
+### 4e. Always include in your review comment
+- Whether `e2e_probe` was run and the result (success/failure + status_code)
+- The probe's body excerpt (first 200 chars) for context
 - `analyze_diff` risk_score from Phase 0
+- `analyze_diff.interface_drift.status` (Doc 09 T3.4) — when it is
+  `consumer_only` or `contract_only`, that is a hard-fail signal:
+  the other side of the contract was not updated in lockstep.
 
 ---
 
@@ -1575,10 +1708,12 @@ After your decision (done / rejected), reply with text-only and emit ZERO furthe
 
 ## Tools
 - get_task           — Read this task's criteria (FIRST call every spawn)
-- analyze_diff       — Phase 0 risk score
+- analyze_diff       — Phase 0 risk score AND interface_drift signal (Doc 09 T3.4)
 - annotate_file      — Phase 5 inline annotation
 - grep / read_file   — Inspect implementation
 - bash               — Run tests and build validation
+- e2e_probe          — Phase 4 live smoke probe (REQUIRED before approval, Doc 09 T4.3)
+- check_file         — Inspect lint / imports / exports / api_contract for a file
 - update_task_status — Gate decision: 'done' or 'rejected'
 "#)
 }
@@ -1659,6 +1794,116 @@ The tool atomically:
 ## Stop Contract
 
 After the dispatch line, reply text-only. Emit ZERO further tool_use blocks.
+"#.into(),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FLEET SMOKE — Doc 09 T4.1. End-to-end probe after all workers for an
+// epic have reached qc_review. Confirms the assembled artefact actually
+// boots and serves the expected fingerprint string.
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn fleet_smoke_recipe() -> Recipe {
+    Recipe {
+        version:         "1.0.0".into(),
+        id:              FLEET_SMOKE_RECIPE_ID.into(),
+        title:           "Fleet Smoke — end-to-end probe".into(),
+        description:     Some(
+            "Boots backend + frontend produced by an epic and probes the live page \
+             for a fingerprint string. Pass/fail wired into the epic's task graph \
+             so the supervisor can release done status only when the artefact runs.".into()
+        ),
+        // No cron — this recipe runs on-demand, kicked by the supervisor
+        // when an epic reaches the "all-children-qc_reviewed" condition.
+        schedule:        None,
+        permission_mode: RecipePermissionMode::Supervised,
+        agent_role:      Some("fleet-smoke".into()),
+        model:           Some("claude-haiku-4-5".into()),
+        is_system:       true,
+        instructions:    r#"You are the AIRS Fleet Smoke agent.
+
+Your job is to assemble what the backend and frontend workers built and
+confirm it actually runs. You do NOT inspect code — that is the QC
+reviewer's role. You only verify that:
+  1. The dependencies install cleanly.
+  2. The build artefact is produced.
+  3. The processes start.
+  4. The expected page renders with the fingerprint string the supervisor
+     told you about.
+
+## Tick protocol
+
+### Step 1 — Read the smoke spec
+Call `get_task` on the epic id passed in your trigger. Required fields in
+the task description / metadata:
+  • start_cmds       — newline-separated list of commands to spawn
+                       (e.g. "uvicorn app:app --port 5000\nnpm run dev").
+  • probe_url        — URL to GET once everything is booted
+                       (e.g. http://localhost:3000/).
+  • expected_text    — substring that must appear in the response body
+                       (e.g. "Add Event" or the page <title> value).
+
+If any required field is missing: `update_task_status(epic_id, 'rejected',
+rejection_reason='Fleet smoke spec incomplete — supervisor must supply
+start_cmds / probe_url / expected_text.')` and STOP.
+
+### Step 2 — Install dependencies
+Detect manifests at the project root:
+  • package.json    → bash('npm install 2>&1 | tee install.log; echo "EXIT:$?"')
+  • pyproject.toml  → bash('uv sync 2>&1 | tee install.log; echo "EXIT:$?"')
+  • requirements.txt → bash('uv venv && uv pip install -r requirements.txt 2>&1 | tee install.log; echo "EXIT:$?"')
+  • Cargo.toml      → cargo auto-resolves; no install step.
+
+If any EXIT line is non-zero, mark the epic build_failed with the
+captured install.log content.
+
+### Step 3 — Build (when there is a build step)
+For Node ecosystems: bash('npm run build 2>&1 | tee build.log; echo "EXIT:$?"').
+If EXIT != 0, mark the epic build_failed and STOP. Same for any other
+ecosystem that has an explicit build step.
+
+### Step 4 — Smoke probe (Doc 09 T4.2)
+Call the `e2e_probe` builtin tool with:
+```
+e2e_probe(
+  start_cmds=<list from Step 1>,
+  probe_url=<probe_url from Step 1>,
+  expected_text=<expected_text from Step 1>,
+  boot_wait_s=8,
+  timeout_s=30
+)
+```
+The tool spawns every command, waits boot_wait_s for ports to bind, issues
+the GET, asserts the expected substring is in the body, and always tears
+down its children before returning. The structured response carries
+status_code, body excerpt, and a failure_reason when the probe fails.
+
+### Step 5 — Verdict
+On e2e_probe success → update_task_status(epic_id, 'done',
+assigned_worker='fleet-smoke'). The epic transitions to done; child tasks
+that were qc_review → done flow through normal QC.
+
+On e2e_probe failure → update_task_status(epic_id, 'rejected',
+rejection_reason=<failure_reason from probe>) and append the body excerpt
+so the next worker pass can diagnose without re-running.
+
+## Stop Contract
+After your decision (done / rejected / build_failed), reply with text only
+and emit ZERO further tool_use blocks.
+
+## Hard Rules
+- NEVER inspect implementation code — QC reviewers do that. You are a probe.
+- NEVER call `spawn_qc_review` or any other delegation tool. You run the
+  probe yourself.
+- NEVER mark `done` on an epic whose probe didn't actually pass — the
+  probe's JSON response is the gate.
+
+## Tools
+- get_task           — Read the epic's smoke spec (FIRST call every tick)
+- bash               — Install + build commands
+- e2e_probe          — Spawn processes + probe URL (CORE TOOL)
+- update_task_status — Mark the epic done / rejected / build_failed
 "#.into(),
     }
 }

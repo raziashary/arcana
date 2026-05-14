@@ -24,6 +24,12 @@ pub mod spawn_parallel_subagents;
 // spawns a sonnet-backed ephemeral reviewer, schedules cleanup +
 // cost-attribution on terminal status.
 pub mod spawn_qc_review;
+// Doc 09 T3.1 — backend writes INTERFACE.md before qc_review on routing
+// tasks. Frontend reads it before writing any consumer.
+pub mod write_interface_spec;
+// Doc 09 T4.2 — fleet-level smoke probe: bootstraps backend + frontend,
+// curls an endpoint, looks for fingerprint text in the rendered page.
+pub mod e2e_probe;
 pub mod request_supervisor_action;
 pub mod search_memory;
 pub mod remember_this;
@@ -35,6 +41,10 @@ pub mod append_file;
 // configured workspace. Load-bearing safety net — see
 // docs/endtoendrun/14may2026/07-workspace-escape-rootcause.md.
 pub mod path_jail;
+// Doc 09 T2.4 — module-level tracker of recent bash invocations that look
+// like build / test / smoke commands. update_task_status_tool reads from
+// it to refuse qc_review transitions that have no proof a build was run.
+pub mod build_evidence;
 pub mod suggest_worker_tool;
 pub mod claim_task_tool;
 pub mod analyze_diff_tool;
@@ -112,6 +122,9 @@ pub fn register_for_mcp_worker(registry: &mut ToolRegistry) {
     // tools through the MCP server; recipe-level "only the dispatcher" is
     // enforced by the recipe instructions, not by the registry.
     registry.register(Arc::new(spawn_qc_review::SpawnQcReviewTool));
+    // Doc 09 T3.1 / T4.2 — interface spec + e2e smoke probe tools.
+    registry.register(Arc::new(write_interface_spec::WriteInterfaceSpecTool));
+    registry.register(Arc::new(e2e_probe::E2eProbeTool));
     // Task dispatch — Supervisor MUST have assign_task and create_task.
     // Domain workers (backend, frontend, …) are instructed in their recipes to
     // use request_supervisor_action(decompose_audit) instead of create_task directly.
@@ -172,6 +185,9 @@ pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
             registry.register(Arc::new(spawn_parallel_subagents::SpawnParallelSubagentsTool));
             // Doc 04 Phase 3 — QC fan-out tool (parity with MCP registration).
             registry.register(Arc::new(spawn_qc_review::SpawnQcReviewTool));
+            // Doc 09 T3.1 / T4.2 — interface spec + e2e smoke probe (PA parity).
+            registry.register(Arc::new(write_interface_spec::WriteInterfaceSpecTool));
+            registry.register(Arc::new(e2e_probe::E2eProbeTool));
             // Memory tools (Phase 4.7) — available in all non-delegate modes
             registry.register(Arc::new(search_memory::SearchMemoryTool));
             registry.register(Arc::new(remember_this::RememberThisTool));

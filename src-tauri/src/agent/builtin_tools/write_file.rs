@@ -102,11 +102,54 @@ impl Tool for WriteFileTool {
                 // Option A — Tier 1 syntax validation (always-on, fast).
                 // Appends lint feedback to the success message so the agent can
                 // self-correct without a separate check_file call.
-                let lint_note = match validate::tier1_syntax(&path, &ctx.working_dir).await {
-                    Some(result) if !result.diagnostics.is_empty() => {
-                        format!("\n\n⚠ Lint feedback:\n{}", result.format_inline())
+                let mut lint_parts: Vec<String> = Vec::new();
+                if let Some(result) = validate::tier1_syntax(&path, &ctx.working_dir).await {
+                    if !result.diagnostics.is_empty() {
+                        lint_parts.push(result.format_inline());
                     }
-                    _ => String::new(),
+                }
+                // Doc 09 T1.1 — also run Tier 2 import cross-reference after
+                // every write to .py/.js/.jsx/.ts/.tsx/.cjs/.mjs. The calendar
+                // run shipped a `package.json` with zero frontend deps despite
+                // ~12 `import` statements; tier2_imports catches that in-
+                // process on the very write that introduced the mismatch.
+                if let Some(result) = validate::tier2_imports(&path, &ctx.working_dir) {
+                    if !result.is_clean() {
+                        lint_parts.push(format!(
+                            "{}\n  Hint: add missing packages to package.json / requirements.txt.",
+                            result.format_inline()
+                        ));
+                    }
+                }
+                // Doc 09 T1.3 — Tier 2.5 export cross-reference. Catches
+                // consumers importing names that the producing module never
+                // exports (the `isDeleting`-not-returned bug class).
+                if let Some(result) = validate::tier2_5_exports(&path, &ctx.working_dir) {
+                    if !result.is_clean() {
+                        lint_parts.push(format!(
+                            "{}\n  Hint: the importing file references symbols not exported by the target module.",
+                            result.format_inline()
+                        ));
+                    }
+                }
+                // Doc 09 T3.3 — Tier 2.6 API contract. When the backend has
+                // already written INTERFACE.md (Doc 09 T3.1), every URL the
+                // frontend uses must match. Skipped silently when no
+                // INTERFACE.md exists yet — the file gates itself by the
+                // backend worker's lifecycle, not by a config flag.
+                if let Some(result) = validate::tier2_6_api_contract(&path, &ctx.working_dir) {
+                    if !result.is_clean() {
+                        lint_parts.push(format!(
+                            "{}\n  Hint: the backend's INTERFACE.md does not declare these URLs. \
+                             Either update INTERFACE.md (backend) or fix the URL (frontend).",
+                            result.format_inline()
+                        ));
+                    }
+                }
+                let lint_note = if lint_parts.is_empty() {
+                    String::new()
+                } else {
+                    format!("\n\n⚠ Lint feedback:\n{}", lint_parts.join("\n\n"))
                 };
 
                 ToolResult::success(format!(

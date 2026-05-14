@@ -169,20 +169,35 @@ Subagent infra was already there; the dispatcher is now wired up.
 
 Full task list in [04](04-qc-backlog.md).
 
-### Phase 4 — Work-product quality gates (close the loop on bad output)
+### Phase 4 — Work-product quality gates ✅ COMPLETE — 14 May 2026
 
-Make bad work fail loudly *before* reaching qc_review.
+Bad work now fails loudly *before* reaching qc_review.
 
-| Task | File | What |
-|---|---|---|
-| Extend `validate.rs` Tier 1 to TypeScript | [`src-tauri/src/agent/builtin_tools/validate.rs`](src-tauri/src/agent/builtin_tools/validate.rs) | Add `.ts` / `.tsx` syntax check via `tsc --noEmit` or quick parser |
-| New `tier2_imports` pass | [`src-tauri/src/agent/builtin_tools/write_file.rs`](src-tauri/src/agent/builtin_tools/write_file.rs) post-write hook | After write, check imports resolve to existing files / package.json deps |
-| New `tier2_5_exports` pass | new file in `src-tauri/src/agent/builtin_tools/` | Detect empty `module.exports = {}` files that other files import from |
-| Flip `check_file.rs` defaults | [`src-tauri/src/agent/builtin_tools/check_file.rs`](src-tauri/src/agent/builtin_tools/check_file.rs) | Run by default after write, not opt-in |
-| Fix `worker_frontend_recipe` Vite layout bug | [`src-tauri/src/recipes/defaults.rs:594`](src-tauri/src/recipes/defaults.rs:594) | Recipe currently prescribes `public/index.html` — Vite expects root. This is a **recipe bug**, not LLM failure. |
-| Enforce build before `qc_review` | [`src-tauri/src/agent/builtin_tools/update_task_status_tool.rs`](src-tauri/src/agent/builtin_tools/update_task_status_tool.rs) | Workers must run `npm run build` / `cargo check` and capture output before transitioning to qc_review |
-| New `write_interface_spec` tool | new file in `src-tauri/src/agent/builtin_tools/` | Worker writes contract YAML (route paths, request/response shapes) to `INTERFACE.md` for downstream workers to consume |
-| New `e2e_probe.rs` builtin | new file in `src-tauri/src/agent/builtin_tools/` | Fleet smoke test: start servers, hit endpoints, assert responses match interface spec |
+| Task | File | What | Status |
+|---|---|---|---|
+| T1.1 — tier2_imports on every write | [`builtin_tools/write_file.rs`](../../../src-tauri/src/agent/builtin_tools/write_file.rs) | Post-write runs Tier 1 + Tier 2 (imports) + Tier 2.5 (exports) + Tier 2.6 (api_contract) back-to-back | ✅ |
+| T1.2 — Tier-1 TypeScript via tsc | [`builtin_tools/validate.rs`](../../../src-tauri/src/agent/builtin_tools/validate.rs) `check_tsc_syntax` | `--noEmit --allowJs --isolatedModules`. Graceful warning when tsc isn't on PATH | ✅ |
+| T1.3 — tier2_5_exports cross-reference | [`builtin_tools/validate.rs`](../../../src-tauri/src/agent/builtin_tools/validate.rs) `tier2_5_exports` | Pure-Rust regex pass that verifies every relative `import { X } from './foo'` has a matching export in the target file | ✅ |
+| T1.4 — Flip check_file defaults | [`builtin_tools/check_file.rs`](../../../src-tauri/src/agent/builtin_tools/check_file.rs) | Defaults to `["syntax", "imports", "exports", "contract"]`; types still opt-in | ✅ |
+| T2.1 — Vite layout fix | [`recipes/defaults.rs`](../../../src-tauri/src/recipes/defaults.rs) `worker_frontend_recipe` | `index.html` moved to project root with inline "Doc 09 T2.1 — common Vite bug" warning | ✅ |
+| T2.2 — Build precondition with EXIT echo | [`recipes/defaults.rs`](../../../src-tauri/src/recipes/defaults.rs) both worker recipes | Mandatory `bash('<cmd> 2>&1 | tee build.log; echo "EXIT:$?"')` form, echoed in same tick as qc_review | ✅ |
+| T2.3 — Smoke probe step | [`recipes/defaults.rs`](../../../src-tauri/src/recipes/defaults.rs) both worker recipes | `timeout 5 npm run dev` smoke + SMOKE_OK gate before qc_review | ✅ |
+| T2.4 — qc_review build-evidence gate | new [`builtin_tools/build_evidence.rs`](../../../src-tauri/src/agent/builtin_tools/build_evidence.rs) + [`update_task_status_tool.rs`](../../../src-tauri/src/agent/builtin_tools/update_task_status_tool.rs) | Module-level per-session ring tracks bash invocations; tool rejects qc_review without recent successful build. QC reviewers exempted via agent_role check. 6 unit tests | ✅ |
+| T3.1 — write_interface_spec builtin | new [`builtin_tools/write_interface_spec.rs`](../../../src-tauri/src/agent/builtin_tools/write_interface_spec.rs) | Backend writes `<workspace>/INTERFACE.md` with METHOD / PATH / request / response / status codes / auth per route. overwrite + merge modes. worker-backend recipe Step 3.5 mandates calling before qc_review on routing tasks | ✅ |
+| T3.2 — Frontend reads INTERFACE.md first | [`recipes/defaults.rs`](../../../src-tauri/src/recipes/defaults.rs) `worker_frontend_recipe` Step 3.0 | New discovery-budget-exempt step before any consumer write | ✅ |
+| T3.3 — tier2_6_api_contract validation | [`builtin_tools/validate.rs`](../../../src-tauri/src/agent/builtin_tools/validate.rs) `tier2_6_api_contract` | Extracts fetch/apiClient URLs, normalises `${template}`+query, substring-matches against INTERFACE.md | ✅ |
+| T3.4 — interface_drift in analyze_diff | [`builtin_tools/analyze_diff_tool.rs`](../../../src-tauri/src/agent/builtin_tools/analyze_diff_tool.rs) `detect_interface_drift` | Structured `{ status: "consumer_only"\|"contract_only"\|"both"\|"neither", spec_files, consumer_files }` field injected into JSON output. QC reviewer recipe flags `consumer_only`/`contract_only` as hard-fail | ✅ |
+| T4.1 — fleet_smoke_recipe | [`recipes/defaults.rs`](../../../src-tauri/src/recipes/defaults.rs) `fleet_smoke_recipe` | New on-demand recipe (haiku, no cron). Installs deps, builds, calls e2e_probe, marks the epic done/rejected/build_failed | ✅ |
+| T4.2 — e2e_probe builtin | new [`builtin_tools/e2e_probe.rs`](../../../src-tauri/src/agent/builtin_tools/e2e_probe.rs) | Spawns start_cmds with kill_on_drop, waits boot_wait_s, reqwest GET probe_url, asserts expected_text. Returns structured ProbeReport JSON. Total timeout wrapped; teardown always runs. 1 unit test | ✅ |
+| T4.3 — QC reviewer requires e2e_probe | [`recipes/defaults.rs`](../../../src-tauri/src/recipes/defaults.rs) `qc_reviewer_system_prompt` Phase 4 | Phase 4 rewritten: discover start_cmds/probe_url/expected_text, run e2e_probe, verdict branches, hard-fail on consumer_only/contract_only drift | ✅ |
+
+**Verification (full Phase 4 run):**
+- `cargo check` clean (only pre-existing warnings)
+- `cargo test --lib agent::builtin_tools::path_jail::tests` → **7 passed, 0 failed**
+- `cargo test --lib agent::builtin_tools::build_evidence` → **6 passed, 0 failed** (new)
+- `cargo test --lib agent::builtin_tools::e2e_probe` → **1 passed, 0 failed** (new)
+- `cargo test --lib subagent` → **11 passed, 0 failed**
+- `npx tsc --noEmit` clean (exit 0)
 
 Full task list in [09](09-work-product-audit.md).
 

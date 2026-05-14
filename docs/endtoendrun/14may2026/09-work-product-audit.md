@@ -78,43 +78,40 @@ Manifested as: every contract-drift bug in Gap 4.
 
 ## Atomic implementation tasks
 
-### Phase 1 — Validation tools (immediate wins, lowest risk)
+### Phase 1 — Validation tools — ✅ COMPLETE 14 May 2026
 
-- [ ] **T1.1** — `src-tauri/src/agent/builtin_tools/write_file.rs` — call `validate::tier2_imports` after every `write_file` on `.js/.jsx/.ts/.tsx/.py` files, in addition to the current `tier1_syntax`. Append the result to the tool response (same format as `format_inline()`). Cost: one extra in-process Rust walk per write. No subprocess.
+- [x] **T1.1** — `src-tauri/src/agent/builtin_tools/write_file.rs` — post-write now runs Tier 1 syntax + Tier 2 imports + Tier 2.5 exports + Tier 2.6 api_contract back-to-back, with each non-clean result appended to the success message under a single `⚠ Lint feedback:` section. The calendar run's missing-dep / drifted-import classes are caught at the write that introduced them.
+- [x] **T1.2** — `src-tauri/src/agent/builtin_tools/validate.rs` `check_tsc_syntax` — `.ts` / `.tsx` / `.jsx` files now hit Tier 1 via `tsc --noEmit --allowJs --isolatedModules --jsx preserve --target es2020 --module esnext --moduleResolution node`. `--isolatedModules` keeps the pass per-file (true syntax check; cross-file type stuff stays in opt-in Tier 3). Graceful degradation: when `tsc` isn't on PATH the worker gets a `warning` diagnostic + a successful write instead of a hard fail.
+- [x] **T1.3** — `src-tauri/src/agent/builtin_tools/validate.rs` `tier2_5_exports` — pure Rust regex pass that, for every relative `import { X } from './foo'` in the file just written, resolves `./foo` to a real file (.ts / .tsx / .js / .jsx / index.*) and confirms `X` appears in the target's `export { … }` / `export const X` / `export function X` / `export class|interface|type X` / `module.exports = { X }` / `module.exports.X =` / `export default` set. Reported via `ImportResult` so the formatting matches the existing Tier 2 import check.
+- [x] **T1.4** — `src-tauri/src/agent/builtin_tools/check_file.rs` — default `checks` is now `["syntax", "imports", "exports", "contract"]`. Schema enum expanded with the two new tiers; usage hint at "no checkers available" updated to list them. `types` stays opt-in (Tier 3 is genuinely slow).
 
-- [ ] **T1.2** — `src-tauri/src/agent/builtin_tools/validate.rs` — add `tier1_syntax` coverage for `.ts/.tsx` via `tsc --noEmit --allowJs --isolatedModules` when `tsc` is on PATH; degrade to a warning when absent (mirroring the existing Python/Node fallback). Currently TS is silently skipped, which is why the modal and hook never get parsed.
+### Phase 2 — Worker recipe hardening — ✅ COMPLETE 14 May 2026
 
-- [ ] **T1.3** — `src-tauri/src/agent/builtin_tools/validate.rs` — add a new `tier2_5_exports` pass that, given a JS/TS file, parses its `export` symbols and verifies every sibling `import` from that file matches a real export. Pure Rust regex pass over the file tree, no subprocess. Catches `isDeleting`-not-returned, empty-`module.exports`, prop-type drift.
+- [x] **T2.1** — `src-tauri/src/recipes/defaults.rs` `worker_frontend_recipe` Frontend Scaffold section — `index.html` now lives at the PROJECT ROOT, not under `public/`. Recipe carries an inline "Vite's default expects root-level index.html" note + a `Doc 09 T2.1` reference so future audits don't recreate the bug.
+- [x] **T2.2** — `src-tauri/src/recipes/defaults.rs` worker-backend AND worker-frontend Build Validation sections — both recipes now mandate the EXIT-echo form: `bash('<cmd> 2>&1 | tee build.log; echo "EXIT:$?"')`. The literal `EXIT:N` line must appear in the same tick as `update_task_status(qc_review)`. The `update_task_status` tool's T2.4 gate rejects qc_review transitions without recorded build evidence — recipe-level prose meets tool-level enforcement.
+- [x] **T2.3** — `src-tauri/src/recipes/defaults.rs` worker-backend AND worker-frontend — smoke probe section added: `bash('timeout 5 npm run dev > smoke.log 2>&1; grep -E "(error|EADDR|cannot find|ECONNREFUSED)" smoke.log -i || echo SMOKE_OK')`. The grep is i-flag case-insensitive and covers connection refused too. Both `SMOKE_OK` AND `EXIT:0` are required before qc_review.
+- [x] **T2.4** — `src-tauri/src/agent/builtin_tools/update_task_status_tool.rs` + new `build_evidence.rs` module — bash records every recognised build/test/smoke invocation in a session-keyed ring (`build_evidence::record` with a 15-min TTL). On `update_task_status(id, 'qc_review', …)` the tool calls `build_evidence::most_recent_build(ctx.session_id)`; rejects with a self-correcting error when no evidence exists OR the most recent invocation exited non-zero. QC reviewers are exempted via `ctx.agent_role` starts-with check so reviewers (who never run builds) can still move tasks to done/rejected. 6 unit tests cover the classifier + round-trip.
 
-- [ ] **T1.4** — `src-tauri/src/agent/builtin_tools/check_file.rs` — flip the default `checks` from `["syntax", "imports"]` to `["syntax", "imports", "exports"]`. Make `types` opt-out via a `--no-types` flag rather than opt-in for any file with a `tsconfig.json` nearby.
+### Phase 3 — Cross-worker handoff — ✅ COMPLETE 14 May 2026
 
-### Phase 2 — Worker recipe hardening
+- [x] **T3.1** — `src-tauri/src/agent/builtin_tools/write_interface_spec.rs` — new builtin tool. Schema accepts a `routes` array (method, path, description, request_shape, response_shape, status_codes, auth_required, notes) plus an `overwrite|merge` `mode` and optional `conventions` free-text. Output is a structured `INTERFACE.md` with a Conventions header and one `### METHOD /path` section per route. Registered in `mod.rs` for both MCP worker registration and PA-mode registration; worker-backend recipe Step 3.5 mandates calling it before qc_review on routing tasks.
+- [x] **T3.2** — `src-tauri/src/recipes/defaults.rs` `worker_frontend_recipe` — new Step 3.0 inserted between Step 3a and Step 3b, marked discovery-budget-exempt. Frontend reads `INTERFACE.md` BEFORE writing any API consumer; the file is described as the single source of truth.
+- [x] **T3.3** — `src-tauri/src/agent/builtin_tools/validate.rs` `tier2_6_api_contract` — pure-Rust pass. Extracts URL strings from `fetch('…')` / `axios.get('…')` / `apiClient.post('…')` / `{ url: '…' }` patterns, normalises (drops query strings, collapses `${template}` expressions), and substring-matches each against the workspace's `INTERFACE.md`. Wired into both `write_file` post-write (silent skip when INTERFACE.md isn't there yet) and `check_file` (new `contract` tier in the defaults).
+- [x] **T3.4** — `src-tauri/src/agent/builtin_tools/analyze_diff_tool.rs` `detect_interface_drift` — pure regex scan over the unified-diff `+++ b/path` / `--- a/path` markers. Emits a structured `interface_drift: { status, touched_spec, touched_consumer, spec_files, consumer_files }` field injected into the analyzer's JSON output. `status: "consumer_only" | "contract_only" | "both" | "neither"` — the QC reviewer recipe's Phase 4e calls out `consumer_only` / `contract_only` as hard-fail signals.
 
-- [ ] **T2.1** — `src-tauri/src/recipes/defaults.rs` (worker_frontend_recipe, ~line 594) — **fix the scaffold**: write `index.html` to the project root, not `public/`. Vite's default expects root-level `index.html`. The current recipe is the bug factory.
+### Phase 4 — Fleet smoke test — ✅ COMPLETE 14 May 2026
 
-- [ ] **T2.2** — `src-tauri/src/recipes/defaults.rs` (both worker recipes) — replace the prose "MANDATORY before any status update" with an explicit precondition check the worker must `bash`: `bash('npm run build 2>&1 | tee build.log; echo "EXIT:$?"')` and **echo the EXIT line back in the same turn** as the `update_task_status(qc_review)` call. The supervisor recipe can then refuse the transition when EXIT != 0.
+- [x] **T4.1** — `src-tauri/src/recipes/defaults.rs` `fleet_smoke_recipe` — new persistent recipe (haiku, on-demand: `schedule: None`, kicked by the supervisor). Reads the epic's `start_cmds` / `probe_url` / `expected_text` from task metadata, installs dependencies (npm / uv / cargo), runs the build with the T2.2 EXIT-echo form, then calls `e2e_probe`. On success → `update_task_status(epic_id, 'done', 'fleet-smoke')`. On failure → `'rejected'` with the probe's `failure_reason`. Registered in `FLEET_SMOKE_RECIPE_ID` next to the other system recipes.
+- [x] **T4.2** — `src-tauri/src/agent/builtin_tools/e2e_probe.rs` — new builtin tool. Spawns each `start_cmd` via `tokio::process::Command` with `kill_on_drop(true)`, waits `boot_wait_s` (default 8s) for ports to bind, issues a `reqwest` GET against `probe_url`, asserts the `expected_text` substring is in the body. Returns a structured `ProbeReport { success, probe_url, expected_text, status_code, response_body_excerpt, failure_reason, started_processes }` serialised into the tool response. Total timeout (default 30s) wraps the entire probe; teardown always runs even on timeout.
+- [x] **T4.3** — `src-tauri/src/recipes/defaults.rs` `qc_reviewer_system_prompt` — Phase 4 rewritten to mandate `e2e_probe` BEFORE approval. Discovery steps for `start_cmds`/`probe_url`/`expected_text`, exact invocation, verdict branches with example rejection text. Phase 4e adds explicit guidance: `analyze_diff.interface_drift.status == "consumer_only" | "contract_only"` is a hard-fail signal even when other phases are green.
 
-- [ ] **T2.3** — `src-tauri/src/recipes/defaults.rs` — add a "smoke" sub-step to both worker recipes: after `npm run build` succeeds, run a 5-second `bash('timeout 5 npm run dev > smoke.log 2>&1; grep -E "(error|EADDR|cannot find)" smoke.log || echo SMOKE_OK')` and require `SMOKE_OK` before transitioning to `qc_review`.
-
-- [ ] **T2.4** — `src-tauri/src/agent/builtin_tools/update_task_status_tool.rs` — when target status is `qc_review`, reject the transition if the agent has not invoked `bash` with a recognised build command (`npm run build` / `cargo build` / `uv run pytest` / `go test`) within the last N tool calls of this session. Return a clear error: `cannot move to qc_review without recorded successful build`.
-
-### Phase 3 — Cross-worker handoff
-
-- [ ] **T3.1** — `src-tauri/src/agent/builtin_tools/` (new file `write_interface_spec.rs`) — tool the backend worker must call before `qc_review` on any task containing the word `route`, `endpoint`, `API`, or `handler` in its acceptance criteria. Writes `<workspace>/INTERFACE.md` with one row per route: METHOD, PATH, request shape, response shape (JSON example).
-
-- [ ] **T3.2** — `src-tauri/src/recipes/defaults.rs` (worker_frontend_recipe Step 3) — insert "**Step 3.0**: If `INTERFACE.md` exists in the workspace, read it before writing any API consumer (`apiClient`, `fetch`, `useEvents`-style hooks). Match request URLs and response shapes against it exactly." Make this a discovery-budget-exempt read.
-
-- [ ] **T3.3** — `src-tauri/src/agent/builtin_tools/validate.rs` (new `tier2_6_api_contract`) — given a frontend file that calls `apiClient.<verb>` or `fetch(`, extract the URL strings and verify each appears in `INTERFACE.md`. Pure Rust pass.
-
-- [ ] **T3.4** — `src-tauri/src/agent/builtin_tools/analyze_diff_tool.rs` — when both `INTERFACE.md` and frontend consumer changes are in the diff, add a structured `interface_drift` field to the analyzer's output. The QC agent can then surface it as a hard-fail signal rather than free-text.
-
-### Phase 4 — Fleet smoke test (forward-looking, 1–2 weeks)
-
-- [ ] **T4.1** — `src-tauri/src/recipes/defaults.rs` (new `fleet_smoke_recipe`) — a recipe that runs after all worker tasks of an epic reach `qc_review`. Steps: install (`npm install` + `uv sync`), build (`npm run build`), start the backend (background), start the frontend dev server (background), curl one endpoint round-trip, screenshot/HTML-snapshot the root URL, look for an HTML element matching a fingerprint string set by the supervisor (e.g. `"Add Event"`). Pass/fail wired into the epic's task graph.
-
-- [ ] **T4.2** — `src-tauri/src/agent/builtin_tools/` (new `e2e_probe.rs`) — bash wrapper that takes `{start_cmds, probe_url, expected_text, timeout_s}` and returns structured pass/fail. Built so the smoke recipe can call it without composing brittle inline bash.
-
-- [ ] **T4.3** — `src-tauri/src/recipes/defaults.rs` (qc_recipe) — require the QC agent to invoke `e2e_probe` (or read its persisted result) before approving any epic that contains both a backend and a frontend worker task.
+**Verification (full Phase 4 run):**
+- `cargo check` clean (only pre-existing warnings)
+- `cargo test --lib agent::builtin_tools::path_jail::tests` → **7 passed, 0 failed**
+- `cargo test --lib agent::builtin_tools::build_evidence` → **6 passed, 0 failed** (new)
+- `cargo test --lib agent::builtin_tools::e2e_probe` → **1 passed, 0 failed** (new)
+- `cargo test --lib subagent` → **11 passed, 0 failed** (regression-free)
+- `npx tsc --noEmit` clean (exit 0)
 
 ## What NOT to do
 

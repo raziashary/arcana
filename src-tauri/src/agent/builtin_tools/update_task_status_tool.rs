@@ -52,7 +52,7 @@ impl Tool for UpdateTaskStatusTool {
 
     fn is_read_only(&self) -> bool { false }
 
-    async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let id = match input["id"].as_i64() {
             Some(id) if id > 0 => id,
             _ => return ToolResult::error("'id' must be a positive integer task ID"),
@@ -110,6 +110,54 @@ impl Tool for UpdateTaskStatusTool {
                     "status='rejected' requires a non-empty 'rejection_reason'. \
                      Describe what failed so the worker knows what to fix."
                 );
+            }
+        }
+
+        // Doc 09 T2.4 — gate qc_review transitions on recent build evidence.
+        //
+        // The 14 May calendar run shipped 16 integration defects to qc_review
+        // because no worker actually ran `npm run build`. The bash tool now
+        // records every recognised build/test/smoke invocation in a per-
+        // session ring (`build_evidence::record`). Here we reject the
+        // transition if the calling session has produced no entry, or if the
+        // most recent recorded build failed.
+        //
+        // Exemptions:
+        //   • QC reviewer subagents (parent_slug = qc-dispatcher) can move
+        //     tasks to done/rejected freely — they don't write code.
+        //   • Other agents reading qc_review via supervisor reconciliation
+        //     touch task status with non-qc_review targets only.
+        //   • Tests / unit code may call update_task_status outside a session
+        //     where bash isn't available. We allow when the agent_role is
+        //     None (raw tool invocation) so non-fleet callers aren't blocked.
+        if status == "qc_review" && ctx.agent_role.is_some() {
+            // Skip the gate for QC reviewers — they never run a build, they
+            // just review someone else's. The qc-reviewer-* slugs all start
+            // with a stable prefix; match on that.
+            let role = ctx.agent_role.as_deref().unwrap_or("");
+            let is_qc_reviewer = role.starts_with("qc-")
+                || role.starts_with("subagent-qc-dispatcher");
+            if !is_qc_reviewer {
+                match super::build_evidence::most_recent_build(&ctx.session_id) {
+                    None => return ToolResult::error(
+                        "Cannot move task to qc_review without recorded build evidence. \
+                         Run your recipe's Build Validation step in the SAME tick as this \
+                         status update — e.g. `bash('npm run build 2>&1 | tee build.log; \
+                         echo \"EXIT:$?\"')` for Node, `bash('cargo test 2>&1 | tee \
+                         build.log; echo \"EXIT:$?\"')` for Rust, or `bash('uv run pytest \
+                         2>&1 | tee build.log; echo \"EXIT:$?\"')` for Python. The \
+                         supervisor / qc-dispatcher requires proof the artifact builds \
+                         before any review can begin."
+                    ),
+                    Some(ev) if ev.exit_code != 0 => return ToolResult::error(&format!(
+                        "Cannot move task to qc_review — the most recent build invocation \
+                         exited with code {}. Transition to status='build_failed' instead \
+                         (the worker recipe's failure branch). Most recent build: '{}'.",
+                        ev.exit_code,
+                        ev.command,
+                    )),
+                    Some(_) => { /* ok — proceed */ }
+                }
             }
         }
 
@@ -196,10 +244,10 @@ impl Tool for UpdateTaskStatusTool {
             let ctx = HookContext {
                 hook_type: ht.as_str().to_string(),
                 timestamp: chrono::Utc::now(),
-                session_id: Some(_ctx.session_id.clone()),
+                session_id: Some(ctx.session_id.clone()),
                 agent_mode: Some("Worker".to_string()),
                 tool_call: Some(ToolCallContext {
-                    id: _ctx.call_id.clone(),
+                    id: ctx.call_id.clone(),
                     name: "update_task_status".to_string(),
                     input: input.clone(),
                     result: Some(json!({

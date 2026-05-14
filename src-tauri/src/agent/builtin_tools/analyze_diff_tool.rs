@@ -95,7 +95,28 @@ impl Tool for AnalyzeDiffTool {
                     result.lines_added,
                     result.lines_deleted,
                 );
-                let json = match serde_json::to_string(&result) {
+                let mut json_value = match serde_json::to_value(&result) {
+                    Ok(v)  => v,
+                    Err(e) => return ToolResult::error(format!("Failed to serialize result: {e}")),
+                };
+                // Doc 09 T3.4 — interface_drift field.
+                //
+                // When the diff touches INTERFACE.md AND/OR any frontend
+                // consumer of an API, we surface a structured drift signal
+                // the QC reviewer can hard-fail on. Heuristic — scan the
+                // patch for the file change set:
+                //   • `INTERFACE.md` touched → backend changed the contract.
+                //   • A file matching apiClient.*/use*Events*-style consumer
+                //     was touched → frontend changed too.
+                // When BOTH or NEITHER side appears we emit an "unknown"
+                // drift; the QC reviewer can re-run the api_contract check
+                // for a definitive verdict.
+                let drift = detect_interface_drift(&patch);
+                if let Some(obj) = json_value.as_object_mut() {
+                    obj.insert("interface_drift".into(),
+                               serde_json::to_value(&drift).unwrap_or(Value::Null));
+                }
+                let json = match serde_json::to_string(&json_value) {
                     Ok(j)  => j,
                     Err(e) => return ToolResult::error(format!("Failed to serialize result: {e}")),
                 };
@@ -128,6 +149,66 @@ impl Tool for AnalyzeDiffTool {
             Err(e) => ToolResult::error(format!("Diff analysis failed: {e}")),
         }
     }
+}
+
+/// Doc 09 T3.4 — interface drift detector.
+///
+/// Pure regex scan over the unified-diff `+++ b/path` markers. Returns a
+/// JSON-friendly shape the QC reviewer can match on:
+///   • status         : "contract_only" | "consumer_only" | "both" |
+///                      "neither" | "unknown"
+///   • touched_spec   : true when INTERFACE.md is in the diff
+///   • touched_consumer : true when any FE consumer file is in the diff
+///   • files          : the actual paths matched on each side
+#[derive(Debug, serde::Serialize)]
+struct InterfaceDrift {
+    status:           &'static str,
+    touched_spec:     bool,
+    touched_consumer: bool,
+    spec_files:       Vec<String>,
+    consumer_files:   Vec<String>,
+}
+
+fn detect_interface_drift(patch: &str) -> InterfaceDrift {
+    let mut spec_files: Vec<String> = Vec::new();
+    let mut consumer_files: Vec<String> = Vec::new();
+
+    // Match `+++ b/<path>` (new-side) and `--- a/<path>` (old-side) so a
+    // pure-deletion of an interface still surfaces.
+    let re = regex::Regex::new(r"(?m)^(?:\+\+\+ b/|--- a/)(.+)$").unwrap();
+    for cap in re.captures_iter(patch) {
+        let path = cap[1].trim().to_string();
+        if path.is_empty() || path == "/dev/null" { continue; }
+
+        let pl = path.to_lowercase();
+        if pl.ends_with("interface.md") || pl.contains("/interface.md") {
+            if !spec_files.contains(&path) { spec_files.push(path.clone()); }
+        }
+
+        // Frontend API consumer heuristic — file is JS/TS AND its name
+        // resembles a known consumer pattern.
+        let is_js_ts = pl.ends_with(".ts") || pl.ends_with(".tsx")
+            || pl.ends_with(".js") || pl.ends_with(".jsx");
+        let consumer_hint = pl.contains("apiclient")
+            || pl.contains("api_client")
+            || pl.contains("use") && (pl.contains("query") || pl.contains("fetch") || pl.contains("event"))
+            || pl.contains("/hooks/")
+            || pl.contains("/api/");
+        if is_js_ts && consumer_hint {
+            if !consumer_files.contains(&path) { consumer_files.push(path); }
+        }
+    }
+
+    let touched_spec = !spec_files.is_empty();
+    let touched_consumer = !consumer_files.is_empty();
+    let status = match (touched_spec, touched_consumer) {
+        (true,  true)  => "both",
+        (true,  false) => "contract_only",
+        (false, true)  => "consumer_only",
+        (false, false) => "neither",
+    };
+
+    InterfaceDrift { status, touched_spec, touched_consumer, spec_files, consumer_files }
 }
 
 fn build_analyzer_from_vault() -> crate::errors::Result<DiffAnalyzer> {

@@ -107,6 +107,12 @@ impl Tool for BashTool {
             )),
             Ok(Err(e)) => ToolResult::error(format!("Failed to spawn command: {e}")),
             Ok(Ok((stdout, stderr, exit_code))) => {
+                // Doc 09 T2.4 — record build-like invocations into the
+                // module-level evidence tracker so update_task_status can
+                // gate qc_review transitions. Side-effect only — no impact
+                // on the tool's return value or output.
+                super::build_evidence::record(&ctx.session_id, &command, exit_code);
+
                 // K.1 — Label stdout and stderr separately so agents can
                 // distinguish build warnings (stderr) from program output.
                 let mut output = String::new();

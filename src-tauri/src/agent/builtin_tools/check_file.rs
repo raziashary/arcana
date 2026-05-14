@@ -48,11 +48,12 @@ impl Tool for CheckFileTool {
                     "type": "array",
                     "items": {
                         "type": "string",
-                        "enum": ["syntax", "imports", "types"]
+                        "enum": ["syntax", "imports", "exports", "contract", "types"]
                     },
-                    "description": "Which checks to run. Default: [\"syntax\", \"imports\"]. \
+                    "description": "Which checks to run. Default: \
+                                    [\"syntax\", \"imports\", \"exports\", \"contract\"]. \
                                     Add \"types\" to invoke mypy/pyright/tsc (slow).",
-                    "default": ["syntax", "imports"]
+                    "default": ["syntax", "imports", "exports", "contract"]
                 },
                 "type_checker": {
                     "type": "string",
@@ -90,17 +91,24 @@ impl Tool for CheckFileTool {
         }
 
         // ── Parse checks parameter ────────────────────────────────────────────
+        // Doc 09 T1.4 — defaults now include the two passes that were the
+        // most expensive misses in the 14 May calendar run: tier2_5_exports
+        // (consumer/producer drift) and tier2_6_api_contract (URL mismatches
+        // against INTERFACE.md). `types` stays opt-in because Tier 3 is
+        // genuinely slow (multi-second subprocesses).
         let checks: Vec<String> = if let Some(arr) = input["checks"].as_array() {
             arr.iter()
                 .filter_map(|v| v.as_str().map(String::from))
                 .collect()
         } else {
-            vec!["syntax".into(), "imports".into()]
+            vec!["syntax".into(), "imports".into(), "exports".into(), "contract".into()]
         };
 
-        let run_syntax  = checks.iter().any(|c| c == "syntax");
-        let run_imports = checks.iter().any(|c| c == "imports");
-        let run_types   = checks.iter().any(|c| c == "types");
+        let run_syntax   = checks.iter().any(|c| c == "syntax");
+        let run_imports  = checks.iter().any(|c| c == "imports");
+        let run_exports  = checks.iter().any(|c| c == "exports");
+        let run_contract = checks.iter().any(|c| c == "contract");
+        let run_types    = checks.iter().any(|c| c == "types");
 
         let type_checker = input["type_checker"].as_str()
             .filter(|&s| s != "auto")
@@ -141,6 +149,38 @@ impl Tool for CheckFileTool {
             }
         }
 
+        // Tier 2.5 — exports (Doc 09 T1.3)
+        if run_exports {
+            if let Some(result) = validate::tier2_5_exports(&path, &ctx.working_dir) {
+                let status = if result.is_clean() {
+                    format!("[{}] ✓ All named imports resolve to actual exports.", result.checker)
+                } else {
+                    has_errors = true;
+                    format!(
+                        "{}\n  Hint: the producing module is missing one or more of these names.",
+                        result.format_inline()
+                    )
+                };
+                sections.push(format!("=== Exports ===\n{status}"));
+            }
+        }
+
+        // Tier 2.6 — API contract (Doc 09 T3.3)
+        if run_contract {
+            if let Some(result) = validate::tier2_6_api_contract(&path, &ctx.working_dir) {
+                let status = if result.is_clean() {
+                    format!("[{}] ✓ All API URLs documented in INTERFACE.md.", result.checker)
+                } else {
+                    has_errors = true;
+                    format!(
+                        "{}\n  Hint: fix either INTERFACE.md (backend) or the URL (frontend).",
+                        result.format_inline()
+                    )
+                };
+                sections.push(format!("=== API contract ===\n{status}"));
+            }
+        }
+
         // Tier 3 — types
         if run_types {
             let result = validate::tier3_types(
@@ -172,8 +212,10 @@ impl Tool for CheckFileTool {
             return ToolResult::success(format!(
                 "check_file: {display_path}\n\
                  No checkers available for {ext} files in the requested tiers ({}).\n\
-                 Supported: syntax → .json/.yaml/.toml/.py/.js; \
+                 Supported: syntax → .json/.yaml/.toml/.py/.js/.ts/.tsx; \
                  imports → .py/.js/.ts/.tsx/.jsx; \
+                 exports → .js/.ts/.tsx/.jsx; \
+                 contract → .js/.ts/.tsx (when INTERFACE.md present); \
                  types → .py/.ts/.tsx/.js/.jsx",
                 checks.join(", ")
             ));
