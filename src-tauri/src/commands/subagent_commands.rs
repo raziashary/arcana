@@ -118,3 +118,26 @@ pub async fn list_active_subagents(
 ) -> Result<Vec<SubagentSummary>, String> {
     Ok(manager.list(parent_session_id.as_deref()).await)
 }
+
+/// Doc 04 Phase 3.3 — live snapshot of QC reviewer concurrency.
+///
+/// Returns a tuple `(in_flight, max_concurrent)` so the Subagent Monitor /
+/// AutoDev Live Monitor can render "QC: 3 / 6 in flight" without re-walking
+/// the registry on the frontend. `in_flight` is computed from the live
+/// subagent list filtered to `parent_slug == "qc-dispatcher"`;
+/// `max_concurrent` is the pool's `MAX_CONCURRENT_QC` constant.
+#[tauri::command]
+pub async fn get_qc_reviewer_stats(
+    manager: State<'_, Arc<SubagentManager>>,
+) -> Result<serde_json::Value, String> {
+    let summaries = manager.list(None).await;
+    let in_flight = summaries.iter()
+        .filter(|s| s.parent_slug == crate::subagent::pool::QC_DISPATCHER_SLUG)
+        .filter(|s| !s.status.is_terminal())
+        .count();
+    let max = crate::subagent::pool::MAX_CONCURRENT_QC;
+    Ok(serde_json::json!({
+        "in_flight":     in_flight,
+        "max_concurrent": max,
+    }))
+}

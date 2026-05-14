@@ -53,6 +53,11 @@ export interface Task {
   blocked_by?:   string[] | null
   // Ruflo Feature 3 — Diff Risk Scoring (populated by analyze_diff_tool when task_id is passed)
   diff_analysis?: string | null
+  // Doc 04 Phase 2/4 — per-task QC reviewer claim + cost rollup.
+  // `under_review_by` is non-null while a qc-reviewer subagent is mid-flight.
+  // `task_qc_cost_usd` accumulates every reviewer's cost across retries.
+  under_review_by?:   string | null
+  task_qc_cost_usd?:  number
 }
 
 // ─── Phase Summary (Ruflo Feature 5) ─────────────────────────────────────────

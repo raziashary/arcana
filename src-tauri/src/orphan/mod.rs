@@ -45,7 +45,104 @@ fn reconcile_inner() -> crate::errors::Result<Vec<String>> {
         }
     }
 
+    // Doc 04 Phase 2.4 — stranded QC reviewer sweep. Piggy-backs on the
+    // existing reconciler cadence so we don't need a second timer. Released
+    // claims aren't reported in the returned Vec (those are task-status
+    // releases, not subagent-claim releases — the dispatcher recipe picks
+    // them up automatically on its next 30s tick).
+    reconcile_stranded_qc_claims(&db);
+
     Ok(released)
+}
+
+/// Doc 04 Phase 2.4 — sweep stranded QC reviewer claims.
+///
+/// A task is "stranded" when its `under_review_by` field references a
+/// subagent that no longer exists in the SubagentManager registry. This
+/// happens when:
+///   1. The Rust process restarted between claim and reviewer completion.
+///   2. The background completion handler tokio task was dropped (very rare).
+///   3. The reviewer exceeded its TERMINAL_RETENTION window (60 s) and was
+///      pruned from the registry before the next reconciler tick.
+///
+/// On startup `SubagentManager::list` returns an empty registry, so every
+/// claim from the previous process gets cleared on the first reconciler tick.
+/// During steady-state the function clears at most a handful of entries per
+/// run. Safe to call frequently.
+fn reconcile_stranded_qc_claims(db: &TasksDb) {
+    let claims = match db.list_qc_claims() {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("[OrphanDetector] list_qc_claims failed: {e}");
+            return;
+        }
+    };
+    if claims.is_empty() { return; }
+
+    // Snapshot live subagent slugs via the global manager. If the manager
+    // hasn't been installed yet (very early boot), we treat every claim as
+    // stranded — which is correct: nothing from a previous lifecycle can
+    // possibly still be running.
+    let live_ids: std::collections::HashSet<String> =
+        match crate::subagent::manager::global() {
+            Some(mgr) => {
+                let summaries = futures::executor::block_on(mgr.list(None));
+                summaries.into_iter().map(|s| s.id).collect()
+            }
+            None => std::collections::HashSet::new(),
+        };
+
+    for (task_id, slug) in claims {
+        // After spawn_qc_review's `upgrade_qc_claim`, the `slug` value is
+        // the real subagent_id ("subagent-qc-dispatcher-..."). For those we
+        // do an exact match against the live registry. If the claim still
+        // carries the synthetic `qc-rev-task<id>-<ts>` token (because the
+        // spawn happened but upgrade_qc_claim raced with this reconciler),
+        // we fall back to the timestamp heuristic so a freshly-spawned
+        // reviewer isn't accidentally swept.
+        let still_claimed = if slug.starts_with("qc-rev-task") {
+            is_claim_recent_and_live(&slug, &live_ids)
+        } else {
+            live_ids.contains(&slug)
+        };
+        if !still_claimed {
+            if let Err(e) = db.release_qc_claim(task_id) {
+                warn!(
+                    "[OrphanDetector] release_qc_claim task #{task_id} ({slug}) failed: {e}"
+                );
+                continue;
+            }
+            warn!(
+                "[OrphanDetector] Released stranded QC claim task #{task_id} \
+                 (claim_token='{slug}') — reviewer no longer alive"
+            );
+        }
+    }
+}
+
+/// Best-effort liveness check. The under_review_by token is a synthetic
+/// `qc-rev-task<id>-<ts>` value (NOT the actual subagent id) so we can't
+/// compare directly. Heuristic: a claim placed in the last 90 seconds is
+/// considered "possibly live"; older claims with no matching subagent are
+/// stranded.
+///
+/// This is intentionally conservative — false positives leave a claim
+/// hanging for one extra reconciler tick (~60 s), which the dispatcher
+/// will then catch on its next pass.
+fn is_claim_recent_and_live(
+    claim_token: &str,
+    _live_ids: &std::collections::HashSet<String>,
+) -> bool {
+    // Parse the ts suffix off the claim_token.
+    let parts: Vec<&str> = claim_token.rsplitn(2, '-').collect();
+    let ts_ms: i64 = match parts.first().and_then(|s| s.parse().ok()) {
+        Some(n) => n,
+        None    => return false,   // malformed → treat as stranded
+    };
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let age_ms = now_ms.saturating_sub(ts_ms);
+    // Anything younger than 90 s might still be mid-flight.
+    age_ms < 90_000
 }
 
 fn check_task(task: &Task) -> Option<String> {

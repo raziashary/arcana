@@ -136,35 +136,35 @@ plenty of headroom and a real ceiling under burst load).
 
 ## Atomic implementation tasks
 
-### Phase 1 — Replace serial QC with per-task subagents (functional fix)
+### Phase 1 — Replace serial QC with per-task subagents (functional fix) — ✅ COMPLETE 14 May 2026
 
-- [ ] Add a new builtin tool `spawn_qc_review` at `src-tauri/src/agent/builtin_tools/spawn_qc_review.rs` — wraps `SubagentManager::spawn` with a fixed system-prompt template, fixed model (`claude-sonnet-4-5`), and a required `task_id` input.
-- [ ] Register the tool in `src-tauri/src/agent/builtin_tools/mod.rs` alongside `spawn_subagent` / `spawn_parallel_subagents`.
-- [ ] Extract the per-task body of the existing `qc_agent_recipe` (Phases 0–5 at `src-tauri/src/recipes/defaults.rs:1104`) into a new `qc_reviewer_system_prompt(task_id, repo_path)` builder so the spawned reviewer's prompt is task-scoped.
-- [ ] Add `qc_dispatcher_recipe()` at `src-tauri/src/recipes/defaults.rs` — model `claude-haiku-4-5`, `schedule: "*/30 * * * * *"` (30 s), `agent_role: "qc-dispatcher"`, instructions = "list_tasks(qc_review); for each not under review, call spawn_qc_review(task_id); update metadata; return".
-- [ ] Register the new recipe ID `QC_DISPATCHER_RECIPE_ID` in the recipes registry at `src-tauri/src/recipes/defaults.rs:43`.
-- [ ] In `src-tauri/src/db/workers.rs`, swap the seeded `qc-agent` row's `recipe_id` to `qc-dispatcher` (or insert `qc-dispatcher` and retire `qc-agent`).
-- [ ] Update the reconciler / `kick_worker` call sites that currently target `qc-agent` to target `qc-dispatcher` — check `src-tauri/src/commands/task_commands.rs` and `src-tauri/src/db/workers.rs` for hardcoded `"qc-agent"` slugs.
+- [x] New builtin tool `spawn_qc_review` at `src-tauri/src/agent/builtin_tools/spawn_qc_review.rs` — atomically claims the task via `TasksDb::try_claim_for_qc_review`, builds the per-task system prompt, spawns the subagent on `claude-sonnet-4-5`, upgrades the claim to the real subagent_id, and detaches a background tokio task that awaits the reviewer's terminal state to attribute cost (`add_qc_cost`), release the claim, and record analytics events.
+- [x] Registered the tool in `src-tauri/src/agent/builtin_tools/mod.rs` for both `register_for_mcp_worker` (Mode 2 LivingAgents) and `register_for_mode` (PA / Mode 1). Recipe-level guardrails forbid all non-dispatcher callers from using it.
+- [x] Extracted `qc_reviewer_system_prompt(task_id, repo_path)` in `src-tauri/src/recipes/defaults.rs` — Phases 0–5 of the legacy QC protocol, scoped to one task. Removes "list_tasks queue iteration", "No tasks available" branch, and "Subagent Protocol" (subagents cannot nest more QC). Exposed as `pub fn` for the spawn tool to consume.
+- [x] Added `qc_dispatcher_recipe()` — model `claude-haiku-4-5`, schedule `*/30 * * * * *`, `agent_role: "qc-agent"` (slug retained for backward compat). Recipe instructions: list queue → filter `under_review_by` / `build_failed` → cap at 6 spawns/tick → call `spawn_qc_review(task_id)` per task → stop.
+- [x] Registered `QC_DISPATCHER_RECIPE_ID = "qc-dispatcher"` in the recipes registry next to `QC_AGENT_RECIPE_ID` (both kept; the old one is no longer bound but remains available for manual rebinding).
+- [x] Swapped `src-tauri/src/db/workers.rs:178` seed: QC Agent row now binds to recipe `qc-dispatcher`, model `claude-haiku-4-5`, poll interval 60s. The `qc-agent` slug is retained — kick_worker / Live Monitor / hooks all continue working.
+- [x] Slug parity verified — keeping the `qc-agent` slug means the existing hardcoded references in `scheduler.rs:462`, `task_commands.rs:36`, `update_task_status_tool.rs:140`, `client.rs:284`, `runner.rs:218-230` all continue to function unchanged. The dispatcher's `parent_slug` for the subagent pool is the separate constant `QC_DISPATCHER_SLUG = "qc-dispatcher"` defined in `pool.rs`.
 
-### Phase 2 — Idempotency and queue safety
+### Phase 2 — Idempotency and queue safety — ✅ COMPLETE 14 May 2026
 
-- [ ] Add an `under_review_by` text column to `tasks.db` (migration in `src-tauri/src/db/migrations/`) — value is the subagent slug, NULL when not under review.
-- [ ] In `spawn_qc_review`, set `under_review_by = subagent_id` atomically before the spawn returns; clear it on terminal status events in `SubagentManager::finalise` at `src-tauri/src/subagent/manager.rs:287`.
-- [ ] Update the supervisor recipe at `src-tauri/src/recipes/defaults.rs:295` to skip tasks where `under_review_by IS NOT NULL` (covers a dispatcher crash mid-spawn).
-- [ ] Add a stranded-reviewer reconciler: on startup and every 5 min, scan for tasks with `under_review_by` referencing a subagent not present in `SubagentManager::list` and clear the flag so the next dispatcher tick re-spawns. Hook this into the existing stranded-task reconciler.
+- [x] Added `under_review_by TEXT` and `task_qc_cost_usd REAL DEFAULT 0.0` columns to `tasks.db` via idempotent `ALTER TABLE` migrations in `TasksDb::init_schema`. New `idx_tasks_under_review_by` index keeps the dispatcher's filter query fast.
+- [x] Atomic claim/release primitives in `src-tauri/src/db/tasks.rs`: `try_claim_for_qc_review(task_id, slug) -> bool` uses `UPDATE … WHERE under_review_by IS NULL` and returns whether the row count was 1 (claim won) or 0 (race lost). `upgrade_qc_claim` swaps the synthetic claim token for the real subagent_id post-spawn. `release_qc_claim` and `list_qc_claims` round out the lifecycle. Wired into `spawn_qc_review` (claim before spawn, upgrade after spawn returns the handle, release in the background completion handler).
+- [x] Supervisor recipe `defaults.rs` — clarifying note under "QC-review tasks": acknowledges the new `under_review_by` flag, points at the orphan reconciler for stranded-claim cleanup, and reaffirms the "do NOT touch qc_review" rule. The supervisor already skipped qc_review entirely, so this is documentation-only — no behavior change required.
+- [x] Stranded-reviewer reconciler in `src-tauri/src/orphan/mod.rs` — `reconcile_stranded_qc_claims` runs on every existing orphan reconciler tick (no new timer). For each claim it cross-references `SubagentManager::list` (live registry); the real subagent_id is matched exactly, while the pre-upgrade synthetic `qc-rev-task<id>-<ts>` token falls back to a 90-second age heuristic. On process restart, the empty registry sweeps every claim on the first tick.
 
-### Phase 3 — Tighten resource ceilings
+### Phase 3 — Tighten resource ceilings — ✅ COMPLETE 14 May 2026
 
-- [ ] Add a QC-specific concurrency cap (e.g. `MAX_CONCURRENT_QC = 6`) at `src-tauri/src/subagent/pool.rs:26` — a second tokio Semaphore that any `parent_slug == "qc-dispatcher"` acquires before the global pool. Keeps a burst of 30 `qc_review` tasks from starving codegen workers.
-- [ ] Wire a per-tick cap into the dispatcher recipe instructions: "spawn at most 6 reviewers per tick; remaining tasks ride the next 30 s pulse".
-- [ ] Surface the live QC reviewer count in the Subagent Monitor: filter by `parent_slug == "qc-dispatcher"` — uses `SubagentManager::list` at `manager.rs:172` which already supports filtering.
+- [x] `MAX_CONCURRENT_QC = 6` + dedicated `qc: Semaphore` slot in `src-tauri/src/subagent/pool.rs`. Acquired BEFORE the global semaphore using `try_acquire_owned` (so a burst of QC spawns rejects immediately instead of back-pressuring worker subagents). Released-on-drop via the same `PoolPermit` mechanism as the global cap. New `QC_DISPATCHER_SLUG = "qc-dispatcher"` constant single-sources the slug check across pool / tool / reconciler.
+- [x] Per-tick cap baked into the dispatcher recipe instructions: "Cap at 6 spawns per tick. Even if 30 tasks are pending, spawn at most 6 reviewers per tick. The remaining tasks ride the next 30 s pulse." Belt-and-suspenders with the pool cap — recipe-level keeps the LLM from even trying to overflow.
+- [x] Live reviewer count via new Tauri command `get_qc_reviewer_stats` in `src-tauri/src/commands/subagent_commands.rs` returning `{ in_flight, max_concurrent }`. Registered in `lib.rs`. Pool exposes `qc_available()` so the count is O(1).
 
-### Phase 4 (optional) — Observability and cost guardrails
+### Phase 4 — Observability and cost guardrails — ✅ COMPLETE 14 May 2026
 
-- [ ] Emit a `qc_review_dispatched` analytics event with `task_id`, `subagent_id`, dispatcher tick latency. Hook into `src-tauri/src/events/` alongside the existing `subagent:event` emitter.
-- [ ] Aggregate per-task QC cost from the `SubagentEvent::Cost` frames already parsed at `src-tauri/src/subagent/bridge.rs:259` and write to a new `task_qc_cost_usd` column on completion.
-- [ ] Add a "QC ROI" panel in the AutoDev UI — for each finished task, show `qc_cost_usd / worker_cost_usd` so the user can spot tasks where the reviewer cost outweighs the implementation cost.
-- [ ] Add a hard cost guard: if cumulative QC spend in the last hour exceeds a configurable threshold (default $5), the dispatcher pauses spawning and emits a warning event. Belt-and-braces against a runaway reject/retry loop.
+- [x] Analytics events — `spawn_qc_review` records `qc_review_dispatched` synchronously on spawn, then `qc_review_dispatched_complete` / `_failed` from the background completion handler. All three flow through `analytics::global().collector().record_system_event` with component=`qc-dispatcher`, severity=info/warn, and JSON metadata containing `{ kind, task_id, subagent_id, cost_usd, duration_secs, success }`. Surfaces in `get_system_logs` (admin dashboard) and is queryable via the analytics DB for ad-hoc audits.
+- [x] Per-task QC cost rollup — `TasksDb::add_qc_cost(task_id, cost_usd)` increments `task_qc_cost_usd` atomically. Background completion handler in `spawn_qc_review` calls it with `SubagentResult.cost_usd` on success. Task DTO + frontend `Task` interface carry the new field for the UI to consume.
+- [x] QC ROI panel — new `src/components/dashboard/QcRoiPanel.tsx`. Top 8 tasks by `task_qc_cost_usd` descending, each row showing `#id`, title, `QC$`, `WORKER$` (= `budget_cost_usd`), and `QC/W` ratio. Ratios > 100% are tinted with `var(--danger)` so suspiciously-expensive reviews jump out. Header chip shows `Reviewers: in_flight / max_concurrent`, polled from `get_qc_reviewer_stats` every 5 s and refreshed instantly on every `subagent:event`. Mounted in `AutoDevPanel.tsx` directly under the Live Monitor section.
+- [x] Hard cost guard in `spawn_qc_review.rs::qc_cost_guard` — rolling 1-hour ring of `(timestamp, cost)` entries. `check_and_record_dispatch_intent()` runs BEFORE the atomic claim and rejects when the sum (including a $0.10 provisional reserve per dispatch) would exceed $5/hour. `record_dispatch_complete(realised_cost)` swaps the provisional entry for the realised cost when the reviewer terminates so the window self-corrects. The reject error includes a human-readable explanation so the dispatcher's next tick stops spawning and reports the trip to the user.
 
 ## Concurrency / safety considerations
 

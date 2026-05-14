@@ -143,17 +143,29 @@ Full task lists in [01](01-live-monitor-stale.md), [02](02-dashboard-not-live.md
 - `cargo test --lib subagent::bridge::tests` → **5 passed, 0 failed**
 - `npx tsc --noEmit` clean (exit 0)
 
-### Phase 3 — Per-task headless QC (the user's idea, big throughput win)
+### Phase 3 — Per-task headless QC ✅ COMPLETE — 14 May 2026
 
-Subagent infra is already there; we just need a dispatcher.
+Subagent infra was already there; the dispatcher is now wired up.
 
-| Task | File | What |
-|---|---|---|
-| Replace `qc-agent` recipe with `qc-dispatcher` | [`src-tauri/src/recipes/defaults.rs`](src-tauri/src/recipes/defaults.rs) (qc_agent_recipe section) | Dispatcher reads `qc_review` queue, spawns N ephemeral qc-reviewer subagents in parallel |
-| QC reviewer system prompt template | [`src-tauri/src/recipes/defaults.rs`](src-tauri/src/recipes/defaults.rs) | Constant string with the canonical QC review protocol (currently embedded in qc-agent recipe) |
-| Subagent spawn for QC | [`src-tauri/src/subagent/manager.rs`](src-tauri/src/subagent/manager.rs) usage from new dispatcher | Use existing `spawn` API; pass `system_prompt` = QC template, `model` = sonnet, `mcp_servers` = `["autodev-mcp-server"]` |
-| QC pool sub-cap | [`src-tauri/src/subagent/pool.rs`](src-tauri/src/subagent/pool.rs) | Optional separate cap for QC subagents (~6) so they don't crowd out worker-spawned subagents |
-| UI: QC subagent cards | [`src/tabs/AutoDevPanel.tsx`](src/tabs/AutoDevPanel.tsx) Live Monitor section | Show each active QC reviewer with its target task #N |
+| Task | File | What | Status |
+|---|---|---|---|
+| Replaced `qc-agent` recipe with `qc-dispatcher` | [`src-tauri/src/recipes/defaults.rs`](../../../src-tauri/src/recipes/defaults.rs) `qc_dispatcher_recipe` + workers.db seed | Dispatcher (haiku, 30s cron) reads `qc_review` queue, caps at 6, calls `spawn_qc_review(task_id)` per task. Slug stays `qc-agent` for backward compat; recipe is what changed | ✅ |
+| QC reviewer system prompt template | [`src-tauri/src/recipes/defaults.rs`](../../../src-tauri/src/recipes/defaults.rs) `qc_reviewer_system_prompt(task_id, repo_path)` | Per-task, task-id-scoped variant of the legacy QC protocol (Phases 0–5). Subagent Protocol removed (no nested QC). Exposed `pub fn` so the builtin tool can consume it | ✅ |
+| `spawn_qc_review` builtin tool | new [`src-tauri/src/agent/builtin_tools/spawn_qc_review.rs`](../../../src-tauri/src/agent/builtin_tools/spawn_qc_review.rs) | Atomically claims the task via `try_claim_for_qc_review`, spawns sonnet subagent, upgrades the claim to the real subagent_id, schedules background cost-attribution and claim-release | ✅ |
+| `under_review_by` + cost column | [`src-tauri/src/db/tasks.rs`](../../../src-tauri/src/db/tasks.rs) | New columns: `under_review_by TEXT`, `task_qc_cost_usd REAL DEFAULT 0.0`. Idempotent ALTERs + index on `under_review_by`. Atomic primitives: `try_claim_for_qc_review` / `upgrade_qc_claim` / `release_qc_claim` / `add_qc_cost` / `list_qc_claims` | ✅ |
+| Stranded-reviewer reconciler | [`src-tauri/src/orphan/mod.rs`](../../../src-tauri/src/orphan/mod.rs) `reconcile_stranded_qc_claims` | Piggy-backs on existing orphan reconciler tick. Real subagent_id → exact match against `SubagentManager::list`; synthetic claim token → 90s age fallback. Empty registry on startup sweeps every stale claim | ✅ |
+| `MAX_CONCURRENT_QC = 6` pool sub-cap | [`src-tauri/src/subagent/pool.rs`](../../../src-tauri/src/subagent/pool.rs) | Dedicated `qc: Semaphore` acquired with `try_acquire_owned` BEFORE the global cap; rejects QC bursts fast instead of back-pressuring worker subagents. `QC_DISPATCHER_SLUG` constant single-sources the trigger | ✅ |
+| Live QC reviewer count Tauri cmd | [`src-tauri/src/commands/subagent_commands.rs`](../../../src-tauri/src/commands/subagent_commands.rs) `get_qc_reviewer_stats` + `lib.rs` registration | Returns `{ in_flight, max_concurrent }` — frontend QC ROI panel polls every 5s + on every subagent:event | ✅ |
+| QC ROI UI panel | new [`src/components/dashboard/QcRoiPanel.tsx`](../../../src/components/dashboard/QcRoiPanel.tsx) | Top 8 tasks by QC cost; columns `#id / title / QC$ / WORKER$ / QC/W%`. Suspicious ratios (> 100%) tinted red. Header chip shows live reviewer count. Mounted in AutoDev panel below the Live Monitor | ✅ |
+| qc-agent.yaml submodule update | [`submodules/core-orchestrator/config/agents/qc-agent.yaml`](../../../submodules/core-orchestrator/config/agents/qc-agent.yaml) | Persona switched to dispatcher role; model changed to haiku; system prompt rewritten to describe the fan-out role | ✅ |
+| Hard cost guard ($5/hour ceiling) | [`spawn_qc_review.rs`](../../../src-tauri/src/agent/builtin_tools/spawn_qc_review.rs) `qc_cost_guard` module | Rolling 1h ring of (timestamp, cost) entries with $0.10 provisional reserve per in-flight reviewer. Trips BEFORE the atomic claim so a denied spawn doesn't leak claim state. Realised cost replaces the provisional entry on completion | ✅ |
+| Analytics dispatch events | [`spawn_qc_review.rs`](../../../src-tauri/src/agent/builtin_tools/spawn_qc_review.rs) `record_analytics_event` | `qc_review_dispatched` / `_complete` / `_failed` events flow through `analytics::global().collector().record_system_event` with task_id, subagent_id, cost_usd, duration_secs, success. Queryable via the analytics DB | ✅ |
+
+**Verification:**
+- `cargo check` clean (only pre-existing warnings)
+- `cargo test --lib agent::builtin_tools::path_jail::tests` → **7 passed, 0 failed**
+- `cargo test --lib subagent` → **11 passed, 0 failed** (bridge + slug + pool)
+- `npx tsc --noEmit` clean (exit 0)
 
 Full task list in [04](04-qc-backlog.md).
 

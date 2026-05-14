@@ -175,7 +175,13 @@ impl WorkersDb {
         let seeds: &[(&str, &str, &str, &str, i64, bool, &str, Option<&str>)] = &[
             // (name, slug, type, model, interval, is_system, description, recipe_id)
             ("Supervisor",        "supervisor",       "supervisor", "claude-opus-4-5",    120, true,  "Polls the task board, assigns tasks to workers.", Some("supervisor-poll")),
-            ("QC Agent",          "qc-agent",         "qc",         "claude-opus-4-5",    120, true,  "Reviews completed work, approves or rejects.", Some("qc-agent-review")),
+            // Doc 04 Phase 3 — QC worker now runs the qc-dispatcher recipe.
+            // The slug stays `qc-agent` for backward compat (Live Monitor
+            // card, scheduler hardcodes, hooks); the dispatcher recipe runs
+            // on haiku and fans out per-task sonnet reviewer subagents via
+            // `spawn_qc_review`. Old `qc-agent-review` recipe still exists in
+            // the registry for users who manually rebind workers.
+            ("QC Agent",          "qc-agent",         "qc",         "claude-haiku-4-5",   60,  true,  "Dispatches per-task QC reviewers (Doc 04 Phase 3).", Some("qc-dispatcher")),
             ("Worker Backend",    "worker-backend",   "backend",    "claude-sonnet-4-5",  120, false, "Implements backend tasks (Python / Rust).", Some("worker-backend-poll")),
             ("Worker Frontend",   "worker-frontend",  "frontend",   "claude-sonnet-4-5",  120, false, "Implements frontend tasks (React / TypeScript).", Some("worker-frontend-poll")),
             ("Worker Platform",   "worker-platform",  "platform",   "claude-sonnet-4-5",  120, false, "Infrastructure, CI/CD, and DevOps tasks.", Some("worker-platform-poll")),

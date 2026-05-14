@@ -118,6 +118,7 @@ pub fn register_commands(
         subagent_commands::{
             spawn_subagent, execute_subtask, get_subagent_status,
             terminate_subagent, abort_subagent, list_active_subagents,
+            get_qc_reviewer_stats,
         },
         analytics_commands::{
             get_dashboard_summary, get_cost_analytics, get_token_usage,
@@ -363,6 +364,7 @@ pub fn register_commands(
         terminate_subagent,
         abort_subagent,
         list_active_subagents,
+        get_qc_reviewer_stats,                       // Doc 04 Phase 3.3
         // Analytics & Dashboard (Phase 5.4)
         get_dashboard_summary,
         get_cost_analytics,

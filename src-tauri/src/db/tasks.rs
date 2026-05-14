@@ -182,6 +182,15 @@ pub struct Task {
     pub milestone:     Option<String>,       // optional milestone marker for this phase
     pub epic_id:       Option<String>,       // links subtask back to its parent epic task id
     pub blocked_by:    Option<Vec<String>>,  // task IDs that must be done before this one starts
+    // Doc 04 Phase 2 — per-task QC reviewer claim. Set atomically by
+    // `spawn_qc_review` to the subagent slug; cleared on terminal status by
+    // the stranded-reviewer reconciler. NULL = available for the next
+    // dispatcher tick to claim.
+    pub under_review_by: Option<String>,
+    // Doc 04 Phase 4 — running QC cost in USD for this task. Aggregated
+    // across all reviewer runs (including retries) so the QC ROI panel can
+    // show qc_cost / worker_cost ratios per task.
+    pub task_qc_cost_usd: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -339,6 +348,15 @@ impl TasksDb {
         let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN milestone   TEXT;");
         let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN epic_id     TEXT;");
         let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN blocked_by  TEXT;");
+        // Doc 04 Phase 2 / Phase 4 — per-task QC reviewer claim + cost rollup.
+        // `under_review_by` carries the subagent slug while a reviewer runs;
+        // `task_qc_cost_usd` is the running sum of every reviewer run for the
+        // task. Both are NULL-safe (defaulted on read via COALESCE).
+        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN under_review_by  TEXT;");
+        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN task_qc_cost_usd REAL DEFAULT 0.0;");
+        let _ = self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_under_review_by ON tasks(under_review_by);"
+        );
         // Indexes for phase queries
         let _ = self.conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_tasks_epic_id ON tasks(epic_id);"
@@ -400,7 +418,8 @@ impl TasksDb {
                     COALESCE(budget_tokens_used,0), COALESCE(budget_cost_usd,0.0),
                     COALESCE(budget_turns_used,0), COALESCE(budget_exceeded,0),
                     budget_exceeded_reason,
-                    phase, phase_order, milestone, epic_id, blocked_by
+                    phase, phase_order, milestone, epic_id, blocked_by,
+                    under_review_by, COALESCE(task_qc_cost_usd, 0.0)
              FROM tasks WHERE id = ?1"
         )?;
         let task = stmt.query_row(params![id], row_to_task).optional()?;
@@ -418,7 +437,8 @@ impl TasksDb {
                          COALESCE(budget_tokens_used,0), COALESCE(budget_cost_usd,0.0),
                          COALESCE(budget_turns_used,0), COALESCE(budget_exceeded,0),
                          budget_exceeded_reason,
-                         phase, phase_order, milestone, epic_id, blocked_by
+                         phase, phase_order, milestone, epic_id, blocked_by,
+                    under_review_by, COALESCE(task_qc_cost_usd, 0.0)
                  FROM tasks WHERE status = ?1 ORDER BY created_at ASC",
                 vec![status.to_string()],
             )
@@ -432,7 +452,8 @@ impl TasksDb {
                          COALESCE(budget_tokens_used,0), COALESCE(budget_cost_usd,0.0),
                          COALESCE(budget_turns_used,0), COALESCE(budget_exceeded,0),
                          budget_exceeded_reason,
-                         phase, phase_order, milestone, epic_id, blocked_by
+                         phase, phase_order, milestone, epic_id, blocked_by,
+                    under_review_by, COALESCE(task_qc_cost_usd, 0.0)
                  FROM tasks ORDER BY created_at ASC",
                 vec![],
             )
@@ -457,7 +478,8 @@ impl TasksDb {
                     COALESCE(budget_tokens_used,0), COALESCE(budget_cost_usd,0.0),
                     COALESCE(budget_turns_used,0), COALESCE(budget_exceeded,0),
                     budget_exceeded_reason,
-                    phase, phase_order, milestone, epic_id, blocked_by
+                    phase, phase_order, milestone, epic_id, blocked_by,
+                    under_review_by, COALESCE(task_qc_cost_usd, 0.0)
              FROM tasks WHERE status = ?1 AND assigned_worker = ?2 ORDER BY id"
         )?;
         let tasks = stmt.query_map(params![status, worker], row_to_task)?
@@ -638,7 +660,8 @@ impl TasksDb {
                     COALESCE(budget_tokens_used,0), COALESCE(budget_cost_usd,0.0),
                     COALESCE(budget_turns_used,0), COALESCE(budget_exceeded,0),
                     budget_exceeded_reason,
-                    phase, phase_order, milestone, epic_id, blocked_by
+                    phase, phase_order, milestone, epic_id, blocked_by,
+                    under_review_by, COALESCE(task_qc_cost_usd, 0.0)
              FROM tasks
              WHERE status IN ('assigned', 'in_progress')
              ORDER BY updated_at ASC"
@@ -965,7 +988,8 @@ impl TasksDb {
                     COALESCE(budget_tokens_used,0), COALESCE(budget_cost_usd,0.0),
                     COALESCE(budget_turns_used,0), COALESCE(budget_exceeded,0),
                     budget_exceeded_reason,
-                    phase, phase_order, milestone, epic_id, blocked_by
+                    phase, phase_order, milestone, epic_id, blocked_by,
+                    under_review_by, COALESCE(task_qc_cost_usd, 0.0)
              FROM tasks WHERE epic_id = ?1
              ORDER BY COALESCE(phase_order, 999), id"
         )?;
@@ -1039,7 +1063,8 @@ impl TasksDb {
                     COALESCE(budget_tokens_used,0), COALESCE(budget_cost_usd,0.0),
                     COALESCE(budget_turns_used,0), COALESCE(budget_exceeded,0),
                     budget_exceeded_reason,
-                    phase, phase_order, milestone, epic_id, blocked_by
+                    phase, phase_order, milestone, epic_id, blocked_by,
+                    under_review_by, COALESCE(task_qc_cost_usd, 0.0)
              FROM tasks WHERE blocked_by IS NOT NULL AND blocked_by != '[]'"
         )?;
         let tasks = stmt.query_map([], row_to_task)?
@@ -1115,6 +1140,72 @@ impl TasksDb {
         Ok(unblocked_ids)
     }
 
+    // ─── Doc 04 Phase 2/4 — QC reviewer claim + cost rollup ──────────────────
+
+    /// Atomically claim a task for QC review by setting `under_review_by` to
+    /// the given subagent slug **only if** the slot is currently NULL. Returns
+    /// `true` if the claim succeeded, `false` if another reviewer already
+    /// owns the task. This is the single anti-double-spawn primitive — every
+    /// `spawn_qc_review` call must check the return value before proceeding.
+    pub fn try_claim_for_qc_review(&self, task_id: i64, subagent_slug: &str) -> Result<bool> {
+        let rows = self.conn.execute(
+            "UPDATE tasks SET under_review_by = ?2
+             WHERE id = ?1 AND under_review_by IS NULL",
+            params![task_id, subagent_slug],
+        )?;
+        Ok(rows == 1)
+    }
+
+    /// Clear the QC claim regardless of current value. Called when a
+    /// reviewer reaches a terminal state (Completed / Failed / Terminated)
+    /// or when the stranded-reviewer reconciler sweeps a dead subagent.
+    pub fn release_qc_claim(&self, task_id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tasks SET under_review_by = NULL WHERE id = ?1",
+            params![task_id],
+        )?;
+        Ok(())
+    }
+
+    /// Update the QC claim from the synthetic claim_token to the real
+    /// subagent_id once the spawn has returned a handle. Lets the
+    /// stranded-reviewer reconciler match `under_review_by` directly against
+    /// `SubagentManager::list`'s live ids.
+    pub fn upgrade_qc_claim(&self, task_id: i64, real_subagent_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tasks SET under_review_by = ?2 WHERE id = ?1",
+            params![task_id, real_subagent_id],
+        )?;
+        Ok(())
+    }
+
+    /// List task IDs currently claimed for QC review along with their slug.
+    /// Used by the stranded-reviewer reconciler to detect rows whose
+    /// reviewer subagent is no longer alive in the SubagentManager registry.
+    pub fn list_qc_claims(&self) -> Result<Vec<(i64, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, under_review_by FROM tasks WHERE under_review_by IS NOT NULL"
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Add a USD increment to the running `task_qc_cost_usd` for a task. Called
+    /// from the spawn_qc_review completion hook with the reviewer's
+    /// `SubagentResult.cost_usd` so the QC ROI panel can show qc_cost /
+    /// worker_cost ratios per task.
+    pub fn add_qc_cost(&self, task_id: i64, cost_usd: f64) -> Result<()> {
+        if cost_usd <= 0.0 { return Ok(()); }
+        self.conn.execute(
+            "UPDATE tasks
+             SET task_qc_cost_usd = COALESCE(task_qc_cost_usd, 0.0) + ?2
+             WHERE id = ?1",
+            params![task_id, cost_usd],
+        )?;
+        Ok(())
+    }
+
     /// Returns tasks in a specific phase that are ready to assign (status = ready | assigned).
     pub fn get_ready_tasks_in_phase(&self, epic_id: &str, phase: &str) -> Result<Vec<Task>> {
         let mut stmt = self.conn.prepare(
@@ -1126,7 +1217,8 @@ impl TasksDb {
                     COALESCE(budget_tokens_used,0), COALESCE(budget_cost_usd,0.0),
                     COALESCE(budget_turns_used,0), COALESCE(budget_exceeded,0),
                     budget_exceeded_reason,
-                    phase, phase_order, milestone, epic_id, blocked_by
+                    phase, phase_order, milestone, epic_id, blocked_by,
+                    under_review_by, COALESCE(task_qc_cost_usd, 0.0)
              FROM tasks
              WHERE epic_id = ?1 AND phase = ?2
                AND status IN ('ready', 'assigned')
@@ -1173,6 +1265,10 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         epic_id:     row.get(28).unwrap_or(None),
         blocked_by:  row.get::<_, Option<String>>(29).unwrap_or(None)
                          .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()),
+        // Doc 04 Phase 2 / Phase 4 — under_review_by + task_qc_cost_usd
+        // (indices 30, 31). Both are NULL-safe by SQL COALESCE / Option.
+        under_review_by:   row.get::<_, Option<String>>(30).unwrap_or(None),
+        task_qc_cost_usd:  row.get::<_, f64>(31).unwrap_or(0.0),
     })
 }
 

@@ -26,6 +26,7 @@ import { useAgentLiveStore }  from '../stores/agentLiveStore'
 import { useUiStore }         from '../stores/uiStore'
 import { WorkerAffinityPanel } from '../components/dashboard/WorkerAffinityPanel'
 import { OrphanAlert } from '../components/dashboard/OrphanAlert'
+import { QcRoiPanel }  from '../components/dashboard/QcRoiPanel'
 import { BudgetBar } from '../components/budget/BudgetBar'
 import { DiffAnalysisCard } from '../components/dashboard/DiffAnalysisCard'
 import { EpicsSection } from '../components/dashboard/EpicPhaseView'
@@ -1029,6 +1030,15 @@ export default function AutoDevTab() {
 
       {/* Live Monitor — real-time per-agent state cards */}
       <ErrorBoundary label="Live Monitor" inline><LiveMonitorSection /></ErrorBoundary>
+
+      {/* Doc 04 Phase 4.3 — QC ROI panel: per-task QC vs worker cost + live
+          reviewer count. Hidden behind ErrorBoundary so a backend error
+          (e.g. get_qc_reviewer_stats missing) never blanks the page. */}
+      <ErrorBoundary label="QC ROI" inline>
+        <div style={{ padding: '0 12px 8px 12px' }}>
+          <QcRoiPanel />
+        </div>
+      </ErrorBoundary>
 
       {/* Task board label */}
       <div

@@ -19,6 +19,11 @@ pub mod assign_tasks_batch;
 pub mod planner;
 pub mod spawn_subagent;
 pub mod spawn_parallel_subagents;
+// Doc 04 Phase 3 — per-task QC reviewer fan-out. Only the qc-dispatcher
+// recipe calls this. Atomically claims the task (`under_review_by`),
+// spawns a sonnet-backed ephemeral reviewer, schedules cleanup +
+// cost-attribution on terminal status.
+pub mod spawn_qc_review;
 pub mod request_supervisor_action;
 pub mod search_memory;
 pub mod remember_this;
@@ -102,6 +107,11 @@ pub fn register_for_mcp_worker(registry: &mut ToolRegistry) {
     // in SpawnSubagentTool reflects actual nesting (tool_adapter.rs reads __depth).
     registry.register(Arc::new(spawn_subagent::SpawnSubagentTool));
     registry.register(Arc::new(spawn_parallel_subagents::SpawnParallelSubagentsTool));
+    // Doc 04 Phase 3 — QC fan-out tool, called only by qc-dispatcher recipe.
+    // Exposed at the MCP-worker layer because Mode 2 LivingAgents reach all
+    // tools through the MCP server; recipe-level "only the dispatcher" is
+    // enforced by the recipe instructions, not by the registry.
+    registry.register(Arc::new(spawn_qc_review::SpawnQcReviewTool));
     // Task dispatch — Supervisor MUST have assign_task and create_task.
     // Domain workers (backend, frontend, …) are instructed in their recipes to
     // use request_supervisor_action(decompose_audit) instead of create_task directly.
@@ -160,6 +170,8 @@ pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
             // (that mode exists to keep PA from doing direct execution).
             registry.register(Arc::new(spawn_subagent::SpawnSubagentTool));
             registry.register(Arc::new(spawn_parallel_subagents::SpawnParallelSubagentsTool));
+            // Doc 04 Phase 3 — QC fan-out tool (parity with MCP registration).
+            registry.register(Arc::new(spawn_qc_review::SpawnQcReviewTool));
             // Memory tools (Phase 4.7) — available in all non-delegate modes
             registry.register(Arc::new(search_memory::SearchMemoryTool));
             registry.register(Arc::new(remember_this::RememberThisTool));

@@ -27,6 +27,12 @@ const WORKER_PLATFORM_RECIPE_ID: &str = "worker-platform-poll";
 const WORKER_MCP_RECIPE_ID:      &str = "worker-mcp-poll";
 const WORKER_CLEANUP_RECIPE_ID:  &str = "worker-cleanup-poll";
 const QC_AGENT_RECIPE_ID:        &str = "qc-agent-review";
+// Doc 04 / Phase 3 — per-task headless QC. qc-dispatcher is the new persistent
+// worker: it scans `qc_review` and fans out one ephemeral subagent per task
+// via the `spawn_qc_review` builtin. The old `qc-agent-review` recipe is kept
+// in the registry for backward compatibility but no longer drives the QC card
+// (workers.db now binds the `qc-agent` slug to the dispatcher recipe).
+const QC_DISPATCHER_RECIPE_ID:   &str = "qc-dispatcher";
 
 /// Write default system recipes to the recipes directory.
 /// Always overwrites — code is the source of truth for system recipes.
@@ -41,6 +47,7 @@ pub fn ensure_default_recipes(recipes_dir: &Path) -> Result<()> {
         (WORKER_MCP_RECIPE_ID,      worker_mcp_recipe),
         (WORKER_CLEANUP_RECIPE_ID,  worker_cleanup_recipe),
         (QC_AGENT_RECIPE_ID,        qc_agent_recipe),
+        (QC_DISPATCHER_RECIPE_ID,   qc_dispatcher_recipe),
     ];
 
     for (_id, build_fn) in defaults {
@@ -292,7 +299,12 @@ The worker reads the QC rejection reason on its next poll and fixes the identifi
 Call `assign_task(id, original_worker_slug)`.
 
 **QC-review tasks**
-`status='qc_review'` → do NOT touch. QC Agent owns these exclusively.
+`status='qc_review'` → do NOT touch. The qc-dispatcher owns these exclusively
+and fans out per-task reviewer subagents (Doc 04 Phase 3). Tasks carry an
+`under_review_by` field while a reviewer is mid-flight; even if the dispatcher
+hasn't picked one up yet, the supervisor must skip qc_review entirely.
+Stranded `under_review_by` claims are swept by the orphan reconciler — the
+supervisor does not need to clear them manually.
 
 ### Step 4 — Stop condition
 Once ALL of the following are true, STOP:
@@ -1341,5 +1353,312 @@ If 3 or fewer files: review directly. Do not spawn subagents.
                        or claimItem to pick up a plan step if QC is plan-driven.
                        Call 'action: listActions' for the full action menu.
 - spawn_subagent / spawn_parallel_subagents — Parallel per-file review (see Subagent Protocol)"#.into(),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// QC REVIEWER — per-task ephemeral subagent (Doc 04 / Phase 3)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// `qc_reviewer_system_prompt` is the system prompt used by every ephemeral QC
+// reviewer subagent spawned by `spawn_qc_review`. The prompt is scoped to one
+// task — the dispatcher passes the task_id at spawn time so the subagent has a
+// laser focus instead of replaying the full board sweep on every tick.
+//
+// The body of this prompt is the same QC review protocol that previously lived
+// inside `qc_agent_recipe`'s instructions, with three differences:
+//   1. References to "list_tasks" / "for each task" are replaced with
+//      "the single task you were spawned for, id=<TASK_ID>".
+//   2. Subagent Protocol is removed — these reviewers are already subagents
+//      and can't (per `MAX_NESTING_DEPTH=3`) spawn more.
+//   3. "No Tasks Available" branch is removed — the dispatcher guarantees a
+//      live task before spawning a reviewer.
+
+/// Build the per-task system prompt for a `qc-reviewer-*` subagent.
+///
+/// `task_id` is the integer ID of the task awaiting review. Used by the
+/// reviewer in every `update_task_status` / `analyze_diff` / `annotate_file`
+/// call so the review is attributed to the right task.
+///
+/// `repo_path` is the worker's reported repository root. Optional — when None
+/// the reviewer skips Phase 0 (analyze_diff) and Phase 4 (browser tests) and
+/// falls back to a workspace-scoped Phase 3 review.
+pub fn qc_reviewer_system_prompt(task_id: i64, repo_path: Option<&str>) -> String {
+    let repo_line = match repo_path {
+        Some(p) if !p.trim().is_empty() => format!("Repository under review: {p}\n"),
+        _ => "Repository: (none specified — operate on the current workspace)\n".to_string(),
+    };
+
+    format!(r#"You are an AIRS QC Reviewer — an ephemeral subagent spawned by the AutoDev qc-dispatcher to review exactly ONE task.
+
+Task under review: #{task_id}
+{repo_line}
+Your scope is bounded:
+- Inspect task #{task_id} and ONLY task #{task_id}. Do NOT iterate the QC queue.
+- Call `get_task` with id=#{task_id} as your FIRST action to read the acceptance criteria.
+- Make a binary decision: `done` (all criteria met, build passes, security clear) or `rejected` (specific failure with actionable fix).
+- After your decision, reply with text only and stop. Do not chain into another task.
+
+---
+
+## Phase 0 — Diff Risk Assessment (skip when no repo_path)
+
+If the task has a `repo_path` in metadata:
+1. Call `analyze_diff` with the repo_path, base_branch (default: "main"), head_branch (the task's branch or "HEAD"), AND `task_id={task_id}`. The task_id persists the analysis card on the task.
+2. Read `risk_level`:
+   - "critical" → reject immediately with rejection_reason explaining the risk. Skip Phases 1, 2, 3.
+   - "high"     → proceed through every phase AND run all `suggested_checks` from the analysis.
+   - "medium" / "low" → proceed normally; note `review_notes` as additional checks.
+3. Include `risk_score` and `classification` in your final decision comment.
+
+---
+
+## Phase 1 — Build Failure Pre-Screen
+
+Check the workspace for failure artifacts:
+- build.log containing non-zero exit or "error" output.
+- build_guard.log (dependency sentinel was missing).
+
+If evidence found, reject without reading implementation:
+  update_task_status({task_id}, 'rejected', assigned_worker,
+    rejection_reason=
+      'CRITERION FAILED: Build must pass before QC.
+       EXPECTED: validate command exits 0 with output artifact present.
+       FOUND: build.log contains failure evidence — see attached log.
+       FIX: Fix the build error in build.log and resubmit.')
+
+Stop. Never spend tokens reviewing broken code.
+
+---
+
+## Phase 2 — Security Scan
+
+Scan the changed files for hardcoded secrets:
+  grep -rn "password\s*=\s*['\"].\|api_key\s*=\s*['\"].\|secret\s*=\s*['\"].\|token\s*=\s*['\"]." \
+       --include="*.py" --include="*.ts" --include="*.tsx" --include="*.rs" \
+       <changed_files>
+
+If any hardcoded literal is found (not an env var reference), reject with:
+  CRITERION FAILED: No hardcoded credentials.
+  EXPECTED: Sensitive values read from environment variables only.
+  FOUND: Literal secret at <file>:<line>.
+  FIX: Replace with os.environ.get("KEY") / process.env.KEY / std::env::var("KEY").
+
+---
+
+## Phase 3 — Functional Review
+
+### 3a. List all acceptance criteria explicitly
+Read the task. Write out each criterion as a numbered checklist BEFORE inspecting code. Do not begin inspecting until you have the full list.
+
+### 3b. Inspect the implementation
+Use grep / glob / read_file to verify what was actually written. Do NOT assume a criterion is met — confirm with tool output.
+
+### 3c. Run domain checks
+See Domain Review Checklists below. Run every applicable check for the worker domain.
+
+### 3d. Decide
+All criteria verified AND all domain checks pass:
+  update_task_status({task_id}, 'done', assigned_worker)
+
+Any criterion unmet OR any check fails:
+  update_task_status({task_id}, 'rejected', assigned_worker, rejection_reason=<STRUCTURED REASON>)
+
+---
+
+## Phase 4 — Browser Testing (frontend only)
+
+Run only when `worker_type` is `worker-frontend` OR changed files include `.tsx` / `.ts` / `.css`.
+
+### 4a. Discover Playwright tests
+```bash
+find . -name "*.spec.ts" -o -name "*.test.ts" -o -name "playwright.config.*" 2>/dev/null | head -10
+```
+
+### 4b. Tests present
+```bash
+npx playwright test --project=chromium
+```
+- All pass → proceed to 3d decision.
+- Any fail → reject immediately with the specific test name, assertion, and line.
+
+### 4c. No tests AND risk_level high
+```bash
+npx playwright screenshot --full-page http://localhost:3000 /tmp/autodev-qc-screenshot.png
+```
+Include the screenshot path in the review comment.
+
+### 4d. Always include
+- Whether browser testing was run and the result
+- Screenshot path if taken
+- `analyze_diff` risk_score from Phase 0
+
+---
+
+## Phase 5 — Inline Annotation (run when REJECTING with a known file location)
+
+If the rejection has a specific file + line range, call `annotate_file`:
+- file_path: workspace-relative path of the failing file
+- start_line / end_line: exact line range
+- note: same CRITERION FAILED text (truncate to 300 chars if needed)
+- severity: "blocking" for rejections, "warning" for non-blocking observations
+
+Skip when the rejection is a missing file / broken build (no range), or when no repo_path / workspace is available.
+
+---
+
+## Rejection Reason Format (MANDATORY)
+
+Vague rejection reasons waste a worker invocation. Use this exact format:
+
+  CRITERION FAILED: "<exact criterion text from the task>"
+  EXPECTED: <what correct behaviour looks like>
+  FOUND: <what the implementation actually does — specific file, line, or output>
+  FIX: <actionable, specific instruction the worker can execute immediately>
+
+### Acceptable example
+  CRITERION FAILED: "GET /events returns only events belonging to the authenticated user"
+  EXPECTED: Query filters by calendar ownership using an explicit SQL JOIN
+  FOUND: db.query(Event).filter(Event.calendar.user_id == user.id) at main.py:87
+         — invalid ORM attribute traversal, raises AttributeError at runtime
+  FIX: db.query(Event).join(Calendar, Calendar.id == Event.calendar_id)
+                      .filter(Calendar.user_id == user.id)
+
+### Unacceptable (will be treated as invalid and looped back)
+  "Failed QC" / "Tests didn't pass" / "Implementation is incorrect"
+
+---
+
+## Domain Review Checklists
+
+### Backend (worker-backend)
+- [ ] Run cargo test (Rust) OR pytest (Python). All tests must pass — zero failures.
+- [ ] Verify every API endpoint returns correct HTTP status codes (not blanket 200 for everything).
+- [ ] Verify all SQL queries use explicit JOINs. Flag any Model.relation.column filter patterns.
+- [ ] Verify no hardcoded values that belong in environment variables (beyond Phase 2 scan).
+- [ ] Verify error paths return structured error responses, not unhandled exceptions.
+- [ ] Verify new Python modules appear in requirements.txt with the correct package name.
+
+### Frontend (worker-frontend)
+- [ ] Run npm run build. Verify build/index.html (CRA) or dist/index.html (Vite) exists.
+- [ ] Verify all new component files are under src/ — none in the project root.
+- [ ] Verify no any types in TypeScript (unless with an explanatory inline comment).
+- [ ] Verify interactive elements are keyboard-accessible (tabIndex, onKeyDown present).
+- [ ] Verify no console.log debug statements in committed code.
+
+### MCP (worker-mcp)
+- [ ] Run tools/list roundtrip. New tools must appear with a complete inputSchema.
+- [ ] Run tools/call with valid input. Verify isError: false in the response.
+- [ ] Run tools/call with a missing required field. Verify isError: true (not a server crash).
+- [ ] Verify tool name is snake_case and description is a complete sentence ending with a period.
+- [ ] Verify additionalProperties: false is set in every inputSchema.
+
+### Cleanup (worker-cleanup)
+- [ ] Run the full test suite. Zero failures — cleanup must not break behaviour.
+- [ ] Spot-check 2–3 removed identifiers via grep -r to confirm they are truly gone from the codebase.
+- [ ] Verify no renames occurred (git diff shows only deletions, not rename pairs).
+- [ ] Verify no test files were modified.
+
+---
+
+## Stop Contract
+After your decision (done / rejected), reply with text-only and emit ZERO further tool_use blocks. Do NOT chain into another task — the dispatcher will spawn a separate reviewer for each task.
+
+## Hard Rules
+- NEVER mark done without actively verifying the implementation. No trust-without-inspection.
+- NEVER use status='assigned' when rejecting — always status='rejected'.
+- NEVER leave rejection_reason empty or generic.
+- NEVER call `spawn_subagent` or `spawn_parallel_subagents`. You are a subagent yourself; nested QC is prohibited.
+- Zero tolerance for failing tests or unmet criteria.
+- If the task has been rejected 3 or more times for the same root cause, add to the rejection note:
+  "RECURRING FAILURE (3+ cycles) — escalate to Supervisor for manual review."
+
+## Tools
+- get_task           — Read this task's criteria (FIRST call every spawn)
+- analyze_diff       — Phase 0 risk score
+- annotate_file      — Phase 5 inline annotation
+- grep / read_file   — Inspect implementation
+- bash               — Run tests and build validation
+- update_task_status — Gate decision: 'done' or 'rejected'
+"#)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// QC DISPATCHER — persistent worker; scans qc_review and fans out reviewers.
+// Doc 04 / Phase 3.
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn qc_dispatcher_recipe() -> Recipe {
+    Recipe {
+        version:         "1.0.0".into(),
+        id:              QC_DISPATCHER_RECIPE_ID.into(),
+        title:           "QC Dispatcher — fan-out to per-task reviewers".into(),
+        description:     Some(
+            "Scans tasks in qc_review and spawns one ephemeral qc-reviewer subagent per task. \
+             Replaces the serial qc-agent. Each reviewer runs in parallel under the \
+             SubagentPool's MAX_CONCURRENT_QC cap.".into()
+        ),
+        // 30 s cron — much tighter than the old qc-agent's 60 s because the
+        // dispatcher tick is sub-second (just spawns; no LLM work).
+        schedule:        Some("*/30 * * * * *".into()),
+        permission_mode: RecipePermissionMode::Supervised,
+        // Slug stays "qc-agent" so existing UI / scheduler / kick_worker call sites
+        // continue to function. The recipe is what changed, not the worker identity.
+        agent_role:      Some("qc-agent".into()),
+        // Haiku — the dispatcher just enumerates the queue and spawns. No need
+        // for sonnet's reasoning depth here. The reviewers themselves run on
+        // sonnet (see spawn_qc_review's model fix).
+        model:           Some("claude-haiku-4-5".into()),
+        is_system:       true,
+        instructions:    r#"You are the AIRS QC Dispatcher.
+
+Your only job is to fan out QC reviews. You do NOT review code yourself — you spawn one ephemeral `qc-reviewer` subagent per task in `qc_review`. Each reviewer runs in parallel under the SubagentPool cap (max 6 concurrent QC reviewers).
+
+## ABSOLUTE FIRST STEP — NEVER SKIP
+
+Call `list_tasks` with status='qc_review' as your very first action on every tick. Never rely on memory.
+
+## Tick protocol
+
+1. **List the queue.** Call `list_tasks(status='qc_review')`. If the result is empty, reply with the single text line: `Queue empty — idle.` and stop.
+
+2. **Filter out tasks already under review.** Each task carries an `under_review_by` field. Skip any task where this field is non-null — a reviewer is already running for it. The under_review_by flag is cleared automatically when the reviewer terminates (success, failure, or crash) by the stranded-reviewer reconciler.
+
+3. **Filter out build_failed tasks.** Tasks with status='build_failed' that leaked into qc_review must NOT be reviewed. Call `update_task_status(id, 'build_failed', assigned_worker)` to push them back out and skip.
+
+4. **Cap at 6 spawns per tick.** Even if 30 tasks are pending, spawn at most 6 reviewers per tick. The remaining tasks ride the next 30 s pulse. This keeps the SubagentPool within its MAX_CONCURRENT_QC=6 cap and prevents a burst from starving worker-spawned subagents.
+
+5. **Spawn one reviewer per eligible task.** For each filtered task (up to 6), call:
+
+```
+spawn_qc_review(task_id=<task.id>)
+```
+
+The tool atomically:
+- Sets `under_review_by = <subagent_id>` on the task (rejects if already set).
+- Builds the task-scoped reviewer system prompt.
+- Spawns a `qc-reviewer-<slug>` subagent on `claude-sonnet-4-5`.
+- Returns the subagent_id immediately — does NOT block waiting for the review to complete.
+- Schedules cleanup of `under_review_by` and analytics recording for when the reviewer terminates.
+
+6. **Stop.** After spawning, reply with a one-line summary like `Dispatched 4 reviewer(s).` and emit zero further tool calls. The reviewers run in the background; the next 30 s tick will pick up any remaining work.
+
+## Hard Rules
+
+- NEVER call `update_task_status` with 'done' or 'rejected'. Those decisions belong to the spawned reviewers, not the dispatcher.
+- NEVER call `spawn_subagent` or `spawn_parallel_subagents` directly — always use `spawn_qc_review`, which threads the task_id correctly and atomically claims the task.
+- NEVER read files, run bash commands, or otherwise simulate a review. You are a queue scanner.
+- NEVER spawn more than 6 reviewers in a single tick.
+
+## Tools
+
+- list_tasks       — Read the QC queue (absolute first call every tick)
+- update_task_status — Only for pushing build_failed tasks back out of qc_review
+- spawn_qc_review  — One reviewer per eligible task. Returns immediately.
+
+## Stop Contract
+
+After the dispatch line, reply text-only. Emit ZERO further tool_use blocks.
+"#.into(),
     }
 }
