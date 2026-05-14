@@ -53,7 +53,7 @@ export function GodNodeBuilding({ node, layout, isSelected, impactData }: GodNod
   return (
     <group position={[x, 0, z]}>
       {/* Main tower body — octagonal (CylinderGeometry with 8 segments) */}
-      <mesh ref={towerRef} position={[0, towerH / 2, 0]} castShadow>
+      <mesh ref={towerRef} position={[0, towerH / 2, 0]} castShadow frustumCulled={false}>
         <cylinderGeometry args={[width * 0.45, width * 0.55, towerH, 8]} />
         <meshStandardMaterial
           color={color}
@@ -65,7 +65,7 @@ export function GodNodeBuilding({ node, layout, isSelected, impactData }: GodNod
       </mesh>
 
       {/* Tapered top cap */}
-      <mesh position={[0, towerH + width * 0.3, 0]} castShadow>
+      <mesh position={[0, towerH + width * 0.3, 0]} castShadow frustumCulled={false}>
         <coneGeometry args={[width * 0.35, width * 0.6, 8]} />
         <meshStandardMaterial
           color={color}
@@ -77,7 +77,7 @@ export function GodNodeBuilding({ node, layout, isSelected, impactData }: GodNod
       </mesh>
 
       {/* Pulsing beacon sphere */}
-      <mesh ref={beaconRef} position={[0, towerH + width * 0.7, 0]}>
+      <mesh ref={beaconRef} position={[0, towerH + width * 0.7, 0]} frustumCulled={false}>
         <sphereGeometry args={[width * 0.25, 8, 8]} />
         <meshStandardMaterial
           color={color}

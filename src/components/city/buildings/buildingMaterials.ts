@@ -3,17 +3,17 @@ import * as THREE from 'three'
 
 export interface MaterialDef { color: string; emissive: string; metalness: number; roughness: number }
 
-// Base palette
+// Base palette — colors at 60–80% lightness so buildings are readable against dark ground
 const MATERIAL_DEFS: Record<string, MaterialDef> = {
-  Function:   { color: '#2a4a7f', emissive: '#0a1a3a', metalness: 0.3, roughness: 0.6 },
-  Class:      { color: '#3d7a3d', emissive: '#0f1f0f', metalness: 0.4, roughness: 0.5 },
-  Module:     { color: '#5a3d7a', emissive: '#1a0f2a', metalness: 0.2, roughness: 0.7 },
-  Test:       { color: '#f28e2b', emissive: '#3a2000', metalness: 0.1, roughness: 0.8 },
-  Type:       { color: '#4d8080', emissive: '#0f2020', metalness: 0.5, roughness: 0.4 },
-  Interface:  { color: '#806644', emissive: '#201500', metalness: 0.3, roughness: 0.6 },
-  Constant:   { color: '#806666', emissive: '#200f0f', metalness: 0.2, roughness: 0.7 },
-  Variable:   { color: '#668080', emissive: '#0f2020', metalness: 0.2, roughness: 0.7 },
-  default:    { color: '#404040', emissive: '#0a0a0a', metalness: 0.2, roughness: 0.8 },
+  Function:   { color: '#5588dd', emissive: '#1a3a7a', metalness: 0.3, roughness: 0.55 },
+  Class:      { color: '#55bb55', emissive: '#1a551a', metalness: 0.4, roughness: 0.50 },
+  Module:     { color: '#8855cc', emissive: '#331166', metalness: 0.2, roughness: 0.65 },
+  Test:       { color: '#ff9933', emissive: '#553300', metalness: 0.1, roughness: 0.75 },
+  Type:       { color: '#44aaaa', emissive: '#114444', metalness: 0.5, roughness: 0.40 },
+  Interface:  { color: '#cc9944', emissive: '#553311', metalness: 0.3, roughness: 0.55 },
+  Constant:   { color: '#cc6677', emissive: '#441122', metalness: 0.2, roughness: 0.65 },
+  Variable:   { color: '#77aacc', emissive: '#1a3a55', metalness: 0.2, roughness: 0.65 },
+  default:    { color: '#7a7a8a', emissive: '#1a1a22', metalness: 0.2, roughness: 0.75 },
 }
 
 // Cache materials so we don't recreate them every frame

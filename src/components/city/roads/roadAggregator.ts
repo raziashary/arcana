@@ -54,7 +54,7 @@ export function aggregateImportRoads(
       to: tgtCenter,
       width: Math.max(2.0, Math.log(1 + count) * 2.5),
       laneCount: Math.min(count, 6),
-      color: '#4477FF',
+      color: '#1a1f2e',
       srcCommunity: srcComm,
       tgtCommunity: tgtComm,
       edgeCount: count,

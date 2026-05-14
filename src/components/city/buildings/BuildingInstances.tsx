@@ -96,6 +96,7 @@ function KindInstances({ nodes, kind, layout, testedBySet, selectedNodeId, impac
       args={[undefined, undefined, count]}
       castShadow
       receiveShadow
+      frustumCulled={false}
     >
       <boxGeometry args={[1, 1, 1]} />
       <meshStandardMaterial

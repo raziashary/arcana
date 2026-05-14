@@ -13,37 +13,36 @@ interface GroundRoadProps {
 function GroundRoad({ road }: GroundRoadProps) {
   const { from, to, width, color } = road
 
-  const geometry = useMemo(() => {
+  const { midX, midZ, length, angle } = useMemo(() => {
     const start = new THREE.Vector3(...from)
     const end = new THREE.Vector3(...to)
     const dir = end.clone().sub(start)
-    const length = dir.length()
-
-    const geo = new THREE.PlaneGeometry(length, width)
-    geo.rotateX(-Math.PI / 2)  // lay flat
-
-    // Rotate to point from start to end
-    const angle = Math.atan2(dir.z, dir.x)
-    geo.rotateY(-angle)
-
-    // Center on midpoint
     const mid = start.clone().add(end).multiplyScalar(0.5)
-    geo.translate(mid.x, 0.04, mid.z)
-
-    return geo
-  }, [from, to, width])
+    return {
+      midX: mid.x,
+      midZ: mid.z,
+      length: dir.length(),
+      angle: Math.atan2(dir.z, dir.x),
+    }
+  }, [from, to])
 
   return (
-    <mesh geometry={geometry} receiveShadow>
+    <mesh
+      position={[midX, 0.08, midZ]}
+      rotation={[0, -angle, 0]}
+      receiveShadow
+      frustumCulled={false}
+    >
+      {/* Thin box so it has visible side faces at oblique camera angles */}
+      <boxGeometry args={[length, 0.06, width]} />
       <meshStandardMaterial
         color={color}
-        emissive="#1a2a5a"
-        emissiveIntensity={0.5}
+        emissive="#2244aa"
+        emissiveIntensity={0.4}
         transparent
-        opacity={0.65}
-        roughness={0.7}
-        metalness={0.1}
-        side={THREE.DoubleSide}
+        opacity={0.90}
+        roughness={0.6}
+        metalness={0.2}
         depthWrite={false}
       />
     </mesh>

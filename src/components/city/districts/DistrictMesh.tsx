@@ -54,30 +54,30 @@ export function DistrictMesh({ district }: DistrictMeshProps) {
 
       {/* Boundary walls — thin raised box on each edge */}
       {/* North wall */}
-      <mesh position={[centerX, 0.15, z]} castShadow>
-        <boxGeometry args={[width, 0.3, 0.12]} />
-        <meshStandardMaterial color={wallColor} transparent opacity={0.35} roughness={0.6} />
+      <mesh position={[centerX, 0.75, z]} castShadow frustumCulled={false}>
+        <boxGeometry args={[width, 1.5, 0.15]} />
+        <meshStandardMaterial color={wallColor} emissive={wallColor} emissiveIntensity={0.15} transparent opacity={0.50} roughness={0.6} />
       </mesh>
       {/* South wall */}
-      <mesh position={[centerX, 0.15, z + depth]} castShadow>
-        <boxGeometry args={[width, 0.3, 0.12]} />
-        <meshStandardMaterial color={wallColor} transparent opacity={0.35} roughness={0.6} />
+      <mesh position={[centerX, 0.75, z + depth]} castShadow frustumCulled={false}>
+        <boxGeometry args={[width, 1.5, 0.15]} />
+        <meshStandardMaterial color={wallColor} emissive={wallColor} emissiveIntensity={0.15} transparent opacity={0.50} roughness={0.6} />
       </mesh>
       {/* West wall */}
-      <mesh position={[x, 0.15, centerZ]} castShadow>
-        <boxGeometry args={[0.12, 0.3, depth]} />
-        <meshStandardMaterial color={wallColor} transparent opacity={0.35} roughness={0.6} />
+      <mesh position={[x, 0.75, centerZ]} castShadow frustumCulled={false}>
+        <boxGeometry args={[0.15, 1.5, depth]} />
+        <meshStandardMaterial color={wallColor} emissive={wallColor} emissiveIntensity={0.15} transparent opacity={0.50} roughness={0.6} />
       </mesh>
       {/* East wall */}
-      <mesh position={[x + width, 0.15, centerZ]} castShadow>
-        <boxGeometry args={[0.12, 0.3, depth]} />
-        <meshStandardMaterial color={wallColor} transparent opacity={0.35} roughness={0.6} />
+      <mesh position={[x + width, 0.75, centerZ]} castShadow frustumCulled={false}>
+        <boxGeometry args={[0.15, 1.5, depth]} />
+        <meshStandardMaterial color={wallColor} emissive={wallColor} emissiveIntensity={0.15} transparent opacity={0.50} roughness={0.6} />
       </mesh>
 
       {/* District name billboard */}
       <Billboard position={[centerX, 4.0, centerZ]} follow lockX={false} lockY={false} lockZ={false}>
         <Text
-          fontSize={Math.max(3.0, Math.min(width, depth) * 0.18)}
+          fontSize={Math.max(4.0, Math.min(width, depth) * 0.20)}
           color={color}
           fillOpacity={0.9}
           anchorX="center"
