@@ -199,7 +199,8 @@ impl OrchestratorClient {
 
         let agents: Vec<serde_json::Value> = match list_resp {
             Ok(resp) if resp.status().is_success() => {
-                resp.json().await.unwrap_or_default()
+                let raw: serde_json::Value = resp.json().await.unwrap_or_default();
+                parse_agents_list(raw)
             }
             _ => return (false, Self::FLEET_AGENTS.iter().map(|s| s.to_string()).collect()),
         };
@@ -221,8 +222,43 @@ impl OrchestratorClient {
         } else {
             debug!("[OrchestratorClient] Fleet verification pending — missing: {:?}", missing);
         }
-        
+
         (ready, missing)
+    }
+
+    /// Fetch a `slug → llm_model` map from the running core-orchestrator.
+    ///
+    /// This is the most reliable source of truth for "what model is this agent
+    /// actually using right now" — it bypasses YAML reads (which depend on path
+    /// resolution) and reflects any live PUT /config writes immediately.
+    ///
+    /// Returns an empty map on any failure (not authenticated, network error,
+    /// orchestrator down). Callers should fall back to their stored DB model
+    /// value in that case.
+    pub async fn fetch_agent_models(&self) -> std::collections::HashMap<String, String> {
+        let mut out = std::collections::HashMap::new();
+        if self.ensure_authenticated().await.is_err() {
+            return out;
+        }
+        let list_url = format!("{}/api/agents", self.base_url);
+        let resp = match self.client
+            .get(&list_url)
+            .header("Authorization", self.get_auth_header())
+            .send()
+            .await
+        {
+            Ok(r) if r.status().is_success() => r,
+            _ => return out,
+        };
+        let raw: serde_json::Value = resp.json().await.unwrap_or_default();
+        for agent in parse_agents_list(raw) {
+            let name = agent["name"].as_str().unwrap_or("");
+            let model = agent["llm_model"].as_str().unwrap_or("");
+            if !name.is_empty() && !model.is_empty() {
+                out.insert(name.to_string(), model.to_string());
+            }
+        }
+        out
     }
 
     // ─── Health ──────────────────────────────────────────────────────────────
@@ -471,10 +507,9 @@ impl OrchestratorClient {
             .map_err(|e| AutoDevError::Agent(format!("GET /api/agents: {e}")))?;
 
         if list_resp.status().is_success() {
-            let agents: Vec<serde_json::Value> = list_resp
-                .json()
-                .await
-                .unwrap_or_default();
+            // Normalise response: handles both raw `[...]` and wrapped `{"agents":[...]}`
+            let raw: serde_json::Value = list_resp.json().await.unwrap_or_default();
+            let agents = parse_agents_list(raw);
 
             for agent in &agents {
                 let name = agent["name"].as_str().unwrap_or("");
@@ -557,6 +592,45 @@ impl OrchestratorClient {
         if !create_resp.status().is_success() {
             let status = create_resp.status();
             let body   = create_resp.text().await.unwrap_or_default();
+
+            // HTTP 500 with "already exists" means the agent's YAML file is on
+            // disk in `config/agents/{slug}.yaml` but the in-memory AgentRegistry
+            // hasn't loaded it yet, so neither GET /api/agents nor
+            // GET /api/agents/{slug} can see it. The orchestrator's own error
+            // message confirms the situation:
+            //   "Agent 'qc-agent' already exists. Use PUT /api/agents/qc-agent/config
+            //    to update, or DELETE /api/agents/qc-agent then recreate."
+            //
+            // Because the orchestrator deterministically derives `agent_id` from
+            // the agent's name (slug), we can trust `agent_id == slug` here and
+            // skip the GET-recovery round-trip entirely. We then fire a
+            // PUT /config which both (a) reloads the YAML into the live registry
+            // and (b) reconciles the model, so subsequent /invoke calls hit a
+            // populated agent.
+            if status.as_u16() == 500 && body.contains("already exists") {
+                tracing::warn!(
+                    "[OrchestratorClient] POST create returned 500 'already exists' for '{slug}' \
+                     — YAML on disk but agent not in live registry; forcing load via PUT /config"
+                );
+
+                // Force-load via PUT /api/agents/{slug}/config — this rewrites the
+                // YAML with our requested model AND triggers the orchestrator to
+                // reload the agent into the AgentRegistry.
+                if let Err(e) = self.update_agent_model(slug, orch_model).await {
+                    tracing::warn!(
+                        "[OrchestratorClient] force-load PUT /config for '{slug}' failed: {e} \
+                         — proceeding with slug-as-id; next /invoke may 404 until orch reloads"
+                    );
+                } else {
+                    debug!(
+                        "[OrchestratorClient] force-loaded '{slug}' via PUT /config \
+                         (model='{orch_model}')"
+                    );
+                }
+
+                return Ok(slug.to_string());
+            }
+
             return Err(AutoDevError::Agent(format!(
                 "agent creation failed (HTTP {status}): {}",
                 &body[..body.len().min(400)]
@@ -764,6 +838,13 @@ impl OrchestratorClient {
     pub async fn update_agent_model_by_slug(&self, slug: &str, model: &str) -> Result<bool> {
         self.ensure_authenticated().await?;
 
+        // Translate to orchestrator registry key before comparing or pushing.
+        // `model` arrives in Anthropic API format ("claude-sonnet-4-5");
+        // `llm_model` from GET /api/agents is in orch format ("claude-4-5-sonnet").
+        // Without this translation the equality check always fails and we push a
+        // no-op update every single time the function is called.
+        let orch_model = to_orch_model_key(model);
+
         // Look up agent by name
         let list_url = format!("{}/api/agents", self.base_url);
         let list_resp = self.client
@@ -777,10 +858,9 @@ impl OrchestratorClient {
             return Err(AutoDevError::Agent("Failed to list agents from orchestrator".into()));
         }
 
-        let agents: Vec<serde_json::Value> = list_resp
-            .json()
-            .await
-            .unwrap_or_default();
+        // Normalise response: handles both raw `[...]` and wrapped `{"agents":[...]}`
+        let raw: serde_json::Value = list_resp.json().await.unwrap_or_default();
+        let agents = parse_agents_list(raw);
 
         // Find agent by slug
         let agent_info = agents.iter().find(|a| {
@@ -802,21 +882,21 @@ impl OrchestratorClient {
             }
         };
 
-        // Only update if model actually changed
-        if current_model == model {
-            debug!("[OrchestratorClient] agent '{slug}' already on model '{model}' — no change needed");
+        // Only update if model actually changed (compare in orch key format)
+        if current_model == orch_model {
+            debug!("[OrchestratorClient] agent '{slug}' already on model '{orch_model}' — no change needed");
             return Ok(true);
         }
 
-        // Push the model update
-        info!("[OrchestratorClient] Pushing model change for '{slug}': '{current_model}' → '{model}'");
-        self.update_agent_model(&agent_id, model).await?;
+        // Push the model update using the translated key
+        info!("[OrchestratorClient] Pushing model change for '{slug}': '{current_model}' → '{orch_model}'");
+        self.update_agent_model(&agent_id, orch_model).await?;
 
         // Update cache to reflect new model
         self.agent_cache
             .lock()
             .unwrap()
-            .insert(slug.to_string(), (agent_id, model.to_string()));
+            .insert(slug.to_string(), (agent_id, orch_model.to_string()));
 
         Ok(true)
     }
@@ -1090,9 +1170,9 @@ impl OrchestratorClient {
             )));
         }
 
-        let agents: Vec<serde_json::Value> = resp.json().await.unwrap_or_default();
-        let slugs = agents
-            .iter()
+        let raw: serde_json::Value = resp.json().await.unwrap_or_default();
+        let slugs = parse_agents_list(raw)
+            .into_iter()
             .filter_map(|a| a["name"].as_str().map(|s| s.to_string()))
             .filter(|n| n.starts_with(crate::subagent::slug::SUBAGENT_PREFIX))
             .collect();
@@ -1108,16 +1188,46 @@ impl Default for OrchestratorClient {
 
 // ─── Model name translation ────────────────────────────────────────────────────
 //
-// The Rust app stores model IDs using Anthropic's direct API format
-// (e.g. "claude-haiku-4-5"), while the core-orchestrator's model registry
-// uses a version-model key convention (e.g. "claude-4-5-haiku").
-// This function translates at the API boundary so the orchestrator accepts
-// the model without a 500 "not found in registry" error.
+// Most model IDs stored in workers.db / the YAML files already match the
+// core-orchestrator registry keys defined in:
+//   submodules/core-orchestrator/src/llm/providers/model_registry.py
+//
+// The only exception is the haiku 4.5 model: AutoDev's default workers were
+// seeded with "claude-haiku-4-5" (Anthropic's direct-API name) but the
+// orchestrator registry key is "claude-4-5-haiku".  Everything else —
+// "claude-sonnet-4-5", "claude-sonnet-4-5-thinking", "deepseek-v4-pro", etc. —
+// uses the registry key directly and must pass through unchanged.
 fn to_orch_model_key(model: &str) -> &str {
     match model {
-        "claude-haiku-4-5"  => "claude-4-5-haiku",
-        "claude-sonnet-4-5" => "claude-4-5-sonnet",
-        "claude-opus-4-5"   => "claude-4-5-opus",
-        other               => other,
+        // Legacy seed value → correct registry key
+        "claude-haiku-4-5"          => "claude-4-5-haiku",
+        "claude-haiku-4-5-thinking" => "claude-4-5-haiku-thinking",
+        // Everything else is already a valid registry key; pass through as-is.
+        other => other,
+    }
+}
+
+// ─── Response shape normaliser ─────────────────────────────────────────────────
+//
+// `GET /api/agents` may return:
+//   • A raw JSON array:          `[{...}, ...]`
+//   • A wrapped object:          `{"agents": [{...}, ...]}`
+//
+// Deserialising directly as `Vec<serde_json::Value>` silently yields an empty
+// vec for the wrapped format (via `unwrap_or_default()`), causing every tick to
+// fall through to POST create → HTTP 500 "already exists".
+// This helper normalises both shapes into a flat Vec.
+fn parse_agents_list(json: serde_json::Value) -> Vec<serde_json::Value> {
+    match json {
+        serde_json::Value::Array(arr) => arr,
+        serde_json::Value::Object(ref map) => {
+            for key in &["agents", "data", "items", "results"] {
+                if let Some(serde_json::Value::Array(arr)) = map.get(*key) {
+                    return arr.clone();
+                }
+            }
+            vec![]
+        }
+        _ => vec![],
     }
 }

@@ -810,48 +810,44 @@ pub fn resolve_orchestrator_path(explicit: Option<&str>) -> std::result::Result<
         }
     }
 
-    // Check NSIS installed location (Windows: %LOCALAPPDATA%\AutoDev\resources\sidecars\)
-    #[cfg(target_os = "windows")]
+    // In debug builds (dev mode) skip the installed-copy paths entirely.
+    // A developer who also has AutoDev installed has the NSIS copy in
+    // %LOCALAPPDATA%\AutoDev which would resolve first, causing all YAML
+    // reads/writes to hit the stale installed bundle instead of the live
+    // submodule the running orchestrator is actually reading from.
+    // In release builds these paths are correct and should be checked first.
+    #[cfg(not(debug_assertions))]
     {
-        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-            let nsis_path = PathBuf::from(local_app_data)
-                .join("AutoDev")
-                .join("resources")
-                .join("sidecars")
-                .join("core-orchestrator");
-            if nsis_path.exists() {
-                info!("[SidecarManager] Found core-orchestrator at NSIS installed location: {}", nsis_path.display());
-                return Ok(nsis_path);
+        // Check NSIS installed location (Windows: %LOCALAPPDATA%\AutoDev\resources\sidecars\)
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+                let nsis_path = PathBuf::from(local_app_data)
+                    .join("AutoDev")
+                    .join("resources")
+                    .join("sidecars")
+                    .join("core-orchestrator");
+                if nsis_path.exists() {
+                    info!("[SidecarManager] Found core-orchestrator at NSIS installed location: {}", nsis_path.display());
+                    return Ok(nsis_path);
+                }
             }
         }
-    }
 
-    // Check MSI installed location (Windows: %LOCALAPPDATA%\Programs\autodev\sidecars\) - legacy
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-            let installed_path = PathBuf::from(local_app_data)
-                .join("Programs")
-                .join("autodev")
-                .join("sidecars")
-                .join("core-orchestrator");
-            if installed_path.exists() {
-                info!("[SidecarManager] Found core-orchestrator at MSI installed location: {}", installed_path.display());
-                return Ok(installed_path);
+        // Check MSI installed location (Windows: %LOCALAPPDATA%\Programs\autodev\sidecars\) - legacy
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+                let installed_path = PathBuf::from(local_app_data)
+                    .join("Programs")
+                    .join("autodev")
+                    .join("sidecars")
+                    .join("core-orchestrator");
+                if installed_path.exists() {
+                    info!("[SidecarManager] Found core-orchestrator at MSI installed location: {}", installed_path.display());
+                    return Ok(installed_path);
+                }
             }
-        }
-    }
-
-    // Fallback to relative paths for dev environment
-    for rel in &[
-        "submodules/core-orchestrator",
-        "../submodules/core-orchestrator",
-        "../../submodules/core-orchestrator",
-        "../../../submodules/core-orchestrator",
-    ] {
-        let pb = PathBuf::from(rel);
-        if pb.exists() {
-            return Ok(pb.canonicalize().unwrap_or(pb));
         }
     }
 
@@ -894,48 +890,40 @@ pub fn resolve_memory_path(explicit: Option<&str>) -> std::result::Result<PathBu
         }
     }
 
-    // Check NSIS installed location (Windows: %LOCALAPPDATA%\AutoDev\resources\sidecars\)
-    #[cfg(target_os = "windows")]
+    // In debug builds (dev mode) skip the installed-copy paths entirely — same
+    // reasoning as resolve_orchestrator_path above.
+    #[cfg(not(debug_assertions))]
     {
-        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-            let nsis_path = PathBuf::from(local_app_data)
-                .join("AutoDev")
-                .join("resources")
-                .join("sidecars")
-                .join("memory-mcp-server");
-            if nsis_path.exists() {
-                info!("[SidecarManager] Found memory-mcp-server at NSIS installed location: {}", nsis_path.display());
-                return Ok(nsis_path);
+        // Check NSIS installed location (Windows: %LOCALAPPDATA%\AutoDev\resources\sidecars\)
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+                let nsis_path = PathBuf::from(local_app_data)
+                    .join("AutoDev")
+                    .join("resources")
+                    .join("sidecars")
+                    .join("memory-mcp-server");
+                if nsis_path.exists() {
+                    info!("[SidecarManager] Found memory-mcp-server at NSIS installed location: {}", nsis_path.display());
+                    return Ok(nsis_path);
+                }
             }
         }
-    }
 
-    // Check MSI installed location (Windows: %LOCALAPPDATA%\Programs\autodev\sidecars\) - legacy
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-            let installed_path = PathBuf::from(local_app_data)
-                .join("Programs")
-                .join("autodev")
-                .join("sidecars")
-                .join("memory-mcp-server");
-            if installed_path.exists() {
-                info!("[SidecarManager] Found memory-mcp-server at MSI installed location: {}", installed_path.display());
-                return Ok(installed_path);
+        // Check MSI installed location (Windows: %LOCALAPPDATA%\Programs\autodev\sidecars\) - legacy
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+                let installed_path = PathBuf::from(local_app_data)
+                    .join("Programs")
+                    .join("autodev")
+                    .join("sidecars")
+                    .join("memory-mcp-server");
+                if installed_path.exists() {
+                    info!("[SidecarManager] Found memory-mcp-server at MSI installed location: {}", installed_path.display());
+                    return Ok(installed_path);
+                }
             }
-        }
-    }
-
-    // Fallback to relative paths for dev environment
-    for rel in &[
-        "submodules/memory-mcp-server",
-        "../submodules/memory-mcp-server",
-        "../../submodules/memory-mcp-server",
-        "../../../submodules/memory-mcp-server",
-    ] {
-        let pb = PathBuf::from(rel);
-        if pb.exists() {
-            return Ok(pb.canonicalize().unwrap_or(pb));
         }
     }
 

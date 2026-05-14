@@ -18,6 +18,50 @@ use autodev_lib::mcp_server::health_monitor::McpHealthMonitor;
 use autodev_lib::updater::{UpdaterState, UpdateChannel, start_background_check};
 
 fn main() {
+    // ─── .env loading ────────────────────────────────────────────────────────
+    // Load `.env` from the npm/project root so AUTODEV_SIDECAR_PATH and
+    // AUTODEV_MEMORY_PATH (single source of truth for sidecar paths in dev)
+    // are available to every subsystem before any path resolution runs.
+    //
+    // dotenvy walks up from CWD looking for `.env`. With `cargo tauri dev`
+    // CWD is the project root, which is where `.env` lives.
+    let dotenv_loaded = dotenvy::dotenv().ok();
+    if let Some(ref p) = dotenv_loaded {
+        eprintln!("[AutoDev] Loaded .env from: {}", p.display());
+
+        // Canonicalize the sidecar path env vars so that downstream callers
+        // never depend on the CWD at the moment of resolution. Relative paths
+        // in `.env` (e.g. `./submodules/core-orchestrator`) are resolved
+        // against `.env`'s parent directory — the project root.
+        if let Some(env_dir) = p.parent() {
+            for key in &["AUTODEV_SIDECAR_PATH", "AUTODEV_MEMORY_PATH"] {
+                if let Ok(val) = std::env::var(key) {
+                    let pb = std::path::PathBuf::from(&val);
+                    let resolved = if pb.is_relative() {
+                        env_dir.join(&pb)
+                    } else {
+                        pb
+                    };
+                    match resolved.canonicalize() {
+                        Ok(abs) => {
+                            // Strip Windows \\?\ verbatim prefix so paths render cleanly in logs.
+                            let abs_str = abs.to_string_lossy()
+                                .trim_start_matches(r"\\?\")
+                                .to_string();
+                            std::env::set_var(key, &abs_str);
+                            eprintln!("[AutoDev] {key}={abs_str}");
+                        }
+                        Err(e) => {
+                            eprintln!("[AutoDev] WARN {key}='{val}' could not be resolved: {e}");
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        eprintln!("[AutoDev] No .env file found — relying on system environment variables");
+    }
+
     // Capture panics and write them to both stderr and the tracing log file
     // before the process exits. This makes the "app restart" root cause visible.
     std::panic::set_hook(Box::new(|info| {

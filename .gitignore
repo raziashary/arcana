@@ -3,6 +3,7 @@ sidecars/
 dist/
 target/
 scripts/
+src-tauri/resources/sidecars/
 
 # Python
 *.pyc

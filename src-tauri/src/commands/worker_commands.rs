@@ -47,9 +47,29 @@ pub struct UpdateModelSyncResult {
 // ─── Commands ─────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn list_workers() -> Result<Vec<Worker>> {
+pub async fn list_workers(
+    orch_client: State<'_, Arc<OrchestratorClient>>,
+) -> Result<Vec<Worker>> {
     let mut workers = WorkersDb::open()?.list()?;
-    // Overlay model values from YAML — the YAML is authoritative; SQLite seed may be stale.
+
+    // Source 1 (preferred): query the live core-orchestrator over HTTP. This is
+    // the most reliable source — it reflects any PUT /config writes immediately
+    // and bypasses all file-path resolution.
+    if orch_client.is_healthy().await {
+        let api_models = orch_client.fetch_agent_models().await;
+        if !api_models.is_empty() {
+            for worker in &mut workers {
+                if let Some(model) = api_models.get(&worker.slug) {
+                    worker.model = model.clone();
+                }
+            }
+            return Ok(workers);
+        }
+    }
+
+    // Source 2 (fallback): read llm.model directly from the agent YAML files.
+    // Used when the orchestrator is offline (e.g. Demo Mode, or first launch
+    // before the sidecar is up).
     if let Ok(orch_dir) = resolve_orchestrator_path(None) {
         let agents_dir = orch_dir.join("config").join("agents");
         for worker in &mut workers {
@@ -283,18 +303,43 @@ fn write_yaml_model(agents_dir: &Path, slug: &str, model: &str) -> Result<()> {
     Ok(())
 }
 
-/// Derive the LiteLLM provider name from a model ID.
+/// Derive the LiteLLM provider name from a model registry key.
+/// Keys must match the entries in core-orchestrator/src/llm/providers/model_registry.py.
 fn model_to_provider(model: &str) -> &str {
+    // NVIDIA NIM managed models all use the `-nvidia` suffix.
+    // Check this first to prevent the deepseek/kimi prefix rules from claiming them.
+    if model.ends_with("-nvidia") {
+        return "nvidia";
+    }
+
+    // Standard prefix-based routing
     if model.starts_with("claude") {
         "anthropic"
-    } else if model.starts_with("deepseek") {
-        "deepseek"
-    } else if model.starts_with("gpt") || model.starts_with("o1") || model.starts_with("o3") || model.starts_with("o4") {
+    } else if model.starts_with("gpt-5")
+           || model.starts_with("gpt-4")
+           || model.starts_with("gpt-3")
+           || model.starts_with("o1-")
+           || model.starts_with("o3")
+           || model.starts_with("o4-") {
         "openai"
     } else if model.starts_with("gemini") {
         "google"
-    } else if model.starts_with("llama") || model.starts_with("mistral") || model.starts_with("codestral") {
-        "ollama"
+    } else if model.starts_with("grok") {
+        "xai"
+    } else if model.starts_with("deepseek") {
+        "deepseek"
+    } else if model.starts_with("kimi") {
+        "moonshot"
+    } else if model.starts_with("sea-lion") {
+        "sealion"
+    // Groq-hosted: Llama models, gpt-oss, and the groq-specific qwen variant
+    } else if model.starts_with("llama")
+           || model.starts_with("gpt-oss")
+           || model == "qwen3-32b" {
+        "groq"
+    // Alibaba Dashscope Qwen (qwen3-max, qwen-*)
+    } else if model.starts_with("qwen") {
+        "dashscope"
     } else {
         "openai"
     }

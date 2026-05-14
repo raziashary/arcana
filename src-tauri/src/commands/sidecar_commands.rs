@@ -488,10 +488,14 @@ pub fn get_submodule_paths() -> Vec<SubmoduleStatus> {
     let orch_status = match &orch_result {
         Ok(path) => {
             let path_str = path.display().to_string();
-            let source = if path_str.contains("Programs") {
-                "installed".to_string()
-            } else if std::env::var("AUTODEV_SIDECAR_PATH").is_ok() {
+            // Priority mirrors resolve_orchestrator_path: env var wins, then
+            // check for installed-copy markers, then classify as relative/bundled.
+            let source = if std::env::var("AUTODEV_SIDECAR_PATH").is_ok() {
                 "env_var".to_string()
+            } else if path_str.contains("AutoDev") && path_str.contains("sidecars") {
+                "installed".to_string()
+            } else if path_str.contains("Programs") {
+                "installed".to_string()
             } else {
                 "relative".to_string()
             };
@@ -517,10 +521,12 @@ pub fn get_submodule_paths() -> Vec<SubmoduleStatus> {
     let memory_status = match &memory_result {
         Ok(path) => {
             let path_str = path.display().to_string();
-            let source = if path_str.contains("Programs") {
-                "installed".to_string()
-            } else if std::env::var("AUTODEV_MEMORY_PATH").is_ok() {
+            let source = if std::env::var("AUTODEV_MEMORY_PATH").is_ok() {
                 "env_var".to_string()
+            } else if path_str.contains("AutoDev") && path_str.contains("sidecars") {
+                "installed".to_string()
+            } else if path_str.contains("Programs") {
+                "installed".to_string()
             } else {
                 "relative".to_string()
             };

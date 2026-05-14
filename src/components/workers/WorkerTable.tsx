@@ -23,32 +23,105 @@ interface Toast {
 }
 
 // ─── Available models ────────────────────────────────────────────────────────
-// Must match registry keys in core-orchestrator/src/llm/providers/model_registry.py
+// Registry keys from core-orchestrator/src/llm/providers/model_registry.py
+// Grouped by provider for the <optgroup> selector.
 
-const AVAILABLE_MODELS = [
-  // Anthropic Claude (follows claude-{version}-{tier} pattern)
-  'claude-4-5-haiku',
-  'claude-4-5-haiku-thinking',
-  'claude-sonnet-4-5',
-  'claude-sonnet-4-5-thinking',
-  'claude-4-1-opus',
-  'claude-4-1-opus-thinking',
-  // OpenAI GPT
-  'gpt-4.1',
-  'gpt-4.1-mini',
-  'gpt-4o',
-  'gpt-4o-mini',
-  // Google Gemini (follows gemini-{version}-{tier} pattern)
-  'gemini-3-pro',
-  'gemini-3-pro-thinking',
-  'gemini-3-flash',
-  'gemini-3-flash-thinking',
-  'gemini-2.5-pro',
-  'gemini-2.5-flash',
-  // DeepSeek v4
-  'deepseek-v4-flash',
-  'deepseek-v4-pro',
+const MODEL_GROUPS: Array<{ label: string; models: string[] }> = [
+  {
+    label: 'Anthropic Claude',
+    models: [
+      'claude-4-5-haiku',
+      'claude-4-5-haiku-thinking',
+      'claude-sonnet-4-5',
+      'claude-sonnet-4-5-thinking',
+      'claude-4-1-opus',
+      'claude-4-1-opus-thinking',
+      'claude-4-opus',
+      'claude-4-opus-thinking',
+      'claude-4-sonnet',
+      'claude-4-sonnet-thinking',
+    ],
+  },
+  {
+    label: 'OpenAI GPT',
+    models: [
+      'gpt-5',
+      'gpt-5-mini',
+      'gpt-4.1',
+      'gpt-4.1-mini',
+      'gpt-4.1-nano',
+      'gpt-4o',
+      'gpt-4o-mini',
+      'o3',
+      'o4-mini',
+    ],
+  },
+  {
+    label: 'Google Gemini',
+    models: [
+      'gemini-3-pro',
+      'gemini-3-pro-thinking',
+      'gemini-3-flash',
+      'gemini-3-flash-thinking',
+      'gemini-2.5-pro',
+      'gemini-2.5-flash',
+    ],
+  },
+  {
+    label: 'DeepSeek',
+    models: [
+      'deepseek-v4-flash',
+      'deepseek-v4-pro',
+    ],
+  },
+  {
+    label: 'xAI Grok',
+    models: [
+      'grok-3-mini-beta',
+      'grok-3-mini-beta-thinking',
+    ],
+  },
+  {
+    label: 'Moonshot / Kimi',
+    models: [
+      'kimi-k2',
+      'kimi-k2.5',
+      'kimi-k2-thinking',
+    ],
+  },
+  {
+    label: 'Groq (Llama)',
+    models: [
+      'llama-3.3-70b',
+      'llama-3.1-8b',
+    ],
+  },
+  {
+    label: 'SEA-LION (AI Singapore)',
+    models: [
+      'sea-lion-llama-3.5-70b-Reasoning',
+      'sea-lion-llama-3-70b',
+      'sea-lion-gemma-4-27b',
+    ],
+  },
+  {
+    label: 'Dashscope / Qwen',
+    models: [
+      'qwen3-max',
+    ],
+  },
+  {
+    label: 'NVIDIA NIM',
+    models: [
+      'kimi-k2.5-nvidia',
+      'qwen-3.5-nvidia',
+      'deepseek-v3.2-nvidia',
+    ],
+  },
 ]
+
+// Flat set for membership checks
+const ALL_KNOWN_MODELS = new Set(MODEL_GROUPS.flatMap(g => g.models))
 
 // ─── Status Dot ───────────────────────────────────────────────────────────────
 
@@ -157,23 +230,43 @@ function WorkerRow({
       <td style={{ padding: '8px 10px', fontSize: 11, color: 'var(--text-3)' }}>
         {typeLabel}
       </td>
-      <td style={{ padding: '4px 10px', minWidth: 130 }}>
-        <select
-          title="Worker model"
-          value={worker.model}
-          onChange={e => handleModelChange(e.target.value)}
-          disabled={savingModel}
-          style={{
-            fontFamily: 'monospace', fontSize: 10,
-            background: 'var(--bg-2)', border: '1px solid var(--border)',
-            color: 'var(--accent)', borderRadius: 3,
-            padding: '2px 4px', cursor: 'pointer', width: '100%',
-          }}
-        >
-          {AVAILABLE_MODELS.map(m => (
-            <option key={m} value={m}>{m}</option>
-          ))}
-        </select>
+      <td style={{ padding: '4px 10px', minWidth: 160 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <select
+            title="Worker model"
+            value={worker.model}
+            onChange={e => void handleModelChange(e.target.value)}
+            disabled={savingModel}
+            style={{
+              fontFamily: 'monospace', fontSize: 10,
+              background: 'var(--bg-2)', border: '1px solid var(--border)',
+              color: savingModel ? 'var(--text-3)' : 'var(--accent)',
+              borderRadius: 3, padding: '2px 4px',
+              cursor: savingModel ? 'wait' : 'pointer', width: '100%',
+            }}
+          >
+            {/* If the worker's current model isn't in our known list, show it
+                as the first option so the dropdown displays the real value
+                rather than jumping to the first known entry. */}
+            {!ALL_KNOWN_MODELS.has(worker.model) && (
+              <option value={worker.model}>{worker.model} (current)</option>
+            )}
+            {MODEL_GROUPS.map(group => (
+              <optgroup key={group.label} label={group.label}>
+                {group.models.map(m => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+          {savingModel && (
+            <span style={{
+              fontSize: 10, color: 'var(--text-3)',
+              animation: 'spin 1s linear infinite',
+              display: 'inline-block', flexShrink: 0,
+            }}>⟳</span>
+          )}
+        </div>
       </td>
       <td style={{ padding: '8px 10px', fontSize: 11 }}>
         <span style={{ color: workerStatusColor(worker.status) }}>
