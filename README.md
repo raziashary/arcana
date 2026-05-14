@@ -22,12 +22,22 @@ AutoDev is a downloadable desktop application that combines the best capabilitie
 - 🧠 **Advanced memory system:** 3-tier architecture (episodic/semantic/procedural) with context scoring, compression, staleness tracking
 - 🎯 **Agent orchestration:** 21 finite state machines governing lifecycle + A2A protocol
 - 📝 **AUTODEV.md system:** SQLite-backed instruction system, editable from UI, no manual file editing required
-- 🔌 **MCP native:** Connect to GitHub, Slack, Adobe, and custom MCP servers via rmcp crate
+- 🔌 **MCP native:** Connect to GitHub, Slack, Adobe, and custom MCP servers via rmcp crate, plus an in-app MCP server exposing canonical Rust tools to the fleet
 - 🛠️ **Skills & Recipes:** Reusable YAML workflows with cron scheduling for fleet orchestration
 - 🚀 **Single installer:** No Python, Redis, or Docker setup required for end users
-- 🎭 **Dual-mode execution:** PA mode (Rust-native for speed) + Worker mode (orchestrated via core-orchestrator for complex tasks)
+- 🎭 **Dual-mode execution:** PA mode (Rust-native for speed) + Worker mode (orchestrated via core-orchestrator with real-time SSE streaming back into the UI)
 - 🔄 **Git integration:** Structured git operations via git2-rs with worktree isolation per task
 - 📊 **Cost tracking:** Real-time token spend per session with per-agent, per-task reporting
+- 🛡️ **Workspace path-jail:** Every writing tool enforces that file paths and shell working directories stay inside the user's configured workspace
+- 🧯 **Budget circuit breaker:** Per-task token / USD / turn caps, pre-emptively halting runaway loops and escalating to the Supervisor
+- 🧪 **Build evidence gate:** Workers can't push tasks to QC review without a recent successful build on record
+- 👥 **Headless QC dispatcher:** A fleet of short-lived reviewer subagents reviews completed work in parallel with a concurrency cap and a rolling cost guard
+- 🧭 **Semantic task routing:** Supervisor learns which Worker performs best for which task type from historical outcomes
+- 🩺 **MCP & sidecar health monitors:** Per-server liveness pings, TCP-alive checks, auto-reconnect, and a sidecar crash banner with one-click "Copy crash report"
+- 🪦 **PID-based orphan detection:** Tasks abandoned by a crashed Worker are released within the next Supervisor poll (~2 min) instead of waiting 4 hours
+- 📐 **Backend↔Frontend contract:** INTERFACE.md authored by the Supervisor and validated against both sides, with structured drift detection in diff analysis
+- 🗺️ **Phase-based decomposition:** Epics broken into ordered phases with blockers, milestones, and a live Epic Phase View
+- 🔎 **Diff risk scoring:** `analyze_diff` tool gives the QC agent a structured risk score, classification, summary, and review notes per PR
 
 ---
 
@@ -132,6 +142,10 @@ Recipe trigger → Tauri → HTTP POST /api/v1/agent/invoke → core-orchestrato
 - **Context scoring** — relevance ranking, smart compaction
 - **Feedback-driven synopsis** — conversation evolution
 - Too complex to reimplement in Rust; Python ecosystem advantage
+
+**Live visibility:** Mode 2 invocations stream tool calls, tool results, and intermediate model output back into the desktop app via SSE (`invoke_worker_streaming`), so the Live Monitor and Worker Requests panel show what the LivingAgent is doing in real time — not just whether it is "idle" or "working."
+
+**Smart fallback:** A two-probe watchdog (HTTP `/health` + raw TCP probe) keeps the fleet on Mode 2 when the orchestrator is busy-but-alive and only declares it dead when both probes fail. Each recipe declares a `FallbackPolicy` (`Mode2Only` or `Mode1Capable`); recipes that depend on MCP/memory/A2A pause gracefully when Mode 2 is unreachable rather than running on a degraded engine.
 
 ### PA Mode Toggle
 
@@ -628,9 +642,29 @@ AutoDev uses **git2-rs** (libgit2 Rust bindings) for structured git operations:
 Workers can communicate with the Supervisor via the `request_supervisor_action` tool:
 - **decompose_audit:** Worker provides full suggested task payloads, Supervisor creates them atomically
 - **reassign:** Worker requests task reassignment to different worker
-- **needs_info:** Worker asks human PA a question
+- **needs_info:** Worker asks human PA a question (also fired automatically when the budget circuit breaker trips)
 - **report_issue:** Worker reports blocking issue or error
 - **request_review:** Worker requests QC review of completed work
+
+### Workspace Path-Jail
+
+Every file-writing builtin tool (`write_file`, `edit_file`, `append_file`) and the `bash` tool's working directory pass through a single jail helper that canonicalizes both the target path and the configured workspace and refuses anything that resolves outside it. The bash tool additionally scans the command string for `>`, `>>`, and `tee` redirect targets as a best-effort defense. Refusals come back as a structured error message designed for the LLM to read and self-correct from. On Windows the comparison is case-insensitive and matches at component boundaries so siblings like `C:\foobar` do not falsely satisfy a `C:\foo` workspace.
+
+### Build Evidence Gate
+
+Workers cannot transition a task to `qc_review` unless they have produced a recent, successful build. A session-keyed ring buffer stamps every build command that exits cleanly (the `EXIT:0` sentinel); the status-update tool consults that ring and refuses the transition if no fresh evidence exists, returning the Worker a structured message telling it to run its build and retry. Failed builds get a dedicated `build_failed` task status so they are not silently retried.
+
+### Budget Circuit Breaker
+
+Every task can carry a budget — a maximum number of tokens, a maximum USD cost, and a maximum number of agent turns. The agent engine checks the budget at the *start* of every loop turn and halts immediately when any limit is reached, rather than after the next expensive LLM call. A halted task is moved to `needs_info` with an auto-filed `WorkerRequest` against the Supervisor, not marked failed — the Supervisor decides to raise the budget, split the work, or reassign. Defaults are configurable in Settings (per-task tokens / USD / warn-at-%).
+
+### Headless QC Dispatcher
+
+QC is fanned out across short-lived reviewer subagents instead of a single QC agent serializing every review. A lightweight `qc-dispatcher` recipe spawns one reviewer per task in `qc_review` (concurrency capped at 6, rolling $5/hr cost guard), each reviewer reads the diff, runs its checks, writes its verdict, and terminates. Tasks carry `under_review_by` (which reviewer owns them) and `task_qc_cost_usd` (cumulative review cost) columns. A stranded-reviewer reconciler clears dangling references when a host process dies.
+
+### Backend↔Frontend Interface Contract
+
+The Supervisor authors `INTERFACE.md` via the `write_interface_spec` tool, capturing the agreed API surface (endpoints, request/response shapes, error codes) between backend and frontend workers. The diff analyzer compares every API-surface change against this contract and flags drift; the validation pipeline's Tier 2.6 fails the frontend's build when it calls an endpoint the backend does not expose. Tier 2.5 is a pure-Rust import↔export matcher that catches missing symbols before the slow compiler does.
 
 ---
 
@@ -659,9 +693,37 @@ Workers can communicate with the Supervisor via the `request_supervisor_action` 
 
 ### AutoDev-Native
 
-- **AutoDev Panel:** Live task board with 4-column kanban (Ready, In Progress, QC Review, Done Today)
+**Fleet & Task Board**
+- **AutoDev Panel:** Live task board with multi-column kanban (Ready, In Progress, QC Review, Rejected, Done Today)
 - **Agent Roster:** Dynamic table showing all agents with status dots, current tasks, elapsed time
 - **Worker Management:** Create custom workers, bind recipes, auto-launch on app startup
+- **Headless QC Dispatcher:** Per-task ephemeral reviewer subagents (concurrency cap = 6, rolling $5/hr cost guard, `under_review_by` + `task_qc_cost_usd` columns, stranded-reviewer reconciler, QC ROI panel)
+- **Fleet Request Queue:** Workers can request supervisor action (decompose, reassign, report issues, needs-info, request-review)
+- **Rejected-Task Feedback Loop:** `rejection_reason` + `retry_count` columns; Supervisor re-dispatches rejected tasks back to the originating Worker
+- **Semantic Task Routing:** Worker affinity learning from `routing_history` (static pattern fast-path + historical scoring) + Worker Affinity Stats panel
+- **Phase-Based Decomposition:** Epics → ordered phases with blockers, milestones, automatic unblock-on-completion, dedicated Epic Phase View + Epics tab
+- **Live Monitor:** Mode 2 tool calls streamed via SSE in real time; lazy slug registration so events never get dropped
+
+**Safety & Reliability**
+- **Workspace Path-Jail:** `write_file` / `edit_file` / `append_file` / `bash` (cwd + redirect targets) all enforce that paths stay inside the configured workspace
+- **Build Evidence Gate:** Session-keyed ring of recent `EXIT:0` builds; Workers cannot transition tasks to `qc_review` without recent successful build evidence
+- **Budget Circuit Breaker:** Per-task token / USD / turn caps with pre-emptive halt and `needs_info` escalation; per-task `BudgetBar` widget; daily budget summary
+- **PID-Based Orphan Detection:** Workers record their OS PID + hostname when claiming; orphans released within ~2 min via the Supervisor's poll
+- **Backend↔Frontend Interface Contract:** `INTERFACE.md` authored via `write_interface_spec`; Tier 2.6 API-contract validation; structured drift detection in `analyze_diff`
+- **Tier 2.5 Export Cross-Reference:** Pure-Rust import↔export matcher catches missing/renamed exports before the slow compiler does
+- **Fleet Smoke Recipe + `e2e_probe`:** Scheduled end-to-end check that boots the app and confirms it serves an expected response
+
+**Visibility & Diagnostics**
+- **Sidecar Crash Banner:** Captured stderr tail + "Copy crash report" markdown bundle
+- **Workspace Mismatch Banner:** Startup check comparing app cwd vs. configured workspace
+- **Stray Files Banner:** Startup scan for worker-generated artifacts in unexpected places
+- **MCP Connection Health Monitor:** 30-second ping loop, Connected / Degraded / Disconnected / Reconnecting states, auto-reconnect with exponential backoff, status-bar `⚠️ MCP` indicator
+- **TCP-Alive Health Probe:** Watchdog uses HTTP `/health` + raw TCP together so a busy-but-alive orchestrator does not trigger premature fallback
+- **Structured Error Taxonomy:** Every recoverable failure tagged with a `kind=` field (nine canonical kinds documented in `LOG_ERROR_KINDS.md`)
+- **Diff Risk Scoring (`analyze_diff`):** Two-pass (structural Rust + single LLM classification) producing risk score, classification, summary, review notes, and suggested checks; rendered as a `DiffAnalysisCard` on QC tasks
+- **Logs Tab:** Centralized log viewer with filtering, search, export; daily rotation with 14-day retention (`AUTODEV_LOG_RETENTION_DAYS` override)
+
+**Editing & UX**
 - **AUTODEV.md System:** SQLite-backed instruction system, editable from UI, no manual file editing
 - **PA Mode Toggle:** Three sub-modes (Fast Development, Review, Delegate) with tool filtering
 - **Key Vault:** Encrypted API key storage via OS keychain (keyring crate)
@@ -671,11 +733,10 @@ Workers can communicate with the Supervisor via the `request_supervisor_action` 
 - **Model Configuration:** Per-model settings for temperature, top-p, reasoning effort, thinking budget
 - **GitHub Integration:** PAT storage, GitHub MCP config, PR creation via workers
 - **Workspace Folder:** Native OS folder picker, @-mention path resolution
-- **Logs Tab:** Centralized log viewer with filtering, search, export capabilities
 - **Git Panel:** Full git integration with Changes, History, Branches, Stash, Undo tabs
 - **File Checkpointing:** Auto-checkpoint before writes, undo/redo support, file history
-- **Sidecar Management:** Auto-start Python sidecars, health checks, log routing
-- **Fleet Request Queue:** Workers can request supervisor action (decompose, reassign, report issues)
+- **Sidecar Management:** Auto-start Python sidecars, health checks, log routing, standalone-binary fallback for Redis/Memurai
+- **Browser-Test Skill:** Playwright-driven visual regression and E2E checks invoked by the QC agent on frontend PRs
 
 ---
 
@@ -721,14 +782,40 @@ AutoDev follows a phased development approach:
 - AIRS MCP server (exposes canonical Rust tools)
 - Sidecar management improvements
 
-### Phase 4 🚧 IN PROGRESS
+### Phase 4 ✅ COMPLETE
 **Subagents + Model Router + Dispatch**
-- Subagent creation and management
+- Subagent creation and management (`spawn_subagent`, `spawn_parallel_subagents`, ephemeral lifecycle with create→invoke→delete)
 - Enhanced model router with complex routing rules
-- Dispatch signal UI
+- Push-based dispatch (workers kicked the moment a task lands; no waiting for the next cron tick)
 - AutoDev native mode (boot-start recipe, FSEvents dispatch watch)
 
-### Phase 5 📋 PLANNED
+### Phase 5 ✅ COMPLETE
+**Fleet Hardening + Operational Safety**
+- Workspace path-jail (write/edit/append/bash + redirect heuristic)
+- Build evidence gate (`EXIT:0` ring), rejected-task feedback loop, `retry_count`
+- Headless QC dispatcher: ephemeral reviewer subagents, concurrency cap, $5/hr cost guard, `under_review_by` + `task_qc_cost_usd`, stranded reviewer reconciler, QC ROI panel
+- Per-recipe `FallbackPolicy` (`Mode2Only` / `Mode1Capable`), worker idle pre-flight, TCP-alive health probe
+- Mode 2 SSE streaming into Live Monitor (`invoke_worker_streaming`), lazy slug registration
+- Sidecar crash banner with "Copy crash report", Workspace mismatch banner, Stray files banner
+- Structured `kind=` log taxonomy + `LOG_ERROR_KINDS.md`, daily log rotation with 14-day retention, cached runtime config
+
+### Phase 6 ✅ COMPLETE
+**Ruflo-Inspired Capabilities**
+- Semantic task routing with worker affinity learning (`routing_history`, `suggest_worker` MCP tool, Worker Affinity Stats panel)
+- PID-based orphan detection (replaces 4-hour stale-lock with ~2-minute reconciliation via `sysinfo`)
+- Diff risk scoring for QC agent (`analyze_diff` MCP tool, two-pass structural + LLM classifier, `DiffAnalysisCard`)
+- Budget circuit breaker (per-task token/USD/turn caps, pre-emptive halt, `needs_info` escalation, `BudgetBar`)
+- Phase-based task decomposition (epics → phases → blockers → milestones, Epic Phase View, dedicated Epics tab)
+- MCP connection health monitor (30s ping loop, auto-reconnect with backoff, status-bar indicator)
+- Browser-test skill (Playwright-driven QC for frontend PRs, install detection, capability flag)
+
+### Phase 7 ✅ COMPLETE
+**Backend↔Frontend Contract & E2E**
+- `INTERFACE.md` contract authored by Supervisor via `write_interface_spec`
+- Tier 2.5 export cross-reference + Tier 2.6 API-contract validation, interface drift detection in `analyze_diff`
+- Fleet smoke recipe + `e2e_probe` builtin tool (timeout-wrapped GET + expected-text match)
+
+### Phase 8 📋 PLANNED
 **Plugin + CLI + Installers**
 - AIRS Plugin (one-click worker PC configuration)
 - Headless CLI (`airsctl`)
@@ -739,13 +826,17 @@ AutoDev follows a phased development approach:
 
 ## Current Status
 
-**Phase:** Phase 3 Complete ✅  
-**Next:** Phase 4 - Subagents + Model Router + Dispatch
+**Phase:** Phases 1–7 Complete ✅
+**Next:** Phase 8 — Plugin, CLI, and platform installers
 
 **Completed:**
 - ✅ Phase 1: App shell, Provider layer, Chat tab with tool execution, PA Mode Toggle, AUTODEV.md system
 - ✅ Phase 2: Recipes engine, AutoDev Panel, Worker management, GitHub integration, Sidecar integration
 - ✅ Phase 3: Skills system, IDE tab, Git integration, File checkpointing, AIRS MCP server
+- ✅ Phase 4: Subagent lifecycle, enhanced model router, push-based dispatch, AutoDev native mode
+- ✅ Phase 5: Path-jail, build evidence gate, QC dispatcher, fallback policy, crash/mismatch/stray banners, log retention + error taxonomy
+- ✅ Phase 6: Ruflo-inspired features (semantic routing, PID orphans, diff risk, budget breaker, phase decomposition, MCP health monitor, browser-test skill)
+- ✅ Phase 7: INTERFACE.md contract, fleet smoke recipe + `e2e_probe`, tier 2.5/2.6 validation
 
 **Environment verified:**
 - ✅ Python 3.13+
@@ -844,6 +935,24 @@ A: AutoDev automatically checkpoints files before writes (50 snapshots per file)
 
 **Q: What's the difference between Recipes and Skills?**  
 A: Recipes are YAML workflows for fleet orchestration (workers, supervisor, QC agents) with cron scheduling. Skills are markdown files with YAML frontmatter for reusable prompt workflows that can be invoked via slash commands or programmatically by agents.
+
+**Q: What stops a worker from writing files outside my project folder?**
+A: The workspace path-jail. Every file-writing builtin tool (`write_file`, `edit_file`, `append_file`) and the `bash` tool's working directory pass through a canonicalize-then-`starts_with` check against the configured workspace, with a redirect-target heuristic on shell commands. A misbehaving agent that tries to write to `C:\Windows\foo.txt` gets a structured refusal it can self-correct from. A Workspace Mismatch banner also fires at startup when the app's cwd differs from the configured workspace.
+
+**Q: Can a runaway agent burn through my whole API budget?**
+A: No. Every task carries an optional token / USD / turn budget; the agent engine checks the budget at the *start* of every loop turn and halts immediately when any limit is hit. A halted task is moved to `needs_info` and a `WorkerRequest` is filed against the Supervisor automatically. Fleet-wide defaults live in Settings → Default Worker Budget.
+
+**Q: How does QC scale when several workers finish at once?**
+A: A lightweight `qc-dispatcher` recipe spawns one ephemeral reviewer subagent per task in `qc_review` (concurrency capped at 6 by default, with a rolling $5/hr cost guard). Each reviewer reads the diff, runs its checks, writes a verdict, and terminates. A `qc:decision` event fires a visible toast on every approval or rejection.
+
+**Q: What happens if a Worker process crashes mid-task?**
+A: PID-based orphan detection. Workers record their OS PID + hostname when they claim a task. The orphan detector runs on the Supervisor's poll cadence (~2 minutes), checks each claimed task's PID via the `sysinfo` crate, and releases any task whose host process is no longer alive — back to the `ready` queue, with an Orphan Alert toast on the AutoDev panel.
+
+**Q: What does the orchestrator falling over actually look like in the UI?**
+A: A two-probe watchdog (HTTP `/health` + raw TCP) distinguishes "busy but alive" from "actually dead." When it does declare the orchestrator dead and the breaker opens, a Sidecar Crash banner appears with the captured stderr tail and a one-click "Copy crash report" button. Each recipe's `FallbackPolicy` decides whether it can keep running on Mode 1 or should pause gracefully as `fallback_idle`.
+
+**Q: How does the Supervisor decide who gets a task?**
+A: Two layers. First a small set of hand-written static patterns (keywords like "fastapi", "react", "docker" → worker-backend/-frontend/-platform); if those are ambiguous or disagree with history, the Supervisor calls the `suggest_worker` MCP tool which scores Workers by historical success rate × duration ranking for that task type (`routing_history` table). A Worker Affinity Stats panel exposes the per-Worker per-type success rates.
 
 ---
 
