@@ -370,7 +370,10 @@ impl AgentEngine {
             } else {
                 "unknown"
             };
-            let _ = crate::analytics::global()
+            // Phase 1 of docs/endtoendrun/14may2026/02 — fail loudly so a
+            // future analytics regression shows up in the log instead of
+            // silently zeroing the Dashboard.
+            if let Err(e) = crate::analytics::global()
                 .collector()
                 .record_token_usage(
                     session_id.to_string(),
@@ -382,7 +385,10 @@ impl AgentEngine {
                     None,
                     cost.cost_usd,
                     "agent_session".to_string(),
-                );
+                )
+            {
+                error!("[Mode1] record_token_usage failed for session {session_id}: {e}");
+            }
         }
 
         emit_agent_done(&self.app, AgentDonePayload {

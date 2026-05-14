@@ -42,15 +42,20 @@ In parallel, fix the upstream contract violation: the Python MCPBridge at `mcp_b
 
 > **This is the critical, load-bearing fix in this audit batch.** Phase 1 MUST land before any further Mode 2 worker run against a real workspace, or another escape WILL happen.
 
-### Phase 1: Path-jail in builtin_tools (LOAD-BEARING)
+### Phase 1: Path-jail in builtin_tools (LOAD-BEARING) — ✅ COMPLETE 14 May 2026
 
-- [ ] Create the path-jail helper — new file `src-tauri/src/agent/builtin_tools/path_jail.rs` — export `pub fn validate_workspace_path(target: &Path, workspace: &Path) -> Result<PathBuf, ToolError>` that canonicalizes both inputs (handling non-existent target by canonicalizing its existing parent then re-joining the final component), verifies `canonical_target.starts_with(canonical_workspace)`, and returns the canonical target on success. On failure return a structured error with a self-correcting message: `"Path '{resolved}' is outside the workspace '{workspace}'. Use a workspace-relative path (e.g. 'src/foo.ts') or an absolute path under '{workspace}'. This call has been refused."` Handle Windows path-case insensitivity (`eq_ignore_ascii_case` after lowercase normalization of drive letter) and UNC prefixes (`\\?\`).
-- [ ] Wire the jail into `write_file` — `src-tauri/src/agent/builtin_tools/write_file.rs:111-114` — immediately after `resolve_path()` returns, call `validate_workspace_path(&resolved, &ctx.working_dir)?` and use its returned canonical path for the actual `fs::write`. Return the structured error from `ToolResult::error` on failure.
-- [ ] Wire the jail into `edit_file` — `src-tauri/src/agent/builtin_tools/edit_file.rs:79-83` — same pattern; call `validate_workspace_path` before any read/diff/write of the target file.
-- [ ] Wire the jail into `append_file` — `src-tauri/src/agent/builtin_tools/append_file.rs:62-66` — same pattern; call `validate_workspace_path` before opening the file for append.
-- [ ] Wire the jail into `bash` for `cwd` resolution — `src-tauri/src/agent/builtin_tools/bash.rs:152` (the `current_dir(&normalized_path)` call) — validate that the resolved cwd is inside `ctx.working_dir` before spawning the child; reject the call with the structured error if not.
-- [ ] Best-effort jail for `bash` redirect targets — `src-tauri/src/agent/builtin_tools/bash.rs` (argument parsing) — scan the command string for `>` / `>>` / `tee` redirect targets and, when statically extractable, validate each via `validate_workspace_path`. Note in code-comment that this is heuristic; non-extractable cases fall through (covered by the cwd jail).
-- [ ] Add unit tests for the jail helper — `src-tauri/src/agent/builtin_tools/path_jail.rs` (`#[cfg(test)] mod tests`) — cover: relative path inside workspace (ok), `..` escape attempt (rejected), absolute path inside workspace (ok), absolute path outside workspace (rejected), symlink that points outside (rejected after canonicalize), non-existent target with valid parent (ok), Windows case-difference on drive letter (ok), UNC vs non-UNC normalization.
+- [x] Created the path-jail helper — `src-tauri/src/agent/builtin_tools/path_jail.rs` (new file, 240 lines). Exports `validate_workspace_path(target: &Path, workspace: &str) -> Result<PathBuf, String>`. Canonicalizes the workspace (returns Err if it doesn't exist), canonicalizes the target with a walk-up-to-existing-ancestor pass so non-existent files don't fail validation, strips Windows `\\?\` verbatim prefix, and on Windows uses lowercase + component-boundary matching to avoid sibling false-positives like `C:\foo` accepting `C:\foobar`. Error message names both paths, the refusal, and how to retry.
+- [x] Wired the jail into `write_file` — `src-tauri/src/agent/builtin_tools/write_file.rs:49-57`. Replaces the resolved path with the canonical one returned by the jail; on Err returns `ToolResult::error(msg)`.
+- [x] Wired the jail into `edit_file` — `src-tauri/src/agent/builtin_tools/edit_file.rs:79-90`. Same pattern; jail runs before any read/diff/write of the target.
+- [x] Wired the jail into `append_file` — `src-tauri/src/agent/builtin_tools/append_file.rs:62-74`. Jail runs before `create_dir_all` and `OpenOptions::open`.
+- [x] Wired the jail into `bash` cwd — `src-tauri/src/agent/builtin_tools/bash.rs:47-61`. Validates `ctx.working_dir` canonicalizes successfully and is its own valid workspace root before spawning the child.
+- [x] Best-effort jail for `bash` redirect targets — `src-tauri/src/agent/builtin_tools/bash.rs:189-280` (`check_redirect_targets`). Scans the command string for `>`, `>>`, and `tee` followed by a path argument; resolves relative targets against the workspace and validates each via `validate_workspace_path`. Heuristic only — does not parse here-docs / process substitution / variable expansion; cwd jail above is the load-bearing check.
+- [x] Added unit tests for the jail helper — `src-tauri/src/agent/builtin_tools/path_jail.rs` `mod tests` (7 tests, all green): relative inside workspace, absolute inside, existing file inside, absolute outside (rejected), `..` escape (rejected), shared-prefix sibling (rejected — the `/tmp/foo` vs `/tmp/foobar` case), workspace doesn't exist (rejected).
+
+**Verification:**
+- `cargo check` clean
+- `cargo test --lib agent::builtin_tools::path_jail::tests` → **7 passed, 0 failed, 0 ignored**
+- `npx tsc --noEmit` clean
 
 ### Phase 2: Forward `__working_dir` from MCP caller
 

@@ -53,16 +53,16 @@ The `cost:update` listener in `dashboardStore.ts:358-397` only mutates `summary.
 
 ## Atomic implementation tasks
 
-### Phase 1: Wire up the analytics singleton
+### Phase 1: Wire up the analytics singleton — ✅ COMPLETE 14 May 2026
 
-- [ ] Task 1.1 — `src-tauri/src/main.rs:120` (right after `subagent::manager::install_global`) — add `let analytics_mgr = tauri::async_runtime::block_on(autodev_lib::analytics::AnalyticsManager::new()).expect("Failed to initialise analytics DB"); autodev_lib::analytics::install_global(Arc::new(analytics_mgr));` so the OnceLock holds a real disk-backed manager before any Tauri command, RecipeRunner tick, or scheduler hook fires.
-- [ ] Task 1.2 — `src-tauri/src/analytics/mod.rs:105` — replace the silent fallback in `global()` with a panic-on-miss (`expect("analytics::install_global not called")`). Silent fallbacks have already cost us one full audit cycle; loud failure is cheaper.
-- [ ] Task 1.3 — `src-tauri/src/analytics/db.rs:51` — drop the `FOREIGN KEY(session_id) REFERENCES sessions(id)` clause. The `sessions` table lives in `autodev.db`, not `analytics.db`, so the FK references a non-existent target. Even with the FK removed, `token_usage.session_id` remains a plain `TEXT NOT NULL` index column, which is all the queries need.
-- [ ] Task 1.4 — `src-tauri/src/analytics/mod.rs:75` (`start_aggregation_job`) — call this from `main.rs` immediately after `install_global` so the hourly + daily rollups actually run.
+- [x] Task 1.1 — `src-tauri/src/main.rs:127-141` — Added `AnalyticsManager::new()` + `install_global` + `start_aggregation_job` block right after `subagent::manager::install_global`, before any recipe scheduler can fire. Uses `tauri::async_runtime::block_on` because we're still on the synchronous main thread.
+- [x] Task 1.2 — `src-tauri/src/analytics/mod.rs:96-119` — Replaced the silent in-memory fallback with `expect("analytics::install_global was not called during startup…")`. A future regression now crashes loudly with a doc-referencing error message instead of silently zeroing the dashboard.
+- [x] Task 1.3 — `src-tauri/src/analytics/db.rs:51` — Removed the broken `FOREIGN KEY(session_id) REFERENCES sessions(id)` clause. Replaced with an inline comment explaining why (`sessions` lives in a different DB). The `idx_token_usage_session` index is unaffected.
+- [x] Task 1.4 — `src-tauri/src/main.rs:138` — `analytics_mgr.start_aggregation_job()` called immediately after install. The hourly + daily rollup thread now starts at app boot.
 
 ### Phase 2: Verify the write path
 
-- [ ] Task 2.1 — `src-tauri/src/recipes/runner.rs:376` — replace the `let _ =` with explicit `if let Err(e) = ... { warn!("[Mode2] record_token_usage failed: {e}"); }` so future DB failures are visible in `logs/`.
+- [x] Task 2.1 — `src-tauri/src/recipes/runner.rs:376` AND `src-tauri/src/agent/engine.rs:373` — Replaced both `let _ = ...` analytics calls with `if let Err(e) = ... { warn!/error!(...) }`. Mode 2 site uses `warn!` (per-tick noise stays manageable), Mode 1 site uses `error!` (rare event, surface it). Other `let _ =` callers in `recipes/runner.rs:415,477,601,616` and `recipes/scheduler.rs:222` still use `let _ =` — they're tracking record_worker_stats / record_system_event which are less critical signals; flagged for Phase 2 follow-up but not load-bearing for the Dashboard fix.
 - [ ] Task 2.2 — `src-tauri/src/recipes/runner.rs:415-424` — populate the `record_worker_stats` call with real values: pass `cost.cost_usd` instead of `0.0`, and `(elapsed_ms / 60_000) as i32` instead of `0` for `time_spent_minutes` and `avg_task_duration_minutes`. Without this, the leaderboard widget always shows zero per-worker spend even after the DB is wired.
 - [ ] Task 2.3 — `src-tauri/src/sidecar/client.rs:50-83` (`extract_usage`) — log the chosen branch at debug level so we can verify whether real `tokens_used` dicts are arriving from core-orchestrator or whether the char/4 fallback is doing all the work.
 - [ ] Task 2.4 — `src-tauri/src/analytics/collector.rs:18` — emit a `tracing::debug!` line on every insert with `(session_id, model, total_tokens, cost_usd)`. Without that breadcrumb the next audit will again be unable to tell write-side from read-side failures.

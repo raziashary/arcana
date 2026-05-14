@@ -91,7 +91,6 @@ impl AnalyticsManager {
 // Global analytics manager instance — OnceLock<Arc<>> requires no locking primitives;
 // safe to call from any context including async tasks.
 use std::sync::OnceLock;
-use rusqlite::Connection;
 
 static ANALYTICS_MANAGER: OnceLock<Arc<AnalyticsManager>> = OnceLock::new();
 
@@ -101,17 +100,19 @@ pub fn install_global(manager: Arc<AnalyticsManager>) {
 }
 
 /// Get the global analytics manager — zero-cost read from OnceLock, never blocks.
-/// Falls back to an in-memory no-op instance if called before install_global.
+///
+/// **Panics if called before `install_global`.** The previous implementation
+/// returned a throw-away in-memory manager with no schema applied, which
+/// silently swallowed every write and every read for the entire app
+/// lifetime — see `docs/endtoendrun/14may2026/02-dashboard-not-live.md`.
+/// Loud failure is strictly cheaper than another silent-data audit cycle.
 pub fn global() -> Arc<AnalyticsManager> {
-    if let Some(m) = ANALYTICS_MANAGER.get() {
-        return m.clone();
-    }
-    // Pre-init fallback: create a no-op in-memory instance so callers don't panic.
-    Arc::new(AnalyticsManager {
-        db:         Arc::new(AnalyticsDb         { conn: std::sync::Mutex::new(Connection::open_in_memory().unwrap()) }),
-        collector:  Arc::new(AnalyticsCollector ::new(Arc::new(AnalyticsDb { conn: std::sync::Mutex::new(Connection::open_in_memory().unwrap()) }))),
-        aggregator: Arc::new(AnalyticsAggregator::new(Arc::new(AnalyticsDb { conn: std::sync::Mutex::new(Connection::open_in_memory().unwrap()) }))),
-        queries:    Arc::new(AnalyticsQueries   ::new(Arc::new(AnalyticsDb { conn: std::sync::Mutex::new(Connection::open_in_memory().unwrap()) }))),
-        exporter:   Arc::new(AnalyticsExporter  ::new(Arc::new(AnalyticsDb { conn: std::sync::Mutex::new(Connection::open_in_memory().unwrap()) }))),
-    })
+    ANALYTICS_MANAGER
+        .get()
+        .cloned()
+        .expect(
+            "analytics::install_global was not called during startup. \
+             AutoDev cannot run without a real analytics DB — see \
+             docs/endtoendrun/14may2026/02-dashboard-not-live.md."
+        )
 }

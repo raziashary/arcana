@@ -25,6 +25,11 @@ pub mod remember_this;
 pub mod validate;
 pub mod check_file;
 pub mod append_file;
+// Path-jail helper used by write_file / edit_file / append_file / bash to
+// refuse any operation whose resolved absolute path escapes the worker's
+// configured workspace. Load-bearing safety net — see
+// docs/endtoendrun/14may2026/07-workspace-escape-rootcause.md.
+pub mod path_jail;
 pub mod suggest_worker_tool;
 pub mod claim_task_tool;
 pub mod analyze_diff_tool;

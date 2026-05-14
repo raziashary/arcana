@@ -47,8 +47,13 @@ impl AnalyticsDb {
                 total_tokens INTEGER NOT NULL,
                 thinking_tokens INTEGER,
                 cost_usd REAL NOT NULL,
-                request_type TEXT NOT NULL,
-                FOREIGN KEY(session_id) REFERENCES sessions(id)
+                request_type TEXT NOT NULL
+                -- Note: previous schema declared FOREIGN KEY(session_id) REFERENCES sessions(id)
+                -- but `sessions` lives in `autodev.db`, not `analytics.db`, so the FK
+                -- always pointed at a non-existent table. With foreign_keys=ON this
+                -- meant every insert failed. session_id remains a plain TEXT index
+                -- column (see idx_token_usage_session below), which is all the
+                -- queries layer needs. See docs/endtoendrun/14may2026/02 §Phase 1 §1.3.
             );
 
             CREATE TABLE IF NOT EXISTS daily_costs (

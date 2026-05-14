@@ -9,6 +9,7 @@ use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
+use super::path_jail::validate_workspace_path;
 
 pub struct AppendFileTool;
 
@@ -59,10 +60,18 @@ impl Tool for AppendFileTool {
         let newline = input["newline"].as_bool().unwrap_or(true);
 
         // Resolve path against working directory
-        let resolved = if Path::new(path_str).is_absolute() {
+        let raw = if Path::new(path_str).is_absolute() {
             Path::new(path_str).to_path_buf()
         } else {
             Path::new(&ctx.working_dir).join(path_str)
+        };
+
+        // Workspace path-jail (Phase 1 of docs/endtoendrun/14may2026/07).
+        // Same rationale as write_file: refuse appends whose canonical
+        // destination escapes the configured workspace.
+        let resolved = match validate_workspace_path(&raw, &ctx.working_dir) {
+            Ok(canonical) => canonical,
+            Err(msg)      => return ToolResult::error(msg),
         };
 
         // Create parent directories if needed

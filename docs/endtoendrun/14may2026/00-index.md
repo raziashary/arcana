@@ -72,21 +72,28 @@ Phases are ordered by **dependency** and **blast radius**, not by doc number. Ea
 - [x] Delete the 3 stray files listed above
 - [x] Confirm no other Tauri HMR-triggering files in `src-tauri/` or `src/` from a previous run
 
-### Phase 1 — Load-bearing safety fixes (must ship before next E2E run)
+### Phase 1 — Load-bearing safety fixes (must ship before next E2E run) ✅ COMPLETE — 14 May 2026
 
 Without these, the next end-to-end test will eat the dev server again or generate useless dashboard numbers.
 
-| Task | File | What |
-|---|---|---|
-| Path-jail helper | new `src-tauri/src/agent/builtin_tools/path_jail.rs` | Canonicalize both paths, reject target outside `ctx.working_dir`, return self-correcting error message |
-| Wire jail into `write_file` | [`builtin_tools/write_file.rs:111-114`](src-tauri/src/agent/builtin_tools/write_file.rs:111) | Call jail BEFORE fs::write |
-| Wire jail into `edit_file` | [`builtin_tools/edit_file.rs:79-83`](src-tauri/src/agent/builtin_tools/edit_file.rs:79) | Same |
-| Wire jail into `append_file` | [`builtin_tools/append_file.rs:62-66`](src-tauri/src/agent/builtin_tools/append_file.rs:62) | Same |
-| Wire jail into `bash` cwd | [`builtin_tools/bash.rs:152`](src-tauri/src/agent/builtin_tools/bash.rs:152) | Reject if requested cwd escapes workspace |
-| Prefer configured workspace over `current_dir()` | [`mcp_server/tool_adapter.rs:33-42`](src-tauri/src/mcp_server/tool_adapter.rs:33) | Read from `workspace_commands::load_workspace_dir()` first, only fall back to `current_dir()` |
-| **Wire `install_global` into startup** | [`src-tauri/src/main.rs`](src-tauri/src/main.rs) (early in setup) | Call `analytics::install_global(autodev_dir)` once, before any recipe scheduler starts |
-| Drop the broken FK | [`analytics/db.rs:51`](src-tauri/src/analytics/db.rs:51) | Remove `FOREIGN KEY(session_id) REFERENCES sessions(id)` — `sessions` lives in another DB |
-| Fail loudly on analytics write errors | [`analytics/collector.rs`](src-tauri/src/analytics/collector.rs) | Replace `let _ = ...` callers' silence with at least a `warn!` so we see future regressions |
+| Task | File | What | Status |
+|---|---|---|---|
+| Path-jail helper | new [`src-tauri/src/agent/builtin_tools/path_jail.rs`](../../../src-tauri/src/agent/builtin_tools/path_jail.rs) | Canonicalize both paths, reject target outside `ctx.working_dir`, return self-correcting error message + 7 unit tests | ✅ |
+| Wire jail into `write_file` | [`builtin_tools/write_file.rs:49-57`](../../../src-tauri/src/agent/builtin_tools/write_file.rs) | Call jail BEFORE fs::write | ✅ |
+| Wire jail into `edit_file` | [`builtin_tools/edit_file.rs:79-90`](../../../src-tauri/src/agent/builtin_tools/edit_file.rs) | Same | ✅ |
+| Wire jail into `append_file` | [`builtin_tools/append_file.rs:62-74`](../../../src-tauri/src/agent/builtin_tools/append_file.rs) | Same | ✅ |
+| Wire jail into `bash` cwd + redirect heuristic | [`builtin_tools/bash.rs:47-72`, `bash.rs:189-280`](../../../src-tauri/src/agent/builtin_tools/bash.rs) | Reject if requested cwd escapes workspace; best-effort scan for `>` / `>>` / `tee` outside workspace | ✅ |
+| **Wire `install_global` into startup** | [`src-tauri/src/main.rs:127-141`](../../../src-tauri/src/main.rs) (right after subagent install_global) | Call `AnalyticsManager::new()` + `install_global` + `start_aggregation_job` once, before any recipe scheduler starts | ✅ |
+| Drop the broken FK | [`analytics/db.rs:51`](../../../src-tauri/src/analytics/db.rs) | Removed `FOREIGN KEY(session_id) REFERENCES sessions(id)` — `sessions` lives in another DB | ✅ |
+| Panic loud (not silent fallback) in `analytics::global()` | [`analytics/mod.rs:96-119`](../../../src-tauri/src/analytics/mod.rs) | Replaced in-memory fallback with `expect()` so silent regressions are impossible | ✅ |
+| Fail loudly on analytics write errors | [`recipes/runner.rs:376`, `agent/engine.rs:373`](../../../src-tauri/src/recipes/runner.rs) | Replaced `let _ = ...` with `if let Err(e) = ... { warn!/error!(...) }` so future regressions surface in log | ✅ |
+
+**Verification:**
+- `cargo check` clean (only pre-existing warnings)
+- `cargo test --lib agent::builtin_tools::path_jail::tests` → **7 passed, 0 failed**
+- `npx tsc --noEmit` clean
+
+> The "Prefer configured workspace over `current_dir()` in tool_adapter" task originally listed here belongs to **Phase 2** of doc [07](07-workspace-escape-rootcause.md). The Phase 1 path-jail covers the escape regardless of which workspace defaulting strategy is in effect, so it was deferred. Full Phase 2 list in [07](07-workspace-escape-rootcause.md).
 
 Full atomic task lists in [02](02-dashboard-not-live.md) Phase 1 and [07](07-workspace-escape-rootcause.md) Phase 1.
 

@@ -120,6 +120,24 @@ fn main() {
     let subagent_mgr = autodev_lib::subagent::SubagentManager::new(orch_client.clone());
     autodev_lib::subagent::manager::install_global(subagent_mgr.clone());
 
+    // ─── Analytics singleton ─────────────────────────────────────────────────
+    // The Dashboard, Mode-1 cost recorder, and every Mode-2 tick all read
+    // and write through `analytics::global()`. Without this `install_global`
+    // call, that accessor panics (intentionally — silent in-memory fallbacks
+    // have already cost one audit cycle, see docs/endtoendrun/14may2026/02).
+    //
+    // `AnalyticsManager::new()` is async (opens & migrates ~/.autodev/analytics.db)
+    // but we're still on the synchronous main thread before Tauri's runtime
+    // starts, so block until the DB is ready. After install, kick the hourly +
+    // daily rollup background thread.
+    let analytics_mgr = tauri::async_runtime::block_on(
+        autodev_lib::analytics::AnalyticsManager::new()
+    ).expect("Failed to initialise analytics DB at ~/.autodev/analytics.db");
+    let analytics_mgr = Arc::new(analytics_mgr);
+    autodev_lib::analytics::install_global(analytics_mgr.clone());
+    analytics_mgr.start_aggregation_job();
+    eprintln!("[AutoDev] analytics: installed global manager + started rollup job");
+
     // Phase 5.3 — auto-updater state
     let updater_state = UpdaterState::new();
 

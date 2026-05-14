@@ -4,6 +4,7 @@ use std::path::Path;
 
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
 use crate::hooks::{HookRegistry, HookType, HookContext, ToolCallContext};
+use super::path_jail::validate_workspace_path;
 use super::validate;
 
 pub struct WriteFileTool;
@@ -46,7 +47,18 @@ impl Tool for WriteFileTool {
             None    => return ToolResult::error("Missing required field: content"),
         };
 
-        let path = resolve_path(path_str, &ctx.working_dir);
+        let resolved = resolve_path(path_str, &ctx.working_dir);
+
+        // Workspace path-jail (Phase 1 of docs/endtoendrun/14may2026/07).
+        // Refuse any write whose canonical destination escapes the configured
+        // workspace. Without this, a Mode 2 worker passing a relative path
+        // resolves against `std::env::current_dir()` in some MCP code paths,
+        // and files leak into `src-tauri/` during `tauri dev`. The error
+        // message tells the LLM exactly how to retry.
+        let path = match validate_workspace_path(&resolved, &ctx.working_dir) {
+            Ok(canonical) => canonical,
+            Err(msg)      => return ToolResult::error(msg),
+        };
 
         // Create parent directories if needed
         if let Some(parent) = path.parent() {

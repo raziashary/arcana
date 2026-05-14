@@ -373,7 +373,12 @@ impl RecipeRunner {
                             } else {
                                 "unknown"
                             };
-                            let _ = crate::analytics::global()
+                            // Phase 1 of docs/endtoendrun/14may2026/02 — fail
+                            // loudly. The previous `let _ = ...` silently
+                            // swallowed every analytics write for the entire
+                            // session and was the reason the Dashboard
+                            // showed zeros for days.
+                            if let Err(e) = crate::analytics::global()
                                 .collector()
                                 .record_token_usage(
                                     format!("mode2-{}-{}", worker_slug, chrono::Utc::now().timestamp_millis()),
@@ -385,7 +390,10 @@ impl RecipeRunner {
                                     None,
                                     cost.cost_usd,
                                     format!("worker_tick:{}", worker_slug),
-                                );
+                                )
+                            {
+                                warn!("[Mode2] record_token_usage failed for '{worker_slug}': {e}");
+                            }
                             // Live-broadcast a cost:update so the Dashboard
                             // and any other cost listeners refresh immediately
                             // rather than waiting for the 60s polling fallback.

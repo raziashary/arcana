@@ -7,6 +7,7 @@ use tokio::process::Command;
 use tokio::time::timeout;
 
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
+use super::path_jail::validate_workspace_path;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 const MAX_OUTPUT_BYTES: usize   = 50_000;
@@ -50,6 +51,30 @@ impl Tool for BashTool {
             None    => return ToolResult::error("Missing required field: command"),
         };
         let timeout_secs = input["timeout_secs"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS);
+
+        // Workspace path-jail (Phase 1 of docs/endtoendrun/14may2026/07).
+        //
+        // 1. The shell cwd MUST be inside the configured workspace. Without
+        //    this check, a Mode 2 worker whose `ctx.working_dir` somehow
+        //    drifted away from the configured workspace would run shell
+        //    commands against the wrong tree.
+        let cwd_path = PathBuf::from(&ctx.working_dir);
+        if let Err(msg) = validate_workspace_path(&cwd_path, &ctx.working_dir) {
+            // validate_workspace_path returns an error if the path doesn't
+            // canonicalize. A workspace that can't canonicalize is itself a
+            // configuration failure — surface to the agent so it asks the
+            // user/supervisor rather than running blindly.
+            return ToolResult::error(msg);
+        }
+
+        // 2. Best-effort scan for `>` / `>>` / `tee` redirect targets that
+        //    point outside the workspace. This is heuristic — shell
+        //    redirection has many forms (here-docs, process substitution,
+        //    eval, dynamic vars) we cannot statically extract. The cwd jail
+        //    above is the load-bearing check; this catches the easy cases.
+        if let Some(err) = check_redirect_targets(&command, &ctx.working_dir) {
+            return ToolResult::error(err);
+        }
 
         let command = if cfg!(target_os = "windows") {
             let rewritten = rewrite_for_windows(&command, &ctx.working_dir);
@@ -158,6 +183,93 @@ async fn run_command(
     let stderr   = String::from_utf8_lossy(&output.stderr).to_string();
     let exit_code = output.status.code().unwrap_or(-1);
     Ok((stdout, stderr, exit_code))
+}
+
+/// Best-effort scan for `>`, `>>`, and `tee` redirect targets that resolve
+/// outside the workspace. Heuristic only: a misbehaving model could still
+/// escape via variable expansion, here-docs, or `eval`, so the cwd jail in
+/// `execute` is the load-bearing check. This catches the obvious form
+/// `something > /etc/passwd` or `tee C:\Windows\foo.txt`.
+fn check_redirect_targets(command: &str, workspace: &str) -> Option<String> {
+    use std::path::Path;
+    // Tokenize on simple whitespace. We DON'T try to parse shell quoting —
+    // if the model passes a quoted path with spaces we'll see it as one
+    // token after the `>` and validate it as-is.
+    let bytes = command.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // Look for `>`, `>>`, or `tee` token starts.
+        let (target_start, target_kind) = if bytes[i] == b'>' {
+            // `>` or `>>` — skip the marker and any whitespace.
+            let mut j = i + 1;
+            if j < bytes.len() && bytes[j] == b'>' { j += 1; }
+            while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') { j += 1; }
+            (j, "redirect")
+        } else if i + 3 <= bytes.len()
+            && &bytes[i..i + 3] == b"tee"
+            && (i == 0 || matches!(bytes[i.saturating_sub(1)], b' ' | b'\t' | b'|' | b'&' | b';'))
+            && (i + 3 == bytes.len() || matches!(bytes[i + 3], b' ' | b'\t'))
+        {
+            // `tee` token — skip token + flags + whitespace to first non-flag arg.
+            let mut j = i + 3;
+            // Skip leading spaces and flags (`-a`, `--append`, etc.) until we
+            // find a non-flag argument.
+            loop {
+                while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') { j += 1; }
+                if j >= bytes.len() { break; }
+                if bytes[j] == b'-' {
+                    // Skip the flag token.
+                    while j < bytes.len() && bytes[j] != b' ' && bytes[j] != b'\t' { j += 1; }
+                    continue;
+                }
+                break;
+            }
+            (j, "tee")
+        } else {
+            i += 1;
+            continue;
+        };
+
+        // Extract target token: up to next whitespace / shell metachar.
+        let mut end = target_start;
+        while end < bytes.len()
+            && !matches!(bytes[end], b' ' | b'\t' | b'\n' | b'|' | b'&' | b';' | b'<' | b'>')
+        {
+            end += 1;
+        }
+        if end > target_start {
+            let raw = &command[target_start..end];
+            // Strip surrounding quotes if present.
+            let stripped = raw.trim_matches('"').trim_matches('\'');
+            // Skip non-path targets like file descriptors `&1`, `&2`.
+            if !stripped.is_empty() && !stripped.starts_with('&') && !stripped.starts_with('/') {
+                // Resolve relative redirect targets against workspace.
+                let candidate = Path::new(stripped);
+                let resolved = if candidate.is_absolute() {
+                    candidate.to_path_buf()
+                } else {
+                    Path::new(workspace).join(stripped)
+                };
+                if let Err(_msg) = validate_workspace_path(&resolved, workspace) {
+                    return Some(format!(
+                        "Refused: bash {target_kind} target '{stripped}' resolves outside the workspace '{workspace}'. \
+                         Use a workspace-relative path. The command was not executed."
+                    ));
+                }
+            } else if stripped.starts_with('/') {
+                // Absolute Unix-style path — also validate.
+                let resolved = Path::new(stripped).to_path_buf();
+                if let Err(_msg) = validate_workspace_path(&resolved, workspace) {
+                    return Some(format!(
+                        "Refused: bash {target_kind} target '{stripped}' is outside the workspace '{workspace}'. \
+                         Use a workspace-relative path. The command was not executed."
+                    ));
+                }
+            }
+        }
+        i = end.max(i + 1);
+    }
+    None
 }
 
 /// Fix 10b: Unix → PowerShell command pre-processor for Windows.

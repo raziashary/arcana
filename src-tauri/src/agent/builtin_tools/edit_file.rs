@@ -7,6 +7,7 @@ use tracing::debug;
 
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
 use crate::hooks::{HookRegistry, HookType, HookContext, ToolCallContext};
+use super::path_jail::validate_workspace_path;
 use super::validate;
 
 pub struct EditFileTool;
@@ -76,10 +77,18 @@ impl Tool for EditFileTool {
             Err(e) => return ToolResult::error(format!("Invalid input: {e}")),
         };
 
-        let file_path = if PathBuf::from(&params.path).is_absolute() {
+        let resolved = if PathBuf::from(&params.path).is_absolute() {
             PathBuf::from(&params.path)
         } else {
             PathBuf::from(&ctx.working_dir).join(&params.path)
+        };
+
+        // Workspace path-jail (Phase 1 of docs/endtoendrun/14may2026/07).
+        // Same rationale as write_file: refuse edits whose canonical
+        // destination escapes the configured workspace.
+        let file_path = match validate_workspace_path(&resolved, &ctx.working_dir) {
+            Ok(canonical) => canonical,
+            Err(msg)      => return ToolResult::error(msg),
         };
 
         debug!("Editing file: {:?}", file_path);
