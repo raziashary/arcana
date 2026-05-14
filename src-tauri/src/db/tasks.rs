@@ -545,10 +545,21 @@ impl TasksDb {
 
     /// Delete all tasks and reset the auto-increment counter.
     /// Used by the UI "Clear Board" action to start fresh.
+    ///
+    /// IMPORTANT: `worker_requests(task_id) REFERENCES tasks(id)` is an
+    /// enforced foreign key (`PRAGMA foreign_keys = ON` set in `init`).
+    /// Bare `DELETE FROM tasks` fails the moment any pending worker request
+    /// references a task — which is the normal state after a run with QC
+    /// activity. We therefore drain `worker_requests` first, then `tasks`,
+    /// then reset both auto-increment sequences atomically so the next
+    /// `INSERT` starts from id 1 again.
     pub fn clear_all(&self) -> Result<()> {
         self.conn.execute_batch(
-            "DELETE FROM tasks;
-             DELETE FROM sqlite_sequence WHERE name = 'tasks';"
+            "BEGIN;
+             DELETE FROM worker_requests;
+             DELETE FROM tasks;
+             DELETE FROM sqlite_sequence WHERE name IN ('tasks', 'worker_requests');
+             COMMIT;"
         )?;
         Ok(())
     }

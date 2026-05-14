@@ -5,7 +5,7 @@
 //   - In Progress cards have progress bars
 //   - Metrics footer: Cost Today | Tokens | Closed | QC Pass Rate
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, type ReactNode } from 'react'
 import { RefreshCw, Trash2, ChevronDown, ChevronRight, Plus, Eraser } from 'lucide-react'
 import { invoke } from '@tauri-apps/api/core'
 import {
@@ -812,6 +812,173 @@ function WorkerRequestsWidget({
   )
 }
 
+// ─── ObservabilityTabs ───────────────────────────────────────────────────────
+//
+// Tab strip that surfaces one of the AutoDev panel's five secondary panels
+// at a time. Replaces the previous always-on vertical stack which caused the
+// page to feel crowded (5 + Agent Roster + Task Board = 7 stacked sections
+// before the user's screen ran out). Each tab includes a small live badge
+// where useful — e.g. Worker Requests shows the pending count, Live Monitor
+// shows the active reviewer count via QC ROI's source.
+//
+// Persistence: the active tab is stored under `autodev.obstab` so the user's
+// preferred view sticks. Default = "monitor" because that's what is most
+// often needed during a live run.
+
+type ObsTabId = 'monitor' | 'requests' | 'affinity' | 'epics' | 'qcroi'
+
+interface ObsTab {
+  id:    ObsTabId
+  label: string
+  badge?: (ctx: { workerRequests: WorkerRequest[] }) => string | null
+  render: (ctx: {
+    tasks:           Task[]
+    workerRequests:  WorkerRequest[]
+    onResolveRequest: (id: number, action: 'completed' | 'rejected', note?: string) => Promise<void>
+  }) => ReactNode
+}
+
+const OBS_TABS: ObsTab[] = [
+  {
+    id:    'monitor',
+    label: 'Live Monitor',
+    render: () => <LiveMonitorSection />,
+  },
+  {
+    id:    'requests',
+    label: 'Worker Requests',
+    badge: ({ workerRequests }) => {
+      const n = workerRequests.filter(r => r.status === 'pending').length
+      return n > 0 ? String(n) : null
+    },
+    render: ({ workerRequests, onResolveRequest }) => (
+      <WorkerRequestsWidget
+        requests={workerRequests}
+        onResolve={onResolveRequest}
+      />
+    ),
+  },
+  {
+    id:    'affinity',
+    label: 'Worker Affinity',
+    render: () => <WorkerAffinityPanel />,
+  },
+  {
+    id:    'epics',
+    label: 'Epics',
+    render: ({ tasks }) => <EpicsSection tasks={tasks} />,
+  },
+  {
+    id:    'qcroi',
+    label: 'QC ROI',
+    render: () => (
+      <div style={{ padding: '0 12px 8px 12px' }}>
+        <QcRoiPanel />
+      </div>
+    ),
+  },
+]
+
+function ObservabilityTabs(props: {
+  tasks:            Task[]
+  workerRequests:   WorkerRequest[]
+  onResolveRequest: (id: number, action: 'completed' | 'rejected', note?: string) => Promise<void>
+}) {
+  const [active, setActive] = useState<ObsTabId>(() => {
+    const stored = localStorage.getItem('autodev.obstab') as ObsTabId | null
+    if (stored && OBS_TABS.some(t => t.id === stored)) return stored
+    return 'monitor'
+  })
+
+  function selectTab(id: ObsTabId) {
+    setActive(id)
+    localStorage.setItem('autodev.obstab', id)
+  }
+
+  const activeTab = OBS_TABS.find(t => t.id === active) ?? OBS_TABS[0]
+
+  return (
+    <div
+      className="autodev-obs-tabs"
+      style={{
+        borderTop:    '1px solid var(--border-1)',
+        borderBottom: '1px solid var(--border-1)',
+        background:   'var(--bg-app)',
+      }}
+    >
+      {/* Tab strip */}
+      <div
+        role="tablist"
+        style={{
+          display:    'flex',
+          alignItems: 'center',
+          gap:        4,
+          padding:    '6px 12px',
+          background: 'var(--bg-surface)',
+          borderBottom: '1px solid var(--border-1)',
+          fontFamily: 'var(--font-mono)',
+          fontSize:   '10px',
+          overflowX:  'auto',
+        }}
+      >
+        {OBS_TABS.map(tab => {
+          const isActive = tab.id === active
+          const badge = tab.badge?.({ workerRequests: props.workerRequests }) ?? null
+          return (
+            <button
+              key={tab.id}
+              role="tab"
+              aria-selected={isActive}
+              onClick={() => selectTab(tab.id)}
+              style={{
+                background:    isActive ? 'var(--bg-card)' : 'transparent',
+                border:        `1px solid ${isActive ? 'var(--accent-border)' : 'var(--border-1)'}`,
+                color:         isActive ? 'var(--accent)' : 'var(--text-2)',
+                padding:       '4px 10px',
+                borderRadius:  3,
+                cursor:        'pointer',
+                fontFamily:    'inherit',
+                fontSize:      'inherit',
+                letterSpacing: '0.05em',
+                textTransform: 'uppercase',
+                display:       'inline-flex',
+                alignItems:    'center',
+                gap:           5,
+                whiteSpace:    'nowrap',
+              }}
+            >
+              <span>{tab.label}</span>
+              {badge && (
+                <span
+                  style={{
+                    background:   isActive ? 'var(--accent)' : 'var(--info)',
+                    color:        '#000',
+                    fontSize:     '9px',
+                    padding:      '0 5px',
+                    borderRadius: 9,
+                    fontWeight:   600,
+                  }}
+                >
+                  {badge}
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Active panel content */}
+      <div className="autodev-obs-tabs-content">
+        {activeTab.render({
+          tasks:           props.tasks,
+          workerRequests:  props.workerRequests,
+          onResolveRequest: props.onResolveRequest,
+        })}
+      </div>
+    </div>
+  )
+}
+
 function formatLastRefreshed(d: Date): string {
   const diffMs  = Date.now() - d.getTime()
   const diffSec = Math.floor(diffMs / 1_000)
@@ -832,6 +999,8 @@ export default function AutoDevTab() {
   const [tokensIn,     setTokensIn]     = useState<number | null>(null)
   const [tokensOut,    setTokensOut]    = useState<number | null>(null)
   const [clearConfirm, setClearConfirm] = useState(false)
+  const [clearError,   setClearError]   = useState<string | null>(null)
+  const [clearBusy,    setClearBusy]    = useState(false)
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null)
   const [isRefreshing,  setIsRefreshing]  = useState(false)
   const [showSubagents, setShowSubagents] = useState(false)
@@ -1011,33 +1180,26 @@ export default function AutoDevTab() {
       {/* Orphan Alert — shows toast when worker processes die (Ruflo Feature 2) */}
       <ErrorBoundary label="Orphan Alert" inline><OrphanAlert /></ErrorBoundary>
 
-      {/* Agent roster table */}
+      {/* Agent roster table — always visible (the primary live state) */}
       <ErrorBoundary label="Agent Roster" inline><AgentRoster tasks={tasks} /></ErrorBoundary>
 
-      {/* Worker Affinity — historical routing performance per worker (Ruflo Feature 1) */}
-      <ErrorBoundary label="Worker Affinity" inline><WorkerAffinityPanel /></ErrorBoundary>
-
-      {/* Epics — Phase-based task decomposition view (Ruflo Feature 5) */}
-      <ErrorBoundary label="Epics" inline><EpicsSection tasks={tasks} /></ErrorBoundary>
-
-      {/* Worker Requests — Fleet→Supervisor escalation queue */}
-      <ErrorBoundary label="Worker Requests" inline>
-        <WorkerRequestsWidget
-          requests={workerRequests}
-          onResolve={(id, action, note) => resolveWorkerRequest(id, action, note)}
+      {/*
+        ───────────────────────────────────────────────────────────────────
+        Observability tab strip — replaces the previous stack of five
+        always-expanded panels (Live Monitor / Worker Requests / Worker
+        Affinity / Epics / QC ROI) that made the AutoDev tab feel crowded.
+        Only one section is open at a time; user's choice is persisted in
+        localStorage so the preference sticks across sessions. The default
+        is "Live Monitor" because that's what the user most often wants to
+        see during a run.
+        ───────────────────────────────────────────────────────────────────
+      */}
+      <ErrorBoundary label="Observability Tabs" inline>
+        <ObservabilityTabs
+          tasks={tasks}
+          workerRequests={workerRequests}
+          onResolveRequest={(id, action, note) => resolveWorkerRequest(id, action, note)}
         />
-      </ErrorBoundary>
-
-      {/* Live Monitor — real-time per-agent state cards */}
-      <ErrorBoundary label="Live Monitor" inline><LiveMonitorSection /></ErrorBoundary>
-
-      {/* Doc 04 Phase 4.3 — QC ROI panel: per-task QC vs worker cost + live
-          reviewer count. Hidden behind ErrorBoundary so a backend error
-          (e.g. get_qc_reviewer_stats missing) never blanks the page. */}
-      <ErrorBoundary label="QC ROI" inline>
-        <div style={{ padding: '0 12px 8px 12px' }}>
-          <QcRoiPanel />
-        </div>
       </ErrorBoundary>
 
       {/* Task board label */}
@@ -1048,29 +1210,70 @@ export default function AutoDevTab() {
         <span style={{ fontSize: '11px', color: 'var(--text-2)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
           Task Board
         </span>
-        <button
-          onClick={async () => {
-            if (!clearConfirm) { setClearConfirm(true); setTimeout(() => setClearConfirm(false), 3000); return }
-            await invoke('clear_all_tasks')
-            setClearConfirm(false)
-            loadTasks()
-          }}
-          className="flex items-center gap-1"
-          style={{
-            background:   clearConfirm ? 'rgba(255,68,68,0.12)' : 'var(--bg-card)',
-            border:       clearConfirm ? '1px solid rgba(255,68,68,0.3)' : '1px solid var(--border-1)',
-            borderRadius: 2,
-            padding:      '3px 8px',
-            color:        clearConfirm ? 'var(--danger)' : 'var(--text-2)',
-            fontSize:     '10px',
-            fontFamily:   'monospace',
-            cursor:       'pointer',
-          }}
-          title={clearConfirm ? 'Click again to confirm — deletes all tasks' : 'Clear all tasks from board'}
-        >
-          <Eraser size={9} />
-          <span>{clearConfirm ? 'Confirm clear?' : 'Clear Board'}</span>
-        </button>
+        <div className="flex items-center gap-2">
+          {clearError && (
+            <span
+              style={{
+                fontSize:   '10px',
+                color:      'var(--danger)',
+                fontFamily: 'monospace',
+                maxWidth:   320,
+                overflow:   'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+              title={clearError}
+            >
+              ✗ {clearError}
+            </span>
+          )}
+          <button
+            onClick={async () => {
+              if (!clearConfirm) {
+                setClearError(null)
+                setClearConfirm(true)
+                setTimeout(() => setClearConfirm(false), 3000)
+                return
+              }
+              setClearBusy(true)
+              try {
+                // The Rust command deletes worker_requests first, then
+                // tasks, inside a transaction. If it still fails (e.g.
+                // disk-full / db locked), surface the message instead of
+                // letting the unhandled rejection vanish.
+                await invoke('clear_all_tasks')
+                setClearError(null)
+                await loadTasks()
+              } catch (e) {
+                const msg = typeof e === 'string' ? e : (e as Error).message ?? 'clear failed'
+                setClearError(msg)
+                // Auto-dismiss the error after 6s so the toolbar doesn't
+                // permanently advertise stale errors.
+                setTimeout(() => setClearError(null), 6_000)
+              } finally {
+                setClearConfirm(false)
+                setClearBusy(false)
+              }
+            }}
+            disabled={clearBusy}
+            className="flex items-center gap-1"
+            style={{
+              background:   clearConfirm ? 'rgba(255,68,68,0.12)' : 'var(--bg-card)',
+              border:       clearConfirm ? '1px solid rgba(255,68,68,0.3)' : '1px solid var(--border-1)',
+              borderRadius: 2,
+              padding:      '3px 8px',
+              color:        clearConfirm ? 'var(--danger)' : 'var(--text-2)',
+              fontSize:     '10px',
+              fontFamily:   'monospace',
+              cursor:       clearBusy ? 'wait' : 'pointer',
+              opacity:      clearBusy ? 0.6 : 1,
+            }}
+            title={clearConfirm ? 'Click again to confirm — deletes all tasks' : 'Clear all tasks from board'}
+          >
+            <Eraser size={9} />
+            <span>{clearBusy ? 'Clearing…' : clearConfirm ? 'Confirm clear?' : 'Clear Board'}</span>
+          </button>
+        </div>
       </div>
 
       {/* Kanban board */}
