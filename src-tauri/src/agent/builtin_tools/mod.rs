@@ -63,6 +63,13 @@ pub mod get_ready_tasks_in_phase_tool;
 // Supervisor escalation queue tools — required by the Supervisor recipe Step 1a.
 pub mod list_worker_requests_tool;
 pub mod resolve_worker_request_tool;
+// AutoDev Communication Protocol (ACP) — structured worker↔worker messaging.
+// Inbox lives in `worker_messages` SQLite table; reads/writes guarded by the
+// existing budget / orphan / build-evidence machinery because the target
+// worker reads its inbox during its own scheduled tick, not out-of-band.
+pub mod send_worker_message;
+pub mod list_worker_messages;
+pub mod acknowledge_worker_message;
 
 use std::sync::Arc;
 use super::{PAMode, tool_registry::ToolRegistry};
@@ -149,6 +156,11 @@ pub fn register_for_mcp_worker(registry: &mut ToolRegistry) {
     // and the resolve action requires an explicit request id.
     registry.register(Arc::new(list_worker_requests_tool::ListWorkerRequestsTool));
     registry.register(Arc::new(resolve_worker_request_tool::ResolveWorkerRequestTool));
+    // ACP tools — every fleet worker (including supervisor + qc-agent) can
+    // send / list / acknowledge cross-worker messages.
+    registry.register(Arc::new(send_worker_message::SendWorkerMessageTool));
+    registry.register(Arc::new(list_worker_messages::ListWorkerMessagesTool));
+    registry.register(Arc::new(acknowledge_worker_message::AcknowledgeWorkerMessageTool));
 }
 
 /// Register tools filtered by PA mode:
@@ -215,6 +227,11 @@ pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
             // so Razi can manually drain the queue from chat if needed.
             registry.register(Arc::new(list_worker_requests_tool::ListWorkerRequestsTool));
             registry.register(Arc::new(resolve_worker_request_tool::ResolveWorkerRequestTool));
+            // ACP tools available in PA so Razi can manually inspect / send
+            // worker messages from the chat tab for debugging the fleet.
+            registry.register(Arc::new(send_worker_message::SendWorkerMessageTool));
+            registry.register(Arc::new(list_worker_messages::ListWorkerMessagesTool));
+            registry.register(Arc::new(acknowledge_worker_message::AcknowledgeWorkerMessageTool));
         }
         PAMode::Delegate => {
             registry.register(Arc::new(create_task::CreateTaskTool));

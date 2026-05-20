@@ -53,6 +53,32 @@ pub struct WorkerRequest {
     pub resolved_at:       Option<String>,
 }
 
+/// AutoDev Communication Protocol (ACP) — structured worker↔worker message.
+///
+/// Mediated inbox: the sender writes a row, the target reads its inbox on its
+/// next tick via list_worker_messages and acknowledges via
+/// acknowledge_worker_message. The Supervisor sees every message (read path
+/// is just `SELECT *`) and a UI panel renders the transcript per task.
+///
+/// Kinds:
+///   nudge      — "look at this, no answer expected"
+///   question   — "please answer this; I'm waiting"
+///   answer     — "here's the answer to your question (reply chain)"
+///   fyi        — informational; lowest priority
+///   broadcast  — supervisor-only; fan-out one row per fleet worker
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerMessage {
+    pub id:         i64,
+    pub from_slug:  String,
+    pub to_slug:    String,
+    pub body:       String,
+    pub kind:       String,
+    pub task_id:    Option<i64>,
+    pub status:     String,         // "pending" | "read" | "acknowledged"
+    pub created_at: String,
+    pub read_at:    Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateWorkerRequestInput {
     pub worker_slug:  String,
@@ -313,6 +339,27 @@ impl TasksDb {
             CREATE INDEX IF NOT EXISTS idx_worker_requests_status     ON worker_requests(status);
             CREATE INDEX IF NOT EXISTS idx_worker_requests_worker    ON worker_requests(worker_slug);
             CREATE INDEX IF NOT EXISTS idx_worker_requests_task      ON worker_requests(task_id);
+
+            -- AutoDev Communication Protocol — structured worker↔worker inbox.
+            -- One row per (sender, target) pair; a broadcast inserts N rows.
+            CREATE TABLE IF NOT EXISTS worker_messages (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_slug   TEXT    NOT NULL,
+                to_slug     TEXT    NOT NULL,
+                body        TEXT    NOT NULL,
+                kind        TEXT    NOT NULL DEFAULT 'nudge',
+                task_id     INTEGER,
+                status      TEXT    NOT NULL DEFAULT 'pending',
+                created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+                read_at     TEXT,
+                FOREIGN KEY(task_id) REFERENCES tasks(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_worker_messages_to_status
+                ON worker_messages(to_slug, status);
+            CREATE INDEX IF NOT EXISTS idx_worker_messages_task
+                ON worker_messages(task_id);
+            CREATE INDEX IF NOT EXISTS idx_worker_messages_created
+                ON worker_messages(created_at);
             "
         )?;
         // Add columns to existing DBs that predate these migrations.
@@ -636,6 +683,178 @@ impl TasksDb {
         );
         self.conn.execute(&sql, params![status, resolution_note, id])?;
         Ok(())
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // AutoDev Communication Protocol (ACP) — worker↔worker mediated inbox
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Insert a single worker message and return its persisted row.
+    pub fn insert_worker_message(
+        &self,
+        from_slug: &str,
+        to_slug:   &str,
+        body:      &str,
+        kind:      &str,
+        task_id:   Option<i64>,
+    ) -> Result<WorkerMessage> {
+        self.conn.execute(
+            "INSERT INTO worker_messages (from_slug, to_slug, body, kind, task_id)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![from_slug, to_slug, body, kind, task_id],
+        )?;
+        let id = self.conn.last_insert_rowid();
+        self.get_worker_message(id)?
+            .ok_or_else(|| AutoDevError::Agent(
+                "Worker message inserted but vanished on read-back".into()
+            ))
+    }
+
+    pub fn get_worker_message(&self, id: i64) -> Result<Option<WorkerMessage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, from_slug, to_slug, body, kind, task_id, status, created_at, read_at
+             FROM worker_messages WHERE id = ?1"
+        )?;
+        let msg = stmt
+            .query_row(params![id], row_to_worker_message)
+            .optional()?;
+        Ok(msg)
+    }
+
+    /// List messages addressed to `to_slug`. When `unread_only` is true, only
+    /// returns messages whose status is `pending`. Listing pending messages
+    /// transitions them to `read` and stamps `read_at` so the supervisor's
+    /// drain can distinguish "never seen" from "seen but un-acked."
+    pub fn list_worker_messages_for(
+        &self,
+        to_slug:     &str,
+        unread_only: bool,
+    ) -> Result<Vec<WorkerMessage>> {
+        // Step 1: snapshot the rows we're about to return so the caller sees
+        // the row's `status='pending'` state as it was when they listed
+        // (rather than racing the UPDATE below). The mark-read transition is
+        // applied immediately afterwards under the same connection so any
+        // follow-up read sees `read`.
+        let sql = if unread_only {
+            "SELECT id, from_slug, to_slug, body, kind, task_id, status, created_at, read_at
+             FROM worker_messages
+             WHERE to_slug = ?1 AND status = 'pending'
+             ORDER BY created_at ASC"
+        } else {
+            "SELECT id, from_slug, to_slug, body, kind, task_id, status, created_at, read_at
+             FROM worker_messages
+             WHERE to_slug = ?1
+             ORDER BY created_at ASC"
+        };
+        let mut stmt = self.conn.prepare(sql)?;
+        let messages: Vec<WorkerMessage> = stmt
+            .query_map(params![to_slug], row_to_worker_message)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        // Mark the pending ones we just returned as read.
+        if !messages.is_empty() {
+            let pending_ids: Vec<i64> = messages.iter()
+                .filter(|m| m.status == "pending")
+                .map(|m| m.id)
+                .collect();
+            if !pending_ids.is_empty() {
+                // Build an IN-list bind safely.
+                let placeholders: Vec<String> = (0..pending_ids.len())
+                    .map(|i| format!("?{}", i + 1))
+                    .collect();
+                let sql = format!(
+                    "UPDATE worker_messages SET status='read', read_at=datetime('now')
+                     WHERE id IN ({}) AND status='pending'",
+                    placeholders.join(",")
+                );
+                let params: Vec<&dyn rusqlite::ToSql> = pending_ids.iter()
+                    .map(|id| id as &dyn rusqlite::ToSql)
+                    .collect();
+                self.conn.execute(&sql, params.as_slice())?;
+            }
+        }
+        Ok(messages)
+    }
+
+    /// Mark a message as acknowledged. Caller must verify ownership
+    /// (`to_slug` matches the calling agent) at the tool layer.
+    pub fn acknowledge_worker_message(&self, id: i64) -> Result<()> {
+        let rows = self.conn.execute(
+            "UPDATE worker_messages
+             SET status = 'acknowledged'
+             WHERE id = ?1 AND status IN ('pending','read')",
+            params![id],
+        )?;
+        if rows == 0 {
+            return Err(AutoDevError::Agent(format!(
+                "Worker message #{id} not found or already acknowledged."
+            )));
+        }
+        Ok(())
+    }
+
+    /// Supervisor drain: messages still pending OR read (un-acked) for more
+    /// than `older_than_minutes`. Used by the Supervisor recipe to surface
+    /// stuck cross-worker conversations as escalations.
+    pub fn list_stale_worker_messages(&self, older_than_minutes: i64) -> Result<Vec<WorkerMessage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, from_slug, to_slug, body, kind, task_id, status, created_at, read_at
+             FROM worker_messages
+             WHERE status IN ('pending','read')
+               AND datetime(created_at) <= datetime('now', ?1)
+             ORDER BY created_at ASC"
+        )?;
+        let offset = format!("-{older_than_minutes} minutes");
+        let messages: Vec<WorkerMessage> = stmt
+            .query_map(params![offset], row_to_worker_message)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(messages)
+    }
+
+    /// Fleet Chat panel — full message list for one task, in chronological
+    /// order. Returns at most `limit` rows.
+    pub fn list_worker_messages_for_task(
+        &self,
+        task_id: i64,
+        limit:   i64,
+    ) -> Result<Vec<WorkerMessage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, from_slug, to_slug, body, kind, task_id, status, created_at, read_at
+             FROM worker_messages
+             WHERE task_id = ?1
+             ORDER BY created_at ASC
+             LIMIT ?2"
+        )?;
+        let messages: Vec<WorkerMessage> = stmt
+            .query_map(params![task_id, limit], row_to_worker_message)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(messages)
+    }
+
+    /// Fleet Chat panel — all messages across all tasks, newest first.
+    /// Bounded by `limit` so the UI never pulls an unbounded backlog.
+    pub fn list_recent_worker_messages(&self, limit: i64) -> Result<Vec<WorkerMessage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, from_slug, to_slug, body, kind, task_id, status, created_at, read_at
+             FROM worker_messages
+             ORDER BY created_at DESC
+             LIMIT ?1"
+        )?;
+        let messages: Vec<WorkerMessage> = stmt
+            .query_map(params![limit], row_to_worker_message)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(messages)
+    }
+
+    /// Per-target unread count, used by the AgentLiveCard badge.
+    pub fn count_unread_for(&self, to_slug: &str) -> Result<i64> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM worker_messages
+             WHERE to_slug = ?1 AND status = 'pending'",
+            params![to_slug],
+            |row| row.get(0),
+        )?;
+        Ok(count)
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1328,5 +1547,19 @@ fn row_to_worker_request(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkerRequ
         resolution_note:  row.get(6)?,
         created_at:       row.get(7)?,
         resolved_at:      row.get(8)?,
+    })
+}
+
+fn row_to_worker_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkerMessage> {
+    Ok(WorkerMessage {
+        id:         row.get(0)?,
+        from_slug:  row.get(1)?,
+        to_slug:    row.get(2)?,
+        body:       row.get(3)?,
+        kind:       row.get(4)?,
+        task_id:    row.get(5)?,
+        status:     row.get(6)?,
+        created_at: row.get(7)?,
+        read_at:    row.get(8)?,
     })
 }

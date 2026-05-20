@@ -107,6 +107,11 @@ pub const EVT_WORKSPACE_MISMATCH: &str = "workspace:mismatch";
 // a triage report without opening the log file.
 pub const EVT_SIDECAR_CRASH:      &str = "sidecar:crash";
 
+// AutoDev Communication Protocol (ACP) — structured worker↔worker message.
+// Fires once per insert into `worker_messages`. Powers the Fleet Chat panel
+// and the per-worker "N unread" badge on AgentLiveCard.
+pub const EVT_WORKER_MESSAGE:     &str = "worker:message";
+
 // ── Payload types ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Clone)]
@@ -361,6 +366,36 @@ pub fn emit_task_changed_global(payload: TaskChangedPayload) {
 pub fn emit_worker_status_global(payload: WorkerStatusPayload) {
     if let Some(app) = app_handle() {
         emit_worker_status(app, payload);
+    }
+}
+
+// ── AutoDev Communication Protocol payload + emit helpers ────────────────────
+
+#[derive(Debug, Serialize, Clone)]
+pub struct WorkerMessagePayload {
+    pub message_id: i64,
+    pub from:       String,
+    pub to:         String,
+    pub body:       String,
+    pub kind:       String,
+    pub task_id:    Option<i64>,
+    pub timestamp:  String,
+}
+
+pub fn emit_worker_message(app: &AppHandle, payload: WorkerMessagePayload) {
+    let _ = app.emit(EVT_WORKER_MESSAGE, payload);
+}
+
+pub fn emit_worker_message_global(payload: WorkerMessagePayload) {
+    if let Some(app) = app_handle() {
+        emit_worker_message(app, payload);
+    } else {
+        tracing::warn!(
+            "emit_worker_message_global skipped: AppHandle not installed. \
+             Worker message #{} from '{}' to '{}' will not appear in Fleet Chat \
+             until next reload.",
+            payload.message_id, payload.from, payload.to
+        );
     }
 }
 

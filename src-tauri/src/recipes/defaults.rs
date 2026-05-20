@@ -238,6 +238,15 @@ or the request stays pending and you will re-process it every tick (infinite loo
 
 If any request was handled, STOP after this step — the board state changed. Let the next tick continue.
 
+### Step 1b — Drain the ACP inbox (AutoDev Communication Protocol)
+
+Call `list_worker_messages` to read messages addressed to the Supervisor. For each:
+- A worker `question` you can answer in one shot → `send_worker_message(to=<sender>, kind='answer', body=<answer>, task_id=<orig_task_id>)`, then `acknowledge_worker_message(id)`.
+- A worker `fyi` / `nudge` that doesn't require a reply → just `acknowledge_worker_message(id)`.
+- Anything that needs cross-worker coordination → consider sending a `broadcast` (you are the only agent allowed to broadcast) or routing a follow-up task via `create_task` + `assign_task`.
+
+You may also briefly inspect the rest of the fleet's conversations if you suspect a stuck thread: messages older than 5 minutes that are still `pending` or `read` (un-acked) belong to a stuck conversation; nudge the addressee to act, or reassign the task.
+
 ### Step 2 — Dispatch READY tasks (BATCH — do this in ONE tool call)
 For every task with `status='ready'` (process in priority order p0 → p1 → p2 → p3,
 never skip a higher-priority task for a lower one):
@@ -340,6 +349,9 @@ After that line, emit ZERO further tool calls.
 ## Tools
 - list_tasks              — Read the full board (first call every tick)
 - list_worker_requests    — Read pending fleet escalation requests (Step 1a)
+- list_worker_messages    — Read the ACP inbox (Step 1b)
+- send_worker_message     — Send a message to a specific worker, or '*' for broadcast (supervisor-only)
+- acknowledge_worker_message — Mark an inbox message as handled after acting on it
 - resolve_worker_request  — Mark a request completed/acknowledged/rejected after acting on it (REQUIRED after every Step 1a action)
 - suggest_worker          — Tie-breaker only — call ONLY when the static Routing Matrix is ambiguous for a task
 - create_task             — Create atomic sub-tasks from epics or decompose_audit payloads
@@ -379,6 +391,13 @@ Call `list_tasks`. Look for:
 
 Check AUTODEV_PROGRESS.md in the working directory — a prior session may have left
 a partial implementation summary there. Read it before starting.
+
+### Step 1.5 — Drain your ACP inbox (AutoDev Communication Protocol)
+Call `list_worker_messages` to read messages addressed to you. For each:
+- `question` from a peer → reply with `send_worker_message(to=<sender>, kind='answer', body=<answer>, task_id=<task_id_if_relevant>)`, then `acknowledge_worker_message(id)`.
+- `nudge` / `fyi` that affects your current task → fold the info into your plan, then `acknowledge_worker_message(id)`.
+- `nudge` you can't act on right now (no matching task, ambiguous) → `acknowledge_worker_message(id)` with the message body summarized in AUTODEV_PROGRESS.md.
+Inbox is async and lossless — do NOT spawn delegations or out-of-band runs. Process the messages inline within this tick.
 
 ### Step 2 — Claim or resume
 - Assigned: update_task_status(id, 'in_progress', 'worker-backend')
@@ -571,6 +590,7 @@ Apply this to ALL endpoints: GET, PUT, PATCH, DELETE.
 File/exec:  read_file · write_file · edit_file · append_file · check_file
             bash · grep · glob · list_directory
 Task board: list_tasks · get_task · update_task_status · claim_task
+ACP inbox: list_worker_messages · send_worker_message · acknowledge_worker_message
 Escalation: request_supervisor_action (decompose, reassign, report_issue, request_review)
 QC support: analyze_diff · annotate_file
 Delegation: spawn_subagent · spawn_parallel_subagents (see Subagent Protocol)
@@ -623,6 +643,13 @@ Call `list_tasks`. Look for:
 
 Check AUTODEV_PROGRESS.md in the working directory — a prior session may have left
 a partial implementation summary there. Read it before starting.
+
+### Step 1.5 — Drain your ACP inbox (AutoDev Communication Protocol)
+Call `list_worker_messages` to read messages addressed to you. For each:
+- `question` from a peer (typically the backend worker about an endpoint shape) → reply with `send_worker_message(to=<sender>, kind='answer', body=<answer>, task_id=<task_id_if_relevant>)`, then `acknowledge_worker_message(id)`.
+- `nudge` like "INTERFACE.md changed — re-check your consumers" → re-read INTERFACE.md before writing any consumer, then `acknowledge_worker_message(id)`.
+- `fyi` you can't act on right now → `acknowledge_worker_message(id)`.
+Inbox is async — do NOT delegate or invoke another worker out-of-band. Process inline within this tick.
 
 ### Step 2 — Claim or resume
 - Assigned: update_task_status(id, 'in_progress', 'worker-frontend')
@@ -784,6 +811,7 @@ After scaffold is confirmed: run npm install before writing any component.
 File/exec:  read_file · write_file · edit_file · append_file · check_file
             bash · grep · glob · list_directory
 Task board: list_tasks · get_task · update_task_status · claim_task
+ACP inbox: list_worker_messages · send_worker_message · acknowledge_worker_message
 Escalation: request_supervisor_action (decompose, reassign, report_issue, request_review)
 QC support: analyze_diff · annotate_file
 Delegation: spawn_subagent · spawn_parallel_subagents (see Subagent Protocol)
@@ -827,6 +855,9 @@ You operate in supervised mode — destructive or irreversible actions require e
 ### Step 1 — Find your work
 Call `list_tasks`. Look for:
 - assigned_worker='worker-platform' AND status='assigned'
+
+### Step 1.5 — Drain your ACP inbox
+Call `list_worker_messages`. Reply to questions with `send_worker_message(to=<sender>, kind='answer', body=…, task_id=…)`; acknowledge each via `acknowledge_worker_message(id)` once handled. Process inline; do NOT spawn out-of-band runs.
 
 ### Step 2 — Claim
 update_task_status(id, 'in_progress', 'worker-platform')
@@ -894,6 +925,7 @@ After completing a task, append to AUTODEV_PROGRESS.md:
 File/exec:  read_file · write_file · edit_file · append_file · check_file
             bash · grep · glob · list_directory
 Task board: list_tasks · get_task · update_task_status · claim_task
+ACP inbox: list_worker_messages · send_worker_message · acknowledge_worker_message
 Escalation: request_supervisor_action (decompose, reassign, report_issue, request_review)
 QC support: analyze_diff · annotate_file
 Delegation: spawn_subagent · spawn_parallel_subagents (see Subagent Protocol)
@@ -935,6 +967,9 @@ Call `list_tasks`. Look for:
 - assigned_worker='worker-mcp' AND status='in_progress' → resume interrupted work
 
 Check AUTODEV_PROGRESS.md for context from previous sessions.
+
+### Step 1.5 — Drain your ACP inbox
+Call `list_worker_messages`. Reply to questions with `send_worker_message(to=<sender>, kind='answer', body=…, task_id=…)`; acknowledge each via `acknowledge_worker_message(id)` once handled. Process inline.
 
 ### Step 2 — Claim or resume
 - Assigned: update_task_status(id, 'in_progress', 'worker-mcp')
@@ -1059,6 +1094,7 @@ After completing a task, append to AUTODEV_PROGRESS.md:
 File/exec:  read_file · write_file · edit_file · append_file · check_file
             bash · grep · glob · list_directory
 Task board: list_tasks · get_task · update_task_status · claim_task
+ACP inbox: list_worker_messages · send_worker_message · acknowledge_worker_message
 Escalation: request_supervisor_action (decompose, reassign, report_issue, request_review)
 QC support: analyze_diff · annotate_file
 Delegation: spawn_subagent · spawn_parallel_subagents (see Subagent Protocol)
@@ -1107,6 +1143,9 @@ If a change could alter observable behaviour, it is out of scope for this agent.
 ### Step 1 — Find your work
 Call `list_tasks`. Look for:
 - assigned_worker='worker-cleanup' AND status='assigned'
+
+### Step 1.5 — Drain your ACP inbox
+Call `list_worker_messages`. Reply to questions with `send_worker_message(to=<sender>, kind='answer', body=…, task_id=…)`; acknowledge each via `acknowledge_worker_message(id)` once handled. Process inline; do NOT delegate.
 
 ### Step 2 — Claim
 update_task_status(id, 'in_progress', 'worker-cleanup')

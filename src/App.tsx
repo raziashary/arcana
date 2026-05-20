@@ -25,6 +25,7 @@ import { useWorkerStore }   from './stores/workerStore'
 import { useTaskStore }     from './stores/taskStore'
 import { useSidecarStore }  from './stores/sidecarStore'
 import { useUpdateStore }   from './stores/updateStore'
+import { useWorkerChatStore } from './stores/workerChatStore'
 import { UpdateToast }      from './components/update/UpdateToast'
 import { UpdateDialog }     from './components/update/UpdateDialog'
 import { ErrorBoundary }    from './components/ErrorBoundary'
@@ -57,6 +58,7 @@ export default function App() {
   const initSidecarEvents = useSidecarStore(s => s.initEventListeners)
   const initUpdater       = useUpdateStore(s => s.init)
   const cleanupUpdater    = useUpdateStore(s => s.cleanup)
+  const hydrateWorkerChat = useWorkerChatStore(s => s.hydrate)
 
   useEffect(() => {
     loadProviders()
@@ -68,6 +70,9 @@ export default function App() {
     void initWorkerEvents()
     void initTaskEvents()
     void initSidecarEvents()
+    // AutoDev Communication Protocol — seed Fleet Chat from SQLite + subscribe
+    // to the live worker:message stream. Idempotent.
+    void hydrateWorkerChat()
     // Phase 5.3 — subscribe to auto-updater events
     void initUpdater()
     return () => { cleanupUpdater() }

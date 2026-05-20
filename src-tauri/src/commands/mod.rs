@@ -34,3 +34,5 @@ pub mod diff_commands;
 pub mod budget_commands;
 pub mod browser_commands;
 pub mod annotation_commands;
+// AutoDev Communication Protocol — Fleet Chat query commands.
+pub mod worker_message_commands;

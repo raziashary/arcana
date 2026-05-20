@@ -7,6 +7,7 @@ import { useAgentLiveStore } from '../../stores/agentLiveStore'
 import { useTaskStore }      from '../../stores/taskStore'
 import { useUiStore }        from '../../stores/uiStore'
 import { useUiStore as _useUiStore } from '../../stores/uiStore'
+import { useWorkerChatStore } from '../../stores/workerChatStore'
 import { StagePipeline } from './StagePipeline'
 import { MiniLogTail }   from './MiniLogTail'
 import { TokenSparkline } from './TokenSparkline'
@@ -63,6 +64,9 @@ export function AgentLiveCard({ agentId }: Props) {
   const agent    = useAgentLiveStore(s => s.agents[agentId])
   const tasks    = useTaskStore(s => s.tasks)
   const pulseTaskColumn = useUiStore(s => s.pulseTaskColumn)
+  // ACP unread badge — pending messages addressed to this worker.
+  const unreadCount = useWorkerChatStore(s => s.unreadByTarget[agentId] ?? 0)
+  const setSelectedTaskId = useWorkerChatStore(s => s.setSelectedTaskId)
   const [expanded, setExpanded] = useState(false)
 
   // Doc 06 Phase 3 — live count of qc_review tasks for the QC card chip.
@@ -133,6 +137,39 @@ export function AgentLiveCard({ agentId }: Props) {
         />
         <span className="card-agent-name">{agent.display_name}</span>
         <span className="card-role-badge">{agent.agent_type.toUpperCase()}</span>
+        {/* ACP unread badge — clicking jumps to Fleet Chat with this agent's
+            inbox isolated. Hidden when zero. */}
+        {unreadCount > 0 && (
+          <span
+            onClick={(e) => {
+              e.stopPropagation()
+              // No task filter — show the all-tasks feed; the user filters
+              // by clicking the specific task chip in Fleet Chat's header.
+              setSelectedTaskId(null)
+              // Switch the observability sub-tab; uses the same localStorage
+              // key AutoDevPanel reads on mount.
+              try { localStorage.setItem('autodev.obstab', 'fleetchat') } catch { /* noop */ }
+              // Trigger a soft reload of the active obs tab by dispatching a
+              // storage event — AutoDevPanel listens to its own setState, so
+              // we instead just open Fleet Chat by reloading the tab.
+              window.dispatchEvent(new Event('storage'))
+            }}
+            title={`${unreadCount} unread ACP message${unreadCount === 1 ? '' : 's'} for ${agent.display_name}. Click to open Fleet Chat.`}
+            style={{
+              fontSize:      9,
+              padding:       '1px 5px',
+              marginLeft:    4,
+              background:    'var(--warning, #FFCB8B)',
+              color:         '#000',
+              borderRadius:  6,
+              fontWeight:    700,
+              cursor:        'pointer',
+              letterSpacing: 0.4,
+            }}
+          >
+            💬 {unreadCount}
+          </span>
+        )}
         {shortModel && (
           <span
             className="card-model-badge"

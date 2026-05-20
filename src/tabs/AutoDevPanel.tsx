@@ -22,6 +22,7 @@ import {
 import { useSidecarStore } from '../stores/sidecarStore'
 import { SubagentMonitor } from '../components/subagent/SubagentMonitor'
 import { LiveMonitorSection } from '../components/autodev/LiveMonitorSection'
+import { FleetChat }          from '../components/autodev/FleetChat'
 import { useAgentLiveStore }  from '../stores/agentLiveStore'
 import { useUiStore }         from '../stores/uiStore'
 import { WorkerAffinityPanel } from '../components/dashboard/WorkerAffinityPanel'
@@ -825,7 +826,7 @@ function WorkerRequestsWidget({
 // preferred view sticks. Default = "monitor" because that's what is most
 // often needed during a live run.
 
-type ObsTabId = 'monitor' | 'requests' | 'affinity' | 'epics' | 'qcroi'
+type ObsTabId = 'monitor' | 'requests' | 'affinity' | 'epics' | 'qcroi' | 'fleetchat'
 
 interface ObsTab {
   id:    ObsTabId
@@ -874,6 +875,15 @@ const OBS_TABS: ObsTab[] = [
     render: () => (
       <div style={{ padding: '0 12px 8px 12px' }}>
         <QcRoiPanel />
+      </div>
+    ),
+  },
+  {
+    id:    'fleetchat',
+    label: 'Fleet Chat',
+    render: () => (
+      <div style={{ padding: '0 12px 8px 12px' }}>
+        <FleetChat />
       </div>
     ),
   },

@@ -162,6 +162,7 @@ pub fn register_commands(
         budget_commands::{cmd_set_task_budget, get_task_budget_status, get_daily_budget_summary, set_default_worker_budget},
         browser_commands::{check_playwright_available, install_playwright_browsers},
         annotation_commands::{create_annotation, list_annotations_for_file, resolve_annotation, update_annotation_response, update_annotation_task_id, delete_annotation},
+        worker_message_commands::{list_worker_messages_for_task, list_recent_worker_messages, count_unread_worker_messages_for},
     };
     builder.invoke_handler(tauri::generate_handler![
         // Agent
@@ -462,5 +463,9 @@ pub fn register_commands(
         update_annotation_response,
         update_annotation_task_id,
         delete_annotation,
+        // AutoDev Communication Protocol — Fleet Chat
+        list_worker_messages_for_task,
+        list_recent_worker_messages,
+        count_unread_worker_messages_for,
     ])
 }
