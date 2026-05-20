@@ -41,6 +41,11 @@ pub mod append_file;
 // configured workspace. Load-bearing safety net — see
 // docs/endtoendrun/14may2026/07-workspace-escape-rootcause.md.
 pub mod path_jail;
+// Process-wide per-file async mutex registry. Used by write_file, edit_file,
+// append_file, and the MCP tool_adapter so PA-mode and Mode 2 callers
+// contend on the same lock when targeting the same path. See
+// path_lock.rs for the design notes.
+pub mod path_lock;
 // Doc 09 T2.4 — module-level tracker of recent bash invocations that look
 // like build / test / smoke commands. update_task_status_tool reads from
 // it to refuse qc_review transitions that have no proof a build was run.

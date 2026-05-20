@@ -5,6 +5,7 @@ use std::path::Path;
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
 use crate::hooks::{HookRegistry, HookType, HookContext, ToolCallContext};
 use super::path_jail::validate_workspace_path;
+use super::path_lock;
 use super::validate;
 
 pub struct WriteFileTool;
@@ -14,7 +15,10 @@ impl Tool for WriteFileTool {
     fn name(&self) -> &str { "write_file" }
 
     fn description(&self) -> &str {
-        "Write content to a file at the given path. Creates the file (and any parent directories) if it doesn't exist. Overwrites existing content."
+        "Create a NEW file at the given path. Refuses by default if the file already \
+         exists — use edit_file to modify an existing file. To intentionally overwrite \
+         (e.g. regenerating a generated artifact), pass overwrite=true and the call \
+         will replace the file's contents. Creates parent directories as needed."
     }
 
     fn input_schema(&self) -> serde_json::Value {
@@ -28,6 +32,13 @@ impl Tool for WriteFileTool {
                 "content": {
                     "type":        "string",
                     "description": "Full file content to write."
+                },
+                "overwrite": {
+                    "type":        "boolean",
+                    "description": "Optional. Default false. When false and the file already \
+                                    exists, the call is refused — use edit_file instead. Set \
+                                    to true only when the intent is to regenerate or wholly \
+                                    replace the file."
                 }
             },
             "required": ["path", "content"]
@@ -46,6 +57,7 @@ impl Tool for WriteFileTool {
             Some(c) => c,
             None    => return ToolResult::error("Missing required field: content"),
         };
+        let overwrite = input["overwrite"].as_bool().unwrap_or(false);
 
         let resolved = resolve_path(path_str, &ctx.working_dir);
 
@@ -59,6 +71,38 @@ impl Tool for WriteFileTool {
             Ok(canonical) => canonical,
             Err(msg)      => return ToolResult::error(msg),
         };
+
+        // Cross-tool, cross-worker per-path serialisation. Held for the
+        // duration of this call so a concurrent edit_file / append_file /
+        // write_file targeting the same path waits its turn rather than
+        // racing the read-modify-write cycle.
+        //
+        // We compute the key from the pre-canonical `resolved` path (the
+        // jail's canonicalised path may not yet exist on a fresh-file
+        // write). lock_key normalises both forms to the same slot.
+        let _lock_guard = path_lock::acquire_for(&resolved, &ctx.working_dir).await;
+
+        // Refuse-on-exists. Workers create files with write_file and modify
+        // them with edit_file; rewriting an existing file via write_file is
+        // the canonical "I forgot the previous worker already created this"
+        // bug, and is the path that produced the 14 May calendar run's
+        // duplicate-scaffold problem. Require an explicit overwrite=true so
+        // the agent has to acknowledge the intent.
+        //
+        // The check happens AFTER the path lock is acquired so two
+        // concurrent first-time writers can't both observe "doesn't exist"
+        // and both write the file.
+        if path.exists() && !overwrite {
+            return ToolResult::error(format!(
+                "File '{}' already exists. write_file refuses to overwrite an existing \
+                 file without explicit consent. To modify the file, call edit_file with \
+                 the specific old_string→new_string change. If you really do want to \
+                 replace the file wholesale (e.g. regenerating a generated artifact), \
+                 retry with overwrite=true. This guard prevents one worker from silently \
+                 clobbering another worker's freshly-created file.",
+                path.display()
+            ));
+        }
 
         // Create parent directories if needed
         if let Some(parent) = path.parent() {

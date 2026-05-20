@@ -8,6 +8,7 @@ use tracing::debug;
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
 use crate::hooks::{HookRegistry, HookType, HookContext, ToolCallContext};
 use super::path_jail::validate_workspace_path;
+use super::path_lock;
 use super::validate;
 
 pub struct EditFileTool;
@@ -90,6 +91,21 @@ impl Tool for EditFileTool {
             Ok(canonical) => canonical,
             Err(msg)      => return ToolResult::error(msg),
         };
+
+        // Cross-tool, cross-worker per-path lock. Held across the entire
+        // read → string-search → write sequence so a concurrent writer (any
+        // other worker via write_file / edit_file / append_file, or the same
+        // worker through a second invocation) cannot extend or rewrite the
+        // file between our `fs::read_to_string` and `fs::write`. Without
+        // this, the classic edit_file race produces a silent lost update:
+        // worker A reads, worker B reads + writes, worker A writes — A
+        // overwrites B's change with stale data.
+        //
+        // The lock module is the same one wired into the MCP adapter, so
+        // PA-mode edits, Mode 2 edits, and ephemeral subagent edits all
+        // contend on a single key per file. Different files run in parallel
+        // as before.
+        let _lock_guard = path_lock::acquire_for(&file_path, &ctx.working_dir).await;
 
         debug!("Editing file: {:?}", file_path);
 

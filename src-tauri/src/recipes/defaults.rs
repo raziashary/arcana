@@ -290,9 +290,14 @@ If a task is too broad for one atomic worker session:
 `status='ready'` AND `assigned_worker` already set → call `assign_task` to overwrite atomically.
 
 **Stalled in-progress tasks**
-`status='in_progress'` AND `updated_at` older than 10 minutes:
-Call `update_task_status(id, 'assigned', assigned_worker=<original>)` to reset the claim.
-The worker will retry from scratch on its next poll.
+`status='in_progress'` → do NOT touch, ever. The PID-based OrphanDetector (Ruflo
+Feature 2) owns this state exclusively. It runs immediately before every
+supervisor tick, checks each in_progress task's recorded `claimed_by_pid` via the
+OS, and releases truly-abandoned tasks back to 'ready' deterministically. If you
+also reset in_progress on a stalled-but-still-alive worker, you race the
+OrphanDetector — both you and it will fight over `rejection_reason` and the next
+tick will be unpredictable. Stalled-but-alive workers are a real case (long
+LivingAgent ticks); leave them be and let the orphan detector adjudicate.
 
 **Build-failed retry policy**
 `status='build_failed'`:

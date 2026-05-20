@@ -6,10 +6,11 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::path::Path;
 use tokio::fs::OpenOptions;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
 
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
 use super::path_jail::validate_workspace_path;
+use super::path_lock;
 
 pub struct AppendFileTool;
 
@@ -74,6 +75,13 @@ impl Tool for AppendFileTool {
             Err(msg)      => return ToolResult::error(msg),
         };
 
+        // Cross-tool, cross-worker per-path lock. Same key/registry used by
+        // write_file and edit_file — a concurrent overwrite or edit cannot
+        // truncate the file mid-append, and a concurrent append from another
+        // worker is strictly ordered after ours rather than racing the
+        // trailing-newline probe.
+        let _lock_guard = path_lock::acquire_for(&resolved, &ctx.working_dir).await;
+
         // Create parent directories if needed
         if let Some(parent) = resolved.parent() {
             if let Err(e) = tokio::fs::create_dir_all(parent).await {
@@ -84,25 +92,16 @@ impl Tool for AppendFileTool {
             }
         }
 
-        // Determine whether to inject a leading newline
-        let prefix = if newline && resolved.exists() {
-            // Read only the last byte to check if file ends with newline
-            match std::fs::metadata(&resolved) {
-                Ok(meta) if meta.len() > 0 => {
-                    // Read last byte
-                    let last_byte = read_last_byte(&resolved);
-                    if last_byte != b'\n' { "\n" } else { "" }
-                }
-                _ => "",
-            }
-        } else {
-            ""
-        };
-
-        let to_write = format!("{}{}", prefix, content);
-        let bytes_to_append = to_write.len();
-
+        // Open once in read + append mode. Doing the trailing-newline probe
+        // through the same file handle narrows the previous probe-then-open
+        // race window (where another writer could extend the file between the
+        // standalone `metadata` call and our `OpenOptions::open`). The window
+        // is not fully closed — another concurrent appender can still extend
+        // the file between `seek/read` and our `write_all` — but the worst
+        // observable outcome is a duplicated or missing newline, which is
+        // cosmetic. Documented limitation.
         let mut file = match OpenOptions::new()
+            .read(true)
             .create(true)
             .append(true)
             .open(&resolved)
@@ -114,6 +113,30 @@ impl Tool for AppendFileTool {
                 resolved.display()
             )),
         };
+
+        // Probe last byte through the open handle.
+        let needs_leading_nl = if newline {
+            match file.metadata().await {
+                Ok(meta) if meta.len() > 0 => {
+                    let mut buf = [0u8; 1];
+                    let seek_ok = file.seek(SeekFrom::End(-1)).await.is_ok();
+                    let read_ok = seek_ok && file.read_exact(&mut buf).await.is_ok();
+                    read_ok && buf[0] != b'\n'
+                }
+                _ => false,
+            }
+        } else {
+            false
+        };
+
+        // Append mode auto-seeks to end on each write, so the read seek above
+        // does not affect the write position.
+        let to_write = if needs_leading_nl {
+            format!("\n{}", content)
+        } else {
+            content.to_string()
+        };
+        let bytes_to_append = to_write.len();
 
         if let Err(e) = file.write_all(to_write.as_bytes()).await {
             return ToolResult::error(format!(
@@ -128,16 +151,4 @@ impl Tool for AppendFileTool {
             resolved.display()
         ))
     }
-}
-
-// Read only the final byte of a file to check for trailing newline.
-fn read_last_byte(path: &Path) -> u8 {
-    use std::io::{Read, Seek, SeekFrom};
-    let Ok(mut f) = std::fs::File::open(path) else { return b'\n' };
-    let Ok(meta) = f.metadata() else { return b'\n' };
-    if meta.len() == 0 { return b'\n'; }
-    if f.seek(SeekFrom::End(-1)).is_err() { return b'\n'; }
-    let mut buf = [0u8; 1];
-    if f.read_exact(&mut buf).is_err() { return b'\n'; }
-    buf[0]
 }

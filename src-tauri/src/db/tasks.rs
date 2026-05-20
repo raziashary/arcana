@@ -644,11 +644,36 @@ impl TasksDb {
 
     /// Claim a task and record the worker's PID for orphan detection.
     /// Transitions status from `assigned` → `in_progress`.
+    ///
+    /// Bug J defensive: refuse the claim when the same worker already owns
+    /// another task in `in_progress`. The worker recipes already say in
+    /// natural language "NEVER claim a second task while one is in_progress",
+    /// but that was prompt-level discipline only. This is the code-side
+    /// backstop — a bug in dispatch, a glitch in the LLM, or an aggressive
+    /// retry can no longer produce a double-claim.
     pub fn claim_task_with_pid(&self, id: i64, worker_slug: &str, pid: u32) -> Result<()> {
+        // Pre-flight: count this worker's currently-in-progress tasks, ignoring
+        // the one we're about to claim (in case of an idempotent retry that
+        // somehow already transitioned the row).
+        let active: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM tasks
+             WHERE assigned_worker = ?1 AND status = 'in_progress' AND id != ?2",
+            params![worker_slug, id],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        if active > 0 {
+            return Err(AutoDevError::Agent(format!(
+                "Worker '{worker_slug}' already owns {active} in_progress task(s); \
+                 finish or release them before claiming task #{id}. This guard \
+                 backs the worker recipe's 'NEVER claim a second task while one \
+                 is in_progress' rule."
+            )));
+        }
+
         let host = std::env::var("COMPUTERNAME")
             .or_else(|_| std::env::var("HOSTNAME"))
             .unwrap_or_else(|_| "unknown".to_string());
-        self.conn.execute(
+        let rows = self.conn.execute(
             "UPDATE tasks
              SET status = 'in_progress', assigned_worker = ?1,
                  claimed_by_pid = ?2, claim_host = ?3,
@@ -656,6 +681,15 @@ impl TasksDb {
              WHERE id = ?4 AND status = 'assigned'",
             params![worker_slug, pid as i64, host, id],
         )?;
+        if rows == 0 {
+            // The atomic WHERE guard refused the transition — task not in
+            // 'assigned' state. Caller can fetch the row to discover why.
+            return Err(AutoDevError::Agent(format!(
+                "Task #{id} could not be claimed by '{worker_slug}' — it is no \
+                 longer in status='assigned'. Another worker may have claimed it, \
+                 the supervisor may have reassigned it, or QC may have intervened."
+            )));
+        }
         Ok(())
     }
 

@@ -3,7 +3,7 @@
 // Uses tokio tasks + the `cron` crate for accurate next-fire-time calculation.
 // See: DEVELOPMENT_PLAN.md Phase 2 — Cron Scheduler
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -349,7 +349,48 @@ impl RecipeScheduler {
     ///     stays exactly as it was for idle/recovery polling.
     ///   - Never blocks the caller: the tick runs on the Tauri async runtime.
     pub fn kick_worker(&self, worker_slug: &str) {
-        // Gate: skip if worker is already in flight.
+        // Bug F — close the TOCTOU window between the "already working" check
+        // and the spawn. A separate process-wide `kick_inflight` HashSet acts
+        // as the actual ordering primitive: whichever kick inserts the slug
+        // first wins, every other kick observes the slug already present and
+        // bails immediately. The spawned task removes itself from the set
+        // when it completes, freeing the slot for the next kick.
+        //
+        // The DB-level "status == working" check is still useful as a
+        // belt-and-braces signal for the case where a long-running cron tick
+        // is in flight, but it is no longer the ordering primitive.
+        let slug_for_inflight = worker_slug.to_string();
+        {
+            let mut inflight = kick_inflight().lock().unwrap();
+            if !inflight.insert(slug_for_inflight.clone()) {
+                info!(
+                    "[RecipeScheduler] kick_worker('{}'): skipped (another \
+                     kick is already in flight)",
+                    worker_slug
+                );
+                return;
+            }
+        }
+
+        // From here on we MUST remove ourselves from `kick_inflight` on every
+        // exit path — otherwise the worker is permanently locked out. Use a
+        // small RAII guard for the synchronous early returns; the success
+        // path hands ownership to the spawned task which clears the slot on
+        // completion.
+        struct KickGuard {
+            slug: String,
+            committed: bool,
+        }
+        impl Drop for KickGuard {
+            fn drop(&mut self) {
+                if !self.committed {
+                    kick_inflight().lock().unwrap().remove(&self.slug);
+                }
+            }
+        }
+        let mut guard = KickGuard { slug: slug_for_inflight.clone(), committed: false };
+
+        // DB gate: skip if worker is already in flight per the DB status.
         let (worker_opt, recipe_id_opt) = match WorkersDb::open() {
             Ok(db) => match db.get_by_slug(worker_slug) {
                 Ok(Some(w)) => {
@@ -403,7 +444,13 @@ impl RecipeScheduler {
             if let Err(e) = runner.run_recipe(&recipe, &slug).await {
                 error!("[RecipeScheduler] kick_worker: recipe run failed for '{}': {e}", slug);
             }
+            // Free the kick slot so the next push-based kick can fire.
+            kick_inflight().lock().unwrap().remove(&slug);
         });
+        // The spawned task now owns the responsibility for clearing the
+        // kick_inflight entry; mark the guard committed so its Drop doesn't
+        // double-remove.
+        guard.committed = true;
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
@@ -447,6 +494,13 @@ async fn wait_for_orchestrator_ready(runner: &super::runner::RecipeRunner, timeo
 // before installation (tests, early boot).
 
 static GLOBAL_SCHEDULER: OnceLock<Arc<RecipeScheduler>> = OnceLock::new();
+
+// Bug F — process-wide kick-inflight set. Lives as long as the process; the
+// set is cheap (one entry per active kick, removed on completion).
+fn kick_inflight() -> &'static Mutex<HashSet<String>> {
+    static SET: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    SET.get_or_init(|| Mutex::new(HashSet::new()))
+}
 
 /// Install the process-wide RecipeScheduler handle. Idempotent; subsequent
 /// calls are silently ignored (OnceLock semantics).

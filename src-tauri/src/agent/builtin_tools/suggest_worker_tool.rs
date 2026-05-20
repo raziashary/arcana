@@ -5,6 +5,7 @@
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use crate::db::tasks::TasksDb;
+use crate::db::workers::WorkersDb;
 use crate::routing::TaskRouter;
 use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 
@@ -54,19 +55,34 @@ impl Tool for SuggestWorkerTool {
         };
 
         match TaskRouter::suggest_worker(&task) {
-            Ok(score) => ToolResult::success(json!({
-                "task_id":     task_id,
-                "task_title":  task.title,
-                "task_type":   task.task_type.as_str(),
-                "worker_slug": score.worker_slug,
-                "score":       score.score,
-                "confidence":  score.confidence,
-                "method":      score.method,
-                "message": format!(
-                    "Recommended worker: {} (score={:.2}, method={})",
-                    score.worker_slug, score.score, score.method
-                )
-            }).to_string()),
+            Ok(score) => {
+                // Bug A — surface `primary_repos` so the field stops being
+                // dead metadata. The supervisor (or any caller doing routing)
+                // gets to see which repos this worker is configured to own
+                // and can use it as a sanity check on the recommendation
+                // before assigning. Best-effort: a missing or empty repos
+                // list returns an empty array, not an error.
+                let primary_repos = WorkersDb::open()
+                    .ok()
+                    .and_then(|db| db.get_by_slug(&score.worker_slug).ok().flatten())
+                    .map(|w| w.primary_repos)
+                    .unwrap_or_default();
+
+                ToolResult::success(json!({
+                    "task_id":       task_id,
+                    "task_title":    task.title,
+                    "task_type":     task.task_type.as_str(),
+                    "worker_slug":   score.worker_slug,
+                    "score":         score.score,
+                    "confidence":    score.confidence,
+                    "method":        score.method,
+                    "primary_repos": primary_repos,
+                    "message": format!(
+                        "Recommended worker: {} (score={:.2}, method={})",
+                        score.worker_slug, score.score, score.method
+                    )
+                }).to_string())
+            }
             Err(e) => ToolResult::error(format!("Failed to compute worker suggestion: {e}")),
         }
     }

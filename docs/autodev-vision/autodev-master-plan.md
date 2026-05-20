@@ -78,7 +78,7 @@ Any AIRS team member or AutoDev worker agent can:
 | **Plugins** | Bundle Skills + MCP servers + Hooks into installable packages | AIRS plugin = one install to configure any worker PC |
 | **Context compaction** | Auto-compress stale context to prevent context window overflow | Essential for long-running worker sessions |
 | **Plan mode** | Agent maps the work before executing — halves token waste | Used by Supervisor when breaking down epics |
-| **Git worktree integration** | Each task gets an isolated git worktree branch via `git2-rs`; file checkpointing per message (undo support); commit attribution trailers | The `worker/backend/<issue>` branching pattern; agents work in isolation without polluting main |
+| **Git worktree integration** | The `git2-rs` worktree API (create / list / remove) is shipped and exposed as Tauri commands. File checkpointing per message (undo support) and commit attribution trailers are wired. The remaining piece — having the runner automatically create a fresh worktree per task — is intentionally deferred; Workers currently share the configured workspace. The other guard rails (path-jail, per-path write lock, build-evidence gate) cover the same multi-Worker-on-one-repo failure modes. | The `worker/backend/<issue>` branching pattern; agents *can* opt into worktree isolation today via the git module; auto-wiring is on the roadmap. |
 | **`@mention` subagents** | Reference specific subagents by name in conversation | Supervisor can address workers by name |
 | **HTTP hooks** | POST JSON to external services on lifecycle events | Send task completion events to AIRS dashboard |
 | **`defer` permission** | Pause headless session, wait for external signal to resume | Multi-agent coordination between Supervisor and Workers |

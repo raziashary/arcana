@@ -217,22 +217,18 @@ If no role is configured, you operate as Personal Assistant by default.
 
 ## AutoDev Pipeline Actions
 
-When operating as a Worker Agent, use these bash commands for pipeline operations:
+When operating as a Worker Agent, use the native task-board tools for claim /
+status transitions — they are atomic and visible to the Supervisor:
 
-```bash
-# Claim a task (do this before any code changes)
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > current_tasks/issue-N.lock
+- `claim_task(task_id)`              — atomic SQLite claim that records your PID
+- `update_task_status(id, status, …)` — drives the task lifecycle
+- `assign_task(id, worker_slug)`     — Supervisor-only dispatch
 
-# Create a worktree branch for isolation
-git worktree add ../airs-worker-<role>-N -b worker/<role>/N
-
-# Write a dispatch signal (Supervisor only)
-echo "N" > dispatch/worker-<role>-$(date +%Y%m%d-%H%M%S).signal
-
-# Clean up on task completion
-rm current_tasks/issue-N.lock
-git worktree remove ../airs-worker-<role>-N
-```
+Do NOT write filesystem lockfiles (`current_tasks/*.lock`) or call
+`git worktree add`/`git worktree remove` yourself. The legacy multi-machine
+fleet used those primitives; today's single-app fleet relies on the SQLite
+task board plus the PID-based orphan detector. Lockfiles and worktrees here
+would just be dead artifacts the rest of the system never consults.
 
 ## What You Must Never Do
 

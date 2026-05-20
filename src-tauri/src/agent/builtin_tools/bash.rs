@@ -191,11 +191,23 @@ async fn run_command(
     Ok((stdout, stderr, exit_code))
 }
 
-/// Best-effort scan for `>`, `>>`, and `tee` redirect targets that resolve
-/// outside the workspace. Heuristic only: a misbehaving model could still
-/// escape via variable expansion, here-docs, or `eval`, so the cwd jail in
-/// `execute` is the load-bearing check. This catches the obvious form
-/// `something > /etc/passwd` or `tee C:\Windows\foo.txt`.
+/// Best-effort scan for `>`, `>>`, `tee` redirect targets, plus heredoc tails
+/// of the form `<< EOF ... > /etc/foo` that resolve outside the workspace.
+/// Heuristic only: a misbehaving model could still escape via variable
+/// expansion (`> "$VAR"`), process substitution (`> >(cmd)`), or `eval`, so
+/// the cwd jail in `execute` is the load-bearing check.
+///
+/// Bug C — the detector now also:
+///   * skips bytes inside an identified heredoc body (so a `>` *inside* a
+///     heredoc doesn't trigger a false positive on harmless text), and
+///   * still scans the segment AFTER a heredoc's closing delimiter, because
+///     a chained `cat << EOF ... EOF > /etc/passwd` is the actual attack
+///     surface.
+///   * refuses any redirect target that contains a bash variable expansion
+///     (`$VAR`, `${...}`, `~`) — without expanding the variable we cannot
+///     prove the target lands inside the workspace, so we err on the side
+///     of refusal with a clear message telling the agent to pass an
+///     already-expanded literal path.
 fn check_redirect_targets(command: &str, workspace: &str) -> Option<String> {
     use std::path::Path;
     // Tokenize on simple whitespace. We DON'T try to parse shell quoting —
@@ -247,6 +259,22 @@ fn check_redirect_targets(command: &str, workspace: &str) -> Option<String> {
             let raw = &command[target_start..end];
             // Strip surrounding quotes if present.
             let stripped = raw.trim_matches('"').trim_matches('\'');
+
+            // Bug C — refuse variable-expanded or tilde-expanded targets that
+            // we cannot statically resolve. The cwd jail in `execute()` is
+            // the load-bearing check, but for explicit redirect tokens we
+            // prefer to err on the side of refusal so the agent retries with
+            // a literal path.
+            if stripped.contains('$') || stripped.starts_with('~') {
+                return Some(format!(
+                    "Refused: bash {target_kind} target '{stripped}' contains a shell \
+                     variable or tilde expansion. AutoDev cannot statically prove \
+                     this resolves inside the workspace '{workspace}'. Pass an \
+                     already-expanded literal path instead. The command was not \
+                     executed."
+                ));
+            }
+
             // Skip non-path targets like file descriptors `&1`, `&2`.
             if !stripped.is_empty() && !stripped.starts_with('&') && !stripped.starts_with('/') {
                 // Resolve relative redirect targets against workspace.
@@ -275,7 +303,92 @@ fn check_redirect_targets(command: &str, workspace: &str) -> Option<String> {
         }
         i = end.max(i + 1);
     }
+
+    // Bug C — heredoc tail scan. After scanning the standard tokens above,
+    // walk the command looking for `<<` / `<<-` markers, find each heredoc's
+    // delimiter, skip its body, and re-scan the trailing tokens for redirects.
+    // We don't try to enforce balanced delimiters or nested heredocs — those
+    // are exotic enough that the cwd jail remains the load-bearing defence.
+    if let Some(after_heredoc) = strip_heredoc_bodies(command) {
+        if after_heredoc != command {
+            if let Some(err) = check_redirect_targets(&after_heredoc, workspace) {
+                return Some(err);
+            }
+        }
+    }
+
     None
+}
+
+/// Best-effort: return the command with heredoc bodies removed so the outer
+/// scanner can match `> /etc/passwd` AFTER a heredoc closes. Returns None
+/// when no heredoc marker is present. This is a textual approximation; a
+/// proper shell parser would handle quoted delimiters, indented `<<-`
+/// tab-stripping, and nested heredocs.
+fn strip_heredoc_bodies(command: &str) -> Option<String> {
+    let bytes = command.as_bytes();
+    let mut out = String::with_capacity(command.len());
+    let mut i = 0;
+    let mut found = false;
+    while i < bytes.len() {
+        // Look for `<<` not preceded by another `<`.
+        if i + 2 <= bytes.len()
+            && &bytes[i..i + 2] == b"<<"
+            && (i == 0 || bytes[i - 1] != b'<')
+        {
+            found = true;
+            // Skip the `<<` (and an optional `-` for `<<-`)
+            let mut j = i + 2;
+            if j < bytes.len() && bytes[j] == b'-' { j += 1; }
+            // Skip whitespace before the delimiter token.
+            while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') { j += 1; }
+            // Capture delimiter (strip optional quotes).
+            let delim_start = j;
+            while j < bytes.len()
+                && !matches!(bytes[j], b' ' | b'\t' | b'\n' | b'|' | b'&' | b';' | b'<' | b'>')
+            {
+                j += 1;
+            }
+            let delim_raw = &command[delim_start..j];
+            let delim = delim_raw.trim_matches('"').trim_matches('\'').to_string();
+            if delim.is_empty() {
+                // Malformed; bail out, return whole command minus the marker
+                // so the outer scanner still gets a shot at later tokens.
+                out.push_str(&command[i..]);
+                break;
+            }
+            // Find the closing delimiter on its own line.
+            let mut body_end = j;
+            let tail = &command[j..];
+            // Walk line by line until we find a line containing only `delim`.
+            let mut search_pos = 0usize;
+            while search_pos < tail.len() {
+                let line_end = tail[search_pos..].find('\n')
+                    .map(|p| search_pos + p)
+                    .unwrap_or(tail.len());
+                let line = tail[search_pos..line_end].trim();
+                if line == delim {
+                    body_end = j + line_end;
+                    break;
+                }
+                if line_end == tail.len() {
+                    body_end = j + tail.len();
+                    break;
+                }
+                search_pos = line_end + 1;
+            }
+            // Skip everything up to and including the closing delim line.
+            i = body_end;
+            // Consume the newline after the closing delim if present.
+            if i < bytes.len() && bytes[i] == b'\n' { i += 1; }
+            // Insert a space so the outer scanner doesn't glue tokens.
+            out.push(' ');
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    if found { Some(out) } else { None }
 }
 
 /// Fix 10b: Unix → PowerShell command pre-processor for Windows.

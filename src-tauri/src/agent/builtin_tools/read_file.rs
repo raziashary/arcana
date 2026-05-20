@@ -7,13 +7,29 @@ use crate::hooks::{HookRegistry, HookType, HookContext, ToolCallContext};
 
 pub struct ReadFileTool;
 
+/// Soft cap: files with more than this many lines REQUIRE an explicit
+/// start_line / end_line range. The error message instructs the agent to
+/// narrow the read.
+const READ_FILE_REQUIRE_RANGE_OVER_LINES: usize = 800;
+
+/// Hard cap: a single read_file call returns at most this many lines, even
+/// when the agent explicitly asked for a wider range. Larger reads must be
+/// performed as multiple paged calls.
+const READ_FILE_MAX_LINES_PER_CALL: usize = 2000;
+
 #[async_trait]
 impl Tool for ReadFileTool {
     fn name(&self) -> &str { "read_file" }
 
     fn description(&self) -> &str {
-        "Read the contents of a file at the given path. Returns the file content with line numbers. \
-         Use start_line and end_line to read specific portions of large files."
+        "Read the contents of a file at the given path. Returns the file content with \
+         line numbers. \
+         \
+         REQUIRED for large files: pass start_line and end_line (1-indexed, inclusive) \
+         to read a specific section. Files longer than 800 lines refuse a no-range \
+         read; the error tells you the total line count so you can page through \
+         in 2,000-line windows. Even with an explicit range, a single call returns \
+         at most 2,000 lines — wider spans must be split across multiple calls."
     }
 
     fn input_schema(&self) -> serde_json::Value {
@@ -26,11 +42,15 @@ impl Tool for ReadFileTool {
                 },
                 "start_line": {
                     "type":        "integer",
-                    "description": "Optional: 1-indexed line to start reading from."
+                    "minimum":     1,
+                    "description": "1-indexed line to start reading from. REQUIRED for files \
+                                    longer than 800 lines."
                 },
                 "end_line": {
                     "type":        "integer",
-                    "description": "Optional: 1-indexed line to stop reading at (inclusive)."
+                    "minimum":     1,
+                    "description": "1-indexed line to stop reading at (inclusive). Combined \
+                                    with start_line, the call returns at most 2,000 lines."
                 }
             },
             "required": ["path"]
@@ -100,18 +120,72 @@ impl Tool for ReadFileTool {
                 let end   = input["end_line"].as_u64().map(|n| n as usize);
 
                 let lines: Vec<&str> = content.lines().collect();
+                let total_lines = lines.len();
+
+                // Soft cap: refuse a no-range read of a long file. The
+                // agent learns the total line count from the error and
+                // can page through in 2000-line windows.
+                if !has_range && total_lines > READ_FILE_REQUIRE_RANGE_OVER_LINES {
+                    return ToolResult::error(format!(
+                        "File '{}' has {} lines, which exceeds the {}-line no-range read \
+                         limit. Re-read with start_line and end_line to page through it \
+                         (at most {} lines per call). For example:\n  \
+                         read_file(path='{}', start_line=1, end_line={})",
+                        path.display(),
+                        total_lines,
+                        READ_FILE_REQUIRE_RANGE_OVER_LINES,
+                        READ_FILE_MAX_LINES_PER_CALL,
+                        path_str,
+                        READ_FILE_MAX_LINES_PER_CALL.min(total_lines),
+                    ));
+                }
+
                 let from = start.map(|n| n.saturating_sub(1)).unwrap_or(0);
-                let to   = end.unwrap_or(lines.len()).min(lines.len());
-                
+                let requested_to = end.unwrap_or(total_lines).min(total_lines);
+
+                // Hard cap: even with an explicit range, never emit more
+                // than READ_FILE_MAX_LINES_PER_CALL lines in one response.
+                // Wider spans must be paged across multiple calls.
+                let to = requested_to.min(from + READ_FILE_MAX_LINES_PER_CALL);
+                let truncated_by_hard_cap = to < requested_to;
+
+                if from >= total_lines {
+                    return ToolResult::error(format!(
+                        "start_line={} is past end of file '{}' (file has {} lines).",
+                        from + 1, path.display(), total_lines,
+                    ));
+                }
+                if to <= from {
+                    return ToolResult::error(format!(
+                        "Empty line range: start_line={}, end_line={}. \
+                         end_line must be ≥ start_line.",
+                        from + 1, requested_to,
+                    ));
+                }
+
                 let selected_lines = &lines[from..to];
                 let start_line_num = from + 1;
-                
-                let output = selected_lines
+
+                let mut output = selected_lines
                     .iter()
                     .enumerate()
                     .map(|(i, line)| format!("{:>4} | {}", start_line_num + i, line))
                     .collect::<Vec<_>>()
                     .join("\n");
+
+                if truncated_by_hard_cap {
+                    output.push_str(&format!(
+                        "\n\n[⚠ Output truncated to {max} lines — file has {total} lines, \
+                         range requested ended at line {req}. Continue with \
+                         read_file(path='{path}', start_line={next}, end_line={next_end}).]",
+                        max      = READ_FILE_MAX_LINES_PER_CALL,
+                        total    = total_lines,
+                        req      = requested_to,
+                        path     = path_str,
+                        next     = to + 1,
+                        next_end = (to + READ_FILE_MAX_LINES_PER_CALL).min(total_lines),
+                    ));
+                }
 
                 ToolResult::success(output)
             }

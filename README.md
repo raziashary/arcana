@@ -26,7 +26,7 @@ AutoDev is a downloadable desktop application that combines the best capabilitie
 - 🛠️ **Skills & Recipes:** Reusable YAML workflows with cron scheduling for fleet orchestration
 - 🚀 **Single installer:** No Python, Redis, or Docker setup required for end users
 - 🎭 **Dual-mode execution:** PA mode (Rust-native for speed) + Worker mode (orchestrated via core-orchestrator with real-time SSE streaming back into the UI)
-- 🔄 **Git integration:** Structured git operations via git2-rs with worktree isolation per task
+- 🔄 **Git integration:** Structured git operations via git2-rs. The git module exposes worktree create/list/remove as a first-class capability, but worktrees are not (yet) created automatically per task — Workers currently share the configured workspace
 - 📊 **Cost tracking:** Real-time token spend per session with per-agent, per-task reporting
 - 🛡️ **Workspace path-jail:** Every writing tool enforces that file paths and shell working directories stay inside the user's configured workspace
 - 🧯 **Budget circuit breaker:** Per-task token / USD / turn caps, pre-emptively halting runaway loops and escalating to the Supervisor
@@ -631,7 +631,7 @@ AUTODEV.md is a first-class UI feature - created, edited, and stored entirely wi
 
 AutoDev uses **git2-rs** (libgit2 Rust bindings) for structured git operations:
 - No shell-out to git binary (type-safe, no parsing)
-- Worktree isolation per task (`.autodev/worktrees/`)
+- Worktree create / list / remove exposed as Tauri commands and a git module (not yet auto-wired per task; Workers share the configured workspace today)
 - File checkpointing for undo support (50 snapshots per file)
 - Commit attribution with `Generated-by: AutoDev/<role>` trailers
 - Pull is fast-forward only (safer for agents)
@@ -677,7 +677,7 @@ The Supervisor authors `INTERFACE.md` via the `write_interface_spec` tool, captu
 - Subagents + Agent Teams (Phase 4)
 - Skills, Hooks, Plugins (Phase 3)
 - MCP client integration via rmcp crate
-- Git worktree per task (git2-rs implementation)
+- Git worktree primitive exposed via git2-rs (per-task auto-wiring deferred — capability available to recipes that opt in)
 - Context compaction when approaching token limit
 - Plan mode for complex multi-step tasks
 
