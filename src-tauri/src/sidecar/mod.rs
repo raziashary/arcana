@@ -345,6 +345,12 @@ fn is_windows_asyncio_noise(line: &str) -> bool {
     // is sufficient — no regex dependency needed.
     line.contains("ConnectionResetError") && line.contains("WinError 10054")
         || line.contains("_ProactorBasePipeTransport._call_connection_lost")
+        // anyio 4.x + Python 3.13 + IocpProactor cancel-scope cross-task violation.
+        // Logged by asyncio's async-generator error handler; not actionable once
+        // WindowsSelectorEventLoopPolicy is active (start_orchestrator.py).
+        || line.contains("cancel scope in a different task")
+        || line.contains("closing of asynchronous generator")
+        || line.contains("unhandled errors in a TaskGroup")
 }
 
 /// J.1 — Map a Python sidecar log line to the Rust tracing level it should
@@ -358,6 +364,9 @@ fn classify_python_log_level(line: &str) -> &'static str {
         || line.contains("ConnectionResetError")
         || line.contains("_call_connection_lost")
         || line.contains("send_nowait")
+        || line.contains("cancel scope in a different task")
+        || line.contains("closing of asynchronous generator")
+        || line.contains("unhandled errors in a TaskGroup")
     {
         return "debug";
     }
@@ -580,12 +589,11 @@ impl SidecarManager {
         }
 
         let mut cmd = Command::new("uv");
-        cmd.args([
-            "run", "uvicorn", "api_gateway.api.main:app",
-            "--host", "127.0.0.1",
-            "--port", "4000",
-            "--log-level", "info",
-        ]);
+        // start_orchestrator.py sets WindowsSelectorEventLoopPolicy BEFORE uvicorn
+        // creates its event loop.  This prevents the IocpProactor.accept_coro crash
+        // caused by anyio cancel-scope cross-task violations during MCP async-generator
+        // GC finalization (Python 3.13 + anyio 4.x + Windows).
+        cmd.args(["run", "python", "start_orchestrator.py"]);
         cmd.current_dir(cwd);
         // CRITICAL: clear list/dict-typed env vars that dotenvy mangles before
         // they reach the Python subprocess. Without this, pydantic-settings

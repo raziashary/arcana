@@ -173,9 +173,17 @@ impl ServerHandler for AutodevMcpServer {
 
         // L.1 — Accept __working_dir per-call so fleet workers target the right
         // project directory instead of the process-cwd default.
+        //
+        // Re-read config.db on every call (cheap synchronous SQLite read) so a
+        // workspace change made in the Settings panel takes effect immediately
+        // without restarting the app. Construction-time snapshot only used as
+        // last-resort fallback when the DB returns empty.
         let working_dir = args.remove("__working_dir")
             .and_then(|v| v.as_str().map(String::from))
-            .unwrap_or_else(|| self.working_dir.clone());
+            .unwrap_or_else(|| {
+                let fresh = crate::commands::workspace_commands::load_workspace_dir();
+                if !fresh.trim().is_empty() { fresh } else { self.working_dir.clone() }
+            });
 
         // L.5 — Accept __agent_role so fleet workers can identify themselves.
         // Required for request_supervisor_action to record the correct worker_slug

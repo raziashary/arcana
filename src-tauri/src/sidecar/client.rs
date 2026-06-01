@@ -1535,22 +1535,14 @@ impl OrchestratorClient {
     ) -> Result<reqwest::Response> {
         self.ensure_authenticated().await?;
 
-        // Doc 10 hotfix — the core-orchestrator's `/invoke/stream` endpoint
-        // declares `session_id` as a REQUIRED query parameter (it returns
-        // HTTP 422 `{"loc":["query","session_id"],"msg":"Field required"}`
-        // when missing). The non-streaming `/invoke` sibling is *stateless*
-        // and rejects session_id; the streaming variant is *stateful* by
-        // design (sessions buffer SSE frames for resumption). Recipe ticks
-        // don't persist a session across cron pulses, so we generate a fresh
-        // UUID per call — the orchestrator treats it as a brand-new session,
-        // delivers all SSE frames inline, and discards it on stream close.
-        //
-        // Pre-hotfix symptom: every Mode 2 recipe tick (after the Doc 01
-        // Phase 2 swap to invoke_worker_streaming) failed with the 422 above,
-        // and after 6 consecutive `/health` misses the watchdog correctly
-        // tripped to `mode2_only → fallback_idle`. The 422 is the load-
-        // bearing bug; the fallback_idle is just downstream symptom.
-        let session_id = uuid::Uuid::new_v4().to_string();
+        // Use a stable `worker-{agent_id}` session_id so each worker has a
+        // consistent memory lane across ticks. The core-orchestrator's
+        // invoke_agent_stream now auto-creates the session when it doesn't
+        // exist (headless path), so no pre-existing browser SSE connection is
+        // required. The `worker-` prefix also matches the existing
+        // service.py:1483 guard that skips get_session_context for headless
+        // worker sessions, suppressing harmless "Session not found" warnings.
+        let session_id = format!("worker-{agent_id}");
         let url = format!(
             "{}/api/agents/{}/invoke/stream?session_id={}",
             self.base_url, agent_id, session_id
