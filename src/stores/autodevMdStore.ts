@@ -146,7 +146,7 @@ export const useAutodevMdStore = create<AutodevMdState>((set, get) => ({
   setModified: (scope, isModified) => {
     set(s => {
       const next = new Set(s.modifiedScopes)
-      isModified ? next.add(scope) : next.delete(scope)
+      if (isModified) { next.add(scope) } else { next.delete(scope) }
       return { modifiedScopes: next }
     })
   },

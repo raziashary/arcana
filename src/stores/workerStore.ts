@@ -6,6 +6,10 @@
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+// Imported as a module, not via require(). `addToast` is a method ON the store,
+// so the previous `const { addToast } = require('../stores/toastStore')` bound
+// undefined and every worker-error and QC toast silently did nothing.
+import { useToastStore } from './toastStore'
 
 // ─── Types (mirror Rust Worker struct) ───────────────────────────────────────
 
@@ -280,7 +284,7 @@ export const useWorkerStore = create<WorkerStoreState>((set, get) => ({
           const last = _lastToastTs[slug] ?? 0
           if (now - last > TOAST_DEDUP_MS) {
             _lastToastTs[slug] = now
-            const { addToast } = require('../stores/toastStore')
+            const { addToast } = useToastStore.getState()
             addToast({
               title: `Worker ${slug} errored`,
               message: reason ?? 'Invoke failed — see logs for details',
@@ -321,7 +325,7 @@ export const useWorkerStore = create<WorkerStoreState>((set, get) => ({
       // BUG-004 — QC decision toast event.
       const unlistenQc = await listen<QcDecisionPayload>('qc:decision', (event) => {
         const { task_id, task_title, decision, rejection_reason } = event.payload
-        const { addToast } = require('../stores/toastStore')
+        const { addToast } = useToastStore.getState()
         if (decision === 'approved') {
           addToast({
             title: `✅ QC passed — Task #${task_id} done`,

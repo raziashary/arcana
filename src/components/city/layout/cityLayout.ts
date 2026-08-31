@@ -89,8 +89,7 @@ export function computeCityLayout(
     .paddingOuter(4)
     .paddingInner(2)
     .paddingTop(5)
-    .tile(d3Hierarchy.treemapSquarify)
-    (root)
+    .tile(d3Hierarchy.treemapSquarify)(root)
 
   const buildingPositions = new Map<string, BuildingLayout>()
   const districts: DistrictLayout[] = []

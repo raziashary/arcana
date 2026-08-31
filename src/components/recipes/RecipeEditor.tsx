@@ -65,7 +65,7 @@ function parseRecipeYaml(yaml: string): Partial<Recipe> {
     }
     if (inInstructions) continue
 
-    const m = line.match(/^([a-z_]+):\s*[\'"\|]?(.+)?[\'"\|]?\s*$/)
+    const m = line.match(/^([a-z_]+):\s*['"|]?(.+)?['"|]?\s*$/)
     if (!m) continue
     const [, key, raw] = m
     const val = (raw ?? '').replace(/['"|]/g, '').trim()

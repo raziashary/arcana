@@ -55,7 +55,7 @@ export default function SkillsPalette({ onInsert }: Props) {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'S') {
         e.preventDefault()
-        store.paletteOpen ? store.closePalette() : store.openPalette()
+        if (store.paletteOpen) { store.closePalette() } else { store.openPalette() }
       }
       if (e.key === 'Escape' && store.paletteOpen) {
         store.closePalette()

@@ -71,13 +71,15 @@ export function parseToolOutput(
 ): ToolOutputType {
   try {
     switch (toolName) {
-      case "grep":
+      case "grep": {
         const grepData = JSON.parse(output) as GrepOutput;
         return { type: "grep", data: grepData };
+      }
 
-      case "glob":
+      case "glob": {
         const globData = JSON.parse(output) as GlobOutput;
         return { type: "glob", data: globData };
+      }
 
       case "bash":
         try {

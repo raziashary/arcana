@@ -22,6 +22,11 @@ pub mod ide;
 pub mod git;
 pub mod runtime_config;
 pub mod mcp;
+
+// Compiled only under test: asserts every .rs file under src/ is reachable from
+// the crate root. 918 lines shipped as "COMPLETE" while never being compiled.
+#[cfg(test)]
+mod reachability_gate;
 pub mod plan;
 pub mod subagent;
 pub mod analytics;

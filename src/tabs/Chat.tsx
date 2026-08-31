@@ -256,7 +256,7 @@ export default function ChatTab() {
     const ws = workspaceDir || localDir
     if (!ws) return text
     const sep = ws.includes('\\') ? '\\' : '/'
-    return text.replace(/@([\/\\]?[\w\-.][\w\-.+/\\]*[./\\][\w\-.+/\\]*|[\w\-]+\.[\w]+)/g, (_, p) => {
+    return text.replace(/@([/\\]?[\w\-.][\w\-.+/\\]*[./\\][\w\-.+/\\]*|[\w-]+\.\w+)/g, (_, p) => {
       if (p.startsWith('/') || p.startsWith('\\') || /^[A-Za-z]:/.test(p)) return `@${p}`
       return `${ws}${sep}${p}`
     })
