@@ -156,6 +156,8 @@ The only legitimate stops are: the phase is complete · a §0.8 destructive oper
 > - **`delete_file` calls `remove_dir_all`** despite a docstring saying "empty directory" (`GI-05`).
 > - **Plugin uninstall runs `rustup self uninstall -y`** — it removes the machine's Rust toolchain (`G3a SK-99`).
 > - **`ensure_default_recipes` / `ensure_default_skills` overwrite user edits on every launch** (`SK-49`, `SK-69`).
+> - **`git add -A` / `git add .` would commit 225 MB of untracked Python.** `submodules/` is untracked **and not gitignored** (§1.1a), so a blind stage pulls in the entire sidecar tree. **Always stage by explicit path.** This is §0.9's rule, restated here because this is the section every session reads.
+> - **Deleting `submodules/` without `.git/modules/submodules/`** leaves both object stores in the repository — the sidecar surviving by address rather than by content (§1.1a, P8-C).
 > *This list is appended to as more are discovered. Removing an entry requires proof it is fixed.*
 
 **§0.9 — Commit discipline.** One commit per lettered sub-section. Conventional-commit messages stating what and why. Stage deliberately — never `git add -A`. Scan every diff for credentials. **Razi authorises all pushes**; the first push of any branch and anything touching `main` requires explicit approval.
@@ -186,7 +188,7 @@ Required by §0.2n. **Seeded from the planning phase**, because that phase produ
 |---|---|---|---|
 | **L-C1** | **A derived artifact was not regenerated after its source changed** | **3** | Part 1B stale since rev 0.3, so none of ADR-05-01…05-06 owned a mechanic · a **duplicate `ADR-02-06`** created by inserting into a ledger without re-reading it · the specs' gate tables never regenerated against the rev-0.9 mechanics |
 | **L-C2** | **A property was asserted without the mechanism, or the comparison, that would establish it** | **3** | *"the anchor's reranker **is** the competitive model"* — 6 of 8 terms are disjoint · *"structurally impossible"* — the enum only relocates the dead-latch to `FromStr` · the cache-hit formula generalised from Anthropic to four providers |
-| **L-C3** | **A source's conclusion was adopted without checking its load-bearing detail** | **2** | `port_status.rs` "should be KEPT" propagated into two documents; one import line disproved it · `G4b §A.14`'s two-part verdict adopted by half — the vault landed, the **redaction was dropped** |
+| **L-C3** | **A source's conclusion was adopted without checking its load-bearing detail** | **3** | `port_status.rs` "should be KEPT" propagated into two documents; one import line disproved it · `G4b §A.14`'s two-part verdict adopted by half — the vault landed, the **redaction was dropped** · **P8 was written as "a `git rm` and a `.gitmodules` edit" from the presence of `.gitmodules` alone — the index has zero gitlinks, so `git rm` would have failed on first contact** (§1.1a) |
 | **L-C4** | **A local change was made without re-checking the dependencies I had myself documented** | **1** | Moving the `/mcp` deletion to P0 broke the ACP identity chain described four sections earlier in the same document |
 | **L-C5** | **An owner's answer was reinterpreted rather than escalated** | **1** | ADR-02-02's option (B) was silently narrowed to "diagnoses only" instead of flagging that a literal reading re-creates BUG-COMPILE |
 
@@ -226,6 +228,31 @@ Required by §0.2n. **Seeded from the planning phase**, because that phase produ
 | Shared | `src-shared/src/` | 1,073 LOC | Duplicates **four** tables by hand |
 | Sidecar | `submodules/core-orchestrator` | 225 MB bundled | **DELETE (P8)** |
 | Memory MCP | `submodules/memory-mcp-server` | — | **DELETE (P8)** |
+
+## 1.1a The submodule registration is broken — verified state
+
+Razi flagged this, and it is verified rather than assumed (§0.0). **The two submodules are in a half-registered state, and it changes how P8 must delete them.**
+
+| Check | Result |
+|---|---|
+| Gitlink entries in the index | **0** — `git ls-files -s submodules/` is empty |
+| Gitlinks in `HEAD` | **0** — `git ls-tree HEAD submodules/` is empty |
+| Ever committed | **Never** — `git log --all -- submodules/` returns nothing |
+| `.gitmodules` | **Tracked and committed**, declaring both submodules |
+| `.git/modules/submodules/` | **Present**, holding both object stores |
+| `submodules/*/.git` | Present as **pointer files** into `.git/modules/` |
+| Gitignored | **No** |
+
+**What happened:** `git submodule add` ran locally — creating `.gitmodules`, the object stores and the working trees — but **the resulting gitlinks were never committed**. So `.gitmodules` describes two submodules that this repository has no index or history record of.
+
+**Four consequences, all of which change P8:**
+
+1. **`git submodule deinit` will fail.** It operates on submodules registered in the index; there are none.
+2. **`git rm submodules/…` will fail.** Nothing is tracked to remove. *(An earlier revision of this plan said P8 would be "a `git rm` and a `.gitmodules` edit". That was assumed, not checked — see §0.16 L-C3.)*
+3. ✅ **No history rewriting is needed.** The sidecar content was never in this repository's history, so deletion leaves no large blobs and needs no `filter-branch`. **This materially simplifies P8.**
+4. ⚠️ **`.git/modules/submodules/` is a "survives by address" trap.** Deleting the working tree alone leaves both object stores behind — the same class as the MCP files living in sidecar-named paths. P8's exit condition covers content *and* address.
+
+⚠️ **Live hazard, today:** 225 MB sits untracked and **not ignored**, so `git add -A` would commit the entire Python tree. §0.9's stage-deliberately rule is what prevents it; it is now also named in §0.8.
 
 **Live schema head:** only `graph/` has a real migration ladder — `PRAGMA user_version`, 5 migrations, **head = v5, and v5 is a broken statement that must be repaired before v6**. Every other database uses `CREATE TABLE IF NOT EXISTS` on open. **11 databases across 3 data roots.**
 
@@ -688,7 +715,19 @@ Full task breakdowns are written at the start of each phase (§0.12 requires re-
 | **P5 Graph** | A canonical path · B non-destructive upsert · C incremental correctness · D graph-scoped context | One normalized DB path (four spellings → four DBs today) · stop `INSERT OR REPLACE` + cascade deleting edges graph-wide · re-cluster on incremental update · **feed context selection** (M-18) | `05` |
 | **P6 UI** | A anchor · B event lifetime · C contract · D settings · E Graph City · F reachability | 7px/fonts/tokens/light-only · session-lifetime subscription above the tab boundary · reconcile 2 missing + 47 dead commands + 10 dead listeners + 3 dead events · persist every setting · **self-host the font** (the CSP block is why the city hangs) · route or delete ~3,700 orphaned LOC | `07` |
 | **P7 Experience** | A first-run · B errors · C progress · D destructive · E coherence | The BYOK flow · **fix the two toast producers** (a two-call-site import fix, not a system to build) · honest progress + cancellation · confirm the 10 unconfirmed destructive actions · one vocabulary | `07 §7` |
-| **P8 Deletion** | A verify entry gate · B excise · C relocate · D prune deps | **Entry gate: all ten ported capabilities pass with the sidecar *absent*, not merely stopped** · remove `sidecar/` (3,161 LOC) + 29 commands + `resources/sidecars` (225 MB) + both submodules · verify **no sidecar code survives by address** | `09 §4` |
+| **P8 Deletion** | A verify entry gate · B excise Rust · C **filesystem + config removal** · D relocate · E prune deps | **Entry gate: all ten ported capabilities pass with the sidecar *absent*, not merely stopped** · remove `sidecar/` (3,161 LOC) + 29 commands + `resources/sidecars` (225 MB) · **see §1.1a — this is not a `git submodule` operation** · verify **no sidecar code survives by content or by address** | `09 §4` |
+
+### P8-C · Submodule removal — the correct procedure for the state we are actually in
+
+Grounded in §1.1a. **The standard `git submodule deinit` → `git rm` sequence will fail here**, because there are no gitlinks in the index or in history to operate on.
+
+1. **Back up first** (§0.8). `submodules/` is 225 MB of untracked working tree with no remote copy of any local modification.
+2. Delete both stanzas from **`.gitmodules`** — this is the only *tracked* artifact, so it is a normal file edit and a normal commit.
+3. Delete **`.git/modules/submodules/`** — both object stores. ⚠️ **Skipping this is the "survives by address" failure**: the working tree goes and the repository still carries the sidecar's git objects.
+4. Delete the **`submodules/`** working tree.
+5. Delete **`src-tauri/resources/sidecars/`** and its `tauri.conf.json` `resources` entry — the 225 MB bundle resource.
+6. **No history rewrite.** Verified: the content was never committed to this repository.
+7. Assert the exit condition: no `.py` in the tree, no `.py` in any built installer, and `git ls-files | grep -i sidecar` returns nothing.
 | **P9 Delivery** | A signing · B installers · C updater · D capstone | Apple + Windows certificates (**procurement lead time — start at GO**) · working install on all three · the headline acceptance test | `09` |
 
 ---
