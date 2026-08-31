@@ -183,6 +183,7 @@ fn main() {
     autodev_lib::register_commands(
         tauri::Builder::default()
             .plugin(tauri_plugin_shell::init())
+            .plugin(tauri_plugin_dialog::init())
             .manage(app_state)
             .manage(session_mgr)
             .manage(pending_permissions)

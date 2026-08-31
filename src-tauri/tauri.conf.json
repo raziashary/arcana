@@ -21,7 +21,7 @@
         "fullscreen": false,
         "decorations": false,
         "transparent": false,
-        "additionalBrowserArgs": "--enable-gpu --use-angle=d3d11 --enable-features=Vulkan"
+        "additionalBrowserArgs": "--enable-gpu --use-angle=d3d11"
       }
     ],
     "security": {
@@ -30,7 +30,12 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis",
+      "deb",
+      "appimage",
+      "dmg"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -47,7 +52,11 @@
     "copyright": "© 2026 AIRS Foundry. All rights reserved.",
     "linux": {
       "deb": {
-        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libayatana-appindicator3-1"],
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0",
+          "libayatana-appindicator3-1"
+        ],
         "section": "devel",
         "priority": "optional"
       },
@@ -57,7 +66,9 @@
     },
     "fileAssociations": [
       {
-        "ext": ["autodev"],
+        "ext": [
+          "autodev"
+        ],
         "name": "AutoDev Project",
         "description": "AutoDev Project File",
         "role": "Editor"
@@ -101,7 +112,9 @@
       },
       "nsis": {
         "displayLanguageSelector": true,
-        "languages": ["English"],
+        "languages": [
+          "English"
+        ],
         "installerIcon": "icons/icon.ico",
         "headerImage": "icons/128x128.png"
       }
@@ -111,7 +124,6 @@
     "shell": {
       "open": true
     },
-    "dialog": {},
-    "fs": {}
+    "dialog": {}
   }
 }

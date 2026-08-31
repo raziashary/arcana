@@ -63,3 +63,9 @@ logs/
 *.tmp
 *.bak
 *.cache
+
+# Redis snapshots. AutoDev can start Memurai on Windows (see
+# sidecar/mod.rs), and a Redis launched with a repo working directory
+# writes its dump here. 175 KB of one was committed once already.
+dump.rdb
+*.rdb

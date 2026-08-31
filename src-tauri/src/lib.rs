@@ -14,6 +14,7 @@ pub mod hooks;
 pub mod ide;
 pub mod mcp;
 pub mod observability;
+pub mod platform;
 pub mod provider;
 pub mod recipes;
 pub mod runtime_config;
@@ -92,7 +93,9 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
             rename_file, resolve_symbol, search_file_contents, search_files,
             set_ide_workspace_state,
         },
-        log_commands::{clear_log_files, list_log_files, read_log_file, read_log_file_full},
+        log_commands::{
+            clear_log_files, export_log_file, list_log_files, read_log_file, read_log_file_full,
+        },
         memory_commands::{
             deactivate_fact, delete_memory_topic, get_memory_md, get_memory_stats,
             get_memory_topic, get_session_timeline, get_user_preferences, list_memory_topics,
@@ -287,6 +290,7 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         list_log_files,
         read_log_file,
         read_log_file_full,
+        export_log_file,
         clear_log_files,
         // Sidecar lifecycle (core-orchestrator)
         get_sidecar_status,

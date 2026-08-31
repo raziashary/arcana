@@ -53,28 +53,16 @@ pub async fn check_sidecar_connectivity(
     if redis_ok {
         sidecar.mark_redis_running();
     } else {
-        // Phase 3.4b — Memurai auto-start:
-        // On the first connectivity check where Redis is unreachable (status == Stopped,
-        // meaning we have never yet attempted a start), try to bring up the Memurai
-        // Windows service automatically. On subsequent failures (status == Error) we
-        // skip the start attempt so we don't spam the log with repeated failed `net start`
-        // calls on every polling interval.
-        let is_first_attempt = matches!(sidecar.redis_status(), SidecarStatus::Stopped);
-        if is_first_attempt {
-            info!("[sidecar_commands] Redis not reachable — attempting Memurai auto-start");
-            if sidecar.try_start_memurai_service().await {
-                // Give the service 2 s to bind before re-probing
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                if client.is_redis_healthy().await {
-                    sidecar.mark_redis_running();
-                } else {
-                    sidecar.mark_redis_unavailable();
-                }
-            } else {
-                sidecar.mark_redis_unavailable();
-            }
-        }
-        // If status was already Error (tried before), leave it as-is — no re-attempt.
+        // AutoDev no longer starts Redis. It used to run `net start Memurai`
+        // (plus two fallbacks) the first time Redis was unreachable — starting
+        // a Windows service on the user's machine without asking, gated only on
+        // the service being installed. That is "presence of a capability
+        // treated as intent to use it", and it is how a 175 KB dump.rdb ended
+        // up committed inside src-tauri/.
+        //
+        // Redis is optional: core-orchestrator runs without it with the warm
+        // tier disabled, so an unreachable Redis is reported, not repaired.
+        sidecar.mark_redis_unavailable();
     }
 
     // Fleet readiness is still memory + orchestrator + in-process MCP. Redis

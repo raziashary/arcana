@@ -736,7 +736,14 @@ impl SidecarManager {
     // ─── redis / memurai status (Phase 3.4b) ──────────────────────────────────
     //
     // Redis is externally managed (Memurai service on Windows, system redis on
-    // Linux/macOS). AutoDev only polls liveness — it never spawns redis.
+    // Linux/macOS). AutoDev polls liveness and never starts it.
+    //
+    // That claim used to be false: `try_start_memurai_service` sat four lines
+    // below this comment and ran `net start Memurai` plus two fallbacks. It has
+    // been removed — starting a system service unasked, gated only on the
+    // service existing, is how a 175 KB `dump.rdb` came to be committed inside
+    // `src-tauri/`.
+    //
     // Redis is OPTIONAL: core-orchestrator runs without it (warm tier disabled)
     // so `redis_is_running()` is NOT part of `fleet_is_ready()`.
 
@@ -772,100 +779,6 @@ impl SidecarManager {
             self.redis_status.lock().unwrap().clone(),
             SidecarStatus::Running
         )
-    }
-
-    /// On Windows, attempt to start the Memurai Redis-compatible service if it is
-    /// installed but not yet running. Returns true if the service start command was
-    /// dispatched (does NOT guarantee Redis is listening — caller must re-probe).
-    ///
-    /// Tries in order:
-    ///   1. `net start Memurai`      — standard Windows service start
-    ///   2. `sc start Memurai`       — SC Manager fallback
-    ///   3. `net start redis`        — plain Redis service name (WSL / Chocolatey installs)
-    ///
-    /// This method is intentionally fire-and-forget: it logs success/failure but never
-    /// panics. The caller (check_sidecar_connectivity) retries the TCP PING afterwards.
-    pub async fn try_start_memurai_service(&self) -> bool {
-        // Attempt to start the Memurai service via spawn_blocking so we don't
-        // block the Tokio runtime. Tries three common service names in order.
-        let started = tokio::task::spawn_blocking(|| -> bool {
-            #[cfg(target_os = "windows")]
-            {
-                let attempts: &[(&str, &[&str])] = &[
-                    ("net", &["start", "Memurai"]),
-                    ("sc", &["start", "Memurai"]),
-                    ("net", &["start", "redis"]),
-                ];
-                for (cmd, args) in attempts {
-                    match std::process::Command::new(cmd).args(*args).output() {
-                        Ok(out) => {
-                            let stdout = String::from_utf8_lossy(&out.stdout);
-                            let stderr = String::from_utf8_lossy(&out.stderr);
-                            // exit 0 OR "already running" both count as success
-                            if out.status.success()
-                                || stdout.to_ascii_lowercase().contains("already")
-                                || stderr.to_ascii_lowercase().contains("already")
-                            {
-                                return true;
-                            }
-                        }
-                        Err(_) => {}
-                    }
-                }
-                false
-            }
-            #[cfg(not(target_os = "windows"))]
-            false
-        })
-        .await
-        .unwrap_or(false);
-
-        if started {
-            info!("[SidecarManager] Redis/Memurai service started successfully");
-            return true;
-        }
-
-        // ── Attempt 4: standalone binary fallback (BUG-003) ────────────────────
-        #[cfg(target_os = "windows")]
-        {
-            let binary_paths: &[&str] = &[
-                r"C:\Program Files\Memurai\memurai.exe",
-                r"C:\ProgramData\chocolatey\bin\redis-server.exe",
-            ];
-            for path in binary_paths {
-                if std::path::Path::new(path).exists() {
-                    let mut cmd = std::process::Command::new(path);
-
-                    // Hide console window on Windows (macOS/Linux don't show windows by default)
-                    #[cfg(target_os = "windows")]
-                    {
-                        use std::os::windows::process::CommandExt;
-                        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-                    }
-
-                    match cmd.spawn() {
-                        Ok(child) => {
-                            let pid = child.id();
-                            *self.redis_process.lock().unwrap() = Some(child);
-                            info!(
-                                "[SidecarManager] Redis/Memurai binary started from {} (PID {})",
-                                path, pid
-                            );
-                            return true;
-                        }
-                        Err(e) => {
-                            debug!("[SidecarManager] Failed to spawn {}: {}", path, e);
-                        }
-                    }
-                }
-            }
-        }
-
-        warn!(
-            "[SidecarManager] Could not start Redis/Memurai — \
-             install Memurai (https://memurai.com) for warm memory tier support"
-        );
-        false
     }
 
     /// Terminate managed sidecars (call on app shutdown).

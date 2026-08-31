@@ -11,7 +11,13 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { save } from '@tauri-apps/plugin-dialog'
-import { writeTextFile } from '@tauri-apps/plugin-fs'
+// The WRITE is done in Rust (`export_log_file`), not with
+// @tauri-apps/plugin-fs. That plugin's JS half was declared in package.json
+// while its Rust half was never added to Cargo.toml, never registered, and
+// never granted a capability — so writeTextFile threw at runtime while
+// TypeScript compiled and CI stayed green, and this export silently did
+// nothing. Keeping the write in Rust also avoids granting the frontend a broad
+// filesystem scope.
 import { RefreshCw, ChevronDown, Download, Copy, Check, Trash2, AlertTriangle } from 'lucide-react'
 
 // ─── Log line parser ──────────────────────────────────────────────────────────
@@ -71,6 +77,9 @@ export default function LogsTab() {
   const [totalLines,   setTotalLines]    = useState(0)
   const [truncated,    setTruncated]     = useState(false)
   const [fullSize,     setFullSize]      = useState(0)
+  // Export failures used to go to console.error only, so a user clicking
+  // "Export" saw nothing happen and had no way to know why.
+  const [exportError,  setExportError]   = useState<string | null>(null)
   const [clearConfirm, setClearConfirm]  = useState(false)
   const [clearingLogs, setClearingLogs]  = useState(false)
   const bottomRef    = useRef<HTMLDivElement>(null)
@@ -316,10 +325,16 @@ export default function LogsTab() {
                   }]
                 })
                 if (filePath) {
-                  await writeTextFile(filePath, rawContent)
+                  await invoke<string>('export_log_file', {
+                    date: selectedDate,
+                    destPath: filePath,
+                    full: false,
+                    tailLines: null,
+                  })
                 }
               } catch (e) {
                 console.error('Failed to export log:', e)
+                setExportError(e instanceof Error ? e.message : String(e))
               }
             }}
             disabled={!rawContent}
@@ -345,7 +360,6 @@ export default function LogsTab() {
             <button
               onClick={async () => {
                 try {
-                  const full = await invoke<string>('read_log_file_full', { date: selectedDate })
                   const defaultPath = `autodev-${selectedDate || 'log'}-FULL.log`
                   const filePath = await save({
                     defaultPath,
@@ -355,10 +369,16 @@ export default function LogsTab() {
                     }]
                   })
                   if (filePath) {
-                    await writeTextFile(filePath, full)
+                    await invoke<string>('export_log_file', {
+                      date: selectedDate,
+                      destPath: filePath,
+                      full: true,
+                      tailLines: null,
+                    })
                   }
                 } catch (e) {
                   console.error('Failed to download full log:', e)
+                  setExportError(e instanceof Error ? e.message : String(e))
                 }
               }}
               title="Download full log file (not truncated)"
@@ -464,6 +484,24 @@ export default function LogsTab() {
             }}>
               <AlertTriangle size={9} />
               {(fullSize / 1024 / 1024).toFixed(1)} MB on disk
+            </span>
+          )}
+          {exportError && (
+            <span
+              onClick={() => setExportError(null)}
+              title="Click to dismiss"
+              style={{
+                fontFamily: 'monospace',
+                fontSize: 9,
+                color: 'var(--warning)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                cursor: 'pointer',
+              }}
+            >
+              <AlertTriangle size={9} />
+              Export failed: {exportError}
             </span>
           )}
           {dates.length > 0 && selectedDate === dates[0] && (

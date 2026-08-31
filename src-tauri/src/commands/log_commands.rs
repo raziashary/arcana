@@ -179,3 +179,50 @@ pub fn clear_log_files() -> Result<usize> {
     }
     Ok(deleted)
 }
+
+/// Write a log file out to a user-chosen destination.
+///
+/// The write happens here rather than in the frontend deliberately. `Logs.tsx`
+/// used `@tauri-apps/plugin-fs`'s `writeTextFile`, but the Rust half of that
+/// plugin was never added to Cargo.toml, never registered in `main.rs`, and
+/// never granted a capability — so the call threw at runtime while TypeScript
+/// compiled cleanly and CI stayed green. The export simply did nothing when a
+/// user clicked it, and the failure went to `console.error`.
+///
+/// Doing it in Rust also avoids granting the frontend a broad filesystem scope:
+/// the caller supplies only a destination path, and the source is resolved from
+/// the logs directory here.
+///
+/// `full = false` writes the tail that the UI is displaying; `full = true`
+/// writes the entire file.
+#[tauri::command]
+pub fn export_log_file(
+    date: String,
+    dest_path: String,
+    full: bool,
+    tail_lines: Option<usize>,
+) -> Result<String> {
+    let contents = if full {
+        read_log_file_full(date)?
+    } else {
+        read_log_file(date, tail_lines)?.content
+    };
+
+    let dest = std::path::PathBuf::from(&dest_path);
+    if dest.as_os_str().is_empty() {
+        return Err(AutoDevError::Agent("No destination path given".into()));
+    }
+    if let Some(parent) = dest.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            return Err(AutoDevError::Agent(format!(
+                "Destination folder does not exist: {}",
+                parent.display()
+            )));
+        }
+    }
+
+    std::fs::write(&dest, contents.as_bytes())
+        .map_err(|e| AutoDevError::Agent(format!("Failed to write {}: {e}", dest.display())))?;
+
+    Ok(dest.to_string_lossy().into_owned())
+}
