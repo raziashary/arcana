@@ -3,15 +3,13 @@
 // Architecture:
 //   check.rs      — queries GitHub Releases API, compares semver
 //   download.rs   — streams installer with progress events
-//   verify.rs     — SHA-256 + Ed25519 signature checks
-//   patch.rs      — optional delta patch support (bsdiff4 format)
+//   verify.rs     — SHA-256 + Ed25519 signature checks (both mandatory)
 //   install.rs    — atomic OS-specific installation scheduling
 //   persistence.rs — data integrity checks before/after update
 
 pub mod check;
 pub mod download;
 pub mod install;
-pub mod patch;
 pub mod persistence;
 pub mod verify;
 

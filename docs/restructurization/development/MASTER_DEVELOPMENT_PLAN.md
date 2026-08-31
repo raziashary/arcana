@@ -186,7 +186,7 @@ Required by §0.2n. **Seeded from the planning phase**, because that phase produ
 
 | # | Class | Count | Instances |
 |---|---|---|---|
-| **L-C1** | **A derived artifact was not regenerated after its source changed** | **3** | Part 1B stale since rev 0.3, so none of ADR-05-01…05-06 owned a mechanic · a **duplicate `ADR-02-06`** created by inserting into a ledger without re-reading it · the specs' gate tables never regenerated against the rev-0.9 mechanics |
+| **L-C1** | **A derived artifact was not regenerated after its source changed** | **4** | Part 1B stale since rev 0.3, so none of ADR-05-01…05-06 owned a mechanic · a **duplicate `ADR-02-06`** created by inserting into a ledger without re-reading it · the specs' gate tables never regenerated against the rev-0.9 mechanics · **spec `10 §6` still said the test frameworks and e2e harness land in P9 while the MDP had moved them to P0 and stated it was correcting that spec — the correction was never applied to the spec itself** (found by the §0.12 re-read at P0 start, before any code) |
 | **L-C2** | **A property was asserted without the mechanism, or the comparison, that would establish it** | **3** | *"the anchor's reranker **is** the competitive model"* — 6 of 8 terms are disjoint · *"structurally impossible"* — the enum only relocates the dead-latch to `FromStr` · the cache-hit formula generalised from Anthropic to four providers |
 | **L-C3** | **A source's conclusion was adopted without checking its load-bearing detail** | **3** | `port_status.rs` "should be KEPT" propagated into two documents; one import line disproved it · `G4b §A.14`'s two-part verdict adopted by half — the vault landed, the **redaction was dropped** · **P8 was written as "a `git rm` and a `.gitmodules` edit" from the presence of `.gitmodules` alone — the index has zero gitlinks, so `git rm` would have failed on first contact** (§1.1a) |
 | **L-C4** | **A local change was made without re-checking the dependencies I had myself documented** | **1** | Moving the `/mcp` deletion to P0 broke the ACP identity chain described four sections earlier in the same document |
@@ -396,6 +396,10 @@ src/                                [P6 anchor, P7 experience]
 **Why this shape.** Every later phase's claim of "done" is worthless until a gate can fail. And two of the three surfaces are remote/local code execution; they are not scheduling questions.
 **Depends on.** Nothing.
 **Spec anchors.** `09 §3`, `09 §5`, `10 §6`, `06 §1`, vision ADR-03-02, ADR-03-04, ADR-04-03, G-15.
+
+> ⚠ **These task lines are AMENDED by [`_verify/P0-CORRECTIONS.md`](_verify/P0-CORRECTIONS.md)** (2026-08-31, written before the first line of P0 code, per §0.2m).
+> Three refutation verifiers re-checked all 27 claims: **21 confirmed as written, 5 understated or too narrow, 1 reversed** — `P0-26` would have deleted the config that is the only evidence of a live runtime break in the Logs export. Six tasks were added (`P0-28`…`P0-33`) and one (`P0-13b`) comes from a Razi ruling.
+> Where a line below disagrees with that file, **that file wins** until this section is regenerated at P0 closeout. Decisions are logged as `ADR-LOG-RESTRUCT-0001`…`0006`.
 
 ### P0-A · The updater trust root
 - [ ] **P0-01** Replace `EMBEDDED_PUBLIC_KEY` (the literal `undefined-public-key-…-placeholder`, 53 bytes) with a real Ed25519 public key; private half in CI secrets only. → `UNIT-PROVEN`

@@ -293,9 +293,112 @@ jobs:
 
   # ── Publish release ───────────────────────────────────────────────────────
 
+  # ── Sign and checksum the built artifacts ──────────────────────────────────
+  #
+  # AutoDev REFUSES to install an update that has no detached Ed25519 signature
+  # and no SHA-256 checksum (src-tauri/src/updater/verify.rs — both are hard
+  # failures in every build profile). Producing them is therefore part of
+  # releasing, not an optional extra: a release published without these assets
+  # cannot be installed by any client. See ADR-LOG-RESTRUCT-0003.
+  sign-release:
+    name: Sign release artifacts
+    needs: [metadata, build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Require the signing key
+        env:
+          PRIVKEY: ${{ secrets.AUTODEV_UPDATE_PRIVKEY }}
+        run: |
+          if [ -z "$PRIVKEY" ]; then
+            echo "::error::AUTODEV_UPDATE_PRIVKEY is not set. Releases cannot be" \
+                 "signed, and an unsigned release is uninstallable. See" \
+                 "docs/updater-signing.md for key generation and setup."
+            exit 1
+          fi
+
+      - name: Download release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh release download "${{ needs.metadata.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" --dir dist
+          ls -1 dist
+
+      - name: Sign and checksum every installer
+        env:
+          PRIVKEY: ${{ secrets.AUTODEV_UPDATE_PRIVKEY }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          umask 077
+          KEY="$RUNNER_TEMP/update-signing.pem"
+          printf '%s' "$PRIVKEY" > "$KEY"
+          trap 'rm -f "$KEY"' EXIT
+
+          signed=0
+          for f in dist/*.msi dist/*.exe dist/*.dmg dist/*.AppImage dist/*.deb; do
+            openssl pkeyutl -sign -inkey "$KEY" -rawin -in "$f" -out "$f.sig"
+            # The checksum sidecar is regenerated here for every platform so the
+            # three build jobs cannot disagree about its format.
+            ( cd dist && sha256sum "$(basename "$f")" > "$(basename "$f").sha256" )
+            echo "signed + checksummed $(basename "$f")"
+            signed=$((signed + 1))
+          done
+
+          if [ "$signed" -eq 0 ]; then
+            echo "::error::No installer artifacts were found to sign."
+            exit 1
+          fi
+          echo "signed $signed artifact(s)"
+
+      # A signature that does not verify is worse than none: it would ship a
+      # release every client refuses. Prove it here, with the same public key
+      # the application compiles in.
+      - name: Verify the signatures before publishing
+        env:
+          PUBKEY: ${{ secrets.AUTODEV_UPDATE_PUBKEY }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          if [ -z "$PUBKEY" ]; then
+            echo "::error::AUTODEV_UPDATE_PUBKEY is not set, so the signatures" \
+                 "cannot be checked against the key the app embeds."
+            exit 1
+          fi
+
+          # Rebuild a DER public key from the raw 32 bytes the app embeds.
+          printf '302a300506032b6570032100' > "$RUNNER_TEMP/pub.hex"
+          printf '%s' "$PUBKEY" | base64 -d | xxd -p -c 32 >> "$RUNNER_TEMP/pub.hex"
+          tr -d '\n' < "$RUNNER_TEMP/pub.hex" | xxd -r -p > "$RUNNER_TEMP/pub.der"
+          openssl pkey -pubin -inform DER -in "$RUNNER_TEMP/pub.der" \
+                  -out "$RUNNER_TEMP/pub.pem"
+
+          for sig in dist/*.sig; do
+            artifact="${sig%.sig}"
+            openssl pkeyutl -verify -pubin -inkey "$RUNNER_TEMP/pub.pem" \
+                    -rawin -in "$artifact" -sigfile "$sig"
+            echo "verified $(basename "$sig")"
+          done
+
+      - name: Upload signatures and checksums
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "${{ needs.metadata.outputs.tag }}" \
+            dist/*.sig dist/*.sha256 \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
   publish-release:
     name: Publish release
-    needs: [metadata, build-windows, build-macos, build-linux]
+    needs: [metadata, build-windows, build-macos, build-linux, sign-release]
     runs-on: ubuntu-latest
     permissions:
       contents: write

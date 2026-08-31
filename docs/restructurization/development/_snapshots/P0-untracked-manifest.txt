@@ -1,0 +1,12 @@
+# Untracked-file manifest — pre-fanout snapshot (§0.2L-5)
+# taken at HEAD eac0550, phase P0 start
+
+## build/
+(count: 0)
+
+## installers/wix/assets/
+(count: 0)
+
+## src-tauri/resources/ — KNOWN 225MB sidecar copy, top level only
+core-orchestrator
+memory-mcp-server

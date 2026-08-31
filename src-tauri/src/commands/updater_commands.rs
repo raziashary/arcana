@@ -104,16 +104,20 @@ pub async fn download_update(
             }
         });
 
-        match updater::download_update(&version2, &asset, false, tx).await {
+        match updater::download_update(&version2, &asset, tx).await {
             Ok(path) => {
-                // Verify checksum + signature
-                let expected_checksum = if !checksum_url.is_empty() {
-                    updater::download::download_checksum(&checksum_url).await.unwrap_or_default()
-                } else {
-                    String::new()
+                // Fetch the published checksum, then verify.
+                //
+                // A failed fetch is a FAILED VERIFICATION, not an absent one.
+                // This used to be `.unwrap_or_default()`, which turned any
+                // network error into an empty string — and an empty checksum
+                // was then accepted by verify_checksum as "nothing to compare
+                // against". A transient DNS failure was sufficient to install
+                // an unverified binary.
+                let verify_result = match updater::download::download_checksum(&checksum_url).await {
+                    Ok(expected) => updater::verify_update(&path, &expected, &sig_url).await,
+                    Err(e)       => Err(e.context("Could not fetch the published checksum")),
                 };
-
-                let verify_result = updater::verify_update(&path, &expected_checksum, &sig_url).await;
 
                 let ready_progress = DownloadProgress {
                     version:          version2.clone(),
@@ -186,6 +190,39 @@ pub async fn install_update(
         .as_ref()
         .map(std::path::PathBuf::from)
         .ok_or_else(|| AutoDevError::Agent("Installer path missing".into()))?;
+
+    // The download command's verification proves nothing about this file now.
+    // It sits in a user-writable directory (~/.autodev/updates) and install is a
+    // SEPARATE IPC call, so anything able to write there between the two calls
+    // gets its binary installed. Re-verify against the published checksum and
+    // signature immediately before scheduling.
+    let info = state.latest.lock().await.clone()
+        .ok_or_else(|| AutoDevError::Agent(
+            "No update info cached — cannot verify the installer before install".into()
+        ))?;
+
+    // The caller supplies `version` independently of the download that actually
+    // happened; without this the update history could record a version that was
+    // never the one installed.
+    if info.version != version || progress.version != version {
+        return Err(AutoDevError::Agent(format!(
+            "Version mismatch at install: requested={version}, cached={}, downloaded={}",
+            info.version, progress.version
+        )));
+    }
+
+    let asset = info.asset_for_current_platform()
+        .ok_or_else(|| AutoDevError::Agent("No update available for this platform".into()))?;
+
+    let expected_checksum = updater::download::download_checksum(&asset.checksum)
+        .await
+        .map_err(|e| AutoDevError::Agent(format!(
+            "Install refused: could not fetch the published checksum: {e}"
+        )))?;
+
+    updater::verify_update(&installer_path, &expected_checksum, &asset.signature)
+        .await
+        .map_err(|e| AutoDevError::Agent(format!("Install refused: {e}")))?;
 
     // Pre-update: verify data integrity and create restore point
     updater::create_restore_point()

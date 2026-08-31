@@ -67,10 +67,17 @@ pub fn resolve_symbol(
     let preferred = std::iter::once(abs_path.clone());
     let rest      = walk_source_files(workspace);
 
+    // The workspace walk yields the source file again, so it would be scanned
+    // twice. The guard that was here — `candidate == abs_path && candidate !=
+    // abs_path` — is always false and never skipped anything.
+    let mut source_file_seen = false;
     for candidate in preferred.chain(rest) {
-        if candidate == abs_path && candidate != abs_path {
-            // Skip re-checking the source file in the general walk.
-            continue;
+        if candidate == abs_path {
+            if source_file_seen {
+                // Skip re-checking the source file in the general walk.
+                continue;
+            }
+            source_file_seen = true;
         }
         let rel = candidate
             .strip_prefix(workspace)

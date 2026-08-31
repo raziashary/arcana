@@ -10,10 +10,10 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 export interface PlatformAsset {
   full_url:    string
-  delta_url:   string
   full_size:   number
-  delta_size:  number
+  /** URL of the detached Ed25519 `.sig` for `full_url` — not the signature itself. */
   signature:   string
+  /** URL of the `.sha256` sidecar for `full_url` — not the digest itself. */
   checksum:    string
 }
 

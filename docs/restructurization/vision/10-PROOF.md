@@ -119,7 +119,16 @@ Minimum viable:
 | Build smoke — macOS | **does not exist** | **on PR** |
 | End-to-end smoke ×3 | **does not exist** | on PR, or nightly if runtime forces it |
 
-**Sequencing** (`00 §Part 6`): making the *existing* gates blocking is P0 — it is nearly free and it stops the register growing while the restructure runs. The frameworks and the end-to-end smoke follow in P9, except macOS build coverage, which moves to **P0** because R-4 identifies "macOS verified last" as a release-blocking risk.
+**Sequencing** (`00 §Part 6`) — ⚠ **CORRECTED 2026-08-31, at P0 start.**
+
+~~The frameworks and the end-to-end smoke follow in P9, except macOS build coverage, which moves to P0.~~
+
+Making the *existing* gates blocking is P0 — nearly free, and it stops the defect register growing while the restructure runs. **The test frameworks and the end-to-end harness are also P0**, not P9:
+
+- **ESLint and Vitest** (`P0-18`, `P0-19`) — §0.5 makes smoke-then-gates mandatory from the first phase, and P0's own `S0` checks cannot be automated without a frontend test runner. Deferring the framework to P9 would mean nine phases of unautomatable frontend smoke.
+- **The end-to-end harness scaffold** (`P0-21`) — **P4's exit gate requires it**, and R-4 names "macOS verified last" as release-blocking. A harness that first exists in P9 cannot gate P4.
+
+*Recorded as a correction rather than an edit: the MDP already carried this ordering and stated it was correcting this spec (`MDP §5`), but this spec was not updated in the same step. That is a §0.3 no-stale violation and an instance of §0.16's **L-C1** — a derived document not regenerated when its source changed. Found by the §0.12 re-read at P0 start, before any code was written.*
 
 ---
 

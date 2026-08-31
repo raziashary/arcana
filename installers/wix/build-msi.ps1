@@ -7,7 +7,15 @@
     1. Verifies prerequisites (Rust, Node, WiX toolset)
     2. Builds the Tauri application in release mode
     3. Signs the installer with the code-signing certificate if CERT_PATH is set
-    4. Outputs autodev_<version>_x64_en-US.msi to dist/
+    4. Outputs autodev_<version>[_channel]_x64_en-US.exe to dist/, plus a
+       matching .sha256 sidecar.
+
+    NOTE: despite this script's name, the artifact it collects is the NSIS
+    installer (.exe) from the Tauri bundler, not an .msi. The description
+    previously claimed .msi, which is what the updater's asset matcher was
+    written against — so it matched nothing and Windows was never offered an
+    update. See docs/restructurization/development/_verify/P0-CORRECTIONS.md
+    (P0-29).
 
 .PARAMETER Version
     Override version string (default: read from Cargo.toml)
@@ -129,9 +137,16 @@ Push-Location $RepoRoot
 
 $env:AUTODEV_CHANNEL = $Channel
 
-# Generate Ed25519 keypair if not already present (dev builds only)
+# The update-signing public key is compiled into the binary from this
+# environment variable (src-tauri/src/updater/verify.rs uses option_env!, and
+# build.rs reruns on change). Nothing is generated here — a keypair is created
+# once, out of band; see docs/updater-signing.md.
+#
+# A debug build without it simply cannot verify updates. A RELEASE build without
+# it fails to compile on purpose, rather than shipping a binary that refuses
+# every update it is offered.
 if (-not $env:AUTODEV_UPDATE_PUBKEY) {
-    Write-Host "  AUTODEV_UPDATE_PUBKEY not set - using dev placeholder" -ForegroundColor Yellow
+    Write-Host "  AUTODEV_UPDATE_PUBKEY not set - this build cannot verify updates" -ForegroundColor Yellow
 }
 
 try {
