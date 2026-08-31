@@ -41,6 +41,10 @@ pub struct AgentEngine {
     pending:      PendingPermissions,
     app:          AppHandle,
     state:        Arc<Mutex<AppState>>,
+    /// Who this engine runs as, and its nesting depth. Threaded into every
+    /// ToolContext, so tool-side identity and the recursion guard depend on the
+    /// spawn tree rather than on anything the model says about itself.
+    identity:     super::tool_trait::AgentIdentity,
     session_mgr:  Option<Arc<SessionManager>>,
     // Ruflo Feature 4 — Budget Circuit Breaker: set via with_task_budget()
     task_id:      Option<i64>,
@@ -55,11 +59,12 @@ impl AgentEngine {
         app:      AppHandle,
         state:    Arc<Mutex<AppState>>,
         pending:  PendingPermissions,
+        identity: super::tool_trait::AgentIdentity,
     ) -> Self {
         let mut registry = ToolRegistry::new();
         builtin_tools::register_for_mode(&mut registry, pa_mode);
 
-        Self { provider, registry, mode, pa_mode, pending, app, state, session_mgr: None, task_id: None, task_budget: None }
+        Self { provider, registry, mode, pa_mode, pending, app, state, identity, session_mgr: None, task_id: None, task_budget: None }
     }
 
     /// Set the session manager for persisting messages
@@ -114,6 +119,7 @@ impl AgentEngine {
             self.app.clone(),
             session_id.to_string(),
             working_dir.to_string(),
+            self.identity.clone(),
         );
         let mut tool_executor = match &self.session_mgr {
             Some(sm) => tool_executor.with_session_manager(sm.clone()),

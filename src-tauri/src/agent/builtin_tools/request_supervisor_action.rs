@@ -98,15 +98,15 @@ impl Tool for RequestSupervisorActionTool {
         let task_assigned_worker = task_id
             .and_then(|tid| db.get_by_id(tid).ok().flatten())
             .and_then(|t| t.assigned_worker);
-        let worker_slug = task_assigned_worker
-            .or_else(|| ctx.agent_role.clone())
-            .unwrap_or_else(|| {
-                tracing::warn!(
-                    "[request_supervisor_action] no assigned_worker on task and \
-                     no __agent_role — recording request as 'unknown'"
-                );
-                "unknown".to_string()
-            });
+        let worker_slug = task_assigned_worker.unwrap_or_else(|| {
+            // The caller's role is always a real slug now, so a request can no
+            // longer be recorded against "unknown".
+            tracing::warn!(
+                "[request_supervisor_action] no assigned_worker on the task;                  attributing the request to the caller '{}'",
+                ctx.agent_role
+            );
+            ctx.agent_role.clone()
+        });
 
         let request = match db.create_worker_request(&CreateWorkerRequestInput {
             worker_slug: worker_slug.clone(),

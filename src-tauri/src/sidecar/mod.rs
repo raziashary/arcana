@@ -21,6 +21,7 @@
 // through the Rust tracing subscriber (visible in the main app log).
 
 pub mod client;
+pub mod sse;
 pub mod startup_progress;
 
 use std::collections::VecDeque;
@@ -413,7 +414,6 @@ pub struct SidecarManager {
     memory_status:  Mutex<SidecarStatus>,
     memory_stderr_tail: StderrTail,
     // autodev-mcp-server (port 8767) — in-process Tokio task, tracked for fleet readiness
-    mcp_status:     Mutex<SidecarStatus>,
     // Redis / Memurai (port 6379) — externally managed (Windows service or
     // system Redis). AutoDev only probes liveness; it does NOT spawn or stop
     // Redis. Redis is OPTIONAL — its absence disables the warm memory tier
@@ -436,7 +436,6 @@ impl SidecarManager {
             memory_process:     Mutex::new(None),
             memory_status:      Mutex::new(SidecarStatus::Stopped),
             memory_stderr_tail: new_stderr_tail(),
-            mcp_status:         Mutex::new(SidecarStatus::Running), // Phase 3.4 — MCP is in-process, starts immediately
             redis_process:      Mutex::new(None),
             redis_status:       Mutex::new(SidecarStatus::Stopped), // Phase 3.4b — polled, not spawned
             progress:           Mutex::new(None),
@@ -681,31 +680,13 @@ impl SidecarManager {
         self.orch_process.lock().unwrap().as_ref().map(|c| c.id())
     }
 
-    /// True only when memory-mcp-server, core-orchestrator, AND autodev-mcp-server are Running.
+    /// True only when memory-mcp-server AND core-orchestrator are Running.
+    ///
+    /// The third term used to be `mcp_is_running()`, which read a field
+    /// initialised to `Running` and never updated by anything — so it was a
+    /// constant `true` reporting the health of a server that is now deleted.
     pub fn fleet_is_ready(&self) -> bool {
-        self.memory_is_running() && self.is_running() && self.mcp_is_running()
-    }
-
-    // ─── autodev-mcp-server status ────────────────────────────────────────────
-
-    /// Mark autodev-mcp-server as healthy.
-    pub fn mark_mcp_running(&self) {
-        *self.mcp_status.lock().unwrap() = SidecarStatus::Running;
-        info!("[SidecarManager] autodev-mcp-server is ready on :8767");
-    }
-
-    /// Mark autodev-mcp-server as errored.
-    pub fn mark_mcp_error(&self, msg: &str) {
-        warn!("[SidecarManager] autodev-mcp-server error: {msg}");
-        *self.mcp_status.lock().unwrap() = SidecarStatus::Error(msg.to_string());
-    }
-
-    pub fn mcp_status(&self) -> SidecarStatus {
-        self.mcp_status.lock().unwrap().clone()
-    }
-
-    pub fn mcp_is_running(&self) -> bool {
-        matches!(self.mcp_status.lock().unwrap().clone(), SidecarStatus::Running)
+        self.memory_is_running() && self.is_running()
     }
 
     // ─── redis / memurai status (Phase 3.4b) ──────────────────────────────────

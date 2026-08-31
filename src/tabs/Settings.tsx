@@ -661,8 +661,10 @@ function GitHubMCPCard() {
       </div>
 
       <div className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
-        Connects to the GitHub MCP server (<code>@modelcontextprotocol/server-github</code>) using your stored PAT.
-        Enables workers to list repos, create PRs, and review code.
+        Records the endpoint of a GitHub MCP server so AutoDev can monitor whether it is reachable.
+        AutoDev does <strong>not</strong> yet call that server: nothing consumes this configuration to
+        open a tool connection, so workers cannot currently list repos, create PRs, or review code
+        through it. The health indicator above reflects reachability only.
       </div>
 
       <div className="space-y-2">

@@ -81,15 +81,20 @@ impl Tool for ClaimTaskTool {
         // between agent and task. Prefer the DB value; only fall back to
         // ctx if the task somehow has no assigned_worker (shouldn't happen
         // after assign_task ran, but guard anyway).
-        let worker_slug = task.assigned_worker.clone()
-            .or_else(|| ctx.agent_role.clone())
-            .unwrap_or_else(|| "unknown".to_string());
-        if worker_slug == "unknown" {
-            tracing::warn!(
-                "[claim_task] task #{task_id} has no assigned_worker AND \
-                 __agent_role is missing — orphan detection will use 'unknown'"
-            );
-        }
+        let worker_slug = match task.assigned_worker.clone() {
+            Some(w) => w,
+            None => {
+                // Falls back to the caller's own role, which is now always a
+                // real slug. This used to fall through to the literal string
+                // "unknown" whenever the MCP bridge dropped __agent_role,
+                // which then broke orphan detection.
+                tracing::warn!(
+                    "[claim_task] task #{task_id} has no assigned_worker;                      attributing the claim to the caller '{}'",
+                    ctx.agent_role
+                );
+                ctx.agent_role.clone()
+            }
+        };
 
         let pid = std::process::id();
 

@@ -28,9 +28,7 @@ const TERMINAL_RETENTION: Duration = Duration::from_secs(60);
 
 use crate::errors::{AutoDevError, Result};
 use crate::events::{emit_subagent_event_global, SubagentEventPayload};
-use crate::sidecar::client::OrchestratorClient;
-
-use super::bridge;
+use super::native_runner::{self, RunnerDeps};
 use super::pool::{PoolPermit, SubagentPool};
 use super::slug;
 use super::types::{
@@ -43,8 +41,8 @@ struct ManagerEntry {
     last_event: Option<String>,
     /// Drop guard — releases the global / per-parent pool slot.
     _permit:  PoolPermit,
-    /// Background task running `bridge::run`. Aborting this future cancels
-    /// the SSE stream consumption (used by `abort_subagent`).
+    /// Background task running `native_runner::run`. Aborting this future
+    /// cancels the child engine's turn loop (used by `abort_subagent`).
     task:     Option<JoinHandle<Result<SubagentResult>>>,
     /// Set when the entry reaches a terminal state. Used by `prune_terminal`
     /// to sweep entries older than TERMINAL_RETENTION.
@@ -52,15 +50,15 @@ struct ManagerEntry {
 }
 
 pub struct SubagentManager {
-    client:   Arc<OrchestratorClient>,
+    deps:     RunnerDeps,
     pool:     Arc<SubagentPool>,
     registry: Mutex<HashMap<String, ManagerEntry>>,
 }
 
 impl SubagentManager {
-    pub fn new(client: Arc<OrchestratorClient>) -> Arc<Self> {
+    pub fn new(deps: RunnerDeps) -> Arc<Self> {
         Arc::new(Self {
-            client,
+            deps,
             pool: SubagentPool::new(),
             registry: Mutex::new(HashMap::new()),
         })
@@ -83,9 +81,6 @@ impl SubagentManager {
         if config.timeout_secs == 0 {
             config.timeout_secs = SubagentConfig::DEFAULT_TIMEOUT_SECS;
         }
-        if config.mcp_servers.is_empty() {
-            config.mcp_servers.push(SubagentConfig::DEFAULT_MCP_SERVER.to_string());
-        }
         if config.model.is_empty() {
             config.model = SubagentConfig::DEFAULT_MODEL.to_string();
         }
@@ -101,12 +96,12 @@ impl SubagentManager {
         // Internal channel: bridge → manager → (event bus + last_event)
         let (tx, rx) = mpsc::unbounded_channel::<SubagentEvent>();
 
-        // Launch the bridge task.
-        let client     = self.client.clone();
-        let bridge_id  = id.clone();
-        let bridge_cfg = config.clone();
+        // Launch the runner task.
+        let run_deps = self.deps.clone();
+        let run_id   = id.clone();
+        let run_cfg  = config.clone();
         let task = tokio::spawn(async move {
-            bridge::run(client, bridge_id, bridge_cfg, prompt, tx).await
+            native_runner::run(run_deps, run_id, run_cfg, prompt, tx).await
         });
 
         // Launch the event pump (consumes rx, fans out to global bus + state).
@@ -209,11 +204,9 @@ impl SubagentManager {
             let _ = t.await;
         }
 
-        // Best-effort cleanup of the upstream agent. The bridge already does
-        // this on its happy path; this covers the abort branch.
-        if let Err(e) = self.client.delete_agent(id).await {
-            warn!("[SubagentManager] terminate: DELETE failed for {id}: {e}");
-        }
+        // Nothing to clean up remotely: aborting the task above ends the
+        // in-process engine. The old path had to DELETE an ephemeral agent from
+        // core-orchestrator here.
 
         self.registry.lock().await.remove(id);
         info!("[SubagentManager] terminated {id} (force={force})");
@@ -225,34 +218,15 @@ impl SubagentManager {
         self.terminate(id, true).await
     }
 
-    /// Orphan cleanup (Layer 3). Deletes every `subagent-*` agent currently
-    /// registered in core-orchestrator. Safe to call on startup before any
-    /// AutoDev-side subagents have been spawned.
+    /// Orphan cleanup. Retained as a no-op so startup wiring and the Tauri
+    /// command that calls it keep working.
     ///
-    /// Failure is non-fatal: we log and continue so a flaky orchestrator
-    /// doesn't block AutoDev startup.
+    /// It used to DELETE every `subagent-*` agent left registered in
+    /// core-orchestrator after a crash. Subagents are now in-process tokio
+    /// tasks: when AutoDev exits they exit with it, so no cross-process orphan
+    /// can survive a restart and there is nothing to sweep.
     pub async fn cleanup_orphans(&self) {
-        let slugs = match self.client.list_ephemeral_subagent_slugs().await {
-            Ok(s) => s,
-            Err(e) => {
-                warn!("[SubagentManager] orphan cleanup skipped: {e}");
-                return;
-            }
-        };
-
-        if slugs.is_empty() {
-            debug!("[SubagentManager] no orphan subagents to clean up");
-            return;
-        }
-
-        info!("[SubagentManager] cleaning up {} orphan subagent(s)", slugs.len());
-        for slug in slugs {
-            if let Err(e) = self.client.delete_agent(&slug).await {
-                warn!("[SubagentManager] failed to delete orphan {slug}: {e}");
-            } else {
-                debug!("[SubagentManager] deleted orphan {slug}");
-            }
-        }
+        debug!("[SubagentManager] orphan cleanup is a no-op: subagents are in-process");
     }
 
     // ── Internal helpers ─────────────────────────────────────────────────────

@@ -107,7 +107,24 @@ impl RecipeRunner {
         // ── Mode 2 health check (needed for dispatch routing decision) ──────────
         // We check orchestrator health early because it determines whether we
         // apply the "no tasks" short-circuit below.
-        let orch_healthy = self.orch_client.is_healthy().await;
+        // Mode 2 is INERT from P0.
+        //
+        // A Mode 2 worker is a core-orchestrator LivingAgent that reaches
+        // AutoDev's tools by calling back into the in-process MCP server. That
+        // server was deleted in P0 (unauthenticated local RCE exposing bash,
+        // write_file and spawn_subagent — ADR-03-02), so a Mode 2 worker would
+        // now run with ZERO tools and burn tokens achieving nothing. The
+        // pre-flight below already treated that state as "abort the tick".
+        //
+        // Every worker therefore runs on the in-process Rust engine (Mode 1),
+        // which needs no sidecar and no Python. The Mode 2 branch is left in
+        // place, unreachable, and is deleted with the rest of the sidecar in
+        // P8; deleting it here would mean unpicking ~350 lines of nested
+        // control flow in the same commit that removes the MCP server.
+        //
+        // ADR-LOG-RESTRUCT-0008.
+        let _orch_reachable = self.orch_client.is_healthy().await;
+        let orch_healthy = false;
         info!(
             "[RecipeRunner] tick dispatch — worker='{}' core-orchestrator={}",
             worker_slug,
@@ -212,7 +229,7 @@ impl RecipeRunner {
                     // LivingAgent will have zero tools and burn tokens doing nothing.
                     // Force an immediate Mode 1 fallback rather than discovering this
                     // inside the expensive invoke_worker call.
-                    let mcp_up = self.orch_client.mcp_server_healthy().await;
+                    let mcp_up = false; // see ADR-LOG-RESTRUCT-0008 — the MCP server is gone
                     // ── qc-agent gate (AFTER ensure_agent so YAML is always created) ─────────
                     // ensure_agent() above already created/registered the YAML config.
                     // Now skip the LLM invocation if there are no reviewable tasks.
@@ -307,7 +324,7 @@ impl RecipeRunner {
                         // would run without ANY tools and is strictly worse. Abort this tick
                         // and wait for the next cron cycle — the in-process server will
                         // almost certainly recover on its own.
-                        let mcp_port = crate::mcp_server::current_mcp_port();
+                        let mcp_port = 0;
                         warn!(
                             "[RecipeRunner] MCP server unreachable for '{}' (port :{} not responding). \
                              Aborting tick — will retry next scheduled interval. \
@@ -326,7 +343,7 @@ impl RecipeRunner {
                     info!(
                         "[RecipeRunner] MCP server healthy for '{}' — \
                          LivingAgent will have tools via :{}, proceeding Mode 2",
-                        worker_slug, crate::mcp_server::current_mcp_port()
+                        worker_slug, 0
                     );
                     {
                         // Prepend the active workspace dir to the instructions so the
@@ -668,6 +685,10 @@ impl RecipeRunner {
             self.app.clone(),
             self.state.clone(),
             self.pending.clone(),
+            // The worker's own slug is its identity. This is what the three
+            // worker-messaging tools, claim_task's orphan detection and the
+            // qc_review gate all read — previously it was None on this path.
+            crate::agent::tool_trait::AgentIdentity::worker(worker_slug),
         );
 
         // Run agent with recipe instructions as system prompt override

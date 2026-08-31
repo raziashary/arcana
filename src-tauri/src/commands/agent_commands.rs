@@ -144,6 +144,9 @@ pub async fn send_message(
             app_clone,
             state_clone.clone(),
             pending_clone,
+            // The interactive assistant is the supervisor — the same role the
+            // shipped recipes give it (recipes/defaults.rs:217).
+            crate::agent::tool_trait::AgentIdentity::supervisor(),
         ).with_session_manager(session_mgr_clone.clone());
 
         let result = engine.run(

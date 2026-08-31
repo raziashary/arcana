@@ -57,13 +57,13 @@ impl Tool for ListWorkerMessagesTool {
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let unread_only = input["unread_only"].as_bool().unwrap_or(true);
 
-        let to_slug = match ctx.agent_role.as_ref() {
-            Some(r) if !r.trim().is_empty() => r.trim().to_string(),
-            _ => return ToolResult::error(
-                "list_worker_messages refused: no __agent_role on the call. \
-                 The ACP is fleet-only — every reader must identify themselves."
-            ),
-        };
+        // Always present now (see AgentIdentity); guards a blank role only.
+        let to_slug = ctx.agent_role.trim().to_string();
+        if to_slug.is_empty() {
+            return ToolResult::error(
+                "list_worker_messages refused: the calling agent has no role.                  Every reader must identify themselves."
+            );
+        }
 
         let db = match TasksDb::open() {
             Ok(db) => db,

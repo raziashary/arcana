@@ -21,7 +21,7 @@ pub mod hooks;
 pub mod ide;
 pub mod git;
 pub mod runtime_config;
-pub mod mcp_server;
+pub mod mcp;
 pub mod plan;
 pub mod subagent;
 pub mod analytics;
@@ -75,7 +75,7 @@ pub fn register_commands(
         log_commands::{list_log_files, read_log_file, read_log_file_full, clear_log_files},
         sidecar_commands::{
             get_sidecar_status, check_sidecar_connectivity, start_sidecar, stop_sidecar,
-            get_full_sidecar_status, get_mcp_port_status, get_sidecar_stderr_tail, list_mcp_tools,
+            get_full_sidecar_status, get_sidecar_stderr_tail, list_mcp_tools,
             // Phase 3.4b — per-service lifecycle + resource + log viewer
             start_memory_mcp, stop_memory_mcp,
             start_orchestrator, stop_orchestrator,
@@ -270,7 +270,6 @@ pub fn register_commands(
         start_sidecar,
         stop_sidecar,
         get_full_sidecar_status,
-        get_mcp_port_status,
         get_sidecar_stderr_tail,
         list_mcp_tools,
         // Phase 3.4b

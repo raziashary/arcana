@@ -119,17 +119,6 @@ pub fn get_full_sidecar_status(
             note:     "LivingAgent gateway (21 FSMs, A2A, litellm)".into(),
         },
         ServiceStatus {
-            id:       "autodev-mcp-server".into(),
-            name:     "AutoDev MCP Server".into(),
-            status:   sidecar.mcp_status().to_string(),
-            required: true,
-            // Reflect the actual bound port — startup may fall back from
-            // 8767 to 8768/8769/8770 when the preferred port is held in
-            // Windows TIME_WAIT after a rapid restart.
-            port:     crate::mcp_server::current_mcp_port(),
-            note:     "Canonical Rust builtin_tools via Streamable HTTP (in-process)".into(),
-        },
-        ServiceStatus {
             id:       "redis".into(),
             name:     "Redis / Memurai".into(),
             status:   sidecar.redis_status().to_string(),
@@ -138,15 +127,6 @@ pub fn get_full_sidecar_status(
             note:     "Warm memory tier + agent card store (optional — core-orch falls back to cold tier if missing)".into(),
         },
     ]
-}
-
-/// Snapshot of the in-process MCP server's port binding state, including
-/// any port-conflict diagnostics (which PID is holding 8767, whether it's
-/// a ghost socket from a crashed previous instance). The Settings panel
-/// uses this for a live indicator and conflict banner.
-#[tauri::command]
-pub fn get_mcp_port_status() -> crate::mcp_server::McpPortStatus {
-    crate::mcp_server::port_snapshot()
 }
 
 /// Snapshot of the last stderr lines captured from a sidecar's subprocess.
@@ -582,8 +562,8 @@ pub fn get_submodule_paths() -> Vec<SubmoduleStatus> {
 /// Called by the Sidecar Panel and status bar to show connection state badges.
 #[tauri::command]
 pub async fn get_mcp_health(
-    monitor: State<'_, Arc<crate::mcp_server::health_monitor::McpHealthMonitor>>,
-) -> Result<Vec<crate::mcp_server::health_monitor::McpServerHealth>, String> {
+    monitor: State<'_, Arc<crate::mcp::health::McpHealthMonitor>>,
+) -> Result<Vec<crate::mcp::health::McpServerHealth>, String> {
     Ok(monitor.get_all_health().await)
 }
 
@@ -592,7 +572,7 @@ pub async fn get_mcp_health(
 #[tauri::command]
 pub async fn force_reconnect_mcp(
     server_name: String,
-    monitor:     State<'_, Arc<crate::mcp_server::health_monitor::McpHealthMonitor>>,
+    monitor:     State<'_, Arc<crate::mcp::health::McpHealthMonitor>>,
     app:         tauri::AppHandle,
 ) -> Result<(), String> {
     monitor.force_reconnect(&server_name, &app).await;

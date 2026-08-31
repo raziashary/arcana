@@ -74,10 +74,10 @@ impl Tool for AnnotateFileTool {
         let severity = input["severity"].as_str().unwrap_or("info").to_string();
 
         // Infer the source from the agent role in context
-        let source = match ctx.agent_role.as_deref() {
-            Some("qc-agent")         => "qc_agent",
-            Some(r) if r.starts_with("worker") => "worker",
-            _                        => "user",
+        let source = match ctx.agent_role.as_str() {
+            "qc-agent"                     => "qc_agent",
+            r if r.starts_with("worker")   => "worker",
+            _                              => "user",
         }.to_string();
 
         let create_input = CreateAnnotationInput {

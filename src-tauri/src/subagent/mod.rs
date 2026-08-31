@@ -15,7 +15,7 @@
 
 pub mod types;
 pub mod slug;
-pub mod bridge;
+pub mod native_runner;
 pub mod pool;
 pub mod manager;
 

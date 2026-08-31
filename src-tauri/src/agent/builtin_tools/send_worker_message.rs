@@ -126,15 +126,18 @@ impl Tool for SendWorkerMessageTool {
         // __agent_role at the MCP boundary. PA / interactive callers won't
         // have one; we refuse those so the inbox stays fleet-only and the
         // From column in Fleet Chat is always an agent slug, never "anon".
-        let from = match ctx.agent_role.as_ref() {
-            Some(r) if !r.trim().is_empty() => r.trim().to_string(),
-            _ => return ToolResult::error(
-                "send_worker_message refused: no __agent_role on the call. The \
-                 ACP is fleet-only — PA/interactive callers cannot send \
-                 worker messages. If you're a fleet worker, ensure your MCP \
-                 client forwards __agent_role."
-            ),
-        };
+        // Identity is Rust-authored and always present now, and the
+        // interactive assistant is "supervisor" — the role the shipped recipes
+        // already give it (recipes/defaults.rs:217), and the one that dispatches
+        // to workers. The old refusal was a proxy for "has an identity", which
+        // interactive callers lacked; they no longer do, so this is a deliberate
+        // widening (ADR-LOG-RESTRUCT-0007). "anon" remains impossible.
+        let from = ctx.agent_role.trim().to_string();
+        if from.is_empty() {
+            return ToolResult::error(
+                "send_worker_message refused: the calling agent has no role, so                  the message would have no identifiable sender."
+            );
+        }
 
         // ── Refuse self-addressed ────────────────────────────────────────────
         if from == to {

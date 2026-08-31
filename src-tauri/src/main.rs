@@ -13,8 +13,7 @@ use autodev_lib::sidecar::startup_progress::{StartupPhase, StartupProgress};
 use autodev_lib::skills::SkillRegistry;
 use autodev_lib::agent::ToolRegistry;
 use autodev_lib::agent::builtin_tools;
-use autodev_lib::mcp_server::server::start_mcp_server;
-use autodev_lib::mcp_server::health_monitor::McpHealthMonitor;
+use autodev_lib::mcp::health::McpHealthMonitor;
 use autodev_lib::updater::{UpdaterState, UpdateChannel, start_background_check};
 
 fn main() {
@@ -102,9 +101,14 @@ fn main() {
         eprintln!("Warning: Failed to load skills: {e}");
     }
 
-    // Phase 3.4 — start AutoDev MCP Server in-process.
-    // All canonical builtin_tools are registered and exposed over Streamable HTTP
-    // on 127.0.0.1:8767 so core-orchestrator LivingAgents can discover them via MCP.
+    // Canonical builtin_tools registry.
+    //
+    // This used to be handed to an in-process MCP server on 127.0.0.1:8767 so
+    // core-orchestrator LivingAgents could call AutoDev's tools. That server was
+    // an unauthenticated local endpoint exposing bash, write_file and
+    // spawn_subagent to any process on the machine, and was deleted in P0
+    // (ADR-03-02). The registry survives because `list_mcp_tools` reads it to
+    // show the user which tools exist.
     let mut mcp_registry = ToolRegistry::new();
     builtin_tools::register_all(&mut mcp_registry);
     let mcp_registry = Arc::new(mcp_registry);
@@ -126,11 +130,16 @@ fn main() {
     let sidecar_mgr    = Arc::new(SidecarManager::new());
     let orch_client    = Arc::new(OrchestratorClient::new());
 
-    // Phase 4.9 — Subagent registry. Shares the same OrchestratorClient so
-    // it benefits from the cached JWT and connection pool. Also installed
-    // globally so builtin tools (`spawn_subagent`, `spawn_parallel_subagents`)
-    // can reach it without Tauri `State<>` plumbing.
-    let subagent_mgr = autodev_lib::subagent::SubagentManager::new(orch_client.clone());
+    // Subagent registry. Subagents run in-process on a nested AgentEngine, so
+    // the manager needs app state and the permission channel rather than an
+    // HTTP client (ADR-LOG-RESTRUCT-0001). Installed globally so the spawn
+    // builtin tools can reach it without Tauri `State<>` plumbing.
+    let subagent_mgr = autodev_lib::subagent::SubagentManager::new(
+        autodev_lib::subagent::native_runner::RunnerDeps {
+            state:   app_state.clone(),
+            pending: pending_permissions.clone(),
+        },
+    );
     autodev_lib::subagent::manager::install_global(subagent_mgr.clone());
 
     // ─── Analytics singleton ─────────────────────────────────────────────────
@@ -233,15 +242,6 @@ fn main() {
                     }
                 }
 
-                // Phase 3.4 — start AutoDev MCP Server as an async task.
-                // The server exposes all builtin_tools over Streamable HTTP on 127.0.0.1:8767
-                // so core-orchestrator LivingAgents can discover them via MCP.
-                let mcp_registry_for_server = mcp_registry.clone();
-                tauri::async_runtime::spawn(async move {
-                    let _mcp_handle = start_mcp_server(mcp_registry_for_server);
-                    // Keep the handle alive for the lifetime of the app
-                    // (it will be dropped when the app shuts down)
-                });
 
                 // Ruflo Feature 6 — Start MCP Connection Health Monitor.
                 // Registers the GitHub MCP server (if configured + enabled) and any other
@@ -401,13 +401,7 @@ fn main() {
                                         if orch_probe.is_healthy().await {
                                             sidecar_ref.mark_running();
                                             orch_probe.clear_cache();
-                                            eprintln!("[AutoDev] core-orchestrator ready after {attempt}s — Mode 2 active");
-                                            // Phase 3.4 — register autodev-mcp-server so LivingAgents discover tools
-                                            if let Err(e) = orch_probe.register_mcp_server().await {
-                                                eprintln!("[AutoDev] Failed to register autodev-mcp-server: {e}");
-                                            } else {
-                                                eprintln!("[AutoDev] autodev-mcp-server registered with core-orchestrator");
-                                            }
+                                            eprintln!("[AutoDev] core-orchestrator ready after {attempt}s (Mode 2 is inert — see ADR-LOG-RESTRUCT-0008)");
                                             break;
                                         }
                                     }

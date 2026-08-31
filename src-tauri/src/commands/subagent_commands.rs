@@ -36,11 +36,7 @@ pub struct SpawnSubagentRequest {
     #[serde(default)]
     pub timeout_secs: Option<u32>,
     #[serde(default)]
-    pub mcp_servers: Vec<String>,
-    #[serde(default)]
     pub depth: u32,
-    #[serde(default)]
-    pub capabilities: Vec<String>,
 }
 
 impl SpawnSubagentRequest {
@@ -54,8 +50,6 @@ impl SpawnSubagentRequest {
             working_dir:       self.working_dir.unwrap_or_default(),
             max_turns:         self.max_turns.unwrap_or(0),
             timeout_secs:      self.timeout_secs.unwrap_or(0),
-            mcp_servers:       self.mcp_servers,
-            capabilities:      self.capabilities,
             depth:             self.depth,
         };
         (cfg, self.task_description)

@@ -210,6 +210,52 @@ Name the evidence class.>
 
 ---
 
+---
+
+## ADR-LOG-RESTRUCT-0007 — `ToolContext.agent_role` becomes non-optional, which widens who may use the ACP
+
+**Status:** DECIDED
+**Author:** Claude
+**Tier:** flagged-and-proposed
+
+**What.** `ToolContext.agent_role` changes from `Option<String>` to `String`, and `depth` is threaded from the spawn tree. Two behaviours change as a direct consequence: the interactive assistant can now use the worker↔worker messaging tools, and the `qc_review` build-evidence gate now applies to every caller rather than none.
+
+**Why.** An absent identity was never a neutral default — it silently disabled capabilities. Seven tools read `agent_role`; three of them (`send_worker_message`, `list_worker_messages`, `acknowledge_worker_message`) hard-refuse without it, `claim_task_tool.rs:85` and `request_supervisor_action.rs:102` fall back to attributing work to the literal string `"unknown"` (breaking orphan detection), and `update_task_status_tool.rs:133` read `ctx.agent_role.is_some()` as the *condition for applying* the build-evidence gate. Since all three in-process construction sites hardcoded `None`, that gate could never fire outside the MCP path — a guard that stops firing without ever erroring, which is exactly the `10 §4` "guard-the-guard" failure class. Making the field non-optional removes the possibility of that state existing at all, rather than adding a check for it.
+
+The two widenings are deliberate and are the point of the change, not side effects:
+- The old refusal in `send_worker_message` was a proxy for "has an identity", which interactive callers lacked. They no longer lack one, and the interactive assistant is `"supervisor"` — the role the shipped recipes already assign it (`recipes/defaults.rs:217`) and the one that dispatches to workers. `"anon"` remains impossible.
+- The `qc_review` gate applying to everyone is the restoration promised by `P0-13a`. QC reviewers stay exempt because they review someone else's build and never run one.
+
+**When.** 2026-09-01 · phase P0 · triggering task `P0-13a`
+
+**Where.** `src-tauri/src/agent/tool_trait.rs` · `src-tauri/src/agent/tool_executor.rs` · `src-tauri/src/agent/engine.rs` · `src-tauri/src/commands/agent_commands.rs` · `src-tauri/src/recipes/runner.rs` · `src-tauri/src/agent/builtin_tools/{send_worker_message,list_worker_messages,acknowledge_worker_message,claim_task_tool,request_supervisor_action,annotate_file_tool,update_task_status_tool}.rs`
+
+**How.** `AgentIdentity { role, depth }` is constructed at the two engine sites — `AgentIdentity::supervisor()` for the PA, `AgentIdentity::worker(worker_slug)` for a fleet worker — and threaded `AgentEngine::new → ToolExecutor::new → ToolContext`. Evidence: `UNIT-PROVEN` — `identity_tests` asserts depth semantics and, by reading `tool_executor.rs`, that no construction site hardcodes `agent_role: None` or `depth: 0`. That source-scan is the only possible form: the values are struct literals with no runtime surface to interrogate.
+
+**Links.** spec `10 §4` "Guard-the-guard" · `_verify/V2-P0BC-vault-mcp.md` findings 1–2 · ADR-LOG-RESTRUCT-0001 · MDP `§6 P0-13a`
+
+---
+
+## ADR-LOG-RESTRUCT-0008 — Mode 2 is inert from P0; its code is deleted in P8
+
+**Status:** DECIDED
+**Author:** Claude
+**Tier:** flagged-and-proposed
+
+**What.** `RecipeRunner`'s Mode 2 branch is made unreachable in P0 by forcing its gate to `false`. Every fleet worker runs on the in-process Rust engine (Mode 1). The ~350 lines of Mode 2 control flow are removed with the rest of the sidecar in P8, not now.
+
+**Why.** A Mode 2 worker is a `core-orchestrator` LivingAgent that reaches AutoDev's tools by calling back into the in-process MCP server. P0 deletes that server, so a Mode 2 worker would run with **zero tools** while still consuming tokens. The pre-existing pre-flight at `runner.rs` already treated an unreachable MCP server as "abort the tick", so leaving the branch live would mean every Mode 2 tick aborting after paying for `ensure_agent` — worse than not entering it. Routing to Mode 1 keeps workers functional with no sidecar and no Python, which is what the headline acceptance test requires.
+
+Deleting the branch in this commit was considered and rejected: it is ~350 lines of deeply nested control flow (its own closing braces are comment-annotated), and unpicking it in the same change that removes the MCP server would put the build at risk for work P8 already owns. The gate is a single line with the reasoning attached, so the dead branch cannot be mistaken for a live path.
+
+**When.** 2026-09-01 · phase P0 · triggering task `P0-13`
+
+**Where.** `src-tauri/src/recipes/runner.rs`
+
+**How.** `let orch_healthy = false;` with the original probe preserved as `_orch_reachable` so the health call still runs for logging. Evidence: `CODE-PRESENT` now; `SMOKE-PROVEN` at `S0` when a worker tick is observed taking the Mode 1 path. The P8 deletion is tracked as a task, not an intention.
+
+**Links.** MDP `§6 P0-C` sequencing hazard (Razi-ruled) · ADR-03-02 · ADR-LOG-RESTRUCT-0006
+
 # §5 · Standing entries carried from planning
 
 Not build-time decisions — but recorded here because a future session will otherwise rediscover them the hard way. Each is already ratified in vision Part 8; these are the **operational consequences** that bite during implementation.

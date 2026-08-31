@@ -146,8 +146,6 @@ impl Tool for SpawnParallelSubagentsTool {
                 working_dir:       ctx.working_dir.clone(),
                 max_turns:         st.get("max_turns").and_then(|v| v.as_u64()).map(|n| n as u32).unwrap_or(0),
                 timeout_secs:      st.get("timeout_secs").and_then(|v| v.as_u64()).map(|n| n as u32).unwrap_or(0),
-                mcp_servers:       Vec::new(),
-                capabilities:      Vec::new(),
                 depth:             ctx.depth + 1, // K.11 — increment nesting depth
             };
             spawn_inputs.push((config, task_description));

@@ -145,8 +145,6 @@ impl Tool for SpawnSubagentTool {
                                     .and_then(|v| v.as_u64())
                                     .map(|n| n as u32)
                                     .unwrap_or(0),
-            mcp_servers:       Vec::new(),
-            capabilities:      Vec::new(),
             depth:             ctx.depth + 1, // K.11 — increment nesting depth
         };
 

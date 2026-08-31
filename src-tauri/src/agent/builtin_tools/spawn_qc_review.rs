@@ -159,8 +159,6 @@ impl Tool for SpawnQcReviewTool {
             working_dir:       ctx.working_dir.clone(),
             max_turns:         30,
             timeout_secs,
-            mcp_servers:       Vec::new(),                  // default = autodev-mcp-server
-            capabilities:      Vec::new(),
             depth:             ctx.depth + 1,
         };
 

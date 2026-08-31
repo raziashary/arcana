@@ -127,14 +127,17 @@ impl Tool for UpdateTaskStatusTool {
         //     tasks to done/rejected freely — they don't write code.
         //   • Other agents reading qc_review via supervisor reconciliation
         //     touch task status with non-qc_review targets only.
-        //   • Tests / unit code may call update_task_status outside a session
-        //     where bash isn't available. We allow when the agent_role is
-        //     None (raw tool invocation) so non-fleet callers aren't blocked.
-        if status == "qc_review" && ctx.agent_role.is_some() {
+        //   • This gate used to be skipped entirely whenever agent_role was
+        //     None — which, on the in-process path, was ALWAYS, because all
+        //     three ToolContext construction sites hardcoded None. The gate
+        //     could therefore never fire outside the MCP path. Identity is now
+        //     always present, so it applies to every caller except QC
+        //     reviewers (ADR-LOG-RESTRUCT-0007).
+        if status == "qc_review" {
             // Skip the gate for QC reviewers — they never run a build, they
             // just review someone else's. The qc-reviewer-* slugs all start
             // with a stable prefix; match on that.
-            let role = ctx.agent_role.as_deref().unwrap_or("");
+            let role = ctx.agent_role.as_str();
             let is_qc_reviewer = role.starts_with("qc-")
                 || role.starts_with("subagent-qc-dispatcher");
             if !is_qc_reviewer {

@@ -755,7 +755,10 @@ impl OrchestratorClient {
             "description":   format!("AutoDev fleet worker agent — {slug}"),
             "llm_model":     orch_model,
             "system_prompt": system_prompt,
-            "mcp_servers": ["autodev-mcp-server"],
+            // Was ["autodev-mcp-server"], which pointed at the in-process MCP
+            // server deleted in P0. Naming a server that no longer exists would
+            // make the orchestrator wait on a connection that can never open.
+            "mcp_servers": [],
             "internal_tools": [],
             "autodev_tools": [],
             "capabilities":  ["task_management", "code_generation", "autodev_fleet"],
@@ -952,7 +955,7 @@ impl OrchestratorClient {
         worker_slug:  &str,
     ) -> Result<WorkerInvokeResult> {
         use crate::events::{emit_subagent_event_global, SubagentEventPayload};
-        use crate::subagent::bridge::{find_frame_end, parse_event_frame};
+        use super::sse::{find_frame_end, parse_event_frame};
         use crate::subagent::SubagentEvent;
         use futures::StreamExt;
 
@@ -968,8 +971,8 @@ impl OrchestratorClient {
              slug='{worker_slug}' prompt_len={prompt_len}"
         );
 
-        // The SSE endpoint is the same one the subagent bridge uses. Re-use
-        // it directly so the protocol stays in one place.
+        // Same SSE protocol the subagent bridge used before subagents moved
+        // in-process; the framing now lives in `sidecar::sse`.
         let resp = self.invoke_agent_stream_raw(agent_id, &prompt).await?;
 
         let mut byte_stream = resp.bytes_stream();
@@ -1256,166 +1259,9 @@ impl OrchestratorClient {
 
     // ─── MCP Server Registration ────────────────────────────────────────────────
 
-    /// Register the in-process AutoDev MCP Server with core-orchestrator's
-    /// MCP configuration so LivingAgents can discover tools from it.
-    /// Called once after core-orchestrator is healthy (in main.rs startup).
-    pub async fn register_mcp_server(&self) -> Result<()> {
-        if self.ensure_authenticated().await.is_err() {
-            return Err(AutoDevError::Agent(
-                "Cannot register MCP server: not authenticated".into()
-            ));
-        }
-
-        let url = format!("{}/api/mcp/servers", self.base_url);
-        // Read the actual bound port from the in-process MCP server so the
-        // registration follows the port fallback applied at startup (8767 →
-        // 8768/8769/8770 when 8767 was held by a previous instance).
-        let mcp_port = crate::mcp_server::current_mcp_port();
-        let mcp_url  = format!("http://127.0.0.1:{}/mcp", mcp_port);
-        // No auth header in body — MCP server is localhost-only, no auth required.
-        let body = serde_json::json!({
-            "id": "autodev-mcp-server",
-            "name": "AutoDev MCP Server",
-            "type": "autodev",
-            "transport": "http",
-            "http": {
-                "url": mcp_url,
-                "headers": {
-                    "Content-Type": "application/json"
-                }
-            }
-        });
-
-        let resp = self.client
-            .post(&url)
-            .header("Authorization", self.get_auth_header())
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AutoDevError::Agent(format!("POST /api/mcp/servers: {e}")))?;
-
-        let status = resp.status();
-        if status.is_success() {
-            info!("[OrchestratorClient] autodev-mcp-server registered with core-orchestrator on port {mcp_port}");
-            return Ok(());
-        }
-
-        // If the server entry already exists on disk from a previous run,
-        // POST returns 409 (or 400/500 with "already exists" body). The
-        // stored URL may now be stale (port fallback after Windows TIME_WAIT
-        // bumped us from 8767 → 8768), so we follow up with a PUT to
-        // refresh the URL on the orchestrator side. Without this, the
-        // orchestrator would happily forward LivingAgent tool calls to a
-        // dead port forever.
-        let code  = status.as_u16();
-        let text  = resp.text().await.unwrap_or_default();
-        let lower = text.to_ascii_lowercase();
-        let is_already_exists = code == 409
-            || ((code == 400 || code == 500)
-                && (lower.contains("already exists")
-                    || lower.contains("already registered")
-                    || lower.contains("duplicate")));
-
-        if !is_already_exists {
-            return Err(AutoDevError::Agent(format!(
-                "MCP server registration failed (HTTP {status}): {}",
-                &text[..text.len().min(400)]
-            )));
-        }
-
-        info!(
-            "[OrchestratorClient] autodev-mcp-server already registered (HTTP {} — \
-             upserting URL to refresh port to {})",
-            code, mcp_port
-        );
-        let put_url = format!("{}/api/mcp/servers/autodev-mcp-server", self.base_url);
-        let put_body = serde_json::json!({
-            "transport": "http",
-            "http": {
-                "url": mcp_url,
-                "headers": { "Content-Type": "application/json" }
-            }
-        });
-        let put_resp = self.client
-            .put(&put_url)
-            .header("Authorization", self.get_auth_header())
-            .json(&put_body)
-            .send()
-            .await;
-        match put_resp {
-            Ok(r) if r.status().is_success() => {
-                info!("[OrchestratorClient] autodev-mcp-server URL refreshed to {}", mcp_url);
-                Ok(())
-            }
-            Ok(r) => {
-                // PUT failed — log but don't fail the whole startup. If the
-                // port hadn't actually changed, the existing entry is still
-                // correct. The next /invoke will surface the real problem.
-                let put_status = r.status();
-                let put_text = r.text().await.unwrap_or_default();
-                warn!(
-                    "[OrchestratorClient] PUT refresh failed (HTTP {}): {} — \
-                     proceeding with existing URL; this is fine unless the port changed",
-                    put_status, &put_text[..put_text.len().min(200)]
-                );
-                Ok(())
-            }
-            Err(e) => {
-                warn!(
-                    "[OrchestratorClient] PUT refresh transport error: {} — \
-                     proceeding with existing URL", e
-                );
-                Ok(())
-            }
-        }
-    }
 
     // ─── Pre-flight MCP health check (BUG-002b safety net) ───────────────────
 
-    /// Lightweight TCP probe to the in-process MCP server. Returns true if
-    /// the port is accepting connections — a proxy for "LivingAgent will be
-    /// able to discover tools". Uses `current_mcp_port()` so the probe
-    /// targets the actual bound port (8767 by default, may fall back to
-    /// 8768/8769/8770 after a Windows TIME_WAIT collision).
-    ///
-    /// Short-circuits to `true` when the in-process server has not finished
-    /// binding yet — the runner uses this signal to gate Mode 2 dispatch,
-    /// and reporting false here would force an unnecessary Mode 1 fallback
-    /// for the first few seconds of every cold start.
-    ///
-    /// Used by `runner.rs` to abort a tick when the MCP server is down,
-    /// avoiding an expensive tool-less LivingAgent tick.
-    pub async fn mcp_server_healthy(&self) -> bool {
-        use tokio::net::TcpStream;
-        use tokio::time::timeout;
-
-        // Bind not finished yet — optimistically allow the tick. The next
-        // failure will be the orchestrator's invoke call, which is handled.
-        if !crate::mcp_server::is_ready() {
-            debug!("[OrchestratorClient] MCP server not yet bound — assuming healthy for this tick");
-            return true;
-        }
-
-        let port = crate::mcp_server::current_mcp_port();
-        let addr = format!("127.0.0.1:{}", port);
-        match timeout(
-            Duration::from_secs(2),
-            TcpStream::connect(&addr),
-        ).await {
-            Ok(Ok(_)) => {
-                debug!("[OrchestratorClient] MCP server TCP probe OK :{}", port);
-                true
-            }
-            Ok(Err(e)) => {
-                warn!("[OrchestratorClient] MCP server TCP connect failed :{} — {}", port, e);
-                false
-            }
-            Err(_) => {
-                warn!("[OrchestratorClient] MCP server TCP connect timed out :{} (>2s)", port);
-                false
-            }
-        }
-    }
 
     // ─── Phase 4.9 — Ephemeral Subagent Lifecycle ────────────────────────────
     //

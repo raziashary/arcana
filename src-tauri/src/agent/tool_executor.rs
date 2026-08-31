@@ -19,7 +19,7 @@ use crate::hooks::{HookRegistry, HookType, HookContext, ToolCallContext};
 use crate::session::manager::SessionManager;
 use crate::session::types::Message;
 use super::permission::{PendingPermissions, PermissionMode, PermissionResponse};
-use super::tool_trait::{Tool, ToolContext, ToolResult};
+use super::tool_trait::{AgentIdentity, Tool, ToolContext, ToolResult};
 
 // Max concurrent read-only tools (Claude Code uses 10)
 const MAX_CONCURRENT_READ_TOOLS: usize = 10;
@@ -30,6 +30,10 @@ pub struct ToolExecutor {
     app:         AppHandle,
     session_id:  String,
     working_dir: String,
+    /// Who this executor runs as, and how deeply nested. Threaded into every
+    /// ToolContext it builds so identity is never absent and depth is never
+    /// self-reported by the model.
+    identity:    AgentIdentity,
     // Tools auto-approved for this session (AllowAlways responses)
     always_allow: std::collections::HashSet<String>,
     // Session manager for persisting tool messages
@@ -43,6 +47,7 @@ impl ToolExecutor {
         app:         AppHandle,
         session_id:  String,
         working_dir: String,
+        identity:    AgentIdentity,
     ) -> Self {
         Self {
             mode,
@@ -50,6 +55,7 @@ impl ToolExecutor {
             app,
             session_id,
             working_dir,
+            identity,
             always_allow: std::collections::HashSet::new(),
             session_mgr: None,
         }
@@ -85,8 +91,8 @@ impl ToolExecutor {
             session_id:  self.session_id.clone(),
             working_dir: self.working_dir.clone(),
             call_id:     call_id.clone(),
-            depth:       0,
-            agent_role:  None,
+            depth:       self.identity.depth,
+            agent_role:  self.identity.role.clone(),
         };
 
         // Emit tool start event for UI
@@ -239,6 +245,7 @@ impl ToolExecutor {
                 let _mode = self.mode.clone();
                 let _always_allow = self.always_allow.clone();
                 let _pending = self.pending.clone();
+                let identity = self.identity.clone();
 
                 let handle = tokio::spawn(async move {
                     let _permit = sem_clone.acquire().await.unwrap();
@@ -248,8 +255,8 @@ impl ToolExecutor {
                         session_id: session_id.clone(),
                         working_dir: working_dir.clone(),
                         call_id: call_id.clone(),
-                        depth: 0,
-                        agent_role: None,
+                        depth: identity.depth,
+                        agent_role: identity.role.clone(),
                     };
 
                     // Emit start event
@@ -312,8 +319,8 @@ impl ToolExecutor {
                     session_id: self.session_id.clone(),
                     working_dir: self.working_dir.clone(),
                     call_id: call_id.clone(),
-                    depth: 0,
-                    agent_role: None,
+                    depth: self.identity.depth,
+                    agent_role: self.identity.role.clone(),
                 };
 
                 // Emit start event

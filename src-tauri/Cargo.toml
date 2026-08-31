@@ -46,17 +46,6 @@ keyring = "2"
 # HTTP client (provider API calls)
 reqwest = { version = "0.12", features = ["json", "stream"] }
 
-# MCP protocol (official Rust SDK) — Phase 3.4
-rmcp = { version = "0.16", features = ["server", "transport-streamable-http-server"] }
-
-# HTTP framework for MCP Streamable HTTP transport
-axum = "0.8"
-
-# Low-level socket configuration — needed so the MCP server can set
-# SO_REUSEADDR before bind() and survive the Windows TIME_WAIT window
-# (port stays "in use" for ~2 min after a previous instance closes).
-socket2 = { version = "0.5", features = ["all"] }
-
 # Utilities
 uuid   = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }

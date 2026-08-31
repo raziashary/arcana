@@ -41,18 +41,6 @@ export interface McpServerHealth {
   error_message:         string | null
 }
 
-// In-process AutoDev MCP server port binding status. Refreshed via
-// get_mcp_port_status on mount and via the mcp:port-conflict event when
-// startup falls back to an alternate port.
-export interface McpPortStatus {
-  preferred_port:   number
-  bound_port:       number
-  fallback_active:  boolean
-  conflict_pid:     number | null
-  is_ghost:         boolean
-  message:          string
-}
-
 interface StartupProgressPayload {
   phase: string;
   message?: string;
@@ -64,9 +52,6 @@ interface SidecarState {
   // Ruflo Feature 6 — external MCP server health
   mcpServerHealth:   McpServerHealth[];
   mcpDisconnected:   string[];           // server names currently disconnected
-  // In-process AutoDev MCP server port — surfaced as a live indicator in
-  // Settings so the user knows when a Windows ghost socket forced a fallback.
-  mcpPortStatus:     McpPortStatus | null;
 
   // Actions
   loadStatus: () => Promise<void>;
@@ -74,7 +59,6 @@ interface SidecarState {
   startSidecar: (path?: string) => Promise<string>;
   stopSidecar: () => Promise<void>;
   loadMcpHealth: () => Promise<void>;
-  loadMcpPortStatus: () => Promise<void>;
   initEventListeners: () => Promise<void>;
 }
 
@@ -87,7 +71,6 @@ export const useSidecarStore = create<SidecarState>((set, get) => ({
   isConnected: false,
   mcpServerHealth:  [],
   mcpDisconnected:  [],
-  mcpPortStatus:    null,
 
   // ── Loaders ──────────────────────────────────────────────────────────────────
 
@@ -148,15 +131,6 @@ export const useSidecarStore = create<SidecarState>((set, get) => ({
       set({ mcpServerHealth: health, mcpDisconnected: disconnected })
     } catch (e) {
       console.error("[sidecarStore] Failed to load MCP health:", e)
-    }
-  },
-
-  loadMcpPortStatus: async () => {
-    try {
-      const status = await invoke<McpPortStatus>("get_mcp_port_status")
-      set({ mcpPortStatus: status })
-    } catch (e) {
-      console.error("[sidecarStore] Failed to load MCP port status:", e)
     }
   },
 
@@ -302,14 +276,6 @@ export const useSidecarStore = create<SidecarState>((set, get) => ({
       )
       _unlistenFns.push(unlistenRequiresRestart)
 
-      // In-process MCP server port conflict — emitted once at startup when
-      // the preferred port (8767) couldn't be bound and we fell back to
-      // 8768/8769/8770. Carries the holding PID and a ghost-socket flag.
-      const unlistenPortConflict = await listen<McpPortStatus>(
-        'mcp:port-conflict',
-        e => { set({ mcpPortStatus: e.payload }) }
-      )
-      _unlistenFns.push(unlistenPortConflict)
     } catch (e) {
       console.error("[sidecarStore] Failed to register startup:progress listener:", e);
       _listenersInstalled = false; // allow retry

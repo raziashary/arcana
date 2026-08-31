@@ -44,11 +44,7 @@ pub struct SubagentConfig {
     /// Hard cap on subagent runtime. Default 300s.
     pub timeout_secs: u32,
 
-    /// MCP servers to attach. Defaults to ["autodev-mcp-server"].
-    pub mcp_servers: Vec<String>,
 
-    /// Capability tags forwarded to core-orchestrator's AgentCreate body.
-    pub capabilities: Vec<String>,
 
     /// Nesting depth (0 = spawned by a top-level agent, 1 = subagent of a
     /// subagent, etc.). Enforced by `SubagentPool` against `MAX_NESTING_DEPTH`.
@@ -59,7 +55,6 @@ impl SubagentConfig {
     /// Defaults applied by `SpawnSubagentTool` when the LLM omits fields.
     pub const DEFAULT_MAX_TURNS: u32 = 20;
     pub const DEFAULT_TIMEOUT_SECS: u32 = 300;
-    pub const DEFAULT_MCP_SERVER: &'static str = "autodev-mcp-server";
     /// Fallback model when the LLM omits the `model` field in a subtask.
     /// Matches the fleet default used by RecipeRunner.
     pub const DEFAULT_MODEL: &'static str = "claude-haiku-4-5";
@@ -205,8 +200,6 @@ pub struct SpawnSubagentInput {
     pub max_turns: Option<u32>,
     #[serde(default)]
     pub timeout_secs: Option<u32>,
-    #[serde(default)]
-    pub mcp_servers: Vec<String>,
 }
 
 /// Input shape for the `spawn_parallel_subagents` builtin tool.

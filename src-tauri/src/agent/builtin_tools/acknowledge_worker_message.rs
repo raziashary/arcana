@@ -45,14 +45,15 @@ impl Tool for AcknowledgeWorkerMessageTool {
             _ => return ToolResult::error("'id' must be a positive integer message id"),
         };
 
-        let caller = match ctx.agent_role.as_ref() {
-            Some(r) if !r.trim().is_empty() => r.trim().to_string(),
-            _ => return ToolResult::error(
-                "acknowledge_worker_message refused: no __agent_role on the \
-                 call. The ACP is fleet-only — every ack must identify the \
-                 caller."
-            ),
-        };
+        // Identity is Rust-authored now and always present, so the former
+        // "no __agent_role" refusal cannot fire. The emptiness check remains
+        // as a guard against an agent constructed with a blank role.
+        let caller = ctx.agent_role.trim().to_string();
+        if caller.is_empty() {
+            return ToolResult::error(
+                "acknowledge_worker_message refused: the calling agent has no                  role. Every ack must identify the caller."
+            );
+        }
 
         let db = match TasksDb::open() {
             Ok(db) => db,

@@ -7,7 +7,6 @@
 // Managed services:
 //   1. memory-mcp-server   — spawned process, can Start/Stop/Restart
 //   2. core-orchestrator   — spawned process, can Start/Stop/Restart
-//   3. autodev-mcp-server  — in-process Rust, no lifecycle controls
 //   4. redis / memurai     — externally managed, no lifecycle controls
 //
 // Data is fed by Tauri commands:
@@ -24,7 +23,6 @@ import {
   Play, Square, RotateCcw, Activity, FileText, X, Cpu, HardDrive,
 } from 'lucide-react'
 import { McpHealthPanel } from './McpHealthPanel'
-import { useSidecarStore } from '../../stores/sidecarStore'
 
 interface ServiceStatus {
   id:       string
@@ -116,16 +114,6 @@ export default function SidecarPanel() {
   }
 
   // Subscribe to MCP port-conflict state for the banner below. The store
-  // updates on mount via loadMcpPortStatus + live on the mcp:port-conflict event.
-  const mcpPortStatus    = useSidecarStore(s => s.mcpPortStatus)
-  const loadMcpPortStatus = useSidecarStore(s => s.loadMcpPortStatus)
-
-  useEffect(() => {
-    void refresh(true)
-    void loadMcpPortStatus()
-    const id = setInterval(() => { void refresh(false) }, 10_000)
-    return () => clearInterval(id)
-  }, [loadMcpPortStatus])
 
   // ─── Modal data loaders ──────────────────────────────────────────────────
 
@@ -262,62 +250,6 @@ export default function SidecarPanel() {
           preferred port (8767) couldn't be bound and we fell back to an
           alternate. Shows the holding PID + ghost-socket flag so the user
           can clear it (taskkill / tcpvcon -k / reboot) instead of guessing. */}
-      {mcpPortStatus?.fallback_active && (
-        <div
-          className="font-mono rounded-sm p-3"
-          style={{
-            background: 'rgba(255, 170, 0, 0.08)',
-            border:     '1px solid var(--warning, #ffaa00)',
-            color:      'var(--text-1)',
-            fontSize:   '11px',
-            lineHeight: 1.5,
-          }}
-        >
-          <div className="flex items-center gap-2 mb-1" style={{ color: 'var(--warning, #ffaa00)' }}>
-            <AlertTriangle size={12} />
-            <span style={{ fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
-              MCP port conflict — using fallback :{mcpPortStatus.bound_port}
-            </span>
-          </div>
-          <div style={{ color: 'var(--text-2)' }}>{mcpPortStatus.message}</div>
-          {mcpPortStatus.conflict_pid != null && (
-            <div className="mt-2" style={{ color: 'var(--text-3)' }}>
-              {mcpPortStatus.is_ghost ? (
-                <>
-                  PID <code style={{ color: 'var(--accent)' }}>{mcpPortStatus.conflict_pid}</code> is a ghost
-                  socket. Quickest fix: <strong>restart AutoDev</strong> (the new SO_REUSEADDR bind usually
-                  re-takes ghost ports). If that fails, reboot or run{' '}
-                  <code style={{ background: 'rgba(255,255,255,0.05)', padding: '0 4px' }}>tcpvcon -k 127.0.0.1:{mcpPortStatus.preferred_port}</code>.
-                </>
-              ) : (
-                <>
-                  To use the preferred port, stop the process holding it:{' '}
-                  <code style={{ background: 'rgba(255,255,255,0.05)', padding: '0 4px' }}>
-                    taskkill /F /PID {mcpPortStatus.conflict_pid}
-                  </code>
-                  {' '}then restart AutoDev.
-                </>
-              )}
-            </div>
-          )}
-          <div className="flex gap-2 mt-2">
-            <button
-              type="button"
-              onClick={() => { void loadMcpPortStatus() }}
-              className="font-mono px-2 py-1 rounded-sm"
-              style={{
-                fontSize:   '10px',
-                background: 'var(--bg-elevated, #1a1a1a)',
-                border:     '1px solid var(--border-1)',
-                color:      'var(--text-2)',
-                cursor:     'pointer',
-              }}
-            >
-              Recheck
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Sidecar crash banners — render once per service whose status begins
           with `error:`. Pulls the captured stderr tail from the Rust backend
