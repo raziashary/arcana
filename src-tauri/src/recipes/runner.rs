@@ -11,8 +11,8 @@
 // Transient Mode 2 failures (MCP server blip, ensure_agent error, invoke error)
 // do NOT fall back to Mode 1. They abort the current tick and let the next
 // cron tick retry Mode 2. Reasons:
-//   1. MCP server is in-process — a `:8767` blip means the binary is degraded;
-//      Mode 1 would run tool-less and is no better.
+//   1. (Historical: this reasoning concerned the in-process MCP server on
+//      :8767, deleted in P0. Mode 2 is inert now — ADR-LOG-RESTRUCT-0008.)
 //   2. ensure_agent failures are typically auth-refresh races — next tick recovers.
 //   3. invoke_worker failures mean the LivingAgent may have already started the
 //      task; running Mode 1 on top risks double-execution and state corruption.

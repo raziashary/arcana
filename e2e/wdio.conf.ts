@@ -75,6 +75,22 @@ export const config: WebdriverIO.Config = {
           'See e2e/README.md for the per-platform webdriver prerequisites.',
       )
     }
+
+    // tauri-driver is only a proxy: without the platform's native webview
+    // driver it starts and then refuses every connection, which surfaces as a
+    // misleading "make sure browser driver is running on 127.0.0.1:4444".
+    // Name the actual missing prerequisite instead.
+    const nativeDriver = isWindows ? 'msedgedriver' : 'WebKitWebDriver'
+    if (spawnSync(nativeDriver, ['--version'], { encoding: 'utf8' }).error) {
+      throw new Error(
+        `${nativeDriver} is not on PATH, so tauri-driver has nothing to proxy to.\n` +
+          (isWindows
+            ? '  Install Microsoft Edge WebDriver matching your installed Edge build.\n'
+            : '  apt-get install webkit2gtk-driver\n') +
+          'See e2e/README.md.',
+      )
+    }
+
     tauriDriver = spawn('tauri-driver', [], { stdio: [null, process.stdout, process.stderr] })
   },
 

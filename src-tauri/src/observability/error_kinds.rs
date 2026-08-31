@@ -21,9 +21,11 @@ pub const KIND_ORCH_CRASH: &str = "orch_crash";
 /// that the auto-retry policy gave up.
 pub const KIND_WATCHDOG_RESTART: &str = "watchdog_restart";
 
-/// autodev-mcp-server on :8767 became unresponsive. Different from
-/// orch_crash because the MCP server lives in-process; if this kind fires,
-/// the AutoDev host itself is degraded (not the Python sidecar).
+/// An MCP server AutoDev depends on became unresponsive.
+///
+/// This used to mean AutoDev's OWN in-process server on :8767, which was
+/// deleted in P0. It now covers the external MCP servers AutoDev connects to
+/// as a client (see `mcp/health.rs`).
 pub const KIND_MCP_UNREACHABLE: &str = "mcp_unreachable";
 
 /// A builtin tool returned a hard error (non-zero exit / panic / bad input).

@@ -4,14 +4,17 @@
 //   Mode 1: PA Agent         → Rust AgentEngine (direct LLM, low latency)
 //   Mode 2: Worker Agent     → core-orchestrator LivingAgent (21 FSMs, mem0, A2A)
 //
-// Three managed processes must all run for Mode 2 to be active:
+// Two managed processes for Mode 2:
 //   1. memory-mcp-server   (port 8000)  — long-term mem0 memory
 //   2. core-orchestrator   (port 4000)  — LivingAgent gateway
-//   3. autodev-mcp-server  (port 8767)  — canonical Rust builtin_tools via MCP
+//
+// A third, an in-process MCP server on :8767 serving AutoDev's builtin_tools
+// to those agents, was deleted in P0 — it was an unauthenticated local
+// endpoint exposing bash, write_file and spawn_subagent. Mode 2 is therefore
+// inert (ADR-LOG-RESTRUCT-0008) and this whole module goes in P8.
 //
 // Startup order: memory-mcp-server MUST start first because LivingAgent's
 // MemoryCore initialises at agent creation time and connects to port 8000.
-// autodev-mcp-server is an in-process Tokio task (no separate binary), so it
 // starts immediately alongside the Tauri app.
 //
 // Log routing: stdout/stderr from both processes is piped to:
@@ -419,7 +422,6 @@ pub struct SidecarManager {
     memory_process: Mutex<Option<Child>>,
     memory_status: Mutex<SidecarStatus>,
     memory_stderr_tail: StderrTail,
-    // autodev-mcp-server (port 8767) — in-process Tokio task, tracked for fleet readiness
     // Redis / Memurai (port 6379) — externally managed (Windows service or
     // system Redis). AutoDev only probes liveness; it does NOT spawn or stop
     // Redis. Redis is OPTIONAL — its absence disables the warm memory tier

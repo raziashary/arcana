@@ -36,6 +36,10 @@ pub mod plan;
 pub mod plugin;
 #[cfg(test)]
 mod reachability_gate;
+
+// Phase-P0 spec-invariant gates over repository files (TG0-02/03/04).
+#[cfg(test)]
+mod ci_gate;
 pub mod routing;
 pub mod subagent;
 pub mod updater;
