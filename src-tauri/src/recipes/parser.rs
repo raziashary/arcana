@@ -1,9 +1,9 @@
 // Recipe parser — reads YAML recipe files from ~/.autodev/recipes/
 // Uses serde_yaml for parsing. Each .yaml file maps to one Recipe struct.
 
-use std::path::Path;
-use crate::errors::{AutoDevError, Result};
 use super::types::Recipe;
+use crate::errors::{AutoDevError, Result};
+use std::path::Path;
 
 /// Parse a single recipe from a YAML string.
 pub fn parse_recipe(yaml: &str) -> Result<Recipe> {
@@ -15,7 +15,7 @@ pub fn parse_recipe(yaml: &str) -> Result<Recipe> {
 /// Returns (valid_recipes, errors) — partial failure is OK.
 pub fn load_all_recipes(recipes_dir: &Path) -> (Vec<Recipe>, Vec<String>) {
     let mut recipes = Vec::new();
-    let mut errors  = Vec::new();
+    let mut errors = Vec::new();
 
     let entries = match std::fs::read_dir(recipes_dir) {
         Ok(e) => e,
@@ -27,7 +27,11 @@ pub fn load_all_recipes(recipes_dir: &Path) -> (Vec<Recipe>, Vec<String>) {
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().map(|e| e == "yaml" || e == "yml").unwrap_or(false) {
+        if path
+            .extension()
+            .map(|e| e == "yaml" || e == "yml")
+            .unwrap_or(false)
+        {
             match std::fs::read_to_string(&path) {
                 Ok(yaml) => {
                     match parse_recipe(&yaml) {

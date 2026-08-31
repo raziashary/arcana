@@ -1,10 +1,10 @@
 // Analytics collector — event ingestion pipeline for token usage, costs, and system events
-use std::sync::Arc;
-use chrono::Utc;
-use tracing::debug;
-use crate::errors::Result;
 use super::db::AnalyticsDb;
 use super::types::*;
+use crate::errors::Result;
+use chrono::Utc;
+use std::sync::Arc;
+use tracing::debug;
 
 pub struct AnalyticsCollector {
     db: Arc<AnalyticsDb>,

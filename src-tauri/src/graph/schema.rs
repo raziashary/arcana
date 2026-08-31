@@ -6,32 +6,32 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeInfo {
-    pub kind: String,                    // function, class, module, variable, etc.
-    pub name: String,                    // simple name
-    pub qualified_name: String,          // full path (e.g., module.Class.method)
-    pub file_path: String,               // relative to repo root
+    pub kind: String,           // function, class, module, variable, etc.
+    pub name: String,           // simple name
+    pub qualified_name: String, // full path (e.g., module.Class.method)
+    pub file_path: String,      // relative to repo root
     pub line_start: i32,
     pub line_end: i32,
-    pub language: String,                // python, javascript, rust, etc.
-    pub parent_name: Option<String>,     // qualified name of parent scope
-    pub params: Option<String>,          // JSON array of param names
-    pub return_type: Option<String>,     // return type annotation
-    pub modifiers: Option<String>,       // public, private, async, etc. (JSON array)
+    pub language: String,            // python, javascript, rust, etc.
+    pub parent_name: Option<String>, // qualified name of parent scope
+    pub params: Option<String>,      // JSON array of param names
+    pub return_type: Option<String>, // return type annotation
+    pub modifiers: Option<String>,   // public, private, async, etc. (JSON array)
     pub is_test: bool,
-    pub file_hash: String,               // SHA-256 of file content
+    pub file_hash: String, // SHA-256 of file content
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EdgeInfo {
-    pub kind: String,                    // calls, imports, inherits, uses, etc.
-    pub source_qualified: String,        // caller/importer
-    pub target_qualified: String,        // callee/imported
-    pub file_path: String,               // where the edge originates
-    pub line: i32,                       // line number of the call/import
-    pub confidence: f32,                 // 0.0–1.0 (1.0 = certain, <1.0 = inferred)
-    pub confidence_tier: String,         // certain, inferred, heuristic
-    pub weight: f32,                     // call count or importance
-    pub relation: Option<String>,        // extra metadata (JSON)
+    pub kind: String,             // calls, imports, inherits, uses, etc.
+    pub source_qualified: String, // caller/importer
+    pub target_qualified: String, // callee/imported
+    pub file_path: String,        // where the edge originates
+    pub line: i32,                // line number of the call/import
+    pub confidence: f32,          // 0.0–1.0 (1.0 = certain, <1.0 = inferred)
+    pub confidence_tier: String,  // certain, inferred, heuristic
+    pub weight: f32,              // call count or importance
+    pub relation: Option<String>, // extra metadata (JSON)
 }
 
 // ── SQL Schema Constants ───────────────────────────────────────────────────

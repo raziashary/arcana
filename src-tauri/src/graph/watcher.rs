@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use notify::{EventKind, RecursiveMode, Watcher};
 
-use crate::errors::{AutoDevError, Result};
 use super::detect::CodeDetector;
+use crate::errors::{AutoDevError, Result};
 
 pub struct GraphWatcher {
     debounce_ms: u64,
@@ -35,7 +35,7 @@ impl GraphWatcher {
             thread: None,
         })
     }
-    
+
     /// Start watching `repo_root` recursively. The callback is invoked with
     /// deduplicated batches of changed code-file paths after `debounce_ms`
     /// of inactivity. Calling `start` twice is an error — call `stop` first.
@@ -48,26 +48,28 @@ impl GraphWatcher {
                 "GraphWatcher::start called while already running".to_string(),
             ));
         }
-        
+
         let (event_tx, event_rx) = channel::<notify::Result<notify::Event>>();
         let (shutdown_tx, shutdown_rx) = channel::<()>();
-        
+
         // Build the OS watcher and subscribe to recursive events on repo_root.
         let mut watcher = notify::recommended_watcher(move |res| {
             let _ = event_tx.send(res);
-        }).map_err(|e| AutoDevError::Agent(format!("watcher init failed: {e}")))?;
-        
-        watcher.watch(repo_root, RecursiveMode::Recursive)
+        })
+        .map_err(|e| AutoDevError::Agent(format!("watcher init failed: {e}")))?;
+
+        watcher
+            .watch(repo_root, RecursiveMode::Recursive)
             .map_err(|e| AutoDevError::Agent(format!("watch({:?}) failed: {e}", repo_root)))?;
-        
+
         let debounce = Duration::from_millis(self.debounce_ms);
-        
+
         // Debounce thread: collects events into a pending set; when the channel
         // has been quiet for `debounce` duration, flushes the set to the callback.
         let thread = std::thread::spawn(move || {
             let mut pending: HashSet<PathBuf> = HashSet::new();
             let mut last_event: Option<Instant> = None;
-            
+
             loop {
                 // Check shutdown signal (non-blocking)
                 if shutdown_rx.try_recv().is_ok() {
@@ -77,7 +79,7 @@ impl GraphWatcher {
                     }
                     break;
                 }
-                
+
                 // Poll for events with a short timeout so we can also flush on quiet.
                 match event_rx.recv_timeout(Duration::from_millis(50)) {
                     Ok(Ok(event)) => {
@@ -86,8 +88,10 @@ impl GraphWatcher {
                             event.kind,
                             EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
                         );
-                        if !interesting { continue; }
-                        
+                        if !interesting {
+                            continue;
+                        }
+
                         for path in event.paths {
                             // Filter to source files only — ignore VCS metadata, build dirs, etc.
                             if CodeDetector::is_code_file(&path) {
@@ -107,25 +111,28 @@ impl GraphWatcher {
                         break;
                     }
                 }
-                
+
                 // Flush if quiet for >= debounce
                 if let Some(last) = last_event {
                     if last.elapsed() >= debounce && !pending.is_empty() {
                         let batch: Vec<PathBuf> = pending.drain().collect();
-                        tracing::info!("[GraphWatcher] flushing batch of {} changed files", batch.len());
+                        tracing::info!(
+                            "[GraphWatcher] flushing batch of {} changed files",
+                            batch.len()
+                        );
                         callback(batch);
                         last_event = None;
                     }
                 }
             }
         });
-        
+
         self.watcher = Some(Box::new(watcher));
         self.shutdown_tx = Some(shutdown_tx);
         self.thread = Some(thread);
         Ok(())
     }
-    
+
     /// Stop watching and join the debounce thread. Safe to call multiple times.
     pub fn stop(&mut self) -> Result<()> {
         // Signal the debounce thread to exit

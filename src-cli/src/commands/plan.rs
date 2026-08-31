@@ -1,7 +1,7 @@
+use crate::output::{status_colored, OutputContext};
 use anyhow::Result;
-use clap::{Args, Subcommand};
 use autodev_shared::db::plans::PlansDb;
-use crate::output::{OutputContext, status_colored};
+use clap::{Args, Subcommand};
 
 #[derive(Subcommand)]
 pub enum PlanCmd {
@@ -84,7 +84,12 @@ pub async fn run(cmd: PlanCmd, ctx: OutputContext) -> Result<()> {
 
 fn create(args: CreateArgs, ctx: OutputContext) -> Result<()> {
     let db = PlansDb::open()?;
-    let plan = db.create(&args.title, args.description.as_deref(), args.scope.as_deref(), "airsctl")?;
+    let plan = db.create(
+        &args.title,
+        args.description.as_deref(),
+        args.scope.as_deref(),
+        "airsctl",
+    )?;
     ctx.success(&format!("Created plan #{}", plan.id));
     print_plan_detail(&ctx, &plan, &[]);
     Ok(())
@@ -100,14 +105,19 @@ fn list(args: ListArgs, ctx: OutputContext) -> Result<()> {
     }
 
     let headers = ["ID", "Title", "Status", "Scope", "Created By", "Created"];
-    let rows: Vec<Vec<String>> = plans.iter().map(|p| vec![
-        p.id.to_string(),
-        truncate(&p.title, 40),
-        status_colored(&p.status),
-        p.scope.clone(),
-        p.created_by.clone(),
-        p.created_at[..10].to_string(),
-    ]).collect();
+    let rows: Vec<Vec<String>> = plans
+        .iter()
+        .map(|p| {
+            vec![
+                p.id.to_string(),
+                truncate(&p.title, 40),
+                status_colored(&p.status),
+                p.scope.clone(),
+                p.created_by.clone(),
+                p.created_at[..10].to_string(),
+            ]
+        })
+        .collect();
 
     ctx.print_table(&headers, rows);
     Ok(())
@@ -128,11 +138,14 @@ fn get(args: GetArgs, ctx: OutputContext) -> Result<()> {
 fn add_step(args: AddStepArgs, ctx: OutputContext) -> Result<()> {
     let db = PlansDb::open()?;
     let step = db.add_step(args.plan_id, &args.title, args.description.as_deref())?;
-    ctx.success(&format!("Added step #{} to plan #{}", step.id, args.plan_id));
+    ctx.success(&format!(
+        "Added step #{} to plan #{}",
+        step.id, args.plan_id
+    ));
     ctx.print_kv(&[
-        ("step_id",     &step.id.to_string()),
-        ("title",       &step.title),
-        ("status",      &step.status),
+        ("step_id", &step.id.to_string()),
+        ("title", &step.title),
+        ("status", &step.status),
         ("order_index", &step.order_index.to_string()),
     ]);
     Ok(())
@@ -141,7 +154,10 @@ fn add_step(args: AddStepArgs, ctx: OutputContext) -> Result<()> {
 fn update_step(args: UpdateStepArgs, ctx: OutputContext) -> Result<()> {
     let db = PlansDb::open()?;
     db.update_step_status(args.step_id, &args.status)?;
-    ctx.success(&format!("Step #{} status updated to '{}'", args.step_id, args.status));
+    ctx.success(&format!(
+        "Step #{} status updated to '{}'",
+        args.step_id, args.status
+    ));
     Ok(())
 }
 
@@ -158,30 +174,38 @@ fn print_plan_detail(
     steps: &[autodev_shared::db::plans::PlanStep],
 ) {
     ctx.print_kv(&[
-        ("id",          &p.id.to_string()),
-        ("title",       &p.title),
-        ("status",      &p.status),
-        ("scope",       &p.scope),
-        ("created_by",  &p.created_by),
+        ("id", &p.id.to_string()),
+        ("title", &p.title),
+        ("status", &p.status),
+        ("scope", &p.scope),
+        ("created_by", &p.created_by),
         ("description", p.description.as_deref().unwrap_or("-")),
-        ("created_at",  &p.created_at),
-        ("updated_at",  &p.updated_at),
+        ("created_at", &p.created_at),
+        ("updated_at", &p.updated_at),
     ]);
 
     if !steps.is_empty() {
         ctx.info("\nSteps:");
         let headers = ["#", "ID", "Title", "Status"];
-        let rows: Vec<Vec<String>> = steps.iter().map(|s| vec![
-            s.order_index.to_string(),
-            s.id.to_string(),
-            s.title.clone(),
-            status_colored(&s.status),
-        ]).collect();
+        let rows: Vec<Vec<String>> = steps
+            .iter()
+            .map(|s| {
+                vec![
+                    s.order_index.to_string(),
+                    s.id.to_string(),
+                    s.title.clone(),
+                    status_colored(&s.status),
+                ]
+            })
+            .collect();
         ctx.print_table(&headers, rows);
     }
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max { s.to_string() }
-    else { format!("{}…", &s[..max.saturating_sub(1)]) }
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max.saturating_sub(1)])
+    }
 }

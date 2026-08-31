@@ -22,7 +22,7 @@ impl SkillEngine {
                 None => {
                     if p.required && p.default.is_none() {
                         errors.push(ValidationError {
-                            field:   p.name.clone(),
+                            field: p.name.clone(),
                             message: format!("'{}' is required", p.name),
                         });
                     }
@@ -30,10 +30,10 @@ impl SkillEngine {
                 Some(v) => {
                     // Type check
                     let type_ok = match p.param_type {
-                        SkillParamType::String  => v.is_string(),
+                        SkillParamType::String => v.is_string(),
                         SkillParamType::Boolean => v.is_boolean(),
                         SkillParamType::Integer => v.is_i64() || v.is_u64(),
-                        SkillParamType::Enum    => {
+                        SkillParamType::Enum => {
                             if let (Some(s), Some(vals)) = (v.as_str(), &p.values) {
                                 vals.iter().any(|allowed| allowed == s)
                             } else {
@@ -43,7 +43,7 @@ impl SkillEngine {
                     };
                     if !type_ok {
                         errors.push(ValidationError {
-                            field:   p.name.clone(),
+                            field: p.name.clone(),
                             message: format!("'{}' has wrong type", p.name),
                         });
                     }
@@ -51,7 +51,11 @@ impl SkillEngine {
             }
         }
 
-        if errors.is_empty() { ValidationResult::ok() } else { ValidationResult::fail(errors) }
+        if errors.is_empty() {
+            ValidationResult::ok()
+        } else {
+            ValidationResult::fail(errors)
+        }
     }
 
     /// Render the skill template by substituting {{param_name}} with actual values.
@@ -74,7 +78,9 @@ impl SkillEngine {
 
         // Also expose any extra params passed in (not in schema) verbatim
         for (k, v) in params {
-            resolved.entry(k.clone()).or_insert_with(|| value_to_string(v));
+            resolved
+                .entry(k.clone())
+                .or_insert_with(|| value_to_string(v));
         }
 
         // Perform substitution
@@ -84,20 +90,20 @@ impl SkillEngine {
         }
 
         SkillExecutionResult {
-            skill_name:  skill.name.clone(),
+            skill_name: skill.name.clone(),
             rendered,
             executed_at: chrono::Utc::now(),
-            parameters:  params.clone(),
+            parameters: params.clone(),
         }
     }
 }
 
 fn value_to_string(v: &serde_json::Value) -> String {
     match v {
-        serde_json::Value::String(s)  => s.clone(),
-        serde_json::Value::Bool(b)    => b.to_string(),
-        serde_json::Value::Number(n)  => n.to_string(),
-        serde_json::Value::Null       => String::new(),
-        other                         => other.to_string(),
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Null => String::new(),
+        other => other.to_string(),
     }
 }

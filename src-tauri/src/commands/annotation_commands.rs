@@ -1,8 +1,8 @@
 // Annotation commands — CRUD for ~/.autodev/annotations.db
 // Used by: IDE CodeViewer (display), AnnotateFileTool (agent writes), frontend store
 
-use crate::errors::Result;
 use crate::db::annotations::{Annotation, AnnotationsDb, CreateAnnotationInput};
+use crate::errors::Result;
 
 #[tauri::command]
 pub fn create_annotation(input: CreateAnnotationInput) -> Result<String> {

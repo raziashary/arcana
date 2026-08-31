@@ -1,10 +1,10 @@
 // Analytics aggregator — background job for hourly and daily rollups
-use std::sync::Arc;
-use chrono::{Local, NaiveDate};
-use std::collections::HashMap;
-use crate::errors::Result;
 use super::db::AnalyticsDb;
 use super::types::*;
+use crate::errors::Result;
+use chrono::{Local, NaiveDate};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 pub struct AnalyticsAggregator {
     db: Arc<AnalyticsDb>,
@@ -59,10 +59,14 @@ impl AnalyticsAggregator {
             }
 
             // Provider breakdown
-            *provider_breakdown.entry(record.provider.clone()).or_insert(0.0) += record.cost_usd;
+            *provider_breakdown
+                .entry(record.provider.clone())
+                .or_insert(0.0) += record.cost_usd;
 
             // Agent type breakdown
-            *agent_type_breakdown.entry(record.agent_type.clone()).or_insert(0.0) += record.cost_usd;
+            *agent_type_breakdown
+                .entry(record.agent_type.clone())
+                .or_insert(0.0) += record.cost_usd;
         }
 
         // Insert daily cost record

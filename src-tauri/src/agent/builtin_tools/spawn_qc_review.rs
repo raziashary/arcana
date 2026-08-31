@@ -21,14 +21,16 @@ use tracing::{debug, info, warn};
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
 use crate::db::tasks::TasksDb;
 use crate::recipes::defaults::qc_reviewer_system_prompt;
-use crate::subagent::{self, SubagentConfig, SubagentStatus};
 use crate::subagent::pool::QC_DISPATCHER_SLUG;
+use crate::subagent::{self, SubagentConfig, SubagentStatus};
 
 pub struct SpawnQcReviewTool;
 
 #[async_trait]
 impl Tool for SpawnQcReviewTool {
-    fn name(&self) -> &str { "spawn_qc_review" }
+    fn name(&self) -> &str {
+        "spawn_qc_review"
+    }
 
     fn description(&self) -> &str {
         "Spawn an ephemeral per-task QC reviewer subagent. Atomically claims \
@@ -63,7 +65,9 @@ impl Tool for SpawnQcReviewTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let task_id = match input.get("task_id").and_then(|v| v.as_i64()) {
@@ -76,16 +80,19 @@ impl Tool for SpawnQcReviewTool {
         if ctx.depth >= subagent::pool::MAX_NESTING_DEPTH {
             return ToolResult::error(format!(
                 "spawn_qc_review rejected: caller is at depth {} (limit {})",
-                ctx.depth, subagent::pool::MAX_NESTING_DEPTH
+                ctx.depth,
+                subagent::pool::MAX_NESTING_DEPTH
             ));
         }
 
         let mgr = match subagent::manager::global() {
             Some(m) => m,
-            None => return ToolResult::error(
-                "Subagent system unavailable: SubagentManager not initialised. \
-                 Wait for sidecar startup and try again."
-            ),
+            None => {
+                return ToolResult::error(
+                    "Subagent system unavailable: SubagentManager not initialised. \
+                 Wait for sidecar startup and try again.",
+                )
+            }
         };
 
         // Doc 04 Phase 4.4 — cost guard. Check the rolling hour QC spend
@@ -105,8 +112,8 @@ impl Tool for SpawnQcReviewTool {
         // Load the task to check status + read repo_path / assigned_worker
         let task = match tasks_db.get_by_id(task_id) {
             Ok(Some(t)) => t,
-            Ok(None)    => return ToolResult::error(&format!("task #{task_id} not found")),
-            Err(e)      => return ToolResult::error(&format!("read task #{task_id}: {e}")),
+            Ok(None) => return ToolResult::error(&format!("task #{task_id} not found")),
+            Err(e) => return ToolResult::error(&format!("read task #{task_id}: {e}")),
         };
         if task.status.as_str() != "qc_review" {
             return ToolResult::error(&format!(
@@ -125,13 +132,18 @@ impl Tool for SpawnQcReviewTool {
         // it from a stable pattern so the reconciler can match registry IDs
         // back to claims; the real subagent_id will start with the same
         // prefix because slug::generate uses `subagent-<parent_slug>-...`.
-        let claim_token = format!("qc-rev-task{task_id}-{}", chrono::Utc::now().timestamp_millis());
+        let claim_token = format!(
+            "qc-rev-task{task_id}-{}",
+            chrono::Utc::now().timestamp_millis()
+        );
 
         match tasks_db.try_claim_for_qc_review(task_id, &claim_token) {
-            Ok(true)  => debug!("[spawn_qc_review] claimed task #{task_id} -> {claim_token}"),
-            Ok(false) => return ToolResult::error(&format!(
+            Ok(true) => debug!("[spawn_qc_review] claimed task #{task_id} -> {claim_token}"),
+            Ok(false) => {
+                return ToolResult::error(&format!(
                 "task #{task_id} claim raced with another reviewer — try the next dispatcher tick"
-            )),
+            ))
+            }
             Err(e) => return ToolResult::error(&format!("claim task #{task_id}: {e}")),
         }
 
@@ -140,26 +152,28 @@ impl Tool for SpawnQcReviewTool {
         let system_prompt = qc_reviewer_system_prompt(task_id, repo_path);
 
         // ── Spawn (does NOT await result) ──────────────────────────────────
-        let model = input.get("model")
+        let model = input
+            .get("model")
             .and_then(|v| v.as_str())
             .filter(|s| !s.trim().is_empty())
             .unwrap_or("claude-sonnet-4-5")
             .to_string();
-        let timeout_secs = input.get("timeout_secs")
+        let timeout_secs = input
+            .get("timeout_secs")
             .and_then(|v| v.as_u64())
             .map(|n| n as u32)
             .unwrap_or(600);
 
         let config = SubagentConfig {
-            parent_slug:       QC_DISPATCHER_SLUG.to_string(),
+            parent_slug: QC_DISPATCHER_SLUG.to_string(),
             parent_session_id: ctx.session_id.clone(),
             system_prompt,
-            tools:             Vec::new(),                  // MCP-only
+            tools: Vec::new(), // MCP-only
             model,
-            working_dir:       ctx.working_dir.clone(),
-            max_turns:         30,
+            working_dir: ctx.working_dir.clone(),
+            max_turns: 30,
             timeout_secs,
-            depth:             ctx.depth + 1,
+            depth: ctx.depth + 1,
         };
 
         // Use a placeholder trigger; the reviewer reads task details via
@@ -231,8 +245,7 @@ impl Tool for SpawnQcReviewTool {
                         &subagent_id_for_bg,
                         Some(cost),
                         result.duration_secs,
-                        matches!(result.status,
-                            SubagentStatus::Completed),
+                        matches!(result.status, SubagentStatus::Completed),
                     );
                     info!(
                         "[spawn_qc_review] task #{task_id_for_bg} reviewer '{}' \
@@ -277,12 +290,15 @@ impl Tool for SpawnQcReviewTool {
             true,
         );
 
-        ToolResult::success(json!({
-            "task_id":     task_id,
-            "subagent_id": subagent_id,
-            "status":      "dispatched",
-            "claim_token": claim_token,
-        }).to_string())
+        ToolResult::success(
+            json!({
+                "task_id":     task_id,
+                "subagent_id": subagent_id,
+                "status":      "dispatched",
+                "claim_token": claim_token,
+            })
+            .to_string(),
+        )
     }
 }
 
@@ -356,7 +372,10 @@ mod qc_cost_guard {
     const PROVISIONAL_COST_USD: f64 = 0.10;
     const WINDOW: Duration = Duration::from_secs(3600);
 
-    struct Entry { at: Instant, cost: f64 }
+    struct Entry {
+        at: Instant,
+        cost: f64,
+    }
     static RING: OnceLock<Mutex<Vec<Entry>>> = OnceLock::new();
 
     fn ring() -> &'static Mutex<Vec<Entry>> {
@@ -384,7 +403,10 @@ mod qc_cost_guard {
             ));
         }
         let mut g = ring().lock().unwrap();
-        g.push(Entry { at: now, cost: PROVISIONAL_COST_USD });
+        g.push(Entry {
+            at: now,
+            cost: PROVISIONAL_COST_USD,
+        });
         None
     }
 
@@ -396,9 +418,15 @@ mod qc_cost_guard {
     pub fn record_dispatch_complete(realised_cost: f64) {
         let mut g = ring().lock().unwrap();
         // Pop the oldest provisional entry if present.
-        if let Some(idx) = g.iter().position(|e| (e.cost - PROVISIONAL_COST_USD).abs() < 1e-9) {
+        if let Some(idx) = g
+            .iter()
+            .position(|e| (e.cost - PROVISIONAL_COST_USD).abs() < 1e-9)
+        {
             g.remove(idx);
         }
-        g.push(Entry { at: Instant::now(), cost: realised_cost.max(0.0) });
+        g.push(Entry {
+            at: Instant::now(),
+            cost: realised_cost.max(0.0),
+        });
     }
 }

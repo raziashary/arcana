@@ -3,22 +3,22 @@
 // Worker mode: tools are forwarded to core-orchestrator with __autodev suffix.
 // Tool availability varies by PAMode — see register_for_mode().
 
-pub mod read_file;
-pub mod write_file;
-pub mod edit_file;
-pub mod bash;
-pub mod list_directory;
-pub mod grep;
-pub mod glob;
-pub mod create_task;
-pub mod list_tasks_tool;
-pub mod get_task_tool;
-pub mod update_task_status_tool;
 pub mod assign_task;
 pub mod assign_tasks_batch;
+pub mod bash;
+pub mod create_task;
+pub mod edit_file;
+pub mod get_task_tool;
+pub mod glob;
+pub mod grep;
+pub mod list_directory;
+pub mod list_tasks_tool;
 pub mod planner;
-pub mod spawn_subagent;
+pub mod read_file;
 pub mod spawn_parallel_subagents;
+pub mod spawn_subagent;
+pub mod update_task_status_tool;
+pub mod write_file;
 // Doc 04 Phase 3 — per-task QC reviewer fan-out. Only the qc-dispatcher
 // recipe calls this. Atomically claims the task (`under_review_by`),
 // spawns a sonnet-backed ephemeral reviewer, schedules cleanup +
@@ -29,13 +29,13 @@ pub mod spawn_qc_review;
 pub mod write_interface_spec;
 // Doc 09 T4.2 — fleet-level smoke probe: bootstraps backend + frontend,
 // curls an endpoint, looks for fingerprint text in the rendered page.
+pub mod append_file;
+pub mod check_file;
 pub mod e2e_probe;
+pub mod remember_this;
 pub mod request_supervisor_action;
 pub mod search_memory;
-pub mod remember_this;
 pub mod validate;
-pub mod check_file;
-pub mod append_file;
 // Path-jail helper used by write_file / edit_file / append_file / bash to
 // refuse any operation whose resolved absolute path escapes the worker's
 // configured workspace. Load-bearing safety net — see
@@ -49,12 +49,12 @@ pub mod path_lock;
 // Doc 09 T2.4 — module-level tracker of recent bash invocations that look
 // like build / test / smoke commands. update_task_status_tool reads from
 // it to refuse qc_review transitions that have no proof a build was run.
-pub mod build_evidence;
-pub mod suggest_worker_tool;
-pub mod claim_task_tool;
 pub mod analyze_diff_tool;
 pub mod annotate_file_tool;
+pub mod build_evidence;
+pub mod claim_task_tool;
 pub mod set_task_budget_tool;
+pub mod suggest_worker_tool;
 // Ruflo Feature 5 — Phase-Based Task Decomposition
 pub mod create_epic_tool;
 pub mod create_phased_task_tool;
@@ -67,12 +67,12 @@ pub mod resolve_worker_request_tool;
 // Inbox lives in `worker_messages` SQLite table; reads/writes guarded by the
 // existing budget / orphan / build-evidence machinery because the target
 // worker reads its inbox during its own scheduled tick, not out-of-band.
-pub mod send_worker_message;
-pub mod list_worker_messages;
 pub mod acknowledge_worker_message;
+pub mod list_worker_messages;
+pub mod send_worker_message;
 
+use super::{tool_registry::ToolRegistry, PAMode};
 use std::sync::Arc;
-use super::{PAMode, tool_registry::ToolRegistry};
 
 /// Register all tools (all modes) — used when no PAMode context is available.
 pub fn register_all(registry: &mut ToolRegistry) {
@@ -109,7 +109,9 @@ pub fn register_for_mcp_worker(registry: &mut ToolRegistry) {
     registry.register(Arc::new(get_task_tool::GetTaskTool));
     registry.register(Arc::new(update_task_status_tool::UpdateTaskStatusTool));
     // Worker→Supervisor communication — workers can request action without task-creation power
-    registry.register(Arc::new(request_supervisor_action::RequestSupervisorActionTool));
+    registry.register(Arc::new(
+        request_supervisor_action::RequestSupervisorActionTool,
+    ));
     // Routing — Supervisor uses this before assign_task; safe to expose to all workers
     registry.register(Arc::new(suggest_worker_tool::SuggestWorkerTool));
     // Orphan detection — workers call this instead of update_task_status(in_progress)
@@ -122,13 +124,17 @@ pub fn register_for_mcp_worker(registry: &mut ToolRegistry) {
     registry.register(Arc::new(set_task_budget_tool::SetTaskBudgetTool));
     // Ruflo Feature 5 — Epic read tools exposed so workers can check phase progress
     registry.register(Arc::new(get_epic_progress_tool::GetEpicProgressTool));
-    registry.register(Arc::new(get_ready_tasks_in_phase_tool::GetReadyTasksInPhaseTool));
+    registry.register(Arc::new(
+        get_ready_tasks_in_phase_tool::GetReadyTasksInPhaseTool,
+    ));
     // Subagent tools — workers document Subagent Protocols in their recipes.
     // Pool hard caps + depth guard enforce safety; recipes provide cost-advisory guidance.
     // NOTE: subagent MCP callers must pass __depth on every call so the depth guard
     // in SpawnSubagentTool reflects actual nesting (tool_adapter.rs reads __depth).
     registry.register(Arc::new(spawn_subagent::SpawnSubagentTool));
-    registry.register(Arc::new(spawn_parallel_subagents::SpawnParallelSubagentsTool));
+    registry.register(Arc::new(
+        spawn_parallel_subagents::SpawnParallelSubagentsTool,
+    ));
     // Doc 04 Phase 3 — QC fan-out tool, called only by qc-dispatcher recipe.
     // Exposed at the MCP-worker layer because Mode 2 LivingAgents reach all
     // tools through the MCP server; recipe-level "only the dispatcher" is
@@ -155,12 +161,16 @@ pub fn register_for_mcp_worker(registry: &mut ToolRegistry) {
     // Safe to expose to all workers — reading and resolving requests is idempotent
     // and the resolve action requires an explicit request id.
     registry.register(Arc::new(list_worker_requests_tool::ListWorkerRequestsTool));
-    registry.register(Arc::new(resolve_worker_request_tool::ResolveWorkerRequestTool));
+    registry.register(Arc::new(
+        resolve_worker_request_tool::ResolveWorkerRequestTool,
+    ));
     // ACP tools — every fleet worker (including supervisor + qc-agent) can
     // send / list / acknowledge cross-worker messages.
     registry.register(Arc::new(send_worker_message::SendWorkerMessageTool));
     registry.register(Arc::new(list_worker_messages::ListWorkerMessagesTool));
-    registry.register(Arc::new(acknowledge_worker_message::AcknowledgeWorkerMessageTool));
+    registry.register(Arc::new(
+        acknowledge_worker_message::AcknowledgeWorkerMessageTool,
+    ));
 }
 
 /// Register tools filtered by PA mode:
@@ -192,14 +202,18 @@ pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
             registry.register(Arc::new(assign_tasks_batch::AssignTasksBatchTool));
             registry.register(Arc::new(create_task::CreateTaskTool));
             // Worker→Supervisor communication — available in all modes
-            registry.register(Arc::new(request_supervisor_action::RequestSupervisorActionTool));
+            registry.register(Arc::new(
+                request_supervisor_action::RequestSupervisorActionTool,
+            ));
             // Planner tool — available in all modes for plan management
             registry.register(Arc::new(planner::PlannerTool));
             // Subagent tools — Phase 4.9. Available to PA, Workers, and Supervisor
             // for fan-out / context-isolation work. Not exposed in Delegate mode
             // (that mode exists to keep PA from doing direct execution).
             registry.register(Arc::new(spawn_subagent::SpawnSubagentTool));
-            registry.register(Arc::new(spawn_parallel_subagents::SpawnParallelSubagentsTool));
+            registry.register(Arc::new(
+                spawn_parallel_subagents::SpawnParallelSubagentsTool,
+            ));
             // Doc 04 Phase 3 — QC fan-out tool (parity with MCP registration).
             registry.register(Arc::new(spawn_qc_review::SpawnQcReviewTool));
             // Doc 09 T3.1 / T4.2 — interface spec + e2e smoke probe (PA parity).
@@ -222,16 +236,22 @@ pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
             registry.register(Arc::new(create_epic_tool::CreateEpicTool));
             registry.register(Arc::new(create_phased_task_tool::CreatePhasedTaskTool));
             registry.register(Arc::new(get_epic_progress_tool::GetEpicProgressTool));
-            registry.register(Arc::new(get_ready_tasks_in_phase_tool::GetReadyTasksInPhaseTool));
+            registry.register(Arc::new(
+                get_ready_tasks_in_phase_tool::GetReadyTasksInPhaseTool,
+            ));
             // Supervisor escalation queue tools — also available in PA modes
             // so Razi can manually drain the queue from chat if needed.
             registry.register(Arc::new(list_worker_requests_tool::ListWorkerRequestsTool));
-            registry.register(Arc::new(resolve_worker_request_tool::ResolveWorkerRequestTool));
+            registry.register(Arc::new(
+                resolve_worker_request_tool::ResolveWorkerRequestTool,
+            ));
             // ACP tools available in PA so Razi can manually inspect / send
             // worker messages from the chat tab for debugging the fleet.
             registry.register(Arc::new(send_worker_message::SendWorkerMessageTool));
             registry.register(Arc::new(list_worker_messages::ListWorkerMessagesTool));
-            registry.register(Arc::new(acknowledge_worker_message::AcknowledgeWorkerMessageTool));
+            registry.register(Arc::new(
+                acknowledge_worker_message::AcknowledgeWorkerMessageTool,
+            ));
         }
         PAMode::Delegate => {
             registry.register(Arc::new(create_task::CreateTaskTool));

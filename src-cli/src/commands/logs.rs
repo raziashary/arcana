@@ -1,7 +1,7 @@
+use crate::output::OutputContext;
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use colored::Colorize;
-use crate::output::OutputContext;
 
 #[derive(Subcommand)]
 pub enum LogsCmd {
@@ -65,17 +65,18 @@ async fn view(args: ViewArgs, ctx: OutputContext) -> Result<()> {
     let files = find_logs(&log_dir, args.component.as_deref());
 
     if files.is_empty() {
-        ctx.info(&format!(
-            "No log files found in {}",
-            log_dir.display()
-        ));
+        ctx.info(&format!("No log files found in {}", log_dir.display()));
         return Ok(());
     }
 
     if args.follow {
         // Poll-based follow mode: print tail then re-check every 500ms
-        ctx.info(&format!("Following {} log file(s). Press Ctrl+C to stop.", files.len()));
-        let mut last_sizes: Vec<u64> = files.iter()
+        ctx.info(&format!(
+            "Following {} log file(s). Press Ctrl+C to stop.",
+            files.len()
+        ));
+        let mut last_sizes: Vec<u64> = files
+            .iter()
             .map(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
             .collect();
 
@@ -86,7 +87,7 @@ async fn view(args: ViewArgs, ctx: OutputContext) -> Result<()> {
                 if new_size > last_sizes[i] {
                     // Read only new bytes
                     let mut file = std::fs::File::open(path)?;
-                    use std::io::{Seek, SeekFrom, Read};
+                    use std::io::{Read, Seek, SeekFrom};
                     file.seek(SeekFrom::Start(last_sizes[i]))?;
                     let mut buf = String::new();
                     file.read_to_string(&mut buf)?;
@@ -101,9 +102,12 @@ async fn view(args: ViewArgs, ctx: OutputContext) -> Result<()> {
             if !ctx.quiet {
                 println!(
                     "{}",
-                    format!("=== {} ===", path.file_name().unwrap_or_default().to_string_lossy())
-                        .cyan()
-                        .bold()
+                    format!(
+                        "=== {} ===",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    )
+                    .cyan()
+                    .bold()
                 );
             }
             match read_tail(path, args.lines) {
@@ -126,20 +130,31 @@ fn list(ctx: OutputContext) -> Result<()> {
     }
 
     let headers = ["File", "Size", "Modified"];
-    let rows: Vec<Vec<String>> = files.iter().map(|p| {
-        let meta = std::fs::metadata(p);
-        let size = meta.as_ref().map(|m| format_bytes(m.len())).unwrap_or_else(|_| "-".into());
-        let modified = meta.as_ref().ok()
-            .and_then(|m| m.modified().ok())
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| format_unix_time(d.as_secs()))
-            .unwrap_or_else(|| "-".into());
-        vec![
-            p.file_name().unwrap_or_default().to_string_lossy().into_owned(),
-            size,
-            modified,
-        ]
-    }).collect();
+    let rows: Vec<Vec<String>> = files
+        .iter()
+        .map(|p| {
+            let meta = std::fs::metadata(p);
+            let size = meta
+                .as_ref()
+                .map(|m| format_bytes(m.len()))
+                .unwrap_or_else(|_| "-".into());
+            let modified = meta
+                .as_ref()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| format_unix_time(d.as_secs()))
+                .unwrap_or_else(|| "-".into());
+            vec![
+                p.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                size,
+                modified,
+            ]
+        })
+        .collect();
 
     ctx.print_table(&headers, rows);
     ctx.info(&format!("\nLog directory: {}", log_dir.display()));
@@ -167,9 +182,16 @@ fn clear(args: ClearArgs, ctx: OutputContext) -> Result<()> {
         return Ok(());
     }
 
-    ctx.info(&format!("Found {} log file(s) older than {} days.", candidates.len(), args.days));
+    ctx.info(&format!(
+        "Found {} log file(s) older than {} days.",
+        candidates.len(),
+        args.days
+    ));
     for p in &candidates {
-        ctx.info(&format!("  {}", p.file_name().unwrap_or_default().to_string_lossy()));
+        ctx.info(&format!(
+            "  {}",
+            p.file_name().unwrap_or_default().to_string_lossy()
+        ));
     }
 
     if !args.force {
@@ -231,7 +253,9 @@ fn get_log_dir() -> Result<std::path::PathBuf> {
 }
 
 fn find_logs(dir: &std::path::Path, component: Option<&str>) -> Vec<std::path::PathBuf> {
-    let Ok(entries) = std::fs::read_dir(dir) else { return vec![]; };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return vec![];
+    };
     let mut files: Vec<_> = entries
         .filter_map(|e| e.ok())
         .map(|e| e.path())
@@ -264,9 +288,13 @@ fn read_tail(path: &std::path::Path, lines: usize) -> Result<String> {
 }
 
 fn format_bytes(b: u64) -> String {
-    if b >= 1_048_576 { format!("{:.1} MB", b as f64 / 1_048_576.0) }
-    else if b >= 1_024 { format!("{:.1} KB", b as f64 / 1_024.0) }
-    else { format!("{b} B") }
+    if b >= 1_048_576 {
+        format!("{:.1} MB", b as f64 / 1_048_576.0)
+    } else if b >= 1_024 {
+        format!("{:.1} KB", b as f64 / 1_024.0)
+    } else {
+        format!("{b} B")
+    }
 }
 
 fn format_unix_time(secs: u64) -> String {
@@ -285,11 +313,26 @@ fn format_unix_time(secs: u64) -> String {
     let y1 = rem / 365;
     let year = y400 * 400 + y100 * 100 + y4 * 4 + y1 + 1970;
     let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
-    let mdays = [31u64, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mdays = [
+        31u64,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut doy = rem % 365 + if y1 == 4 { 365 } else { 0 };
     let mut month = 1u64;
     for md in &mdays {
-        if doy < *md { break; }
+        if doy < *md {
+            break;
+        }
         doy -= md;
         month += 1;
     }

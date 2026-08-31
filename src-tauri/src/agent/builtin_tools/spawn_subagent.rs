@@ -12,15 +12,15 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
-use crate::subagent::{
-    self, SubagentConfig, SubagentResult, SubagentStatus,
-};
+use crate::subagent::{self, SubagentConfig, SubagentResult, SubagentStatus};
 
 pub struct SpawnSubagentTool;
 
 #[async_trait]
 impl Tool for SpawnSubagentTool {
-    fn name(&self) -> &str { "spawn_subagent" }
+    fn name(&self) -> &str {
+        "spawn_subagent"
+    }
 
     fn description(&self) -> &str {
         "Spawn a single isolated subagent to execute a focused subtask. \
@@ -70,7 +70,9 @@ impl Tool for SpawnSubagentTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let task_description = match input.get("task_description").and_then(|v| v.as_str()) {
@@ -90,10 +92,12 @@ impl Tool for SpawnSubagentTool {
 
         let mgr = match subagent::manager::global() {
             Some(m) => m,
-            None => return ToolResult::error(
-                "Subagent system unavailable: SubagentManager not yet initialised. \
-                 Wait for sidecar startup to complete and try again."
-            ),
+            None => {
+                return ToolResult::error(
+                    "Subagent system unavailable: SubagentManager not yet initialised. \
+                 Wait for sidecar startup to complete and try again.",
+                )
+            }
         };
 
         // K.12 — Build a richer system prompt when task_context is provided.
@@ -123,29 +127,35 @@ impl Tool for SpawnSubagentTool {
         };
 
         let config = SubagentConfig {
-            parent_slug:       ctx.session_id.clone(),
+            parent_slug: ctx.session_id.clone(),
             parent_session_id: ctx.session_id.clone(),
             system_prompt,
-            tools:             input.get("tools")
-                                    .and_then(|v| v.as_array())
-                                    .map(|arr| arr.iter()
-                                        .filter_map(|x| x.as_str().map(String::from))
-                                        .collect())
-                                    .unwrap_or_default(),
-            model:             input.get("model")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("")
-                                    .to_string(),
-            working_dir:       ctx.working_dir.clone(),
-            max_turns:         input.get("max_turns")
-                                    .and_then(|v| v.as_u64())
-                                    .map(|n| n as u32)
-                                    .unwrap_or(0),
-            timeout_secs:      input.get("timeout_secs")
-                                    .and_then(|v| v.as_u64())
-                                    .map(|n| n as u32)
-                                    .unwrap_or(0),
-            depth:             ctx.depth + 1, // K.11 — increment nesting depth
+            tools: input
+                .get("tools")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            model: input
+                .get("model")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            working_dir: ctx.working_dir.clone(),
+            max_turns: input
+                .get("max_turns")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as u32)
+                .unwrap_or(0),
+            timeout_secs: input
+                .get("timeout_secs")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as u32)
+                .unwrap_or(0),
+            depth: ctx.depth + 1, // K.11 — increment nesting depth
         };
 
         // Spawn (returns immediately) then await the bridge task to drive it
@@ -160,7 +170,10 @@ impl Tool for SpawnSubagentTool {
             Err(e) => return ToolResult::error(&format!("subagent run failed: {e}")),
         };
 
-        if matches!(result.status, SubagentStatus::Failed | SubagentStatus::Terminated) {
+        if matches!(
+            result.status,
+            SubagentStatus::Failed | SubagentStatus::Terminated
+        ) {
             return ToolResult::error(&format!(
                 "Subagent {} {}: {}",
                 result.subagent_id,
@@ -169,16 +182,19 @@ impl Tool for SpawnSubagentTool {
             ));
         }
 
-        ToolResult::success(json!({
-            "subagent_id":    result.subagent_id,
-            "status":         result.status.as_str(),
-            "result_summary": result.result_summary,
-            "files_modified": result.files_modified,
-            "cost_usd":       result.cost_usd,
-            "tokens_in":      result.tokens_in,
-            "tokens_out":     result.tokens_out,
-            "duration_secs":  result.duration_secs,
-        }).to_string())
+        ToolResult::success(
+            json!({
+                "subagent_id":    result.subagent_id,
+                "status":         result.status.as_str(),
+                "result_summary": result.result_summary,
+                "files_modified": result.files_modified,
+                "cost_usd":       result.cost_usd,
+                "tokens_in":      result.tokens_in,
+                "tokens_out":     result.tokens_out,
+                "duration_secs":  result.duration_secs,
+            })
+            .to_string(),
+        )
     }
 }
 

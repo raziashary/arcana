@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use tracing_subscriber::{EnvFilter, fmt};
+use tracing_subscriber::{fmt, EnvFilter};
 
 mod commands;
 mod noninteractive;
@@ -8,7 +8,7 @@ mod output;
 mod repl;
 
 use commands::{agent, analytics, config, logs, plan, plugin, system, task, worker};
-use output::{OutputFormat, OutputContext};
+use output::{OutputContext, OutputFormat};
 
 #[derive(Parser)]
 #[command(
@@ -130,13 +130,15 @@ async fn main() -> Result<()> {
         quiet: cli.quiet,
         non_interactive: cli.non_interactive,
         orchestrator_url: orchestrator_url.clone(),
-        provider: cli.provider.clone().or_else(|| {
-            cfg.core.as_ref().and_then(|c| c.default_provider.clone())
-        }),
+        provider: cli
+            .provider
+            .clone()
+            .or_else(|| cfg.core.as_ref().and_then(|c| c.default_provider.clone())),
         model: cli.model.clone(),
-        working_dir: cli.working_dir.clone().or_else(|| {
-            cfg.core.as_ref().and_then(|c| c.working_dir.clone())
-        }),
+        working_dir: cli
+            .working_dir
+            .clone()
+            .or_else(|| cfg.core.as_ref().and_then(|c| c.working_dir.clone())),
     };
 
     // Resolve effective non-interactive mode
@@ -193,12 +195,14 @@ fn resolve_output_format(cli: &Cli, cfg: &autodev_shared::config::CliConfigFile)
         cfg.output_format()
     };
     match raw.as_str() {
-        "json"  => OutputFormat::Json,
+        "json" => OutputFormat::Json,
         "plain" => OutputFormat::Plain,
-        _       => OutputFormat::Table,
+        _ => OutputFormat::Table,
     }
 }
 
 fn resolve_orchestrator_url(cli: &Cli, cfg: &autodev_shared::config::CliConfigFile) -> String {
-    cli.orchestrator_url.clone().unwrap_or_else(|| cfg.orchestrator_url())
+    cli.orchestrator_url
+        .clone()
+        .unwrap_or_else(|| cfg.orchestrator_url())
 }

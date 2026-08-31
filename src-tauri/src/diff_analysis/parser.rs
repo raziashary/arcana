@@ -1,33 +1,33 @@
 // Diff parser — converts raw unified diff text into structured change data.
 // Handles standard `diff --git` format produced by git2 and CLI git.
 
-use serde::{Deserialize, Serialize};
 use crate::errors::Result;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedDiff {
-    pub files:               Vec<ChangedFile>,
-    pub total_lines_added:   usize,
+    pub files: Vec<ChangedFile>,
+    pub total_lines_added: usize,
     pub total_lines_deleted: usize,
-    pub file_count:          usize,
+    pub file_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChangedFile {
-    pub path:             String,
-    pub extension:        String,
-    pub lines_added:      usize,
-    pub lines_deleted:    usize,
-    pub is_new_file:      bool,
-    pub is_deleted_file:  bool,
-    pub is_renamed:       bool,
-    pub hunks:            Vec<DiffHunk>,
+    pub path: String,
+    pub extension: String,
+    pub lines_added: usize,
+    pub lines_deleted: usize,
+    pub is_new_file: bool,
+    pub is_deleted_file: bool,
+    pub is_renamed: bool,
+    pub hunks: Vec<DiffHunk>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiffHunk {
-    pub header:        String,
-    pub added_lines:   Vec<String>,
+    pub header: String,
+    pub added_lines: Vec<String>,
     pub deleted_lines: Vec<String>,
 }
 
@@ -100,8 +100,8 @@ pub fn parse_unified_diff(diff_text: &str) -> Result<ParsedDiff> {
                     hunks.push(h);
                 }
                 current_hunk = Some(DiffHunk {
-                    header:        line.to_string(),
-                    added_lines:   Vec::new(),
+                    header: line.to_string(),
+                    added_lines: Vec::new(),
                     deleted_lines: Vec::new(),
                 });
                 continue;
@@ -133,7 +133,7 @@ pub fn parse_unified_diff(diff_text: &str) -> Result<ParsedDiff> {
             hunks.push(h);
         }
 
-        let lines_added: usize   = hunks.iter().map(|h| h.added_lines.len()).sum();
+        let lines_added: usize = hunks.iter().map(|h| h.added_lines.len()).sum();
         let lines_deleted: usize = hunks.iter().map(|h| h.deleted_lines.len()).sum();
 
         let extension = std::path::Path::new(&path)
@@ -156,7 +156,7 @@ pub fn parse_unified_diff(diff_text: &str) -> Result<ParsedDiff> {
         }
     }
 
-    let total_lines_added:   usize = files.iter().map(|f| f.lines_added).sum();
+    let total_lines_added: usize = files.iter().map(|f| f.lines_added).sum();
     let total_lines_deleted: usize = files.iter().map(|f| f.lines_deleted).sum();
     let file_count = files.len();
 

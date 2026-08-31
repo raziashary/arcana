@@ -5,10 +5,10 @@
 //          and 2026 agentic coding best practices throughout.
 // See: DEVELOPMENT_PLAN.md Phase 2.2 — Worker Management System
 
-use std::path::Path;
-use crate::errors::Result;
 use super::parser::save_recipe;
 use super::types::{Recipe, RecipePermissionMode};
+use crate::errors::Result;
+use std::path::Path;
 
 /// K.9 — Canonical fleet worker slugs. Single source of truth shared by
 /// `assign_task.rs` (VALID_WORKERS) and any other list that must stay in sync.
@@ -20,25 +20,25 @@ pub const FLEET_WORKERS: &[&str] = &[
     "worker-cleanup",
 ];
 
-const SUPERVISOR_RECIPE_ID:      &str = "supervisor-poll";
-const WORKER_BACKEND_RECIPE_ID:  &str = "worker-backend-poll";
+const SUPERVISOR_RECIPE_ID: &str = "supervisor-poll";
+const WORKER_BACKEND_RECIPE_ID: &str = "worker-backend-poll";
 const WORKER_FRONTEND_RECIPE_ID: &str = "worker-frontend-poll";
 const WORKER_PLATFORM_RECIPE_ID: &str = "worker-platform-poll";
-const WORKER_MCP_RECIPE_ID:      &str = "worker-mcp-poll";
-const WORKER_CLEANUP_RECIPE_ID:  &str = "worker-cleanup-poll";
-const QC_AGENT_RECIPE_ID:        &str = "qc-agent-review";
+const WORKER_MCP_RECIPE_ID: &str = "worker-mcp-poll";
+const WORKER_CLEANUP_RECIPE_ID: &str = "worker-cleanup-poll";
+const QC_AGENT_RECIPE_ID: &str = "qc-agent-review";
 // Doc 04 / Phase 3 — per-task headless QC. qc-dispatcher is the new persistent
 // worker: it scans `qc_review` and fans out one ephemeral subagent per task
 // via the `spawn_qc_review` builtin. The old `qc-agent-review` recipe is kept
 // in the registry for backward compatibility but no longer drives the QC card
 // (workers.db now binds the `qc-agent` slug to the dispatcher recipe).
-const QC_DISPATCHER_RECIPE_ID:   &str = "qc-dispatcher";
+const QC_DISPATCHER_RECIPE_ID: &str = "qc-dispatcher";
 // Doc 09 T4.1 — fleet-level smoke test. Runs after all workers in an
 // epic reach qc_review and asserts the assembled artefact actually
 // starts and responds to a probe URL. Wired by the supervisor recipe
 // when an epic's task graph contains both a backend and a frontend
 // worker task.
-const FLEET_SMOKE_RECIPE_ID:     &str = "fleet-smoke";
+const FLEET_SMOKE_RECIPE_ID: &str = "fleet-smoke";
 
 /// Write default system recipes to the recipes directory.
 /// Always overwrites — code is the source of truth for system recipes.
@@ -46,15 +46,15 @@ pub fn ensure_default_recipes(recipes_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(recipes_dir)?;
 
     let defaults: &[(&str, fn() -> Recipe)] = &[
-        (SUPERVISOR_RECIPE_ID,      supervisor_recipe),
-        (WORKER_BACKEND_RECIPE_ID,  worker_backend_recipe),
+        (SUPERVISOR_RECIPE_ID, supervisor_recipe),
+        (WORKER_BACKEND_RECIPE_ID, worker_backend_recipe),
         (WORKER_FRONTEND_RECIPE_ID, worker_frontend_recipe),
         (WORKER_PLATFORM_RECIPE_ID, worker_platform_recipe),
-        (WORKER_MCP_RECIPE_ID,      worker_mcp_recipe),
-        (WORKER_CLEANUP_RECIPE_ID,  worker_cleanup_recipe),
-        (QC_AGENT_RECIPE_ID,        qc_agent_recipe),
-        (QC_DISPATCHER_RECIPE_ID,   qc_dispatcher_recipe),
-        (FLEET_SMOKE_RECIPE_ID,     fleet_smoke_recipe),
+        (WORKER_MCP_RECIPE_ID, worker_mcp_recipe),
+        (WORKER_CLEANUP_RECIPE_ID, worker_cleanup_recipe),
+        (QC_AGENT_RECIPE_ID, qc_agent_recipe),
+        (QC_DISPATCHER_RECIPE_ID, qc_dispatcher_recipe),
+        (FLEET_SMOKE_RECIPE_ID, fleet_smoke_recipe),
     ];
 
     for (_id, build_fn) in defaults {
@@ -370,17 +370,21 @@ After that line, emit ZERO further tool calls.
 
 fn worker_backend_recipe() -> Recipe {
     Recipe {
-        version:         "1.3.0".into(),
-        id:              WORKER_BACKEND_RECIPE_ID.into(),
-        title:           "Worker Backend — Task Execution Loop".into(),
-        description:     Some("Polls for tasks assigned to worker-backend and executes them autonomously.".into()),
-        schedule:        Some("*/1 * * * *".into()),
+        version: "1.3.0".into(),
+        id: WORKER_BACKEND_RECIPE_ID.into(),
+        title: "Worker Backend — Task Execution Loop".into(),
+        description: Some(
+            "Polls for tasks assigned to worker-backend and executes them autonomously.".into(),
+        ),
+        schedule: Some("*/1 * * * *".into()),
         permission_mode: RecipePermissionMode::Autonomous,
-        agent_role:      Some("worker-backend".into()),
-        model:           None,
-        is_system:       true,
+        agent_role: Some("worker-backend".into()),
+        model: None,
+        is_system: true,
         fallback_policy: super::types::FallbackPolicy::Mode2Only,
-        instructions:    format!("{}{}", r#"You are the AIRS Backend Worker Agent. You implement backend tasks assigned to you.
+        instructions: format!(
+            "{}{}",
+            r#"You are the AIRS Backend Worker Agent. You implement backend tasks assigned to you.
 
 ## Execution Protocol
 
@@ -612,7 +616,8 @@ NEVER spawn for: single-file edits, tasks already in progress, pure code generat
 where the target file is already known.
 When spawning: pass a precise system_prompt and task_description. Wait for result.
 Always include __depth in every tool call (injected in your [AUTODEV WORKSPACE] header)."#,
-        universal_env_bootstrap()),
+            universal_env_bootstrap()
+        ),
     }
 }
 
@@ -622,17 +627,21 @@ Always include __depth in every tool call (injected in your [AUTODEV WORKSPACE] 
 
 fn worker_frontend_recipe() -> Recipe {
     Recipe {
-        version:         "1.2.0".into(),
-        id:              WORKER_FRONTEND_RECIPE_ID.into(),
-        title:           "Worker Frontend — Task Execution Loop".into(),
-        description:     Some("Polls for tasks assigned to worker-frontend and executes them autonomously.".into()),
-        schedule:        Some("*/1 * * * *".into()),
+        version: "1.2.0".into(),
+        id: WORKER_FRONTEND_RECIPE_ID.into(),
+        title: "Worker Frontend — Task Execution Loop".into(),
+        description: Some(
+            "Polls for tasks assigned to worker-frontend and executes them autonomously.".into(),
+        ),
+        schedule: Some("*/1 * * * *".into()),
         permission_mode: RecipePermissionMode::Autonomous,
-        agent_role:      Some("worker-frontend".into()),
-        model:           None,
-        is_system:       true,
+        agent_role: Some("worker-frontend".into()),
+        model: None,
+        is_system: true,
         fallback_policy: super::types::FallbackPolicy::Mode2Only,
-        instructions:    format!("{}{}", r#"You are the AIRS Frontend Worker Agent. You implement React/TypeScript frontend tasks.
+        instructions: format!(
+            "{}{}",
+            r#"You are the AIRS Frontend Worker Agent. You implement React/TypeScript frontend tasks.
 
 ## Execution Protocol
 
@@ -827,7 +836,8 @@ Planning:   planner — YAML DSL for multi-step plans. Key actions for workers:
 Spawn ONLY when: >3 files to read before writing, cross-domain work, or parallel verification.
 NEVER for: single-component edits, tasks already in progress, known target files.
 Always include __depth in every tool call (injected in your [AUTODEV WORKSPACE] header)."#,
-        universal_env_bootstrap()),
+            universal_env_bootstrap()
+        ),
     }
 }
 
@@ -837,17 +847,21 @@ Always include __depth in every tool call (injected in your [AUTODEV WORKSPACE] 
 
 fn worker_platform_recipe() -> Recipe {
     Recipe {
-        version:         "1.3.0".into(),
-        id:              WORKER_PLATFORM_RECIPE_ID.into(),
-        title:           "Worker Platform — Infrastructure & CI".into(),
-        description:     Some("Handles infrastructure, CI/CD, Docker, and DevOps tasks in supervised mode.".into()),
-        schedule:        Some("*/5 * * * *".into()),
+        version: "1.3.0".into(),
+        id: WORKER_PLATFORM_RECIPE_ID.into(),
+        title: "Worker Platform — Infrastructure & CI".into(),
+        description: Some(
+            "Handles infrastructure, CI/CD, Docker, and DevOps tasks in supervised mode.".into(),
+        ),
+        schedule: Some("*/5 * * * *".into()),
         permission_mode: RecipePermissionMode::Supervised,
-        agent_role:      Some("worker-platform".into()),
-        model:           None,
-        is_system:       true,
+        agent_role: Some("worker-platform".into()),
+        model: None,
+        is_system: true,
         fallback_policy: super::types::FallbackPolicy::Mode2Only,
-        instructions:    format!("{}{}", r#"You are the AIRS Platform Worker Agent. You handle infrastructure, CI/CD, Docker, and deployment tasks.
+        instructions: format!(
+            "{}{}",
+            r#"You are the AIRS Platform Worker Agent. You handle infrastructure, CI/CD, Docker, and deployment tasks.
 You operate in supervised mode — destructive or irreversible actions require explicit confirmation before proceeding.
 
 ## Execution Protocol
@@ -936,7 +950,8 @@ Planning:   planner — claimItem · createSubplan · updateStep · submitForQC 
 Spawn ONLY when: multi-file infra audit across >3 files, or parallel validation.
 NEVER for: single-file config edits.
 Always include __depth in every tool call (injected in your [AUTODEV WORKSPACE] header)."#,
-        universal_env_bootstrap()),
+            universal_env_bootstrap()
+        ),
     }
 }
 
@@ -946,17 +961,22 @@ Always include __depth in every tool call (injected in your [AUTODEV WORKSPACE] 
 
 fn worker_mcp_recipe() -> Recipe {
     Recipe {
-        version:         "1.3.0".into(),
-        id:              WORKER_MCP_RECIPE_ID.into(),
-        title:           "Worker MCP — Extensions Builder".into(),
-        description:     Some("Builds and maintains MCP server extensions per the MCP 2025-11-05 specification.".into()),
-        schedule:        Some("*/1 * * * *".into()),
+        version: "1.3.0".into(),
+        id: WORKER_MCP_RECIPE_ID.into(),
+        title: "Worker MCP — Extensions Builder".into(),
+        description: Some(
+            "Builds and maintains MCP server extensions per the MCP 2025-11-05 specification."
+                .into(),
+        ),
+        schedule: Some("*/1 * * * *".into()),
         permission_mode: RecipePermissionMode::Autonomous,
-        agent_role:      Some("worker-mcp".into()),
-        model:           None,
-        is_system:       true,
+        agent_role: Some("worker-mcp".into()),
+        model: None,
+        is_system: true,
         fallback_policy: super::types::FallbackPolicy::Mode2Only,
-        instructions:    format!("{}{}", r#"You are the AIRS MCP Worker Agent. You build and maintain MCP server extensions.
+        instructions: format!(
+            "{}{}",
+            r#"You are the AIRS MCP Worker Agent. You build and maintain MCP server extensions.
 You are the authoritative implementer of the MCP 2025-11-05 specification within this fleet.
 
 ## Execution Protocol
@@ -1105,7 +1125,8 @@ Planning:   planner — claimItem · createSubplan · updateStep · submitForQC 
 Spawn ONLY when: >3 files to read before writing, or parallel roundtrip testing of multiple tools.
 NEVER for: single-tool additions with a clear target file.
 Always include __depth in every tool call (injected in your [AUTODEV WORKSPACE] header)."#,
-        universal_env_bootstrap()),
+            universal_env_bootstrap()
+        ),
     }
 }
 
@@ -1115,25 +1136,30 @@ Always include __depth in every tool call (injected in your [AUTODEV WORKSPACE] 
 
 fn worker_cleanup_recipe() -> Recipe {
     Recipe {
-        version:         "1.4.0".into(),
-        id:              WORKER_CLEANUP_RECIPE_ID.into(),
-        title:           "Worker Cleanup — Code Quality".into(),
-        description:     Some("Handles lint fixes, dead code removal, and housekeeping. Never changes functionality.".into()),
+        version: "1.4.0".into(),
+        id: WORKER_CLEANUP_RECIPE_ID.into(),
+        title: "Worker Cleanup — Code Quality".into(),
+        description: Some(
+            "Handles lint fixes, dead code removal, and housekeeping. Never changes functionality."
+                .into(),
+        ),
         // Tightened from */10 to */2 so cleanup participates at fleet cadence.
         // Push-based kicks (R1) provide sub-second pickup when work exists;
         // the cron interval is just the idle-poll fallback.
-        schedule:        Some("*/2 * * * *".into()),
+        schedule: Some("*/2 * * * *".into()),
         permission_mode: RecipePermissionMode::Autonomous,
-        agent_role:      Some("worker-cleanup".into()),
-        model:           None,
-        is_system:       true,
+        agent_role: Some("worker-cleanup".into()),
+        model: None,
+        is_system: true,
         // Doc 05 Phase 3 — worker-cleanup is the canonical Mode1-capable
         // recipe: lint fixes and dead-code removal are file-only operations
         // that the Rust AgentEngine can execute when the LLM provider is
         // configured. Other recipes (worker-backend / frontend / qc-agent)
         // are MCP-tool-heavy and stay Mode2Only.
         fallback_policy: super::types::FallbackPolicy::Mode1Capable,
-        instructions:    format!("{}{}", r#"You are the AIRS Cleanup Worker Agent. You handle code quality — lint fixes, dead code removal, and housekeeping.
+        instructions: format!(
+            "{}{}",
+            r#"You are the AIRS Cleanup Worker Agent. You handle code quality — lint fixes, dead code removal, and housekeeping.
 
 Fundamental constraint: you MUST NOT change functionality.
 If a change could alter observable behaviour, it is out of scope for this agent.
@@ -1264,7 +1290,8 @@ Planning:   planner — claimItem · updateStep · submitForQC · getPlan
 Spawn ONLY when: scanning >3 large files for dead code simultaneously (parallel grep).
 NEVER for: single-file lint fixes or import removal.
 Always include __depth in every tool call (injected in your [AUTODEV WORKSPACE] header)."#,
-        universal_env_bootstrap()),
+            universal_env_bootstrap()
+        ),
     }
 }
 
@@ -1549,7 +1576,8 @@ pub fn qc_reviewer_system_prompt(task_id: i64, repo_path: Option<&str>) -> Strin
         _ => "Repository: (none specified — operate on the current workspace)\n".to_string(),
     };
 
-    format!(r#"You are an AIRS QC Reviewer — an ephemeral subagent spawned by the AutoDev qc-dispatcher to review exactly ONE task.
+    format!(
+        r#"You are an AIRS QC Reviewer — an ephemeral subagent spawned by the AutoDev qc-dispatcher to review exactly ONE task.
 
 Task under review: #{task_id}
 {repo_line}
@@ -1771,7 +1799,8 @@ After your decision (done / rejected), reply with text-only and emit ZERO furthe
 - e2e_probe          — Phase 4 live smoke probe (REQUIRED before approval, Doc 09 T4.3)
 - check_file         — Inspect lint / imports / exports / api_contract for a file
 - update_task_status — Gate decision: 'done' or 'rejected'
-"#)
+"#
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

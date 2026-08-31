@@ -1,7 +1,7 @@
-use anyhow::Result;
-use clap::{Args, Subcommand};
-use autodev_shared::config::CliConfigFile;
 use crate::output::OutputContext;
+use anyhow::Result;
+use autodev_shared::config::CliConfigFile;
+use clap::{Args, Subcommand};
 
 #[derive(Subcommand)]
 pub enum ConfigCmd {
@@ -104,7 +104,8 @@ fn list(ctx: OutputContext) -> Result<()> {
         return Ok(());
     }
 
-    let pairs_ref: Vec<(&str, &str)> = pairs.iter()
+    let pairs_ref: Vec<(&str, &str)> = pairs
+        .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
     ctx.print_kv(&pairs_ref);
@@ -137,8 +138,8 @@ fn validate(ctx: OutputContext) -> Result<()> {
 fn import(args: ImportArgs, ctx: OutputContext) -> Result<()> {
     let content = std::fs::read_to_string(&args.path)?;
     // Support TOML only for now (the config format)
-    let cfg: CliConfigFile = toml::from_str(&content)
-        .map_err(|e| anyhow::anyhow!("Failed to parse TOML: {e}"))?;
+    let cfg: CliConfigFile =
+        toml::from_str(&content).map_err(|e| anyhow::anyhow!("Failed to parse TOML: {e}"))?;
     cfg.save()?;
     ctx.success(&format!("Imported config from {}", args.path));
     Ok(())

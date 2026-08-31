@@ -16,7 +16,9 @@ pub enum RecipePermissionMode {
 }
 
 impl Default for RecipePermissionMode {
-    fn default() -> Self { Self::Autonomous }
+    fn default() -> Self {
+        Self::Autonomous
+    }
 }
 
 /// Doc 05 Phase 3 — fallback policy declaration.
@@ -42,16 +44,16 @@ pub enum FallbackPolicy {
 /// A single Recipe — stored as YAML in ~/.autodev/recipes/
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Recipe {
-    pub version:         String,                   // "1.0.0"
-    pub id:              String,                   // slug used as file name
-    pub title:           String,
-    pub description:     Option<String>,
-    pub schedule:        Option<String>,           // cron expression (*/120 * * * * = every 2 min)
+    pub version: String, // "1.0.0"
+    pub id: String,      // slug used as file name
+    pub title: String,
+    pub description: Option<String>,
+    pub schedule: Option<String>, // cron expression (*/120 * * * * = every 2 min)
     pub permission_mode: RecipePermissionMode,
-    pub instructions:    String,                   // system prompt injected into agent
-    pub agent_role:      Option<String>,           // "supervisor" | "worker-backend" | "qc"
-    pub model:           Option<String>,           // model override (default from settings)
-    pub is_system:       bool,                     // system recipes cannot be deleted by users
+    pub instructions: String,       // system prompt injected into agent
+    pub agent_role: Option<String>, // "supervisor" | "worker-backend" | "qc"
+    pub model: Option<String>,      // model override (default from settings)
+    pub is_system: bool,            // system recipes cannot be deleted by users
     // Doc 05 Phase 3 — per-recipe fallback policy. `serde(default)` so
     // existing on-disk YAML without the field deserializes as Mode2Only.
     #[serde(default)]
@@ -72,10 +74,10 @@ pub enum RecipeRunStatus {
 /// A record of a recipe execution
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecipeRun {
-    pub id:         String,        // UUID
-    pub recipe_id:  String,
-    pub status:     RecipeRunStatus,
+    pub id: String, // UUID
+    pub recipe_id: String,
+    pub status: RecipeRunStatus,
     pub started_at: String,
-    pub ended_at:   Option<String>,
-    pub error:      Option<String>,
+    pub ended_at: Option<String>,
+    pub error: Option<String>,
 }

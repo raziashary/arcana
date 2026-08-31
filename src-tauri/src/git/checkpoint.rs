@@ -76,10 +76,7 @@ pub fn create(session_id: &str, file_path: &str, reason: &str) -> Result<Option<
 
     let id = Uuid::new_v4().to_string();
     let stamp = now_ms();
-    let base = src
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("file");
+    let base = src.file_name().and_then(|s| s.to_str()).unwrap_or("file");
     let snap_path = session_dir.join(format!("{stamp}_{base}.{id}.snap"));
     std::fs::write(&snap_path, &bytes)?;
 
@@ -100,11 +97,11 @@ pub fn create(session_id: &str, file_path: &str, reason: &str) -> Result<Option<
 
     Ok(Some(CheckpointInfo {
         id,
-        session_id:    session_id.to_string(),
-        file_path:     file_path_str,
-        created_ms:    stamp,
-        reason:        reason.to_string(),
-        size_bytes:    size,
+        session_id: session_id.to_string(),
+        file_path: file_path_str,
+        created_ms: stamp,
+        reason: reason.to_string(),
+        size_bytes: size,
         snapshot_path: snap_path_str,
     }))
 }
@@ -153,24 +150,29 @@ pub fn list(file_path: Option<&str>, session_id: Option<&str>) -> Result<Vec<Che
     }
     sql.push_str(" ORDER BY created_ms DESC");
 
-    let mut stmt = conn.prepare(&sql).map_err(|e| AutoDevError::Git(format!("prepare: {e}")))?;
-    let params_refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| AutoDevError::Git(format!("prepare: {e}")))?;
+    let params_refs: Vec<&dyn rusqlite::ToSql> =
+        args.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
     let rows = stmt
         .query_map(params_refs.as_slice(), |r| {
             Ok(CheckpointInfo {
-                id:            r.get(0)?,
-                session_id:    r.get(1)?,
-                file_path:     r.get(2)?,
+                id: r.get(0)?,
+                session_id: r.get(1)?,
+                file_path: r.get(2)?,
                 snapshot_path: r.get(3)?,
-                created_ms:    r.get(4)?,
-                reason:        r.get(5)?,
-                size_bytes:    r.get::<_, i64>(6)? as u64,
+                created_ms: r.get(4)?,
+                reason: r.get(5)?,
+                size_bytes: r.get::<_, i64>(6)? as u64,
             })
         })
         .map_err(|e| AutoDevError::Git(format!("query: {e}")))?;
 
     let mut out = Vec::new();
-    for r in rows { out.push(r.map_err(|e| AutoDevError::Git(e.to_string()))?); }
+    for r in rows {
+        out.push(r.map_err(|e| AutoDevError::Git(e.to_string()))?);
+    }
     Ok(out)
 }
 
@@ -184,10 +186,15 @@ pub fn delete(checkpoint_id: &str) -> Result<()> {
         )
         .ok()
     };
-    if let Some(p) = snapshot_path.as_deref() { let _ = std::fs::remove_file(p); }
+    if let Some(p) = snapshot_path.as_deref() {
+        let _ = std::fs::remove_file(p);
+    }
     let conn = open_db()?;
-    conn.execute("DELETE FROM checkpoints WHERE id = ?1", params![checkpoint_id])
-        .map_err(|e| AutoDevError::Git(format!("delete: {e}")))?;
+    conn.execute(
+        "DELETE FROM checkpoints WHERE id = ?1",
+        params![checkpoint_id],
+    )
+    .map_err(|e| AutoDevError::Git(format!("delete: {e}")))?;
     Ok(())
 }
 
@@ -212,12 +219,16 @@ pub fn compare(id_old: &str, id_new: &str) -> Result<DiffResult> {
 /// Evict old checkpoints for `file_path` beyond RETENTION_PER_FILE.
 fn prune(file_path: &str) -> Result<()> {
     let conn = open_db()?;
-    let mut stmt = conn.prepare(
-        "SELECT id, snapshot_path FROM checkpoints
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, snapshot_path FROM checkpoints
          WHERE file_path = ?1 ORDER BY created_ms DESC",
-    ).map_err(|e| AutoDevError::Git(e.to_string()))?;
+        )
+        .map_err(|e| AutoDevError::Git(e.to_string()))?;
     let rows = stmt
-        .query_map(params![file_path], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .query_map(params![file_path], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })
         .map_err(|e| AutoDevError::Git(e.to_string()))?;
 
     let mut keepers_seen = 0;

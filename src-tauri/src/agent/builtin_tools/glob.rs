@@ -38,10 +38,12 @@ struct GlobInput {
     #[serde(default = "default_max_results")]
     max_results: usize,
     #[serde(default)]
-    include_metadata: bool,   // If true, include size_bytes and modified_at
+    include_metadata: bool, // If true, include size_bytes and modified_at
 }
 
-fn default_max_results() -> usize { 200 }
+fn default_max_results() -> usize {
+    200
+}
 
 #[async_trait]
 impl Tool for GlobTool {
@@ -99,7 +101,11 @@ impl Tool for GlobTool {
 
         let search_path = if let Some(path) = &params.path {
             let p = PathBuf::from(path);
-            if p.is_absolute() { p } else { PathBuf::from(&ctx.working_dir).join(path) }
+            if p.is_absolute() {
+                p
+            } else {
+                PathBuf::from(&ctx.working_dir).join(path)
+            }
         } else {
             PathBuf::from(&ctx.working_dir)
         };
@@ -112,7 +118,15 @@ impl Tool for GlobTool {
         };
 
         let mut file_entries = Vec::new();
-        let skip_dirs = ["node_modules", ".git", "target", "dist", "build", ".next", ".cache"];
+        let skip_dirs = [
+            "node_modules",
+            ".git",
+            "target",
+            "dist",
+            "build",
+            ".next",
+            ".cache",
+        ];
 
         for entry in WalkDir::new(&search_path)
             .follow_links(false)
@@ -130,13 +144,15 @@ impl Tool for GlobTool {
                 Err(_) => continue,
             };
 
-            let relative_path = entry.path().strip_prefix(&search_path)
+            let relative_path = entry
+                .path()
+                .strip_prefix(&search_path)
                 .unwrap_or(entry.path())
                 .to_string_lossy()
                 .replace('\\', "/");
 
-            let is_match = pattern.matches(&relative_path) || 
-                           pattern.matches(entry.file_name().to_string_lossy().as_ref());
+            let is_match = pattern.matches(&relative_path)
+                || pattern.matches(entry.file_name().to_string_lossy().as_ref());
 
             if is_match {
                 let metadata = match fs::metadata(entry.path()) {
@@ -146,7 +162,8 @@ impl Tool for GlobTool {
 
                 let (size_bytes, modified_at) = if params.include_metadata {
                     let sz = Some(metadata.len());
-                    let mt = metadata.modified()
+                    let mt = metadata
+                        .modified()
                         .ok()
                         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                         .map(|d| {
@@ -187,7 +204,10 @@ impl Tool for GlobTool {
         };
 
         if output.total_files == 0 {
-            ToolResult::success(format!("No files found matching pattern '{}'", params.pattern))
+            ToolResult::success(format!(
+                "No files found matching pattern '{}'",
+                params.pattern
+            ))
         } else if output.total_files >= params.max_results {
             // Hit the cap — guide the agent to narrow scope
             ToolResult::success_with_hint(

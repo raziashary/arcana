@@ -20,9 +20,9 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
 use uuid::Uuid;
 
-use crate::errors::{AutoDevError, Result};
 use super::db::MemoryDb;
 use super::types::ProceduralMemory;
+use crate::errors::{AutoDevError, Result};
 
 pub struct ProceduralStore;
 
@@ -52,7 +52,10 @@ impl ProceduralStore {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::write(&path, content)?;
-        debug!("[ProceduralStore] saved MEMORY.md ({} bytes)", content.len());
+        debug!(
+            "[ProceduralStore] saved MEMORY.md ({} bytes)",
+            content.len()
+        );
         Ok(())
     }
 
@@ -80,20 +83,18 @@ impl ProceduralStore {
             }
             if let Ok(content) = std::fs::read_to_string(&path) {
                 topics.push(ProceduralMemory {
-                    id:         topic.clone(),
-                    topic:      topic.clone(),
-                    title:      title_from_content(&content).unwrap_or_else(|| topic.clone()),
+                    id: topic.clone(),
+                    topic: topic.clone(),
+                    title: title_from_content(&content).unwrap_or_else(|| topic.clone()),
                     content,
-                    tags:       vec![],
+                    tags: vec![],
                     created_at: Utc::now(),
                     updated_at: entry
                         .metadata()
                         .ok()
                         .and_then(|m| m.modified().ok())
                         .map(|t| {
-                            let dur = t
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default();
+                            let dur = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
                             chrono::DateTime::<Utc>::from_timestamp(dur.as_secs() as i64, 0)
                                 .unwrap_or_else(Utc::now)
                         })
@@ -111,11 +112,11 @@ impl ProceduralStore {
         let content = std::fs::read_to_string(&path)
             .map_err(|_| AutoDevError::Agent(format!("Topic '{topic}' not found")))?;
         Ok(ProceduralMemory {
-            id:         topic.to_string(),
-            topic:      topic.to_string(),
-            title:      title_from_content(&content).unwrap_or_else(|| topic.to_string()),
+            id: topic.to_string(),
+            topic: topic.to_string(),
+            title: title_from_content(&content).unwrap_or_else(|| topic.to_string()),
             content,
-            tags:       vec![],
+            tags: vec![],
             created_at: Utc::now(),
             updated_at: Utc::now(),
         })
@@ -130,10 +131,10 @@ impl ProceduralStore {
         std::fs::write(&path, content)?;
 
         // Mirror into SQLite for search.
-        let db        = MemoryDb::open()?;
-        let now       = Utc::now().to_rfc3339();
+        let db = MemoryDb::open()?;
+        let now = Utc::now().to_rfc3339();
         let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".into());
-        let id        = Uuid::new_v4().to_string();
+        let id = Uuid::new_v4().to_string();
 
         db.conn.execute(
             "INSERT INTO procedural_memories (id, topic, title, content, tags, created_at, updated_at)
@@ -160,14 +161,17 @@ impl ProceduralStore {
             std::fs::remove_file(&path)?;
         }
         let db = MemoryDb::open()?;
-        db.conn.execute("DELETE FROM procedural_memories WHERE topic = ?1", params![topic])?;
+        db.conn.execute(
+            "DELETE FROM procedural_memories WHERE topic = ?1",
+            params![topic],
+        )?;
         refresh_memory_md_index()?;
         Ok(())
     }
 
     /// Keyword search across SQLite mirror.
     pub fn search(query: &str, limit: u32) -> Result<Vec<ProceduralMemory>> {
-        let db      = MemoryDb::open()?;
+        let db = MemoryDb::open()?;
         let pattern = format!("%{}%", query.to_lowercase());
         let mut stmt = db.conn.prepare(
             "SELECT id, topic, title, content, tags, created_at, updated_at
@@ -176,21 +180,22 @@ impl ProceduralStore {
              ORDER  BY updated_at DESC
              LIMIT  ?2",
         )?;
-        let rows = stmt.query_map(params![pattern, limit], |row| {
-            let tags_str: String = row.get(4).unwrap_or_else(|_| "[]".into());
-            let tags: Vec<String> = serde_json::from_str(&tags_str).unwrap_or_default();
-            Ok(ProceduralMemory {
-                id:         row.get(0)?,
-                topic:      row.get(1)?,
-                title:      row.get(2)?,
-                content:    row.get(3)?,
-                tags,
-                created_at: row.get::<_, String>(5)?.parse().unwrap_or_default(),
-                updated_at: row.get::<_, String>(6)?.parse().unwrap_or_default(),
-            })
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
+        let rows = stmt
+            .query_map(params![pattern, limit], |row| {
+                let tags_str: String = row.get(4).unwrap_or_else(|_| "[]".into());
+                let tags: Vec<String> = serde_json::from_str(&tags_str).unwrap_or_default();
+                Ok(ProceduralMemory {
+                    id: row.get(0)?,
+                    topic: row.get(1)?,
+                    title: row.get(2)?,
+                    content: row.get(3)?,
+                    tags,
+                    created_at: row.get::<_, String>(5)?.parse().unwrap_or_default(),
+                    updated_at: row.get::<_, String>(6)?.parse().unwrap_or_default(),
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
         Ok(rows)
     }
 
@@ -198,11 +203,11 @@ impl ProceduralStore {
         MemoryDb::open()
             .ok()
             .and_then(|db| {
-                db.conn.query_row(
-                    "SELECT COUNT(*) FROM procedural_memories",
-                    [],
-                    |r| r.get::<_, i64>(0),
-                ).ok()
+                db.conn
+                    .query_row("SELECT COUNT(*) FROM procedural_memories", [], |r| {
+                        r.get::<_, i64>(0)
+                    })
+                    .ok()
             })
             .unwrap_or(0) as u64
     }
@@ -230,7 +235,13 @@ fn topic_path(topic: &str) -> Result<PathBuf> {
     // Sanitize: only allow alphanumeric, dash, underscore.
     let safe: String = topic
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     Ok(topics_dir()?.join(format!("{safe}.md")))
 }
@@ -267,7 +278,11 @@ fn refresh_memory_md_index() -> Result<()> {
         if path.extension().and_then(|e| e.to_str()) != Some("md") {
             continue;
         }
-        let topic = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        let topic = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
         let content = std::fs::read_to_string(&path).unwrap_or_default();
         let title = title_from_content(&content).unwrap_or_else(|| topic.clone());
         entries.push((topic, title));

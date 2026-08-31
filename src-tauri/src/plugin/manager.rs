@@ -7,18 +7,18 @@ use serde_json::Value;
 use super::{
     builtins::get_builtin,
     manifest::{
-        InstalledPlugin, InstallResult, PluginConfig, PluginInfo,
-        PluginManifest, RunResult, SetupToken, TokenClaims, UpdateResult, VerifyResult,
+        InstallResult, InstalledPlugin, PluginConfig, PluginInfo, PluginManifest, RunResult,
+        SetupToken, TokenClaims, UpdateResult, VerifyResult,
     },
-    registry,
-    runner,
-    token,
+    registry, runner, token,
 };
 
 pub struct PluginManager;
 
 impl PluginManager {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 
     // ─── Marketplace / listing ────────────────────────────────────────────
 
@@ -66,7 +66,7 @@ impl PluginManager {
             let _ = std::fs::remove_dir_all(&install_dir);
             return Ok(InstallResult {
                 success: false,
-                plugin:  name.to_string(),
+                plugin: name.to_string(),
                 version: manifest.version,
                 message: format!("Install failed: {}", run_result.stderr.trim()),
                 warnings,
@@ -80,7 +80,7 @@ impl PluginManager {
 
         Ok(InstallResult {
             success: true,
-            plugin:  name.to_string(),
+            plugin: name.to_string(),
             version: manifest.version,
             message: format!("Plugin '{}' installed successfully.", name),
             warnings,
@@ -89,8 +89,8 @@ impl PluginManager {
 
     /// Install a plugin from a raw YAML manifest string (for user-provided plugins).
     pub fn install_from_yaml(&self, yaml: &str) -> Result<InstallResult> {
-        let manifest: PluginManifest = serde_yaml::from_str(yaml)
-            .context("Cannot parse plugin manifest YAML")?;
+        let manifest: PluginManifest =
+            serde_yaml::from_str(yaml).context("Cannot parse plugin manifest YAML")?;
         let name = manifest.name.clone();
 
         // Write manifest to registry first so install can find it
@@ -107,7 +107,7 @@ impl PluginManager {
             let _ = std::fs::remove_dir_all(&install_dir);
             return Ok(InstallResult {
                 success: false,
-                plugin:  name,
+                plugin: name,
                 version: manifest.version,
                 message: format!("Install failed: {}", run_result.stderr.trim()),
                 warnings: vec![],
@@ -120,7 +120,7 @@ impl PluginManager {
 
         Ok(InstallResult {
             success: true,
-            plugin:  name.clone(),
+            plugin: name.clone(),
             version: manifest.version,
             message: format!("Plugin '{}' installed from custom manifest.", name),
             warnings: vec![],
@@ -130,7 +130,8 @@ impl PluginManager {
     // ─── Uninstall ────────────────────────────────────────────────────────
 
     pub fn uninstall(&self, name: &str) -> Result<bool> {
-        let manifest = self.get_plugin(name)
+        let manifest = self
+            .get_plugin(name)
             .ok_or_else(|| anyhow!("Plugin '{}' not found", name))?;
 
         let install_dir = registry::plugin_install_dir(name)?;
@@ -150,7 +151,8 @@ impl PluginManager {
     // ─── Update ───────────────────────────────────────────────────────────
 
     pub fn update(&self, name: &str) -> Result<UpdateResult> {
-        let old_manifest = self.get_plugin(name)
+        let old_manifest = self
+            .get_plugin(name)
             .ok_or_else(|| anyhow!("Plugin '{}' not found", name))?;
         let old_version = old_manifest.version.clone();
 
@@ -159,30 +161,28 @@ impl PluginManager {
         let install_result = self.install(name)?;
 
         Ok(UpdateResult {
-            success:      install_result.success,
-            plugin:       name.to_string(),
+            success: install_result.success,
+            plugin: name.to_string(),
             from_version: old_version,
-            to_version:   install_result.version,
-            message:      install_result.message,
+            to_version: install_result.version,
+            message: install_result.message,
         })
     }
 
     // ─── Verify ───────────────────────────────────────────────────────────
 
     pub fn verify(&self, name: &str) -> Result<VerifyResult> {
-        let manifest = self.get_plugin(name)
+        let manifest = self
+            .get_plugin(name)
             .ok_or_else(|| anyhow!("Plugin '{}' not found", name))?;
         Ok(runner::verify_plugin(&manifest))
     }
 
     // ─── Run ──────────────────────────────────────────────────────────────
 
-    pub fn run(
-        &self,
-        name: &str,
-        args: &[String],
-    ) -> Result<RunResult> {
-        let manifest = self.get_plugin(name)
+    pub fn run(&self, name: &str, args: &[String]) -> Result<RunResult> {
+        let manifest = self
+            .get_plugin(name)
             .ok_or_else(|| anyhow!("Plugin '{}' not found", name))?;
         let install_dir = registry::plugin_install_dir(name)?;
         runner::run_plugin(&manifest, &install_dir, args)
@@ -199,7 +199,8 @@ impl PluginManager {
     }
 
     pub fn set_config(&self, cfg: &PluginConfig) -> Result<()> {
-        let manifest = self.get_plugin(&cfg.name)
+        let manifest = self
+            .get_plugin(&cfg.name)
             .ok_or_else(|| anyhow!("Plugin '{}' not found", cfg.name))?;
         registry::persist_install(&manifest, Some(&cfg.values))?;
         Ok(())
@@ -209,10 +210,10 @@ impl PluginManager {
 
     pub fn generate_setup_token(
         &self,
-        fleet_id:    &str,
+        fleet_id: &str,
         worker_type: &str,
-        repos:       &[String],
-        ttl_hours:   u64,
+        repos: &[String],
+        ttl_hours: u64,
     ) -> Result<SetupToken> {
         token::generate_token(fleet_id, worker_type, repos, ttl_hours)
     }
@@ -237,5 +238,7 @@ impl PluginManager {
 }
 
 impl Default for PluginManager {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }

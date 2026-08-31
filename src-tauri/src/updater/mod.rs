@@ -13,10 +13,14 @@ pub mod install;
 pub mod persistence;
 pub mod verify;
 
-pub use check::{UpdateInfo, UpdateChannel, PlatformAsset, check_for_update};
-pub use download::{DownloadProgress, DownloadStage, DownloadState, download_update};
-pub use install::{InstallResult, UpdateRecord, schedule_install, get_update_history, skip_version, is_skipped};
-pub use persistence::{IntegrityReport, verify_data_integrity, create_restore_point, cleanup_after_update};
+pub use check::{check_for_update, PlatformAsset, UpdateChannel, UpdateInfo};
+pub use download::{download_update, DownloadProgress, DownloadStage, DownloadState};
+pub use install::{
+    get_update_history, is_skipped, schedule_install, skip_version, InstallResult, UpdateRecord,
+};
+pub use persistence::{
+    cleanup_after_update, create_restore_point, verify_data_integrity, IntegrityReport,
+};
 pub use verify::verify_update;
 
 use std::sync::Arc;
@@ -37,8 +41,8 @@ pub struct UpdaterState {
 impl UpdaterState {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            latest:      Mutex::new(None),
-            progress:    Mutex::new(None),
+            latest: Mutex::new(None),
+            progress: Mutex::new(None),
             progress_tx: Mutex::new(None),
         })
     }

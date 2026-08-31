@@ -2,42 +2,42 @@
 // Database path: ~/.autodev/annotations.db
 // Used by: IDE CodeViewer (display), QC Agent (write), PA (write on Ask PA flow)
 
-use rusqlite::{Connection, OptionalExtension, params};
-use serde::{Deserialize, Serialize};
-use crate::errors::{AutoDevError, Result};
 use super::autodev_dir;
+use crate::errors::{AutoDevError, Result};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Annotation {
-    pub id:            String,
-    pub file_path:     String,   // workspace-relative path
-    pub start_line:    i64,
-    pub end_line:      i64,
+    pub id: String,
+    pub file_path: String, // workspace-relative path
+    pub start_line: i64,
+    pub end_line: i64,
     pub selected_text: Option<String>,
-    pub prompt:        String,
-    pub response:      Option<String>,
-    pub source:        String,   // "user" | "qc_agent" | "worker"
-    pub severity:      String,   // "info" | "warning" | "blocking"
-    pub status:        String,   // "open" | "pending" | "resolved"
-    pub task_id:       Option<String>,
-    pub created_at:    String,
-    pub updated_at:    String,
+    pub prompt: String,
+    pub response: Option<String>,
+    pub source: String,   // "user" | "qc_agent" | "worker"
+    pub severity: String, // "info" | "warning" | "blocking"
+    pub status: String,   // "open" | "pending" | "resolved"
+    pub task_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateAnnotationInput {
-    pub file_path:     String,
-    pub start_line:    i64,
-    pub end_line:      i64,
+    pub file_path: String,
+    pub start_line: i64,
+    pub end_line: i64,
     pub selected_text: Option<String>,
-    pub prompt:        String,
-    pub source:        Option<String>,
-    pub severity:      Option<String>,
-    pub task_id:       Option<String>,
+    pub prompt: String,
+    pub source: Option<String>,
+    pub severity: Option<String>,
+    pub task_id: Option<String>,
 }
 
 // ─── Database Handle ──────────────────────────────────────────────────────────
@@ -57,7 +57,9 @@ impl AnnotationsDb {
     }
 
     fn migrate(&self) -> Result<()> {
-        self.conn.execute_batch(r#"
+        self.conn
+            .execute_batch(
+                r#"
             CREATE TABLE IF NOT EXISTS annotations (
                 id            TEXT PRIMARY KEY,
                 file_path     TEXT NOT NULL,
@@ -80,14 +82,16 @@ impl AnnotationsDb {
                 BEGIN
                     UPDATE annotations SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
                 END;
-        "#).map_err(|e| AutoDevError::Agent(format!("annotations.db migrate: {e}")))
+        "#,
+            )
+            .map_err(|e| AutoDevError::Agent(format!("annotations.db migrate: {e}")))
     }
 
     // ─── Queries ──────────────────────────────────────────────────────────────
 
     pub fn create(&self, input: &CreateAnnotationInput) -> Result<String> {
         let id = uuid_v4();
-        let source   = input.source.as_deref().unwrap_or("user");
+        let source = input.source.as_deref().unwrap_or("user");
         let severity = input.severity.as_deref().unwrap_or("info");
         self.conn.execute(
             "INSERT INTO annotations \
@@ -102,99 +106,118 @@ impl AnnotationsDb {
     }
 
     pub fn list_for_file(&self, file_path: &str) -> Result<Vec<Annotation>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, file_path, start_line, end_line, selected_text, prompt, response, \
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, file_path, start_line, end_line, selected_text, prompt, response, \
                     source, severity, status, task_id, created_at, updated_at \
              FROM annotations WHERE file_path = ?1 AND status != 'deleted' \
-             ORDER BY start_line ASC"
-        ).map_err(|e| AutoDevError::Agent(format!("list_for_file prepare: {e}")))?;
+             ORDER BY start_line ASC",
+            )
+            .map_err(|e| AutoDevError::Agent(format!("list_for_file prepare: {e}")))?;
 
-        let rows = stmt.query_map(params![file_path], |row| {
-            Ok(Annotation {
-                id:            row.get(0)?,
-                file_path:     row.get(1)?,
-                start_line:    row.get(2)?,
-                end_line:      row.get(3)?,
-                selected_text: row.get(4)?,
-                prompt:        row.get(5)?,
-                response:      row.get(6)?,
-                source:        row.get(7)?,
-                severity:      row.get(8)?,
-                status:        row.get(9)?,
-                task_id:       row.get(10)?,
-                created_at:    row.get(11)?,
-                updated_at:    row.get(12)?,
+        let rows = stmt
+            .query_map(params![file_path], |row| {
+                Ok(Annotation {
+                    id: row.get(0)?,
+                    file_path: row.get(1)?,
+                    start_line: row.get(2)?,
+                    end_line: row.get(3)?,
+                    selected_text: row.get(4)?,
+                    prompt: row.get(5)?,
+                    response: row.get(6)?,
+                    source: row.get(7)?,
+                    severity: row.get(8)?,
+                    status: row.get(9)?,
+                    task_id: row.get(10)?,
+                    created_at: row.get(11)?,
+                    updated_at: row.get(12)?,
+                })
             })
-        }).map_err(|e| AutoDevError::Agent(format!("list_for_file query: {e}")))?;
+            .map_err(|e| AutoDevError::Agent(format!("list_for_file query: {e}")))?;
 
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| AutoDevError::Agent(format!("list_for_file collect: {e}")))
     }
 
     pub fn get_by_id(&self, id: &str) -> Result<Option<Annotation>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, file_path, start_line, end_line, selected_text, prompt, response, \
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, file_path, start_line, end_line, selected_text, prompt, response, \
                     source, severity, status, task_id, created_at, updated_at \
-             FROM annotations WHERE id = ?1"
-        ).map_err(|e| AutoDevError::Agent(format!("get_by_id prepare: {e}")))?;
+             FROM annotations WHERE id = ?1",
+            )
+            .map_err(|e| AutoDevError::Agent(format!("get_by_id prepare: {e}")))?;
 
         stmt.query_row(params![id], |row| {
             Ok(Annotation {
-                id:            row.get(0)?,
-                file_path:     row.get(1)?,
-                start_line:    row.get(2)?,
-                end_line:      row.get(3)?,
+                id: row.get(0)?,
+                file_path: row.get(1)?,
+                start_line: row.get(2)?,
+                end_line: row.get(3)?,
                 selected_text: row.get(4)?,
-                prompt:        row.get(5)?,
-                response:      row.get(6)?,
-                source:        row.get(7)?,
-                severity:      row.get(8)?,
-                status:        row.get(9)?,
-                task_id:       row.get(10)?,
-                created_at:    row.get(11)?,
-                updated_at:    row.get(12)?,
+                prompt: row.get(5)?,
+                response: row.get(6)?,
+                source: row.get(7)?,
+                severity: row.get(8)?,
+                status: row.get(9)?,
+                task_id: row.get(10)?,
+                created_at: row.get(11)?,
+                updated_at: row.get(12)?,
             })
-        }).optional()
-         .map_err(|e| AutoDevError::Agent(format!("get_by_id: {e}")))
+        })
+        .optional()
+        .map_err(|e| AutoDevError::Agent(format!("get_by_id: {e}")))
     }
 
     pub fn update_response(&self, id: &str, response: Option<&str>) -> Result<()> {
-        self.conn.execute(
-            "UPDATE annotations SET response = ?1 WHERE id = ?2",
-            params![response, id],
-        ).map_err(|e| AutoDevError::Agent(format!("update_response: {e}")))?;
+        self.conn
+            .execute(
+                "UPDATE annotations SET response = ?1 WHERE id = ?2",
+                params![response, id],
+            )
+            .map_err(|e| AutoDevError::Agent(format!("update_response: {e}")))?;
         Ok(())
     }
 
     pub fn update_task_id(&self, id: &str, task_id: &str) -> Result<()> {
-        self.conn.execute(
-            "UPDATE annotations SET task_id = ?1 WHERE id = ?2",
-            params![task_id, id],
-        ).map_err(|e| AutoDevError::Agent(format!("update_task_id: {e}")))?;
+        self.conn
+            .execute(
+                "UPDATE annotations SET task_id = ?1 WHERE id = ?2",
+                params![task_id, id],
+            )
+            .map_err(|e| AutoDevError::Agent(format!("update_task_id: {e}")))?;
         Ok(())
     }
 
     pub fn update_status(&self, id: &str, status: &str) -> Result<()> {
-        self.conn.execute(
-            "UPDATE annotations SET status = ?1 WHERE id = ?2",
-            params![status, id],
-        ).map_err(|e| AutoDevError::Agent(format!("update_status: {e}")))?;
+        self.conn
+            .execute(
+                "UPDATE annotations SET status = ?1 WHERE id = ?2",
+                params![status, id],
+            )
+            .map_err(|e| AutoDevError::Agent(format!("update_status: {e}")))?;
         Ok(())
     }
 
     pub fn resolve(&self, id: &str, response: Option<&str>) -> Result<()> {
-        self.conn.execute(
-            "UPDATE annotations SET status = 'resolved', response = ?1 WHERE id = ?2",
-            params![response, id],
-        ).map_err(|e| AutoDevError::Agent(format!("resolve: {e}")))?;
+        self.conn
+            .execute(
+                "UPDATE annotations SET status = 'resolved', response = ?1 WHERE id = ?2",
+                params![response, id],
+            )
+            .map_err(|e| AutoDevError::Agent(format!("resolve: {e}")))?;
         Ok(())
     }
 
     pub fn delete(&self, id: &str) -> Result<()> {
-        self.conn.execute(
-            "UPDATE annotations SET status = 'deleted' WHERE id = ?1",
-            params![id],
-        ).map_err(|e| AutoDevError::Agent(format!("delete: {e}")))?;
+        self.conn
+            .execute(
+                "UPDATE annotations SET status = 'deleted' WHERE id = ?1",
+                params![id],
+            )
+            .map_err(|e| AutoDevError::Agent(format!("delete: {e}")))?;
         Ok(())
     }
 }

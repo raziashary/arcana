@@ -2,8 +2,8 @@
 // Skills are reusable .md workflows with YAML frontmatter, invocable via slash commands
 // or programmatically by Fleet workers. Stored in ~/.autodev/skills/{category}/{name}.md
 
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 // ── Category ──────────────────────────────────────────────────────────────────
 
@@ -20,21 +20,21 @@ pub enum SkillCategory {
 impl SkillCategory {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Coding    => "coding",
+            Self::Coding => "coding",
             Self::Debugging => "debugging",
-            Self::DevOps    => "devops",
-            Self::Fleet     => "fleet",
-            Self::Custom    => "custom",
+            Self::DevOps => "devops",
+            Self::Fleet => "fleet",
+            Self::Custom => "custom",
         }
     }
 
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
-            "coding"    => Self::Coding,
+            "coding" => Self::Coding,
             "debugging" => Self::Debugging,
-            "devops"    => Self::DevOps,
-            "fleet"     => Self::Fleet,
-            _           => Self::Custom,
+            "devops" => Self::DevOps,
+            "fleet" => Self::Fleet,
+            _ => Self::Custom,
         }
     }
 }
@@ -52,46 +52,46 @@ pub enum SkillParamType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillParameter {
-    pub name:        String,
+    pub name: String,
     #[serde(rename = "type")]
-    pub param_type:  SkillParamType,
-    pub required:    bool,
+    pub param_type: SkillParamType,
+    pub required: bool,
     pub description: String,
-    pub default:     Option<serde_json::Value>,
-    pub values:      Option<Vec<String>>,    // Valid values for Enum type
+    pub default: Option<serde_json::Value>,
+    pub values: Option<Vec<String>>, // Valid values for Enum type
 }
 
 // ── Frontmatter (YAML header of each .md skill file) ─────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillFrontmatter {
-    pub name:                 String,
-    pub description:          String,
-    pub category:             String,
+    pub name: String,
+    pub description: String,
+    pub category: String,
     #[serde(default)]
-    pub parameters:           Vec<SkillParameter>,
-    pub version:              String,
-    pub author:               Option<String>,
-    pub tags:                 Option<Vec<String>>,
+    pub parameters: Vec<SkillParameter>,
+    pub version: String,
+    pub author: Option<String>,
+    pub tags: Option<Vec<String>>,
     /// Optional list of capabilities required to run this skill (e.g. "playwright").
     /// The UI shows a ⚠️ Requires setup badge if any capability is unavailable.
-    pub requires_capability:  Option<Vec<String>>,
+    pub requires_capability: Option<Vec<String>>,
 }
 
 // ── Full Skill (frontmatter + template body) ──────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Skill {
-    pub name:                String,
-    pub description:         String,
-    pub category:            SkillCategory,
-    pub parameters:          Vec<SkillParameter>,
-    pub version:             String,
-    pub author:              String,
-    pub tags:                Vec<String>,
-    pub template:            String,             // Raw markdown body with {{param}} placeholders
-    pub file_path:           String,             // Absolute path to .md file on disk
-    pub is_builtin:          bool,
+    pub name: String,
+    pub description: String,
+    pub category: SkillCategory,
+    pub parameters: Vec<SkillParameter>,
+    pub version: String,
+    pub author: String,
+    pub tags: Vec<String>,
+    pub template: String,  // Raw markdown body with {{param}} placeholders
+    pub file_path: String, // Absolute path to .md file on disk
+    pub is_builtin: bool,
     /// Capabilities required to run this skill (e.g. ["playwright"]).
     pub requires_capability: Option<Vec<String>>,
 }
@@ -100,13 +100,13 @@ pub struct Skill {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillSummary {
-    pub name:                String,
-    pub description:         String,
-    pub category:            SkillCategory,
-    pub tags:                Vec<String>,
-    pub version:             String,
-    pub is_builtin:          bool,
-    pub param_count:         usize,
+    pub name: String,
+    pub description: String,
+    pub category: SkillCategory,
+    pub tags: Vec<String>,
+    pub version: String,
+    pub is_builtin: bool,
+    pub param_count: usize,
     /// Propagated from the skill frontmatter — palette shows ⚠️ badge when set.
     pub requires_capability: Option<Vec<String>>,
 }
@@ -114,13 +114,13 @@ pub struct SkillSummary {
 impl From<&Skill> for SkillSummary {
     fn from(s: &Skill) -> Self {
         Self {
-            name:                s.name.clone(),
-            description:         s.description.clone(),
-            category:            s.category.clone(),
-            tags:                s.tags.clone(),
-            version:             s.version.clone(),
-            is_builtin:          s.is_builtin,
-            param_count:         s.parameters.len(),
+            name: s.name.clone(),
+            description: s.description.clone(),
+            category: s.category.clone(),
+            tags: s.tags.clone(),
+            version: s.version.clone(),
+            is_builtin: s.is_builtin,
+            param_count: s.parameters.len(),
             requires_capability: s.requires_capability.clone(),
         }
     }
@@ -130,32 +130,38 @@ impl From<&Skill> for SkillSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillExecutionResult {
-    pub skill_name:  String,
-    pub rendered:    String,             // Template with parameters substituted
+    pub skill_name: String,
+    pub rendered: String, // Template with parameters substituted
     pub executed_at: DateTime<Utc>,
-    pub parameters:  serde_json::Map<String, serde_json::Value>,
+    pub parameters: serde_json::Map<String, serde_json::Value>,
 }
 
 // ── Validation ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationError {
-    pub field:   String,
+    pub field: String,
     pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationResult {
-    pub valid:  bool,
+    pub valid: bool,
     pub errors: Vec<ValidationError>,
 }
 
 impl ValidationResult {
     pub fn ok() -> Self {
-        Self { valid: true, errors: vec![] }
+        Self {
+            valid: true,
+            errors: vec![],
+        }
     }
 
     pub fn fail(errors: Vec<ValidationError>) -> Self {
-        Self { valid: false, errors }
+        Self {
+            valid: false,
+            errors,
+        }
     }
 }

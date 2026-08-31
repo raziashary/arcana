@@ -75,10 +75,10 @@ const ORCH_ONLY_ENV_VARS: &[&str] = &[
     "CORS_ORIGINS",
     "API_KEYS",
     "ALLOWED_MIME",
-    "AIRS_API_KEY",        // shared between orch + memory; orch reads from its own .env
-    "DATABASE_URL",        // orch-specific
-    "REDIS_URL",           // orch + memory; each reads from its own .env
-    "MEM0_API_KEY",        // memory-mcp internal
+    "AIRS_API_KEY", // shared between orch + memory; orch reads from its own .env
+    "DATABASE_URL", // orch-specific
+    "REDIS_URL",    // orch + memory; each reads from its own .env
+    "MEM0_API_KEY", // memory-mcp internal
 ];
 
 /// Strip Python-sidecar-only env vars from a Command so the subprocess
@@ -111,10 +111,10 @@ impl Default for SidecarStatus {
 impl std::fmt::Display for SidecarStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SidecarStatus::Stopped    => write!(f, "stopped"),
-            SidecarStatus::Starting   => write!(f, "starting"),
-            SidecarStatus::Running    => write!(f, "running"),
-            SidecarStatus::Error(e)   => write!(f, "error: {e}"),
+            SidecarStatus::Stopped => write!(f, "stopped"),
+            SidecarStatus::Starting => write!(f, "starting"),
+            SidecarStatus::Running => write!(f, "running"),
+            SidecarStatus::Error(e) => write!(f, "error: {e}"),
         }
     }
 }
@@ -145,11 +145,11 @@ impl std::fmt::Display for SidecarStatus {
 //      goes only to the sidecar-specific file where it belongs.
 
 /// Maximum size of a sidecar log file before it is rotated on next startup.
-const MAX_SIDECAR_LOG_BYTES: u64  = 20 * 1_024 * 1_024; // 20 MB
+const MAX_SIDECAR_LOG_BYTES: u64 = 20 * 1_024 * 1_024; // 20 MB
 /// Maximum lines written per session; further writes suppressed (errors still flow).
 const MAX_SIDECAR_LOG_LINES: usize = 50_000;
 /// Maximum character length of a single line; longer lines are dropped.
-const MAX_SIDECAR_LINE_LEN:  usize = 2_000;
+const MAX_SIDECAR_LINE_LEN: usize = 2_000;
 
 /// Returns the ~/.autodev/logs/ directory, creating it if needed.
 fn logs_dir() -> PathBuf {
@@ -175,12 +175,16 @@ fn logs_dir() -> PathBuf {
 /// path), the second rename attempt just fails silently — the winner already
 /// moved the file and the loser opens a fresh one.
 fn rotate_sidecar_log_if_needed(log_file: &PathBuf) {
-    if !log_file.exists() { return; }
+    if !log_file.exists() {
+        return;
+    }
     let meta = match fs::metadata(log_file) {
-        Ok(m)  => m,
+        Ok(m) => m,
         Err(_) => return,
     };
-    if meta.len() < MAX_SIDECAR_LOG_BYTES { return; }
+    if meta.len() < MAX_SIDECAR_LOG_BYTES {
+        return;
+    }
 
     // Build rotated path: append ".1" to the full filename  (memory-mcp.log → memory-mcp.log.1)
     let mut rotated_os = log_file.as_os_str().to_owned();
@@ -189,7 +193,7 @@ fn rotate_sidecar_log_if_needed(log_file: &PathBuf) {
 
     let _ = fs::remove_file(&rotated); // drop previous backup if present
     match fs::rename(log_file, &rotated) {
-        Ok(_)  => info!(
+        Ok(_) => info!(
             "[log_router] Rotated '{}' ({:.1} MB) — fresh file will be created",
             log_file.file_name().unwrap_or_default().to_string_lossy(),
             meta.len() as f64 / (1_024.0 * 1_024.0)
@@ -234,7 +238,7 @@ fn spawn_log_router<R: std::io::Read + Send + 'static>(
             .append(true)
             .open(&log_file)
         {
-            Ok(f)  => f,
+            Ok(f) => f,
             Err(e) => {
                 warn!("[log_router] Cannot open {:?}: {}", log_file, e);
                 return;
@@ -322,9 +326,9 @@ fn spawn_log_router<R: std::io::Read + Send + 'static>(
                     // plus Python errors — a fraction of the previous volume.
                     match classify_python_log_level(&l) {
                         "error" => error!("[{prefix}] {l}"),
-                        "warn"  => warn!("[{prefix}] {l}"),
-                        "info"  => info!("[{prefix}] {l}"),
-                        _       => debug!("[{prefix}] {l}"),
+                        "warn" => warn!("[{prefix}] {l}"),
+                        "info" => info!("[{prefix}] {l}"),
+                        _ => debug!("[{prefix}] {l}"),
                     }
 
                     // Always write every (non-oversized, non-capped) line to the
@@ -376,8 +380,10 @@ fn classify_python_log_level(line: &str) -> &'static str {
         return "info";
     }
     // Standard Python log level markers.
-    if line.contains(" ERROR ") || line.contains("Traceback")
-        || line.contains("Exception") || line.contains(" CRITICAL ")
+    if line.contains(" ERROR ")
+        || line.contains("Traceback")
+        || line.contains("Exception")
+        || line.contains(" CRITICAL ")
     {
         return "error";
     }
@@ -403,15 +409,15 @@ fn classify_python_log_level(line: &str) -> &'static str {
 /// See DEVELOPMENT_PLAN.md Phase 2.6 for full connection diagram.
 pub struct SidecarManager {
     // core-orchestrator (port 4000)
-    orch_process:   Mutex<Option<Child>>,
-    orch_status:    Mutex<SidecarStatus>,
+    orch_process: Mutex<Option<Child>>,
+    orch_status: Mutex<SidecarStatus>,
     // Rolling stderr buffer for the orchestrator. Populated by the log
     // router; read by the watchdog (to detect crash signatures) and by the
     // Tauri command `get_sidecar_last_error` (for the UI banner).
     orch_stderr_tail: StderrTail,
     // memory-mcp-server (port 8000) — must be running before core-orchestrator
     memory_process: Mutex<Option<Child>>,
-    memory_status:  Mutex<SidecarStatus>,
+    memory_status: Mutex<SidecarStatus>,
     memory_stderr_tail: StderrTail,
     // autodev-mcp-server (port 8767) — in-process Tokio task, tracked for fleet readiness
     // Redis / Memurai (port 6379) — externally managed (Windows service or
@@ -420,25 +426,25 @@ pub struct SidecarManager {
     // and agent card store but does not block fleet startup.
     // Phase 3.4b fallback: if service-start fails, we try to spawn a standalone
     // binary and track it here so it is reaped on app shutdown.
-    redis_process:  Mutex<Option<Child>>,
-    redis_status:   Mutex<SidecarStatus>,
+    redis_process: Mutex<Option<Child>>,
+    redis_status: Mutex<SidecarStatus>,
     // Startup phase tracker — set once the Tauri AppHandle is available
     // (see main.rs setup hook). Log router + status transitions feed this.
-    progress:       Mutex<Option<Arc<StartupProgress>>>,
+    progress: Mutex<Option<Arc<StartupProgress>>>,
 }
 
 impl SidecarManager {
     pub fn new() -> Self {
         Self {
-            orch_process:       Mutex::new(None),
-            orch_status:        Mutex::new(SidecarStatus::Stopped),
-            orch_stderr_tail:   new_stderr_tail(),
-            memory_process:     Mutex::new(None),
-            memory_status:      Mutex::new(SidecarStatus::Stopped),
+            orch_process: Mutex::new(None),
+            orch_status: Mutex::new(SidecarStatus::Stopped),
+            orch_stderr_tail: new_stderr_tail(),
+            memory_process: Mutex::new(None),
+            memory_status: Mutex::new(SidecarStatus::Stopped),
             memory_stderr_tail: new_stderr_tail(),
-            redis_process:      Mutex::new(None),
-            redis_status:       Mutex::new(SidecarStatus::Stopped), // Phase 3.4b — polled, not spawned
-            progress:           Mutex::new(None),
+            redis_process: Mutex::new(None),
+            redis_status: Mutex::new(SidecarStatus::Stopped), // Phase 3.4b — polled, not spawned
+            progress: Mutex::new(None),
         }
     }
 
@@ -479,7 +485,10 @@ impl SidecarManager {
             }
         }
         *self.memory_status.lock().unwrap() = SidecarStatus::Starting;
-        info!("[SidecarManager] Spawning memory-mcp-server from: {}", cwd.display());
+        info!(
+            "[SidecarManager] Spawning memory-mcp-server from: {}",
+            cwd.display()
+        );
         if let Some(p) = self.progress() {
             p.advance(StartupPhase::MemoryStarting);
         }
@@ -501,8 +510,8 @@ impl SidecarManager {
         // / "Qdrant" INFO lines and therefore won't advance the VectorDb phase — the
         // loading overlay skips that cosmetic step but startup still completes via
         // the health-check poll in main.rs.
-        cmd.env("LOG_LEVEL",     "WARNING");
-        cmd.env("MEM0_LOG_LEVEL","WARNING");   // mem0-specific override if read by the app
+        cmd.env("LOG_LEVEL", "WARNING");
+        cmd.env("MEM0_LOG_LEVEL", "WARNING"); // mem0-specific override if read by the app
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
@@ -513,18 +522,31 @@ impl SidecarManager {
             cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
 
-        let mut child = cmd.spawn()
-            .map_err(|e| AutoDevError::Agent(
-                format!("Failed to spawn memory-mcp-server (is `uv` in PATH?): {e}")
-            ))?;
+        let mut child = cmd.spawn().map_err(|e| {
+            AutoDevError::Agent(format!(
+                "Failed to spawn memory-mcp-server (is `uv` in PATH?): {e}"
+            ))
+        })?;
 
         let log_dir = logs_dir();
         let progress = self.progress();
         if let Some(stdout) = child.stdout.take() {
-            spawn_log_router(stdout, log_dir.join("memory-mcp.log"), "memory-mcp", progress.clone(), None);
+            spawn_log_router(
+                stdout,
+                log_dir.join("memory-mcp.log"),
+                "memory-mcp",
+                progress.clone(),
+                None,
+            );
         }
         if let Some(stderr) = child.stderr.take() {
-            spawn_log_router(stderr, log_dir.join("memory-mcp.log"), "memory-mcp ERR", progress, Some(self.memory_stderr_tail.clone()));
+            spawn_log_router(
+                stderr,
+                log_dir.join("memory-mcp.log"),
+                "memory-mcp ERR",
+                progress,
+                Some(self.memory_stderr_tail.clone()),
+            );
         }
 
         *self.memory_process.lock().unwrap() = Some(child);
@@ -561,7 +583,10 @@ impl SidecarManager {
     }
 
     pub fn memory_is_running(&self) -> bool {
-        matches!(self.memory_status.lock().unwrap().clone(), SidecarStatus::Running)
+        matches!(
+            self.memory_status.lock().unwrap().clone(),
+            SidecarStatus::Running
+        )
     }
 
     /// Returns the OS PID of memory-mcp-server child process, if alive.
@@ -582,7 +607,10 @@ impl SidecarManager {
             }
         }
         *self.orch_status.lock().unwrap() = SidecarStatus::Starting;
-        info!("[SidecarManager] Spawning core-orchestrator from: {}", cwd.display());
+        info!(
+            "[SidecarManager] Spawning core-orchestrator from: {}",
+            cwd.display()
+        );
         if let Some(p) = self.progress() {
             p.advance(StartupPhase::OrchStarting);
         }
@@ -601,7 +629,7 @@ impl SidecarManager {
         strip_inherited_orch_env(&mut cmd);
         cmd.env("PYTHONIOENCODING", "utf-8:replace");
         cmd.env("PYTHONUTF8", "1");
-        cmd.env("LITELLM_LOG", "WARNING");  // T7.3 — suppress LiteLLM debug noise
+        cmd.env("LITELLM_LOG", "WARNING"); // T7.3 — suppress LiteLLM debug noise
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
@@ -612,18 +640,31 @@ impl SidecarManager {
             cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
 
-        let mut child = cmd.spawn()
-            .map_err(|e| AutoDevError::Agent(
-                format!("Failed to spawn core-orchestrator (is `uv` in PATH?): {e}")
-            ))?;
+        let mut child = cmd.spawn().map_err(|e| {
+            AutoDevError::Agent(format!(
+                "Failed to spawn core-orchestrator (is `uv` in PATH?): {e}"
+            ))
+        })?;
 
         let log_dir = logs_dir();
         let progress = self.progress();
         if let Some(stdout) = child.stdout.take() {
-            spawn_log_router(stdout, log_dir.join("core-orchestrator.log"), "core-orch", progress.clone(), None);
+            spawn_log_router(
+                stdout,
+                log_dir.join("core-orchestrator.log"),
+                "core-orch",
+                progress.clone(),
+                None,
+            );
         }
         if let Some(stderr) = child.stderr.take() {
-            spawn_log_router(stderr, log_dir.join("core-orchestrator.log"), "core-orch ERR", progress, Some(self.orch_stderr_tail.clone()));
+            spawn_log_router(
+                stderr,
+                log_dir.join("core-orchestrator.log"),
+                "core-orch ERR",
+                progress,
+                Some(self.orch_stderr_tail.clone()),
+            );
         }
 
         *self.orch_process.lock().unwrap() = Some(child);
@@ -672,7 +713,10 @@ impl SidecarManager {
 
     /// True only when core-orchestrator is Running.
     pub fn is_running(&self) -> bool {
-        matches!(self.orch_status.lock().unwrap().clone(), SidecarStatus::Running)
+        matches!(
+            self.orch_status.lock().unwrap().clone(),
+            SidecarStatus::Running
+        )
     }
 
     /// Returns the OS PID of core-orchestrator child process, if alive.
@@ -724,7 +768,10 @@ impl SidecarManager {
     }
 
     pub fn redis_is_running(&self) -> bool {
-        matches!(self.redis_status.lock().unwrap().clone(), SidecarStatus::Running)
+        matches!(
+            self.redis_status.lock().unwrap().clone(),
+            SidecarStatus::Running
+        )
     }
 
     /// On Windows, attempt to start the Memurai Redis-compatible service if it is
@@ -746,7 +793,7 @@ impl SidecarManager {
             {
                 let attempts: &[(&str, &[&str])] = &[
                     ("net", &["start", "Memurai"]),
-                    ("sc",  &["start", "Memurai"]),
+                    ("sc", &["start", "Memurai"]),
                     ("net", &["start", "redis"]),
                 ];
                 for (cmd, args) in attempts {
@@ -888,7 +935,10 @@ pub fn resolve_orchestrator_path(explicit: Option<&str>) -> std::result::Result<
         if let Some(exe_dir) = exe_path.parent() {
             let resource_path = exe_dir.join("sidecars").join("core-orchestrator");
             if resource_path.exists() {
-                info!("[SidecarManager] Found core-orchestrator at resource location: {}", resource_path.display());
+                info!(
+                    "[SidecarManager] Found core-orchestrator at resource location: {}",
+                    resource_path.display()
+                );
                 return Ok(resource_path);
             }
         }
@@ -912,7 +962,10 @@ pub fn resolve_orchestrator_path(explicit: Option<&str>) -> std::result::Result<
                     .join("sidecars")
                     .join("core-orchestrator");
                 if nsis_path.exists() {
-                    info!("[SidecarManager] Found core-orchestrator at NSIS installed location: {}", nsis_path.display());
+                    info!(
+                        "[SidecarManager] Found core-orchestrator at NSIS installed location: {}",
+                        nsis_path.display()
+                    );
                     return Ok(nsis_path);
                 }
             }
@@ -928,7 +981,10 @@ pub fn resolve_orchestrator_path(explicit: Option<&str>) -> std::result::Result<
                     .join("sidecars")
                     .join("core-orchestrator");
                 if installed_path.exists() {
-                    info!("[SidecarManager] Found core-orchestrator at MSI installed location: {}", installed_path.display());
+                    info!(
+                        "[SidecarManager] Found core-orchestrator at MSI installed location: {}",
+                        installed_path.display()
+                    );
                     return Ok(installed_path);
                 }
             }
@@ -968,7 +1024,10 @@ pub fn resolve_memory_path(explicit: Option<&str>) -> std::result::Result<PathBu
         if let Some(exe_dir) = exe_path.parent() {
             let resource_path = exe_dir.join("sidecars").join("memory-mcp-server");
             if resource_path.exists() {
-                info!("[SidecarManager] Found memory-mcp-server at resource location: {}", resource_path.display());
+                info!(
+                    "[SidecarManager] Found memory-mcp-server at resource location: {}",
+                    resource_path.display()
+                );
                 return Ok(resource_path);
             }
         }
@@ -988,7 +1047,10 @@ pub fn resolve_memory_path(explicit: Option<&str>) -> std::result::Result<PathBu
                     .join("sidecars")
                     .join("memory-mcp-server");
                 if nsis_path.exists() {
-                    info!("[SidecarManager] Found memory-mcp-server at NSIS installed location: {}", nsis_path.display());
+                    info!(
+                        "[SidecarManager] Found memory-mcp-server at NSIS installed location: {}",
+                        nsis_path.display()
+                    );
                     return Ok(nsis_path);
                 }
             }
@@ -1004,7 +1066,10 @@ pub fn resolve_memory_path(explicit: Option<&str>) -> std::result::Result<PathBu
                     .join("sidecars")
                     .join("memory-mcp-server");
                 if installed_path.exists() {
-                    info!("[SidecarManager] Found memory-mcp-server at MSI installed location: {}", installed_path.display());
+                    info!(
+                        "[SidecarManager] Found memory-mcp-server at MSI installed location: {}",
+                        installed_path.display()
+                    );
                     return Ok(installed_path);
                 }
             }
@@ -1024,51 +1089,48 @@ pub fn resolve_memory_path(explicit: Option<&str>) -> std::result::Result<PathBu
 // Backoff sequence: 2s → 4s → 8s → 16s → 32s → 64s → 120s (capped).
 // The backoff resets to 2s after a successful recovery.
 
-const WATCHDOG_POLL_SECS:        u64  = 10;
-const WATCHDOG_INITIAL_DELAY:    u64  = 90;  // Let startup complete first
-const WATCHDOG_MAX_BACKOFF:      u64  = 120;
-const WATCHDOG_UNHEALTHY_STRIKES: u32 = 3;   // 3 × 10s = 30s of failure
+const WATCHDOG_POLL_SECS: u64 = 10;
+const WATCHDOG_INITIAL_DELAY: u64 = 90; // Let startup complete first
+const WATCHDOG_MAX_BACKOFF: u64 = 120;
+const WATCHDOG_UNHEALTHY_STRIKES: u32 = 3; // 3 × 10s = 30s of failure
 
 /// Spawn background watchdog tasks that monitor both sidecars and restart on
 /// failure.  Should be called from main.rs after the initial startup sequence
 /// completes.  The tasks run for the lifetime of the Tokio runtime.
-pub fn start_watchdog(
-    sidecar_mgr: Arc<SidecarManager>,
-    client:      Arc<client::OrchestratorClient>,
-) {
+pub fn start_watchdog(sidecar_mgr: Arc<SidecarManager>, client: Arc<client::OrchestratorClient>) {
     // Use tauri::async_runtime::spawn instead of tokio::spawn.
     // start_watchdog is called from Tauri's synchronous .setup() callback where
     // no Tokio reactor is running on the current thread yet.  Tauri's spawn
     // stores a handle to the runtime and works correctly from any thread.
-    let mem_mgr    = sidecar_mgr.clone();
+    let mem_mgr = sidecar_mgr.clone();
     let mem_client = client.clone();
     tauri::async_runtime::spawn(async move {
         memory_watchdog(mem_mgr, mem_client).await;
     });
 
-    let orch_mgr    = sidecar_mgr;
+    let orch_mgr = sidecar_mgr;
     let orch_client = client;
     tauri::async_runtime::spawn(async move {
         orch_watchdog(orch_mgr, orch_client).await;
     });
 }
 
-async fn orch_watchdog(
-    mgr:    Arc<SidecarManager>,
-    client: Arc<client::OrchestratorClient>,
-) {
+async fn orch_watchdog(mgr: Arc<SidecarManager>, client: Arc<client::OrchestratorClient>) {
     // Wait for the initial fleet startup to complete before monitoring.
     tokio::time::sleep(Duration::from_secs(WATCHDOG_INITIAL_DELAY)).await;
-    info!("[watchdog] core-orchestrator watchdog active (poll every {}s)", WATCHDOG_POLL_SECS);
+    info!(
+        "[watchdog] core-orchestrator watchdog active (poll every {}s)",
+        WATCHDOG_POLL_SECS
+    );
 
-    let mut backoff_secs  = 2u64;
+    let mut backoff_secs = 2u64;
     let mut unhealthy_run = 0u32;
     // Circuit breaker — record each restart attempt timestamp. If we hit
     // CIRCUIT_BREAKER_MAX restarts inside CIRCUIT_BREAKER_WINDOW, stop
     // retrying and surface a permanent-error state with the captured
     // stderr tail so the user can fix the underlying problem instead of
     // watching the same crash loop forever.
-    const CIRCUIT_BREAKER_MAX:    usize = 3;
+    const CIRCUIT_BREAKER_MAX: usize = 3;
     const CIRCUIT_BREAKER_WINDOW: Duration = Duration::from_secs(300);
     let mut restart_history: VecDeque<Instant> = VecDeque::with_capacity(CIRCUIT_BREAKER_MAX + 1);
 
@@ -1076,19 +1138,22 @@ async fn orch_watchdog(
         tokio::time::sleep(Duration::from_secs(WATCHDOG_POLL_SECS)).await;
 
         // Only watch when the orchestrator was intentionally started.
-        if !matches!(mgr.status(), SidecarStatus::Running | SidecarStatus::Starting) {
+        if !matches!(
+            mgr.status(),
+            SidecarStatus::Running | SidecarStatus::Starting
+        ) {
             unhealthy_run = 0;
-            backoff_secs  = 2;
+            backoff_secs = 2;
             continue;
         }
 
         // Two-stage failure detection: process exit OR health-probe failure.
-        let exited    = mgr.orch_exited();
+        let exited = mgr.orch_exited();
         let unhealthy = !client.is_healthy().await;
 
         if !exited && !unhealthy {
             unhealthy_run = 0;
-            backoff_secs  = 2;
+            backoff_secs = 2;
             continue;
         }
 
@@ -1103,26 +1168,41 @@ async fn orch_watchdog(
         // bail out if we've already restarted too many times recently.
         let now = Instant::now();
         while let Some(t) = restart_history.front() {
-            if now.duration_since(*t) > CIRCUIT_BREAKER_WINDOW { restart_history.pop_front(); }
-            else { break; }
+            if now.duration_since(*t) > CIRCUIT_BREAKER_WINDOW {
+                restart_history.pop_front();
+            } else {
+                break;
+            }
         }
         if restart_history.len() >= CIRCUIT_BREAKER_MAX {
             let tail = mgr.stderr_tail("core-orchestrator");
-            let tail_str = tail.iter().rev().take(15).rev().cloned().collect::<Vec<_>>().join("\n");
+            let tail_str = tail
+                .iter()
+                .rev()
+                .take(15)
+                .rev()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n");
             let summary = if tail_str.is_empty() {
                 "no stderr captured".to_string()
             } else {
-                format!("last stderr lines:\n{}", &tail_str[..tail_str.len().min(2000)])
+                format!(
+                    "last stderr lines:\n{}",
+                    &tail_str[..tail_str.len().min(2000)]
+                )
             };
             // Doc 08 Phase 2 — taxonomy: orch_crash is the canonical kind
             // for "Python sidecar died and we gave up restarting".
             error!(
                 kind = crate::observability::error_kinds::KIND_ORCH_CRASH,
                 restart_count = CIRCUIT_BREAKER_MAX,
-                window_secs   = CIRCUIT_BREAKER_WINDOW.as_secs(),
+                window_secs = CIRCUIT_BREAKER_WINDOW.as_secs(),
                 "[watchdog] core-orchestrator crashed {} times in {}s — circuit breaker OPEN. \
                  Pausing restarts; manual intervention required. {}",
-                CIRCUIT_BREAKER_MAX, CIRCUIT_BREAKER_WINDOW.as_secs(), summary
+                CIRCUIT_BREAKER_MAX,
+                CIRCUIT_BREAKER_WINDOW.as_secs(),
+                summary
             );
             mgr.mark_error(&format!(
                 "crashed {} times in {}s — stopped restarting. Check Settings → Sidecar logs for the Python traceback.",
@@ -1131,15 +1211,13 @@ async fn orch_watchdog(
             // Doc 05 Phase 1 — surface the captured stderr tail through
             // a Tauri event so the SidecarCrashBanner can render it
             // without the user opening the log file.
-            crate::events::emit_sidecar_crash_global(
-                crate::events::SidecarCrashPayload {
-                    sidecar_id:    "core-orchestrator".to_string(),
-                    restart_count: CIRCUIT_BREAKER_MAX as u32,
-                    window_secs:   CIRCUIT_BREAKER_WINDOW.as_secs(),
-                    stderr_tail:   tail.iter().rev().take(40).rev().cloned().collect(),
-                    timestamp:     chrono::Utc::now().to_rfc3339(),
-                }
-            );
+            crate::events::emit_sidecar_crash_global(crate::events::SidecarCrashPayload {
+                sidecar_id: "core-orchestrator".to_string(),
+                restart_count: CIRCUIT_BREAKER_MAX as u32,
+                window_secs: CIRCUIT_BREAKER_WINDOW.as_secs(),
+                stderr_tail: tail.iter().rev().take(40).rev().cloned().collect(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+            });
             // Sleep long; user must restart the app or fix env / config.
             tokio::time::sleep(Duration::from_secs(60)).await;
             continue;
@@ -1149,7 +1227,9 @@ async fn orch_watchdog(
         warn!(
             "[watchdog] core-orchestrator failure after {} misses \
              (exited={exited}, unhealthy={unhealthy}) — restart attempt {}/{} in {backoff_secs}s",
-            unhealthy_run, restart_history.len(), CIRCUIT_BREAKER_MAX
+            unhealthy_run,
+            restart_history.len(),
+            CIRCUIT_BREAKER_MAX
         );
         unhealthy_run = 0;
         mgr.stop();
@@ -1170,12 +1250,15 @@ async fn orch_watchdog(
                         client.clear_cache();
                         info!("[watchdog] core-orchestrator recovered after {attempt}s");
                         backoff_secs = 2;
-                        recovered    = true;
+                        recovered = true;
                         break;
                     }
                 }
                 if !recovered {
-                    warn!("[watchdog] orch recovery timed out — will retry after {}s", backoff_secs * 2);
+                    warn!(
+                        "[watchdog] orch recovery timed out — will retry after {}s",
+                        backoff_secs * 2
+                    );
                     mgr.mark_error("watchdog: restart health-check timed out");
                     backoff_secs = (backoff_secs * 2).min(WATCHDOG_MAX_BACKOFF);
                 }
@@ -1188,37 +1271,42 @@ async fn orch_watchdog(
     }
 }
 
-async fn memory_watchdog(
-    mgr:    Arc<SidecarManager>,
-    client: Arc<client::OrchestratorClient>,
-) {
+async fn memory_watchdog(mgr: Arc<SidecarManager>, client: Arc<client::OrchestratorClient>) {
     tokio::time::sleep(Duration::from_secs(WATCHDOG_INITIAL_DELAY)).await;
-    info!("[watchdog] memory-mcp-server watchdog active (poll every {}s)", WATCHDOG_POLL_SECS);
+    info!(
+        "[watchdog] memory-mcp-server watchdog active (poll every {}s)",
+        WATCHDOG_POLL_SECS
+    );
 
-    let mut backoff_secs  = 2u64;
+    let mut backoff_secs = 2u64;
     let mut unhealthy_run = 0u32;
 
     loop {
         tokio::time::sleep(Duration::from_secs(WATCHDOG_POLL_SECS)).await;
 
-        if !matches!(mgr.memory_status(), SidecarStatus::Running | SidecarStatus::Starting) {
+        if !matches!(
+            mgr.memory_status(),
+            SidecarStatus::Running | SidecarStatus::Starting
+        ) {
             unhealthy_run = 0;
-            backoff_secs  = 2;
+            backoff_secs = 2;
             continue;
         }
 
-        let exited    = mgr.memory_exited();
+        let exited = mgr.memory_exited();
         let unhealthy = !client.is_memory_healthy().await;
 
         if !exited && !unhealthy {
             unhealthy_run = 0;
-            backoff_secs  = 2;
+            backoff_secs = 2;
             continue;
         }
 
         unhealthy_run += 1;
         if !exited && unhealthy_run < WATCHDOG_UNHEALTHY_STRIKES {
-            debug!("[watchdog] memory unhealthy probe #{unhealthy_run}/{WATCHDOG_UNHEALTHY_STRIKES}");
+            debug!(
+                "[watchdog] memory unhealthy probe #{unhealthy_run}/{WATCHDOG_UNHEALTHY_STRIKES}"
+            );
             continue;
         }
 
@@ -1245,12 +1333,15 @@ async fn memory_watchdog(
                         mgr.mark_memory_running();
                         info!("[watchdog] memory-mcp-server recovered after {attempt}s");
                         backoff_secs = 2;
-                        recovered    = true;
+                        recovered = true;
                         break;
                     }
                 }
                 if !recovered {
-                    warn!("[watchdog] memory recovery timed out — will retry after {}s", backoff_secs * 2);
+                    warn!(
+                        "[watchdog] memory recovery timed out — will retry after {}s",
+                        backoff_secs * 2
+                    );
                     mgr.mark_memory_error("watchdog: restart health-check timed out");
                     backoff_secs = (backoff_secs * 2).min(WATCHDOG_MAX_BACKOFF);
                 }

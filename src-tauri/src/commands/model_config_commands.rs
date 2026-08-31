@@ -2,8 +2,8 @@
 // Phase 2.3: T4a/T4b — Reasoning Effort + Temperature/Top-P per-model config.
 // See: DEVELOPMENT_PLAN.md Phase 2.3 — Provider Support & Model Enhancements
 
-use crate::errors::Result;
 use crate::db::model_configs::{ModelConfig, ModelConfigsDb};
+use crate::errors::Result;
 
 // ─── Commands ─────────────────────────────────────────────────────────────────
 
@@ -17,12 +17,12 @@ pub fn get_model_config(model_id: String) -> Result<Option<ModelConfig>> {
 /// Persist a model config.  All fields are optional — pass None to keep using defaults.
 #[tauri::command]
 pub fn set_model_config(
-    model_id:         String,
-    temperature:      Option<f32>,
-    top_p:            Option<f32>,
+    model_id: String,
+    temperature: Option<f32>,
+    top_p: Option<f32>,
     reasoning_effort: Option<String>,
     thinking_enabled: bool,
-    thinking_budget:  Option<u32>,
+    thinking_budget: Option<u32>,
 ) -> Result<()> {
     let cfg = ModelConfig {
         model_id,

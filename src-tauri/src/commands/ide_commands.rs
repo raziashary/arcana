@@ -31,15 +31,19 @@ fn require_workspace() -> Result<String> {
 /// `depth` caps recursion: 0 = only immediate children, 1 = two levels, …
 #[tauri::command]
 pub fn read_file_tree(
-    path:            Option<String>,
-    depth:           Option<usize>,
+    path: Option<String>,
+    depth: Option<usize>,
     ignore_patterns: Option<Vec<String>>,
 ) -> Result<FileTreeNode> {
     let workspace = require_workspace()?;
-    let target    = path.unwrap_or_default();
-    let root      = if target.is_empty() { workspace.clone() } else { target };
-    let depth     = depth.unwrap_or(1);
-    let ignore    = ignore_patterns.unwrap_or_default();
+    let target = path.unwrap_or_default();
+    let root = if target.is_empty() {
+        workspace.clone()
+    } else {
+        target
+    };
+    let depth = depth.unwrap_or(1);
+    let ignore = ignore_patterns.unwrap_or_default();
 
     file_tree::read_tree(&workspace, &root, depth, &ignore)
 }
@@ -48,9 +52,9 @@ pub fn read_file_tree(
 
 #[tauri::command]
 pub fn read_file_content(
-    path:       String,
+    path: String,
     start_line: Option<usize>,
-    end_line:   Option<usize>,
+    end_line: Option<usize>,
 ) -> Result<FileContent> {
     let workspace = require_workspace()?;
     file_reader::read_content(&workspace, &path, start_line, end_line)
@@ -66,10 +70,10 @@ pub fn get_file_metadata(path: String) -> Result<FileMetadata> {
 
 #[tauri::command]
 pub fn search_files(
-    query:        String,
-    path:         Option<String>,
-    glob:         Option<String>,
-    max_results:  Option<usize>,
+    query: String,
+    path: Option<String>,
+    glob: Option<String>,
+    max_results: Option<usize>,
 ) -> Result<Vec<FileSearchResult>> {
     let workspace = require_workspace()?;
     file_search::search_files(
@@ -83,8 +87,8 @@ pub fn search_files(
 
 #[tauri::command]
 pub fn search_file_contents(
-    query:       String,
-    path:        Option<String>,
+    query: String,
+    path: Option<String>,
     max_results: Option<usize>,
 ) -> Result<Vec<ContentSearchResult>> {
     let workspace = require_workspace()?;
@@ -112,8 +116,7 @@ pub fn create_file(path: String, content: Option<String>) -> Result<()> {
     let workspace = require_workspace()?;
     let abs = resolve_safe(&workspace, &path)?;
     if let Some(parent) = abs.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| AutoDevError::Agent(format!("mkdir: {e}")))?;
+        std::fs::create_dir_all(parent).map_err(|e| AutoDevError::Agent(format!("mkdir: {e}")))?;
     }
     std::fs::write(&abs, content.unwrap_or_default())
         .map_err(|e| AutoDevError::Agent(format!("create file: {e}")))?;
@@ -125,8 +128,7 @@ pub fn create_file(path: String, content: Option<String>) -> Result<()> {
 pub fn create_directory(path: String) -> Result<()> {
     let workspace = require_workspace()?;
     let abs = resolve_safe(&workspace, &path)?;
-    std::fs::create_dir_all(&abs)
-        .map_err(|e| AutoDevError::Agent(format!("mkdir: {e}")))?;
+    std::fs::create_dir_all(&abs).map_err(|e| AutoDevError::Agent(format!("mkdir: {e}")))?;
     Ok(())
 }
 
@@ -136,11 +138,9 @@ pub fn delete_file(path: String) -> Result<()> {
     let workspace = require_workspace()?;
     let abs = resolve_safe(&workspace, &path)?;
     if abs.is_dir() {
-        std::fs::remove_dir_all(&abs)
-            .map_err(|e| AutoDevError::Agent(format!("rmdir: {e}")))?;
+        std::fs::remove_dir_all(&abs).map_err(|e| AutoDevError::Agent(format!("rmdir: {e}")))?;
     } else {
-        std::fs::remove_file(&abs)
-            .map_err(|e| AutoDevError::Agent(format!("rm: {e}")))?;
+        std::fs::remove_file(&abs).map_err(|e| AutoDevError::Agent(format!("rm: {e}")))?;
     }
     Ok(())
 }
@@ -160,8 +160,7 @@ pub fn rename_file(old_path: String, new_path: String) -> Result<()> {
         }
         p
     };
-    std::fs::rename(&abs_old, &abs_new)
-        .map_err(|e| AutoDevError::Agent(format!("rename: {e}")))?;
+    std::fs::rename(&abs_old, &abs_new).map_err(|e| AutoDevError::Agent(format!("rename: {e}")))?;
     Ok(())
 }
 
@@ -175,11 +174,9 @@ pub fn move_file(from_path: String, to_dir: String) -> Result<()> {
         .file_name()
         .ok_or_else(|| AutoDevError::Agent("invalid from_path".into()))?;
     let abs_to_dir = std::path::Path::new(&workspace).join(&to_dir);
-    std::fs::create_dir_all(&abs_to_dir)
-        .map_err(|e| AutoDevError::Agent(format!("mkdir: {e}")))?;
+    std::fs::create_dir_all(&abs_to_dir).map_err(|e| AutoDevError::Agent(format!("mkdir: {e}")))?;
     let abs_dest = abs_to_dir.join(file_name);
-    std::fs::rename(&abs_from, &abs_dest)
-        .map_err(|e| AutoDevError::Agent(format!("move: {e}")))?;
+    std::fs::rename(&abs_from, &abs_dest).map_err(|e| AutoDevError::Agent(format!("move: {e}")))?;
     Ok(())
 }
 
@@ -194,15 +191,18 @@ fn resolve_safe(workspace: &str, path: &str) -> Result<std::path::PathBuf> {
         .components()
         .fold(std::path::PathBuf::new(), |mut acc, c| {
             match c {
-                std::path::Component::ParentDir => { acc.pop(); }
+                std::path::Component::ParentDir => {
+                    acc.pop();
+                }
                 other => acc.push(other),
             }
             acc
         });
     if !normalized.starts_with(ws) {
-        return Err(AutoDevError::Agent(
-            format!("path '{}' escapes workspace root", path)
-        ));
+        return Err(AutoDevError::Agent(format!(
+            "path '{}' escapes workspace root",
+            path
+        )));
     }
     Ok(normalized)
 }
@@ -214,8 +214,8 @@ fn resolve_safe(workspace: &str, path: &str) -> Result<std::path::PathBuf> {
 /// Returns `null` on the frontend when no definition is found.
 #[tauri::command]
 pub fn resolve_symbol(
-    path:   String,
-    line:   usize,
+    path: String,
+    line: usize,
     column: usize,
 ) -> Result<Option<SymbolDefinition>> {
     let workspace = require_workspace()?;

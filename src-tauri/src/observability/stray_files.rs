@@ -49,7 +49,7 @@ pub struct StrayFile {
 pub fn scan(repo_root: Option<&Path>) -> Vec<StrayFile> {
     let root = match repo_root {
         Some(p) => p.to_path_buf(),
-        None    => match std::env::current_dir() {
+        None => match std::env::current_dir() {
             Ok(p) => p,
             Err(e) => {
                 warn!("[stray_files] cannot determine current_dir: {e} — skipping scan");
@@ -69,7 +69,9 @@ pub fn scan(repo_root: Option<&Path>) -> Vec<StrayFile> {
 
     for sub in subdirs {
         let dir = root.join(sub);
-        if !dir.is_dir() { continue; }
+        if !dir.is_dir() {
+            continue;
+        }
         scan_recursive(&dir, &root, &known_filenames, &mut found, 0);
     }
 
@@ -96,41 +98,52 @@ pub fn scan(repo_root: Option<&Path>) -> Vec<StrayFile> {
 }
 
 fn scan_recursive(
-    dir:     &Path,
-    root:    &Path,
+    dir: &Path,
+    root: &Path,
     blocklist: &HashSet<&'static str>,
-    found:   &mut Vec<StrayFile>,
-    depth:   u32,
+    found: &mut Vec<StrayFile>,
+    depth: u32,
 ) {
     // Cap depth so a runaway directory tree can't lock up startup.
-    if depth > 4 { return; }
+    if depth > 4 {
+        return;
+    }
 
     let entries = match std::fs::read_dir(dir) {
-        Ok(e)  => e,
+        Ok(e) => e,
         Err(_) => return,
     };
     for entry in entries.flatten() {
         let path = entry.path();
         let name = match path.file_name().and_then(|n| n.to_str()) {
             Some(n) => n,
-            None    => continue,
+            None => continue,
         };
         // Skip canonical AutoDev folders / hidden dirs.
-        if matches!(name,
-            "target" | "node_modules" | ".git" | "dist" | "build" |
-            ".cache" | ".turbo" | "out") { continue; }
+        if matches!(
+            name,
+            "target" | "node_modules" | ".git" | "dist" | "build" | ".cache" | ".turbo" | "out"
+        ) {
+            continue;
+        }
 
         if path.is_dir() {
             scan_recursive(&path, root, blocklist, found, depth + 1);
             continue;
         }
-        if !path.is_file() { continue; }
+        if !path.is_file() {
+            continue;
+        }
 
         // Match against the blocklist by filename. Conservative: only flag
         // files whose names match patterns workers historically produced.
         if blocklist.contains(name) {
             let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-            let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().to_string();
+            let rel = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .to_string();
             found.push(StrayFile {
                 absolute_path: path.to_string_lossy().to_string(),
                 relative_to_repo: rel,
@@ -145,7 +158,11 @@ fn scan_recursive(
         let in_src_tauri = path.to_string_lossy().contains("src-tauri");
         if in_src_tauri && (name.ends_with(".tsx") || name.ends_with(".jsx")) {
             let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-            let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().to_string();
+            let rel = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .to_string();
             found.push(StrayFile {
                 absolute_path: path.to_string_lossy().to_string(),
                 relative_to_repo: rel,
@@ -167,7 +184,8 @@ fn stray_filename_blocklist() -> HashSet<&'static str> {
         "install.log",
         // Calendar run's specific outputs
         "server.js",
-    ].into()
+    ]
+    .into()
 }
 
 #[cfg(test)]

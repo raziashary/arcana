@@ -2,32 +2,32 @@
 // Storage: ~/.autodev/config.db (shared with AUTODEV.md instructions).
 // Phase 2.3: T4a/T4b — Reasoning Effort + Temperature/Top-P per-model config.
 
-use rusqlite::{Connection, OptionalExtension, params};
-use serde::{Deserialize, Serialize};
-use crate::errors::{AutoDevError, Result};
 use super::autodev_dir;
+use crate::errors::{AutoDevError, Result};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
-    pub model_id:           String,
-    pub temperature:        Option<f32>,    // 0.0 – 2.0
-    pub top_p:              Option<f32>,    // 0.0 – 1.0
-    pub reasoning_effort:   Option<String>, // "low" | "medium" | "high"
-    pub thinking_enabled:   bool,           // enable extended thinking / reasoning mode
-    pub thinking_budget:    Option<u32>,    // token budget for extended thinking (default 5000)
+    pub model_id: String,
+    pub temperature: Option<f32>,         // 0.0 – 2.0
+    pub top_p: Option<f32>,               // 0.0 – 1.0
+    pub reasoning_effort: Option<String>, // "low" | "medium" | "high"
+    pub thinking_enabled: bool,           // enable extended thinking / reasoning mode
+    pub thinking_budget: Option<u32>,     // token budget for extended thinking (default 5000)
 }
 
 impl Default for ModelConfig {
     fn default() -> Self {
         Self {
-            model_id:         String::new(),
-            temperature:      None,
-            top_p:            None,
+            model_id: String::new(),
+            temperature: None,
+            top_p: None,
             reasoning_effort: None,
             thinking_enabled: false,
-            thinking_budget:  None,
+            thinking_budget: None,
         }
     }
 }
@@ -110,10 +110,12 @@ impl ModelConfigsDb {
     }
 
     pub fn delete(&self, model_id: &str) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM model_configs WHERE model_id = ?1",
-            params![model_id],
-        ).map_err(|e| AutoDevError::Agent(format!("model_configs delete: {e}")))?;
+        self.conn
+            .execute(
+                "DELETE FROM model_configs WHERE model_id = ?1",
+                params![model_id],
+            )
+            .map_err(|e| AutoDevError::Agent(format!("model_configs delete: {e}")))?;
         Ok(())
     }
 }

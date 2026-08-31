@@ -17,15 +17,15 @@
 // Errors are surfaced as AutoDevError::Git(String); commands in
 // commands/git_commands.rs serialise them for the frontend.
 
-pub mod types;
-pub mod repo;
-pub mod status;
-pub mod diff;
-pub mod commit;
 pub mod branch;
-pub mod remote;
-pub mod merge;
-pub mod worktree;
-pub mod history;
-pub mod stash;
 pub mod checkpoint;
+pub mod commit;
+pub mod diff;
+pub mod history;
+pub mod merge;
+pub mod remote;
+pub mod repo;
+pub mod stash;
+pub mod status;
+pub mod types;
+pub mod worktree;

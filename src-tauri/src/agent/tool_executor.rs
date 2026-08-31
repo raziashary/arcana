@@ -10,30 +10,30 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
-use crate::errors::Result;
-use crate::events::{
-    emit_permission_request, emit_tool_end, emit_tool_start,
-    PermissionPayload, ToolEndPayload, ToolStartPayload,
-};
-use crate::hooks::{HookRegistry, HookType, HookContext, ToolCallContext};
-use crate::session::manager::SessionManager;
-use crate::session::types::Message;
 use super::permission::{PendingPermissions, PermissionMode, PermissionResponse};
 use super::tool_trait::{AgentIdentity, Tool, ToolContext, ToolResult};
+use crate::errors::Result;
+use crate::events::{
+    emit_permission_request, emit_tool_end, emit_tool_start, PermissionPayload, ToolEndPayload,
+    ToolStartPayload,
+};
+use crate::hooks::{HookContext, HookRegistry, HookType, ToolCallContext};
+use crate::session::manager::SessionManager;
+use crate::session::types::Message;
 
 // Max concurrent read-only tools (Claude Code uses 10)
 const MAX_CONCURRENT_READ_TOOLS: usize = 10;
 
 pub struct ToolExecutor {
-    mode:        PermissionMode,
-    pending:     PendingPermissions,
-    app:         AppHandle,
-    session_id:  String,
+    mode: PermissionMode,
+    pending: PendingPermissions,
+    app: AppHandle,
+    session_id: String,
     working_dir: String,
     /// Who this executor runs as, and how deeply nested. Threaded into every
     /// ToolContext it builds so identity is never absent and depth is never
     /// self-reported by the model.
-    identity:    AgentIdentity,
+    identity: AgentIdentity,
     // Tools auto-approved for this session (AllowAlways responses)
     always_allow: std::collections::HashSet<String>,
     // Session manager for persisting tool messages
@@ -42,12 +42,12 @@ pub struct ToolExecutor {
 
 impl ToolExecutor {
     pub fn new(
-        mode:        PermissionMode,
-        pending:     PendingPermissions,
-        app:         AppHandle,
-        session_id:  String,
+        mode: PermissionMode,
+        pending: PendingPermissions,
+        app: AppHandle,
+        session_id: String,
         working_dir: String,
-        identity:    AgentIdentity,
+        identity: AgentIdentity,
     ) -> Self {
         Self {
             mode,
@@ -68,9 +68,23 @@ impl ToolExecutor {
     }
 
     /// Persist a tool message to the database
-    fn save_tool_message(&self, call_id: &str, tool_name: &str, input: serde_json::Value, output: &str, is_error: bool) {
+    fn save_tool_message(
+        &self,
+        call_id: &str,
+        tool_name: &str,
+        input: serde_json::Value,
+        output: &str,
+        is_error: bool,
+    ) {
         if let Some(ref session_mgr) = self.session_mgr {
-            let tool_msg = Message::new_tool(&self.session_id, call_id, tool_name, input, output, is_error);
+            let tool_msg = Message::new_tool(
+                &self.session_id,
+                call_id,
+                tool_name,
+                input,
+                output,
+                is_error,
+            );
             if let Err(e) = session_mgr.append_message(&tool_msg) {
                 error!("Failed to save tool message: {}", e);
             } else {
@@ -88,20 +102,23 @@ impl ToolExecutor {
     ) -> Result<ToolResult> {
         let call_id = Uuid::new_v4().to_string();
         let ctx = ToolContext {
-            session_id:  self.session_id.clone(),
+            session_id: self.session_id.clone(),
             working_dir: self.working_dir.clone(),
-            call_id:     call_id.clone(),
-            depth:       self.identity.depth,
-            agent_role:  self.identity.role.clone(),
+            call_id: call_id.clone(),
+            depth: self.identity.depth,
+            agent_role: self.identity.role.clone(),
         };
 
         // Emit tool start event for UI
-        emit_tool_start(&self.app, ToolStartPayload {
-            session_id: self.session_id.clone(),
-            call_id:    call_id.clone(),
-            tool_name:  tool.name().to_string(),
-            input:      input.clone(),
-        });
+        emit_tool_start(
+            &self.app,
+            ToolStartPayload {
+                session_id: self.session_id.clone(),
+                call_id: call_id.clone(),
+                tool_name: tool.name().to_string(),
+                input: input.clone(),
+            },
+        );
 
         // Permission check
         let approved = match self.mode {
@@ -116,7 +133,8 @@ impl ToolExecutor {
             PermissionMode::SmartApprove => {
                 // Phase 2: smart approval logic
                 // For now, auto-approve read-only, prompt otherwise
-                tool.is_read_only() || self.always_allow.contains(tool.name())
+                tool.is_read_only()
+                    || self.always_allow.contains(tool.name())
                     || self.request_permission(&call_id, &tool, &input).await?
             }
         };
@@ -185,16 +203,25 @@ impl ToolExecutor {
         HookRegistry::fire(&post_hook_type, &post_ctx).await;
 
         // Persist tool message to database
-        self.save_tool_message(&call_id, tool.name(), input, &result.output, result.is_error);
+        self.save_tool_message(
+            &call_id,
+            tool.name(),
+            input,
+            &result.output,
+            result.is_error,
+        );
 
         // Emit tool end event for UI
-        emit_tool_end(&self.app, ToolEndPayload {
-            session_id: self.session_id.clone(),
-            call_id:    call_id.clone(),
-            tool_name:  tool.name().to_string(),
-            output:     result.output.clone(),
-            is_error:   result.is_error,
-        });
+        emit_tool_end(
+            &self.app,
+            ToolEndPayload {
+                session_id: self.session_id.clone(),
+                call_id: call_id.clone(),
+                tool_name: tool.name().to_string(),
+                output: result.output.clone(),
+                is_error: result.is_error,
+            },
+        );
 
         Ok(result)
     }
@@ -206,7 +233,8 @@ impl ToolExecutor {
     pub async fn execute_batch(
         &mut self,
         tools: Vec<(Arc<dyn Tool>, serde_json::Value, String)>, // (tool, input, tool_use_id)
-    ) -> Result<Vec<(String, ToolResult)>> { // (tool_use_id, result)
+    ) -> Result<Vec<(String, ToolResult)>> {
+        // (tool_use_id, result)
         if tools.is_empty() {
             return Ok(Vec::new());
         }
@@ -223,8 +251,12 @@ impl ToolExecutor {
             }
         }
 
-        let mut results: Vec<(String, ToolResult)> = Vec::with_capacity(read_tools.len() + write_tools.len());
-        results.resize(read_tools.len() + write_tools.len(), (String::new(), ToolResult::error("placeholder")));
+        let mut results: Vec<(String, ToolResult)> =
+            Vec::with_capacity(read_tools.len() + write_tools.len());
+        results.resize(
+            read_tools.len() + write_tools.len(),
+            (String::new(), ToolResult::error("placeholder")),
+        );
 
         // Execute read-only tools concurrently with semaphore
         if !read_tools.is_empty() {
@@ -235,7 +267,9 @@ impl ToolExecutor {
             );
 
             let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_READ_TOOLS));
-            let mut read_handles: Vec<JoinHandle<(usize, String, ToolResult, String, String, serde_json::Value)>> = Vec::new();
+            let mut read_handles: Vec<
+                JoinHandle<(usize, String, ToolResult, String, String, serde_json::Value)>,
+            > = Vec::new();
 
             for (tool, input, tool_use_id, original_idx) in read_tools {
                 let sem_clone = Arc::clone(&semaphore);
@@ -260,12 +294,15 @@ impl ToolExecutor {
                     };
 
                     // Emit start event
-                    emit_tool_start(&app, ToolStartPayload {
-                        session_id: session_id.clone(),
-                        call_id: call_id.clone(),
-                        tool_name: tool.name().to_string(),
-                        input: input.clone(),
-                    });
+                    emit_tool_start(
+                        &app,
+                        ToolStartPayload {
+                            session_id: session_id.clone(),
+                            call_id: call_id.clone(),
+                            tool_name: tool.name().to_string(),
+                            input: input.clone(),
+                        },
+                    );
 
                     // Execute (read-only always approved)
                     let result = tool.execute(input.clone(), &ctx).await;
@@ -274,13 +311,16 @@ impl ToolExecutor {
                     let tool_name = tool.name().to_string();
 
                     // Emit end event
-                    emit_tool_end(&app, ToolEndPayload {
-                        session_id: session_id.clone(),
-                        call_id: call_id.clone(),
-                        tool_name: tool_name.clone(),
-                        output: result.output.clone(),
-                        is_error: result.is_error,
-                    });
+                    emit_tool_end(
+                        &app,
+                        ToolEndPayload {
+                            session_id: session_id.clone(),
+                            call_id: call_id.clone(),
+                            tool_name: tool_name.clone(),
+                            output: result.output.clone(),
+                            is_error: result.is_error,
+                        },
+                    );
 
                     (original_idx, tool_use_id, result, call_id, tool_name, input)
                 });
@@ -294,7 +334,14 @@ impl ToolExecutor {
                     Ok((idx, tool_use_id, result, call_id, tool_name, input)) => {
                         // Persist tool message
                         if let Some(ref session_mgr) = self.session_mgr {
-                            let tool_msg = Message::new_tool(&self.session_id, &call_id, &tool_name, input, &result.output, result.is_error);
+                            let tool_msg = Message::new_tool(
+                                &self.session_id,
+                                &call_id,
+                                &tool_name,
+                                input,
+                                &result.output,
+                                result.is_error,
+                            );
                             if let Err(e) = session_mgr.append_message(&tool_msg) {
                                 error!("Failed to save tool message (concurrent): {}", e);
                             }
@@ -324,12 +371,15 @@ impl ToolExecutor {
                 };
 
                 // Emit start event
-                emit_tool_start(&self.app, ToolStartPayload {
-                    session_id: self.session_id.clone(),
-                    call_id: call_id.clone(),
-                    tool_name: tool.name().to_string(),
-                    input: input.clone(),
-                });
+                emit_tool_start(
+                    &self.app,
+                    ToolStartPayload {
+                        session_id: self.session_id.clone(),
+                        call_id: call_id.clone(),
+                        tool_name: tool.name().to_string(),
+                        input: input.clone(),
+                    },
+                );
 
                 // Permission check (may prompt user)
                 let approved = match self.mode {
@@ -413,16 +463,25 @@ impl ToolExecutor {
                 HookRegistry::fire(&post_hook_type, &post_ctx).await;
 
                 // Persist tool message
-                self.save_tool_message(&call_id, tool.name(), input, &result.output, result.is_error);
+                self.save_tool_message(
+                    &call_id,
+                    tool.name(),
+                    input,
+                    &result.output,
+                    result.is_error,
+                );
 
                 // Emit end event
-                emit_tool_end(&self.app, ToolEndPayload {
-                    session_id: self.session_id.clone(),
-                    call_id: call_id.clone(),
-                    tool_name: tool.name().to_string(),
-                    output: result.output.clone(),
-                    is_error: result.is_error,
-                });
+                emit_tool_end(
+                    &self.app,
+                    ToolEndPayload {
+                        session_id: self.session_id.clone(),
+                        call_id: call_id.clone(),
+                        tool_name: tool.name().to_string(),
+                        output: result.output.clone(),
+                        is_error: result.is_error,
+                    },
+                );
 
                 results[original_idx] = (tool_use_id, result);
             }
@@ -433,9 +492,9 @@ impl ToolExecutor {
 
     async fn request_permission(
         &mut self,
-        call_id:  &str,
-        tool:     &Arc<dyn Tool>,
-        input:    &serde_json::Value,
+        call_id: &str,
+        tool: &Arc<dyn Tool>,
+        input: &serde_json::Value,
     ) -> Result<bool> {
         let (tx, rx) = oneshot::channel::<PermissionResponse>();
         {
@@ -443,13 +502,16 @@ impl ToolExecutor {
             pending.insert(call_id.to_string(), tx);
         }
 
-        emit_permission_request(&self.app, PermissionPayload {
-            session_id:  self.session_id.clone(),
-            call_id:     call_id.to_string(),
-            tool_name:   tool.name().to_string(),
-            input:       input.clone(),
-            description: tool.description().to_string(),
-        });
+        emit_permission_request(
+            &self.app,
+            PermissionPayload {
+                session_id: self.session_id.clone(),
+                call_id: call_id.to_string(),
+                tool_name: tool.name().to_string(),
+                input: input.clone(),
+                description: tool.description().to_string(),
+            },
+        );
 
         // Wait for the user to respond (frontend sends respond_to_permission)
         match rx.await {
@@ -457,7 +519,11 @@ impl ToolExecutor {
             Ok(PermissionResponse::AllowAlways) => {
                 // Add this tool to the always-allow set for this session
                 self.always_allow.insert(tool.name().to_string());
-                debug!("Tool '{}' added to always-allow for session {}", tool.name(), self.session_id);
+                debug!(
+                    "Tool '{}' added to always-allow for session {}",
+                    tool.name(),
+                    self.session_id
+                );
                 Ok(true)
             }
             Ok(PermissionResponse::Deny) | Err(_) => Ok(false),

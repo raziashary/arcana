@@ -2,9 +2,12 @@
 // Frontend reads tasks via these commands to populate the AutoDev Panel kanban.
 // PA's create_task tool writes directly via TasksDb; these expose read + status updates.
 
-use crate::db::tasks::{Task, WorkerRequest, PhaseSummary, CreatePhasedTaskInput, TasksDb};
+use crate::db::tasks::{CreatePhasedTaskInput, PhaseSummary, Task, TasksDb, WorkerRequest};
 use crate::errors::Result;
-use crate::events::{emit_task_changed_global, emit_task_unblocked_global, emit_phase_complete_global, TaskChangedPayload};
+use crate::events::{
+    emit_phase_complete_global, emit_task_changed_global, emit_task_unblocked_global,
+    TaskChangedPayload,
+};
 
 /// List all tasks, optionally filtered by status.
 /// Status values: "ready" | "assigned" | "in_progress" | "qc_review" | "done" | "failed" | "cancelled"
@@ -34,7 +37,7 @@ pub fn update_task_status(id: i64, status: String, assigned_worker: Option<Strin
     // the task.
     match status.as_str() {
         "qc_review" => crate::recipes::scheduler::kick("qc-agent"),
-        "assigned"  => {
+        "assigned" => {
             if let Some(ref w) = assigned_worker {
                 crate::recipes::scheduler::kick(w);
             }
@@ -81,7 +84,9 @@ pub fn update_task_status(id: i64, status: String, assigned_worker: Option<Strin
         }
         // Check if the completed task's phase is fully done
         if let Ok(Some(completed_task)) = db2.get_by_id(id) {
-            if let (Some(ref epic_id), Some(ref phase)) = (&completed_task.epic_id, &completed_task.phase) {
+            if let (Some(ref epic_id), Some(ref phase)) =
+                (&completed_task.epic_id, &completed_task.phase)
+            {
                 if let Ok(summaries) = db2.get_phase_summary(epic_id) {
                     if let Some(summary) = summaries.iter().find(|s| &s.phase == phase) {
                         if summary.is_complete {
@@ -99,8 +104,8 @@ pub fn update_task_status(id: i64, status: String, assigned_worker: Option<Strin
 
     emit_task_changed_global(TaskChangedPayload {
         task_id: Some(id),
-        kind:    "status".into(),
-        status:  Some(status),
+        kind: "status".into(),
+        status: Some(status),
         assigned_worker,
     });
     Ok(())
@@ -113,8 +118,8 @@ pub fn delete_task(id: i64) -> Result<()> {
     db.delete(id)?;
     emit_task_changed_global(TaskChangedPayload {
         task_id: Some(id),
-        kind:    "deleted".into(),
-        status:  None,
+        kind: "deleted".into(),
+        status: None,
         assigned_worker: None,
     });
     Ok(())
@@ -149,8 +154,8 @@ pub fn clear_all_tasks() -> Result<()> {
     db.clear_all()?;
     emit_task_changed_global(TaskChangedPayload {
         task_id: None,
-        kind:    "cleared".into(),
-        status:  None,
+        kind: "cleared".into(),
+        status: None,
         assigned_worker: None,
     });
     Ok(())
@@ -169,11 +174,7 @@ pub fn list_worker_requests(status: Option<String>) -> Result<Vec<WorkerRequest>
 
 /// Manually resolve a worker request from the UI (human override).
 #[tauri::command]
-pub fn resolve_worker_request(
-    id: i64,
-    action: String,
-    note: Option<String>,
-) -> Result<()> {
+pub fn resolve_worker_request(id: i64, action: String, note: Option<String>) -> Result<()> {
     let db = TasksDb::open()?;
     db.update_worker_request_status(id, &action, note.as_deref())
 }
@@ -203,16 +204,16 @@ pub fn get_epic_phase_summary(epic_id: String) -> Result<Vec<PhaseSummary>> {
 /// that must reach status=done before this task becomes ready.
 #[tauri::command]
 pub fn create_phased_task(
-    epic_id:             String,
-    phase:               String,
-    phase_order:         i32,
-    title:               String,
-    description:         Option<String>,
-    priority:            String,
-    task_type:           String,
+    epic_id: String,
+    phase: String,
+    phase_order: i32,
+    title: String,
+    description: Option<String>,
+    priority: String,
+    task_type: String,
     acceptance_criteria: String,
-    blocked_by:          Vec<String>,
-    milestone:           Option<String>,
+    blocked_by: Vec<String>,
+    milestone: Option<String>,
 ) -> Result<Task> {
     let db = TasksDb::open()?;
     let task = db.create_phased_task(CreatePhasedTaskInput {
@@ -230,8 +231,12 @@ pub fn create_phased_task(
     })?;
     emit_task_changed_global(TaskChangedPayload {
         task_id: Some(task.id),
-        kind:    "created".into(),
-        status:  Some(if task.epic_id.is_some() { "needs_info".into() } else { "ready".into() }),
+        kind: "created".into(),
+        status: Some(if task.epic_id.is_some() {
+            "needs_info".into()
+        } else {
+            "ready".into()
+        }),
         assigned_worker: None,
     });
     Ok(task)

@@ -1,11 +1,11 @@
 // Analytics queries — data retrieval for dashboard and reports
-use std::sync::Arc;
-use std::collections::HashMap;
-use chrono::{Local, NaiveDate, Duration};
-use tracing::warn;
-use crate::errors::Result;
 use super::db::AnalyticsDb;
 use super::types::*;
+use crate::errors::Result;
+use chrono::{Duration, Local, NaiveDate};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tracing::warn;
 
 pub struct AnalyticsQueries {
     db: Arc<AnalyticsDb>,
@@ -22,16 +22,21 @@ impl AnalyticsQueries {
     /// are swallowed silently — diagnostic logs must never fail the host.
     pub fn row_counts_for_diagnostic(&self) -> Result<std::collections::HashMap<String, i64>> {
         let mut out = std::collections::HashMap::new();
-        let conn = self.db.conn.lock().map_err(|e| {
-            crate::errors::AutoDevError::Agent(format!("Mutex lock failed: {e}"))
-        })?;
-        for table in &["token_usage", "api_failures", "system_events",
-                       "worker_stats", "daily_costs", "hourly_costs"] {
-            let count: i64 = conn.query_row(
-                &format!("SELECT COUNT(*) FROM {table}"),
-                [],
-                |r| r.get(0),
-            ).unwrap_or(-1);
+        let conn =
+            self.db.conn.lock().map_err(|e| {
+                crate::errors::AutoDevError::Agent(format!("Mutex lock failed: {e}"))
+            })?;
+        for table in &[
+            "token_usage",
+            "api_failures",
+            "system_events",
+            "worker_stats",
+            "daily_costs",
+            "hourly_costs",
+        ] {
+            let count: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap_or(-1);
             out.insert((*table).to_string(), count);
         }
         Ok(out)
@@ -52,14 +57,18 @@ impl AnalyticsQueries {
         let yesterday = today - Duration::days(1);
 
         // Today: live AppState counters (daily_costs row for today never exists intra-day)
-        let today_cost   = live_cost_usd;
+        let today_cost = live_cost_usd;
         let today_tokens = live_tokens;
 
         // Yesterday: persisted rollup
-        let yesterday_cost = self.db.get_daily_cost(yesterday)?
+        let yesterday_cost = self
+            .db
+            .get_daily_cost(yesterday)?
             .map(|r| r.total_cost_usd)
             .unwrap_or(0.0);
-        let yesterday_tokens = self.db.get_daily_cost(yesterday)?
+        let yesterday_tokens = self
+            .db
+            .get_daily_cost(yesterday)?
             .map(|r| r.total_tokens)
             .unwrap_or(0);
 
@@ -88,22 +97,28 @@ impl AnalyticsQueries {
                 ) {
                     Ok(conn) => {
                         let today_str = today.to_string();
-                        let total: i32 = conn.query_row(
-                            "SELECT COUNT(*) FROM workers WHERE status != 'deleted'",
-                            [],
-                            |r| r.get(0),
-                        ).unwrap_or(0);
-                        let active: i32 = conn.query_row(
-                            "SELECT COUNT(*) FROM workers \
+                        let total: i32 = conn
+                            .query_row(
+                                "SELECT COUNT(*) FROM workers WHERE status != 'deleted'",
+                                [],
+                                |r| r.get(0),
+                            )
+                            .unwrap_or(0);
+                        let active: i32 = conn
+                            .query_row(
+                                "SELECT COUNT(*) FROM workers \
                              WHERE status NOT IN ('paused', 'deleted')",
-                            [],
-                            |r| r.get(0),
-                        ).unwrap_or(0);
-                        let added: i32 = conn.query_row(
-                            "SELECT COUNT(*) FROM workers WHERE date(created_at) = ?1",
-                            rusqlite::params![today_str],
-                            |r| r.get(0),
-                        ).unwrap_or(0);
+                                [],
+                                |r| r.get(0),
+                            )
+                            .unwrap_or(0);
+                        let added: i32 = conn
+                            .query_row(
+                                "SELECT COUNT(*) FROM workers WHERE date(created_at) = ?1",
+                                rusqlite::params![today_str],
+                                |r| r.get(0),
+                            )
+                            .unwrap_or(0);
                         (total, active, added)
                     }
                     Err(e) => {
@@ -195,17 +210,20 @@ impl AnalyticsQueries {
     /// Queries the live `token_usage` table directly (not the daily_costs rollup)
     /// so that per-model, per-provider, and per-session breakdowns are real data
     /// with accurate prompt/completion splits — not estimated ratios.
-    pub fn get_token_usage(
-        &self,
-        start: NaiveDate,
-        end: NaiveDate,
-    ) -> Result<TokenUsageAnalytics> {
-        let (total_tokens, prompt_tokens, completion_tokens, thinking_tokens,
-             by_agent_type, by_model, by_provider, top_sessions) =
-            self.db.get_token_usage_for_range(start, end)?;
+    pub fn get_token_usage(&self, start: NaiveDate, end: NaiveDate) -> Result<TokenUsageAnalytics> {
+        let (
+            total_tokens,
+            prompt_tokens,
+            completion_tokens,
+            thinking_tokens,
+            by_agent_type,
+            by_model,
+            by_provider,
+            top_sessions,
+        ) = self.db.get_token_usage_for_range(start, end)?;
 
         Ok(TokenUsageAnalytics {
-            date_range:        format!("{} to {}", start, end),
+            date_range: format!("{} to {}", start, end),
             total_tokens,
             prompt_tokens,
             completion_tokens,
@@ -232,13 +250,14 @@ impl AnalyticsQueries {
         // Calculate retry success rate from actual data:
         //   resolved failures that had at least one retry / total failures with retries
         let total_with_retries = failures.iter().filter(|f| f.retry_count > 0).count();
-        let resolved_with_retries = failures.iter()
+        let resolved_with_retries = failures
+            .iter()
             .filter(|f| f.retry_count > 0 && f.resolved)
             .count();
         let auto_retry_success_rate = if total_with_retries > 0 {
             resolved_with_retries as f64 / total_with_retries as f64
         } else {
-            0.0  // No retry history yet — show 0, not a fake 85%
+            0.0 // No retry history yet — show 0, not a fake 85%
         };
 
         Ok(ApiFailureAnalytics {
@@ -275,7 +294,7 @@ impl AnalyticsQueries {
         Ok(CostPrediction {
             current_daily_average: daily_average,
             projected_monthly_cost: projected_monthly,
-            confidence_percent: 75.0,  // Based on 7-day sample
+            confidence_percent: 75.0, // Based on 7-day sample
             based_on_days: days as i32,
         })
     }

@@ -109,24 +109,35 @@ impl CompactionEngine {
         });
 
         let summary_request = crate::provider::types::CompletionRequest {
-            model:                  model.to_string(),
-            messages:               summary_conversation,
-            system:                 None,
-            tools:                  vec![],
-            max_tokens:             1024,
-            temperature:            Some(0.3),
-            top_p:                  None,
-            reasoning_effort:       None,
+            model: model.to_string(),
+            messages: summary_conversation,
+            system: None,
+            tools: vec![],
+            max_tokens: 1024,
+            temperature: Some(0.3),
+            top_p: None,
+            reasoning_effort: None,
             thinking_budget_tokens: None,
         };
 
         // Try to get a summary from the LLM
         let summary_text = match provider.complete(summary_request).await {
-            Ok(response) => {
-                response.content.into_iter().find_map(|block| {
-                    if let MessageContent::Text { text } = block { Some(text) } else { None }
-                }).unwrap_or_else(|| format!("[{} messages summarized — summary unavailable]", middle.len()))
-            }
+            Ok(response) => response
+                .content
+                .into_iter()
+                .find_map(|block| {
+                    if let MessageContent::Text { text } = block {
+                        Some(text)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| {
+                    format!(
+                        "[{} messages summarized — summary unavailable]",
+                        middle.len()
+                    )
+                }),
             Err(e) => {
                 info!("LLM summary failed ({e}), falling back to truncation");
                 return Self::compact_truncate(messages);

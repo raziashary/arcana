@@ -13,12 +13,12 @@
 // atomic operation that ALWAYS sets status='assigned' AND assigned_worker
 // together. The LLM cannot produce an invalid state.
 
+use super::super::tool_trait::{Tool, ToolContext, ToolResult};
+use crate::db::tasks::TasksDb;
+use crate::hooks::{HookContext, HookRegistry, HookType, ToolCallContext};
+use crate::recipes::defaults::FLEET_WORKERS;
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use crate::db::tasks::TasksDb;
-use crate::hooks::{HookRegistry, HookType, HookContext, ToolCallContext};
-use crate::recipes::defaults::FLEET_WORKERS;
-use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 
 pub struct AssignTaskTool;
 
@@ -29,7 +29,9 @@ const VALID_WORKERS: &[&str] = FLEET_WORKERS;
 
 #[async_trait]
 impl Tool for AssignTaskTool {
-    fn name(&self) -> &str { "assign_task" }
+    fn name(&self) -> &str {
+        "assign_task"
+    }
 
     fn description(&self) -> &str {
         "Atomically assign a ready task to a worker. Sets status='assigned' AND \
@@ -57,7 +59,9 @@ impl Tool for AssignTaskTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let id = match input["id"].as_i64() {
@@ -85,8 +89,8 @@ impl Tool for AssignTaskTool {
         // so the supervisor can't accidentally kick active work.
         let task = match db.get_by_id(id) {
             Ok(Some(t)) => t,
-            Ok(None)    => return ToolResult::error(&format!("Task #{id} not found")),
-            Err(e)      => return ToolResult::error(&format!("Failed to fetch task: {e}")),
+            Ok(None) => return ToolResult::error(&format!("Task #{id} not found")),
+            Err(e) => return ToolResult::error(&format!("Failed to fetch task: {e}")),
         };
 
         let prev_status = task.status.as_str().to_string();
@@ -122,8 +126,8 @@ impl Tool for AssignTaskTool {
         // Phase 3.0 R1 — task-board push event for the UI.
         crate::events::emit_task_changed_global(crate::events::TaskChangedPayload {
             task_id: Some(id),
-            kind:    "assigned".into(),
-            status:  Some("assigned".into()),
+            kind: "assigned".into(),
+            status: Some("assigned".into()),
             assigned_worker: Some(worker_slug.clone()),
         });
 
@@ -131,15 +135,15 @@ impl Tool for AssignTaskTool {
         // lifecycle events. `OnTaskClaim` is the canonical "someone owns this
         // now" signal.
         let ctx = HookContext {
-            hook_type:  HookType::OnTaskClaim.as_str().to_string(),
-            timestamp:  chrono::Utc::now(),
+            hook_type: HookType::OnTaskClaim.as_str().to_string(),
+            timestamp: chrono::Utc::now(),
             session_id: Some(_ctx.session_id.clone()),
             agent_mode: Some("Supervisor".to_string()),
             tool_call: Some(ToolCallContext {
-                id:       _ctx.call_id.clone(),
-                name:     "assign_task".to_string(),
-                input:    input.clone(),
-                result:   Some(json!({
+                id: _ctx.call_id.clone(),
+                name: "assign_task".to_string(),
+                input: input.clone(),
+                result: Some(json!({
                     "task_id":         id,
                     "previous_status": prev_status,
                     "new_status":      "assigned",
@@ -148,7 +152,7 @@ impl Tool for AssignTaskTool {
                 is_error: false,
             }),
             file_path: None,
-            task_id:   Some(id.to_string()),
+            task_id: Some(id.to_string()),
             worker_id: Some(worker_slug.clone()),
             extra: json!({
                 "task_title":      task.title,
@@ -160,16 +164,19 @@ impl Tool for AssignTaskTool {
             HookRegistry::fire(&HookType::OnTaskClaim, &ctx).await;
         });
 
-        ToolResult::success(json!({
-            "task_id":         id,
-            "title":           task.title,
-            "previous_status": prev_status,
-            "new_status":      "assigned",
-            "assigned_worker": worker_slug,
-            "message":         format!(
-                "✅ Task #{id} assigned to {worker_slug} (status=assigned). \
-                 Worker will pick it up on its next tick."
-            )
-        }).to_string())
+        ToolResult::success(
+            json!({
+                "task_id":         id,
+                "title":           task.title,
+                "previous_status": prev_status,
+                "new_status":      "assigned",
+                "assigned_worker": worker_slug,
+                "message":         format!(
+                    "✅ Task #{id} assigned to {worker_slug} (status=assigned). \
+                     Worker will pick it up on its next tick."
+                )
+            })
+            .to_string(),
+        )
     }
 }

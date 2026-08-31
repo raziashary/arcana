@@ -10,26 +10,26 @@ use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
 
 #[derive(Debug, Serialize)]
 struct GrepMatch {
-    line_number:     usize,
-    line_content:    String,
+    line_number: usize,
+    line_content: String,
     match_positions: Vec<(usize, usize)>,
-    context_before:  Vec<String>,  // K.5 — lines before the match
-    context_after:   Vec<String>,  // K.5 — lines after the match
+    context_before: Vec<String>, // K.5 — lines before the match
+    context_after: Vec<String>,  // K.5 — lines after the match
 }
 
 #[derive(Debug, Serialize)]
 struct GrepFileResult {
-    file:    String,
+    file: String,
     matches: Vec<GrepMatch>,
 }
 
 #[derive(Debug, Serialize)]
 struct GrepOutput {
-    pattern:       String,
+    pattern: String,
     total_matches: usize,
     files_matched: usize,
-    truncated:     bool,           // K.5 — true when max_results was hit
-    results:       Vec<GrepFileResult>,
+    truncated: bool, // K.5 — true when max_results was hit
+    results: Vec<GrepFileResult>,
 }
 
 pub struct GrepTool;
@@ -49,8 +49,12 @@ struct GrepInput {
     max_results: u32,
 }
 
-fn default_context_lines() -> u32 { 1 }   // 1 line of context — saves tokens vs 2
-fn default_max_results() -> u32 { 100 }   // 100 is the practical floor for real codebases
+fn default_context_lines() -> u32 {
+    1
+} // 1 line of context — saves tokens vs 2
+fn default_max_results() -> u32 {
+    100
+} // 100 is the practical floor for real codebases
 
 #[async_trait]
 impl Tool for GrepTool {
@@ -118,7 +122,11 @@ impl Tool for GrepTool {
 
         let search_path = if let Some(path) = &params.path {
             let p = PathBuf::from(path);
-            if p.is_absolute() { p } else { PathBuf::from(&ctx.working_dir).join(path) }
+            if p.is_absolute() {
+                p
+            } else {
+                PathBuf::from(&ctx.working_dir).join(path)
+            }
         } else {
             PathBuf::from(&ctx.working_dir)
         };
@@ -143,7 +151,15 @@ impl Tool for GrepTool {
         let mut file_results: Vec<GrepFileResult> = Vec::new();
         let mut total_matches = 0;
         let mut truncated = false;
-        let skip_dirs = ["node_modules", ".git", "target", "dist", "build", ".next", ".cache"];
+        let skip_dirs = [
+            "node_modules",
+            ".git",
+            "target",
+            "dist",
+            "build",
+            ".next",
+            ".cache",
+        ];
 
         // Walk directory tree
         'walk: for entry in WalkDir::new(&search_path)
@@ -170,7 +186,8 @@ impl Tool for GrepTool {
             // against the full path (e.g. "src/**/*.tsx") rather than just the
             // filename. The previous filename-only match made ** path components
             // silently ineffective.
-            let relative_path = entry.path()
+            let relative_path = entry
+                .path()
                 .strip_prefix(&search_path)
                 .unwrap_or(entry.path())
                 .to_string_lossy()
@@ -203,7 +220,8 @@ impl Tool for GrepTool {
                 // Use find_iter (not find) to capture ALL match positions on the line,
                 // not just the first one. Previously grep("import") on a line with
                 // "import os, import sys" would only report one match position.
-                let all_matches: Vec<(usize, usize)> = regex.find_iter(line)
+                let all_matches: Vec<(usize, usize)> = regex
+                    .find_iter(line)
                     .map(|m| (m.start(), m.end()))
                     .collect();
                 if !all_matches.is_empty() {
@@ -211,11 +229,15 @@ impl Tool for GrepTool {
 
                     // K.5 — Collect context lines before and after the match.
                     let ctx_start = line_num.saturating_sub(params.context_lines as usize);
-                    let ctx_end   = (line_num + params.context_lines as usize + 1).min(lines.len());
+                    let ctx_end = (line_num + params.context_lines as usize + 1).min(lines.len());
                     let context_before: Vec<String> = lines[ctx_start..line_num]
-                        .iter().map(|s| s.to_string()).collect();
-                    let context_after: Vec<String>  = lines[line_num + 1..ctx_end]
-                        .iter().map(|s| s.to_string()).collect();
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect();
+                    let context_after: Vec<String> = lines[line_num + 1..ctx_end]
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect();
 
                     file_matches.push(GrepMatch {
                         line_number: line_num + 1,

@@ -10,16 +10,16 @@ use tokio::process::Command;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BrowserInfo {
-    pub name:      String,
+    pub name: String,
     pub installed: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BrowserAvailability {
     pub playwright_installed: bool,
-    pub playwright_version:   Option<String>,
-    pub browsers:             Vec<BrowserInfo>,
-    pub npx_available:        bool,
+    pub playwright_version: Option<String>,
+    pub browsers: Vec<BrowserInfo>,
+    pub npx_available: bool,
 }
 
 // ── Commands ───────────────────────────────────────────────────────────────────
@@ -39,9 +39,9 @@ pub async fn check_playwright_available() -> Result<BrowserAvailability, String>
     if !npx_ok {
         return Ok(BrowserAvailability {
             playwright_installed: false,
-            playwright_version:   None,
-            browsers:             Vec::new(),
-            npx_available:        false,
+            playwright_version: None,
+            browsers: Vec::new(),
+            npx_available: false,
         });
     }
 
@@ -64,9 +64,9 @@ pub async fn check_playwright_available() -> Result<BrowserAvailability, String>
     if !installed {
         return Ok(BrowserAvailability {
             playwright_installed: false,
-            playwright_version:   None,
-            browsers:             Vec::new(),
-            npx_available:        true,
+            playwright_version: None,
+            browsers: Vec::new(),
+            npx_available: true,
         });
     }
 
@@ -82,14 +82,17 @@ pub async fn check_playwright_available() -> Result<BrowserAvailability, String>
         let browser_installed = res
             .map(|o| o.status.success() && o.stdout.is_empty())
             .unwrap_or(false);
-        browsers.push(BrowserInfo { name: name.to_string(), installed: browser_installed });
+        browsers.push(BrowserInfo {
+            name: name.to_string(),
+            installed: browser_installed,
+        });
     }
 
     Ok(BrowserAvailability {
         playwright_installed: true,
-        playwright_version:   version,
+        playwright_version: version,
         browsers,
-        npx_available:        true,
+        npx_available: true,
     })
 }
 

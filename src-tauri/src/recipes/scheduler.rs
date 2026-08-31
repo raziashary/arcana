@@ -8,26 +8,26 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+use async_runtime::JoinHandle;
 use chrono::Utc;
 use cron::Schedule;
 use tauri::async_runtime;
-use async_runtime::JoinHandle;
 use tracing::{debug, error, info, warn};
 // Phase 7.7 — used for metadata JSON in record_system_event calls
 use serde_json;
 
+use super::runner::RecipeRunner;
 use crate::db::workers::WorkersDb;
 use crate::errors::{AutoDevError, Result};
 use crate::recipes::parser::load_recipe_by_id;
-use super::runner::RecipeRunner;
 
 // ─── RecipeScheduler ──────────────────────────────────────────────────────────
 
 /// Manages background cron tasks for all active workers.
 /// Stored as Arc<RecipeScheduler> in Tauri managed state — lives for app lifetime.
 pub struct RecipeScheduler {
-    runner:  Arc<RecipeRunner>,
-    handles: Mutex<HashMap<String, JoinHandle<()>>>,  // worker_slug → running task (tauri async runtime)
+    runner: Arc<RecipeRunner>,
+    handles: Mutex<HashMap<String, JoinHandle<()>>>, // worker_slug → running task (tauri async runtime)
 }
 
 impl RecipeScheduler {
@@ -47,50 +47,65 @@ impl RecipeScheduler {
 
         // Load worker + bound recipe
         let db = WorkersDb::open()?;
-        let worker = db.get_by_slug(worker_slug)?
+        let worker = db
+            .get_by_slug(worker_slug)?
             .ok_or_else(|| AutoDevError::Agent(format!("Worker '{worker_slug}' not found")))?;
 
-        let recipe_id = worker.recipe_id.as_deref()
-            .ok_or_else(|| AutoDevError::Agent(format!(
-                "Worker '{worker_slug}' has no recipe bound — bind a recipe first"
-            )))?.to_string();
+        let recipe_id = worker
+            .recipe_id
+            .as_deref()
+            .ok_or_else(|| {
+                AutoDevError::Agent(format!(
+                    "Worker '{worker_slug}' has no recipe bound — bind a recipe first"
+                ))
+            })?
+            .to_string();
 
-        let recipe = load_recipe_by_id(&recipe_id)?
-            .ok_or_else(|| AutoDevError::Agent(format!("Recipe '{recipe_id}' not found on disk")))?;
+        let recipe = load_recipe_by_id(&recipe_id)?.ok_or_else(|| {
+            AutoDevError::Agent(format!("Recipe '{recipe_id}' not found on disk"))
+        })?;
 
         // Parse cron schedule (5-field POSIX → 6-field with leading seconds=0)
-        let raw_schedule = recipe.schedule.clone()
+        let raw_schedule = recipe
+            .schedule
+            .clone()
             .unwrap_or_else(|| "*/2 * * * *".to_string());
         let cron_expr = normalize_to_6field(&raw_schedule);
 
-        let schedule = Schedule::from_str(&cron_expr)
-            .map_err(|e| AutoDevError::Agent(
-                format!("Invalid cron expression '{cron_expr}' (recipe '{recipe_id}'): {e}")
-            ))?;
+        let schedule = Schedule::from_str(&cron_expr).map_err(|e| {
+            AutoDevError::Agent(format!(
+                "Invalid cron expression '{cron_expr}' (recipe '{recipe_id}'): {e}"
+            ))
+        })?;
 
-        info!("[RecipeScheduler] Starting worker '{}' on schedule '{}' (recipe: '{}')",
-            worker_slug, cron_expr, recipe_id);
+        info!(
+            "[RecipeScheduler] Starting worker '{}' on schedule '{}' (recipe: '{}')",
+            worker_slug, cron_expr, recipe_id
+        );
 
         // Set worker to 'idle' (active, ready to fire)
         db.update_status(worker.id, "idle")?;
         // Phase 3.0 R2 — push status to UI so the Agent Roster turns this
         // row "alive" the moment the user hits Start.
         crate::events::emit_worker_status_global(crate::events::WorkerStatusPayload {
-            slug:               worker_slug.to_string(),
-            status:             "idle".to_string(),
-            previous_status:    None,
-            reason:             None,
-            cooldown_seconds:   None,
-            tick_duration_ms:   None,
-            last_outcome:       None,
-            timestamp:          chrono::Utc::now().to_rfc3339(),
+            slug: worker_slug.to_string(),
+            status: "idle".to_string(),
+            previous_status: None,
+            reason: None,
+            cooldown_seconds: None,
+            tick_duration_ms: None,
+            last_outcome: None,
+            timestamp: chrono::Utc::now().to_rfc3339(),
         });
 
-        let runner     = self.runner.clone();
+        let runner = self.runner.clone();
         let slug_owned = worker_slug.to_string();
 
         let handle = async_runtime::spawn(async move {
-            info!("[RecipeScheduler] Schedule loop started for worker '{}'", slug_owned);
+            info!(
+                "[RecipeScheduler] Schedule loop started for worker '{}'",
+                slug_owned
+            );
 
             // Gate the first tick until core-orchestrator is reachable (T5.1/T5.2 — E-04 fix).
             // Polls every 2 s for up to 120 s before proceeding regardless.
@@ -114,7 +129,10 @@ impl RecipeScheduler {
             // before first registration, breaking first-time user experience.
             let orch_ready = runner.is_orchestrator_ready().await;
             if orch_ready {
-                info!("[RecipeScheduler] Orchestrator ready — firing STARTUP tick for '{}' (Mode 2)", slug_owned);
+                info!(
+                    "[RecipeScheduler] Orchestrator ready — firing STARTUP tick for '{}' (Mode 2)",
+                    slug_owned
+                );
             } else {
                 info!(
                     "[RecipeScheduler] Orchestrator not yet ready — firing STARTUP tick for '{}'. \
@@ -129,7 +147,11 @@ impl RecipeScheduler {
             if slug_owned == "supervisor" {
                 let released = crate::orphan::reconcile();
                 if !released.is_empty() {
-                    info!("[OrphanDetector] Startup: released {} orphaned tasks: {:?}", released.len(), released);
+                    info!(
+                        "[OrphanDetector] Startup: released {} orphaned tasks: {:?}",
+                        released.len(),
+                        released
+                    );
                     crate::events::emit_orphans_released_global(released);
                 }
             }
@@ -188,7 +210,7 @@ impl RecipeScheduler {
             const MIN_TICK_SECS: u64 = 10;
 
             for next_fire in schedule.upcoming(Utc) {
-                let now      = Utc::now();
+                let now = Utc::now();
                 let raw_wait = (next_fire - now).to_std().unwrap_or(Duration::ZERO);
                 let wait_dur = raw_wait.max(Duration::from_secs(MIN_TICK_SECS));
 
@@ -212,7 +234,10 @@ impl RecipeScheduler {
                         );
                     }
                 } else {
-                    info!("[RecipeScheduler] Worker '{}' — next fire in {:?}", slug_owned, wait_dur);
+                    info!(
+                        "[RecipeScheduler] Worker '{}' — next fire in {:?}",
+                        slug_owned, wait_dur
+                    );
                 }
                 tokio::time::sleep(wait_dur).await;
 
@@ -231,30 +256,38 @@ impl RecipeScheduler {
                             if !released.is_empty() {
                                 info!(
                                     "[OrphanDetector] Released {} orphaned tasks: {:?}",
-                                    released.len(), released
+                                    released.len(),
+                                    released
                                 );
                                 crate::events::emit_orphans_released_global(released);
                             }
                         }
 
                         // Fire the recipe
-                        info!("[RecipeScheduler] Firing recipe '{}' for worker '{}'", recipe_id, slug_owned);
+                        info!(
+                            "[RecipeScheduler] Firing recipe '{}' for worker '{}'",
+                            recipe_id, slug_owned
+                        );
                         if let Err(e) = runner.run_recipe(&recipe, &slug_owned).await {
-                            error!("[RecipeScheduler] Recipe run failed for '{}': {e}", slug_owned);
+                            error!(
+                                "[RecipeScheduler] Recipe run failed for '{}': {e}",
+                                slug_owned
+                            );
                             // Phase 7.7 — record the failure in the system_events table so
                             // the System Logs panel in the Dashboard shows live error history.
-                            let _ = crate::analytics::global()
-                                .collector()
-                                .record_system_event(
-                                    "scheduler".to_string(),
-                                    "recipe_run_failed".to_string(),
-                                    format!("Worker '{}' recipe run failed: {e}", slug_owned),
-                                    "error".to_string(),
-                                    Some(serde_json::json!({
+                            let _ = crate::analytics::global().collector().record_system_event(
+                                "scheduler".to_string(),
+                                "recipe_run_failed".to_string(),
+                                format!("Worker '{}' recipe run failed: {e}", slug_owned),
+                                "error".to_string(),
+                                Some(
+                                    serde_json::json!({
                                         "worker": slug_owned,
                                         "recipe": recipe_id,
-                                    }).to_string()),
-                                );
+                                    })
+                                    .to_string(),
+                                ),
+                            );
                             // Phase 7.2 — error backoff: pause 60 s before the next cron
                             // tick so a fast-failing recipe (e.g. Anthropic 404) cannot
                             // tight-loop at ~2 invocations/second, flooding the log and
@@ -268,23 +301,38 @@ impl RecipeScheduler {
                     }
                     Some("working") => {
                         // Previous run is still in progress — skip this tick
-                        warn!("[RecipeScheduler] Worker '{}' still working — skipping tick", slug_owned);
+                        warn!(
+                            "[RecipeScheduler] Worker '{}' still working — skipping tick",
+                            slug_owned
+                        );
                     }
                     Some("paused") | Some("deleted") | None => {
-                        info!("[RecipeScheduler] Worker '{}' is paused/deleted — stopping schedule", slug_owned);
+                        info!(
+                            "[RecipeScheduler] Worker '{}' is paused/deleted — stopping schedule",
+                            slug_owned
+                        );
                         break;
                     }
                     _ => {
                         // Unknown status — continue
-                        warn!("[RecipeScheduler] Worker '{}' has unexpected status, continuing", slug_owned);
+                        warn!(
+                            "[RecipeScheduler] Worker '{}' has unexpected status, continuing",
+                            slug_owned
+                        );
                     }
                 }
             }
 
-            info!("[RecipeScheduler] Schedule loop ended for worker '{}'", slug_owned);
+            info!(
+                "[RecipeScheduler] Schedule loop ended for worker '{}'",
+                slug_owned
+            );
         });
 
-        self.handles.lock().unwrap().insert(worker_slug.to_string(), handle);
+        self.handles
+            .lock()
+            .unwrap()
+            .insert(worker_slug.to_string(), handle);
         Ok(())
     }
 
@@ -301,14 +349,14 @@ impl RecipeScheduler {
         // Phase 3.0 R2 — push status so the Agent Roster dims this row
         // immediately without waiting for the next `list_workers` poll.
         crate::events::emit_worker_status_global(crate::events::WorkerStatusPayload {
-            slug:               worker_slug.to_string(),
-            status:             "paused".to_string(),
-            previous_status:    None,
-            reason:             None,
-            cooldown_seconds:   None,
-            tick_duration_ms:   None,
-            last_outcome:       None,
-            timestamp:          chrono::Utc::now().to_rfc3339(),
+            slug: worker_slug.to_string(),
+            status: "paused".to_string(),
+            previous_status: None,
+            reason: None,
+            cooldown_seconds: None,
+            tick_duration_ms: None,
+            last_outcome: None,
+            timestamp: chrono::Utc::now().to_rfc3339(),
         });
 
         info!("[RecipeScheduler] Stopped worker '{}'", worker_slug);
@@ -388,30 +436,45 @@ impl RecipeScheduler {
                 }
             }
         }
-        let mut guard = KickGuard { slug: slug_for_inflight.clone(), committed: false };
+        let mut guard = KickGuard {
+            slug: slug_for_inflight.clone(),
+            committed: false,
+        };
 
         // DB gate: skip if worker is already in flight per the DB status.
         let (worker_opt, recipe_id_opt) = match WorkersDb::open() {
             Ok(db) => match db.get_by_slug(worker_slug) {
                 Ok(Some(w)) => {
                     if w.status == "working" {
-                        info!("[RecipeScheduler] kick_worker('{}'): skipped (already working)", worker_slug);
+                        info!(
+                            "[RecipeScheduler] kick_worker('{}'): skipped (already working)",
+                            worker_slug
+                        );
                         return;
                     }
                     let rid = w.recipe_id.clone();
                     (Some(w), rid)
                 }
                 Ok(None) => {
-                    warn!("[RecipeScheduler] kick_worker('{}'): worker not found", worker_slug);
+                    warn!(
+                        "[RecipeScheduler] kick_worker('{}'): worker not found",
+                        worker_slug
+                    );
                     return;
                 }
                 Err(e) => {
-                    warn!("[RecipeScheduler] kick_worker('{}'): DB error: {e}", worker_slug);
+                    warn!(
+                        "[RecipeScheduler] kick_worker('{}'): DB error: {e}",
+                        worker_slug
+                    );
                     return;
                 }
             },
             Err(e) => {
-                warn!("[RecipeScheduler] kick_worker('{}'): open workers.db failed: {e}", worker_slug);
+                warn!(
+                    "[RecipeScheduler] kick_worker('{}'): open workers.db failed: {e}",
+                    worker_slug
+                );
                 return;
             }
         };
@@ -420,7 +483,10 @@ impl RecipeScheduler {
         let recipe_id = match recipe_id_opt {
             Some(id) => id,
             None => {
-                warn!("[RecipeScheduler] kick_worker('{}'): no bound recipe", worker_slug);
+                warn!(
+                    "[RecipeScheduler] kick_worker('{}'): no bound recipe",
+                    worker_slug
+                );
                 return;
             }
         };
@@ -428,21 +494,33 @@ impl RecipeScheduler {
         let recipe = match load_recipe_by_id(&recipe_id) {
             Ok(Some(r)) => r,
             Ok(None) => {
-                warn!("[RecipeScheduler] kick_worker('{}'): recipe '{}' not on disk", worker_slug, recipe_id);
+                warn!(
+                    "[RecipeScheduler] kick_worker('{}'): recipe '{}' not on disk",
+                    worker_slug, recipe_id
+                );
                 return;
             }
             Err(e) => {
-                warn!("[RecipeScheduler] kick_worker('{}'): load recipe failed: {e}", worker_slug);
+                warn!(
+                    "[RecipeScheduler] kick_worker('{}'): load recipe failed: {e}",
+                    worker_slug
+                );
                 return;
             }
         };
 
         let runner = self.runner.clone();
-        let slug   = worker_slug.to_string();
+        let slug = worker_slug.to_string();
         async_runtime::spawn(async move {
-            info!("[RecipeScheduler] kick_worker: firing '{}' immediately (push-based dispatch)", slug);
+            info!(
+                "[RecipeScheduler] kick_worker: firing '{}' immediately (push-based dispatch)",
+                slug
+            );
             if let Err(e) = runner.run_recipe(&recipe, &slug).await {
-                error!("[RecipeScheduler] kick_worker: recipe run failed for '{}': {e}", slug);
+                error!(
+                    "[RecipeScheduler] kick_worker: recipe run failed for '{}': {e}",
+                    slug
+                );
             }
             // Free the kick slot so the next push-based kick can fire.
             kick_inflight().lock().unwrap().remove(&slug);
@@ -458,7 +536,10 @@ impl RecipeScheduler {
     fn abort_worker_task(&self, worker_slug: &str) {
         if let Some(handle) = self.handles.lock().unwrap().remove(worker_slug) {
             handle.abort();
-            info!("[RecipeScheduler] Aborted previous task for worker '{}'", worker_slug);
+            info!(
+                "[RecipeScheduler] Aborted previous task for worker '{}'",
+                worker_slug
+            );
         }
     }
 }
@@ -467,9 +548,11 @@ impl RecipeScheduler {
 
 /// Poll orchestrator health until ready or timeout (T5.1 — E-04 fix).
 /// Returns true if healthy within `timeout_secs`, false if timed out.
-async fn wait_for_orchestrator_ready(runner: &super::runner::RecipeRunner, timeout_secs: u64) -> bool {
-    let deadline = tokio::time::Instant::now()
-        + tokio::time::Duration::from_secs(timeout_secs);
+async fn wait_for_orchestrator_ready(
+    runner: &super::runner::RecipeRunner,
+    timeout_secs: u64,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_secs);
     loop {
         if runner.is_orchestrator_ready().await {
             return true;
@@ -552,7 +635,7 @@ pub fn kick_all_workers() {
 fn normalize_to_6field(expr: &str) -> String {
     let fields: Vec<&str> = expr.split_whitespace().collect();
     match fields.len() {
-        5 => format!("0 {}", expr),   // prepend seconds = 0
-        _ => expr.to_string(),         // 6 or 7 field — use as-is
+        5 => format!("0 {}", expr), // prepend seconds = 0
+        _ => expr.to_string(),      // 6 or 7 field — use as-is
     }
 }

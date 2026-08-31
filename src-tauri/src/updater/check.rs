@@ -3,8 +3,8 @@
 // update metadata if a newer version is available.
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
 use semver::Version;
+use serde::{Deserialize, Serialize};
 
 /// The update server base URL. Can be overridden by AUTODEV_UPDATE_URL env var.
 const DEFAULT_UPDATE_URL: &str =
@@ -23,8 +23,8 @@ pub enum UpdateChannel {
 impl UpdateChannel {
     pub fn as_str(&self) -> &str {
         match self {
-            Self::Stable  => "stable",
-            Self::Beta    => "beta",
+            Self::Stable => "stable",
+            Self::Beta => "beta",
             Self::Nightly => "nightly",
         }
     }
@@ -37,24 +37,24 @@ impl UpdateChannel {
 /// docs previously described them as the values; they never held those.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlatformAsset {
-    pub full_url:   String,
-    pub full_size:  u64,
+    pub full_url: String,
+    pub full_size: u64,
     /// URL of the detached Ed25519 `.sig` for `full_url`.
-    pub signature:  String,
+    pub signature: String,
     /// URL of the `.sha256` sidecar for `full_url`.
-    pub checksum:   String,
+    pub checksum: String,
 }
 
 /// Update information returned from the update server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateInfo {
-    pub version:       String,
-    pub release_date:  String,
+    pub version: String,
+    pub release_date: String,
     pub release_notes: String,
     /// true = security update — enforce installation.
-    pub critical:      bool,
-    pub channel:       UpdateChannel,
-    pub platforms:     std::collections::HashMap<String, PlatformAsset>,
+    pub critical: bool,
+    pub channel: UpdateChannel,
+    pub platforms: std::collections::HashMap<String, PlatformAsset>,
 }
 
 impl UpdateInfo {
@@ -70,16 +70,16 @@ pub async fn check_for_update(
     current_version: &str,
     channel: UpdateChannel,
 ) -> Result<Option<UpdateInfo>> {
-    let url = std::env::var("AUTODEV_UPDATE_URL")
-        .unwrap_or_else(|_| DEFAULT_UPDATE_URL.to_string());
+    let url =
+        std::env::var("AUTODEV_UPDATE_URL").unwrap_or_else(|_| DEFAULT_UPDATE_URL.to_string());
 
     // The manifest endpoint is overridable, so it is guarded like any other
     // update endpoint rather than trusted because it has a default.
     super::download::require_https(&url).context("Update manifest URL rejected")?;
 
     let url = match channel {
-        UpdateChannel::Stable  => url,
-        UpdateChannel::Beta    => url.replace("releases/latest", "releases?per_page=5"),
+        UpdateChannel::Stable => url,
+        UpdateChannel::Beta => url.replace("releases/latest", "releases?per_page=5"),
         UpdateChannel::Nightly => url.replace("releases/latest", "releases?per_page=10"),
     };
 
@@ -102,7 +102,10 @@ pub async fn check_for_update(
     }
 
     // GitHub returns a release object; convert to our UpdateInfo format.
-    let payload: serde_json::Value = resp.json().await.context("Failed to parse update response")?;
+    let payload: serde_json::Value = resp
+        .json()
+        .await
+        .context("Failed to parse update response")?;
 
     // The beta and nightly channels rewrite the URL to the *list* endpoint,
     // which returns an array. The previous code went straight on to read
@@ -111,7 +114,7 @@ pub async fn check_for_update(
     let release = match payload.as_array() {
         Some(releases) => match releases.iter().find(|r| channel_accepts(&channel, r)) {
             Some(r) => r.clone(),
-            None    => return Ok(None),
+            None => return Ok(None),
         },
         None => payload,
     };
@@ -126,7 +129,7 @@ pub async fn check_for_update(
     }
 
     let current = Version::parse(current_version).unwrap_or(Version::new(0, 0, 0));
-    let latest  = Version::parse(latest_tag).unwrap_or(Version::new(0, 0, 0));
+    let latest = Version::parse(latest_tag).unwrap_or(Version::new(0, 0, 0));
 
     if latest <= current {
         return Ok(None); // Already up to date
@@ -146,19 +149,25 @@ pub async fn check_for_update(
     if let Some(assets) = release["assets"].as_array() {
         for asset in assets {
             let name = asset["name"].as_str().unwrap_or("");
-            let url  = asset["browser_download_url"].as_str().unwrap_or("").to_string();
+            let url = asset["browser_download_url"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
             let size = asset["size"].as_u64().unwrap_or(0);
 
             if let Some(key) = platform_key_from_filename(name) {
                 let rank = asset_preference(name);
                 if rank > ranks.get(&key).copied().unwrap_or(0) {
                     ranks.insert(key.clone(), rank);
-                    platforms.insert(key, PlatformAsset {
-                        full_url:   url,
-                        full_size:  size,
-                        signature:  String::new(), // Loaded separately from .sig asset
-                        checksum:   String::new(), // Loaded separately from .sha256 asset
-                    });
+                    platforms.insert(
+                        key,
+                        PlatformAsset {
+                            full_url: url,
+                            full_size: size,
+                            signature: String::new(), // Loaded separately from .sig asset
+                            checksum: String::new(),  // Loaded separately from .sha256 asset
+                        },
+                    );
                 }
             }
         }
@@ -174,7 +183,10 @@ pub async fn check_for_update(
         // that was actually selected.
         for asset in assets {
             let name = asset["name"].as_str().unwrap_or("");
-            let url  = asset["browser_download_url"].as_str().unwrap_or("").to_string();
+            let url = asset["browser_download_url"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
 
             let (base, is_signature) = if let Some(b) = name.strip_suffix(".sig") {
                 (b, true)
@@ -184,8 +196,12 @@ pub async fn check_for_update(
                 continue;
             };
 
-            let Some(key) = platform_key_from_filename(base) else { continue };
-            let Some(entry) = platforms.get_mut(&key) else { continue };
+            let Some(key) = platform_key_from_filename(base) else {
+                continue;
+            };
+            let Some(entry) = platforms.get_mut(&key) else {
+                continue;
+            };
             if !entry.full_url.ends_with(base) {
                 continue;
             }
@@ -204,8 +220,11 @@ pub async fn check_for_update(
         .to_lowercase()
         .contains("[critical]");
 
-    let release_notes = release["body"].as_str().unwrap_or("No release notes.").to_string();
-    let release_date  = release["published_at"].as_str().unwrap_or("").to_string();
+    let release_notes = release["body"]
+        .as_str()
+        .unwrap_or("No release notes.")
+        .to_string();
+    let release_date = release["published_at"].as_str().unwrap_or("").to_string();
 
     Ok(Some(UpdateInfo {
         version: latest_tag.to_string(),
@@ -286,7 +305,10 @@ fn asset_preference(name: &str) -> u8 {
     let n = name.to_lowercase();
     if n.ends_with(".appimage") {
         2
-    } else if n.ends_with(".msi") || n.ends_with(".exe") || n.ends_with(".dmg") || n.ends_with(".deb")
+    } else if n.ends_with(".msi")
+        || n.ends_with(".exe")
+        || n.ends_with(".dmg")
+        || n.ends_with(".deb")
     {
         1
     } else {

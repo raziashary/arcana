@@ -44,8 +44,6 @@ pub struct SubagentConfig {
     /// Hard cap on subagent runtime. Default 300s.
     pub timeout_secs: u32,
 
-
-
     /// Nesting depth (0 = spawned by a top-level agent, 1 = subagent of a
     /// subagent, etc.). Enforced by `SubagentPool` against `MAX_NESTING_DEPTH`.
     pub depth: u32,
@@ -86,11 +84,11 @@ impl SubagentStatus {
 
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Spawning   => "spawning",
-            Self::Idle       => "idle",
-            Self::Running    => "running",
-            Self::Completed  => "completed",
-            Self::Failed     => "failed",
+            Self::Spawning => "spawning",
+            Self::Idle => "idle",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
             Self::Terminated => "terminated",
         }
     }
@@ -137,7 +135,7 @@ pub struct SubagentResult {
     pub files_modified: Vec<String>,
     /// Total cost in USD (when reported by core-orchestrator).
     pub cost_usd: f64,
-    pub tokens_in:  u32,
+    pub tokens_in: u32,
     pub tokens_out: u32,
     pub duration_secs: f64,
     /// Failure message when `status == Failed` or `Terminated`.
@@ -157,31 +155,52 @@ pub enum SubagentEvent {
     /// Visible "thinking" content (chain-of-thought blocks).
     Thinking { subagent_id: String, text: String },
     /// Tool invocation started.
-    ToolStart { subagent_id: String, tool: String, input: serde_json::Value },
+    ToolStart {
+        subagent_id: String,
+        tool: String,
+        input: serde_json::Value,
+    },
     /// Tool invocation completed.
-    ToolEnd { subagent_id: String, tool: String, output: String, is_error: bool },
+    ToolEnd {
+        subagent_id: String,
+        tool: String,
+        output: String,
+        is_error: bool,
+    },
     /// Final summary message; the SSE stream is about to close.
     Final { subagent_id: String, text: String },
     /// Cost / usage update (may arrive multiple times).
-    Cost { subagent_id: String, cost_usd: f64, tokens_in: u32, tokens_out: u32 },
+    Cost {
+        subagent_id: String,
+        cost_usd: f64,
+        tokens_in: u32,
+        tokens_out: u32,
+    },
     /// Status transition broadcast (Spawning → Running → Completed, etc.).
-    Status { subagent_id: String, status: SubagentStatus, message: Option<String> },
+    Status {
+        subagent_id: String,
+        status: SubagentStatus,
+        message: Option<String>,
+    },
     /// Free-form error event (non-fatal; stream continues unless followed
     /// by a `Status::Failed`).
-    Error { subagent_id: String, message: String },
+    Error {
+        subagent_id: String,
+        message: String,
+    },
 }
 
 impl SubagentEvent {
     pub fn subagent_id(&self) -> &str {
         match self {
-            SubagentEvent::Token       { subagent_id, .. } |
-            SubagentEvent::Thinking    { subagent_id, .. } |
-            SubagentEvent::ToolStart   { subagent_id, .. } |
-            SubagentEvent::ToolEnd     { subagent_id, .. } |
-            SubagentEvent::Final       { subagent_id, .. } |
-            SubagentEvent::Cost        { subagent_id, .. } |
-            SubagentEvent::Status      { subagent_id, .. } |
-            SubagentEvent::Error       { subagent_id, .. } => subagent_id,
+            SubagentEvent::Token { subagent_id, .. }
+            | SubagentEvent::Thinking { subagent_id, .. }
+            | SubagentEvent::ToolStart { subagent_id, .. }
+            | SubagentEvent::ToolEnd { subagent_id, .. }
+            | SubagentEvent::Final { subagent_id, .. }
+            | SubagentEvent::Cost { subagent_id, .. }
+            | SubagentEvent::Status { subagent_id, .. }
+            | SubagentEvent::Error { subagent_id, .. } => subagent_id,
         }
     }
 }
@@ -212,5 +231,9 @@ pub struct SpawnParallelSubagentsInput {
     pub aggregate_results: bool,
 }
 
-fn default_max_concurrent() -> u32 { 5 }
-fn default_aggregate() -> bool { true }
+fn default_max_concurrent() -> u32 {
+    5
+}
+fn default_aggregate() -> bool {
+    true
+}

@@ -62,7 +62,11 @@ pub fn push(repo_path: &str, remote_name: Option<&str>, branch: Option<&str>) ->
 /// Pull = fetch + merge (fast-forward only). On non-ff divergence we return
 /// an error so the caller can surface it; a full merge helper lives in the
 /// branch module if/when we need it.
-pub fn pull(repo_path: &str, remote_name: Option<&str>, branch: Option<&str>) -> Result<PullResult> {
+pub fn pull(
+    repo_path: &str,
+    remote_name: Option<&str>,
+    branch: Option<&str>,
+) -> Result<PullResult> {
     fetch(repo_path, remote_name)?;
     let repo = super::repo::open(repo_path)?;
 
@@ -92,10 +96,10 @@ pub fn pull(repo_path: &str, remote_name: Option<&str>, branch: Option<&str>) ->
 
     if analysis.is_up_to_date() {
         return Ok(PullResult {
-            fetched:       true,
-            fast_forward:  true,
-            conflicts:     vec![],
-            merge_commit:  None,
+            fetched: true,
+            fast_forward: true,
+            conflicts: vec![],
+            merge_commit: None,
             files_changed: 0,
         });
     }
@@ -113,10 +117,10 @@ pub fn pull(repo_path: &str, remote_name: Option<&str>, branch: Option<&str>) ->
         repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))
             .map_err(|e| AutoDevError::Git(format!("checkout_head: {e}")))?;
         return Ok(PullResult {
-            fetched:       true,
-            fast_forward:  true,
-            conflicts:     vec![],
-            merge_commit:  Some(upstream_oid.to_string()),
+            fetched: true,
+            fast_forward: true,
+            conflicts: vec![],
+            merge_commit: Some(upstream_oid.to_string()),
             files_changed: 0,
         });
     }
@@ -139,7 +143,8 @@ fn default_callbacks<'a>() -> RemoteCallbacks<'a> {
         }
         // Try default credential helper (covers HTTPS PATs stored in OS credential manager).
         if allowed_types.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
-            let cfg = git2::Config::open_default().map_err(|e| git2::Error::from_str(&format!("config: {e}")))?;
+            let cfg = git2::Config::open_default()
+                .map_err(|e| git2::Error::from_str(&format!("config: {e}")))?;
             if let Ok(cred) = git2::Cred::credential_helper(&cfg, url, username_from_url) {
                 return Ok(cred);
             }

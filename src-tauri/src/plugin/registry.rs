@@ -2,12 +2,12 @@
 // The local registry lives at ~/.airs/plugins/<name>/manifest.yaml.
 // The remote registry is a future-facing struct ready for an HTTP source.
 
-use std::path::PathBuf;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
-use super::manifest::{InstalledPlugin, PluginInfo, PluginManifest};
 use super::builtins::all_builtins;
+use super::manifest::{InstalledPlugin, PluginInfo, PluginManifest};
 
 /// Root directory for locally installed plugins.
 pub fn plugin_dir() -> Result<PathBuf> {
@@ -28,8 +28,12 @@ pub fn plugin_install_dir(name: &str) -> Result<PathBuf> {
 
 /// Scan `~/.airs/plugins/` and return all installed plugin manifests.
 pub fn list_installed() -> Vec<InstalledPlugin> {
-    let Ok(dir) = plugin_dir() else { return vec![]; };
-    let Ok(entries) = std::fs::read_dir(&dir) else { return vec![]; };
+    let Ok(dir) = plugin_dir() else {
+        return vec![];
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return vec![];
+    };
 
     entries
         .filter_map(|e| e.ok())
@@ -58,7 +62,10 @@ fn load_installed_from_dir(dir: &std::path::Path) -> Result<InstalledPlugin> {
     let (installed_at, config) = if meta_path.exists() {
         let meta_str = std::fs::read_to_string(&meta_path).unwrap_or_default();
         let meta: serde_json::Value = serde_json::from_str(&meta_str).unwrap_or_default();
-        let at = meta["installed_at"].as_str().unwrap_or("unknown").to_string();
+        let at = meta["installed_at"]
+            .as_str()
+            .unwrap_or("unknown")
+            .to_string();
         let cfg = meta.get("config").cloned();
         (at, cfg)
     } else {
@@ -76,8 +83,10 @@ fn load_installed_from_dir(dir: &std::path::Path) -> Result<InstalledPlugin> {
 /// Check if a plugin name is currently installed on disk.
 pub fn is_installed(name: &str) -> bool {
     plugin_dir()
-        .map(|d| d.join(name).join("manifest.yaml").exists()
-            || d.join(name).join("manifest.yml").exists())
+        .map(|d| {
+            d.join(name).join("manifest.yaml").exists()
+                || d.join(name).join("manifest.yml").exists()
+        })
         .unwrap_or(false)
 }
 
@@ -99,7 +108,10 @@ pub fn persist_install(
         "installed_at": now,
         "config": config,
     });
-    std::fs::write(dir.join(".install_meta.json"), serde_json::to_string_pretty(&meta)?)?;
+    std::fs::write(
+        dir.join(".install_meta.json"),
+        serde_json::to_string_pretty(&meta)?,
+    )?;
 
     Ok(dir)
 }
@@ -119,14 +131,14 @@ pub fn remove_install(name: &str) -> Result<()> {
 /// A remote registry entry (used for future marketplace HTTP source).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemotePluginEntry {
-    pub name:        String,
-    pub version:     String,
+    pub name: String,
+    pub version: String,
     pub description: String,
-    pub author:      String,
-    pub icon:        String,
-    pub tags:        Vec<String>,
+    pub author: String,
+    pub icon: String,
+    pub tags: Vec<String>,
     pub download_url: String,
-    pub checksum:    Option<String>,
+    pub checksum: Option<String>,
 }
 
 /// Fetch plugins from a remote registry URL.
@@ -140,9 +152,10 @@ pub async fn fetch_remote(registry_url: &str) -> Vec<RemotePluginEntry> {
     };
 
     match client.get(registry_url).send().await {
-        Ok(resp) if resp.status().is_success() => {
-            resp.json::<Vec<RemotePluginEntry>>().await.unwrap_or_default()
-        }
+        Ok(resp) if resp.status().is_success() => resp
+            .json::<Vec<RemotePluginEntry>>()
+            .await
+            .unwrap_or_default(),
         _ => vec![],
     }
 }
@@ -201,11 +214,26 @@ fn chrono_now() -> String {
     let y1 = rem3 / 365;
     let year = y400 * 400 + y100 * 100 + y4 * 4 + y1 + 1970;
     let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
-    let mdays: [u64; 12] = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mdays: [u64; 12] = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut doy = rem3 % 365 + if y1 == 4 { 365 } else { 0 };
     let mut month = 1u64;
     for md in &mdays {
-        if doy < *md { break; }
+        if doy < *md {
+            break;
+        }
         doy -= md;
         month += 1;
     }

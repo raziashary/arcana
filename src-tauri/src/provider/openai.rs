@@ -8,18 +8,17 @@ use reqwest::Client;
 use serde_json::json;
 use tracing::{debug, error};
 
-use crate::errors::{AutoDevError, Result};
 use super::traits::{Provider, StreamResult};
 use super::types::{
-    CompletionRequest, CompletionResponse, MessageContent, ModelInfo,
-    ProviderStatus, StreamChunk,
+    CompletionRequest, CompletionResponse, MessageContent, ModelInfo, ProviderStatus, StreamChunk,
 };
+use crate::errors::{AutoDevError, Result};
 
 const OPENAI_API_BASE: &str = "https://api.openai.com/v1";
 
 pub struct OpenAIProvider {
     api_key: String,
-    client:  Client,
+    client: Client,
 }
 
 impl OpenAIProvider {
@@ -33,40 +32,40 @@ impl OpenAIProvider {
     fn models_static() -> Vec<ModelInfo> {
         vec![
             ModelInfo {
-                id:                "gpt-4.1".into(),
-                name:              "GPT-4.1".into(),
-                context_window:    1_000_000,
-                supports_vision:   true,
+                id: "gpt-4.1".into(),
+                name: "GPT-4.1".into(),
+                context_window: 1_000_000,
+                supports_vision: true,
                 supports_thinking: false,
-                cost_in_per_1m:    5.0,
-                cost_out_per_1m:   15.0,
+                cost_in_per_1m: 5.0,
+                cost_out_per_1m: 15.0,
             },
             ModelInfo {
-                id:                "gpt-4.1-mini".into(),
-                name:              "GPT-4.1 Mini".into(),
-                context_window:    1_000_000,
-                supports_vision:   true,
+                id: "gpt-4.1-mini".into(),
+                name: "GPT-4.1 Mini".into(),
+                context_window: 1_000_000,
+                supports_vision: true,
                 supports_thinking: false,
-                cost_in_per_1m:    1.0,
-                cost_out_per_1m:   3.0,
+                cost_in_per_1m: 1.0,
+                cost_out_per_1m: 3.0,
             },
             ModelInfo {
-                id:                "gpt-4o".into(),
-                name:              "GPT-4o".into(),
-                context_window:    128_000,
-                supports_vision:   true,
+                id: "gpt-4o".into(),
+                name: "GPT-4o".into(),
+                context_window: 128_000,
+                supports_vision: true,
                 supports_thinking: false,
-                cost_in_per_1m:    2.50,
-                cost_out_per_1m:   10.0,
+                cost_in_per_1m: 2.50,
+                cost_out_per_1m: 10.0,
             },
             ModelInfo {
-                id:                "o4-mini".into(),
-                name:              "o4-mini".into(),
-                context_window:    200_000,
-                supports_vision:   false,
+                id: "o4-mini".into(),
+                name: "o4-mini".into(),
+                context_window: 200_000,
+                supports_vision: false,
                 supports_thinking: true,
-                cost_in_per_1m:    1.10,
-                cost_out_per_1m:   4.40,
+                cost_in_per_1m: 1.10,
+                cost_out_per_1m: 4.40,
             },
         ]
     }
@@ -86,14 +85,21 @@ impl OpenAIProvider {
         for m in &req.messages {
             if m.role == "user" {
                 // User messages with tool results become "tool" role messages in OpenAI
-                let tool_results: Vec<&MessageContent> = m.content.iter()
+                let tool_results: Vec<&MessageContent> = m
+                    .content
+                    .iter()
                     .filter(|c| matches!(c, MessageContent::ToolResult { .. }))
                     .collect();
 
                 if !tool_results.is_empty() {
                     // Add tool result messages (role: "tool")
                     for tr in tool_results {
-                        if let MessageContent::ToolResult { tool_use_id, content, is_error: _ } = tr {
+                        if let MessageContent::ToolResult {
+                            tool_use_id,
+                            content,
+                            is_error: _,
+                        } = tr
+                        {
                             messages.push(json!({
                                 "role": "tool",
                                 "tool_call_id": tool_use_id,
@@ -103,14 +109,16 @@ impl OpenAIProvider {
                     }
                 } else {
                     // Regular user text message
-                    let text = m.content.iter()
+                    let text = m
+                        .content
+                        .iter()
                         .filter_map(|c| match c {
                             MessageContent::Text { text } => Some(text.clone()),
                             _ => None,
                         })
                         .collect::<Vec<_>>()
                         .join("\n");
-                    
+
                     messages.push(json!({
                         "role": "user",
                         "content": text,
@@ -118,7 +126,9 @@ impl OpenAIProvider {
                 }
             } else if m.role == "assistant" {
                 // Assistant messages: separate text and tool_calls
-                let text_parts: Vec<String> = m.content.iter()
+                let text_parts: Vec<String> = m
+                    .content
+                    .iter()
                     .filter_map(|c| match c {
                         MessageContent::Text { text } => Some(text.clone()),
                         _ => None,
@@ -153,14 +163,20 @@ impl OpenAIProvider {
             }
         }
 
-        let tools: Vec<serde_json::Value> = req.tools.iter().map(|t| json!({
-            "type": "function",
-            "function": {
-                "name":        t.name,
-                "description": t.description,
-                "parameters":  t.input_schema,
-            }
-        })).collect();
+        let tools: Vec<serde_json::Value> = req
+            .tools
+            .iter()
+            .map(|t| {
+                json!({
+                    "type": "function",
+                    "function": {
+                        "name":        t.name,
+                        "description": t.description,
+                        "parameters":  t.input_schema,
+                    }
+                })
+            })
+            .collect();
 
         let mut body = json!({
             "model":    req.model,
@@ -189,18 +205,25 @@ impl OpenAIProvider {
 
 #[async_trait]
 impl Provider for OpenAIProvider {
-    fn id(&self)   -> &str { "openai" }
-    fn name(&self) -> &str { "OpenAI" }
-    fn models(&self) -> Vec<ModelInfo> { Self::models_static() }
+    fn id(&self) -> &str {
+        "openai"
+    }
+    fn name(&self) -> &str {
+        "OpenAI"
+    }
+    fn models(&self) -> Vec<ModelInfo> {
+        Self::models_static()
+    }
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
         let body = self.build_body(&request, false);
         debug!("OpenAI complete: model={}", request.model);
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(format!("{OPENAI_API_BASE}/chat/completions"))
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type",  "application/json")
+            .header("Content-Type", "application/json")
             .json(&body)
             .send()
             .await?;
@@ -219,10 +242,11 @@ impl Provider for OpenAIProvider {
         let body = self.build_body(&request, true);
         debug!("OpenAI stream: model={}", request.model);
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(format!("{OPENAI_API_BASE}/chat/completions"))
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type",  "application/json")
+            .header("Content-Type", "application/json")
             .json(&body)
             .send()
             .await?;
@@ -230,7 +254,9 @@ impl Provider for OpenAIProvider {
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(AutoDevError::Provider(format!("OpenAI stream {status}: {text}")));
+            return Err(AutoDevError::Provider(format!(
+                "OpenAI stream {status}: {text}"
+            )));
         }
 
         let byte_stream = resp.bytes_stream();
@@ -239,7 +265,7 @@ impl Provider for OpenAIProvider {
         let chunk_stream = byte_stream
             .map(move |bytes_result| -> Result<Vec<StreamChunk>> {
                 let bytes = bytes_result.map_err(AutoDevError::Http)?;
-                let text  = String::from_utf8_lossy(&bytes);
+                let text = String::from_utf8_lossy(&bytes);
                 let mut buf = buffer.lock().unwrap();
                 buf.push_str(&text);
                 let mut chunks = Vec::new();
@@ -256,7 +282,7 @@ impl Provider for OpenAIProvider {
             .flat_map(|result| {
                 let items: Vec<Result<StreamChunk>> = match result {
                     Ok(chunks) => chunks.into_iter().map(Ok).collect(),
-                    Err(e)     => vec![Err(e)],
+                    Err(e) => vec![Err(e)],
                 };
                 futures::stream::iter(items)
             });
@@ -266,7 +292,8 @@ impl Provider for OpenAIProvider {
 
     async fn test_connection(&self) -> Result<ProviderStatus> {
         // Use models endpoint to validate key
-        let resp = self.client
+        let resp = self
+            .client
             .get(format!("{OPENAI_API_BASE}/models"))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .send()
@@ -274,7 +301,7 @@ impl Provider for OpenAIProvider {
 
         match resp {
             Ok(r) if r.status().is_success() => Ok(ProviderStatus::Connected),
-            Ok(r) if r.status() == 401       => Ok(ProviderStatus::Error("Invalid API key".into())),
+            Ok(r) if r.status() == 401 => Ok(ProviderStatus::Error("Invalid API key".into())),
             Ok(r) => {
                 let code = r.status();
                 Ok(ProviderStatus::Error(format!("HTTP {code}")))
@@ -300,8 +327,10 @@ fn parse_openai_sse_line(line: &str) -> Result<Option<StreamChunk>> {
         return Ok(Some(StreamChunk::Done));
     }
     match serde_json::from_str::<serde_json::Value>(data) {
-        Ok(v)  => parse_openai_chunk(&v),
-        Err(e) => Err(AutoDevError::Provider(format!("SSE parse error: {e} — data: {data}"))),
+        Ok(v) => parse_openai_chunk(&v),
+        Err(e) => Err(AutoDevError::Provider(format!(
+            "SSE parse error: {e} — data: {data}"
+        ))),
     }
 }
 
@@ -315,7 +344,7 @@ fn parse_openai_chunk(v: &serde_json::Value) -> Result<Option<StreamChunk>> {
     }
 
     let delta = &choices[0]["delta"];
-    
+
     // Text content delta
     if let Some(content) = delta["content"].as_str() {
         return Ok(Some(StreamChunk::TextDelta {
@@ -327,7 +356,7 @@ fn parse_openai_chunk(v: &serde_json::Value) -> Result<Option<StreamChunk>> {
     if let Some(tool_calls) = delta["tool_calls"].as_array() {
         for tc in tool_calls {
             let index = tc["index"].as_u64().unwrap_or(0);
-            
+
             // Tool use start
             if let Some(id) = tc["id"].as_str() {
                 if let Some(func) = tc["function"].as_object() {
@@ -360,8 +389,14 @@ fn parse_openai_chunk(v: &serde_json::Value) -> Result<Option<StreamChunk>> {
         if finish_reason != "null" && !finish_reason.is_empty() {
             // Extract usage if present
             if let Some(usage) = v["usage"].as_object() {
-                let tokens_in  = usage.get("prompt_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32;
-                let tokens_out = usage.get("completion_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32;
+                let tokens_in = usage
+                    .get("prompt_tokens")
+                    .and_then(|t| t.as_u64())
+                    .unwrap_or(0) as u32;
+                let tokens_out = usage
+                    .get("completion_tokens")
+                    .and_then(|t| t.as_u64())
+                    .unwrap_or(0) as u32;
                 return Ok(Some(StreamChunk::MessageDelta {
                     stop_reason: finish_reason.to_string(),
                     tokens_in,
@@ -375,14 +410,15 @@ fn parse_openai_chunk(v: &serde_json::Value) -> Result<Option<StreamChunk>> {
 }
 
 fn parse_completion_response(data: serde_json::Value) -> Result<CompletionResponse> {
-    let message_id  = data["id"].as_str().unwrap_or("").to_string();
-    let model       = data["model"].as_str().unwrap_or("").to_string();
-    let tokens_in   = data["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32;
-    let tokens_out  = data["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32;
+    let message_id = data["id"].as_str().unwrap_or("").to_string();
+    let model = data["model"].as_str().unwrap_or("").to_string();
+    let tokens_in = data["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32;
+    let tokens_out = data["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32;
 
     let empty_array = vec![];
     let choices = data["choices"].as_array().unwrap_or(&empty_array);
-    let stop_reason = choices.get(0)
+    let stop_reason = choices
+        .get(0)
         .and_then(|c| c["finish_reason"].as_str())
         .unwrap_or("stop")
         .to_string();
@@ -406,7 +442,7 @@ fn parse_completion_response(data: serde_json::Value) -> Result<CompletionRespon
                 let name = func["name"].as_str().unwrap_or("").to_string();
                 let args_str = func["arguments"].as_str().unwrap_or("{}");
                 let input = serde_json::from_str(args_str).unwrap_or_else(|_| json!({}));
-                
+
                 content.push(MessageContent::ToolUse { id, name, input });
             }
         }

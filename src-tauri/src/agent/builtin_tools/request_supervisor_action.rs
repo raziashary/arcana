@@ -10,17 +10,19 @@
 //   - report_issue:     Task encountered a blocking issue (dependency, bug, etc.)
 //   - request_review:   Worker believes task is done but wants QC to verify early
 
-use async_trait::async_trait;
-use serde_json::{json, Value};
+use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 use crate::db::tasks::{CreateWorkerRequestInput, TasksDb};
 use crate::events::{emit_worker_request_global, WorkerRequestPayload};
-use super::super::tool_trait::{Tool, ToolContext, ToolResult};
+use async_trait::async_trait;
+use serde_json::{json, Value};
 
 pub struct RequestSupervisorActionTool;
 
 #[async_trait]
 impl Tool for RequestSupervisorActionTool {
-    fn name(&self) -> &str { "request_supervisor_action" }
+    fn name(&self) -> &str {
+        "request_supervisor_action"
+    }
 
     fn description(&self) -> &str {
         "Send a structured request to the Supervisor. Workers use this to escalate \
@@ -60,7 +62,9 @@ impl Tool for RequestSupervisorActionTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let request_type = match input["request_type"].as_str() {
@@ -68,7 +72,13 @@ impl Tool for RequestSupervisorActionTool {
             _ => return ToolResult::error("'request_type' is required"),
         };
 
-        let valid_types = ["decompose_audit", "reassign", "needs_info", "report_issue", "request_review"];
+        let valid_types = [
+            "decompose_audit",
+            "reassign",
+            "needs_info",
+            "report_issue",
+            "request_review",
+        ];
         if !valid_types.contains(&request_type.as_str()) {
             return ToolResult::error(&format!(
                 "Invalid request_type '{}'. Valid: {:?}",
@@ -131,14 +141,17 @@ impl Tool for RequestSupervisorActionTool {
             payload: request.payload.clone(),
         });
 
-        ToolResult::success(json!({
-            "request_id": request.id,
-            "status": "pending",
-            "message": format!(
-                "✅ Worker request #{} sent to Supervisor (type: {}). \
-                 The Supervisor will process it on its next tick.",
-                request.id, request_type
-            )
-        }).to_string())
+        ToolResult::success(
+            json!({
+                "request_id": request.id,
+                "status": "pending",
+                "message": format!(
+                    "✅ Worker request #{} sent to Supervisor (type: {}). \
+                     The Supervisor will process it on its next tick.",
+                    request.id, request_type
+                )
+            })
+            .to_string(),
+        )
     }
 }

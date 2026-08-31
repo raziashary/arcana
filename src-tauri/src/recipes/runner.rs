@@ -28,27 +28,25 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::agent::engine::AgentEngine;
-use crate::events::{
-    emit_worker_status, emit_worker_tick_start, emit_worker_tick_end,
-    emit_worker_log_line,
-    WorkerStatusPayload, WorkerTickStartPayload, WorkerTickEndPayload,
-    WorkerLogLinePayload,
-};
-use crate::hooks::ecosystem::Ecosystem;
 use crate::agent::permission::{PendingPermissions, PermissionMode};
 use crate::agent::PAMode;
 use crate::db::workers::WorkersDb;
 use crate::errors::{AutoDevError, Result};
+use crate::events::{
+    emit_worker_log_line, emit_worker_status, emit_worker_tick_end, emit_worker_tick_start,
+    WorkerLogLinePayload, WorkerStatusPayload, WorkerTickEndPayload, WorkerTickStartPayload,
+};
+use crate::hooks::ecosystem::Ecosystem;
 use crate::provider::anthropic::AnthropicProvider;
-use crate::provider::openai::OpenAIProvider;
 use crate::provider::google::GoogleProvider;
 use crate::provider::ollama::OllamaProvider;
+use crate::provider::openai::OpenAIProvider;
 use crate::provider::traits::Provider;
 use crate::recipes::types::Recipe;
 use crate::session::manager::SessionManager;
 use crate::sidecar::client::OrchestratorClient;
 use crate::state::AppState;
-use crate::vault::keychain::{VaultManager, provider_key};
+use crate::vault::keychain::{provider_key, VaultManager};
 
 /// Initial trigger message sent to the worker agent at each cron execution.
 const RECIPE_TRIGGER: &str =
@@ -59,22 +57,28 @@ const RECIPE_TRIGGER: &str =
 /// Executes a recipe as an autonomous agent session.
 /// Each call creates a fresh ephemeral session (not stored in session DB).
 pub struct RecipeRunner {
-    app:          AppHandle,
-    state:        Arc<Mutex<AppState>>,
-    _session_mgr: Arc<SessionManager>,  // retained for future SSE bridging (not attached to recipe sessions)
-    pending:      PendingPermissions,
-    orch_client:  Arc<OrchestratorClient>,  // Mode 2: core-orchestrator LivingAgent
+    app: AppHandle,
+    state: Arc<Mutex<AppState>>,
+    _session_mgr: Arc<SessionManager>, // retained for future SSE bridging (not attached to recipe sessions)
+    pending: PendingPermissions,
+    orch_client: Arc<OrchestratorClient>, // Mode 2: core-orchestrator LivingAgent
 }
 
 impl RecipeRunner {
     pub fn new(
-        app:         AppHandle,
-        state:       Arc<Mutex<AppState>>,
+        app: AppHandle,
+        state: Arc<Mutex<AppState>>,
         session_mgr: Arc<SessionManager>,
-        pending:     PendingPermissions,
+        pending: PendingPermissions,
         orch_client: Arc<OrchestratorClient>,
     ) -> Self {
-        Self { app, state, _session_mgr: session_mgr, pending, orch_client }
+        Self {
+            app,
+            state,
+            _session_mgr: session_mgr,
+            pending,
+            orch_client,
+        }
     }
 
     /// Returns true when the core-orchestrator is reachable and ready.
@@ -128,7 +132,11 @@ impl RecipeRunner {
         info!(
             "[RecipeRunner] tick dispatch — worker='{}' core-orchestrator={}",
             worker_slug,
-            if orch_healthy { "reachable → Mode 2 (LivingAgent)" } else { "unreachable → Mode 1 (Rust Engine)" },
+            if orch_healthy {
+                "reachable → Mode 2 (LivingAgent)"
+            } else {
+                "unreachable → Mode 1 (Rust Engine)"
+            },
         );
 
         // ── Deterministic no-op short-circuit ──────────────────────────────────
@@ -165,7 +173,8 @@ impl RecipeRunner {
 
         // ── Model resolution (shared by both modes) ───────────────────────────
         // Priority: worker.model (DB) > recipe.model (YAML) > active_model > default.
-        let worker_model: Option<String> = WorkersDb::open().ok()
+        let worker_model: Option<String> = WorkersDb::open()
+            .ok()
             .and_then(|db| db.get_by_slug(worker_slug).ok().flatten())
             .map(|w| w.model)
             .filter(|m| !m.is_empty());
@@ -174,7 +183,11 @@ impl RecipeRunner {
             let s = self.state.lock().unwrap();
             worker_model
                 .or_else(|| recipe.model.clone())
-                .unwrap_or_else(|| s.active_model.clone().unwrap_or_else(|| "claude-sonnet-4-5".into()))
+                .unwrap_or_else(|| {
+                    s.active_model
+                        .clone()
+                        .unwrap_or_else(|| "claude-sonnet-4-5".into())
+                })
         };
 
         // Ephemeral session id — used by Mode 1 if reached
@@ -210,18 +223,24 @@ impl RecipeRunner {
         // Use the pre-checked health result from earlier in the function.
         // If reachable, dispatch through LivingAgent for FSMs + mem0 + A2A.
         if orch_healthy {
-            info!("[RecipeRunner] core-orchestrator reachable — dispatching '{}' via LivingAgent", worker_slug);
+            info!(
+                "[RecipeRunner] core-orchestrator reachable — dispatching '{}' via LivingAgent",
+                worker_slug
+            );
             self.set_worker_status(worker_slug, "working");
 
             // D.1 — Record tick start and notify the frontend. Both the start
             // timestamp and the Instant are captured here so we can compute
             // tick_duration_ms for the WorkerStatusPayload on completion.
             let tick_start = Instant::now();
-            emit_worker_tick_start(&self.app, WorkerTickStartPayload {
-                slug:      worker_slug.to_string(),
-                mode:      "mode2".to_string(),
-                timestamp: chrono::Utc::now().to_rfc3339(),
-            });
+            emit_worker_tick_start(
+                &self.app,
+                WorkerTickStartPayload {
+                    slug: worker_slug.to_string(),
+                    mode: "mode2".to_string(),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                },
+            );
 
             match self.orch_client.ensure_agent(worker_slug, &model).await {
                 Ok(agent_id) => {
@@ -230,9 +249,9 @@ impl RecipeRunner {
                     // Force an immediate Mode 1 fallback rather than discovering this
                     // inside the expensive invoke_worker call.
                     let mcp_up = false; // see ADR-LOG-RESTRUCT-0008 — the MCP server is gone
-                    // ── qc-agent gate (AFTER ensure_agent so YAML is always created) ─────────
-                    // ensure_agent() above already created/registered the YAML config.
-                    // Now skip the LLM invocation if there are no reviewable tasks.
+                                        // ── qc-agent gate (AFTER ensure_agent so YAML is always created) ─────────
+                                        // ensure_agent() above already created/registered the YAML config.
+                                        // Now skip the LLM invocation if there are no reviewable tasks.
                     let mut qc_trigger_override: Option<String> = None;
                     if worker_slug == "qc-agent" {
                         if let Ok(db) = crate::db::tasks::TasksDb::open() {
@@ -241,22 +260,34 @@ impl RecipeRunner {
                                     info!("[RecipeRunner] No qc_review tasks in DB — skipping qc-agent tick");
                                     // Doc 06 Phase 3 — leave a visible breadcrumb on the QC card so
                                     // "intentionally idle" doesn't look like "stuck idle".
-                                    emit_worker_log_line(&self.app, WorkerLogLinePayload {
-                                        slug:      worker_slug.to_string(),
-                                        text:      "idle — no qc_review tasks".to_string(),
-                                        timestamp: chrono::Utc::now().to_rfc3339(),
-                                    });
-                                    emit_worker_tick_end(&self.app, WorkerTickEndPayload {
-                                        slug:      worker_slug.to_string(),
-                                        outcome:   "idle".to_string(),
-                                        timestamp: chrono::Utc::now().to_rfc3339(),
-                                    });
+                                    emit_worker_log_line(
+                                        &self.app,
+                                        WorkerLogLinePayload {
+                                            slug: worker_slug.to_string(),
+                                            text: "idle — no qc_review tasks".to_string(),
+                                            timestamp: chrono::Utc::now().to_rfc3339(),
+                                        },
+                                    );
+                                    emit_worker_tick_end(
+                                        &self.app,
+                                        WorkerTickEndPayload {
+                                            slug: worker_slug.to_string(),
+                                            outcome: "idle".to_string(),
+                                            timestamp: chrono::Utc::now().to_rfc3339(),
+                                        },
+                                    );
                                     self.set_worker_status(worker_slug, "idle");
                                     return Ok(());
                                 }
                                 // E.3 — Filter out build_failed tasks that leaked into qc_review.
-                                let reviewable: Vec<_> = tasks.iter()
-                                    .filter(|t| !matches!(t.status, crate::db::tasks::TaskStatus::BuildFailed))
+                                let reviewable: Vec<_> = tasks
+                                    .iter()
+                                    .filter(|t| {
+                                        !matches!(
+                                            t.status,
+                                            crate::db::tasks::TaskStatus::BuildFailed
+                                        )
+                                    })
                                     .collect();
                                 if reviewable.is_empty() {
                                     info!(
@@ -266,20 +297,28 @@ impl RecipeRunner {
                                     // Doc 06 Phase 3 — distinct breadcrumb from the
                                     // "no qc_review tasks" case so the user can tell
                                     // why the QC agent is parked.
-                                    emit_worker_log_line(&self.app, WorkerLogLinePayload {
-                                        slug:      worker_slug.to_string(),
-                                        text:      "idle — only build_failed tasks awaiting QC".to_string(),
-                                        timestamp: chrono::Utc::now().to_rfc3339(),
-                                    });
-                                    emit_worker_tick_end(&self.app, WorkerTickEndPayload {
-                                        slug:      worker_slug.to_string(),
-                                        outcome:   "idle".to_string(),
-                                        timestamp: chrono::Utc::now().to_rfc3339(),
-                                    });
+                                    emit_worker_log_line(
+                                        &self.app,
+                                        WorkerLogLinePayload {
+                                            slug: worker_slug.to_string(),
+                                            text: "idle — only build_failed tasks awaiting QC"
+                                                .to_string(),
+                                            timestamp: chrono::Utc::now().to_rfc3339(),
+                                        },
+                                    );
+                                    emit_worker_tick_end(
+                                        &self.app,
+                                        WorkerTickEndPayload {
+                                            slug: worker_slug.to_string(),
+                                            outcome: "idle".to_string(),
+                                            timestamp: chrono::Utc::now().to_rfc3339(),
+                                        },
+                                    );
                                     self.set_worker_status(worker_slug, "idle");
                                     return Ok(());
                                 }
-                                let titles: Vec<String> = reviewable.iter()
+                                let titles: Vec<String> = reviewable
+                                    .iter()
                                     .map(|t| format!("#{}: {}", t.id, t.title))
                                     .collect();
                                 qc_trigger_override = Some(format!(
@@ -297,9 +336,15 @@ impl RecipeRunner {
                     // This must happen AFTER ensure_agent so agent YAMLs are always created.
                     if worker_slug.starts_with("worker-") {
                         let has_work = crate::db::tasks::TasksDb::open().ok().map_or(true, |db| {
-                            let assigned  = db.list_tasks_by_status_and_worker("assigned",    worker_slug).unwrap_or_default();
-                            let in_prog   = db.list_tasks_by_status_and_worker("in_progress", worker_slug).unwrap_or_default();
-                            let rejected  = db.list_tasks_by_status_and_worker("rejected",    worker_slug).unwrap_or_default();
+                            let assigned = db
+                                .list_tasks_by_status_and_worker("assigned", worker_slug)
+                                .unwrap_or_default();
+                            let in_prog = db
+                                .list_tasks_by_status_and_worker("in_progress", worker_slug)
+                                .unwrap_or_default();
+                            let rejected = db
+                                .list_tasks_by_status_and_worker("rejected", worker_slug)
+                                .unwrap_or_default();
                             !assigned.is_empty() || !in_prog.is_empty() || !rejected.is_empty()
                         });
                         if !has_work {
@@ -307,11 +352,14 @@ impl RecipeRunner {
                                 "[RecipeRunner] {} has no actionable tasks — skipping LLM invocation (Mode 2)",
                                 worker_slug
                             );
-                            emit_worker_tick_end(&self.app, WorkerTickEndPayload {
-                                slug:      worker_slug.to_string(),
-                                outcome:   "idle".to_string(),
-                                timestamp: chrono::Utc::now().to_rfc3339(),
-                            });
+                            emit_worker_tick_end(
+                                &self.app,
+                                WorkerTickEndPayload {
+                                    slug: worker_slug.to_string(),
+                                    outcome: "idle".to_string(),
+                                    timestamp: chrono::Utc::now().to_rfc3339(),
+                                },
+                            );
                             self.set_worker_status(worker_slug, "idle");
                             return Ok(());
                         }
@@ -331,11 +379,14 @@ impl RecipeRunner {
                              NOT falling back to Mode 1 (tool-less Mode 1 is worse than skipping).",
                             worker_slug, mcp_port
                         );
-                        emit_worker_tick_end(&self.app, WorkerTickEndPayload {
-                            slug:      worker_slug.to_string(),
-                            outcome:   "mcp_unavailable".to_string(),
-                            timestamp: chrono::Utc::now().to_rfc3339(),
-                        });
+                        emit_worker_tick_end(
+                            &self.app,
+                            WorkerTickEndPayload {
+                                slug: worker_slug.to_string(),
+                                outcome: "mcp_unavailable".to_string(),
+                                timestamp: chrono::Utc::now().to_rfc3339(),
+                            },
+                        );
                         self.set_worker_status(worker_slug, "idle");
                         return Ok(());
                     }
@@ -369,7 +420,8 @@ impl RecipeRunner {
                         // worker slug. The Live Monitor card's body now
                         // shows the actual tools being called instead of
                         // staying empty during the multi-minute tick.
-                        match self.orch_client
+                        match self
+                            .orch_client
                             .invoke_worker_streaming(
                                 &agent_id,
                                 &instructions_with_ws,
@@ -377,185 +429,207 @@ impl RecipeRunner {
                                 worker_slug,
                             )
                             .await
-                    {
-                        Ok(result) => {
-                            let elapsed_ms = tick_start.elapsed().as_millis() as u64;
-                            let response = result.content.clone();
-                            info!(
+                        {
+                            Ok(result) => {
+                                let elapsed_ms = tick_start.elapsed().as_millis() as u64;
+                                let response = result.content.clone();
+                                info!(
                                 "[RecipeRunner] LivingAgent tick complete for '{}' in {}ms: {:.200}",
                                 worker_slug,
                                 elapsed_ms,
                                 response.trim()
                             );
 
-                            // Phase 8.2 — Mode 2 cost tracking.
-                            // core-orchestrator returns approximate tokens in
-                            // response.metadata.tokens_used; the client falls
-                            // back to a char/4 estimate when that field is
-                            // unpopulated. Either way we now have non-zero
-                            // numbers to bill against the worker's model.
-                            let tokens_in  = result.tokens_in;
-                            let tokens_out = result.tokens_out;
-                            let cost = crate::cost::tracker::CostTracker::calculate(
-                                &model, tokens_in, tokens_out
-                            );
-                            // Roll into the in-process AppState so the
-                            // StatusBar / Sidebar / TabBar cost meter (which
-                            // reads `cost_today_usd`) reflects Mode 2 spend
-                            // alongside Mode 1 PA spend.
-                            {
-                                let mut s = self.state.lock().unwrap();
-                                s.add_cost(cost.cost_usd, tokens_in, tokens_out);
+                                // Phase 8.2 — Mode 2 cost tracking.
+                                // core-orchestrator returns approximate tokens in
+                                // response.metadata.tokens_used; the client falls
+                                // back to a char/4 estimate when that field is
+                                // unpopulated. Either way we now have non-zero
+                                // numbers to bill against the worker's model.
+                                let tokens_in = result.tokens_in;
+                                let tokens_out = result.tokens_out;
+                                let cost = crate::cost::tracker::CostTracker::calculate(
+                                    &model, tokens_in, tokens_out,
+                                );
+                                // Roll into the in-process AppState so the
+                                // StatusBar / Sidebar / TabBar cost meter (which
+                                // reads `cost_today_usd`) reflects Mode 2 spend
+                                // alongside Mode 1 PA spend.
+                                {
+                                    let mut s = self.state.lock().unwrap();
+                                    s.add_cost(cost.cost_usd, tokens_in, tokens_out);
+                                }
+                                // Persist into the analytics DB so the Dashboard's
+                                // get_dashboard_summary picks it up across restarts.
+                                let analytics_provider = if model.contains("claude") {
+                                    "anthropic"
+                                } else if model.contains("gpt")
+                                    || model.starts_with("o1")
+                                    || model.starts_with("o3")
+                                {
+                                    "openai"
+                                } else if model.contains("gemini") {
+                                    "google"
+                                } else {
+                                    "unknown"
+                                };
+                                // Phase 1 of docs/endtoendrun/14may2026/02 — fail
+                                // loudly. The previous `let _ = ...` silently
+                                // swallowed every analytics write for the entire
+                                // session and was the reason the Dashboard
+                                // showed zeros for days.
+                                if let Err(e) =
+                                    crate::analytics::global().collector().record_token_usage(
+                                        format!(
+                                            "mode2-{}-{}",
+                                            worker_slug,
+                                            chrono::Utc::now().timestamp_millis()
+                                        ),
+                                        "mode2_worker".to_string(),
+                                        analytics_provider.to_string(),
+                                        model.clone(),
+                                        tokens_in as i32,
+                                        tokens_out as i32,
+                                        None,
+                                        cost.cost_usd,
+                                        format!("worker_tick:{}", worker_slug),
+                                    )
+                                {
+                                    warn!("[Mode2] record_token_usage failed for '{worker_slug}': {e}");
+                                }
+                                // Live-broadcast a cost:update so the Dashboard
+                                // and any other cost listeners refresh immediately
+                                // rather than waiting for the 60s polling fallback.
+                                let total_today = self.state.lock().unwrap().cost_today_usd;
+                                crate::events::emit_cost_update(
+                                    &self.app,
+                                    crate::events::CostUpdatePayload {
+                                        session_id: format!("mode2:{}", worker_slug),
+                                        tokens_in,
+                                        tokens_out,
+                                        cost_usd: cost.cost_usd,
+                                        total_today,
+                                    },
+                                );
+                                // D.1 — emit tick-end before transitioning to idle
+                                emit_worker_tick_end(
+                                    &self.app,
+                                    WorkerTickEndPayload {
+                                        slug: worker_slug.to_string(),
+                                        outcome: "success".to_string(),
+                                        timestamp: chrono::Utc::now().to_rfc3339(),
+                                    },
+                                );
+                                // D.2 — include timing in the idle status event
+                                self.set_worker_status_ex(
+                                    worker_slug,
+                                    "idle",
+                                    Some(elapsed_ms),
+                                    Some("success".to_string()),
+                                );
+                                // Phase 7.5 — Record successful Mode 2 tick in analytics DB.
+                                //
+                                // Doc 02 Phase 2 task 2.2: populate with real values so the
+                                // worker leaderboard widget shows actual per-worker spend
+                                // and timing instead of zeros. `cost.cost_usd` and
+                                // `elapsed_ms` are already computed above; we just had
+                                // to stop hard-coding 0.0 / 0 here.
+                                //
+                                // `time_spent_minutes` uses ceiling division by 60_000 so a
+                                // sub-minute tick records 1, not 0 (zero-min ticks would
+                                // make the leaderboard's "avg duration" stat misleading).
+                                let time_spent_min = ((elapsed_ms + 59_999) / 60_000) as i32;
+                                if let Err(e) =
+                                    crate::analytics::global().collector().record_worker_stats(
+                                        worker_slug.to_string(),
+                                        1,              // tasks_completed (1 successful tick)
+                                        0,              // tasks_failed
+                                        time_spent_min, // time_spent_minutes (real)
+                                        cost.cost_usd,  // cost (real, from CostTracker above)
+                                        time_spent_min, // avg_task_duration_minutes
+                                    )
+                                {
+                                    warn!("[Mode2] record_worker_stats failed for '{worker_slug}': {e}");
+                                }
+                                // Same stranded-task safety net as the Mode 1 path —
+                                // see the long comment at the reconcile call below.
+                                // Without this, a Mode 2 LivingAgent that finishes
+                                // its tick without moving the task past `in_progress`
+                                // would leave the task stranded forever.
+                                // Run reconciliation BEFORE guard_and_validate so a
+                                // stranded task is promoted to qc_review instead of
+                                // being incorrectly marked build_failed by the sentinel.
+                                if worker_slug.starts_with("worker-") {
+                                    Self::reconcile_stranded_task(worker_slug);
+                                }
+                                // Fix 8c: sentinel-file guard after successful tick.
+                                Self::guard_and_validate(
+                                    worker_slug,
+                                    std::path::Path::new(&working_dir),
+                                );
+                                // C.4 — Notify the frontend dashboard that a Mode 2 tick
+                                // completed so it can refresh metrics without waiting for
+                                // the 60-second polling fallback.
+                                if let Some(app) = crate::events::app_handle() {
+                                    let _ = app.emit(
+                                        "task:changed",
+                                        serde_json::json!({
+                                            "task_id":        null,
+                                            "kind":           "worker_tick_complete",
+                                            "status":         null,
+                                            "assigned_worker": worker_slug,
+                                        }),
+                                    );
+                                }
+                                return Ok(());
                             }
-                            // Persist into the analytics DB so the Dashboard's
-                            // get_dashboard_summary picks it up across restarts.
-                            let analytics_provider = if model.contains("claude") {
-                                "anthropic"
-                            } else if model.contains("gpt") || model.starts_with("o1") || model.starts_with("o3") {
-                                "openai"
-                            } else if model.contains("gemini") {
-                                "google"
-                            } else {
-                                "unknown"
-                            };
-                            // Phase 1 of docs/endtoendrun/14may2026/02 — fail
-                            // loudly. The previous `let _ = ...` silently
-                            // swallowed every analytics write for the entire
-                            // session and was the reason the Dashboard
-                            // showed zeros for days.
-                            if let Err(e) = crate::analytics::global()
-                                .collector()
-                                .record_token_usage(
-                                    format!("mode2-{}-{}", worker_slug, chrono::Utc::now().timestamp_millis()),
-                                    "mode2_worker".to_string(),
-                                    analytics_provider.to_string(),
-                                    model.clone(),
-                                    tokens_in as i32,
-                                    tokens_out as i32,
-                                    None,
-                                    cost.cost_usd,
-                                    format!("worker_tick:{}", worker_slug),
-                                )
-                            {
-                                warn!("[Mode2] record_token_usage failed for '{worker_slug}': {e}");
-                            }
-                            // Live-broadcast a cost:update so the Dashboard
-                            // and any other cost listeners refresh immediately
-                            // rather than waiting for the 60s polling fallback.
-                            let total_today = self.state.lock().unwrap().cost_today_usd;
-                            crate::events::emit_cost_update(&self.app, crate::events::CostUpdatePayload {
-                                session_id:  format!("mode2:{}", worker_slug),
-                                tokens_in,
-                                tokens_out,
-                                cost_usd:    cost.cost_usd,
-                                total_today,
-                            });
-                            // D.1 — emit tick-end before transitioning to idle
-                            emit_worker_tick_end(&self.app, WorkerTickEndPayload {
-                                slug:      worker_slug.to_string(),
-                                outcome:   "success".to_string(),
-                                timestamp: chrono::Utc::now().to_rfc3339(),
-                            });
-                            // D.2 — include timing in the idle status event
-                            self.set_worker_status_ex(
-                                worker_slug, "idle",
-                                Some(elapsed_ms),
-                                Some("success".to_string()),
-                            );
-                            // Phase 7.5 — Record successful Mode 2 tick in analytics DB.
-                            //
-                            // Doc 02 Phase 2 task 2.2: populate with real values so the
-                            // worker leaderboard widget shows actual per-worker spend
-                            // and timing instead of zeros. `cost.cost_usd` and
-                            // `elapsed_ms` are already computed above; we just had
-                            // to stop hard-coding 0.0 / 0 here.
-                            //
-                            // `time_spent_minutes` uses ceiling division by 60_000 so a
-                            // sub-minute tick records 1, not 0 (zero-min ticks would
-                            // make the leaderboard's "avg duration" stat misleading).
-                            let time_spent_min = ((elapsed_ms + 59_999) / 60_000) as i32;
-                            if let Err(e) = crate::analytics::global()
-                                .collector()
-                                .record_worker_stats(
-                                    worker_slug.to_string(),
-                                    1,                  // tasks_completed (1 successful tick)
-                                    0,                  // tasks_failed
-                                    time_spent_min,     // time_spent_minutes (real)
-                                    cost.cost_usd,      // cost (real, from CostTracker above)
-                                    time_spent_min,     // avg_task_duration_minutes
-                                )
-                            {
-                                warn!("[Mode2] record_worker_stats failed for '{worker_slug}': {e}");
-                            }
-                            // Same stranded-task safety net as the Mode 1 path —
-                            // see the long comment at the reconcile call below.
-                            // Without this, a Mode 2 LivingAgent that finishes
-                            // its tick without moving the task past `in_progress`
-                            // would leave the task stranded forever.
-                            // Run reconciliation BEFORE guard_and_validate so a
-                            // stranded task is promoted to qc_review instead of
-                            // being incorrectly marked build_failed by the sentinel.
-                            if worker_slug.starts_with("worker-") {
-                                Self::reconcile_stranded_task(worker_slug);
-                            }
-                            // Fix 8c: sentinel-file guard after successful tick.
-                            Self::guard_and_validate(worker_slug, std::path::Path::new(&working_dir));
-                            // C.4 — Notify the frontend dashboard that a Mode 2 tick
-                            // completed so it can refresh metrics without waiting for
-                            // the 60-second polling fallback.
-                            if let Some(app) = crate::events::app_handle() {
-                                let _ = app.emit("task:changed", serde_json::json!({
-                                    "task_id":        null,
-                                    "kind":           "worker_tick_complete",
-                                    "status":         null,
-                                    "assigned_worker": worker_slug,
-                                }));
-                            }
-                            return Ok(());
-                        }
-                        Err(e) => {
-                            // invoke_worker failed — the LivingAgent may have partially
-                            // executed this task (it could be in_progress). Do NOT fall
-                            // back to Mode 1: that risks double-execution and leaves the
-                            // task in an inconsistent state (Mode 1 and Mode 2 wrote
-                            // different things to the same files). Instead:
-                            //   1. Reconcile any stranded in_progress task → qc_review
-                            //   2. Mark worker error so the UI signals the failure
-                            //   3. Return Err so the scheduler logs it; next cron tick
-                            //      will retry via Mode 2.
-                            warn!(
+                            Err(e) => {
+                                // invoke_worker failed — the LivingAgent may have partially
+                                // executed this task (it could be in_progress). Do NOT fall
+                                // back to Mode 1: that risks double-execution and leaves the
+                                // task in an inconsistent state (Mode 1 and Mode 2 wrote
+                                // different things to the same files). Instead:
+                                //   1. Reconcile any stranded in_progress task → qc_review
+                                //   2. Mark worker error so the UI signals the failure
+                                //   3. Return Err so the scheduler logs it; next cron tick
+                                //      will retry via Mode 2.
+                                warn!(
                                 "[RecipeRunner] LivingAgent invoke failed for '{}': {e}. \
                                  Aborting tick (NOT falling back to Mode 1 — risk of double-execution). \
                                  Next scheduled tick will retry Mode 2.",
                                 worker_slug
                             );
-                            emit_worker_tick_end(&self.app, WorkerTickEndPayload {
-                                slug:      worker_slug.to_string(),
-                                outcome:   "invoke_error".to_string(),
-                                timestamp: chrono::Utc::now().to_rfc3339(),
-                            });
-                            // Reconcile any task the LivingAgent left stranded in_progress.
-                            if worker_slug.starts_with("worker-") {
-                                Self::reconcile_stranded_task(worker_slug);
-                            }
-                            // Phase 7.7 — record the invoke error as a system event.
-                            let _ = crate::analytics::global()
-                                .collector()
-                                .record_system_event(
+                                emit_worker_tick_end(
+                                    &self.app,
+                                    WorkerTickEndPayload {
+                                        slug: worker_slug.to_string(),
+                                        outcome: "invoke_error".to_string(),
+                                        timestamp: chrono::Utc::now().to_rfc3339(),
+                                    },
+                                );
+                                // Reconcile any task the LivingAgent left stranded in_progress.
+                                if worker_slug.starts_with("worker-") {
+                                    Self::reconcile_stranded_task(worker_slug);
+                                }
+                                // Phase 7.7 — record the invoke error as a system event.
+                                let _ = crate::analytics::global().collector().record_system_event(
                                     "runner".to_string(),
                                     "mode2_invoke_error".to_string(),
-                                    format!("Worker '{}' Mode 2 invoke failed (tick aborted): {e}", worker_slug),
+                                    format!(
+                                        "Worker '{}' Mode 2 invoke failed (tick aborted): {e}",
+                                        worker_slug
+                                    ),
                                     "warning".to_string(),
                                     Some(serde_json::json!({ "worker": worker_slug }).to_string()),
                                 );
-                            self.set_worker_status(worker_slug, "error");
-                            return Err(AutoDevError::Agent(format!(
-                                "LivingAgent invoke failed for '{worker_slug}': {e}"
-                            )));
-                        }
-                    }   // closes invoke_worker match body
-                    }   // closes MCP-healthy block
-                }       // closes Ok(agent_id) arm
+                                self.set_worker_status(worker_slug, "error");
+                                return Err(AutoDevError::Agent(format!(
+                                    "LivingAgent invoke failed for '{worker_slug}': {e}"
+                                )));
+                            }
+                        } // closes invoke_worker match body
+                    } // closes MCP-healthy block
+                } // closes Ok(agent_id) arm
                 Err(e) => {
                     // ensure_agent failed — typically a transient condition:
                     // auth token refresh race, orchestrator still warming up,
@@ -569,11 +643,14 @@ impl RecipeRunner {
                          Next scheduled tick will retry Mode 2.",
                         worker_slug
                     );
-                    emit_worker_tick_end(&self.app, WorkerTickEndPayload {
-                        slug:      worker_slug.to_string(),
-                        outcome:   "ensure_agent_error".to_string(),
-                        timestamp: chrono::Utc::now().to_rfc3339(),
-                    });
+                    emit_worker_tick_end(
+                        &self.app,
+                        WorkerTickEndPayload {
+                            slug: worker_slug.to_string(),
+                            outcome: "ensure_agent_error".to_string(),
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                        },
+                    );
                     self.set_worker_status(worker_slug, "idle");
                     return Ok(());
                 }
@@ -592,19 +669,24 @@ impl RecipeRunner {
         // below. This is enforced AFTER the Mode 2 attempt so a transient
         // orch hiccup doesn't downgrade a Mode2Only recipe to a buggy
         // Mode 1 run.
-        if matches!(recipe.fallback_policy,
-                    crate::recipes::types::FallbackPolicy::Mode2Only) {
+        if matches!(
+            recipe.fallback_policy,
+            crate::recipes::types::FallbackPolicy::Mode2Only
+        ) {
             info!(
                 "[RecipeRunner] Worker '{}' Mode 1 fallback skipped per policy \
                  (recipe.fallback_policy = mode2_only) — staying idle until \
                  core-orchestrator is reachable.",
                 worker_slug
             );
-            emit_worker_tick_end(&self.app, WorkerTickEndPayload {
-                slug:      worker_slug.to_string(),
-                outcome:   "fallback_skipped_policy".to_string(),
-                timestamp: chrono::Utc::now().to_rfc3339(),
-            });
+            emit_worker_tick_end(
+                &self.app,
+                WorkerTickEndPayload {
+                    slug: worker_slug.to_string(),
+                    outcome: "fallback_skipped_policy".to_string(),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                },
+            );
             // Doc 05 Phase 2 — distinct status "fallback_idle" so the Live
             // Monitor can render a different visual state for "fallback
             // engaged but skipped per policy" vs ordinary idle.
@@ -655,24 +737,32 @@ impl RecipeRunner {
         );
 
         let api_key = if provider_id != "ollama" {
-            VaultManager::get(&provider_key(&provider_id))?
-                .ok_or_else(|| AutoDevError::Agent(
-                    format!("No API key stored for provider '{provider_id}' — set it in Settings")
-                ))?
+            VaultManager::get(&provider_key(&provider_id))?.ok_or_else(|| {
+                AutoDevError::Agent(format!(
+                    "No API key stored for provider '{provider_id}' — set it in Settings"
+                ))
+            })?
         } else {
             String::new()
         };
 
         let provider: Arc<dyn Provider> = match provider_id.as_str() {
             "anthropic" => Arc::new(AnthropicProvider::new(api_key)),
-            "openai"    => Arc::new(OpenAIProvider::new(api_key)),
-            "google"    => Arc::new(GoogleProvider::new(api_key)),
-            "ollama"    => Arc::new(OllamaProvider::default_from_env()),
-            other       => return Err(AutoDevError::Agent(format!("Unsupported provider: {other}"))),
+            "openai" => Arc::new(OpenAIProvider::new(api_key)),
+            "google" => Arc::new(GoogleProvider::new(api_key)),
+            "ollama" => Arc::new(OllamaProvider::default_from_env()),
+            other => {
+                return Err(AutoDevError::Agent(format!(
+                    "Unsupported provider: {other}"
+                )))
+            }
         };
 
         self.set_worker_status(worker_slug, "working");
-        info!("[RecipeRunner] Starting Rust AgentEngine for '{}' (session: {})", worker_slug, session_id);
+        info!(
+            "[RecipeRunner] Starting Rust AgentEngine for '{}' (session: {})",
+            worker_slug, session_id
+        );
 
         // Build autonomous engine — workers never wait for user approval.
         // NOTE: session_mgr is intentionally NOT attached. Recipe sessions are ephemeral
@@ -692,48 +782,52 @@ impl RecipeRunner {
         );
 
         // Run agent with recipe instructions as system prompt override
-        let result = engine.run(
-            &session_id,
-            &working_dir,
-            &model,
-            vec![],
-            RECIPE_TRIGGER,
-            Some(&recipe.instructions),
-        ).await;
+        let result = engine
+            .run(
+                &session_id,
+                &working_dir,
+                &model,
+                vec![],
+                RECIPE_TRIGGER,
+                Some(&recipe.instructions),
+            )
+            .await;
 
         // Update worker status based on outcome
         match &result {
-            Ok(_)  => {
-                info!("[RecipeRunner] Rust AgentEngine completed for worker '{}'", worker_slug);
+            Ok(_) => {
+                info!(
+                    "[RecipeRunner] Rust AgentEngine completed for worker '{}'",
+                    worker_slug
+                );
                 self.set_worker_status(worker_slug, "idle");
                 // Phase 7.5 — Record successful Mode 1 tick in analytics DB.
                 // Token usage is already recorded inside engine.rs per-session;
                 // record the worker-level completion so dashboards can show task counts.
-                let _ = crate::analytics::global()
-                    .collector()
-                    .record_worker_stats(
-                        worker_slug.to_string(),
-                        1, // tasks_completed
-                        0, // tasks_failed
-                        0, // time_spent_minutes — not yet timed
-                        0.0, // cost — recorded per-token inside engine.rs
-                        0,   // avg_task_duration_minutes
-                    );
+                let _ = crate::analytics::global().collector().record_worker_stats(
+                    worker_slug.to_string(),
+                    1,   // tasks_completed
+                    0,   // tasks_failed
+                    0,   // time_spent_minutes — not yet timed
+                    0.0, // cost — recorded per-token inside engine.rs
+                    0,   // avg_task_duration_minutes
+                );
             }
             Err(e) => {
-                error!("[RecipeRunner] Rust AgentEngine failed for worker '{}': {e}", worker_slug);
+                error!(
+                    "[RecipeRunner] Rust AgentEngine failed for worker '{}': {e}",
+                    worker_slug
+                );
                 self.set_worker_status(worker_slug, "error");
                 // Phase 7.5 — Record failed Mode 1 tick in analytics DB.
-                let _ = crate::analytics::global()
-                    .collector()
-                    .record_worker_stats(
-                        worker_slug.to_string(),
-                        0, // tasks_completed
-                        1, // tasks_failed
-                        0,
-                        0.0,
-                        0,
-                    );
+                let _ = crate::analytics::global().collector().record_worker_stats(
+                    worker_slug.to_string(),
+                    0, // tasks_completed
+                    1, // tasks_failed
+                    0,
+                    0.0,
+                    0,
+                );
             }
         }
 
@@ -828,8 +922,11 @@ impl RecipeRunner {
         };
         all.iter().any(|t| {
             t.assigned_worker.as_deref() == Some(worker_slug)
-                && matches!(t.status, crate::db::tasks::TaskStatus::Assigned
-                                    | crate::db::tasks::TaskStatus::InProgress)
+                && matches!(
+                    t.status,
+                    crate::db::tasks::TaskStatus::Assigned
+                        | crate::db::tasks::TaskStatus::InProgress
+                )
         })
     }
 
@@ -839,10 +936,10 @@ impl RecipeRunner {
 
     fn set_worker_status_ex(
         &self,
-        slug:             &str,
-        status:           &str,
+        slug: &str,
+        status: &str,
         tick_duration_ms: Option<u64>,
-        last_outcome:     Option<String>,
+        last_outcome: Option<String>,
     ) {
         let previous = if let Ok(db) = WorkersDb::open() {
             if let Ok(Some(worker)) = db.get_by_slug(slug) {
@@ -865,21 +962,20 @@ impl RecipeRunner {
         } else {
             None
         };
-        let cooldown_seconds: Option<u32> = if status == "error" {
-            Some(30)
-        } else {
-            None
-        };
-        emit_worker_status(&self.app, WorkerStatusPayload {
-            slug:               slug.to_string(),
-            status:             status.to_string(),
-            previous_status:    previous,
-            reason,
-            cooldown_seconds,
-            timestamp:          chrono::Utc::now().to_rfc3339(),
-            tick_duration_ms,
-            last_outcome,
-        });
+        let cooldown_seconds: Option<u32> = if status == "error" { Some(30) } else { None };
+        emit_worker_status(
+            &self.app,
+            WorkerStatusPayload {
+                slug: slug.to_string(),
+                status: status.to_string(),
+                previous_status: previous,
+                reason,
+                cooldown_seconds,
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                tick_duration_ms,
+                last_outcome,
+            },
+        );
     }
 
     /// Fix 8c — Sentinel-file guard.
@@ -888,8 +984,8 @@ impl RecipeRunner {
     /// If sentinel is missing, update the active in_progress task to
     /// `build_failed` so QC can inspect it.
     fn guard_and_validate(worker_slug: &str, working_dir: &std::path::Path) {
+        use crate::db::tasks::{TaskStatus, TasksDb};
         use std::fs;
-        use crate::db::tasks::{TasksDb, TaskStatus};
 
         // Only guard for workers (not supervisor, etc.)
         if !worker_slug.starts_with("worker-") {
@@ -912,7 +1008,9 @@ impl RecipeRunner {
         let Some(task) = active_task else { return };
 
         // Detect ecosystem
-        let Some(ecosystem) = Ecosystem::detect(working_dir) else { return };
+        let Some(ecosystem) = Ecosystem::detect(working_dir) else {
+            return;
+        };
         let sentinel: std::path::PathBuf = working_dir.join(ecosystem.sentinel_path());
 
         if sentinel.exists() {

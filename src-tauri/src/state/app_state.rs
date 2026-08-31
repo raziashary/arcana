@@ -1,13 +1,13 @@
 // Shared mutable application state held behind Arc<Mutex<>> in Tauri.
 // Avoid storing large data here — this is for lightweight runtime flags.
 
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActiveAgent {
-    pub session_id:  String,
-    pub is_running:  bool,
+    pub session_id: String,
+    pub is_running: bool,
     pub cancel_flag: bool,
 }
 
@@ -26,7 +26,7 @@ pub struct AppState {
     pub cost_today_usd: f64,
 
     // Today's cumulative token counts
-    pub tokens_in_today:  u64,
+    pub tokens_in_today: u64,
     pub tokens_out_today: u64,
 
     // Custom system prompt override (if set, replaces BASE_SYSTEM_PROMPT)
@@ -55,8 +55,8 @@ impl AppState {
     }
 
     pub fn add_cost(&mut self, cost_usd: f64, tokens_in: u32, tokens_out: u32) {
-        self.cost_today_usd   += cost_usd;
-        self.tokens_in_today  += tokens_in as u64;
+        self.cost_today_usd += cost_usd;
+        self.tokens_in_today += tokens_in as u64;
         self.tokens_out_today += tokens_out as u64;
     }
 }

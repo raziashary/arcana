@@ -12,9 +12,9 @@ pub fn list(repo_path: &str) -> Result<Vec<StashInfo>> {
     repo.stash_foreach(|index, message, oid| {
         out.push(StashInfo {
             index,
-            oid:     oid.to_string(),
+            oid: oid.to_string(),
             message: message.to_string(),
-            time:    String::new(), // libgit2's stash_foreach doesn't expose time directly
+            time: String::new(), // libgit2's stash_foreach doesn't expose time directly
         });
         true
     })
@@ -27,7 +27,13 @@ pub fn push(repo_path: &str, message: Option<&str>, include_untracked: bool) -> 
     let mut repo = super::repo::open(repo_path)?;
     let sig = repo
         .signature()
-        .or_else(|_| Signature::new("AutoDev", "autodev@local", &Time::new(chrono::Utc::now().timestamp(), 0)))
+        .or_else(|_| {
+            Signature::new(
+                "AutoDev",
+                "autodev@local",
+                &Time::new(chrono::Utc::now().timestamp(), 0),
+            )
+        })
         .map_err(|e| AutoDevError::Git(format!("signature: {e}")))?;
 
     let mut flags = StashFlags::DEFAULT;

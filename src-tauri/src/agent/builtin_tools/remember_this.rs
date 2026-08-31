@@ -60,23 +60,29 @@ impl Tool for RememberThisTool {
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         let fact = match input["fact"].as_str() {
             Some(f) => f.trim().to_string(),
-            None    => return ToolResult::error("Missing required field: fact"),
+            None => return ToolResult::error("Missing required field: fact"),
         };
 
         if fact.is_empty() {
             return ToolResult::error("fact cannot be empty");
         }
 
-        let category = FactCategory::from_str(
-            input["category"].as_str().unwrap_or("preference"),
-        );
+        let category = FactCategory::from_str(input["category"].as_str().unwrap_or("preference"));
 
         let tags: Vec<String> = input["tags"]
             .as_array()
-            .map(|arr| arr.iter().filter_map(|t| t.as_str().map(String::from)).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|t| t.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
 
-        info!("[remember_this] storing fact category={} session={}", category.as_str(), ctx.session_id);
+        info!(
+            "[remember_this] storing fact category={} session={}",
+            category.as_str(),
+            ctx.session_id
+        );
 
         let id = match SemanticStore::store_fact(
             &fact,
@@ -87,11 +93,15 @@ impl Tool for RememberThisTool {
             Some(&ctx.working_dir),
             &tags,
         ) {
-            Ok(id)  => id,
-            Err(e)  => return ToolResult::error(format!("Failed to store memory: {e}")),
+            Ok(id) => id,
+            Err(e) => return ToolResult::error(format!("Failed to store memory: {e}")),
         };
 
-        let display = if fact.len() > 120 { &fact[..120] } else { &fact };
+        let display = if fact.len() > 120 {
+            &fact[..120]
+        } else {
+            &fact
+        };
         ToolResult::success(
             serde_json::to_string_pretty(
                 &json!({ "stored": true, "id": id, "message": format!("Remembered: \"{display}\"") })

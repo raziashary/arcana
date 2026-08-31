@@ -3,16 +3,18 @@
 // Supervisor calls this after get_epic_progress confirms a phase is unlocked.
 // Available in FastDevelopment | Review modes.
 
+use super::super::tool_trait::{Tool, ToolContext, ToolResult};
+use crate::db::tasks::TasksDb;
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use crate::db::tasks::TasksDb;
-use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 
 pub struct GetReadyTasksInPhaseTool;
 
 #[async_trait]
 impl Tool for GetReadyTasksInPhaseTool {
-    fn name(&self) -> &str { "get_ready_tasks_in_phase" }
+    fn name(&self) -> &str {
+        "get_ready_tasks_in_phase"
+    }
 
     fn description(&self) -> &str {
         "List tasks in a specific epic phase that are ready or assigned (available to dispatch). \
@@ -37,7 +39,9 @@ impl Tool for GetReadyTasksInPhaseTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let epic_id = match input["epic_id"].as_str() {
@@ -59,15 +63,20 @@ impl Tool for GetReadyTasksInPhaseTool {
             Err(e) => return ToolResult::error(&format!("Failed to get phase tasks: {e}")),
         };
 
-        let tasks_json: Vec<Value> = tasks.iter().map(|t| json!({
-            "id":       t.id,
-            "title":    t.title,
-            "priority": t.priority.as_str(),
-            "status":   t.status.as_str(),
-            "phase":    t.phase,
-            "blocked_by": t.blocked_by,
-            "acceptance_criteria": t.acceptance_criteria,
-        })).collect();
+        let tasks_json: Vec<Value> = tasks
+            .iter()
+            .map(|t| {
+                json!({
+                    "id":       t.id,
+                    "title":    t.title,
+                    "priority": t.priority.as_str(),
+                    "status":   t.status.as_str(),
+                    "phase":    t.phase,
+                    "blocked_by": t.blocked_by,
+                    "acceptance_criteria": t.acceptance_criteria,
+                })
+            })
+            .collect();
 
         ToolResult::success(json!({
             "epic_id":   epic_id,

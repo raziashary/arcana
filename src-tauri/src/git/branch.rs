@@ -19,18 +19,16 @@ pub fn list(repo_path: &str) -> Result<Vec<BranchInfo>> {
     for item in branches {
         let (branch, btype) = match item {
             Ok(pair) => pair,
-            Err(_)   => continue,
+            Err(_) => continue,
         };
-        let name = branch
-            .name()
-            .ok()
-            .flatten()
-            .unwrap_or("")
-            .to_string();
-        if name.is_empty() { continue; }
+        let name = branch.name().ok().flatten().unwrap_or("").to_string();
+        if name.is_empty() {
+            continue;
+        }
 
         let oid = branch.get().target();
-        let is_head = matches!((btype, oid, head_oid), (BranchType::Local, Some(a), Some(b)) if a == b);
+        let is_head =
+            matches!((btype, oid, head_oid), (BranchType::Local, Some(a), Some(b)) if a == b);
 
         let (upstream, ahead, behind) = match branch.upstream() {
             Ok(up) => {
@@ -46,7 +44,7 @@ pub fn list(repo_path: &str) -> Result<Vec<BranchInfo>> {
 
         out.push(BranchInfo {
             name,
-            is_remote:  matches!(btype, BranchType::Remote),
+            is_remote: matches!(btype, BranchType::Remote),
             is_head,
             upstream,
             ahead,
@@ -85,10 +83,13 @@ pub fn delete(repo_path: &str, name: &str, force: bool) -> Result<()> {
     if !force {
         // Guard against deleting the current HEAD.
         if b.is_head() {
-            return Err(AutoDevError::Git(format!("cannot delete current branch '{name}'")));
+            return Err(AutoDevError::Git(format!(
+                "cannot delete current branch '{name}'"
+            )));
         }
     }
-    b.delete().map_err(|e| AutoDevError::Git(format!("branch delete: {e}")))?;
+    b.delete()
+        .map_err(|e| AutoDevError::Git(format!("branch delete: {e}")))?;
     Ok(())
 }
 
@@ -101,41 +102,46 @@ pub fn checkout(repo_path: &str, refname: &str) -> Result<()> {
 /// Checkout a specific commit by OID (detached HEAD state).
 pub fn checkout_commit(repo_path: &str, commit_oid: &str) -> Result<()> {
     let repo = super::repo::open(repo_path)?;
-    
+
     let oid = git2::Oid::from_str(commit_oid)
         .map_err(|e| AutoDevError::Git(format!("parse oid: {e}")))?;
-    
+
     let commit = repo
         .find_commit(oid)
         .map_err(|e| AutoDevError::Git(format!("find_commit: {e}")))?;
-    
+
     repo.checkout_tree(commit.as_object(), None)
         .map_err(|e| AutoDevError::Git(format!("checkout_tree: {e}")))?;
-    
+
     repo.set_head_detached(oid)
         .map_err(|e| AutoDevError::Git(format!("set_head_detached: {e}")))?;
-    
+
     Ok(())
 }
 
 /// Create a new branch from a specific commit.
-pub fn create_from_commit(repo_path: &str, branch_name: &str, commit_oid: &str, checkout: bool) -> Result<()> {
+pub fn create_from_commit(
+    repo_path: &str,
+    branch_name: &str,
+    commit_oid: &str,
+    checkout: bool,
+) -> Result<()> {
     let repo = super::repo::open(repo_path)?;
-    
+
     let oid = git2::Oid::from_str(commit_oid)
         .map_err(|e| AutoDevError::Git(format!("parse oid: {e}")))?;
-    
+
     let commit = repo
         .find_commit(oid)
         .map_err(|e| AutoDevError::Git(format!("find_commit: {e}")))?;
-    
+
     repo.branch(branch_name, &commit, false)
         .map_err(|e| AutoDevError::Git(format!("branch create: {e}")))?;
-    
+
     if checkout {
         checkout_ref(&repo, &format!("refs/heads/{branch_name}"))?;
     }
-    
+
     Ok(())
 }
 
@@ -157,9 +163,11 @@ fn checkout_ref(repo: &Repository, refname: &str) -> Result<()> {
         .map_err(|e| AutoDevError::Git(format!("checkout_tree: {e}")))?;
 
     match reference {
-        Some(r) => repo.set_head(r.name().unwrap_or(&full_ref))
+        Some(r) => repo
+            .set_head(r.name().unwrap_or(&full_ref))
             .map_err(|e| AutoDevError::Git(format!("set_head: {e}")))?,
-        None    => repo.set_head_detached(obj.id())
+        None => repo
+            .set_head_detached(obj.id())
             .map_err(|e| AutoDevError::Git(format!("set_head_detached: {e}")))?,
     };
     Ok(())

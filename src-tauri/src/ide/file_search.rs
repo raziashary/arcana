@@ -11,13 +11,27 @@ use std::path::{Path, PathBuf};
 
 use walkdir::WalkDir;
 
-use crate::errors::{AutoDevError, Result};
 use super::types::{ContentMatch, ContentSearchResult, FileSearchResult};
+use crate::errors::{AutoDevError, Result};
 
 const SKIP_DIRS: &[&str] = &[
-    ".git", "node_modules", "target", ".next", "dist", "build",
-    "__pycache__", ".venv", "venv", ".cache", "coverage",
-    ".turbo", ".svelte-kit", "out", ".output", ".idea", ".vscode",
+    ".git",
+    "node_modules",
+    "target",
+    ".next",
+    "dist",
+    "build",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".cache",
+    "coverage",
+    ".turbo",
+    ".svelte-kit",
+    "out",
+    ".output",
+    ".idea",
+    ".vscode",
 ];
 
 // ─── Name search ──────────────────────────────────────────────────────────────
@@ -27,10 +41,10 @@ const SKIP_DIRS: &[&str] = &[
 /// for "recent files" style placeholders.
 pub fn search_files(
     workspace_root: &str,
-    query:          &str,
-    scope:          Option<&str>,
-    glob_pattern:   Option<&str>,
-    max_results:    usize,
+    query: &str,
+    scope: Option<&str>,
+    glob_pattern: Option<&str>,
+    max_results: usize,
 ) -> Result<Vec<FileSearchResult>> {
     let workspace = Path::new(workspace_root);
     let root = resolve_scope(workspace, scope)?;
@@ -50,7 +64,7 @@ pub fn search_files(
         .filter_map(|e| e.ok())
         .filter(|e| e.depth() > 0)
     {
-        let abs  = entry.path();
+        let abs = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
 
         let relative = abs
@@ -72,7 +86,7 @@ pub fn search_files(
             name,
             relative_path: relative,
             absolute_path: abs.to_string_lossy().into_owned(),
-            is_directory:  entry.file_type().is_dir(),
+            is_directory: entry.file_type().is_dir(),
             score,
         });
 
@@ -83,7 +97,8 @@ pub fn search_files(
 
     // Sort by score asc (better first), dirs before files at equal score, then alphabetical.
     results.sort_by(|a, b| {
-        a.score.cmp(&b.score)
+        a.score
+            .cmp(&b.score)
             .then(b.is_directory.cmp(&a.is_directory))
             .then(a.name.cmp(&b.name))
     });
@@ -143,9 +158,9 @@ fn subsequence(needle: &str, haystack: &str) -> bool {
 /// Returns at most `max_results` files; within a file, match lines are capped at 50.
 pub fn search_contents(
     workspace_root: &str,
-    query:          &str,
-    scope:          Option<&str>,
-    max_results:    usize,
+    query: &str,
+    scope: Option<&str>,
+    max_results: usize,
 ) -> Result<Vec<ContentSearchResult>> {
     if query.is_empty() {
         return Ok(Vec::new());
@@ -171,7 +186,9 @@ pub fn search_contents(
         if meta.len() > 2 * 1024 * 1024 {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(abs) else { continue };
+        let Ok(text) = std::fs::read_to_string(abs) else {
+            continue;
+        };
 
         let mut matches: Vec<ContentMatch> = Vec::new();
         for (idx, line) in text.lines().enumerate() {
@@ -179,9 +196,9 @@ pub fn search_contents(
             if let Some(pos) = lc.find(&needle) {
                 matches.push(ContentMatch {
                     line_number: idx + 1,
-                    line_text:   line.to_string(),
+                    line_text: line.to_string(),
                     match_start: pos,
-                    match_end:   pos + query.len(),
+                    match_end: pos + query.len(),
                 });
                 if matches.len() >= 50 {
                     break;
@@ -225,8 +242,13 @@ fn resolve_scope(workspace: &Path, scope: Option<&str>) -> Result<PathBuf> {
         None => Ok(workspace.to_path_buf()),
         Some(s) => {
             let p = Path::new(s);
-            let abs = if p.is_absolute() { p.to_path_buf() } else { workspace.join(p) };
-            let ws_norm = std::fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
+            let abs = if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                workspace.join(p)
+            };
+            let ws_norm =
+                std::fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
             let abs_norm = std::fs::canonicalize(&abs).unwrap_or_else(|_| abs.clone());
             if !abs_norm.starts_with(&ws_norm) {
                 return Err(AutoDevError::Agent(format!(

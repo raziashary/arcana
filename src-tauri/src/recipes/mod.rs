@@ -2,14 +2,14 @@
 // Recipes live in ~/.autodev/recipes/ and are managed by RecipeEngine.
 // See: DEVELOPMENT_PLAN.md Phase 2.1 — Recipes System
 
-pub mod types;
-pub mod parser;
 pub mod defaults;
+pub mod parser;
 pub mod runner;
 pub mod scheduler;
+pub mod types;
 
-use crate::errors::Result;
 use crate::db::autodev_dir;
+use crate::errors::Result;
 use std::path::PathBuf;
 
 pub use types::{Recipe, RecipePermissionMode, RecipeRun, RecipeRunStatus};

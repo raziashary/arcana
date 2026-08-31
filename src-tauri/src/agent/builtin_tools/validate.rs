@@ -17,19 +17,22 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone)]
 pub struct LintDiagnostic {
     pub severity: &'static str, // "error" | "warning"
-    pub message:  String,
-    pub line:     Option<u32>,
+    pub message: String,
+    pub line: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
 pub struct LintResult {
-    pub checker:     String,
+    pub checker: String,
     pub diagnostics: Vec<LintDiagnostic>,
 }
 
 impl LintResult {
     pub fn clean(checker: impl Into<String>) -> Self {
-        Self { checker: checker.into(), diagnostics: vec![] }
+        Self {
+            checker: checker.into(),
+            diagnostics: vec![],
+        }
     }
 
     pub fn is_clean(&self) -> bool {
@@ -37,11 +40,17 @@ impl LintResult {
     }
 
     pub fn error_count(&self) -> usize {
-        self.diagnostics.iter().filter(|d| d.severity == "error").count()
+        self.diagnostics
+            .iter()
+            .filter(|d| d.severity == "error")
+            .count()
     }
 
     pub fn warning_count(&self) -> usize {
-        self.diagnostics.iter().filter(|d| d.severity == "warning").count()
+        self.diagnostics
+            .iter()
+            .filter(|d| d.severity == "warning")
+            .count()
     }
 
     /// Compact multi-line string appended to tool responses.
@@ -58,7 +67,12 @@ impl LintResult {
         );
         for d in &self.diagnostics {
             let loc = d.line.map(|l| format!(" line {l}")).unwrap_or_default();
-            out.push_str(&format!("\n  {}{}: {}", d.severity.to_uppercase(), loc, d.message));
+            out.push_str(&format!(
+                "\n  {}{}: {}",
+                d.severity.to_uppercase(),
+                loc,
+                d.message
+            ));
         }
         out
     }
@@ -72,7 +86,9 @@ pub struct ImportResult {
 }
 
 impl ImportResult {
-    pub fn is_clean(&self) -> bool { self.missing.is_empty() }
+    pub fn is_clean(&self) -> bool {
+        self.missing.is_empty()
+    }
 
     /// Compact one-liner for tool responses. Returns empty string when clean.
     pub fn format_inline(&self) -> String {
@@ -96,10 +112,10 @@ impl ImportResult {
 pub async fn tier1_syntax(path: &Path, working_dir: &str) -> Option<LintResult> {
     let ext = path.extension()?.to_string_lossy().to_lowercase();
     match ext.as_str() {
-        "json"            => Some(check_json(path)),
-        "yaml" | "yml"    => Some(check_yaml(path)),
-        "toml"            => Some(check_toml(path)),
-        "py"              => Some(check_python_syntax(path, working_dir).await),
+        "json" => Some(check_json(path)),
+        "yaml" | "yml" => Some(check_yaml(path)),
+        "toml" => Some(check_toml(path)),
+        "py" => Some(check_python_syntax(path, working_dir).await),
         "js" | "mjs" | "cjs" => Some(check_node_syntax(path).await),
         // Doc 09 T1.2 — TypeScript syntax via `tsc --noEmit --allowJs
         // --isolatedModules`. Falls back to a `warning` LintResult when
@@ -113,20 +129,26 @@ pub async fn tier1_syntax(path: &Path, working_dir: &str) -> Option<LintResult> 
 
 fn check_json(path: &Path) -> LintResult {
     let content = match std::fs::read_to_string(path) {
-        Err(e) => return LintResult {
-            checker: "json_parse".into(),
-            diagnostics: vec![LintDiagnostic { severity: "error", message: e.to_string(), line: None }],
-        },
+        Err(e) => {
+            return LintResult {
+                checker: "json_parse".into(),
+                diagnostics: vec![LintDiagnostic {
+                    severity: "error",
+                    message: e.to_string(),
+                    line: None,
+                }],
+            }
+        }
         Ok(c) => c,
     };
     match serde_json::from_str::<serde_json::Value>(&content) {
-        Ok(_)  => LintResult::clean("json_parse"),
+        Ok(_) => LintResult::clean("json_parse"),
         Err(e) => LintResult {
             checker: "json_parse".into(),
             diagnostics: vec![LintDiagnostic {
                 severity: "error",
-                message:  e.to_string(),
-                line:     Some(e.line() as u32),
+                message: e.to_string(),
+                line: Some(e.line() as u32),
             }],
         },
     }
@@ -134,23 +156,29 @@ fn check_json(path: &Path) -> LintResult {
 
 fn check_yaml(path: &Path) -> LintResult {
     let content = match std::fs::read_to_string(path) {
-        Err(e) => return LintResult {
-            checker: "yaml_parse".into(),
-            diagnostics: vec![LintDiagnostic { severity: "error", message: e.to_string(), line: None }],
-        },
+        Err(e) => {
+            return LintResult {
+                checker: "yaml_parse".into(),
+                diagnostics: vec![LintDiagnostic {
+                    severity: "error",
+                    message: e.to_string(),
+                    line: None,
+                }],
+            }
+        }
         Ok(c) => c,
     };
     // Use serde_json::Value as target — any valid YAML maps to it and gives us
     // a parse error with location info when the YAML is malformed.
     match serde_yaml::from_str::<serde_json::Value>(&content) {
-        Ok(_)  => LintResult::clean("yaml_parse"),
+        Ok(_) => LintResult::clean("yaml_parse"),
         Err(e) => {
             let line = e.location().map(|loc| loc.line() as u32);
             LintResult {
                 checker: "yaml_parse".into(),
                 diagnostics: vec![LintDiagnostic {
                     severity: "error",
-                    message:  e.to_string(),
+                    message: e.to_string(),
                     line,
                 }],
             }
@@ -160,22 +188,28 @@ fn check_yaml(path: &Path) -> LintResult {
 
 fn check_toml(path: &Path) -> LintResult {
     let content = match std::fs::read_to_string(path) {
-        Err(e) => return LintResult {
-            checker: "toml_parse".into(),
-            diagnostics: vec![LintDiagnostic { severity: "error", message: e.to_string(), line: None }],
-        },
+        Err(e) => {
+            return LintResult {
+                checker: "toml_parse".into(),
+                diagnostics: vec![LintDiagnostic {
+                    severity: "error",
+                    message: e.to_string(),
+                    line: None,
+                }],
+            }
+        }
         Ok(c) => c,
     };
     // toml::Value::try_from(str) parses the whole document.
     match content.parse::<toml::Value>() {
-        Ok(_)  => LintResult::clean("toml_parse"),
+        Ok(_) => LintResult::clean("toml_parse"),
         Err(e) => LintResult {
             checker: "toml_parse".into(),
             diagnostics: vec![LintDiagnostic {
                 severity: "error",
                 // toml error messages already include the line/column inline.
-                message:  e.to_string(),
-                line:     None,
+                message: e.to_string(),
+                line: None,
             }],
         },
     }
@@ -193,7 +227,7 @@ async fn check_python_syntax(path: &Path, working_dir: &str) -> LintResult {
             checker: "py_compile".into(),
             diagnostics: vec![LintDiagnostic {
                 severity: "warning",
-                message:  format!(
+                message: format!(
                     "Could not run '{python}' — Python not available, syntax not checked. \
                      Install Python to enable automatic validation."
                 ),
@@ -203,12 +237,12 @@ async fn check_python_syntax(path: &Path, working_dir: &str) -> LintResult {
         Ok(out) if out.status.success() => LintResult::clean("py_compile"),
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-            let line   = parse_python_error_line(&stderr);
+            let line = parse_python_error_line(&stderr);
             LintResult {
                 checker: "py_compile".into(),
                 diagnostics: vec![LintDiagnostic {
                     severity: "error",
-                    message:  stderr.trim().to_string(),
+                    message: stderr.trim().to_string(),
                     line,
                 }],
             }
@@ -228,7 +262,7 @@ async fn check_node_syntax(path: &Path) -> LintResult {
             checker: "node_check".into(),
             diagnostics: vec![LintDiagnostic {
                 severity: "warning",
-                message:  "Could not run 'node' — Node.js not available, syntax not checked. \
+                message: "Could not run 'node' — Node.js not available, syntax not checked. \
                            Install Node.js to enable automatic validation."
                     .into(),
                 line: None,
@@ -237,12 +271,12 @@ async fn check_node_syntax(path: &Path) -> LintResult {
         Ok(out) if out.status.success() => LintResult::clean("node_check"),
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-            let line   = parse_node_error_line(&stderr);
+            let line = parse_node_error_line(&stderr);
             LintResult {
                 checker: "node_check".into(),
                 diagnostics: vec![LintDiagnostic {
                     severity: "error",
-                    message:  stderr.trim().to_string(),
+                    message: stderr.trim().to_string(),
                     line,
                 }],
             }
@@ -271,10 +305,14 @@ async fn check_tsc_syntax(path: &Path, working_dir: &str) -> LintResult {
             "--noEmit",
             "--allowJs",
             "--isolatedModules",
-            "--jsx", "preserve",
-            "--target", "es2020",
-            "--module", "esnext",
-            "--moduleResolution", "node",
+            "--jsx",
+            "preserve",
+            "--target",
+            "es2020",
+            "--module",
+            "esnext",
+            "--moduleResolution",
+            "node",
             &path_str,
         ])
         .current_dir(working_dir)
@@ -286,7 +324,7 @@ async fn check_tsc_syntax(path: &Path, working_dir: &str) -> LintResult {
             checker: "tsc_check".into(),
             diagnostics: vec![LintDiagnostic {
                 severity: "warning",
-                message:  "Could not run 'tsc' — TypeScript not installed. \
+                message: "Could not run 'tsc' — TypeScript not installed. \
                            Install it (`npm install -g typescript`) to enable \
                            automatic .ts/.tsx syntax validation."
                     .into(),
@@ -303,7 +341,8 @@ async fn check_tsc_syntax(path: &Path, working_dir: &str) -> LintResult {
             // tsc emits one diagnostic per line — first 4 lines is enough
             // signal for write-time feedback; the agent can re-run
             // check_file for the full output. Strip ANSI just in case.
-            let trimmed = combined.lines()
+            let trimmed = combined
+                .lines()
                 .filter(|l| !l.trim().is_empty())
                 .take(4)
                 .collect::<Vec<_>>()
@@ -312,8 +351,8 @@ async fn check_tsc_syntax(path: &Path, working_dir: &str) -> LintResult {
                 checker: "tsc_check".into(),
                 diagnostics: vec![LintDiagnostic {
                     severity: "error",
-                    message:  trimmed.trim().to_string(),
-                    line:     None,
+                    message: trimmed.trim().to_string(),
+                    line: None,
                 }],
             }
         }
@@ -328,20 +367,22 @@ async fn check_tsc_syntax(path: &Path, working_dir: &str) -> LintResult {
 pub fn tier2_imports(path: &Path, working_dir: &str) -> Option<ImportResult> {
     let ext = path.extension()?.to_string_lossy().to_lowercase();
     match ext.as_str() {
-        "py"  => check_python_imports(path, working_dir),
-        "js" | "mjs" | "cjs" | "ts" | "tsx" | "jsx"
-              => check_js_imports(path, working_dir),
-        _     => None,
+        "py" => check_python_imports(path, working_dir),
+        "js" | "mjs" | "cjs" | "ts" | "tsx" | "jsx" => check_js_imports(path, working_dir),
+        _ => None,
     }
 }
 
 fn check_python_imports(path: &Path, working_dir: &str) -> Option<ImportResult> {
     let content = std::fs::read_to_string(path).ok()?;
     let imports = extract_python_imports(&content);
-    if imports.is_empty() { return None; }
+    if imports.is_empty() {
+        return None;
+    }
 
     // Walk upward from the file's directory to find requirements.txt.
-    let declared: HashSet<String> = path.parent()
+    let declared: HashSet<String> = path
+        .parent()
         .and_then(|p| find_upward(p, "requirements.txt", working_dir))
         .and_then(|p| std::fs::read_to_string(p).ok())
         .map(|s| parse_requirements(&s))
@@ -353,7 +394,10 @@ fn check_python_imports(path: &Path, working_dir: &str) -> Option<ImportResult> 
         .filter(|imp| !stdlib.contains(imp.as_str()) && !declared.contains(imp))
         .collect();
 
-    Some(ImportResult { missing, checker: "python_imports".into() })
+    Some(ImportResult {
+        missing,
+        checker: "python_imports".into(),
+    })
 }
 
 fn check_js_imports(path: &Path, working_dir: &str) -> Option<ImportResult> {
@@ -374,15 +418,23 @@ fn check_js_imports(path: &Path, working_dir: &str) -> Option<ImportResult> {
         })
         .collect();
 
-    if third_party.is_empty() { return None; }
+    if third_party.is_empty() {
+        return None;
+    }
 
-    let pkg_file = path.parent()
+    let pkg_file = path
+        .parent()
         .and_then(|p| find_upward(p, "package.json", working_dir))?;
     let pkg_content = std::fs::read_to_string(pkg_file).ok()?;
     let pkg: serde_json::Value = serde_json::from_str(&pkg_content).ok()?;
 
     let mut declared: HashSet<String> = HashSet::new();
-    for section in &["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"] {
+    for section in &[
+        "dependencies",
+        "devDependencies",
+        "peerDependencies",
+        "optionalDependencies",
+    ] {
         if let Some(obj) = pkg[section].as_object() {
             declared.extend(obj.keys().cloned());
         }
@@ -396,7 +448,10 @@ fn check_js_imports(path: &Path, working_dir: &str) -> Option<ImportResult> {
         .filter(|pkg| !declared.contains(pkg) && !node_builtins.contains(pkg.as_str()))
         .collect();
 
-    Some(ImportResult { missing, checker: "js_imports".into() })
+    Some(ImportResult {
+        missing,
+        checker: "js_imports".into(),
+    })
 }
 
 // ─── Tier 2.5 — Export cross-reference (Doc 09 T1.3) ─────────────────────────
@@ -430,7 +485,9 @@ pub fn tier2_5_exports(path: &Path, working_dir: &str) -> Option<ImportResult> {
     }
     let content = std::fs::read_to_string(path).ok()?;
     let imports = extract_named_imports(&content);
-    if imports.is_empty() { return None; }
+    if imports.is_empty() {
+        return None;
+    }
 
     let dir = path.parent()?;
     let mut missing: Vec<String> = Vec::new();
@@ -438,17 +495,25 @@ pub fn tier2_5_exports(path: &Path, working_dir: &str) -> Option<ImportResult> {
     for imp in imports {
         // Only check relative paths (./, ../). Third-party imports are
         // covered by Tier 2; we have no easy way to introspect node_modules.
-        if !imp.module.starts_with('.') { continue; }
+        if !imp.module.starts_with('.') {
+            continue;
+        }
 
         let Some(resolved) = resolve_relative_module(dir, &imp.module, working_dir) else {
             // Target file not found on disk — likely a producer that doesn't
             // exist yet. Surface as a single line; downstream Tier 2 already
             // covers missing manifest entries.
-            missing.push(format!("module '{}' not found from {}", imp.module, path.display()));
+            missing.push(format!(
+                "module '{}' not found from {}",
+                imp.module,
+                path.display()
+            ));
             continue;
         };
 
-        let Ok(target_src) = std::fs::read_to_string(&resolved) else { continue };
+        let Ok(target_src) = std::fs::read_to_string(&resolved) else {
+            continue;
+        };
         let exports = extract_exports(&target_src);
 
         // `default` is its own kind — we tolerate any `default` import when
@@ -465,15 +530,15 @@ pub fn tier2_5_exports(path: &Path, working_dir: &str) -> Option<ImportResult> {
                 continue;
             }
             if !exports.iter().any(|e| e == name) {
-                missing.push(format!(
-                    "'{}' (imported from '{}')",
-                    name, imp.module
-                ));
+                missing.push(format!("'{}' (imported from '{}')", name, imp.module));
             }
         }
     }
 
-    Some(ImportResult { missing, checker: "js_exports".into() })
+    Some(ImportResult {
+        missing,
+        checker: "js_exports".into(),
+    })
 }
 
 /// Named import block parsed out of source.
@@ -483,41 +548,52 @@ struct NamedImport {
     module: String,
     /// The list of identifiers being imported. The literal "default" is
     /// used for `import X from '...'` form to keep matching simple.
-    named:  Vec<String>,
+    named: Vec<String>,
 }
 
 fn extract_named_imports(content: &str) -> Vec<NamedImport> {
     let mut out: Vec<NamedImport> = Vec::new();
 
     // 1. `import { A, B as C } from 'x'`  → A, C
-    let re_braced = regex::Regex::new(
-        r#"import\s*\{\s*([^}]+)\s*\}\s*from\s*['"]([^'"]+)['"]"#
-    ).unwrap();
+    let re_braced =
+        regex::Regex::new(r#"import\s*\{\s*([^}]+)\s*\}\s*from\s*['"]([^'"]+)['"]"#).unwrap();
     for cap in re_braced.captures_iter(content) {
         let raw_names = &cap[1];
-        let module    = cap[2].to_string();
-        let names: Vec<String> = raw_names.split(',').filter_map(|n| {
-            let n = n.trim();
-            if n.is_empty() { return None; }
-            // Handle "A as B" — record the local alias as the consumed name
-            // (it's what the file references later). The producer-side check
-            // is against the LHS name, so we record the LHS for missing-export
-            // matching.
-            let lhs = n.split_whitespace().next().unwrap_or(n);
-            Some(lhs.to_string())
-        }).collect();
+        let module = cap[2].to_string();
+        let names: Vec<String> = raw_names
+            .split(',')
+            .filter_map(|n| {
+                let n = n.trim();
+                if n.is_empty() {
+                    return None;
+                }
+                // Handle "A as B" — record the local alias as the consumed name
+                // (it's what the file references later). The producer-side check
+                // is against the LHS name, so we record the LHS for missing-export
+                // matching.
+                let lhs = n.split_whitespace().next().unwrap_or(n);
+                Some(lhs.to_string())
+            })
+            .collect();
         if !names.is_empty() {
-            out.push(NamedImport { module, named: names });
+            out.push(NamedImport {
+                module,
+                named: names,
+            });
         }
     }
 
     // 2. `import Default from 'x'` (no braces)
     let re_default = regex::Regex::new(
-        r#"(?m)^\s*import\s+([A-Za-z_$][\w$]*)\s*(?:,\s*\{[^}]*\}\s*)?from\s*['"]([^'"]+)['"]"#
-    ).unwrap();
+        r#"(?m)^\s*import\s+([A-Za-z_$][\w$]*)\s*(?:,\s*\{[^}]*\}\s*)?from\s*['"]([^'"]+)['"]"#,
+    )
+    .unwrap();
     for cap in re_default.captures_iter(content) {
         let module = cap[2].to_string();
-        out.push(NamedImport { module, named: vec!["default".to_string()] });
+        out.push(NamedImport {
+            module,
+            named: vec!["default".to_string()],
+        });
     }
 
     out
@@ -527,37 +603,35 @@ fn extract_exports(content: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
 
     // `export const NAME = ...`  / `export let NAME` / `export var NAME`
-    let re_var = regex::Regex::new(
-        r"(?m)^\s*export\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)"
-    ).unwrap();
+    let re_var =
+        regex::Regex::new(r"(?m)^\s*export\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)").unwrap();
     for cap in re_var.captures_iter(content) {
         out.push(cap[1].to_string());
     }
 
     // `export function NAME(` / `export async function NAME(`
-    let re_fn = regex::Regex::new(
-        r"(?m)^\s*export\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)"
-    ).unwrap();
+    let re_fn =
+        regex::Regex::new(r"(?m)^\s*export\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)").unwrap();
     for cap in re_fn.captures_iter(content) {
         out.push(cap[1].to_string());
     }
 
     // `export class NAME` / `export interface NAME` / `export type NAME`
-    let re_decl = regex::Regex::new(
-        r"(?m)^\s*export\s+(?:class|interface|type|enum)\s+([A-Za-z_$][\w$]*)"
-    ).unwrap();
+    let re_decl =
+        regex::Regex::new(r"(?m)^\s*export\s+(?:class|interface|type|enum)\s+([A-Za-z_$][\w$]*)")
+            .unwrap();
     for cap in re_decl.captures_iter(content) {
         out.push(cap[1].to_string());
     }
 
     // `export { A, B as C, default as D }`
-    let re_brace = regex::Regex::new(
-        r"export\s*\{\s*([^}]+)\s*\}"
-    ).unwrap();
+    let re_brace = regex::Regex::new(r"export\s*\{\s*([^}]+)\s*\}").unwrap();
     for cap in re_brace.captures_iter(content) {
         for tok in cap[1].split(',') {
             let tok = tok.trim();
-            if tok.is_empty() { continue; }
+            if tok.is_empty() {
+                continue;
+            }
             // `A as B` → exported name is B (RHS)
             let exported = if let Some((_lhs, rhs)) = tok.split_once(" as ") {
                 rhs.trim().to_string()
@@ -575,13 +649,13 @@ fn extract_exports(content: &str) -> Vec<String> {
     }
 
     // `module.exports = { A, B }`  (CJS shape)
-    let re_cjs = regex::Regex::new(
-        r"module\.exports\s*=\s*\{\s*([^}]*)\s*\}"
-    ).unwrap();
+    let re_cjs = regex::Regex::new(r"module\.exports\s*=\s*\{\s*([^}]*)\s*\}").unwrap();
     for cap in re_cjs.captures_iter(content) {
         for tok in cap[1].split(',') {
             let tok = tok.trim();
-            if tok.is_empty() { continue; }
+            if tok.is_empty() {
+                continue;
+            }
             // Support `{ foo }` shorthand and `{ foo: bar }` long form.
             let name = tok.split(':').next().unwrap_or(tok).trim();
             if !name.is_empty() {
@@ -591,9 +665,8 @@ fn extract_exports(content: &str) -> Vec<String> {
     }
 
     // `module.exports.NAME =`  / `exports.NAME =`
-    let re_cjs_named = regex::Regex::new(
-        r"(?m)^\s*(?:module\.)?exports\.([A-Za-z_$][\w$]*)\s*="
-    ).unwrap();
+    let re_cjs_named =
+        regex::Regex::new(r"(?m)^\s*(?:module\.)?exports\.([A-Za-z_$][\w$]*)\s*=").unwrap();
     for cap in re_cjs_named.captures_iter(content) {
         out.push(cap[1].to_string());
     }
@@ -622,7 +695,9 @@ fn resolve_relative_module(from_dir: &Path, spec: &str, working_dir: &str) -> Op
         base.join("index.jsx"),
     ];
     for c in candidates {
-        if c.is_file() { return Some(c); }
+        if c.is_file() {
+            return Some(c);
+        }
     }
     // As a last resort, walk up to workspace root and search — but only when
     // the spec begins with `./` or `../`. We've already exhausted the
@@ -655,9 +730,12 @@ pub fn tier2_6_api_contract(path: &Path, working_dir: &str) -> Option<ImportResu
     let content = std::fs::read_to_string(path).ok()?;
 
     let urls = extract_api_urls(&content);
-    if urls.is_empty() { return None; }
+    if urls.is_empty() {
+        return None;
+    }
 
-    let interface_md = path.parent()
+    let interface_md = path
+        .parent()
         .and_then(|p| find_upward(p, "INTERFACE.md", working_dir))?;
     let spec = std::fs::read_to_string(&interface_md).ok()?;
 
@@ -668,13 +746,18 @@ pub fn tier2_6_api_contract(path: &Path, working_dir: &str) -> Option<ImportResu
     let mut missing: Vec<String> = Vec::new();
     for url in urls {
         let normalised = normalise_url_for_match(&url);
-        if normalised.is_empty() { continue; }
+        if normalised.is_empty() {
+            continue;
+        }
         if !spec.contains(&normalised) {
             missing.push(format!("'{url}' not declared in INTERFACE.md"));
         }
     }
 
-    Some(ImportResult { missing, checker: "api_contract".into() })
+    Some(ImportResult {
+        missing,
+        checker: "api_contract".into(),
+    })
 }
 
 fn extract_api_urls(content: &str) -> Vec<String> {
@@ -727,22 +810,24 @@ fn normalise_url_for_match(url: &str) -> String {
 /// Run a slow type-checker subprocess appropriate for the file type.
 /// `checker` overrides auto-detection (`None` → auto).
 pub async fn tier3_types(path: &Path, working_dir: &str, checker: Option<&str>) -> LintResult {
-    let ext = path.extension()
+    let ext = path
+        .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
         .unwrap_or_default();
 
     match (ext.as_str(), checker) {
-        ("py", Some("mypy"))    => run_mypy(path, working_dir).await,
-        ("py", _)               => run_pyright_or_mypy(path, working_dir).await,
-        ("ts" | "tsx", _)       => run_tsc(path, working_dir).await,
-        ("js" | "jsx", Some("eslint")) | ("js" | "jsx", None)
-                                => run_eslint(path, working_dir).await,
+        ("py", Some("mypy")) => run_mypy(path, working_dir).await,
+        ("py", _) => run_pyright_or_mypy(path, working_dir).await,
+        ("ts" | "tsx", _) => run_tsc(path, working_dir).await,
+        ("js" | "jsx", Some("eslint")) | ("js" | "jsx", None) => {
+            run_eslint(path, working_dir).await
+        }
         _ => LintResult {
             checker: "tier3".into(),
             diagnostics: vec![LintDiagnostic {
                 severity: "warning",
-                message:  format!("No type checker configured for .{ext} files."),
-                line:     None,
+                message: format!("No type checker configured for .{ext} files."),
+                line: None,
             }],
         },
     }
@@ -767,10 +852,15 @@ async fn run_pyright_or_mypy(path: &Path, working_dir: &str) -> LintResult {
 async fn run_mypy(path: &Path, working_dir: &str) -> LintResult {
     run_checker_subprocess(
         "mypy",
-        &["--no-error-summary", "--show-column-numbers", &path.to_string_lossy()],
+        &[
+            "--no-error-summary",
+            "--show-column-numbers",
+            &path.to_string_lossy(),
+        ],
         working_dir,
         "mypy",
-    ).await
+    )
+    .await
 }
 
 async fn run_pyright(path: &Path, working_dir: &str) -> LintResult {
@@ -779,14 +869,22 @@ async fn run_pyright(path: &Path, working_dir: &str) -> LintResult {
         &[&path.to_string_lossy()],
         working_dir,
         "pyright",
-    ).await
+    )
+    .await
 }
 
 async fn run_tsc(path: &Path, working_dir: &str) -> LintResult {
-    let mut args = vec!["--noEmit".to_string(), "--pretty".to_string(), "false".to_string()];
+    let mut args = vec![
+        "--noEmit".to_string(),
+        "--pretty".to_string(),
+        "false".to_string(),
+    ];
 
     // Use tsconfig.json if found; otherwise pass the file directly with --allowJs.
-    if let Some(ts) = path.parent().and_then(|p| find_upward(p, "tsconfig.json", working_dir)) {
+    if let Some(ts) = path
+        .parent()
+        .and_then(|p| find_upward(p, "tsconfig.json", working_dir))
+    {
         args.push("--project".to_string());
         args.push(ts.to_string_lossy().to_string());
     } else {
@@ -804,14 +902,15 @@ async fn run_eslint(path: &Path, working_dir: &str) -> LintResult {
         &["--format=compact", &path.to_string_lossy()],
         working_dir,
         "eslint",
-    ).await
+    )
+    .await
 }
 
 async fn run_checker_subprocess(
-    bin:        &str,
-    args:       &[&str],
+    bin: &str,
+    args: &[&str],
     working_dir: &str,
-    checker:    &str,
+    checker: &str,
 ) -> LintResult {
     let result = tokio::process::Command::new(bin)
         .args(args)
@@ -824,7 +923,7 @@ async fn run_checker_subprocess(
             checker: checker.to_string(),
             diagnostics: vec![LintDiagnostic {
                 severity: "warning",
-                message:  format!(
+                message: format!(
                     "'{bin}' not found — install it to enable type checking. \
                      (e.g. `pip install {bin}` or `npm install -g {bin}`)"
                 ),
@@ -865,8 +964,8 @@ async fn run_checker_subprocess(
                 checker: checker.to_string(),
                 diagnostics: vec![LintDiagnostic {
                     severity: "error",
-                    message:  capped.trim().to_string(),
-                    line:     None,
+                    message: capped.trim().to_string(),
+                    line: None,
                 }],
             }
         }
@@ -906,7 +1005,9 @@ pub fn resolve_python(working_dir: &str) -> String {
     for c in candidates {
         // Absolute paths: check existence. System names: let OS find them.
         if Path::new(&c).is_absolute() {
-            if Path::new(&c).exists() { return c; }
+            if Path::new(&c).exists() {
+                return c;
+            }
         } else {
             return c;
         }
@@ -921,8 +1022,12 @@ pub fn find_upward(start: &Path, filename: &str, working_dir: &str) -> Option<Pa
     let mut current = start.to_path_buf();
     loop {
         let candidate = current.join(filename);
-        if candidate.exists() { return Some(candidate); }
-        if current == root { break; }
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        if current == root {
+            break;
+        }
         match current.parent() {
             Some(p) if p != current => current = p.to_path_buf(),
             _ => break,
@@ -970,7 +1075,7 @@ fn parse_node_error_line(stderr: &str) -> Option<u32> {
 fn extract_python_imports(content: &str) -> Vec<String> {
     // Matches: `import os`, `import os.path`, `from os import path`, `from pathlib import Path`
     let re_import = regex::Regex::new(r"(?m)^import\s+([\w]+)").unwrap();
-    let re_from   = regex::Regex::new(r"(?m)^from\s+([\w][.\w]*)").unwrap();
+    let re_from = regex::Regex::new(r"(?m)^from\s+([\w][.\w]*)").unwrap();
     let mut out: Vec<String> = Vec::new();
 
     for cap in re_import.captures_iter(content) {
@@ -979,7 +1084,9 @@ fn extract_python_imports(content: &str) -> Vec<String> {
     for cap in re_from.captures_iter(content) {
         // Take the top-level package only: "os.path" → "os"
         let pkg = cap[1].split('.').next().unwrap_or(&cap[1]).to_string();
-        if !pkg.is_empty() { out.push(pkg); }
+        if !pkg.is_empty() {
+            out.push(pkg);
+        }
     }
     out.sort();
     out.dedup();
@@ -992,24 +1099,31 @@ fn extract_js_imports(content: &str) -> Vec<String> {
     //          import 'pkg'
     //          export { X } from 'pkg'
     // CJS:     require('pkg')
-    let re_esm = regex::Regex::new(r#"(?:^|\n)\s*(?:import|export)[^'"]*['"]([^'"]+)['"]"#).unwrap();
+    let re_esm =
+        regex::Regex::new(r#"(?:^|\n)\s*(?:import|export)[^'"]*['"]([^'"]+)['"]"#).unwrap();
     let re_cjs = regex::Regex::new(r#"require\(['"]([^'"]+)['"]\)"#).unwrap();
     let mut out: Vec<String> = Vec::new();
 
-    for cap in re_esm.captures_iter(content) { out.push(cap[1].to_string()); }
-    for cap in re_cjs.captures_iter(content) { out.push(cap[1].to_string()); }
+    for cap in re_esm.captures_iter(content) {
+        out.push(cap[1].to_string());
+    }
+    for cap in re_cjs.captures_iter(content) {
+        out.push(cap[1].to_string());
+    }
     out.sort();
     out.dedup();
     out
 }
 
 fn parse_requirements(content: &str) -> HashSet<String> {
-    content.lines()
+    content
+        .lines()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('-'))
         .map(|l| {
             // Strip version specifier: "requests>=2.0" → "requests"
-            let name = l.split(&['=', '>', '<', '!', '[', ';', ' '][..])
+            let name = l
+                .split(&['=', '>', '<', '!', '[', ';', ' '][..])
                 .next()
                 .unwrap_or(l)
                 .trim()
@@ -1025,62 +1139,295 @@ fn parse_requirements(content: &str) -> HashSet<String> {
 fn python_stdlib_set() -> HashSet<&'static str> {
     // Python 3.10+ stdlib modules (commonly imported subset).
     [
-        "__future__", "__main__", "abc", "aifc", "argparse", "array", "ast",
-        "asynchat", "asyncio", "asyncore", "atexit", "audioop", "base64",
-        "bdb", "binascii", "binhex", "bisect", "builtins", "bz2", "calendar",
-        "cgi", "cgitb", "chunk", "cmath", "cmd", "code", "codecs", "codeop",
-        "collections", "colorsys", "compileall", "concurrent", "configparser",
-        "contextlib", "contextvars", "copy", "copyreg", "cProfile", "csv",
-        "ctypes", "curses", "dataclasses", "datetime", "dbm", "decimal",
-        "difflib", "dis", "doctest", "email", "encodings", "enum", "errno",
-        "faulthandler", "fcntl", "filecmp", "fileinput", "fnmatch", "fractions",
-        "ftplib", "functools", "gc", "getopt", "getpass", "gettext", "glob",
-        "grp", "gzip", "hashlib", "heapq", "hmac", "html", "http", "idlelib",
-        "imaplib", "imghdr", "imp", "importlib", "inspect", "io", "ipaddress",
-        "itertools", "json", "keyword", "lib2to3", "linecache", "locale",
-        "logging", "lzma", "mailbox", "mailcap", "marshal", "math", "mimetypes",
-        "mmap", "modulefinder", "multiprocessing", "netrc", "nis", "nntplib",
-        "numbers", "operator", "optparse", "os", "ossaudiodev", "pathlib",
-        "pdb", "pickle", "pickletools", "pipes", "pkgutil", "platform",
-        "plistlib", "poplib", "posix", "posixpath", "pprint", "profile",
-        "pstats", "pty", "pwd", "py_compile", "pyclbr", "pydoc", "queue",
-        "quopri", "random", "re", "readline", "reprlib", "resource", "rlcompleter",
-        "runpy", "sched", "secrets", "select", "selectors", "shelve", "shlex",
-        "shutil", "signal", "site", "smtpd", "smtplib", "sndhdr", "socket",
-        "socketserver", "spwd", "sqlite3", "sre_compile", "sre_constants",
-        "sre_parse", "ssl", "stat", "statistics", "string", "stringprep",
-        "struct", "subprocess", "sunau", "symtable", "sys", "sysconfig",
-        "syslog", "tabnanny", "tarfile", "telnetlib", "tempfile", "termios",
-        "test", "textwrap", "threading", "time", "timeit", "tkinter",
-        "token", "tokenize", "tomllib", "trace", "traceback", "tracemalloc",
-        "tty", "turtle", "turtledemo", "types", "typing", "unicodedata",
-        "unittest", "urllib", "uu", "uuid", "venv", "warnings", "wave",
-        "weakref", "webbrowser", "winreg", "winsound", "wsgiref", "xdrlib",
-        "xml", "xmlrpc", "zipapp", "zipfile", "zipimport", "zlib",
+        "__future__",
+        "__main__",
+        "abc",
+        "aifc",
+        "argparse",
+        "array",
+        "ast",
+        "asynchat",
+        "asyncio",
+        "asyncore",
+        "atexit",
+        "audioop",
+        "base64",
+        "bdb",
+        "binascii",
+        "binhex",
+        "bisect",
+        "builtins",
+        "bz2",
+        "calendar",
+        "cgi",
+        "cgitb",
+        "chunk",
+        "cmath",
+        "cmd",
+        "code",
+        "codecs",
+        "codeop",
+        "collections",
+        "colorsys",
+        "compileall",
+        "concurrent",
+        "configparser",
+        "contextlib",
+        "contextvars",
+        "copy",
+        "copyreg",
+        "cProfile",
+        "csv",
+        "ctypes",
+        "curses",
+        "dataclasses",
+        "datetime",
+        "dbm",
+        "decimal",
+        "difflib",
+        "dis",
+        "doctest",
+        "email",
+        "encodings",
+        "enum",
+        "errno",
+        "faulthandler",
+        "fcntl",
+        "filecmp",
+        "fileinput",
+        "fnmatch",
+        "fractions",
+        "ftplib",
+        "functools",
+        "gc",
+        "getopt",
+        "getpass",
+        "gettext",
+        "glob",
+        "grp",
+        "gzip",
+        "hashlib",
+        "heapq",
+        "hmac",
+        "html",
+        "http",
+        "idlelib",
+        "imaplib",
+        "imghdr",
+        "imp",
+        "importlib",
+        "inspect",
+        "io",
+        "ipaddress",
+        "itertools",
+        "json",
+        "keyword",
+        "lib2to3",
+        "linecache",
+        "locale",
+        "logging",
+        "lzma",
+        "mailbox",
+        "mailcap",
+        "marshal",
+        "math",
+        "mimetypes",
+        "mmap",
+        "modulefinder",
+        "multiprocessing",
+        "netrc",
+        "nis",
+        "nntplib",
+        "numbers",
+        "operator",
+        "optparse",
+        "os",
+        "ossaudiodev",
+        "pathlib",
+        "pdb",
+        "pickle",
+        "pickletools",
+        "pipes",
+        "pkgutil",
+        "platform",
+        "plistlib",
+        "poplib",
+        "posix",
+        "posixpath",
+        "pprint",
+        "profile",
+        "pstats",
+        "pty",
+        "pwd",
+        "py_compile",
+        "pyclbr",
+        "pydoc",
+        "queue",
+        "quopri",
+        "random",
+        "re",
+        "readline",
+        "reprlib",
+        "resource",
+        "rlcompleter",
+        "runpy",
+        "sched",
+        "secrets",
+        "select",
+        "selectors",
+        "shelve",
+        "shlex",
+        "shutil",
+        "signal",
+        "site",
+        "smtpd",
+        "smtplib",
+        "sndhdr",
+        "socket",
+        "socketserver",
+        "spwd",
+        "sqlite3",
+        "sre_compile",
+        "sre_constants",
+        "sre_parse",
+        "ssl",
+        "stat",
+        "statistics",
+        "string",
+        "stringprep",
+        "struct",
+        "subprocess",
+        "sunau",
+        "symtable",
+        "sys",
+        "sysconfig",
+        "syslog",
+        "tabnanny",
+        "tarfile",
+        "telnetlib",
+        "tempfile",
+        "termios",
+        "test",
+        "textwrap",
+        "threading",
+        "time",
+        "timeit",
+        "tkinter",
+        "token",
+        "tokenize",
+        "tomllib",
+        "trace",
+        "traceback",
+        "tracemalloc",
+        "tty",
+        "turtle",
+        "turtledemo",
+        "types",
+        "typing",
+        "unicodedata",
+        "unittest",
+        "urllib",
+        "uu",
+        "uuid",
+        "venv",
+        "warnings",
+        "wave",
+        "weakref",
+        "webbrowser",
+        "winreg",
+        "winsound",
+        "wsgiref",
+        "xdrlib",
+        "xml",
+        "xmlrpc",
+        "zipapp",
+        "zipfile",
+        "zipimport",
+        "zlib",
         "zoneinfo",
         // Common type-checking extras that aren't truly third-party
         "typing_extensions",
         // Popular packages often treated as stdlib by agents
-        "pathspec", "abc",
-    ].into()
+        "pathspec",
+        "abc",
+    ]
+    .into()
 }
 
 fn node_builtin_set() -> HashSet<&'static str> {
     // Node.js built-in modules (available without npm install).
     [
-        "assert", "async_hooks", "buffer", "child_process", "cluster",
-        "console", "constants", "crypto", "dgram", "diagnostics_channel",
-        "dns", "domain", "events", "fs", "http", "http2", "https", "inspector",
-        "module", "net", "os", "path", "perf_hooks", "process", "punycode",
-        "querystring", "readline", "repl", "stream", "string_decoder",
-        "sys", "timers", "tls", "trace_events", "tty", "url", "util",
-        "v8", "vm", "wasi", "worker_threads", "zlib",
+        "assert",
+        "async_hooks",
+        "buffer",
+        "child_process",
+        "cluster",
+        "console",
+        "constants",
+        "crypto",
+        "dgram",
+        "diagnostics_channel",
+        "dns",
+        "domain",
+        "events",
+        "fs",
+        "http",
+        "http2",
+        "https",
+        "inspector",
+        "module",
+        "net",
+        "os",
+        "path",
+        "perf_hooks",
+        "process",
+        "punycode",
+        "querystring",
+        "readline",
+        "repl",
+        "stream",
+        "string_decoder",
+        "sys",
+        "timers",
+        "tls",
+        "trace_events",
+        "tty",
+        "url",
+        "util",
+        "v8",
+        "vm",
+        "wasi",
+        "worker_threads",
+        "zlib",
         // node: prefixed variants
-        "node:assert", "node:buffer", "node:child_process", "node:cluster",
-        "node:console", "node:crypto", "node:dgram", "node:dns", "node:events",
-        "node:fs", "node:http", "node:http2", "node:https", "node:module",
-        "node:net", "node:os", "node:path", "node:process", "node:querystring",
-        "node:readline", "node:stream", "node:tls", "node:url", "node:util",
-        "node:v8", "node:vm", "node:worker_threads", "node:zlib",
-    ].into()
+        "node:assert",
+        "node:buffer",
+        "node:child_process",
+        "node:cluster",
+        "node:console",
+        "node:crypto",
+        "node:dgram",
+        "node:dns",
+        "node:events",
+        "node:fs",
+        "node:http",
+        "node:http2",
+        "node:https",
+        "node:module",
+        "node:net",
+        "node:os",
+        "node:path",
+        "node:process",
+        "node:querystring",
+        "node:readline",
+        "node:stream",
+        "node:tls",
+        "node:url",
+        "node:util",
+        "node:v8",
+        "node:vm",
+        "node:worker_threads",
+        "node:zlib",
+    ]
+    .into()
 }

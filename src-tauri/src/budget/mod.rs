@@ -14,17 +14,17 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskBudget {
-    pub max_tokens: Option<u64>,  // None = unbounded
-    pub max_usd:    Option<f64>,  // None = unbounded
-    pub max_turns:  Option<u32>,  // Agent loop turn limit (default: 20)
+    pub max_tokens: Option<u64>, // None = unbounded
+    pub max_usd: Option<f64>,    // None = unbounded
+    pub max_turns: Option<u32>,  // Agent loop turn limit (default: 20)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BudgetStatus {
     pub tokens_used: u64,
-    pub cost_usd:    f64,
-    pub turns_used:  u32,
-    pub exceeded:    bool,
+    pub cost_usd: f64,
+    pub turns_used: u32,
+    pub exceeded: bool,
     pub exceeded_reason: Option<BudgetExceededReason>,
 }
 
@@ -40,8 +40,8 @@ impl BudgetExceededReason {
     pub fn as_event_str(&self) -> &str {
         match self {
             Self::TokenLimitReached => "BUDGET_EXCEEDED_TOKENS",
-            Self::CostLimitReached  => "BUDGET_EXCEEDED_USD",
-            Self::TurnLimitReached  => "BUDGET_EXCEEDED_TURNS",
+            Self::CostLimitReached => "BUDGET_EXCEEDED_USD",
+            Self::TurnLimitReached => "BUDGET_EXCEEDED_TURNS",
         }
     }
 }
@@ -52,21 +52,25 @@ impl TaskBudget {
     pub fn default_worker() -> Self {
         Self {
             max_tokens: Some(100_000),
-            max_usd:    Some(0.50),
-            max_turns:  Some(20),
+            max_usd: Some(0.50),
+            max_turns: Some(20),
         }
     }
 
     pub fn default_supervisor() -> Self {
         Self {
             max_tokens: Some(50_000),
-            max_usd:    Some(0.25),
-            max_turns:  Some(10),
+            max_usd: Some(0.25),
+            max_turns: Some(10),
         }
     }
 
     pub fn unlimited() -> Self {
-        Self { max_tokens: None, max_usd: None, max_turns: Some(20) }
+        Self {
+            max_tokens: None,
+            max_usd: None,
+            max_turns: Some(20),
+        }
     }
 
     /// Returns the first exceeded reason, or None if all budgets are within limits.
@@ -88,16 +92,16 @@ impl TaskBudget {
 // ── Input Validation (mirrors ADR-097) ────────────────────────────────────────
 
 pub const BUDGET_MAX_TOKENS_CEILING: u64 = 1_000_000;
-pub const BUDGET_MAX_USD_CEILING:    f64 = 100.0;
-pub const BUDGET_MAX_TURNS_CEILING:  u32 = 100;
+pub const BUDGET_MAX_USD_CEILING: f64 = 100.0;
+pub const BUDGET_MAX_TURNS_CEILING: u32 = 100;
 
 /// Validate budget fields as required by ADR-097.
 /// Rejects NaN, Infinity, negative values, and values exceeding hard ceilings.
 /// Returns a constant-string error code — no echo of remaining values.
 pub fn validate_budget(
     max_tokens: Option<u64>,
-    max_usd:    Option<f64>,
-    max_turns:  Option<u32>,
+    max_usd: Option<f64>,
+    max_turns: Option<u32>,
 ) -> Result<TaskBudget, &'static str> {
     if let Some(t) = max_tokens {
         if t == 0 || t > BUDGET_MAX_TOKENS_CEILING {
@@ -114,7 +118,11 @@ pub fn validate_budget(
             return Err("BUDGET_INVALID_TURNS");
         }
     }
-    Ok(TaskBudget { max_tokens, max_usd, max_turns })
+    Ok(TaskBudget {
+        max_tokens,
+        max_usd,
+        max_turns,
+    })
 }
 
 // ── Daily Summary ─────────────────────────────────────────────────────────────
@@ -122,9 +130,9 @@ pub fn validate_budget(
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DailyBudgetSummary {
     pub total_allocated_tokens: u64,
-    pub total_spent_tokens:     u64,
-    pub total_allocated_usd:    f64,
-    pub total_spent_usd:        f64,
-    pub tasks_exceeded:         u32,
-    pub tasks_with_budget:      u32,
+    pub total_spent_tokens: u64,
+    pub total_allocated_usd: f64,
+    pub total_spent_usd: f64,
+    pub tasks_exceeded: u32,
+    pub tasks_with_budget: u32,
 }

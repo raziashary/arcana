@@ -11,17 +11,17 @@
 
 use std::path::Path;
 
-use crate::errors::{AutoDevError, Result};
 use super::types::FileContent;
+use crate::errors::{AutoDevError, Result};
 
 const BINARY_SNIFF_LEN: usize = 8192;
-const MAX_READ_BYTES:   u64   = 50 * 1024 * 1024; // 50 MB hard cap
+const MAX_READ_BYTES: u64 = 50 * 1024 * 1024; // 50 MB hard cap
 
 pub fn read_content(
     workspace_root: &str,
-    path:           &str,
-    start_line:     Option<usize>,
-    end_line:       Option<usize>,
+    path: &str,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
 ) -> Result<FileContent> {
     let workspace = Path::new(workspace_root);
     let abs = resolve(workspace, path)?;
@@ -70,7 +70,7 @@ pub fn read_content(
         line_count,
         size_bytes: meta.len(),
         start_line: effective_start,
-        end_line:   effective_end,
+        end_line: effective_end,
         language,
     })
 }
@@ -103,8 +103,12 @@ fn decode(bytes: &[u8]) -> (String, String, bool) {
     };
 
     match std::str::from_utf8(payload) {
-        Ok(s)  => (s.to_string(), "utf-8".into(), false),
-        Err(_) => (String::from_utf8_lossy(payload).into_owned(), "utf-8-lossy".into(), false),
+        Ok(s) => (s.to_string(), "utf-8".into(), false),
+        Err(_) => (
+            String::from_utf8_lossy(payload).into_owned(),
+            "utf-8-lossy".into(),
+            false,
+        ),
     }
 }
 
@@ -127,9 +131,9 @@ fn decode_utf16_be(bytes: &[u8]) -> String {
 // ─── Pagination ───────────────────────────────────────────────────────────────
 
 fn paginate(
-    text:       &str,
+    text: &str,
     start_line: Option<usize>,
-    end_line:   Option<usize>,
+    end_line: Option<usize>,
 ) -> (String, usize, Option<usize>, Option<usize>) {
     let lines: Vec<&str> = text.lines().collect();
     let total = lines.len();
@@ -139,7 +143,7 @@ fn paginate(
     }
 
     let start = start_line.unwrap_or(1).max(1);
-    let end   = end_line.unwrap_or(total).min(total);
+    let end = end_line.unwrap_or(total).min(total);
     if start > end || start > total {
         return (String::new(), total, Some(start), Some(end));
     }
@@ -152,7 +156,11 @@ fn paginate(
 
 fn resolve(workspace: &Path, path: &str) -> Result<std::path::PathBuf> {
     let p = Path::new(path);
-    let abs = if p.is_absolute() { p.to_path_buf() } else { workspace.join(p) };
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        workspace.join(p)
+    };
 
     let ws_norm = std::fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
     let abs_norm = std::fs::canonicalize(&abs).unwrap_or_else(|_| abs.clone());
@@ -175,49 +183,50 @@ pub fn detect_language(path: &Path) -> String {
         .unwrap_or_default();
 
     let id = match ext.as_str() {
-        "rs"                                     => "rust",
-        "ts"                                     => "typescript",
-        "tsx"                                    => "typescript",
-        "js" | "mjs" | "cjs"                     => "javascript",
-        "jsx"                                    => "javascript",
-        "py" | "pyw"                             => "python",
-        "go"                                     => "go",
-        "java"                                   => "java",
-        "kt" | "kts"                             => "kotlin",
-        "swift"                                  => "swift",
-        "c" | "h"                                => "c",
-        "cpp" | "cc" | "cxx" | "hpp" | "hxx"     => "cpp",
-        "cs"                                     => "csharp",
-        "rb"                                     => "ruby",
-        "php"                                    => "php",
-        "sh" | "bash" | "zsh"                    => "shell",
-        "ps1" | "psm1"                           => "powershell",
-        "lua"                                    => "lua",
-        "html" | "htm"                           => "html",
-        "css"                                    => "css",
-        "scss"                                   => "scss",
-        "less"                                   => "less",
-        "json"                                   => "json",
-        "yml" | "yaml"                           => "yaml",
-        "toml"                                   => "toml",
-        "xml"                                    => "xml",
-        "md" | "markdown"                        => "markdown",
-        "sql"                                    => "sql",
-        "dockerfile"                             => "dockerfile",
-        "graphql" | "gql"                        => "graphql",
-        "vue"                                    => "html",
-        "svelte"                                 => "html",
+        "rs" => "rust",
+        "ts" => "typescript",
+        "tsx" => "typescript",
+        "js" | "mjs" | "cjs" => "javascript",
+        "jsx" => "javascript",
+        "py" | "pyw" => "python",
+        "go" => "go",
+        "java" => "java",
+        "kt" | "kts" => "kotlin",
+        "swift" => "swift",
+        "c" | "h" => "c",
+        "cpp" | "cc" | "cxx" | "hpp" | "hxx" => "cpp",
+        "cs" => "csharp",
+        "rb" => "ruby",
+        "php" => "php",
+        "sh" | "bash" | "zsh" => "shell",
+        "ps1" | "psm1" => "powershell",
+        "lua" => "lua",
+        "html" | "htm" => "html",
+        "css" => "css",
+        "scss" => "scss",
+        "less" => "less",
+        "json" => "json",
+        "yml" | "yaml" => "yaml",
+        "toml" => "toml",
+        "xml" => "xml",
+        "md" | "markdown" => "markdown",
+        "sql" => "sql",
+        "dockerfile" => "dockerfile",
+        "graphql" | "gql" => "graphql",
+        "vue" => "html",
+        "svelte" => "html",
         _ => {
             // Special-case bare filenames.
-            let name = path.file_name()
+            let name = path
+                .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("")
                 .to_lowercase();
             match name.as_str() {
-                "dockerfile"                    => "dockerfile",
-                "makefile"                      => "makefile",
-                "cargo.toml" | "cargo.lock"     => "toml",
-                _                               => "plaintext",
+                "dockerfile" => "dockerfile",
+                "makefile" => "makefile",
+                "cargo.toml" | "cargo.lock" => "toml",
+                _ => "plaintext",
             }
         }
     };
@@ -239,18 +248,20 @@ pub fn read_metadata(workspace_root: &str, path: &str) -> Result<FileMetadata> {
         .map(|p| p.to_string_lossy().replace('\\', "/"))
         .unwrap_or_else(|_| abs.to_string_lossy().into_owned());
 
-    let modified_ms = meta.modified().ok()
+    let modified_ms = meta
+        .modified()
+        .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as i64);
 
     Ok(FileMetadata {
         absolute_path: abs.to_string_lossy().into_owned(),
         relative_path,
-        size_bytes:    meta.len(),
+        size_bytes: meta.len(),
         modified_ms,
-        is_directory:  meta.is_dir(),
-        is_readonly:   meta.permissions().readonly(),
-        git_status:    lookup_single_git_status(workspace, &abs),
+        is_directory: meta.is_dir(),
+        is_readonly: meta.permissions().readonly(),
+        git_status: lookup_single_git_status(workspace, &abs),
     })
 }
 

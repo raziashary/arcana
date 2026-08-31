@@ -1,20 +1,20 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::sync::{Arc, Mutex};
-use autodev_lib::session::manager::SessionManager;
-use autodev_lib::state::AppState;
+use autodev_lib::agent::builtin_tools;
 use autodev_lib::agent::permission::new_pending_permissions;
-use tauri::Manager;
+use autodev_lib::agent::ToolRegistry;
+use autodev_lib::mcp::health::McpHealthMonitor;
 use autodev_lib::recipes::runner::RecipeRunner;
 use autodev_lib::recipes::scheduler::RecipeScheduler;
-use autodev_lib::sidecar::{SidecarManager, start_watchdog};
+use autodev_lib::session::manager::SessionManager;
 use autodev_lib::sidecar::client::OrchestratorClient;
 use autodev_lib::sidecar::startup_progress::{StartupPhase, StartupProgress};
+use autodev_lib::sidecar::{start_watchdog, SidecarManager};
 use autodev_lib::skills::SkillRegistry;
-use autodev_lib::agent::ToolRegistry;
-use autodev_lib::agent::builtin_tools;
-use autodev_lib::mcp::health::McpHealthMonitor;
-use autodev_lib::updater::{UpdaterState, UpdateChannel, start_background_check};
+use autodev_lib::state::AppState;
+use autodev_lib::updater::{start_background_check, UpdateChannel, UpdaterState};
+use std::sync::{Arc, Mutex};
+use tauri::Manager;
 
 fn main() {
     // ─── .env loading ────────────────────────────────────────────────────────
@@ -44,7 +44,8 @@ fn main() {
                     match resolved.canonicalize() {
                         Ok(abs) => {
                             // Strip Windows \\?\ verbatim prefix so paths render cleanly in logs.
-                            let abs_str = abs.to_string_lossy()
+                            let abs_str = abs
+                                .to_string_lossy()
                                 .trim_start_matches(r"\\?\")
                                 .to_string();
                             std::env::set_var(key, &abs_str);
@@ -114,12 +115,11 @@ fn main() {
     let mcp_registry = Arc::new(mcp_registry);
 
     let app_state: Arc<Mutex<AppState>> = Arc::new(Mutex::new(AppState::new()));
-    let skill_registry_managed   = skill_registry.clone();
+    let skill_registry_managed = skill_registry.clone();
     let skill_registry_for_watch = skill_registry.clone();
 
-    let session_mgr: Arc<SessionManager> = Arc::new(
-        SessionManager::new().expect("Failed to initialise session database"),
-    );
+    let session_mgr: Arc<SessionManager> =
+        Arc::new(SessionManager::new().expect("Failed to initialise session database"));
 
     // Shared pending permissions: call_id → oneshot sender.
     // Used by AgentEngine (tool executor) and respond_to_permission command.
@@ -127,8 +127,8 @@ fn main() {
 
     // Sidecar: core-orchestrator lifecycle manager + HTTP client.
     // Both are Arc-wrapped so they can be cloned across threads.
-    let sidecar_mgr    = Arc::new(SidecarManager::new());
-    let orch_client    = Arc::new(OrchestratorClient::new());
+    let sidecar_mgr = Arc::new(SidecarManager::new());
+    let orch_client = Arc::new(OrchestratorClient::new());
 
     // Subagent registry. Subagents run in-process on a nested AgentEngine, so
     // the manager needs app state and the permission channel rather than an
@@ -136,7 +136,7 @@ fn main() {
     // builtin tools can reach it without Tauri `State<>` plumbing.
     let subagent_mgr = autodev_lib::subagent::SubagentManager::new(
         autodev_lib::subagent::native_runner::RunnerDeps {
-            state:   app_state.clone(),
+            state: app_state.clone(),
             pending: pending_permissions.clone(),
         },
     );
@@ -152,9 +152,9 @@ fn main() {
     // but we're still on the synchronous main thread before Tauri's runtime
     // starts, so block until the DB is ready. After install, kick the hourly +
     // daily rollup background thread.
-    let analytics_mgr = tauri::async_runtime::block_on(
-        autodev_lib::analytics::AnalyticsManager::new()
-    ).expect("Failed to initialise analytics DB at ~/.autodev/analytics.db");
+    let analytics_mgr =
+        tauri::async_runtime::block_on(autodev_lib::analytics::AnalyticsManager::new())
+            .expect("Failed to initialise analytics DB at ~/.autodev/analytics.db");
     let analytics_mgr = Arc::new(analytics_mgr);
     autodev_lib::analytics::install_global(analytics_mgr.clone());
     analytics_mgr.start_aggregation_job();
@@ -169,14 +169,14 @@ fn main() {
     let mcp_health_monitor = Arc::new(McpHealthMonitor::new(30, 3, 10));
 
     // Clone Arcs for the setup hook (setup runs after app handle is available)
-    let app_state_for_setup    = app_state.clone();
-    let session_mgr_for_setup  = session_mgr.clone();
-    let pending_for_setup      = pending_permissions.clone();
-    let orch_client_for_setup  = orch_client.clone();
-    let sidecar_mgr_for_setup  = sidecar_mgr.clone();
+    let app_state_for_setup = app_state.clone();
+    let session_mgr_for_setup = session_mgr.clone();
+    let pending_for_setup = pending_permissions.clone();
+    let orch_client_for_setup = orch_client.clone();
+    let sidecar_mgr_for_setup = sidecar_mgr.clone();
     let subagent_mgr_for_setup = subagent_mgr.clone();
-    let updater_state_for_setup   = updater_state.clone();
-    let mcp_health_for_setup      = mcp_health_monitor.clone();
+    let updater_state_for_setup = updater_state.clone();
+    let mcp_health_for_setup = mcp_health_monitor.clone();
 
     // register_commands is defined in the lib crate so generate_handler! runs
     // where the #[tauri::command] __cmd__* macros are in scope.

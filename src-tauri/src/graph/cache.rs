@@ -1,10 +1,10 @@
 // Cache layer — query result caching with LRU eviction
 
+use crate::errors::Result;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use serde::{Deserialize, Serialize};
-use crate::errors::Result;
 
 #[derive(Debug, Clone)]
 pub struct CacheEntry<T> {
@@ -28,29 +28,29 @@ impl<T: Clone> QueryCache<T> {
             ttl: Duration::from_secs(ttl_secs),
         }
     }
-    
+
     pub fn get(&self, key: &str) -> Option<T> {
         let mut cache = self.cache.lock().unwrap();
-        
+
         if let Some(entry) = cache.get_mut(key) {
             // Check if expired
             if entry.created_at.elapsed() > self.ttl {
                 cache.remove(key);
                 return None;
             }
-            
+
             // Update access time and hit count
             entry.accessed_at = Instant::now();
             entry.hit_count += 1;
             return Some(entry.data.clone());
         }
-        
+
         None
     }
-    
+
     pub fn set(&self, key: String, data: T) {
         let mut cache = self.cache.lock().unwrap();
-        
+
         // Evict LRU entry if at capacity
         if cache.len() >= self.max_entries && !cache.contains_key(&key) {
             if let Some(lru_key) = cache
@@ -61,32 +61,32 @@ impl<T: Clone> QueryCache<T> {
                 cache.remove(&lru_key);
             }
         }
-        
+
         let entry = CacheEntry {
             data,
             created_at: Instant::now(),
             accessed_at: Instant::now(),
             hit_count: 0,
         };
-        
+
         cache.insert(key, entry);
     }
-    
+
     pub fn invalidate(&self, key: &str) {
         let mut cache = self.cache.lock().unwrap();
         cache.remove(key);
     }
-    
+
     pub fn clear(&self) {
         let mut cache = self.cache.lock().unwrap();
         cache.clear();
     }
-    
+
     pub fn size(&self) -> usize {
         let cache = self.cache.lock().unwrap();
         cache.len()
     }
-    
+
     pub fn stats(&self) -> CacheStats {
         let cache = self.cache.lock().unwrap();
         let total_hits: u32 = cache.values().map(|e| e.hit_count).sum();
@@ -95,7 +95,7 @@ impl<T: Clone> QueryCache<T> {
         } else {
             total_hits as f32 / cache.len() as f32
         };
-        
+
         CacheStats {
             entries: cache.len(),
             total_hits,
@@ -112,4 +112,3 @@ pub struct CacheStats {
     pub avg_hits: f32,
     pub max_capacity: usize,
 }
-

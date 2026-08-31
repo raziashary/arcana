@@ -33,19 +33,27 @@ pub struct WriteInterfaceSpecTool;
 
 #[derive(Debug, Deserialize)]
 struct RouteSpec {
-    method:          String,
-    path:            String,
-    #[serde(default)] description:    Option<String>,
-    #[serde(default)] request_shape:  Option<Value>,
-    #[serde(default)] response_shape: Option<Value>,
-    #[serde(default)] status_codes:   Option<Vec<u16>>,
-    #[serde(default)] auth_required:  Option<bool>,
-    #[serde(default)] notes:          Option<String>,
+    method: String,
+    path: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    request_shape: Option<Value>,
+    #[serde(default)]
+    response_shape: Option<Value>,
+    #[serde(default)]
+    status_codes: Option<Vec<u16>>,
+    #[serde(default)]
+    auth_required: Option<bool>,
+    #[serde(default)]
+    notes: Option<String>,
 }
 
 #[async_trait]
 impl Tool for WriteInterfaceSpecTool {
-    fn name(&self) -> &str { "write_interface_spec" }
+    fn name(&self) -> &str {
+        "write_interface_spec"
+    }
 
     fn description(&self) -> &str {
         "Write or merge the workspace's INTERFACE.md contract file. \
@@ -94,8 +102,12 @@ impl Tool for WriteInterfaceSpecTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
-    fn requires_permission(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
+    fn requires_permission(&self) -> bool {
+        false
+    }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let routes_val = match input.get("routes") {
@@ -105,15 +117,18 @@ impl Tool for WriteInterfaceSpecTool {
 
         let routes: Vec<RouteSpec> = match serde_json::from_value(routes_val.clone()) {
             Ok(r) => r,
-            Err(e) => return ToolResult::error(&format!(
-                "Could not parse 'routes': {e}. Each entry needs at least 'method' and 'path'."
-            )),
+            Err(e) => {
+                return ToolResult::error(&format!(
+                    "Could not parse 'routes': {e}. Each entry needs at least 'method' and 'path'."
+                ))
+            }
         };
         if routes.is_empty() {
             return ToolResult::error("'routes' must contain at least one entry");
         }
 
-        let mode = input.get("mode")
+        let mode = input
+            .get("mode")
             .and_then(|v| v.as_str())
             .unwrap_or("overwrite")
             .to_lowercase();
@@ -121,7 +136,8 @@ impl Tool for WriteInterfaceSpecTool {
             return ToolResult::error("'mode' must be 'overwrite' or 'merge'");
         }
 
-        let conventions = input.get("conventions")
+        let conventions = input
+            .get("conventions")
             .and_then(|v| v.as_str())
             .map(|s| s.trim().to_string())
             .unwrap_or_default();
@@ -148,7 +164,11 @@ impl Tool for WriteInterfaceSpecTool {
             // to deduplicate — duplicates are visible to the worker as side-
             // by-side entries and the supervisor's next decompose pass can
             // collapse them. Naïve append is robust under partial updates.
-            let sep = if existing.ends_with('\n') { "\n" } else { "\n\n" };
+            let sep = if existing.ends_with('\n') {
+                "\n"
+            } else {
+                "\n\n"
+            };
             format!("{existing}{sep}{new_body}")
         } else {
             let mut out = String::new();
@@ -158,7 +178,7 @@ impl Tool for WriteInterfaceSpecTool {
                  Frontend consumers (`apiClient`, `fetch`, `useXxx` hooks) MUST \
                  match every URL string against an entry in this file. The \
                  `api_contract` validation pass (Doc 09 T3.3) enforces this at \
-                 write time.\n\n"
+                 write time.\n\n",
             );
             if !conventions.is_empty() {
                 out.push_str("## Conventions\n\n");
@@ -173,7 +193,8 @@ impl Tool for WriteInterfaceSpecTool {
         // ── Write the file ────────────────────────────────────────────────────
         if let Err(e) = std::fs::write(&path, &final_body) {
             return ToolResult::error(&format!(
-                "Could not write INTERFACE.md to '{}': {e}", path.display()
+                "Could not write INTERFACE.md to '{}': {e}",
+                path.display()
             ));
         }
 

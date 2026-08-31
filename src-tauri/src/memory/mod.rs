@@ -34,6 +34,6 @@ pub use recall::{build_memory_context, get_stats, search_all};
 pub use semantic::SemanticStore;
 pub use summarizer::Summarizer;
 pub use types::{
-    EpisodicMemory, EpisodicRole, FactCategory, MemoryStats, MemoryTier,
-    ProceduralMemory, RecallRequest, RecallResult, SemanticFact,
+    EpisodicMemory, EpisodicRole, FactCategory, MemoryStats, MemoryTier, ProceduralMemory,
+    RecallRequest, RecallResult, SemanticFact,
 };

@@ -31,15 +31,17 @@ use tracing::{debug, warn};
 
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
 
-const PROBE_DEFAULT_TIMEOUT_S:    u64 = 30;
-const PROBE_DEFAULT_BOOT_WAIT_S:  u64 = 8;
+const PROBE_DEFAULT_TIMEOUT_S: u64 = 30;
+const PROBE_DEFAULT_BOOT_WAIT_S: u64 = 8;
 const PROBE_DEFAULT_HTTP_TIMEOUT: u64 = 10;
 
 pub struct E2eProbeTool;
 
 #[async_trait]
 impl Tool for E2eProbeTool {
-    fn name(&self) -> &str { "e2e_probe" }
+    fn name(&self) -> &str {
+        "e2e_probe"
+    }
 
     fn description(&self) -> &str {
         "End-to-end smoke probe. Spawns one or more long-running commands \
@@ -85,15 +87,22 @@ impl Tool for E2eProbeTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
-    fn requires_permission(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
+    fn requires_permission(&self) -> bool {
+        false
+    }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let start_cmds: Vec<String> = match input.get("start_cmds") {
-            Some(Value::Array(a)) => a.iter()
+            Some(Value::Array(a)) => a
+                .iter()
                 .filter_map(|v| v.as_str().map(String::from))
                 .collect(),
-            _ => return ToolResult::error("'start_cmds' is required and must be a non-empty array"),
+            _ => {
+                return ToolResult::error("'start_cmds' is required and must be a non-empty array")
+            }
         };
         if start_cmds.is_empty() {
             return ToolResult::error("'start_cmds' must contain at least one command");
@@ -110,10 +119,14 @@ impl Tool for E2eProbeTool {
         };
 
         let boot_wait = Duration::from_secs(
-            input["boot_wait_s"].as_u64().unwrap_or(PROBE_DEFAULT_BOOT_WAIT_S)
+            input["boot_wait_s"]
+                .as_u64()
+                .unwrap_or(PROBE_DEFAULT_BOOT_WAIT_S),
         );
         let total_timeout = Duration::from_secs(
-            input["timeout_s"].as_u64().unwrap_or(PROBE_DEFAULT_TIMEOUT_S)
+            input["timeout_s"]
+                .as_u64()
+                .unwrap_or(PROBE_DEFAULT_TIMEOUT_S),
         );
 
         // Run the whole probe under a single timeout. The teardown runs even
@@ -130,8 +143,8 @@ impl Tool for E2eProbeTool {
 
         match result {
             Ok(Ok(report)) => {
-                let json_payload = serde_json::to_string_pretty(&report)
-                    .unwrap_or_else(|_| "{}".into());
+                let json_payload =
+                    serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".into());
                 if report.success {
                     ToolResult::success(format!(
                         "e2e_probe: PASS — fingerprint '{expected}' found at {probe_url}\n\n{json_payload}"
@@ -144,7 +157,7 @@ impl Tool for E2eProbeTool {
                 }
             }
             Ok(Err(e)) => ToolResult::error(format!("e2e_probe error: {e}")),
-            Err(_)     => ToolResult::error(format!(
+            Err(_) => ToolResult::error(format!(
                 "e2e_probe timed out after {}s — probe URL '{probe_url}' did not respond \
                  with '{expected}' before the deadline. Children were killed.",
                 total_timeout.as_secs(),
@@ -155,21 +168,21 @@ impl Tool for E2eProbeTool {
 
 #[derive(Debug, serde::Serialize)]
 struct ProbeReport {
-    success:           bool,
-    probe_url:         String,
-    expected_text:     String,
-    status_code:       Option<u16>,
+    success: bool,
+    probe_url: String,
+    expected_text: String,
+    status_code: Option<u16>,
     response_body_excerpt: Option<String>,
-    failure_reason:    Option<String>,
+    failure_reason: Option<String>,
     started_processes: usize,
 }
 
 async fn run_probe(
     working_dir: String,
-    start_cmds:  Vec<String>,
-    probe_url:   String,
-    expected:    String,
-    boot_wait:   Duration,
+    start_cmds: Vec<String>,
+    probe_url: String,
+    expected: String,
+    boot_wait: Duration,
 ) -> Result<ProbeReport, String> {
     // Spawn each start cmd. On panic / cancel, the Drop impl on the Vec
     // kills the children — but tokio Child needs an explicit `kill().await`
@@ -204,7 +217,9 @@ async fn run_probe(
             Err(e) => {
                 // Best-effort: kill anything we've already started so this
                 // failed probe doesn't leak processes.
-                for c in children.iter_mut() { let _ = c.kill().await; }
+                for c in children.iter_mut() {
+                    let _ = c.kill().await;
+                }
                 return Err(format!("Failed to spawn '{cmd_str}': {e}"));
             }
         }
@@ -261,7 +276,10 @@ async fn http_probe(url: &str, _expected: &str) -> Result<(u16, String), String>
         .timeout(Duration::from_secs(PROBE_DEFAULT_HTTP_TIMEOUT))
         .build()
         .map_err(|e| format!("client build: {e}"))?;
-    let resp = client.get(url).send().await
+    let resp = client
+        .get(url)
+        .send()
+        .await
         .map_err(|e| format!("GET {url}: {e}"))?;
     let status = resp.status().as_u16();
     let body = resp.text().await.unwrap_or_default();

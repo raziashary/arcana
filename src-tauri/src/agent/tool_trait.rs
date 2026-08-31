@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
-    pub output:   String,
+    pub output: String,
     pub is_error: bool,
     /// Optional guidance appended to the tool result content before sending to the LLM.
     /// Use this for large/noisy results to direct the agent on how to consume them,
@@ -18,36 +18,48 @@ pub struct ToolResult {
 
 impl ToolResult {
     pub fn success(output: impl Into<String>) -> Self {
-        Self { output: output.into(), is_error: false, hint: None }
+        Self {
+            output: output.into(),
+            is_error: false,
+            hint: None,
+        }
     }
 
     /// Like `success` but attaches a hint string that is appended inline to the
     /// tool result sent to the LLM. Use for large outputs to guide summarisation.
     pub fn success_with_hint(output: impl Into<String>, hint: impl Into<String>) -> Self {
-        Self { output: output.into(), is_error: false, hint: Some(hint.into()) }
+        Self {
+            output: output.into(),
+            is_error: false,
+            hint: Some(hint.into()),
+        }
     }
 
     pub fn error(message: impl Into<String>) -> Self {
-        Self { output: message.into(), is_error: true, hint: None }
+        Self {
+            output: message.into(),
+            is_error: true,
+            hint: None,
+        }
     }
 }
 
 /// Context passed to every tool execution — working directory, session, etc.
 #[derive(Debug, Clone)]
 pub struct ToolContext {
-    pub session_id:  String,
+    pub session_id: String,
     pub working_dir: String,
-    pub call_id:     String,
+    pub call_id: String,
     /// K.11 — Subagent nesting depth (0 = top-level agent, n+1 = subagent
     /// spawned by an agent at depth n). Spawn tools read this to guard against
     /// unbounded recursion.
-    pub depth:       u32,
+    pub depth: u32,
     /// Who is making this call: "supervisor", "worker-backend", "qc-agent", …
     ///
     /// NOT an Option. Every agent has an identity, and the three worker↔worker
     /// messaging tools hard-refuse without one — so an absent identity was not
     /// a neutral default, it silently disabled capabilities.
-    pub agent_role:  String,
+    pub agent_role: String,
 }
 
 /// Who an agent is, and how deeply nested it is.
@@ -63,7 +75,7 @@ pub struct ToolContext {
 /// See ADR-LOG-RESTRUCT-0001.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentIdentity {
-    pub role:  String,
+    pub role: String,
     pub depth: u32,
 }
 
@@ -71,17 +83,26 @@ impl AgentIdentity {
     /// The interactive assistant. "supervisor" matches the role the shipped
     /// recipes already use for it (`recipes/defaults.rs:217`).
     pub fn supervisor() -> Self {
-        Self { role: "supervisor".to_string(), depth: 0 }
+        Self {
+            role: "supervisor".to_string(),
+            depth: 0,
+        }
     }
 
     /// A top-level fleet worker, identified by its recipe slug.
     pub fn worker(slug: impl Into<String>) -> Self {
-        Self { role: slug.into(), depth: 0 }
+        Self {
+            role: slug.into(),
+            depth: 0,
+        }
     }
 
     /// A subagent spawned by this agent — one level deeper, by construction.
     pub fn child(&self, role: impl Into<String>) -> Self {
-        Self { role: role.into(), depth: self.depth + 1 }
+        Self {
+            role: role.into(),
+            depth: self.depth + 1,
+        }
     }
 }
 
@@ -93,16 +114,16 @@ pub trait Tool: Send + Sync {
 
     /// Read-only tools can run concurrently; write tools run serially.
     /// Pattern from Claude Code's isConcurrencySafe().
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     /// Requires explicit user approval before execution.
-    fn requires_permission(&self) -> bool { !self.is_read_only() }
+    fn requires_permission(&self) -> bool {
+        !self.is_read_only()
+    }
 
-    async fn execute(
-        &self,
-        input: serde_json::Value,
-        ctx:   &ToolContext,
-    ) -> ToolResult;
+    async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult;
 }
 
 #[cfg(test)]
@@ -114,7 +135,10 @@ mod identity_tests {
         assert_eq!(AgentIdentity::supervisor().depth, 0);
         assert_eq!(AgentIdentity::supervisor().role, "supervisor");
         assert_eq!(AgentIdentity::worker("worker-backend").depth, 0);
-        assert_eq!(AgentIdentity::worker("worker-backend").role, "worker-backend");
+        assert_eq!(
+            AgentIdentity::worker("worker-backend").role,
+            "worker-backend"
+        );
     }
 
     #[test]
@@ -143,12 +167,15 @@ mod identity_tests {
     /// literals, so there is no runtime surface to interrogate.
     #[test]
     fn no_tool_context_site_hardcodes_identity() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src/agent/tool_executor.rs");
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/agent/tool_executor.rs");
         let source = std::fs::read_to_string(&path).expect("read tool_executor.rs");
 
         let sites = source.matches("ToolContext {").count();
-        assert!(sites >= 3, "expected at least 3 ToolContext sites, found {sites}");
+        assert!(
+            sites >= 3,
+            "expected at least 3 ToolContext sites, found {sites}"
+        );
 
         assert!(
             !source.contains("agent_role:  None") && !source.contains("agent_role: None"),

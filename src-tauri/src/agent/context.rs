@@ -11,12 +11,15 @@ use tracing::debug;
 
 pub struct ContextBuilder {
     working_dir: String,
-    session_id:  Option<String>,
+    session_id: Option<String>,
 }
 
 impl ContextBuilder {
     pub fn new(working_dir: impl Into<String>) -> Self {
-        Self { working_dir: working_dir.into(), session_id: None }
+        Self {
+            working_dir: working_dir.into(),
+            session_id: None,
+        }
     }
 
     /// Attach a session ID so memory context can be injected into the prompt.
@@ -27,7 +30,7 @@ impl ContextBuilder {
 
     /// Build the full system prompt including AUTODEV.md contents.
     /// If override is provided, it replaces BASE_SYSTEM_PROMPT entirely.
-    /// 
+    ///
     /// TODO: Phase 2.5 — Replace filesystem-based injection with SQLite DB
     /// Current implementation uses legacy file-based approach as placeholder.
     /// Final implementation will query `autodev_instructions` table.
@@ -39,7 +42,10 @@ impl ContextBuilder {
         // TODO: Query SQLite for global AUTODEV.md
         // let global_content = autodev_instructions::get("global", None);
         if let Some(home) = home_dir() {
-            let global_autodev = home.join(".autodev").join("config").join("autodev_global.md");
+            let global_autodev = home
+                .join(".autodev")
+                .join("config")
+                .join("autodev_global.md");
             if let Ok(content) = std::fs::read_to_string(&global_autodev) {
                 if !content.trim().is_empty() {
                     debug!("Injecting global AUTODEV.md from {:?}", global_autodev);
@@ -51,7 +57,9 @@ impl ContextBuilder {
         // LEGACY: {cwd}/CLAUDE.md — will be replaced with SQLite query
         // TODO: Query SQLite for repo-specific AUTODEV.md
         // let repo_content = autodev_instructions::get("repo", Some(&self.working_dir));
-        let cwd_autodev = Path::new(&self.working_dir).join(".autodev").join("autodev.md");
+        let cwd_autodev = Path::new(&self.working_dir)
+            .join(".autodev")
+            .join("autodev.md");
         if let Ok(content) = std::fs::read_to_string(&cwd_autodev) {
             if !content.trim().is_empty() {
                 debug!("Injecting project AUTODEV.md from {:?}", cwd_autodev);
@@ -69,15 +77,11 @@ impl ContextBuilder {
     /// Injects memory context when a session_id is attached via `with_session()`.
     /// Fetches global + repo-specific AUTODEV.md from SQLite config.db.
     /// Falls back to filesystem paths if DB entry is empty.
-    pub fn build_system_prompt_with_mode(
-        &self,
-        mode: super::PAMode,
-        repo_path: &str,
-    ) -> String {
+    pub fn build_system_prompt_with_mode(&self, mode: super::PAMode, repo_path: &str) -> String {
         let base = match mode {
             super::PAMode::FastDevelopment => BASE_SYSTEM_PROMPT,
-            super::PAMode::Review          => REVIEW_SYSTEM_PROMPT,
-            super::PAMode::Delegate        => DELEGATE_SYSTEM_PROMPT,
+            super::PAMode::Review => REVIEW_SYSTEM_PROMPT,
+            super::PAMode::Delegate => DELEGATE_SYSTEM_PROMPT,
         };
 
         let mut parts = vec![base.to_string()];
@@ -89,8 +93,11 @@ impl ContextBuilder {
             .filter(|s| !s.trim().is_empty())
             .or_else(|| {
                 home_dir().and_then(|h| {
-                    std::fs::read_to_string(h.join(".autodev").join("config").join("autodev_global.md")).ok()
-                        .filter(|s| !s.trim().is_empty())
+                    std::fs::read_to_string(
+                        h.join(".autodev").join("config").join("autodev_global.md"),
+                    )
+                    .ok()
+                    .filter(|s| !s.trim().is_empty())
                 })
             });
 
@@ -104,8 +111,12 @@ impl ContextBuilder {
             .filter(|s| !s.trim().is_empty())
             .or_else(|| {
                 std::fs::read_to_string(
-                    std::path::Path::new(repo_path).join(".autodev").join("autodev.md")
-                ).ok().filter(|s| !s.trim().is_empty())
+                    std::path::Path::new(repo_path)
+                        .join(".autodev")
+                        .join("autodev.md"),
+                )
+                .ok()
+                .filter(|s| !s.trim().is_empty())
             });
 
         if let Some(content) = repo_content {

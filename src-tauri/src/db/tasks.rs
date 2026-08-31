@@ -3,21 +3,21 @@
 // Used by: PA (create tasks in Delegate Mode), Supervisor (assign/update), Workers (claim/complete)
 // See: DEVELOPMENT_PLAN.md Phase 2.1 — AutoDev Panel & Internal Board
 
-use rusqlite::{Connection, OptionalExtension, params};
+use super::autodev_dir;
+use crate::errors::{AutoDevError, Result};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::errors::{AutoDevError, Result};
-use super::autodev_dir;
 
 // ─── Worker→Supervisor Request Types ──────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkerRequestStatus {
-    Pending,       // Waiting for Supervisor to act
-    Acknowledged,  // Supervisor has seen it and is processing
-    Completed,     // Supervisor fulfilled the request (tasks created, reassigned, etc.)
-    Rejected,      // Supervisor declined the request
+    Pending,      // Waiting for Supervisor to act
+    Acknowledged, // Supervisor has seen it and is processing
+    Completed,    // Supervisor fulfilled the request (tasks created, reassigned, etc.)
+    Rejected,     // Supervisor declined the request
 }
 
 impl WorkerRequestStatus {
@@ -42,15 +42,15 @@ impl WorkerRequestStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerRequest {
-    pub id:                i64,
-    pub worker_slug:       String,
-    pub task_id:           Option<i64>,
-    pub request_type:      String,   // "decompose_audit" | "reassign" | "needs_info" | "report_issue" | "request_review"
-    pub payload:           String,   // JSON blob — structured data for the supervisor
-    pub status:            WorkerRequestStatus,
-    pub resolution_note:   Option<String>,
-    pub created_at:        String,
-    pub resolved_at:       Option<String>,
+    pub id: i64,
+    pub worker_slug: String,
+    pub task_id: Option<i64>,
+    pub request_type: String, // "decompose_audit" | "reassign" | "needs_info" | "report_issue" | "request_review"
+    pub payload: String,      // JSON blob — structured data for the supervisor
+    pub status: WorkerRequestStatus,
+    pub resolution_note: Option<String>,
+    pub created_at: String,
+    pub resolved_at: Option<String>,
 }
 
 /// AutoDev Communication Protocol (ACP) — structured worker↔worker message.
@@ -68,23 +68,23 @@ pub struct WorkerRequest {
 ///   broadcast  — supervisor-only; fan-out one row per fleet worker
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerMessage {
-    pub id:         i64,
-    pub from_slug:  String,
-    pub to_slug:    String,
-    pub body:       String,
-    pub kind:       String,
-    pub task_id:    Option<i64>,
-    pub status:     String,         // "pending" | "read" | "acknowledged"
+    pub id: i64,
+    pub from_slug: String,
+    pub to_slug: String,
+    pub body: String,
+    pub kind: String,
+    pub task_id: Option<i64>,
+    pub status: String, // "pending" | "read" | "acknowledged"
     pub created_at: String,
-    pub read_at:    Option<String>,
+    pub read_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateWorkerRequestInput {
-    pub worker_slug:  String,
-    pub task_id:      Option<i64>,
+    pub worker_slug: String,
+    pub task_id: Option<i64>,
     pub request_type: String,
-    pub payload:      String,
+    pub payload: String,
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -100,10 +100,20 @@ pub enum TaskPriority {
 
 impl TaskPriority {
     pub fn as_str(&self) -> &str {
-        match self { Self::P0 => "p0", Self::P1 => "p1", Self::P2 => "p2", Self::P3 => "p3" }
+        match self {
+            Self::P0 => "p0",
+            Self::P1 => "p1",
+            Self::P2 => "p2",
+            Self::P3 => "p3",
+        }
     }
     pub fn from_str(s: &str) -> Self {
-        match s { "p0" => Self::P0, "p1" => Self::P1, "p3" => Self::P3, _ => Self::P2 }
+        match s {
+            "p0" => Self::P0,
+            "p1" => Self::P1,
+            "p3" => Self::P3,
+            _ => Self::P2,
+        }
     }
 }
 
@@ -115,22 +125,28 @@ pub enum TaskType {
     Refactor,
     Docs,
     Chore,
-    Epic,    // Ruflo Feature 5 — parent grouping for phased work
+    Epic, // Ruflo Feature 5 — parent grouping for phased work
 }
 
 impl TaskType {
     pub fn as_str(&self) -> &str {
         match self {
-            Self::Feature => "feature", Self::Bug => "bug",
-            Self::Refactor => "refactor", Self::Docs => "docs",
-            Self::Chore => "chore", Self::Epic => "epic",
+            Self::Feature => "feature",
+            Self::Bug => "bug",
+            Self::Refactor => "refactor",
+            Self::Docs => "docs",
+            Self::Chore => "chore",
+            Self::Epic => "epic",
         }
     }
     pub fn from_str(s: &str) -> Self {
         match s {
-            "bug" => Self::Bug, "refactor" => Self::Refactor,
-            "docs" => Self::Docs, "chore" => Self::Chore,
-            "epic" => Self::Epic, _ => Self::Feature,
+            "bug" => Self::Bug,
+            "refactor" => Self::Refactor,
+            "docs" => Self::Docs,
+            "chore" => Self::Chore,
+            "epic" => Self::Epic,
+            _ => Self::Feature,
         }
     }
 }
@@ -138,35 +154,44 @@ impl TaskType {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
-    Ready,        // Created, waiting for Supervisor assignment
-    Assigned,     // Supervisor assigned to a worker
-    InProgress,   // Worker is executing
-    QcReview,     // Worker completed, QC reviewing
-    Done,         // QC approved, merged
-    BuildFailed,  // Dependencies/build validation failed (Fix 8d)
-    Failed,       // Task failed — needs attention
-    Cancelled,    // Manually cancelled
-    Rejected,     // QC rejected — worker must rework and resubmit
-    NeedsInfo,    // Budget exceeded or blocked — awaiting Supervisor/human guidance
+    Ready,       // Created, waiting for Supervisor assignment
+    Assigned,    // Supervisor assigned to a worker
+    InProgress,  // Worker is executing
+    QcReview,    // Worker completed, QC reviewing
+    Done,        // QC approved, merged
+    BuildFailed, // Dependencies/build validation failed (Fix 8d)
+    Failed,      // Task failed — needs attention
+    Cancelled,   // Manually cancelled
+    Rejected,    // QC rejected — worker must rework and resubmit
+    NeedsInfo,   // Budget exceeded or blocked — awaiting Supervisor/human guidance
 }
 
 impl TaskStatus {
     pub fn as_str(&self) -> &str {
         match self {
-            Self::Ready => "ready", Self::Assigned => "assigned",
-            Self::InProgress => "in_progress", Self::QcReview => "qc_review",
-            Self::Done => "done", Self::BuildFailed => "build_failed",
-            Self::Failed => "failed", Self::Cancelled => "cancelled",
-            Self::Rejected => "rejected", Self::NeedsInfo => "needs_info",
+            Self::Ready => "ready",
+            Self::Assigned => "assigned",
+            Self::InProgress => "in_progress",
+            Self::QcReview => "qc_review",
+            Self::Done => "done",
+            Self::BuildFailed => "build_failed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::Rejected => "rejected",
+            Self::NeedsInfo => "needs_info",
         }
     }
     pub fn from_str(s: &str) -> Self {
         match s {
-            "assigned" => Self::Assigned, "in_progress" => Self::InProgress,
-            "qc_review" => Self::QcReview, "done" => Self::Done,
+            "assigned" => Self::Assigned,
+            "in_progress" => Self::InProgress,
+            "qc_review" => Self::QcReview,
+            "done" => Self::Done,
             "build_failed" => Self::BuildFailed,
-            "failed" => Self::Failed, "cancelled" => Self::Cancelled,
-            "rejected" => Self::Rejected, "needs_info" => Self::NeedsInfo,
+            "failed" => Self::Failed,
+            "cancelled" => Self::Cancelled,
+            "rejected" => Self::Rejected,
+            "needs_info" => Self::NeedsInfo,
             _ => Self::Ready,
         }
     }
@@ -174,40 +199,40 @@ impl TaskStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
-    pub id:                   i64,
-    pub title:                String,
-    pub description:          Option<String>,
-    pub priority:             TaskPriority,
-    pub task_type:            TaskType,
-    pub status:               TaskStatus,
-    pub acceptance_criteria:  String,
-    pub assigned_worker:      Option<String>,
-    pub rejection_reason:     Option<String>,
-    pub retry_count:          i64,
-    pub created_by:           String,       // "pa" | "supervisor" | agent slug
-    pub created_at:           String,
-    pub updated_at:           String,
-    pub completed_at:         Option<String>,
+    pub id: i64,
+    pub title: String,
+    pub description: Option<String>,
+    pub priority: TaskPriority,
+    pub task_type: TaskType,
+    pub status: TaskStatus,
+    pub acceptance_criteria: String,
+    pub assigned_worker: Option<String>,
+    pub rejection_reason: Option<String>,
+    pub retry_count: i64,
+    pub created_by: String, // "pa" | "supervisor" | agent slug
+    pub created_at: String,
+    pub updated_at: String,
+    pub completed_at: Option<String>,
     // PID-based orphan detection (Ruflo Feature 2)
-    pub claimed_by_pid:       Option<i64>,
-    pub claim_host:           Option<String>,
+    pub claimed_by_pid: Option<i64>,
+    pub claim_host: Option<String>,
     // Diff risk analysis result (Ruflo Feature 3) — JSON blob from DiffAnalysisResult
-    pub diff_analysis:        Option<String>,
+    pub diff_analysis: Option<String>,
     // Budget Circuit Breaker (Ruflo Feature 4) — None when no budget was set
-    pub budget_max_tokens:    Option<i64>,
-    pub budget_max_usd:       Option<f64>,
-    pub budget_max_turns:     Option<i64>,
-    pub budget_tokens_used:   i64,
-    pub budget_cost_usd:      f64,
-    pub budget_turns_used:    i64,
-    pub budget_exceeded:      bool,
+    pub budget_max_tokens: Option<i64>,
+    pub budget_max_usd: Option<f64>,
+    pub budget_max_turns: Option<i64>,
+    pub budget_tokens_used: i64,
+    pub budget_cost_usd: f64,
+    pub budget_turns_used: i64,
+    pub budget_exceeded: bool,
     pub budget_exceeded_reason: Option<String>,
     // Phase-Based Task Decomposition (Ruflo Feature 5)
-    pub phase:         Option<String>,       // e.g. "foundation" | "core" | "integration" | "qa"
-    pub phase_order:   Option<i32>,          // 1, 2, 3, 4 — controls sequencing within an epic
-    pub milestone:     Option<String>,       // optional milestone marker for this phase
-    pub epic_id:       Option<String>,       // links subtask back to its parent epic task id
-    pub blocked_by:    Option<Vec<String>>,  // task IDs that must be done before this one starts
+    pub phase: Option<String>, // e.g. "foundation" | "core" | "integration" | "qa"
+    pub phase_order: Option<i32>, // 1, 2, 3, 4 — controls sequencing within an epic
+    pub milestone: Option<String>, // optional milestone marker for this phase
+    pub epic_id: Option<String>, // links subtask back to its parent epic task id
+    pub blocked_by: Option<Vec<String>>, // task IDs that must be done before this one starts
     // Doc 04 Phase 2 — per-task QC reviewer claim. Set atomically by
     // `spawn_qc_review` to the subagent slug; cleared on terminal status by
     // the stranded-reviewer reconciler. NULL = available for the next
@@ -221,59 +246,59 @@ pub struct Task {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateTaskInput {
-    pub title:               String,
-    pub description:         Option<String>,
-    pub priority:            String, // "p0" | "p1" | "p2" | "p3"
-    pub task_type:           String, // "feature" | "bug" | "refactor" | "docs" | "chore" | "epic"
+    pub title: String,
+    pub description: Option<String>,
+    pub priority: String,  // "p0" | "p1" | "p2" | "p3"
+    pub task_type: String, // "feature" | "bug" | "refactor" | "docs" | "chore" | "epic"
     pub acceptance_criteria: String,
-    pub created_by:          Option<String>,
+    pub created_by: Option<String>,
 }
 
 /// Input for creating a task inside an epic with phase metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreatePhasedTaskInput {
-    pub epic_id:             String,
-    pub phase:               String,
-    pub phase_order:         i32,
-    pub title:               String,
-    pub description:         Option<String>,
-    pub priority:            String,
-    pub task_type:           String,
+    pub epic_id: String,
+    pub phase: String,
+    pub phase_order: i32,
+    pub title: String,
+    pub description: Option<String>,
+    pub priority: String,
+    pub task_type: String,
     pub acceptance_criteria: String,
-    pub blocked_by:          Vec<String>, // task IDs that must complete first
-    pub milestone:           Option<String>,
-    pub created_by:          Option<String>,
+    pub blocked_by: Vec<String>, // task IDs that must complete first
+    pub milestone: Option<String>,
+    pub created_by: Option<String>,
 }
 
 /// Per-phase progress summary for an epic.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhaseSummary {
-    pub phase:            String,
-    pub phase_order:      i32,
-    pub milestone:        Option<String>,
-    pub total_tasks:      i32,
-    pub done_tasks:       i32,
+    pub phase: String,
+    pub phase_order: i32,
+    pub milestone: Option<String>,
+    pub total_tasks: i32,
+    pub done_tasks: i32,
     pub in_progress_tasks: i32,
-    pub ready_tasks:      i32,
-    pub blocked_tasks:    i32,
-    pub is_complete:      bool,   // true when done_tasks == total_tasks
-    pub is_unlocked:      bool,   // true when previous phase is complete (or this is phase 1)
+    pub ready_tasks: i32,
+    pub blocked_tasks: i32,
+    pub is_complete: bool, // true when done_tasks == total_tasks
+    pub is_unlocked: bool, // true when previous phase is complete (or this is phase 1)
 }
 
 // ─── Routing History ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoutingHistoryEntry {
-    pub id:           String,
-    pub task_id:      String,
-    pub task_title:   String,
-    pub task_type:    String,
-    pub worker_slug:  String,
-    pub assigned_at:  String,
-    pub outcome:      Option<String>,
-    pub outcome_at:   Option<String>,
-    pub duration_ms:  Option<i64>,
-    pub tokens_used:  Option<i64>,
+    pub id: String,
+    pub task_id: String,
+    pub task_title: String,
+    pub task_type: String,
+    pub worker_slug: String,
+    pub assigned_at: String,
+    pub outcome: Option<String>,
+    pub outcome_at: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub tokens_used: Option<i64>,
 }
 
 // ─── Repository ───────────────────────────────────────────────────────────────
@@ -363,53 +388,83 @@ impl TasksDb {
             "
         )?;
         // Add columns to existing DBs that predate these migrations.
-        let _ = self.conn.execute_batch(
-            "ALTER TABLE tasks ADD COLUMN rejection_reason TEXT;"
-        );
-        let _ = self.conn.execute_batch(
-            "ALTER TABLE tasks ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;"
-        );
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE tasks ADD COLUMN rejection_reason TEXT;");
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE tasks ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;");
         // Ruflo Feature 2 — PID-based orphan detection
-        let _ = self.conn.execute_batch(
-            "ALTER TABLE tasks ADD COLUMN claimed_by_pid INTEGER;"
-        );
-        let _ = self.conn.execute_batch(
-            "ALTER TABLE tasks ADD COLUMN claim_host TEXT;"
-        );
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE tasks ADD COLUMN claimed_by_pid INTEGER;");
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE tasks ADD COLUMN claim_host TEXT;");
         // Ruflo Feature 3 — Diff risk scoring result (JSON blob)
-        let _ = self.conn.execute_batch(
-            "ALTER TABLE tasks ADD COLUMN diff_analysis TEXT;"
-        );
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE tasks ADD COLUMN diff_analysis TEXT;");
         // Ruflo Feature 4 — Budget Circuit Breaker columns
-        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN budget_max_tokens INTEGER;");
-        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN budget_max_usd    REAL;");
-        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN budget_max_turns  INTEGER DEFAULT 20;");
-        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN budget_tokens_used INTEGER DEFAULT 0;");
-        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN budget_cost_usd   REAL DEFAULT 0.0;");
-        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN budget_turns_used INTEGER DEFAULT 0;");
-        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN budget_exceeded   INTEGER DEFAULT 0;");
-        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN budget_exceeded_reason TEXT;");
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE tasks ADD COLUMN budget_max_tokens INTEGER;");
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE tasks ADD COLUMN budget_max_usd    REAL;");
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE tasks ADD COLUMN budget_max_turns  INTEGER DEFAULT 20;");
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE tasks ADD COLUMN budget_tokens_used INTEGER DEFAULT 0;");
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE tasks ADD COLUMN budget_cost_usd   REAL DEFAULT 0.0;");
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE tasks ADD COLUMN budget_turns_used INTEGER DEFAULT 0;");
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE tasks ADD COLUMN budget_exceeded   INTEGER DEFAULT 0;");
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE tasks ADD COLUMN budget_exceeded_reason TEXT;");
         // Ruflo Feature 5 — Phase-Based Task Decomposition columns
-        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN phase       TEXT;");
-        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN phase_order INTEGER;");
-        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN milestone   TEXT;");
-        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN epic_id     TEXT;");
-        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN blocked_by  TEXT;");
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE tasks ADD COLUMN phase       TEXT;");
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE tasks ADD COLUMN phase_order INTEGER;");
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE tasks ADD COLUMN milestone   TEXT;");
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE tasks ADD COLUMN epic_id     TEXT;");
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE tasks ADD COLUMN blocked_by  TEXT;");
         // Doc 04 Phase 2 / Phase 4 — per-task QC reviewer claim + cost rollup.
         // `under_review_by` carries the subagent slug while a reviewer runs;
         // `task_qc_cost_usd` is the running sum of every reviewer run for the
         // task. Both are NULL-safe (defaulted on read via COALESCE).
-        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN under_review_by  TEXT;");
-        let _ = self.conn.execute_batch("ALTER TABLE tasks ADD COLUMN task_qc_cost_usd REAL DEFAULT 0.0;");
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE tasks ADD COLUMN under_review_by  TEXT;");
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE tasks ADD COLUMN task_qc_cost_usd REAL DEFAULT 0.0;");
         let _ = self.conn.execute_batch(
-            "CREATE INDEX IF NOT EXISTS idx_tasks_under_review_by ON tasks(under_review_by);"
+            "CREATE INDEX IF NOT EXISTS idx_tasks_under_review_by ON tasks(under_review_by);",
         );
         // Indexes for phase queries
+        let _ = self
+            .conn
+            .execute_batch("CREATE INDEX IF NOT EXISTS idx_tasks_epic_id ON tasks(epic_id);");
         let _ = self.conn.execute_batch(
-            "CREATE INDEX IF NOT EXISTS idx_tasks_epic_id ON tasks(epic_id);"
-        );
-        let _ = self.conn.execute_batch(
-            "CREATE INDEX IF NOT EXISTS idx_tasks_phase ON tasks(phase, phase_order);"
+            "CREATE INDEX IF NOT EXISTS idx_tasks_phase ON tasks(phase, phase_order);",
         );
         // Routing history table (Ruflo Feature 1 — semantic task routing)
         self.conn.execute_batch(
@@ -432,7 +487,7 @@ impl TasksDb {
                 ON routing_history(task_type);
             CREATE INDEX IF NOT EXISTS idx_routing_history_outcome
                 ON routing_history(outcome);
-            "
+            ",
         )?;
         Ok(())
     }
@@ -452,7 +507,8 @@ impl TasksDb {
             ],
         )?;
         let id = self.conn.last_insert_rowid();
-        self.get_by_id(id)?.ok_or_else(|| AutoDevError::Agent("Task not found after insert".into()))
+        self.get_by_id(id)?
+            .ok_or_else(|| AutoDevError::Agent("Task not found after insert".into()))
     }
 
     pub fn get_by_id(&self, id: i64) -> Result<Option<Task>> {
@@ -467,7 +523,7 @@ impl TasksDb {
                     budget_exceeded_reason,
                     phase, phase_order, milestone, epic_id, blocked_by,
                     under_review_by, COALESCE(task_qc_cost_usd, 0.0)
-             FROM tasks WHERE id = ?1"
+             FROM tasks WHERE id = ?1",
         )?;
         let task = stmt.query_row(params![id], row_to_task).optional()?;
         Ok(task)
@@ -508,9 +564,11 @@ impl TasksDb {
 
         let mut stmt = self.conn.prepare(query)?;
         let tasks = if values.is_empty() {
-            stmt.query_map([], row_to_task)?.collect::<std::result::Result<Vec<_>, _>>()?
+            stmt.query_map([], row_to_task)?
+                .collect::<std::result::Result<Vec<_>, _>>()?
         } else {
-            stmt.query_map(params![values[0]], row_to_task)?.collect::<std::result::Result<Vec<_>, _>>()?
+            stmt.query_map(params![values[0]], row_to_task)?
+                .collect::<std::result::Result<Vec<_>, _>>()?
         };
         Ok(tasks)
     }
@@ -527,14 +585,20 @@ impl TasksDb {
                     budget_exceeded_reason,
                     phase, phase_order, milestone, epic_id, blocked_by,
                     under_review_by, COALESCE(task_qc_cost_usd, 0.0)
-             FROM tasks WHERE status = ?1 AND assigned_worker = ?2 ORDER BY id"
+             FROM tasks WHERE status = ?1 AND assigned_worker = ?2 ORDER BY id",
         )?;
-        let tasks = stmt.query_map(params![status, worker], row_to_task)?
+        let tasks = stmt
+            .query_map(params![status, worker], row_to_task)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(tasks)
     }
 
-    pub fn update_status(&self, id: i64, status: &str, assigned_worker: Option<&str>) -> Result<()> {
+    pub fn update_status(
+        &self,
+        id: i64,
+        status: &str,
+        assigned_worker: Option<&str>,
+    ) -> Result<()> {
         self.update_status_with_reason(id, status, assigned_worker, None)
     }
 
@@ -549,19 +613,25 @@ impl TasksDb {
         // completed_at is set atomically: datetime('now') on done, NULL on any other transition.
         // This ensures the "Done Today" filter stays accurate across status cycles.
         // updated_at is always refreshed so stall detection (supervisor) stays accurate.
-        let completed_at_sql = if status == "done" { "datetime('now')" } else { "NULL" };
+        let completed_at_sql = if status == "done" {
+            "datetime('now')"
+        } else {
+            "NULL"
+        };
         if let Some(worker) = assigned_worker {
             let sql = format!(
                 "UPDATE tasks SET status = ?1, assigned_worker = ?2, rejection_reason = ?3, \
                  updated_at = datetime('now'), completed_at = {completed_at_sql} WHERE id = ?4"
             );
-            self.conn.execute(&sql, params![status, worker, rejection_reason, id])?;
+            self.conn
+                .execute(&sql, params![status, worker, rejection_reason, id])?;
         } else {
             let sql = format!(
                 "UPDATE tasks SET status = ?1, rejection_reason = ?2, \
                  updated_at = datetime('now'), completed_at = {completed_at_sql} WHERE id = ?3"
             );
-            self.conn.execute(&sql, params![status, rejection_reason, id])?;
+            self.conn
+                .execute(&sql, params![status, rejection_reason, id])?;
         }
         Ok(())
     }
@@ -586,7 +656,8 @@ impl TasksDb {
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
-        self.conn.execute("DELETE FROM tasks WHERE id = ?1", params![id])?;
+        self.conn
+            .execute("DELETE FROM tasks WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -606,7 +677,7 @@ impl TasksDb {
              DELETE FROM worker_requests;
              DELETE FROM tasks;
              DELETE FROM sqlite_sequence WHERE name IN ('tasks', 'worker_requests');
-             COMMIT;"
+             COMMIT;",
         )?;
         Ok(())
     }
@@ -627,16 +698,19 @@ impl TasksDb {
             ],
         )?;
         let id = self.conn.last_insert_rowid();
-        self.get_worker_request_by_id(id)?.ok_or_else(|| AutoDevError::Agent("Worker request not found after insert".into()))
+        self.get_worker_request_by_id(id)?
+            .ok_or_else(|| AutoDevError::Agent("Worker request not found after insert".into()))
     }
 
     pub fn get_worker_request_by_id(&self, id: i64) -> Result<Option<WorkerRequest>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, worker_slug, task_id, request_type, payload, status,
                     resolution_note, created_at, resolved_at
-             FROM worker_requests WHERE id = ?1"
+             FROM worker_requests WHERE id = ?1",
         )?;
-        let req = stmt.query_row(params![id], row_to_worker_request).optional()?;
+        let req = stmt
+            .query_row(params![id], row_to_worker_request)
+            .optional()?;
         Ok(req)
     }
 
@@ -658,9 +732,11 @@ impl TasksDb {
         };
         let mut stmt = self.conn.prepare(query)?;
         let reqs = if values.is_empty() {
-            stmt.query_map([], row_to_worker_request)?.collect::<std::result::Result<Vec<_>, _>>()?
+            stmt.query_map([], row_to_worker_request)?
+                .collect::<std::result::Result<Vec<_>, _>>()?
         } else {
-            stmt.query_map(params![values[0]], row_to_worker_request)?.collect::<std::result::Result<Vec<_>, _>>()?
+            stmt.query_map(params![values[0]], row_to_worker_request)?
+                .collect::<std::result::Result<Vec<_>, _>>()?
         };
         Ok(reqs)
     }
@@ -681,7 +757,8 @@ impl TasksDb {
              WHERE id = ?3",
             resolved_at
         );
-        self.conn.execute(&sql, params![status, resolution_note, id])?;
+        self.conn
+            .execute(&sql, params![status, resolution_note, id])?;
         Ok(())
     }
 
@@ -693,10 +770,10 @@ impl TasksDb {
     pub fn insert_worker_message(
         &self,
         from_slug: &str,
-        to_slug:   &str,
-        body:      &str,
-        kind:      &str,
-        task_id:   Option<i64>,
+        to_slug: &str,
+        body: &str,
+        kind: &str,
+        task_id: Option<i64>,
     ) -> Result<WorkerMessage> {
         self.conn.execute(
             "INSERT INTO worker_messages (from_slug, to_slug, body, kind, task_id)
@@ -704,16 +781,15 @@ impl TasksDb {
             params![from_slug, to_slug, body, kind, task_id],
         )?;
         let id = self.conn.last_insert_rowid();
-        self.get_worker_message(id)?
-            .ok_or_else(|| AutoDevError::Agent(
-                "Worker message inserted but vanished on read-back".into()
-            ))
+        self.get_worker_message(id)?.ok_or_else(|| {
+            AutoDevError::Agent("Worker message inserted but vanished on read-back".into())
+        })
     }
 
     pub fn get_worker_message(&self, id: i64) -> Result<Option<WorkerMessage>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, from_slug, to_slug, body, kind, task_id, status, created_at, read_at
-             FROM worker_messages WHERE id = ?1"
+             FROM worker_messages WHERE id = ?1",
         )?;
         let msg = stmt
             .query_row(params![id], row_to_worker_message)
@@ -727,7 +803,7 @@ impl TasksDb {
     /// drain can distinguish "never seen" from "seen but un-acked."
     pub fn list_worker_messages_for(
         &self,
-        to_slug:     &str,
+        to_slug: &str,
         unread_only: bool,
     ) -> Result<Vec<WorkerMessage>> {
         // Step 1: snapshot the rows we're about to return so the caller sees
@@ -753,7 +829,8 @@ impl TasksDb {
 
         // Mark the pending ones we just returned as read.
         if !messages.is_empty() {
-            let pending_ids: Vec<i64> = messages.iter()
+            let pending_ids: Vec<i64> = messages
+                .iter()
                 .filter(|m| m.status == "pending")
                 .map(|m| m.id)
                 .collect();
@@ -767,7 +844,8 @@ impl TasksDb {
                      WHERE id IN ({}) AND status='pending'",
                     placeholders.join(",")
                 );
-                let params: Vec<&dyn rusqlite::ToSql> = pending_ids.iter()
+                let params: Vec<&dyn rusqlite::ToSql> = pending_ids
+                    .iter()
                     .map(|id| id as &dyn rusqlite::ToSql)
                     .collect();
                 self.conn.execute(&sql, params.as_slice())?;
@@ -796,13 +874,16 @@ impl TasksDb {
     /// Supervisor drain: messages still pending OR read (un-acked) for more
     /// than `older_than_minutes`. Used by the Supervisor recipe to surface
     /// stuck cross-worker conversations as escalations.
-    pub fn list_stale_worker_messages(&self, older_than_minutes: i64) -> Result<Vec<WorkerMessage>> {
+    pub fn list_stale_worker_messages(
+        &self,
+        older_than_minutes: i64,
+    ) -> Result<Vec<WorkerMessage>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, from_slug, to_slug, body, kind, task_id, status, created_at, read_at
              FROM worker_messages
              WHERE status IN ('pending','read')
                AND datetime(created_at) <= datetime('now', ?1)
-             ORDER BY created_at ASC"
+             ORDER BY created_at ASC",
         )?;
         let offset = format!("-{older_than_minutes} minutes");
         let messages: Vec<WorkerMessage> = stmt
@@ -816,14 +897,14 @@ impl TasksDb {
     pub fn list_worker_messages_for_task(
         &self,
         task_id: i64,
-        limit:   i64,
+        limit: i64,
     ) -> Result<Vec<WorkerMessage>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, from_slug, to_slug, body, kind, task_id, status, created_at, read_at
              FROM worker_messages
              WHERE task_id = ?1
              ORDER BY created_at ASC
-             LIMIT ?2"
+             LIMIT ?2",
         )?;
         let messages: Vec<WorkerMessage> = stmt
             .query_map(params![task_id, limit], row_to_worker_message)?
@@ -838,7 +919,7 @@ impl TasksDb {
             "SELECT id, from_slug, to_slug, body, kind, task_id, status, created_at, read_at
              FROM worker_messages
              ORDER BY created_at DESC
-             LIMIT ?1"
+             LIMIT ?1",
         )?;
         let messages: Vec<WorkerMessage> = stmt
             .query_map(params![limit], row_to_worker_message)?
@@ -874,12 +955,15 @@ impl TasksDb {
         // Pre-flight: count this worker's currently-in-progress tasks, ignoring
         // the one we're about to claim (in case of an idempotent retry that
         // somehow already transitioned the row).
-        let active: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM tasks
+        let active: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks
              WHERE assigned_worker = ?1 AND status = 'in_progress' AND id != ?2",
-            params![worker_slug, id],
-            |row| row.get(0),
-        ).unwrap_or(0);
+                params![worker_slug, id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
         if active > 0 {
             return Err(AutoDevError::Agent(format!(
                 "Worker '{worker_slug}' already owns {active} in_progress task(s); \
@@ -928,9 +1012,10 @@ impl TasksDb {
                     under_review_by, COALESCE(task_qc_cost_usd, 0.0)
              FROM tasks
              WHERE status IN ('assigned', 'in_progress')
-             ORDER BY updated_at ASC"
+             ORDER BY updated_at ASC",
         )?;
-        let tasks = stmt.query_map([], row_to_task)?
+        let tasks = stmt
+            .query_map([], row_to_task)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(tasks)
     }
@@ -998,22 +1083,24 @@ impl TasksDb {
             "SELECT id, task_id, task_title, task_type, worker_slug, assigned_at,
                     outcome, outcome_at, duration_ms, tokens_used
              FROM routing_history
-             ORDER BY assigned_at DESC LIMIT ?1"
+             ORDER BY assigned_at DESC LIMIT ?1",
         )?;
-        let entries = stmt.query_map(params![limit], |row| {
-            Ok(RoutingHistoryEntry {
-                id:          row.get(0)?,
-                task_id:     row.get(1)?,
-                task_title:  row.get(2)?,
-                task_type:   row.get(3)?,
-                worker_slug: row.get(4)?,
-                assigned_at: row.get(5)?,
-                outcome:     row.get(6)?,
-                outcome_at:  row.get(7)?,
-                duration_ms: row.get(8)?,
-                tokens_used: row.get(9)?,
-            })
-        })?.collect::<std::result::Result<Vec<_>, _>>()?;
+        let entries = stmt
+            .query_map(params![limit], |row| {
+                Ok(RoutingHistoryEntry {
+                    id: row.get(0)?,
+                    task_id: row.get(1)?,
+                    task_title: row.get(2)?,
+                    task_type: row.get(3)?,
+                    worker_slug: row.get(4)?,
+                    assigned_at: row.get(5)?,
+                    outcome: row.get(6)?,
+                    outcome_at: row.get(7)?,
+                    duration_ms: row.get(8)?,
+                    tokens_used: row.get(9)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(entries)
     }
 
@@ -1027,7 +1114,7 @@ impl TasksDb {
              FROM routing_history
              WHERE outcome IS NOT NULL
              GROUP BY worker_slug, task_type
-             HAVING total > 0"
+             HAVING total > 0",
         )?;
         let mut map = HashMap::new();
         let rows = stmt.query_map([], |row| {
@@ -1066,10 +1153,10 @@ impl TasksDb {
     /// Set the budget caps for a task (called by Supervisor before assigning).
     pub fn set_task_budget(
         &self,
-        task_id:    i64,
+        task_id: i64,
         max_tokens: Option<u64>,
-        max_usd:    Option<f64>,
-        max_turns:  Option<u32>,
+        max_usd: Option<f64>,
+        max_turns: Option<u32>,
     ) -> Result<()> {
         self.conn.execute(
             "UPDATE tasks SET budget_max_tokens = ?1, budget_max_usd = ?2,
@@ -1087,10 +1174,10 @@ impl TasksDb {
     /// Persist cumulative budget usage after each agent turn.
     pub fn update_task_budget_usage(
         &self,
-        task_id:     i64,
+        task_id: i64,
         tokens_used: u64,
-        cost_usd:    f64,
-        turns_used:  u32,
+        cost_usd: f64,
+        turns_used: u32,
     ) -> Result<()> {
         self.conn.execute(
             "UPDATE tasks SET budget_tokens_used = ?1, budget_cost_usd = ?2,
@@ -1129,14 +1216,14 @@ impl TasksDb {
         )?;
         let exceeded_reason = row.4.as_deref().map(|r| match r {
             "BUDGET_EXCEEDED_TOKENS" => crate::budget::BudgetExceededReason::TokenLimitReached,
-            "BUDGET_EXCEEDED_USD"    => crate::budget::BudgetExceededReason::CostLimitReached,
-            _                        => crate::budget::BudgetExceededReason::TurnLimitReached,
+            "BUDGET_EXCEEDED_USD" => crate::budget::BudgetExceededReason::CostLimitReached,
+            _ => crate::budget::BudgetExceededReason::TurnLimitReached,
         });
         Ok(crate::budget::BudgetStatus {
             tokens_used: row.0,
-            cost_usd:    row.1,
-            turns_used:  row.2,
-            exceeded:    row.3,
+            cost_usd: row.1,
+            turns_used: row.2,
+            exceeded: row.3,
             exceeded_reason,
         })
     }
@@ -1177,18 +1264,20 @@ impl TasksDb {
                     CAST(AVG(CASE WHEN duration_ms > 0 THEN duration_ms END) AS INTEGER) AS avg_dur
              FROM routing_history
              GROUP BY worker_slug, task_type
-             ORDER BY worker_slug, task_type"
+             ORDER BY worker_slug, task_type",
         )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, i64>(4)?,
-                row.get::<_, Option<i64>>(5)?,
-            ))
-        })?.collect::<std::result::Result<Vec<_>, _>>()?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     }
 
@@ -1196,14 +1285,20 @@ impl TasksDb {
 
     /// Create an Epic task — a parent record with task_type='epic'.
     /// Epic tasks have no assigned_worker and no phase; subtasks link back via epic_id.
-    pub fn create_epic(&self, title: &str, description: Option<&str>, created_by: &str) -> Result<Task> {
+    pub fn create_epic(
+        &self,
+        title: &str,
+        description: Option<&str>,
+        created_by: &str,
+    ) -> Result<Task> {
         self.conn.execute(
             "INSERT INTO tasks (title, description, priority, task_type, status, acceptance_criteria, created_by)
              VALUES (?1, ?2, 'p1', 'epic', 'ready', 'All subtasks complete', ?3)",
             params![title, description, created_by],
         )?;
         let id = self.conn.last_insert_rowid();
-        self.get_by_id(id)?.ok_or_else(|| AutoDevError::Agent("Epic not found after insert".into()))
+        self.get_by_id(id)?
+            .ok_or_else(|| AutoDevError::Agent("Epic not found after insert".into()))
     }
 
     /// Create a task with full phase metadata and optional blocker list.
@@ -1212,11 +1307,14 @@ impl TasksDb {
         let blocked_by_json = if input.blocked_by.is_empty() {
             None
         } else {
-            Some(serde_json::to_string(&input.blocked_by)
-                .unwrap_or_else(|_| "[]".to_string()))
+            Some(serde_json::to_string(&input.blocked_by).unwrap_or_else(|_| "[]".to_string()))
         };
         // Determine initial status: blocked if there are unresolved blockers, else ready
-        let initial_status = if input.blocked_by.is_empty() { "ready" } else { "needs_info" };
+        let initial_status = if input.blocked_by.is_empty() {
+            "ready"
+        } else {
+            "needs_info"
+        };
         self.conn.execute(
             "INSERT INTO tasks (title, description, priority, task_type, status,
                                acceptance_criteria, created_by,
@@ -1238,7 +1336,8 @@ impl TasksDb {
             ],
         )?;
         let id = self.conn.last_insert_rowid();
-        self.get_by_id(id)?.ok_or_else(|| AutoDevError::Agent("Phased task not found after insert".into()))
+        self.get_by_id(id)?
+            .ok_or_else(|| AutoDevError::Agent("Phased task not found after insert".into()))
     }
 
     /// All tasks belonging to an epic, ordered by phase_order then id.
@@ -1255,9 +1354,10 @@ impl TasksDb {
                     phase, phase_order, milestone, epic_id, blocked_by,
                     under_review_by, COALESCE(task_qc_cost_usd, 0.0)
              FROM tasks WHERE epic_id = ?1
-             ORDER BY COALESCE(phase_order, 999), id"
+             ORDER BY COALESCE(phase_order, 999), id",
         )?;
-        let tasks = stmt.query_map(params![epic_id], row_to_task)?
+        let tasks = stmt
+            .query_map(params![epic_id], row_to_task)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(tasks)
     }
@@ -1271,7 +1371,10 @@ impl TasksDb {
             std::collections::BTreeMap::new();
         for task in &tasks {
             if let (Some(phase), Some(order)) = (&task.phase, task.phase_order) {
-                phase_map.entry((order, phase.clone())).or_default().push(task);
+                phase_map
+                    .entry((order, phase.clone()))
+                    .or_default()
+                    .push(task);
             }
         }
 
@@ -1280,19 +1383,36 @@ impl TasksDb {
 
         for (idx, (order, phase)) in all_phases.iter().enumerate() {
             let phase_tasks = phase_map.get(&(*order, phase.clone())).unwrap();
-            let total        = phase_tasks.len() as i32;
-            let done         = phase_tasks.iter().filter(|t| t.status == TaskStatus::Done).count() as i32;
-            let in_progress  = phase_tasks.iter().filter(|t| t.status == TaskStatus::InProgress).count() as i32;
-            let ready        = phase_tasks.iter().filter(|t| t.status == TaskStatus::Ready || t.status == TaskStatus::Assigned).count() as i32;
-            let blocked      = phase_tasks.iter().filter(|t| t.status == TaskStatus::NeedsInfo && t.blocked_by.as_ref().map_or(false, |b| !b.is_empty())).count() as i32;
-            let is_complete  = total > 0 && done == total;
+            let total = phase_tasks.len() as i32;
+            let done = phase_tasks
+                .iter()
+                .filter(|t| t.status == TaskStatus::Done)
+                .count() as i32;
+            let in_progress = phase_tasks
+                .iter()
+                .filter(|t| t.status == TaskStatus::InProgress)
+                .count() as i32;
+            let ready = phase_tasks
+                .iter()
+                .filter(|t| t.status == TaskStatus::Ready || t.status == TaskStatus::Assigned)
+                .count() as i32;
+            let blocked = phase_tasks
+                .iter()
+                .filter(|t| {
+                    t.status == TaskStatus::NeedsInfo
+                        && t.blocked_by.as_ref().map_or(false, |b| !b.is_empty())
+                })
+                .count() as i32;
+            let is_complete = total > 0 && done == total;
 
             // A phase is unlocked if it's the first phase or the previous phase is complete
-            let is_unlocked  = if idx == 0 {
+            let is_unlocked = if idx == 0 {
                 true
             } else {
                 let prev = &all_phases[idx - 1];
-                summaries.iter().find(|s| s.phase == prev.1 && s.phase_order == prev.0)
+                summaries
+                    .iter()
+                    .find(|s| s.phase == prev.1 && s.phase_order == prev.0)
                     .map_or(false, |s| s.is_complete)
             };
 
@@ -1329,9 +1449,10 @@ impl TasksDb {
                     budget_exceeded_reason,
                     phase, phase_order, milestone, epic_id, blocked_by,
                     under_review_by, COALESCE(task_qc_cost_usd, 0.0)
-             FROM tasks WHERE blocked_by IS NOT NULL AND blocked_by != '[]'"
+             FROM tasks WHERE blocked_by IS NOT NULL AND blocked_by != '[]'",
         )?;
-        let tasks = stmt.query_map([], row_to_task)?
+        let tasks = stmt
+            .query_map([], row_to_task)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(tasks)
     }
@@ -1349,14 +1470,16 @@ impl TasksDb {
         for task in &blocked_tasks {
             let blockers = match &task.blocked_by {
                 Some(b) => b,
-                None    => continue,
+                None => continue,
             };
             if !blockers.contains(&completed_str) {
                 continue;
             }
             // Check if ALL blockers are now done
             let all_done = blockers.iter().all(|blocker_id| {
-                blocker_id.parse::<i64>().ok()
+                blocker_id
+                    .parse::<i64>()
+                    .ok()
                     .and_then(|bid| self.get_by_id(bid).ok().flatten())
                     .map_or(false, |t| t.status == TaskStatus::Done)
             });
@@ -1369,8 +1492,8 @@ impl TasksDb {
                 unblocked_ids.push(task.id);
                 crate::events::emit_task_changed_global(crate::events::TaskChangedPayload {
                     task_id: Some(task.id),
-                    kind:    "unblocked".into(),
-                    status:  Some("ready".into()),
+                    kind: "unblocked".into(),
+                    status: Some("ready".into()),
                     assigned_worker: task.assigned_worker.clone(),
                 });
             }
@@ -1390,12 +1513,14 @@ impl TasksDb {
                              WHERE id = ?1 AND task_type = 'epic'",
                             params![epic_id_int],
                         );
-                        crate::events::emit_task_changed_global(crate::events::TaskChangedPayload {
-                            task_id: Some(epic_id_int),
-                            kind:    "epic_complete".into(),
-                            status:  Some("done".into()),
-                            assigned_worker: None,
-                        });
+                        crate::events::emit_task_changed_global(
+                            crate::events::TaskChangedPayload {
+                                task_id: Some(epic_id_int),
+                                kind: "epic_complete".into(),
+                                status: Some("done".into()),
+                                assigned_worker: None,
+                            },
+                        );
                     }
                 }
             }
@@ -1447,10 +1572,11 @@ impl TasksDb {
     /// Used by the stranded-reviewer reconciler to detect rows whose
     /// reviewer subagent is no longer alive in the SubagentManager registry.
     pub fn list_qc_claims(&self) -> Result<Vec<(i64, String)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, under_review_by FROM tasks WHERE under_review_by IS NOT NULL"
-        )?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, under_review_by FROM tasks WHERE under_review_by IS NOT NULL")?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     }
@@ -1460,7 +1586,9 @@ impl TasksDb {
     /// `SubagentResult.cost_usd` so the QC ROI panel can show qc_cost /
     /// worker_cost ratios per task.
     pub fn add_qc_cost(&self, task_id: i64, cost_usd: f64) -> Result<()> {
-        if cost_usd <= 0.0 { return Ok(()); }
+        if cost_usd <= 0.0 {
+            return Ok(());
+        }
         self.conn.execute(
             "UPDATE tasks
              SET task_qc_cost_usd = COALESCE(task_qc_cost_usd, 0.0) + ?2
@@ -1486,9 +1614,10 @@ impl TasksDb {
              FROM tasks
              WHERE epic_id = ?1 AND phase = ?2
                AND status IN ('ready', 'assigned')
-             ORDER BY COALESCE(phase_order, 999), id"
+             ORDER BY COALESCE(phase_order, 999), id",
         )?;
-        let tasks = stmt.query_map(params![epic_id, phase], row_to_task)?
+        let tasks = stmt
+            .query_map(params![epic_id, phase], row_to_task)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(tasks)
     }
@@ -1496,70 +1625,75 @@ impl TasksDb {
 
 fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
     Ok(Task {
-        id:                  row.get(0)?,
-        title:               row.get(1)?,
-        description:         row.get(2)?,
-        priority:            TaskPriority::from_str(&row.get::<_, String>(3)?),
-        task_type:           TaskType::from_str(&row.get::<_, String>(4)?),
-        status:              TaskStatus::from_str(&row.get::<_, String>(5)?),
+        id: row.get(0)?,
+        title: row.get(1)?,
+        description: row.get(2)?,
+        priority: TaskPriority::from_str(&row.get::<_, String>(3)?),
+        task_type: TaskType::from_str(&row.get::<_, String>(4)?),
+        status: TaskStatus::from_str(&row.get::<_, String>(5)?),
         acceptance_criteria: row.get(6)?,
-        assigned_worker:     row.get(7)?,
-        rejection_reason:    row.get(8)?,
-        retry_count:         row.get(9)?,
-        created_by:          row.get(10)?,
-        created_at:          row.get(11)?,
-        updated_at:          row.get(12)?,
-        completed_at:        row.get(13)?,
-        claimed_by_pid:      row.get(14).unwrap_or(None),
-        claim_host:          row.get(15).unwrap_or(None),
-        diff_analysis:       row.get(16).unwrap_or(None),
+        assigned_worker: row.get(7)?,
+        rejection_reason: row.get(8)?,
+        retry_count: row.get(9)?,
+        created_by: row.get(10)?,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
+        completed_at: row.get(13)?,
+        claimed_by_pid: row.get(14).unwrap_or(None),
+        claim_host: row.get(15).unwrap_or(None),
+        diff_analysis: row.get(16).unwrap_or(None),
         // Ruflo Feature 4 — Budget Circuit Breaker (columns 17–24)
-        budget_max_tokens:         row.get(17).unwrap_or(None),
-        budget_max_usd:            row.get(18).unwrap_or(None),
-        budget_max_turns:          row.get(19).unwrap_or(None),
-        budget_tokens_used:        row.get::<_, i64>(20).unwrap_or(0),
-        budget_cost_usd:           row.get::<_, f64>(21).unwrap_or(0.0),
-        budget_turns_used:         row.get::<_, i64>(22).unwrap_or(0),
-        budget_exceeded:           row.get::<_, i64>(23).unwrap_or(0) != 0,
-        budget_exceeded_reason:    row.get(24).unwrap_or(None),
+        budget_max_tokens: row.get(17).unwrap_or(None),
+        budget_max_usd: row.get(18).unwrap_or(None),
+        budget_max_turns: row.get(19).unwrap_or(None),
+        budget_tokens_used: row.get::<_, i64>(20).unwrap_or(0),
+        budget_cost_usd: row.get::<_, f64>(21).unwrap_or(0.0),
+        budget_turns_used: row.get::<_, i64>(22).unwrap_or(0),
+        budget_exceeded: row.get::<_, i64>(23).unwrap_or(0) != 0,
+        budget_exceeded_reason: row.get(24).unwrap_or(None),
         // Ruflo Feature 5 — Phase-Based Task Decomposition (indices 25–29)
-        phase:       row.get(25).unwrap_or(None),
-        phase_order: row.get::<_, Option<i64>>(26).unwrap_or(None).map(|v| v as i32),
-        milestone:   row.get(27).unwrap_or(None),
-        epic_id:     row.get(28).unwrap_or(None),
-        blocked_by:  row.get::<_, Option<String>>(29).unwrap_or(None)
-                         .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()),
+        phase: row.get(25).unwrap_or(None),
+        phase_order: row
+            .get::<_, Option<i64>>(26)
+            .unwrap_or(None)
+            .map(|v| v as i32),
+        milestone: row.get(27).unwrap_or(None),
+        epic_id: row.get(28).unwrap_or(None),
+        blocked_by: row
+            .get::<_, Option<String>>(29)
+            .unwrap_or(None)
+            .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()),
         // Doc 04 Phase 2 / Phase 4 — under_review_by + task_qc_cost_usd
         // (indices 30, 31). Both are NULL-safe by SQL COALESCE / Option.
-        under_review_by:   row.get::<_, Option<String>>(30).unwrap_or(None),
-        task_qc_cost_usd:  row.get::<_, f64>(31).unwrap_or(0.0),
+        under_review_by: row.get::<_, Option<String>>(30).unwrap_or(None),
+        task_qc_cost_usd: row.get::<_, f64>(31).unwrap_or(0.0),
     })
 }
 
 fn row_to_worker_request(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkerRequest> {
     Ok(WorkerRequest {
-        id:               row.get(0)?,
-        worker_slug:      row.get(1)?,
-        task_id:          row.get(2)?,
-        request_type:     row.get(3)?,
-        payload:          row.get(4)?,
-        status:           WorkerRequestStatus::from_str(&row.get::<_, String>(5)?),
-        resolution_note:  row.get(6)?,
-        created_at:       row.get(7)?,
-        resolved_at:      row.get(8)?,
+        id: row.get(0)?,
+        worker_slug: row.get(1)?,
+        task_id: row.get(2)?,
+        request_type: row.get(3)?,
+        payload: row.get(4)?,
+        status: WorkerRequestStatus::from_str(&row.get::<_, String>(5)?),
+        resolution_note: row.get(6)?,
+        created_at: row.get(7)?,
+        resolved_at: row.get(8)?,
     })
 }
 
 fn row_to_worker_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkerMessage> {
     Ok(WorkerMessage {
-        id:         row.get(0)?,
-        from_slug:  row.get(1)?,
-        to_slug:    row.get(2)?,
-        body:       row.get(3)?,
-        kind:       row.get(4)?,
-        task_id:    row.get(5)?,
-        status:     row.get(6)?,
+        id: row.get(0)?,
+        from_slug: row.get(1)?,
+        to_slug: row.get(2)?,
+        body: row.get(3)?,
+        kind: row.get(4)?,
+        task_id: row.get(5)?,
+        status: row.get(6)?,
         created_at: row.get(7)?,
-        read_at:    row.get(8)?,
+        read_at: row.get(8)?,
     })
 }

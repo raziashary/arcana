@@ -7,22 +7,22 @@
 pub mod patterns;
 pub mod scorer;
 
-use serde::{Deserialize, Serialize};
-use crate::db::tasks::{TasksDb, Task, RoutingHistoryEntry};
+use crate::db::tasks::{RoutingHistoryEntry, Task, TasksDb};
 use crate::db::workers::WorkersDb;
 use crate::errors::Result;
 pub use scorer::AffinityScore;
+use serde::{Deserialize, Serialize};
 
 // ─── Worker Affinity Stats (for UI + Tauri command) ──────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerAffinityStats {
-    pub worker_slug:     String,
-    pub task_type:       String,
-    pub total_tasks:     i64,
-    pub success_count:   i64,
-    pub failure_count:   i64,
-    pub success_rate:    f64,
+    pub worker_slug: String,
+    pub task_type: String,
+    pub total_tasks: i64,
+    pub success_count: i64,
+    pub failure_count: i64,
+    pub success_rate: f64,
     pub avg_duration_ms: Option<i64>,
 }
 
@@ -33,10 +33,8 @@ pub struct TaskRouter;
 impl TaskRouter {
     /// Suggest the best worker for a task based on static patterns + history.
     pub fn suggest_worker(task: &Task) -> Result<AffinityScore> {
-        let static_match = patterns::match_static(
-            &task.title,
-            task.description.as_deref().unwrap_or(""),
-        );
+        let static_match =
+            patterns::match_static(&task.title, task.description.as_deref().unwrap_or(""));
 
         let task_db = TasksDb::open()?;
         let history = task_db.get_routing_history(200)?;
@@ -51,14 +49,14 @@ impl TaskRouter {
     /// Record a new assignment in routing_history (outcome = NULL / pending).
     pub fn record_assignment(task: &Task, worker_slug: &str) -> Result<()> {
         let entry = RoutingHistoryEntry {
-            id:          uuid::Uuid::new_v4().to_string(),
-            task_id:     task.id.to_string(),
-            task_title:  task.title.clone(),
-            task_type:   task.task_type.as_str().to_string(),
+            id: uuid::Uuid::new_v4().to_string(),
+            task_id: task.id.to_string(),
+            task_title: task.title.clone(),
+            task_type: task.task_type.as_str().to_string(),
             worker_slug: worker_slug.to_string(),
             assigned_at: chrono::Utc::now().to_rfc3339(),
-            outcome:     None,
-            outcome_at:  None,
+            outcome: None,
+            outcome_at: None,
             duration_ms: None,
             tokens_used: None,
         };
@@ -89,10 +87,15 @@ impl TaskRouter {
         // is the one we want to update. 200 is generous — assignment-to-done
         // typically spans <10 tasks of history.
         let history = db.get_routing_history(200).unwrap_or_default();
-        let duration_ms = history.iter()
+        let duration_ms = history
+            .iter()
             .find(|h| h.task_id == task_id && h.outcome.is_none())
             .and_then(|h| chrono::DateTime::parse_from_rfc3339(&h.assigned_at).ok())
-            .map(|assigned| chrono::Utc::now().signed_duration_since(assigned.with_timezone(&chrono::Utc)).num_milliseconds())
+            .map(|assigned| {
+                chrono::Utc::now()
+                    .signed_duration_since(assigned.with_timezone(&chrono::Utc))
+                    .num_milliseconds()
+            })
             .filter(|ms| *ms >= 0)
             .unwrap_or(0);
         db.update_routing_outcome(task_id, outcome, duration_ms, 0)
@@ -104,22 +107,24 @@ impl TaskRouter {
         let raw = db.get_affinity_stats()?;
         let stats = raw
             .into_iter()
-            .map(|(worker_slug, task_type, total, successes, failures, avg_dur)| {
-                let rate = if successes + failures > 0 {
-                    successes as f64 / (successes + failures) as f64
-                } else {
-                    0.0
-                };
-                WorkerAffinityStats {
-                    worker_slug,
-                    task_type,
-                    total_tasks:     total,
-                    success_count:   successes,
-                    failure_count:   failures,
-                    success_rate:    rate,
-                    avg_duration_ms: avg_dur,
-                }
-            })
+            .map(
+                |(worker_slug, task_type, total, successes, failures, avg_dur)| {
+                    let rate = if successes + failures > 0 {
+                        successes as f64 / (successes + failures) as f64
+                    } else {
+                        0.0
+                    };
+                    WorkerAffinityStats {
+                        worker_slug,
+                        task_type,
+                        total_tasks: total,
+                        success_count: successes,
+                        failure_count: failures,
+                        success_rate: rate,
+                        avg_duration_ms: avg_dur,
+                    }
+                },
+            )
             .collect();
         Ok(stats)
     }

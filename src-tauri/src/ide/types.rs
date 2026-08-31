@@ -10,21 +10,21 @@ use serde::{Deserialize, Serialize};
 /// and are lazy-loaded by a follow-up `read_file_tree` call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileTreeNode {
-    pub name:           String,
+    pub name: String,
     /// Path relative to the workspace root (forward-slashes, no leading slash).
-    pub relative_path:  String,
+    pub relative_path: String,
     /// Absolute OS path.
-    pub absolute_path:  String,
-    pub is_directory:   bool,
-    pub size_bytes:     Option<u64>,
+    pub absolute_path: String,
+    pub is_directory: bool,
+    pub size_bytes: Option<u64>,
     /// Unix ms of mtime. None if not available.
-    pub modified_ms:    Option<i64>,
+    pub modified_ms: Option<i64>,
     /// Git status for this path (if inside a git repo). None otherwise.
-    pub git_status:     Option<GitStatus>,
+    pub git_status: Option<GitStatus>,
     /// Children of this directory node (empty for files and lazy-loaded dirs).
-    pub children:       Vec<FileTreeNode>,
+    pub children: Vec<FileTreeNode>,
     /// True when the directory's children were not loaded (depth cut-off).
-    pub has_more:       bool,
+    pub has_more: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,18 +53,18 @@ pub struct FileContent {
     pub absolute_path: String,
     pub relative_path: String,
     /// UTF-8 decoded content. Binary files return a placeholder string and `is_binary=true`.
-    pub content:       String,
-    pub encoding:      String,
-    pub is_binary:     bool,
-    pub line_count:    usize,
+    pub content: String,
+    pub encoding: String,
+    pub is_binary: bool,
+    pub line_count: usize,
     /// Total file size on disk in bytes.
-    pub size_bytes:    u64,
+    pub size_bytes: u64,
     /// First line included when pagination was applied (1-indexed, None = whole file).
-    pub start_line:    Option<usize>,
+    pub start_line: Option<usize>,
     /// Last line included when pagination was applied (1-indexed, None = whole file).
-    pub end_line:      Option<usize>,
+    pub end_line: Option<usize>,
     /// Detected language ID (monaco-compatible: "rust", "typescript", …).
-    pub language:      String,
+    pub language: String,
 }
 
 // ─── File Metadata ────────────────────────────────────────────────────────────
@@ -73,41 +73,41 @@ pub struct FileContent {
 pub struct FileMetadata {
     pub absolute_path: String,
     pub relative_path: String,
-    pub size_bytes:    u64,
-    pub modified_ms:   Option<i64>,
-    pub is_directory:  bool,
-    pub is_readonly:   bool,
-    pub git_status:    Option<GitStatus>,
+    pub size_bytes: u64,
+    pub modified_ms: Option<i64>,
+    pub is_directory: bool,
+    pub is_readonly: bool,
+    pub git_status: Option<GitStatus>,
 }
 
 // ─── Search ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileSearchResult {
-    pub name:          String,
+    pub name: String,
     pub relative_path: String,
     pub absolute_path: String,
-    pub is_directory:  bool,
+    pub is_directory: bool,
     /// Fuzzy-match score (lower = better). Useful for stable sorting.
-    pub score:         i32,
+    pub score: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContentSearchResult {
     pub relative_path: String,
     pub absolute_path: String,
-    pub matches:       Vec<ContentMatch>,
+    pub matches: Vec<ContentMatch>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContentMatch {
     /// 1-indexed line number.
     pub line_number: usize,
-    pub line_text:   String,
+    pub line_text: String,
     /// 0-indexed byte offset of the match start within `line_text`.
     pub match_start: usize,
     /// 0-indexed byte offset of the match end (exclusive) within `line_text`.
-    pub match_end:   usize,
+    pub match_end: usize,
 }
 
 // ─── Symbols ──────────────────────────────────────────────────────────────────
@@ -115,19 +115,19 @@ pub struct ContentMatch {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SymbolTree {
     pub relative_path: String,
-    pub language:      String,
-    pub symbols:       Vec<Symbol>,
+    pub language: String,
+    pub symbols: Vec<Symbol>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Symbol {
-    pub name:        String,
-    pub kind:        SymbolKind,
+    pub name: String,
+    pub kind: SymbolKind,
     /// 1-indexed line where the symbol is declared.
-    pub line:        usize,
+    pub line: usize,
     /// 0-indexed column of the declaration name.
-    pub column:      usize,
-    pub children:    Vec<Symbol>,
+    pub column: usize,
+    pub children: Vec<Symbol>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,16 +151,16 @@ pub enum SymbolKind {
 /// Result of resolve_symbol — the definition site of a named symbol.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SymbolDefinition {
-    pub name:          String,
-    pub kind:          SymbolKind,
+    pub name: String,
+    pub kind: SymbolKind,
     pub relative_path: String,
     pub absolute_path: String,
     /// 1-indexed declaration line.
-    pub line:          usize,
+    pub line: usize,
     /// 0-indexed declaration column.
-    pub column:        usize,
+    pub column: usize,
     /// The raw declaration line text (useful for tooltip previews).
-    pub preview:       String,
+    pub preview: String,
 }
 
 /// A single location where a symbol name appears (may be a call-site, import,
@@ -170,8 +170,8 @@ pub struct SymbolReference {
     pub relative_path: String,
     pub absolute_path: String,
     /// 1-indexed.
-    pub line:          usize,
+    pub line: usize,
     /// 0-indexed byte start of the match within `line_text`.
-    pub column:        usize,
-    pub line_text:     String,
+    pub column: usize,
+    pub line_text: String,
 }

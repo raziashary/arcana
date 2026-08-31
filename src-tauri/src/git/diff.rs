@@ -53,7 +53,7 @@ fn index_to_head<'a>(repo: &'a Repository, opts: &mut DiffOptions) -> Result<Dif
 pub fn diff_blobs(old: &[u8], new: &[u8]) -> DiffResult {
     let mut patch = String::new();
     let mut insertions = 0usize;
-    let mut deletions  = 0usize;
+    let mut deletions = 0usize;
 
     let res = git2::Patch::from_buffers(old, None, new, None, None);
     if let Ok(Some(mut p)) = res.map(Some) {
@@ -65,7 +65,7 @@ pub fn diff_blobs(old: &[u8], new: &[u8]) -> DiffResult {
         if let Ok(stats) = p.line_stats() {
             // line_stats returns (context, additions, deletions)
             insertions = stats.1;
-            deletions  = stats.2;
+            deletions = stats.2;
         }
     }
 
@@ -99,7 +99,7 @@ fn render(diff: &Diff) -> Result<DiffResult> {
     Ok(DiffResult {
         patch,
         files_changed: stats.files_changed(),
-        insertions:    stats.insertions(),
-        deletions:     stats.deletions(),
+        insertions: stats.insertions(),
+        deletions: stats.deletions(),
     })
 }

@@ -10,18 +10,6 @@ use tauri::AppHandle;
 use tracing::{debug, error, info};
 use uuid::Uuid;
 
-use crate::errors::{AutoDevError, Result};
-use crate::events::{
-    emit_agent_done, emit_agent_error, emit_thinking, emit_token,
-    AgentDonePayload, AgentErrorPayload, ThinkingPayload, TokenPayload,
-};
-use crate::cost::tracker::CostTracker;
-use crate::hooks::{HookRegistry, HookType, HookContext};
-use crate::provider::types::{
-    CompletionRequest, MessageContent, RequestMessage, StreamChunk,
-};
-use crate::session::manager::SessionManager;
-use crate::state::AppState;
 use super::builtin_tools;
 use super::compaction::CompactionEngine;
 use super::context::ContextBuilder;
@@ -29,42 +17,64 @@ use super::permission::{PendingPermissions, PermissionMode};
 use super::tool_executor::ToolExecutor;
 use super::tool_registry::ToolRegistry;
 use super::tool_trait::Tool;
+use crate::cost::tracker::CostTracker;
+use crate::errors::{AutoDevError, Result};
+use crate::events::{
+    emit_agent_done, emit_agent_error, emit_thinking, emit_token, AgentDonePayload,
+    AgentErrorPayload, ThinkingPayload, TokenPayload,
+};
+use crate::hooks::{HookContext, HookRegistry, HookType};
 use crate::provider::traits::Provider;
+use crate::provider::types::{CompletionRequest, MessageContent, RequestMessage, StreamChunk};
+use crate::session::manager::SessionManager;
+use crate::state::AppState;
 
 const MAX_TOOL_TURNS: usize = 20;
 
 pub struct AgentEngine {
-    provider:     Arc<dyn Provider>,
-    registry:     ToolRegistry,
-    mode:         PermissionMode,
-    pa_mode:      super::PAMode,
-    pending:      PendingPermissions,
-    app:          AppHandle,
-    state:        Arc<Mutex<AppState>>,
+    provider: Arc<dyn Provider>,
+    registry: ToolRegistry,
+    mode: PermissionMode,
+    pa_mode: super::PAMode,
+    pending: PendingPermissions,
+    app: AppHandle,
+    state: Arc<Mutex<AppState>>,
     /// Who this engine runs as, and its nesting depth. Threaded into every
     /// ToolContext, so tool-side identity and the recursion guard depend on the
     /// spawn tree rather than on anything the model says about itself.
-    identity:     super::tool_trait::AgentIdentity,
-    session_mgr:  Option<Arc<SessionManager>>,
+    identity: super::tool_trait::AgentIdentity,
+    session_mgr: Option<Arc<SessionManager>>,
     // Ruflo Feature 4 — Budget Circuit Breaker: set via with_task_budget()
-    task_id:      Option<i64>,
-    task_budget:  Option<crate::budget::TaskBudget>,
+    task_id: Option<i64>,
+    task_budget: Option<crate::budget::TaskBudget>,
 }
 
 impl AgentEngine {
     pub fn new(
         provider: Arc<dyn Provider>,
-        mode:     PermissionMode,
-        pa_mode:  super::PAMode,
-        app:      AppHandle,
-        state:    Arc<Mutex<AppState>>,
-        pending:  PendingPermissions,
+        mode: PermissionMode,
+        pa_mode: super::PAMode,
+        app: AppHandle,
+        state: Arc<Mutex<AppState>>,
+        pending: PendingPermissions,
         identity: super::tool_trait::AgentIdentity,
     ) -> Self {
         let mut registry = ToolRegistry::new();
         builtin_tools::register_for_mode(&mut registry, pa_mode);
 
-        Self { provider, registry, mode, pa_mode, pending, app, state, identity, session_mgr: None, task_id: None, task_budget: None }
+        Self {
+            provider,
+            registry,
+            mode,
+            pa_mode,
+            pending,
+            app,
+            state,
+            identity,
+            session_mgr: None,
+            task_id: None,
+            task_budget: None,
+        }
     }
 
     /// Set the session manager for persisting messages
@@ -86,31 +96,34 @@ impl AgentEngine {
     /// Returns after the LLM stops tool use (stop_reason = "end_turn").
     pub async fn run(
         &self,
-        session_id:  &str,
+        session_id: &str,
         working_dir: &str,
-        model:       &str,
+        model: &str,
         mut history: Vec<RequestMessage>,
         user_message: &str,
         system_prompt_override: Option<&str>,
     ) -> Result<Vec<RequestMessage>> {
         // Check for cancellation before starting
         if self.state.lock().unwrap().is_cancelled(session_id) {
-            return Err(AutoDevError::Agent("Agent was cancelled before start".into()));
+            return Err(AutoDevError::Agent(
+                "Agent was cancelled before start".into(),
+            ));
         }
 
-        let context_builder = ContextBuilder::new(working_dir)
-            .with_session(session_id);
-        let system_prompt   = if let Some(override_str) = system_prompt_override {
+        let context_builder = ContextBuilder::new(working_dir).with_session(session_id);
+        let system_prompt = if let Some(override_str) = system_prompt_override {
             override_str.to_string()
         } else {
             context_builder.build_system_prompt_with_mode(self.pa_mode, working_dir)
         };
-        let tool_defs       = self.registry.to_definitions();
+        let tool_defs = self.registry.to_definitions();
 
         // Add user message to history
         history.push(RequestMessage {
-            role:    "user".to_string(),
-            content: vec![MessageContent::Text { text: user_message.to_string() }],
+            role: "user".to_string(),
+            content: vec![MessageContent::Text {
+                text: user_message.to_string(),
+            }],
         });
 
         let tool_executor = ToolExecutor::new(
@@ -127,7 +140,7 @@ impl AgentEngine {
         };
 
         let mut turn = 0;
-        let mut total_tokens_in:  u32 = 0;
+        let mut total_tokens_in: u32 = 0;
         let mut total_tokens_out: u32 = 0;
         // Ruflo Feature 4 — cumulative budget usage tracked across all turns
         let mut budget_status = crate::budget::BudgetStatus::default();
@@ -156,14 +169,17 @@ impl AgentEngine {
             if let Some(ref budget) = self.task_budget {
                 if let Some(reason) = budget.check(&budget_status) {
                     let reason_str = reason.as_event_str().to_string();
-                    crate::events::emit_budget_exceeded(&self.app, crate::events::BudgetExceededEvent {
-                        session_id:  session_id.to_string(),
-                        task_id:     self.task_id,
-                        reason:      reason_str.clone(),
-                        tokens_used: budget_status.tokens_used,
-                        cost_usd:    budget_status.cost_usd,
-                        turns_used:  budget_status.turns_used,
-                    });
+                    crate::events::emit_budget_exceeded(
+                        &self.app,
+                        crate::events::BudgetExceededEvent {
+                            session_id: session_id.to_string(),
+                            task_id: self.task_id,
+                            reason: reason_str.clone(),
+                            tokens_used: budget_status.tokens_used,
+                            cost_usd: budget_status.cost_usd,
+                            turns_used: budget_status.turns_used,
+                        },
+                    );
                     if let Some(tid) = self.task_id {
                         self.escalate_budget_exceeded(tid, &budget_status, &reason_str);
                     }
@@ -183,11 +199,9 @@ impl AgentEngine {
                 model_context,
             ) {
                 info!("Compacting conversation for session {session_id}");
-                history = CompactionEngine::compact_with_summary(
-                    history,
-                    self.provider.as_ref(),
-                    model,
-                ).await;
+                history =
+                    CompactionEngine::compact_with_summary(history, self.provider.as_ref(), model)
+                        .await;
             }
 
             // Cancel check
@@ -197,32 +211,35 @@ impl AgentEngine {
             }
 
             let request = CompletionRequest {
-                model:                  model.to_string(),
-                messages:               history.clone(),
-                system:                 Some(system_prompt.clone()),
-                tools:                  tool_defs.clone(),
-                max_tokens:             8192,
-                temperature:            None,
-                top_p:                  None,
-                reasoning_effort:       None,
+                model: model.to_string(),
+                messages: history.clone(),
+                system: Some(system_prompt.clone()),
+                tools: tool_defs.clone(),
+                max_tokens: 8192,
+                temperature: None,
+                top_p: None,
+                reasoning_effort: None,
                 thinking_budget_tokens: None,
             };
 
             debug!("Starting LLM stream turn={turn} session={session_id}");
 
             // Stream response from provider
-            let stream_result = self.stream_response(
-                session_id,
-                model,
-                request,
-                &mut total_tokens_in,
-                &mut total_tokens_out,
-            ).await;
+            let stream_result = self
+                .stream_response(
+                    session_id,
+                    model,
+                    request,
+                    &mut total_tokens_in,
+                    &mut total_tokens_out,
+                )
+                .await;
 
             // Ruflo Feature 4 — accumulate token usage into budget_status after each LLM response
             if let Ok(ref _r) = stream_result {
                 budget_status.tokens_used = (total_tokens_in + total_tokens_out) as u64;
-                budget_status.cost_usd    = CostTracker::calculate(model, total_tokens_in, total_tokens_out).cost_usd;
+                budget_status.cost_usd =
+                    CostTracker::calculate(model, total_tokens_in, total_tokens_out).cost_usd;
                 if let Some(tid) = self.task_id {
                     if let Ok(db) = crate::db::tasks::TasksDb::open() {
                         let _ = db.update_task_budget_usage(
@@ -256,10 +273,13 @@ impl AgentEngine {
                     };
                     HookRegistry::fire(&HookType::OnError, &error_ctx).await;
 
-                    emit_agent_error(&self.app, AgentErrorPayload {
-                        session_id: session_id.to_string(),
-                        message:    e.to_string(),
-                    });
+                    emit_agent_error(
+                        &self.app,
+                        AgentErrorPayload {
+                            session_id: session_id.to_string(),
+                            message: e.to_string(),
+                        },
+                    );
                     return Err(e);
                 }
             };
@@ -272,7 +292,7 @@ impl AgentEngine {
 
             // Add assistant message to history
             history.push(RequestMessage {
-                role:    "assistant".to_string(),
+                role: "assistant".to_string(),
                 content: response_content.clone(),
             });
 
@@ -321,7 +341,7 @@ impl AgentEngine {
                 // Append hint inline so the LLM reads it as part of the result content.
                 let content = match result.hint {
                     Some(hint) => format!("{}\n\n[HINT] {}", result.output, hint),
-                    None       => result.output,
+                    None => result.output,
                 };
                 MessageContent::ToolResult {
                     tool_use_id,
@@ -332,7 +352,7 @@ impl AgentEngine {
 
             // Add tool results as user message (Anthropic convention)
             history.push(RequestMessage {
-                role:    "user".to_string(),
+                role: "user".to_string(),
                 content: tool_results,
             });
 
@@ -379,31 +399,31 @@ impl AgentEngine {
             // Phase 1 of docs/endtoendrun/14may2026/02 — fail loudly so a
             // future analytics regression shows up in the log instead of
             // silently zeroing the Dashboard.
-            if let Err(e) = crate::analytics::global()
-                .collector()
-                .record_token_usage(
-                    session_id.to_string(),
-                    "mode1_agent".to_string(),
-                    analytics_provider.to_string(),
-                    model.to_string(),
-                    total_tokens_in as i32,
-                    total_tokens_out as i32,
-                    None,
-                    cost.cost_usd,
-                    "agent_session".to_string(),
-                )
-            {
+            if let Err(e) = crate::analytics::global().collector().record_token_usage(
+                session_id.to_string(),
+                "mode1_agent".to_string(),
+                analytics_provider.to_string(),
+                model.to_string(),
+                total_tokens_in as i32,
+                total_tokens_out as i32,
+                None,
+                cost.cost_usd,
+                "agent_session".to_string(),
+            ) {
                 error!("[Mode1] record_token_usage failed for session {session_id}: {e}");
             }
         }
 
-        emit_agent_done(&self.app, AgentDonePayload {
-            session_id:  session_id.to_string(),
-            message_id:  Uuid::new_v4().to_string(),
-            tokens_in:   total_tokens_in,
-            tokens_out:  total_tokens_out,
-            cost_usd:    cost.cost_usd,
-        });
+        emit_agent_done(
+            &self.app,
+            AgentDonePayload {
+                session_id: session_id.to_string(),
+                message_id: Uuid::new_v4().to_string(),
+                tokens_in: total_tokens_in,
+                tokens_out: total_tokens_out,
+                cost_usd: cost.cost_usd,
+            },
+        );
 
         Ok(history)
     }
@@ -412,10 +432,10 @@ impl AgentEngine {
     /// Returns the fully assembled response content blocks.
     async fn stream_response(
         &self,
-        session_id:       &str,
-        _model:           &str,
-        request:          CompletionRequest,
-        total_tokens_in:  &mut u32,
+        session_id: &str,
+        _model: &str,
+        request: CompletionRequest,
+        total_tokens_in: &mut u32,
         total_tokens_out: &mut u32,
     ) -> Result<Vec<MessageContent>> {
         use futures::StreamExt;
@@ -432,24 +452,37 @@ impl AgentEngine {
         while let Some(chunk) = stream.next().await {
             match chunk? {
                 StreamChunk::TextDelta { text } => {
-                    emit_token(&self.app, TokenPayload {
-                        session_id: session_id.to_string(),
-                        text: text.clone(),
-                    });
+                    emit_token(
+                        &self.app,
+                        TokenPayload {
+                            session_id: session_id.to_string(),
+                            text: text.clone(),
+                        },
+                    );
                     text_buffer.push_str(&text);
                 }
                 StreamChunk::ThinkingDelta { text } => {
-                    emit_thinking(&self.app, ThinkingPayload {
-                        session_id: session_id.to_string(),
-                        text: text.clone(),
-                    });
+                    emit_thinking(
+                        &self.app,
+                        ThinkingPayload {
+                            session_id: session_id.to_string(),
+                            text: text.clone(),
+                        },
+                    );
                 }
-                StreamChunk::ToolUseStart { id, name, block_index } => {
+                StreamChunk::ToolUseStart {
+                    id,
+                    name,
+                    block_index,
+                } => {
                     debug!("Tool use start: name={name} id={id} block_index={block_index}");
                     index_to_id.insert(block_index, id.clone());
                     tool_use_map.insert(id, (name, String::new()));
                 }
-                StreamChunk::ToolInputDelta { block_index, partial_json } => {
+                StreamChunk::ToolInputDelta {
+                    block_index,
+                    partial_json,
+                } => {
                     if let Some(tool_id) = index_to_id.get(&block_index) {
                         if let Some(entry) = tool_use_map.get_mut(tool_id) {
                             entry.1.push_str(&partial_json);
@@ -458,8 +491,12 @@ impl AgentEngine {
                         debug!("ToolInputDelta: no tool_id for block_index={block_index}");
                     }
                 }
-                StreamChunk::MessageDelta { tokens_in, tokens_out, .. } => {
-                    *total_tokens_in  += tokens_in;
+                StreamChunk::MessageDelta {
+                    tokens_in,
+                    tokens_out,
+                    ..
+                } => {
+                    *total_tokens_in += tokens_in;
                     *total_tokens_out += tokens_out;
                 }
                 StreamChunk::Done => break,
@@ -485,18 +522,23 @@ impl AgentEngine {
     // or reassign. Infallible — logs on DB failure so the budget halt still works.
     fn escalate_budget_exceeded(
         &self,
-        task_id:    i64,
-        status:     &crate::budget::BudgetStatus,
+        task_id: i64,
+        status: &crate::budget::BudgetStatus,
         reason_str: &str,
     ) {
-        let budget_limit_str = self.task_budget.as_ref().map(|b| {
-            format!(
-                "{} tokens / ${:.2} USD / {} turns",
-                b.max_tokens.map_or("unlimited".to_string(), |t| t.to_string()),
-                b.max_usd.map_or(0.0, |u| u),
-                b.max_turns.map_or(0, |t| t),
-            )
-        }).unwrap_or_else(|| "unknown".to_string());
+        let budget_limit_str = self
+            .task_budget
+            .as_ref()
+            .map(|b| {
+                format!(
+                    "{} tokens / ${:.2} USD / {} turns",
+                    b.max_tokens
+                        .map_or("unlimited".to_string(), |t| t.to_string()),
+                    b.max_usd.map_or(0.0, |u| u),
+                    b.max_turns.map_or(0, |t| t),
+                )
+            })
+            .unwrap_or_else(|| "unknown".to_string());
 
         let issue_description = format!(
             "Budget exceeded on task #{task_id}: halted at {} tokens / ${:.4} USD after {} turns. \
@@ -514,10 +556,10 @@ impl AgentEngine {
         });
 
         let req_input = crate::db::tasks::CreateWorkerRequestInput {
-            worker_slug:  "engine".to_string(),
-            task_id:      Some(task_id),
+            worker_slug: "engine".to_string(),
+            task_id: Some(task_id),
             request_type: "report_issue".to_string(),
-            payload:      payload.to_string(),
+            payload: payload.to_string(),
         };
 
         match crate::db::tasks::TasksDb::open() {
@@ -529,9 +571,9 @@ impl AgentEngine {
                     error!("[budget] failed to mark task {task_id} budget-exceeded: {e}");
                 }
                 crate::events::emit_task_changed_global(crate::events::TaskChangedPayload {
-                    task_id:         Some(task_id),
-                    kind:            "budget_exceeded".to_string(),
-                    status:          Some("needs_info".to_string()),
+                    task_id: Some(task_id),
+                    kind: "budget_exceeded".to_string(),
+                    status: Some("needs_info".to_string()),
                     assigned_worker: None,
                 });
             }

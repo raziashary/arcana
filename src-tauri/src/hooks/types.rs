@@ -2,8 +2,8 @@
 // Event-driven extensibility at key lifecycle points throughout AutoDev.
 // Hooks are persisted in ~/.autodev/config.db and executed by HookExecutor.
 
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 // ── Hook Event Types ───────────────────────────────────────────────────────────
 
@@ -56,36 +56,36 @@ pub enum HookType {
 impl HookType {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::SessionStart        => "session_start",
-            Self::SessionEnd          => "session_end",
-            Self::AgentLoopStart      => "agent_loop_start",
-            Self::AgentLoopEnd        => "agent_loop_end",
-            Self::OnError             => "on_error",
-            Self::PreToolUse          => "pre_tool_use",
-            Self::PostToolUse         => "post_tool_use",
-            Self::OnToolError         => "on_tool_error",
+            Self::SessionStart => "session_start",
+            Self::SessionEnd => "session_end",
+            Self::AgentLoopStart => "agent_loop_start",
+            Self::AgentLoopEnd => "agent_loop_end",
+            Self::OnError => "on_error",
+            Self::PreToolUse => "pre_tool_use",
+            Self::PostToolUse => "post_tool_use",
+            Self::OnToolError => "on_tool_error",
             Self::OnPermissionRequest => "on_permission_request",
-            Self::PreFileRead         => "pre_file_read",
-            Self::PostFileWrite       => "post_file_write",
-            Self::PreFileDelete       => "pre_file_delete",
-            Self::OnCheckpointCreate  => "on_checkpoint_create",
+            Self::PreFileRead => "pre_file_read",
+            Self::PostFileWrite => "post_file_write",
+            Self::PreFileDelete => "pre_file_delete",
+            Self::OnCheckpointCreate => "on_checkpoint_create",
             Self::OnCheckpointRestore => "on_checkpoint_restore",
-            Self::PreCommit           => "pre_commit",
-            Self::PostCommit          => "post_commit",
-            Self::PrePush             => "pre_push",
-            Self::OnBranchSwitch      => "on_branch_switch",
-            Self::OnMergeConflict     => "on_merge_conflict",
-            Self::PrePlanStep         => "pre_plan_step",
-            Self::PostPlanStep        => "post_plan_step",
-            Self::OnPlanActivate      => "on_plan_activate",
-            Self::OnPlanComplete      => "on_plan_complete",
-            Self::OnPlanAbandon       => "on_plan_abandon",
-            Self::OnTaskClaim         => "on_task_claim",
-            Self::OnTaskComplete      => "on_task_complete",
-            Self::OnTaskFail          => "on_task_fail",
-            Self::OnQcReviewStart     => "on_qc_review_start",
-            Self::OnQcApprove         => "on_qc_approve",
-            Self::OnQcFail            => "on_qc_fail",
+            Self::PreCommit => "pre_commit",
+            Self::PostCommit => "post_commit",
+            Self::PrePush => "pre_push",
+            Self::OnBranchSwitch => "on_branch_switch",
+            Self::OnMergeConflict => "on_merge_conflict",
+            Self::PrePlanStep => "pre_plan_step",
+            Self::PostPlanStep => "post_plan_step",
+            Self::OnPlanActivate => "on_plan_activate",
+            Self::OnPlanComplete => "on_plan_complete",
+            Self::OnPlanAbandon => "on_plan_abandon",
+            Self::OnTaskClaim => "on_task_claim",
+            Self::OnTaskComplete => "on_task_complete",
+            Self::OnTaskFail => "on_task_fail",
+            Self::OnQcReviewStart => "on_qc_review_start",
+            Self::OnQcApprove => "on_qc_approve",
+            Self::OnQcFail => "on_qc_fail",
         }
     }
 }
@@ -96,37 +96,37 @@ impl HookType {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HookAction {
     Shell {
-        command:     String,
+        command: String,
         working_dir: Option<String>,
         timeout_secs: Option<u32>,
     },
     Script {
-        path:    String,
-        args:    Option<Vec<String>>,
+        path: String,
+        args: Option<Vec<String>>,
     },
     Http {
-        url:     String,
-        method:  String,
+        url: String,
+        method: String,
         headers: Option<serde_json::Value>,
-        body:    Option<serde_json::Value>,
+        body: Option<serde_json::Value>,
     },
     Notification {
-        title:   String,
+        title: String,
         message: String,
     },
     Log {
-        file:    String,
+        file: String,
         message: String,
     },
     Block {
         message: Option<String>,
     },
     Modify {
-        transform: String,          // JSON path expression for mutation
+        transform: String, // JSON path expression for mutation
     },
     EmitEvent {
         event_name: String,
-        payload:    Option<serde_json::Value>,
+        payload: Option<serde_json::Value>,
     },
 }
 
@@ -134,13 +134,13 @@ pub enum HookAction {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HookConditions {
-    pub tool_name:        Option<String>,
-    pub file_pattern:     Option<String>,
-    pub repo_path:        Option<String>,
-    pub command_pattern:  Option<String>,
-    pub session_type:     Option<String>,   // "pa" | "fleet"
-    pub agent_mode:       Option<String>,   // "fast_dev" | "review" | "delegate"
-    pub time_range:       Option<TimeRange>,
+    pub tool_name: Option<String>,
+    pub file_pattern: Option<String>,
+    pub repo_path: Option<String>,
+    pub command_pattern: Option<String>,
+    pub session_type: Option<String>, // "pa" | "fleet"
+    pub agent_mode: Option<String>,   // "fast_dev" | "review" | "delegate"
+    pub time_range: Option<TimeRange>,
     /// Rhai script expression that receives context variables and returns bool.
     /// Available variables: tool_name, file_path, agent_mode, command, hook_type,
     ///   session_id, worker_id, task_id, is_error.
@@ -150,22 +150,22 @@ pub struct HookConditions {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimeRange {
-    pub start_hour: u8,    // 0-23
-    pub end_hour:   u8,
-    pub days:       Option<Vec<String>>,   // ["mon","tue","wed","thu","fri"]
+    pub start_hour: u8, // 0-23
+    pub end_hour: u8,
+    pub days: Option<Vec<String>>, // ["mon","tue","wed","thu","fri"]
 }
 
 // ── Hook Config (stored in DB) ────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookConfig {
-    pub id:         String,
-    pub name:       String,
-    pub hook_type:  HookType,
-    pub enabled:    bool,
-    pub priority:   i32,                   // Lower = higher priority
+    pub id: String,
+    pub name: String,
+    pub hook_type: HookType,
+    pub enabled: bool,
+    pub priority: i32, // Lower = higher priority
     pub conditions: HookConditions,
-    pub action:     HookAction,
+    pub action: HookAction,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -174,24 +174,24 @@ pub struct HookConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookContext {
-    pub hook_type:   String,
-    pub timestamp:   DateTime<Utc>,
-    pub session_id:  Option<String>,
-    pub agent_mode:  Option<String>,
-    pub tool_call:   Option<ToolCallContext>,
-    pub file_path:   Option<String>,
-    pub task_id:     Option<String>,
-    pub worker_id:   Option<String>,
-    pub extra:       serde_json::Value,
+    pub hook_type: String,
+    pub timestamp: DateTime<Utc>,
+    pub session_id: Option<String>,
+    pub agent_mode: Option<String>,
+    pub tool_call: Option<ToolCallContext>,
+    pub file_path: Option<String>,
+    pub task_id: Option<String>,
+    pub worker_id: Option<String>,
+    pub extra: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallContext {
-    pub id:        String,
-    pub name:      String,
-    pub input:     serde_json::Value,
-    pub result:    Option<serde_json::Value>,
-    pub is_error:  bool,
+    pub id: String,
+    pub name: String,
+    pub input: serde_json::Value,
+    pub result: Option<serde_json::Value>,
+    pub is_error: bool,
 }
 
 // ── Hook Execution Result ─────────────────────────────────────────────────────
@@ -207,13 +207,13 @@ pub enum HookOutcome {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookExecutionLog {
-    pub id:          i64,
-    pub hook_id:     String,
-    pub hook_name:   String,
-    pub hook_type:   String,
-    pub outcome:     HookOutcome,
-    pub output:      Option<String>,
-    pub error:       Option<String>,
+    pub id: i64,
+    pub hook_id: String,
+    pub hook_name: String,
+    pub hook_type: String,
+    pub outcome: HookOutcome,
+    pub output: Option<String>,
+    pub error: Option<String>,
     pub executed_at: String,
     pub duration_ms: u64,
 }
@@ -222,10 +222,10 @@ pub struct HookExecutionLog {
 
 #[derive(Debug, Deserialize)]
 pub struct AddHookInput {
-    pub name:       String,
-    pub hook_type:  HookType,
-    pub enabled:    Option<bool>,
-    pub priority:   Option<i32>,
+    pub name: String,
+    pub hook_type: HookType,
+    pub enabled: Option<bool>,
+    pub priority: Option<i32>,
     pub conditions: Option<HookConditions>,
-    pub action:     HookAction,
+    pub action: HookAction,
 }

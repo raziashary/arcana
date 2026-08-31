@@ -7,9 +7,9 @@
 // Stored as a plain path string in ~/.autodev/config.db (app_settings table).
 // See: DEVELOPMENT_PLAN.md — Workspace Folder feature
 
-use rusqlite::{Connection, OptionalExtension, params};
-use crate::errors::{AutoDevError, Result};
 use crate::db::autodev_dir;
+use crate::errors::{AutoDevError, Result};
+use rusqlite::{params, Connection, OptionalExtension};
 
 const WORKSPACE_KEY: &str = "workspace_dir";
 
@@ -17,15 +17,16 @@ const WORKSPACE_KEY: &str = "workspace_dir";
 
 fn open_config_db() -> Result<Connection> {
     let path = autodev_dir()?.join("config.db");
-    let conn = Connection::open(&path)
-        .map_err(|e| AutoDevError::Agent(format!("config.db open: {e}")))?;
+    let conn =
+        Connection::open(&path).map_err(|e| AutoDevError::Agent(format!("config.db open: {e}")))?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS app_settings (
              key        TEXT PRIMARY KEY,
              value      TEXT NOT NULL,
              updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
          );",
-    ).map_err(|e| AutoDevError::Agent(format!("app_settings migrate: {e}")))?;
+    )
+    .map_err(|e| AutoDevError::Agent(format!("app_settings migrate: {e}")))?;
     Ok(conn)
 }
 
@@ -36,12 +37,14 @@ fn open_config_db() -> Result<Connection> {
 #[tauri::command]
 pub fn get_workspace_dir() -> Result<String> {
     let conn = open_config_db()?;
-    let row: Option<String> = conn.query_row(
-        "SELECT value FROM app_settings WHERE key = ?1",
-        params![WORKSPACE_KEY],
-        |r| r.get(0),
-    ).optional()
-     .map_err(|e| AutoDevError::Agent(format!("get_workspace_dir: {e}")))?;
+    let row: Option<String> = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            params![WORKSPACE_KEY],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| AutoDevError::Agent(format!("get_workspace_dir: {e}")))?;
 
     Ok(row.unwrap_or_default())
 }
@@ -55,13 +58,15 @@ pub fn set_workspace_dir(path: String) -> Result<()> {
         conn.execute(
             "DELETE FROM app_settings WHERE key = ?1",
             params![WORKSPACE_KEY],
-        ).map_err(|e| AutoDevError::Agent(format!("clear_workspace_dir: {e}")))?;
+        )
+        .map_err(|e| AutoDevError::Agent(format!("clear_workspace_dir: {e}")))?;
     } else {
         conn.execute(
             "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             params![WORKSPACE_KEY, &path],
-        ).map_err(|e| AutoDevError::Agent(format!("set_workspace_dir: {e}")))?;
+        )
+        .map_err(|e| AutoDevError::Agent(format!("set_workspace_dir: {e}")))?;
     }
     Ok(())
 }
@@ -89,8 +94,9 @@ pub fn load_workspace_dir() -> String {
                 "SELECT value FROM app_settings WHERE key = ?1",
                 params![WORKSPACE_KEY],
                 |r| r.get::<_, String>(0),
-            ).optional()
-             .map_err(|e| AutoDevError::Agent(e.to_string()))
+            )
+            .optional()
+            .map_err(|e| AutoDevError::Agent(e.to_string()))
         })
         .ok()
         .flatten()

@@ -16,7 +16,11 @@ pub fn get_autodev_instructions(scope: String, repo_path: Option<String>) -> Res
 /// Set (insert or update) AUTODEV.md content.
 /// Enforces 40,000 character limit.
 #[tauri::command]
-pub fn set_autodev_instructions(scope: String, repo_path: Option<String>, content: String) -> Result<()> {
+pub fn set_autodev_instructions(
+    scope: String,
+    repo_path: Option<String>,
+    content: String,
+) -> Result<()> {
     let db = AutodevInstructionsDb::open()?;
     db.set(&scope, repo_path.as_deref(), &content)
 }
@@ -37,7 +41,10 @@ pub fn check_autodev_instructions_exists(scope: String, repo_path: Option<String
 
 /// Get character count for a scope (for live counter in editor UI).
 #[tauri::command]
-pub fn get_autodev_instructions_char_count(scope: String, repo_path: Option<String>) -> Result<usize> {
+pub fn get_autodev_instructions_char_count(
+    scope: String,
+    repo_path: Option<String>,
+) -> Result<usize> {
     let db = AutodevInstructionsDb::open()?;
     db.char_count(&scope, repo_path.as_deref())
 }

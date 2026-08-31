@@ -24,9 +24,9 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 
+use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 use crate::db::tasks::TasksDb;
 use crate::recipes::defaults::FLEET_WORKERS;
-use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 
 pub struct AssignTasksBatchTool;
 
@@ -34,7 +34,9 @@ const VALID_WORKERS: &[&str] = FLEET_WORKERS;
 
 #[async_trait]
 impl Tool for AssignTasksBatchTool {
-    fn name(&self) -> &str { "assign_tasks" }
+    fn name(&self) -> &str {
+        "assign_tasks"
+    }
 
     fn description(&self) -> &str {
         "Atomically assign MANY tasks to workers in a single tool call. Use this \
@@ -76,13 +78,15 @@ impl Tool for AssignTasksBatchTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let assignments = match input.get("assignments").and_then(|v| v.as_array()) {
             Some(a) if !a.is_empty() => a.clone(),
             _ => return ToolResult::error(
-                "'assignments' is required and must be a non-empty array of {task_id, worker_slug}"
+                "'assignments' is required and must be a non-empty array of {task_id, worker_slug}",
             ),
         };
 
@@ -92,13 +96,16 @@ impl Tool for AssignTasksBatchTool {
         };
 
         let mut results: Vec<Value> = Vec::with_capacity(assignments.len());
-        let mut kicked: HashSet<String>   = HashSet::new();
+        let mut kicked: HashSet<String> = HashSet::new();
         let mut success_count = 0usize;
         let mut failure_count = 0usize;
 
         for (idx, entry) in assignments.iter().enumerate() {
             let task_id = entry.get("task_id").and_then(|v| v.as_i64());
-            let worker  = entry.get("worker_slug").and_then(|v| v.as_str()).map(|s| s.trim().to_string());
+            let worker = entry
+                .get("worker_slug")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string());
 
             // Per-entry validation — failures recorded but don't abort the batch.
             let (id, worker_slug) = match (task_id, worker) {
@@ -157,7 +164,10 @@ impl Tool for AssignTasksBatchTool {
             };
 
             let prev_status = task.status.as_str().to_string();
-            if !matches!(prev_status.as_str(), "ready" | "assigned" | "failed" | "rejected") {
+            if !matches!(
+                prev_status.as_str(),
+                "ready" | "assigned" | "failed" | "rejected"
+            ) {
                 failure_count += 1;
                 results.push(json!({
                     "index":           idx,
@@ -191,9 +201,9 @@ impl Tool for AssignTasksBatchTool {
 
             // UI push event per assignment (same shape as single assign_task).
             crate::events::emit_task_changed_global(crate::events::TaskChangedPayload {
-                task_id:         Some(id),
-                kind:            "assigned".into(),
-                status:          Some("assigned".into()),
+                task_id: Some(id),
+                kind: "assigned".into(),
+                status: Some("assigned".into()),
                 assigned_worker: Some(worker_slug.clone()),
             });
 
@@ -236,7 +246,8 @@ impl Tool for AssignTasksBatchTool {
                 "failure_count":   failure_count,
                 "workers_kicked":  kicked.iter().cloned().collect::<Vec<_>>(),
                 "results":         results,
-            }).to_string(),
+            })
+            .to_string(),
             summary,
         )
     }

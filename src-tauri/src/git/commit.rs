@@ -17,9 +17,15 @@ pub fn stage(repo_path: &str, files: &[String]) -> Result<()> {
     let repo = super::repo::open(repo_path)?;
     let mut index = repo.index().map_err(|e| AutoDevError::Git(e.to_string()))?;
     index
-        .add_all(files.iter().map(|s| s.as_str()), IndexAddOption::DEFAULT, None)
+        .add_all(
+            files.iter().map(|s| s.as_str()),
+            IndexAddOption::DEFAULT,
+            None,
+        )
         .map_err(|e| AutoDevError::Git(format!("stage add_all: {e}")))?;
-    index.write().map_err(|e| AutoDevError::Git(format!("index write: {e}")))?;
+    index
+        .write()
+        .map_err(|e| AutoDevError::Git(format!("index write: {e}")))?;
     Ok(())
 }
 
@@ -42,7 +48,9 @@ pub fn unstage(repo_path: &str, files: &[String]) -> Result<()> {
     for f in files {
         let _ = index.remove_path(Path::new(f));
     }
-    index.write().map_err(|e| AutoDevError::Git(format!("index write: {e}")))?;
+    index
+        .write()
+        .map_err(|e| AutoDevError::Git(format!("index write: {e}")))?;
     Ok(())
 }
 
@@ -57,8 +65,10 @@ pub fn commit(
     let repo = super::repo::open(repo_path)?;
 
     let sig = match author {
-        Some((name, email)) => Signature::new(&name, &email, &Time::new(chrono::Utc::now().timestamp(), 0))
-            .map_err(|e| AutoDevError::Git(format!("signature: {e}")))?,
+        Some((name, email)) => {
+            Signature::new(&name, &email, &Time::new(chrono::Utc::now().timestamp(), 0))
+                .map_err(|e| AutoDevError::Git(format!("signature: {e}")))?
+        }
         None => repo
             .signature()
             .map_err(|e| AutoDevError::Git(format!("default signature: {e}")))?,
@@ -74,12 +84,16 @@ pub fn commit(
     };
 
     let mut index = repo.index().map_err(|e| AutoDevError::Git(e.to_string()))?;
-    let tree_oid = index.write_tree().map_err(|e| AutoDevError::Git(format!("write_tree: {e}")))?;
-    let tree = repo.find_tree(tree_oid).map_err(|e| AutoDevError::Git(format!("find_tree: {e}")))?;
+    let tree_oid = index
+        .write_tree()
+        .map_err(|e| AutoDevError::Git(format!("write_tree: {e}")))?;
+    let tree = repo
+        .find_tree(tree_oid)
+        .map_err(|e| AutoDevError::Git(format!("find_tree: {e}")))?;
 
     let parents: Vec<git2::Commit> = match repo.head().ok().and_then(|h| h.peel_to_commit().ok()) {
         Some(c) => vec![c],
-        None    => vec![],
+        None => vec![],
     };
     let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
 
@@ -87,24 +101,26 @@ pub fn commit(
         .commit(Some("HEAD"), &sig, &sig, &full_message, &tree, &parent_refs)
         .map_err(|e| AutoDevError::Git(format!("commit: {e}")))?;
 
-    let commit = repo.find_commit(oid).map_err(|e| AutoDevError::Git(e.to_string()))?;
+    let commit = repo
+        .find_commit(oid)
+        .map_err(|e| AutoDevError::Git(e.to_string()))?;
     Ok(to_commit_info(&commit))
 }
 
 pub(crate) fn to_commit_info(commit: &git2::Commit) -> CommitInfo {
     let summary = commit.summary().unwrap_or("").to_string();
-    let body    = commit.body().unwrap_or("").to_string();
-    let author  = commit.author();
-    let time    = chrono::DateTime::<chrono::Utc>::from_timestamp(author.when().seconds(), 0)
+    let body = commit.body().unwrap_or("").to_string();
+    let author = commit.author();
+    let time = chrono::DateTime::<chrono::Utc>::from_timestamp(author.when().seconds(), 0)
         .map(|d| d.to_rfc3339())
         .unwrap_or_default();
 
     CommitInfo {
-        oid:         commit.id().to_string(),
-        short_oid:   commit.id().to_string().chars().take(8).collect(),
+        oid: commit.id().to_string(),
+        short_oid: commit.id().to_string().chars().take(8).collect(),
         summary,
         body,
-        author_name:  author.name().unwrap_or("").to_string(),
+        author_name: author.name().unwrap_or("").to_string(),
         author_email: author.email().unwrap_or("").to_string(),
         time,
         parents: commit.parent_ids().map(|o| o.to_string()).collect(),
@@ -126,4 +142,6 @@ pub fn discard_changes(repo_path: &str, files: &[String]) -> Result<()> {
 
 /// Helper used by higher-level code (e.g. recipe runner) that does not
 /// require a full Repository handle.
-pub(crate) fn _noop_sig_check(_repo: &Repository) -> Result<()> { Ok(()) }
+pub(crate) fn _noop_sig_check(_repo: &Repository) -> Result<()> {
+    Ok(())
+}

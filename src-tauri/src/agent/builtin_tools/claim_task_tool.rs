@@ -4,16 +4,18 @@
 // worker's process PID so OrphanDetector can release the task if the worker
 // process dies unexpectedly (Ruflo Feature 2 — PID-based orphan detection).
 
+use super::super::tool_trait::{Tool, ToolContext, ToolResult};
+use crate::db::tasks::TasksDb;
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use crate::db::tasks::TasksDb;
-use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 
 pub struct ClaimTaskTool;
 
 #[async_trait]
 impl Tool for ClaimTaskTool {
-    fn name(&self) -> &str { "claim_task" }
+    fn name(&self) -> &str {
+        "claim_task"
+    }
 
     fn description(&self) -> &str {
         "Claim an assigned task and begin working on it. Sets status='in_progress' \
@@ -35,7 +37,9 @@ impl Tool for ClaimTaskTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let task_id = match input["task_id"].as_i64() {
@@ -51,8 +55,8 @@ impl Tool for ClaimTaskTool {
         // Verify task exists and is in 'assigned' state
         let task = match db.get_by_id(task_id) {
             Ok(Some(t)) => t,
-            Ok(None)    => return ToolResult::error(format!("Task #{task_id} not found")),
-            Err(e)      => return ToolResult::error(format!("DB error fetching task #{task_id}: {e}")),
+            Ok(None) => return ToolResult::error(format!("Task #{task_id} not found")),
+            Err(e) => return ToolResult::error(format!("DB error fetching task #{task_id}: {e}")),
         };
 
         if task.status.as_str() != "assigned" {
@@ -104,22 +108,25 @@ impl Tool for ClaimTaskTool {
 
         // Emit task-changed so the UI kanban moves the card
         crate::events::emit_task_changed_global(crate::events::TaskChangedPayload {
-            task_id:         Some(task_id),
-            kind:            "status".into(),
-            status:          Some("in_progress".into()),
+            task_id: Some(task_id),
+            kind: "status".into(),
+            status: Some("in_progress".into()),
             assigned_worker: Some(worker_slug.clone()),
         });
 
-        ToolResult::success(json!({
-            "task_id":     task_id,
-            "title":       task.title,
-            "status":      "in_progress",
-            "worker_slug": worker_slug,
-            "pid":         pid,
-            "message": format!(
-                "✅ Task #{task_id} claimed by {worker_slug} (PID={pid}, status=in_progress). \
-                 OrphanDetector will monitor this PID."
-            )
-        }).to_string())
+        ToolResult::success(
+            json!({
+                "task_id":     task_id,
+                "title":       task.title,
+                "status":      "in_progress",
+                "worker_slug": worker_slug,
+                "pid":         pid,
+                "message": format!(
+                    "✅ Task #{task_id} claimed by {worker_slug} (PID={pid}, status=in_progress). \
+                     OrphanDetector will monitor this PID."
+                )
+            })
+            .to_string(),
+        )
     }
 }

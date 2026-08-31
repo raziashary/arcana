@@ -6,13 +6,13 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tracing::info;
 
-use crate::errors::{AutoDevError, Result};
 use super::loader::SkillLoader;
 use super::types::{Skill, SkillCategory, SkillSummary};
+use crate::errors::{AutoDevError, Result};
 
 #[derive(Debug, Default)]
 struct RegistryInner {
-    skills: HashMap<String, Skill>,     // skill.name → Skill
+    skills: HashMap<String, Skill>, // skill.name → Skill
 }
 
 #[derive(Debug, Clone)]
@@ -22,14 +22,16 @@ pub struct SkillRegistry {
 
 impl SkillRegistry {
     pub fn new() -> Self {
-        Self { inner: Arc::new(RwLock::new(RegistryInner::default())) }
+        Self {
+            inner: Arc::new(RwLock::new(RegistryInner::default())),
+        }
     }
 
     /// Load (or reload) all skills from disk.
     pub fn reload(&self) -> Result<usize> {
         let loader = SkillLoader::new()?;
         let loaded = loader.load_all();
-        let count  = loaded.len();
+        let count = loaded.len();
 
         let mut inner = self.inner.write().unwrap();
         inner.skills.clear();
@@ -43,17 +45,27 @@ impl SkillRegistry {
 
     /// Get a single skill by name (exact match).
     pub fn get(&self, name: &str) -> Result<Skill> {
-        self.inner.read().unwrap()
-            .skills.get(name).cloned()
+        self.inner
+            .read()
+            .unwrap()
+            .skills
+            .get(name)
+            .cloned()
             .ok_or_else(|| AutoDevError::Agent(format!("Skill '{name}' not found")))
     }
 
     /// List all skills, optionally filtered by category.
     pub fn list(&self, category_filter: Option<SkillCategory>) -> Vec<SkillSummary> {
-        self.inner.read().unwrap()
-            .skills.values()
+        self.inner
+            .read()
+            .unwrap()
+            .skills
+            .values()
             .filter(|s| {
-                category_filter.as_ref().map(|c| &s.category == c).unwrap_or(true)
+                category_filter
+                    .as_ref()
+                    .map(|c| &s.category == c)
+                    .unwrap_or(true)
             })
             .map(SkillSummary::from)
             .collect()
@@ -62,8 +74,11 @@ impl SkillRegistry {
     /// Search skills by name or tag prefix (case-insensitive).
     pub fn search(&self, query: &str) -> Vec<SkillSummary> {
         let q = query.to_lowercase();
-        self.inner.read().unwrap()
-            .skills.values()
+        self.inner
+            .read()
+            .unwrap()
+            .skills
+            .values()
             .filter(|s| {
                 s.name.to_lowercase().contains(&q)
                     || s.description.to_lowercase().contains(&q)
@@ -83,13 +98,15 @@ impl SkillRegistry {
         let mut map: HashMap<String, Vec<SkillSummary>> = HashMap::new();
         for skill in self.inner.read().unwrap().skills.values() {
             map.entry(skill.category.as_str().to_string())
-               .or_default()
-               .push(SkillSummary::from(skill));
+                .or_default()
+                .push(SkillSummary::from(skill));
         }
         map
     }
 }
 
 impl Default for SkillRegistry {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }

@@ -8,19 +8,19 @@
 // `read_log_file_full` for download / export. See Logs.tsx for the
 // truncation banner UX.
 
-use crate::errors::Result;
 use crate::errors::AutoDevError;
+use crate::errors::Result;
 
 // ─── Return type ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, serde::Serialize)]
 pub struct LogFileResult {
     /// Visible portion of the log (last N lines, joined with `\n`).
-    pub content:         String,
+    pub content: String,
     /// Total line count in the physical file.
-    pub total_lines:     usize,
+    pub total_lines: usize,
     /// True when `total_lines` exceeds the requested tail limit.
-    pub truncated:       bool,
+    pub truncated: bool,
     /// Byte size of the full physical file on disk.
     pub full_size_bytes: u64,
 }
@@ -50,7 +50,8 @@ pub fn list_log_files() -> Result<Vec<String>> {
         .map_err(|e| AutoDevError::Agent(e.to_string()))?
         .filter_map(|e| e.ok())
         .filter(|e| {
-            e.path().extension()
+            e.path()
+                .extension()
                 .and_then(|x| x.to_str())
                 .map(|x| x == "log")
                 .unwrap_or(false)
@@ -102,9 +103,7 @@ pub fn read_log_file(date: String, tail_lines: Option<usize>) -> Result<LogFileR
     }
 
     let limit = tail_lines.unwrap_or(3_000);
-    let full_size = std::fs::metadata(&path)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let full_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
 
     let content = std::fs::read_to_string(&path)
         .map_err(|e| AutoDevError::Agent(format!("Failed to read log file: {e}")))?;
@@ -114,7 +113,14 @@ pub fn read_log_file(date: String, tail_lines: Option<usize>) -> Result<LogFileR
     let truncated = total > limit;
 
     let visible = if truncated {
-        lines.into_iter().rev().take(limit).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>()
+        lines
+            .into_iter()
+            .rev()
+            .take(limit)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
     } else {
         lines
     };
@@ -161,8 +167,7 @@ pub fn clear_log_files() -> Result<usize> {
     if !dir.exists() {
         return Ok(0);
     }
-    let entries = std::fs::read_dir(&dir)
-        .map_err(|e| AutoDevError::Agent(e.to_string()))?;
+    let entries = std::fs::read_dir(&dir).map_err(|e| AutoDevError::Agent(e.to_string()))?;
     let mut deleted = 0usize;
     for entry in entries.flatten() {
         let path = entry.path();

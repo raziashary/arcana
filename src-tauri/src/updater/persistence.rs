@@ -9,18 +9,18 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntegrityReport {
-    pub all_ok:       bool,
-    pub checks:       Vec<DataCheck>,
+    pub all_ok: bool,
+    pub checks: Vec<DataCheck>,
     pub total_size_bytes: u64,
-    pub message:      String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataCheck {
-    pub name:    String,
-    pub path:    String,
+    pub name: String,
+    pub path: String,
     pub present: bool,
-    pub size:    u64,
+    pub size: u64,
     pub message: String,
 }
 
@@ -31,15 +31,19 @@ pub fn verify_data_integrity() -> Result<IntegrityReport> {
     let autodev_dir = home.join(".autodev");
 
     let checks_to_run = vec![
-        ("Config DB",     autodev_dir.join("config.db"),      true),
-        ("Analytics DB",  autodev_dir.join("analytics.db"),   false),
-        ("Sessions dir",  autodev_dir.join("sessions"),        false),
-        ("Plans dir",     autodev_dir.join("plans"),           false),
-        ("Skills dir",    autodev_dir.join("skills"),          false),
-        ("Hooks dir",     autodev_dir.join("hooks"),           false),
-        ("Updates dir",   autodev_dir.join("updates"),         false),
-        ("Plugins dir",   home.join(".airs").join("plugins"),  false),
-        ("Fleet secret",  home.join(".airs").join("fleet_secret"), false),
+        ("Config DB", autodev_dir.join("config.db"), true),
+        ("Analytics DB", autodev_dir.join("analytics.db"), false),
+        ("Sessions dir", autodev_dir.join("sessions"), false),
+        ("Plans dir", autodev_dir.join("plans"), false),
+        ("Skills dir", autodev_dir.join("skills"), false),
+        ("Hooks dir", autodev_dir.join("hooks"), false),
+        ("Updates dir", autodev_dir.join("updates"), false),
+        ("Plugins dir", home.join(".airs").join("plugins"), false),
+        (
+            "Fleet secret",
+            home.join(".airs").join("fleet_secret"),
+            false,
+        ),
     ];
 
     let mut checks = Vec::new();
@@ -76,7 +80,12 @@ pub fn verify_data_integrity() -> Result<IntegrityReport> {
         "Some critical data is missing — update may not be safe".into()
     };
 
-    Ok(IntegrityReport { all_ok, checks, total_size_bytes: total_size, message })
+    Ok(IntegrityReport {
+        all_ok,
+        checks,
+        total_size_bytes: total_size,
+        message,
+    })
 }
 
 /// Create a restore point — a manifest of current state checksums.
@@ -95,16 +104,23 @@ pub fn create_restore_point() -> Result<()> {
     for f in &files_to_snapshot {
         if f.exists() {
             let size = f.metadata().map(|m| m.len()).unwrap_or(0);
-            let key = f.file_name().unwrap_or_default().to_string_lossy().into_owned();
-            snapshot.insert(key, serde_json::json!({
-                "path": f.to_string_lossy(),
-                "size": size,
-                "modified": f.metadata().ok()
-                    .and_then(|m| m.modified().ok())
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0),
-            }));
+            let key = f
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            snapshot.insert(
+                key,
+                serde_json::json!({
+                    "path": f.to_string_lossy(),
+                    "size": size,
+                    "modified": f.metadata().ok()
+                        .and_then(|m| m.modified().ok())
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0),
+                }),
+            );
         }
     }
 
@@ -151,12 +167,21 @@ pub fn cleanup_after_update() -> Result<()> {
             .filter(|e| {
                 let name = e.file_name();
                 let n = name.to_string_lossy();
-                n.ends_with(".msi") || n.ends_with(".dmg") || n.ends_with(".AppImage") || n.ends_with(".deb")
+                n.ends_with(".msi")
+                    || n.ends_with(".dmg")
+                    || n.ends_with(".AppImage")
+                    || n.ends_with(".deb")
             })
             .map(|e| {
-                let modified = e.metadata().ok()
+                let modified = e
+                    .metadata()
+                    .ok()
                     .and_then(|m| m.modified().ok())
-                    .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs())
+                    .map(|t| {
+                        t.duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs()
+                    })
                     .unwrap_or(0);
                 (modified, e.path())
             })

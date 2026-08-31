@@ -8,15 +8,17 @@ use std::path::Path;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
 
-use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
 use super::path_jail::validate_workspace_path;
 use super::path_lock;
+use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
 
 pub struct AppendFileTool;
 
 #[async_trait]
 impl Tool for AppendFileTool {
-    fn name(&self) -> &str { "append_file" }
+    fn name(&self) -> &str {
+        "append_file"
+    }
 
     fn description(&self) -> &str {
         "Append content to the end of a file. Creates the file if it does not exist. \
@@ -45,7 +47,9 @@ impl Tool for AppendFileTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         let path_str = match input["path"].as_str() {
@@ -72,7 +76,7 @@ impl Tool for AppendFileTool {
         // destination escapes the configured workspace.
         let resolved = match validate_workspace_path(&raw, &ctx.working_dir) {
             Ok(canonical) => canonical,
-            Err(msg)      => return ToolResult::error(msg),
+            Err(msg) => return ToolResult::error(msg),
         };
 
         // Cross-tool, cross-worker per-path lock. Same key/registry used by
@@ -108,10 +112,12 @@ impl Tool for AppendFileTool {
             .await
         {
             Ok(f) => f,
-            Err(e) => return ToolResult::error(format!(
-                "Cannot open '{}' for append: {e}",
-                resolved.display()
-            )),
+            Err(e) => {
+                return ToolResult::error(format!(
+                    "Cannot open '{}' for append: {e}",
+                    resolved.display()
+                ))
+            }
         };
 
         // Probe last byte through the open handle.
@@ -139,10 +145,7 @@ impl Tool for AppendFileTool {
         let bytes_to_append = to_write.len();
 
         if let Err(e) = file.write_all(to_write.as_bytes()).await {
-            return ToolResult::error(format!(
-                "Write failed for '{}': {e}",
-                resolved.display()
-            ));
+            return ToolResult::error(format!("Write failed for '{}': {e}", resolved.display()));
         }
 
         ToolResult::success(format!(

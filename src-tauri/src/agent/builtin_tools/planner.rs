@@ -5,20 +5,21 @@
 // Design: Single tool, single yaml_dsl parameter, action-based routing.
 // See DEVELOPMENT_PLAN.md Phase 3.5.
 
-use async_trait::async_trait;
-use serde_json::{json, Value};
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
 use crate::db::plans::{
-    AgentType, PlansDb, PlanScope, PlanItemStatus,
-    CreatePlanInput, CreatePlanItemInput,
+    AgentType, CreatePlanInput, CreatePlanItemInput, PlanItemStatus, PlanScope, PlansDb,
 };
-use crate::events::{PlanChangedPayload, emit_plan_changed_global};
+use crate::events::{emit_plan_changed_global, PlanChangedPayload};
+use async_trait::async_trait;
+use serde_json::{json, Value};
 
 pub struct PlannerTool;
 
 #[async_trait]
 impl Tool for PlannerTool {
-    fn name(&self) -> &str { "planner" }
+    fn name(&self) -> &str {
+        "planner"
+    }
 
     fn description(&self) -> &str {
         "YAML DSL planning interface. Pass 'action: listActions' to see all actions and schemas. \
@@ -39,7 +40,9 @@ impl Tool for PlannerTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let yaml_dsl = match input["yaml_dsl"].as_str() {
@@ -53,7 +56,9 @@ impl Tool for PlannerTool {
         };
 
         match compiler.compile(yaml_dsl) {
-            Ok(result) => ToolResult::success(serde_json::to_string_pretty(&result).unwrap_or_default()),
+            Ok(result) => {
+                ToolResult::success(serde_json::to_string_pretty(&result).unwrap_or_default())
+            }
             Err(e) => ToolResult::error(format!("Planner error: {e}")),
         }
     }
@@ -72,27 +77,28 @@ impl PlannerCompiler {
     }
 
     fn compile(&self, yaml_dsl: &str) -> anyhow::Result<Value> {
-        let doc: serde_yaml::Value = serde_yaml::from_str(yaml_dsl)
-            .map_err(|e| anyhow::anyhow!("Invalid YAML DSL: {e}"))?;
+        let doc: serde_yaml::Value =
+            serde_yaml::from_str(yaml_dsl).map_err(|e| anyhow::anyhow!("Invalid YAML DSL: {e}"))?;
 
-        let action = doc.get("action")
+        let action = doc
+            .get("action")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'action' field in YAML DSL"))?;
 
         match action {
-            "listActions"       => self.list_actions(),
-            "create"            => self.create_plan(&doc),
-            "addStep"           => self.add_step(&doc),
-            "updateStep"        => self.update_step(&doc),
-            "getPlan"           => self.get_plan(&doc),
-            "listPlans"         => self.list_plans(&doc),
+            "listActions" => self.list_actions(),
+            "create" => self.create_plan(&doc),
+            "addStep" => self.add_step(&doc),
+            "updateStep" => self.update_step(&doc),
+            "getPlan" => self.get_plan(&doc),
+            "listPlans" => self.list_plans(&doc),
             "checkDependencies" => self.check_dependencies(&doc),
-            "deletePlan"        => self.delete_plan(&doc),
-            "abandonPlan"       => self.abandon_plan(&doc),
-            "breakDownEpic"     => self.breakdown_epic(&doc),
-            "claimItem"         => self.claim_item(&doc),
-            "createSubplan"     => self.create_subplan(&doc),
-            "submitForQC"       => self.submit_for_qc(&doc),
+            "deletePlan" => self.delete_plan(&doc),
+            "abandonPlan" => self.abandon_plan(&doc),
+            "breakDownEpic" => self.breakdown_epic(&doc),
+            "claimItem" => self.claim_item(&doc),
+            "createSubplan" => self.create_subplan(&doc),
+            "submitForQC" => self.submit_for_qc(&doc),
             _ => Err(anyhow::anyhow!(
                 "Unknown action: '{action}'. Use 'action: listActions' to discover valid actions."
             )),
@@ -127,8 +133,12 @@ impl PlannerCompiler {
         let description = self.get_optional_str(doc, "description");
         let session_id = self.get_optional_str(doc, "session_id");
         let assigned_agent = self.get_optional_str(doc, "assigned_agent");
-        let created_by = self.get_optional_str(doc, "created_by").or_else(|| Some("pa".to_string()));
-        let scope = self.get_optional_str(doc, "scope").unwrap_or_else(|| "personal".to_string());
+        let created_by = self
+            .get_optional_str(doc, "created_by")
+            .or_else(|| Some("pa".to_string()));
+        let scope = self
+            .get_optional_str(doc, "scope")
+            .unwrap_or_else(|| "personal".to_string());
         let agent_scope = PlanScope::from_str(&scope);
         let parent_plan_id = self.get_optional_str(doc, "parent_plan_id");
         let task_id = self.get_optional_i64(doc, "task_id");
@@ -158,7 +168,9 @@ impl PlannerCompiler {
         let title = self.get_str(doc, "title")?;
         let description = self.get_optional_str(doc, "description");
         let order_index = self.get_i64(doc, "order_index").unwrap_or(0);
-        let agent_type = self.get_optional_str(doc, "agent_type").map(|s| AgentType::from_str(&s));
+        let agent_type = self
+            .get_optional_str(doc, "agent_type")
+            .map(|s| AgentType::from_str(&s));
         let estimated_tools = self.get_optional_str_array(doc, "estimated_tools");
         let assigned_worker = self.get_optional_str(doc, "assigned_worker");
         let worktree_branch = self.get_optional_str(doc, "worktree_branch");
@@ -193,7 +205,8 @@ impl PlannerCompiler {
         // step_id is returned by addStep and is immune to reordering.
         // step_index is kept for backwards compatibility but is fragile.
         let item = if let Some(step_id) = self.get_optional_str(doc, "step_id") {
-            items.iter()
+            items
+                .iter()
                 .find(|i| i.id == step_id)
                 .ok_or_else(|| anyhow::anyhow!("Step id '{step_id}' not found in plan {plan_id}"))?
         } else {
@@ -201,14 +214,19 @@ impl PlannerCompiler {
                 .ok_or_else(|| anyhow::anyhow!(
                     "Either 'step_id' (UUID from addStep) or 'step_index' (0-based position) is required"
                 ))?;
-            items.get(step_index)
-                .ok_or_else(|| anyhow::anyhow!("Step index {step_index} out of range (plan has {} steps)", items.len()))?
+            items.get(step_index).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Step index {step_index} out of range (plan has {} steps)",
+                    items.len()
+                )
+            })?
         };
 
         let status_str = self.get_str(doc, "status")?;
         let notes = self.get_optional_str(doc, "notes");
 
-        self.db.update_plan_item_status(&item.id, &status_str, notes.as_deref())?;
+        self.db
+            .update_plan_item_status(&item.id, &status_str, notes.as_deref())?;
         emit_plan_changed_global(PlanChangedPayload {
             plan_id: Some(plan_id.clone()),
             kind: "step_updated".to_string(),
@@ -217,7 +235,8 @@ impl PlannerCompiler {
 
         // If all items done, auto-mark plan completed
         let refreshed = self.db.list_plan_items(&plan_id)?;
-        let all_done = !refreshed.is_empty() && refreshed.iter().all(|i| i.status == PlanItemStatus::Done);
+        let all_done =
+            !refreshed.is_empty() && refreshed.iter().all(|i| i.status == PlanItemStatus::Done);
         if all_done {
             self.db.update_plan_status(&plan_id, "completed")?;
             emit_plan_changed_global(PlanChangedPayload {
@@ -232,9 +251,13 @@ impl PlannerCompiler {
 
     fn get_plan(&self, doc: &serde_yaml::Value) -> anyhow::Result<Value> {
         let plan_id = self.get_str(doc, "plan_id")?;
-        let plan = self.db.get_plan(&plan_id)?
+        let plan = self
+            .db
+            .get_plan(&plan_id)?
             .ok_or_else(|| anyhow::anyhow!("Plan '{plan_id}' not found"))?;
-        let include_items = self.get_optional_bool(doc, "include_items").unwrap_or(false);
+        let include_items = self
+            .get_optional_bool(doc, "include_items")
+            .unwrap_or(false);
 
         let mut result = serde_json::to_value(&plan)?;
         if include_items {
@@ -250,7 +273,9 @@ impl PlannerCompiler {
         let status = self.get_optional_str(doc, "status_filter");
         let scope = self.get_optional_str(doc, "scope");
         let session = self.get_optional_str(doc, "session_id");
-        let plans = self.db.list_plans(status.as_deref(), scope.as_deref(), session.as_deref())?;
+        let plans = self
+            .db
+            .list_plans(status.as_deref(), scope.as_deref(), session.as_deref())?;
         Ok(serde_json::to_value(&plans)?)
     }
 
@@ -298,13 +323,19 @@ impl PlannerCompiler {
     // ─── Fleet-Specific Actions ─────────────────────────────────────────────
 
     fn breakdown_epic(&self, doc: &serde_yaml::Value) -> anyhow::Result<Value> {
-        let epic_task_id = self.get_i64(doc, "epic_task_id")
+        let epic_task_id = self
+            .get_i64(doc, "epic_task_id")
             .ok_or_else(|| anyhow::anyhow!("Missing 'epic_task_id'"))?;
-        let supervisor_id = self.get_optional_str(doc, "supervisor_id").unwrap_or_else(|| "supervisor".to_string());
+        let supervisor_id = self
+            .get_optional_str(doc, "supervisor_id")
+            .unwrap_or_else(|| "supervisor".to_string());
 
         let input = CreatePlanInput {
             title: format!("Epic breakdown: task {}", epic_task_id),
-            description: Some(format!("Auto-generated plan from epic task {}", epic_task_id)),
+            description: Some(format!(
+                "Auto-generated plan from epic task {}",
+                epic_task_id
+            )),
             session_id: Some("fleet".to_string()),
             assigned_agent: Some(supervisor_id.clone()),
             created_by: Some(supervisor_id),
@@ -343,8 +374,10 @@ impl PlannerCompiler {
         let parent_plan_id = self.get_str(doc, "parent_plan_id")?;
         let worker_id = self.get_str(doc, "worker_id")?;
         let title = self.get_str(doc, "title")?;
-        let description = self.get_optional_str(doc, "description").unwrap_or_default();
-        
+        let description = self
+            .get_optional_str(doc, "description")
+            .unwrap_or_default();
+
         let input = CreatePlanInput {
             title,
             description: Some(description),
@@ -355,7 +388,7 @@ impl PlannerCompiler {
             parent_plan_id: Some(parent_plan_id),
             task_id: None,
         };
-        
+
         let plan = self.db.create_plan(input)?;
         emit_plan_changed_global(PlanChangedPayload {
             plan_id: Some(plan.id.clone()),
@@ -368,8 +401,12 @@ impl PlannerCompiler {
     fn submit_for_qc(&self, doc: &serde_yaml::Value) -> anyhow::Result<Value> {
         let plan_id = self.get_str(doc, "plan_id")?;
         let worker_id = self.get_str(doc, "worker_id")?;
-        let summary = self.get_optional_str(doc, "result_summary").unwrap_or_default();
-        let pr_urls = self.get_optional_str_array(doc, "pr_urls").unwrap_or_default();
+        let summary = self
+            .get_optional_str(doc, "result_summary")
+            .unwrap_or_default();
+        let pr_urls = self
+            .get_optional_str_array(doc, "pr_urls")
+            .unwrap_or_default();
 
         // Update plan status to active (ready for QC)
         self.db.update_plan_status(&plan_id, "active")?;
@@ -411,7 +448,9 @@ impl PlannerCompiler {
     }
 
     fn get_usize(&self, doc: &serde_yaml::Value, key: &str) -> Option<usize> {
-        doc.get(key).and_then(|v| v.as_i64()).and_then(|n| n.try_into().ok())
+        doc.get(key)
+            .and_then(|v| v.as_i64())
+            .and_then(|n| n.try_into().ok())
     }
 
     fn get_optional_bool(&self, doc: &serde_yaml::Value, key: &str) -> Option<bool> {

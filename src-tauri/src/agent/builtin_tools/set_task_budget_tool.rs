@@ -21,7 +21,9 @@ pub struct SetTaskBudgetTool;
 
 #[async_trait]
 impl Tool for SetTaskBudgetTool {
-    fn name(&self) -> &str { "set_task_budget" }
+    fn name(&self) -> &str {
+        "set_task_budget"
+    }
 
     fn description(&self) -> &str {
         "Set token and cost budget for a task before assigning it to a worker. \
@@ -54,7 +56,9 @@ impl Tool for SetTaskBudgetTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let task_id = match input.get("task_id").and_then(|v| v.as_i64()) {
@@ -63,8 +67,11 @@ impl Tool for SetTaskBudgetTool {
         };
 
         let max_tokens = input.get("max_tokens").and_then(|v| v.as_u64());
-        let max_usd    = input.get("max_usd").and_then(|v| v.as_f64());
-        let max_turns  = input.get("max_turns").and_then(|v| v.as_u64()).map(|t| t as u32);
+        let max_usd = input.get("max_usd").and_then(|v| v.as_f64());
+        let max_turns = input
+            .get("max_turns")
+            .and_then(|v| v.as_u64())
+            .map(|t| t as u32);
 
         // Validate using ADR-097 rules
         if let Err(code) = budget::validate_budget(max_tokens, max_usd, max_turns) {
@@ -81,25 +88,28 @@ impl Tool for SetTaskBudgetTool {
         }
 
         let effective_tokens = max_tokens.unwrap_or(100_000);
-        let effective_usd    = max_usd.unwrap_or(0.50);
-        let effective_turns  = max_turns.unwrap_or(20);
+        let effective_usd = max_usd.unwrap_or(0.50);
+        let effective_turns = max_turns.unwrap_or(20);
 
         info!(
             "[budget] Set budget for task {task_id}: {effective_tokens} tokens / \
              ${effective_usd:.2} USD / {effective_turns} turns"
         );
 
-        ToolResult::success(json!({
-            "task_id": task_id,
-            "budget_set": {
-                "max_tokens": effective_tokens,
-                "max_usd": effective_usd,
-                "max_turns": effective_turns,
-            },
-            "message": format!(
-                "✅ Budget set for task #{task_id}: {effective_tokens} tokens / \
-                 ${effective_usd:.2} USD / {effective_turns} turns max."
-            )
-        }).to_string())
+        ToolResult::success(
+            json!({
+                "task_id": task_id,
+                "budget_set": {
+                    "max_tokens": effective_tokens,
+                    "max_usd": effective_usd,
+                    "max_turns": effective_turns,
+                },
+                "message": format!(
+                    "✅ Budget set for task #{task_id}: {effective_tokens} tokens / \
+                     ${effective_usd:.2} USD / {effective_turns} turns max."
+                )
+            })
+            .to_string(),
+        )
     }
 }

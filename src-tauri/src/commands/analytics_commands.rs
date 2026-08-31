@@ -1,11 +1,11 @@
 // Analytics Tauri commands — dashboard data retrieval and export
+use crate::analytics::{self, types::*};
+use crate::errors::Result;
+use crate::state::AppState;
 use chrono::NaiveDate;
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::State;
 use tracing::info;
-use crate::analytics::{self, types::*};
-use crate::errors::Result;
-use crate::state::AppState;
 
 // Doc 02 Phase 3.4 — one-shot diagnostic log on first dashboard hit.
 // On-call debugging frequently needs to know "is the dashboard actually
@@ -18,19 +18,20 @@ static FIRST_HIT_LOGGED: OnceLock<()> = OnceLock::new();
 fn log_first_hit_once() {
     let _ = FIRST_HIT_LOGGED.get_or_init(|| {
         let mgr = analytics::global();
-        let counts = mgr.queries().row_counts_for_diagnostic().unwrap_or_default();
-        let path = mgr.db_path().map(|p| p.display().to_string())
+        let counts = mgr
+            .queries()
+            .row_counts_for_diagnostic()
+            .unwrap_or_default();
+        let path = mgr
+            .db_path()
+            .map(|p| p.display().to_string())
             .unwrap_or_else(|| "(unknown)".into());
-        info!(
-            "[analytics_commands] first dashboard hit — db_path={path} row_counts={counts:?}"
-        );
+        info!("[analytics_commands] first dashboard hit — db_path={path} row_counts={counts:?}");
     });
 }
 
 #[tauri::command]
-pub fn get_dashboard_summary(
-    state: State<'_, Arc<Mutex<AppState>>>,
-) -> Result<DashboardSummary> {
+pub fn get_dashboard_summary(state: State<'_, Arc<Mutex<AppState>>>) -> Result<DashboardSummary> {
     log_first_hit_once();
     // Read live in-process counters — daily_costs is only populated by yesterday rollup,
     // so reading it for today would always yield 0.
@@ -60,10 +61,7 @@ pub fn get_cost_analytics(
 }
 
 #[tauri::command]
-pub fn get_token_usage(
-    start: String,
-    end: String,
-) -> Result<TokenUsageAnalytics> {
+pub fn get_token_usage(start: String, end: String) -> Result<TokenUsageAnalytics> {
     let start_date = NaiveDate::parse_from_str(&start, "%Y-%m-%d")
         .map_err(|e| crate::errors::AutoDevError::Agent(format!("Invalid date format: {}", e)))?;
     let end_date = NaiveDate::parse_from_str(&end, "%Y-%m-%d")
@@ -89,11 +87,7 @@ pub fn predict_monthly_cost() -> Result<CostPrediction> {
 }
 
 #[tauri::command]
-pub fn export_costs_csv(
-    start: String,
-    end: String,
-    path: String,
-) -> Result<ExportResult> {
+pub fn export_costs_csv(start: String, end: String, path: String) -> Result<ExportResult> {
     let start_date = NaiveDate::parse_from_str(&start, "%Y-%m-%d")
         .map_err(|e| crate::errors::AutoDevError::Agent(format!("Invalid date format: {}", e)))?;
     let end_date = NaiveDate::parse_from_str(&end, "%Y-%m-%d")
@@ -105,11 +99,7 @@ pub fn export_costs_csv(
 }
 
 #[tauri::command]
-pub fn export_costs_json(
-    start: String,
-    end: String,
-    path: String,
-) -> Result<ExportResult> {
+pub fn export_costs_json(start: String, end: String, path: String) -> Result<ExportResult> {
     let start_date = NaiveDate::parse_from_str(&start, "%Y-%m-%d")
         .map_err(|e| crate::errors::AutoDevError::Agent(format!("Invalid date format: {}", e)))?;
     let end_date = NaiveDate::parse_from_str(&end, "%Y-%m-%d")
@@ -140,14 +130,16 @@ pub fn get_worker_analytics(
     let worker_stats = if let Some(ref wid) = worker_id {
         let agg = db.get_worker_stats_range(wid, start_date, end_date)?;
         let (completed, failed, success_rate, cost, time_min, avg_dur) = agg
-            .map(|r| (
-                r.tasks_completed,
-                r.tasks_failed,
-                r.success_rate,
-                r.cost_usd,
-                r.time_spent_minutes,
-                r.avg_task_duration_minutes,
-            ))
+            .map(|r| {
+                (
+                    r.tasks_completed,
+                    r.tasks_failed,
+                    r.success_rate,
+                    r.cost_usd,
+                    r.time_spent_minutes,
+                    r.avg_task_duration_minutes,
+                )
+            })
             .unwrap_or((0, 0, 0.0, 0.0, 0, 0));
 
         serde_json::json!({
@@ -174,14 +166,16 @@ pub fn get_worker_analytics(
         for w in &workers {
             let agg = db.get_worker_stats_range(&w.slug, start_date, end_date)?;
             let (completed, failed, success_rate, cost, time_min, avg_dur) = agg
-                .map(|r| (
-                    r.tasks_completed,
-                    r.tasks_failed,
-                    r.success_rate,
-                    r.cost_usd,
-                    r.time_spent_minutes,
-                    r.avg_task_duration_minutes,
-                ))
+                .map(|r| {
+                    (
+                        r.tasks_completed,
+                        r.tasks_failed,
+                        r.success_rate,
+                        r.cost_usd,
+                        r.time_spent_minutes,
+                        r.avg_task_duration_minutes,
+                    )
+                })
                 .unwrap_or((0, 0, 0.0, 0.0, 0, 0));
 
             per_worker.push(serde_json::json!({
@@ -195,15 +189,18 @@ pub fn get_worker_analytics(
             }));
         }
 
-        let total_completed: i32 = per_worker.iter()
+        let total_completed: i32 = per_worker
+            .iter()
             .filter_map(|v| v["tasks_completed"].as_i64())
             .map(|n| n as i32)
             .sum();
-        let total_failed: i32 = per_worker.iter()
+        let total_failed: i32 = per_worker
+            .iter()
             .filter_map(|v| v["tasks_failed"].as_i64())
             .map(|n| n as i32)
             .sum();
-        let total_cost: f64 = per_worker.iter()
+        let total_cost: f64 = per_worker
+            .iter()
             .filter_map(|v| v["cost_usd"].as_f64())
             .sum();
         let total = total_completed + total_failed;
@@ -242,23 +239,23 @@ pub fn get_system_logs(
     let safe_hours = hours.clamp(1, 168); // 1h–7d guard against absurd ranges
     let manager = analytics::global();
     let db = manager.db();
-    let records = db.get_system_events_recent(
-        component.as_deref(),
-        severity.as_deref(),
-        safe_hours,
-    )?;
+    let records =
+        db.get_system_events_recent(component.as_deref(), severity.as_deref(), safe_hours)?;
 
-    let events: Vec<serde_json::Value> = records.into_iter().map(|r| {
-        serde_json::json!({
-            "id":         r.id,
-            "timestamp":  r.timestamp.to_rfc3339(),
-            "component":  r.component,
-            "event_type": r.event_type,
-            "message":    r.message,
-            "severity":   r.severity,
-            "metadata":   r.metadata,
+    let events: Vec<serde_json::Value> = records
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "id":         r.id,
+                "timestamp":  r.timestamp.to_rfc3339(),
+                "component":  r.component,
+                "event_type": r.event_type,
+                "message":    r.message,
+                "severity":   r.severity,
+                "metadata":   r.metadata,
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(events)
 }

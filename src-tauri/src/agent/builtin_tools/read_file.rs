@@ -3,7 +3,7 @@ use serde_json::json;
 use std::path::Path;
 
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
-use crate::hooks::{HookRegistry, HookType, HookContext, ToolCallContext};
+use crate::hooks::{HookContext, HookRegistry, HookType, ToolCallContext};
 
 pub struct ReadFileTool;
 
@@ -19,7 +19,9 @@ const READ_FILE_MAX_LINES_PER_CALL: usize = 2000;
 
 #[async_trait]
 impl Tool for ReadFileTool {
-    fn name(&self) -> &str { "read_file" }
+    fn name(&self) -> &str {
+        "read_file"
+    }
 
     fn description(&self) -> &str {
         "Read the contents of a file at the given path. Returns the file content with \
@@ -57,12 +59,14 @@ impl Tool for ReadFileTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         let path_str = match input["path"].as_str() {
             Some(p) => p.to_string(),
-            None    => return ToolResult::error("Missing required field: path"),
+            None => return ToolResult::error("Missing required field: path"),
         };
 
         let path = resolve_path(&path_str, &ctx.working_dir);
@@ -96,7 +100,8 @@ impl Tool for ReadFileTool {
         // Guard: reject files larger than 256 KB (~64K tokens) when no line range is given.
         // Reading a 5 MB lock file or binary would fill the entire context window.
         // Agents that need specific content from large files must use start_line/end_line.
-        let has_range = input["start_line"].as_u64().is_some() || input["end_line"].as_u64().is_some();
+        let has_range =
+            input["start_line"].as_u64().is_some() || input["end_line"].as_u64().is_some();
         if !has_range {
             if let Ok(meta) = std::fs::metadata(&path) {
                 const MAX_BYTES: u64 = 256_000;
@@ -117,7 +122,7 @@ impl Tool for ReadFileTool {
             Err(e) => ToolResult::error(format!("Cannot read '{}': {e}", path.display())),
             Ok(content) => {
                 let start = input["start_line"].as_u64().map(|n| n as usize);
-                let end   = input["end_line"].as_u64().map(|n| n as usize);
+                let end = input["end_line"].as_u64().map(|n| n as usize);
 
                 let lines: Vec<&str> = content.lines().collect();
                 let total_lines = lines.len();
@@ -152,14 +157,17 @@ impl Tool for ReadFileTool {
                 if from >= total_lines {
                     return ToolResult::error(format!(
                         "start_line={} is past end of file '{}' (file has {} lines).",
-                        from + 1, path.display(), total_lines,
+                        from + 1,
+                        path.display(),
+                        total_lines,
                     ));
                 }
                 if to <= from {
                     return ToolResult::error(format!(
                         "Empty line range: start_line={}, end_line={}. \
                          end_line must be ≥ start_line.",
-                        from + 1, requested_to,
+                        from + 1,
+                        requested_to,
                     ));
                 }
 
@@ -178,11 +186,11 @@ impl Tool for ReadFileTool {
                         "\n\n[⚠ Output truncated to {max} lines — file has {total} lines, \
                          range requested ended at line {req}. Continue with \
                          read_file(path='{path}', start_line={next}, end_line={next_end}).]",
-                        max      = READ_FILE_MAX_LINES_PER_CALL,
-                        total    = total_lines,
-                        req      = requested_to,
-                        path     = path_str,
-                        next     = to + 1,
+                        max = READ_FILE_MAX_LINES_PER_CALL,
+                        total = total_lines,
+                        req = requested_to,
+                        path = path_str,
+                        next = to + 1,
                         next_end = (to + READ_FILE_MAX_LINES_PER_CALL).min(total_lines),
                     ));
                 }
@@ -195,5 +203,9 @@ impl Tool for ReadFileTool {
 
 fn resolve_path(path: &str, working_dir: &str) -> std::path::PathBuf {
     let p = Path::new(path);
-    if p.is_absolute() { p.to_path_buf() } else { Path::new(working_dir).join(path) }
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        Path::new(working_dir).join(path)
+    }
 }

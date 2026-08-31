@@ -1,9 +1,9 @@
 // Flows layer — execution flow detection and data flow analysis
 
-use std::collections::{HashMap, HashSet, VecDeque};
-use serde::{Deserialize, Serialize};
-use crate::errors::Result;
 use super::store::GraphStore;
+use crate::errors::Result;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntryPoint {
@@ -34,14 +34,14 @@ pub struct DataFlow {
 pub fn detect_entry_points(store: &GraphStore) -> Result<Vec<EntryPoint>> {
     let all_nodes = store.get_all_nodes_for_graph(i64::MAX, 0)?;
     let all_edges = store.get_all_edges_for_graph(i64::MAX, 0)?;
-    
+
     let mut in_degree: HashMap<String, usize> = HashMap::new();
     for edge in &all_edges {
         *in_degree.entry(edge.target_qualified.clone()).or_insert(0) += 1;
     }
-    
+
     let mut entry_points = Vec::new();
-    
+
     for node in all_nodes {
         let entry_type = if node.name == "main" {
             "main"
@@ -56,25 +56,25 @@ pub fn detect_entry_points(store: &GraphStore) -> Result<Vec<EntryPoint>> {
         } else {
             continue;
         };
-        
+
         // Count downstream nodes
         let mut downstream = HashSet::new();
         let mut queue = VecDeque::new();
         queue.push_back(node.qualified_name.clone());
-        
+
         while let Some(current) = queue.pop_front() {
             if downstream.contains(&current) {
                 continue;
             }
             downstream.insert(current.clone());
-            
+
             for edge in &all_edges {
                 if edge.source_qualified == current && edge.kind == "Calls" {
                     queue.push_back(edge.target_qualified.clone());
                 }
             }
         }
-        
+
         entry_points.push(EntryPoint {
             qualified_name: node.qualified_name,
             label: node.name,
@@ -83,7 +83,7 @@ pub fn detect_entry_points(store: &GraphStore) -> Result<Vec<EntryPoint>> {
             downstream_count: downstream.len(),
         });
     }
-    
+
     entry_points.sort_by(|a, b| b.downstream_count.cmp(&a.downstream_count));
     Ok(entry_points)
 }
@@ -94,29 +94,29 @@ pub fn trace_execution_path(
     max_depth: usize,
 ) -> Result<ExecutionPath> {
     let all_edges = store.get_all_edges_for_graph(i64::MAX, 0)?;
-    
+
     let mut path = vec![entry_point.to_string()];
     let mut queue = VecDeque::new();
     queue.push_back((entry_point.to_string(), 0));
     let mut visited = HashSet::new();
     let mut has_loop = false;
     let mut has_conditional = false;
-    
+
     while let Some((current, depth)) = queue.pop_front() {
         if depth >= max_depth {
             break;
         }
-        
+
         if visited.contains(&current) {
             has_loop = true;
             continue;
         }
         visited.insert(current.clone());
-        
+
         for edge in &all_edges {
             if edge.source_qualified == current && edge.kind == "Calls" {
                 path.push(edge.target_qualified.clone());
-                
+
                 // Detect conditionals (heuristic: multiple outgoing calls)
                 let outgoing = all_edges
                     .iter()
@@ -125,12 +125,12 @@ pub fn trace_execution_path(
                 if outgoing > 1 {
                     has_conditional = true;
                 }
-                
+
                 queue.push_back((edge.target_qualified.clone(), depth + 1));
             }
         }
     }
-    
+
     Ok(ExecutionPath {
         entry_point: entry_point.to_string(),
         path,
@@ -140,13 +140,10 @@ pub fn trace_execution_path(
     })
 }
 
-pub fn analyze_data_flows(
-    store: &GraphStore,
-    max_hops: usize,
-) -> Result<Vec<DataFlow>> {
+pub fn analyze_data_flows(store: &GraphStore, max_hops: usize) -> Result<Vec<DataFlow>> {
     let all_edges = store.get_all_edges_for_graph(i64::MAX, 0)?;
     let mut data_flows = Vec::new();
-    
+
     // Simple heuristic: find paths from imports to calls
     for edge in &all_edges {
         if edge.kind == "ImportsFrom" {
@@ -156,21 +153,23 @@ pub fn analyze_data_flows(
             let mut visited = HashSet::new();
             visited.insert(edge.source_qualified.clone());
             visited.insert(edge.target_qualified.clone());
-            
+
             while let Some((current, hops)) = queue.pop_front() {
                 if hops >= max_hops {
                     break;
                 }
-                
+
                 for next_edge in &all_edges {
-                    if next_edge.source_qualified == current && !visited.contains(&next_edge.target_qualified) {
+                    if next_edge.source_qualified == current
+                        && !visited.contains(&next_edge.target_qualified)
+                    {
                         visited.insert(next_edge.target_qualified.clone());
                         path.push(next_edge.target_qualified.clone());
                         queue.push_back((next_edge.target_qualified.clone(), hops + 1));
                     }
                 }
             }
-            
+
             if path.len() > 2 {
                 data_flows.push(DataFlow {
                     source_node: edge.source_qualified.clone(),
@@ -181,7 +180,7 @@ pub fn analyze_data_flows(
             }
         }
     }
-    
+
     Ok(data_flows)
 }
 

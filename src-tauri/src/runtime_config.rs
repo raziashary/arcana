@@ -53,22 +53,30 @@ pub struct RuntimeConfig {
     #[serde(default = "default_budget_turns")]
     pub default_worker_budget_turns: u32,
     #[serde(default = "default_budget_warn_pct")]
-    pub budget_warn_pct: u8,  // warn at X% of budget; default 80
+    pub budget_warn_pct: u8, // warn at X% of budget; default 80
 }
 
-fn default_budget_tokens() -> u64 { 100_000 }
-fn default_budget_usd()    -> f64 { 0.50 }
-fn default_budget_turns()  -> u32 { 20 }
-fn default_budget_warn_pct() -> u8 { 80 }
+fn default_budget_tokens() -> u64 {
+    100_000
+}
+fn default_budget_usd() -> f64 {
+    0.50
+}
+fn default_budget_turns() -> u32 {
+    20
+}
+fn default_budget_warn_pct() -> u8 {
+    80
+}
 
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             skip_sidecars: false,
             default_worker_budget_tokens: default_budget_tokens(),
-            default_worker_budget_usd:    default_budget_usd(),
-            default_worker_budget_turns:  default_budget_turns(),
-            budget_warn_pct:              default_budget_warn_pct(),
+            default_worker_budget_usd: default_budget_usd(),
+            default_worker_budget_turns: default_budget_turns(),
+            budget_warn_pct: default_budget_warn_pct(),
         }
     }
 }
@@ -152,8 +160,7 @@ pub fn read() -> RuntimeConfig {
 /// Atomically write the runtime config to disk.
 pub fn write(cfg: &RuntimeConfig) -> std::io::Result<()> {
     let path = config_path();
-    let json = serde_json::to_string_pretty(cfg)
-        .unwrap_or_else(|_| "{}".into());
+    let json = serde_json::to_string_pretty(cfg).unwrap_or_else(|_| "{}".into());
 
     // Write to a sibling temp file then rename — prevents a half-written file
     // if the process is killed mid-write.

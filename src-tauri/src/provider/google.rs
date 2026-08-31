@@ -8,18 +8,17 @@ use reqwest::Client;
 use serde_json::json;
 use tracing::{debug, error};
 
-use crate::errors::{AutoDevError, Result};
 use super::traits::{Provider, StreamResult};
 use super::types::{
-    CompletionRequest, CompletionResponse, MessageContent, ModelInfo,
-    ProviderStatus, StreamChunk,
+    CompletionRequest, CompletionResponse, MessageContent, ModelInfo, ProviderStatus, StreamChunk,
 };
+use crate::errors::{AutoDevError, Result};
 
 const GOOGLE_API_BASE: &str = "https://generativelanguage.googleapis.com";
 
 pub struct GoogleProvider {
     api_key: String,
-    client:  Client,
+    client: Client,
 }
 
 impl GoogleProvider {
@@ -33,31 +32,31 @@ impl GoogleProvider {
     fn models_static() -> Vec<ModelInfo> {
         vec![
             ModelInfo {
-                id:                "gemini-2.0-flash-thinking-exp-01-21".into(),
-                name:              "Gemini 2.0 Flash Thinking".into(),
-                context_window:    1_000_000,
-                supports_vision:   true,
+                id: "gemini-2.0-flash-thinking-exp-01-21".into(),
+                name: "Gemini 2.0 Flash Thinking".into(),
+                context_window: 1_000_000,
+                supports_vision: true,
                 supports_thinking: true,
-                cost_in_per_1m:    0.10,
-                cost_out_per_1m:   0.40,
+                cost_in_per_1m: 0.10,
+                cost_out_per_1m: 0.40,
             },
             ModelInfo {
-                id:                "gemini-2.5-pro".into(),
-                name:              "Gemini 2.5 Pro".into(),
-                context_window:    1_000_000,
-                supports_vision:   true,
+                id: "gemini-2.5-pro".into(),
+                name: "Gemini 2.5 Pro".into(),
+                context_window: 1_000_000,
+                supports_vision: true,
                 supports_thinking: true,
-                cost_in_per_1m:    1.25,
-                cost_out_per_1m:   5.0,
+                cost_in_per_1m: 1.25,
+                cost_out_per_1m: 5.0,
             },
             ModelInfo {
-                id:                "gemini-2.5-flash".into(),
-                name:              "Gemini 2.5 Flash".into(),
-                context_window:    1_000_000,
-                supports_vision:   true,
+                id: "gemini-2.5-flash".into(),
+                name: "Gemini 2.5 Flash".into(),
+                context_window: 1_000_000,
+                supports_vision: true,
                 supports_thinking: false,
-                cost_in_per_1m:    0.075,
-                cost_out_per_1m:   0.30,
+                cost_in_per_1m: 0.075,
+                cost_out_per_1m: 0.30,
             },
         ]
     }
@@ -74,21 +73,29 @@ impl GoogleProvider {
                 _ => "user",
             };
 
-            let parts: Vec<serde_json::Value> = msg.content.iter().map(|c| match c {
-                MessageContent::Text { text } => json!({ "text": text }),
-                MessageContent::ToolUse { id: _, name, input } => json!({
-                    "functionCall": {
-                        "name": name,
-                        "args": input,
-                    }
-                }),
-                MessageContent::ToolResult { tool_use_id, content, is_error: _ } => json!({
-                    "functionResponse": {
-                        "name": tool_use_id,
-                        "response": { "result": content }
-                    }
-                }),
-            }).collect();
+            let parts: Vec<serde_json::Value> = msg
+                .content
+                .iter()
+                .map(|c| match c {
+                    MessageContent::Text { text } => json!({ "text": text }),
+                    MessageContent::ToolUse { id: _, name, input } => json!({
+                        "functionCall": {
+                            "name": name,
+                            "args": input,
+                        }
+                    }),
+                    MessageContent::ToolResult {
+                        tool_use_id,
+                        content,
+                        is_error: _,
+                    } => json!({
+                        "functionResponse": {
+                            "name": tool_use_id,
+                            "response": { "result": content }
+                        }
+                    }),
+                })
+                .collect();
 
             contents.push(json!({
                 "role": role,
@@ -104,15 +111,19 @@ impl GoogleProvider {
         }
 
         // Convert tools to Gemini format
-        let tools: Vec<serde_json::Value> = req.tools.iter().map(|t| {
-            json!({
-                "functionDeclarations": [{
-                    "name": t.name,
-                    "description": t.description,
-                    "parameters": t.input_schema,
-                }]
+        let tools: Vec<serde_json::Value> = req
+            .tools
+            .iter()
+            .map(|t| {
+                json!({
+                    "functionDeclarations": [{
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.input_schema,
+                    }]
+                })
             })
-        }).collect();
+            .collect();
 
         let mut body = json!({
             "contents": contents,
@@ -135,7 +146,10 @@ impl GoogleProvider {
             gen_config.insert("topP".into(), json!(top_p));
         }
         if req.thinking_budget_tokens.is_some() {
-            gen_config.insert("thinkingConfig".into(), json!({ "thinkingBudget": req.thinking_budget_tokens }));
+            gen_config.insert(
+                "thinkingConfig".into(),
+                json!({ "thinkingBudget": req.thinking_budget_tokens }),
+            );
         }
         if !gen_config.is_empty() {
             body["generationConfig"] = serde_json::Value::Object(gen_config);
@@ -147,9 +161,15 @@ impl GoogleProvider {
 
 #[async_trait]
 impl Provider for GoogleProvider {
-    fn id(&self)   -> &str { "google" }
-    fn name(&self) -> &str { "Google" }
-    fn models(&self) -> Vec<ModelInfo> { Self::models_static() }
+    fn id(&self) -> &str {
+        "google"
+    }
+    fn name(&self) -> &str {
+        "Google"
+    }
+    fn models(&self) -> Vec<ModelInfo> {
+        Self::models_static()
+    }
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
         let body = self.build_body(&request);
@@ -160,7 +180,8 @@ impl Provider for GoogleProvider {
             GOOGLE_API_BASE, request.model, self.api_key
         );
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(&url)
             .header("Content-Type", "application/json")
             .json(&body)
@@ -186,7 +207,8 @@ impl Provider for GoogleProvider {
             GOOGLE_API_BASE, request.model, self.api_key
         );
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(&url)
             .header("Content-Type", "application/json")
             .json(&body)
@@ -196,7 +218,9 @@ impl Provider for GoogleProvider {
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(AutoDevError::Provider(format!("Google stream {status}: {text}")));
+            return Err(AutoDevError::Provider(format!(
+                "Google stream {status}: {text}"
+            )));
         }
 
         let byte_stream = resp.bytes_stream();
@@ -205,7 +229,7 @@ impl Provider for GoogleProvider {
         let chunk_stream = byte_stream
             .map(move |bytes_result| -> Result<Vec<StreamChunk>> {
                 let bytes = bytes_result.map_err(AutoDevError::Http)?;
-                let text  = String::from_utf8_lossy(&bytes);
+                let text = String::from_utf8_lossy(&bytes);
                 let mut buf = buffer.lock().unwrap();
                 buf.push_str(&text);
                 let mut chunks = Vec::new();
@@ -222,7 +246,7 @@ impl Provider for GoogleProvider {
             .flat_map(|result| {
                 let items: Vec<Result<StreamChunk>> = match result {
                     Ok(chunks) => chunks.into_iter().map(Ok).collect(),
-                    Err(e)     => vec![Err(e)],
+                    Err(e) => vec![Err(e)],
                 };
                 futures::stream::iter(items)
             });
@@ -244,7 +268,8 @@ impl Provider for GoogleProvider {
             }]
         });
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(&url)
             .header("Content-Type", "application/json")
             .json(&test_body)
@@ -253,7 +278,7 @@ impl Provider for GoogleProvider {
 
         match resp {
             Ok(r) if r.status().is_success() => Ok(ProviderStatus::Connected),
-            Ok(r) if r.status() == 403       => Ok(ProviderStatus::Error("Invalid API key".into())),
+            Ok(r) if r.status() == 403 => Ok(ProviderStatus::Error("Invalid API key".into())),
             Ok(r) => {
                 let code = r.status();
                 Ok(ProviderStatus::Error(format!("HTTP {code}")))
@@ -276,8 +301,10 @@ fn parse_google_sse_line(line: &str) -> Result<Option<StreamChunk>> {
         None => return Ok(None),
     };
     match serde_json::from_str::<serde_json::Value>(data) {
-        Ok(v)  => parse_google_chunk(&v),
-        Err(e) => Err(AutoDevError::Provider(format!("SSE parse error: {e} — data: {data}"))),
+        Ok(v) => parse_google_chunk(&v),
+        Err(e) => Err(AutoDevError::Provider(format!(
+            "SSE parse error: {e} — data: {data}"
+        ))),
     }
 }
 
@@ -306,12 +333,13 @@ fn parse_google_chunk(v: &serde_json::Value) -> Result<Option<StreamChunk>> {
 
         // Function call (tool use)
         if let Some(func_call) = part["functionCall"].as_object() {
-            let name = func_call.get("name")
+            let name = func_call
+                .get("name")
                 .and_then(|n| n.as_str())
                 .unwrap_or("")
                 .to_string();
             let _args = func_call.get("args").cloned().unwrap_or(json!({}));
-            
+
             // Gemini sends complete function calls, not deltas
             return Ok(Some(StreamChunk::ToolUseStart {
                 id: format!("gemini-{}", name),
@@ -343,7 +371,8 @@ fn parse_google_chunk(v: &serde_json::Value) -> Result<Option<StreamChunk>> {
 fn parse_completion_response(data: serde_json::Value) -> Result<CompletionResponse> {
     let empty_array = vec![];
     let candidates = data["candidates"].as_array().unwrap_or(&empty_array);
-    let stop_reason = candidates.get(0)
+    let stop_reason = candidates
+        .get(0)
         .and_then(|c| c["finishReason"].as_str())
         .unwrap_or("STOP")
         .to_string();
@@ -365,12 +394,13 @@ fn parse_completion_response(data: serde_json::Value) -> Result<CompletionRespon
 
                 // Function call
                 if let Some(func_call) = part["functionCall"].as_object() {
-                    let name = func_call.get("name")
+                    let name = func_call
+                        .get("name")
                         .and_then(|n| n.as_str())
                         .unwrap_or("")
                         .to_string();
                     let args = func_call.get("args").cloned().unwrap_or(json!({}));
-                    
+
                     content.push(MessageContent::ToolUse {
                         id: format!("gemini-{}", name),
                         name,

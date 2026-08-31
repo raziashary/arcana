@@ -35,8 +35,8 @@ pub fn is_tty() -> bool {
 
 /// Standard exit codes for airsctl.
 pub mod exit_code {
-    pub const SUCCESS: i32        = 0;
-    pub const ERROR: i32          = 1;
+    pub const SUCCESS: i32 = 0;
+    pub const ERROR: i32 = 1;
     pub const PARTIAL_SUCCESS: i32 = 2;
 }
 
@@ -60,16 +60,17 @@ pub fn partial_success(succeeded: usize, failed: usize) -> ! {
     if is_tty() {
         eprintln!("Partial success: {msg}");
     } else {
-        eprintln!(
-            "{{\"status\":\"partial\",\"succeeded\":{succeeded},\"failed\":{failed}}}"
-        );
+        eprintln!("{{\"status\":\"partial\",\"succeeded\":{succeeded},\"failed\":{failed}}}");
     }
     std::process::exit(exit_code::PARTIAL_SUCCESS);
 }
 
 /// Minimal JSON string escaping (no external deps needed here).
 fn json_string(s: &str) -> String {
-    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+    let escaped = s
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n");
     format!("\"{escaped}\"")
 }
 

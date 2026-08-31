@@ -2,31 +2,31 @@
 // Extracts AST nodes via tree-sitter, builds dependency graph, clusters communities,
 // and serves surgical queries to agents via MCP.
 
-pub mod schema;
-pub mod migrations;
-pub mod store;
-pub mod detect;
-pub mod extract;
-pub mod build;
-pub mod cluster;
 pub mod analyze;
-pub mod flows;
-pub mod changes;
-pub mod incremental;
-pub mod query;
-pub mod report;
-pub mod export;
-pub mod registry;
+pub mod build;
 pub mod cache;
+pub mod changes;
+pub mod cluster;
+pub mod detect;
+pub mod export;
+pub mod extract;
+pub mod flows;
+pub mod incremental;
+pub mod migrations;
+pub mod query;
+pub mod registry;
+pub mod report;
+pub mod schema;
+pub mod store;
 pub mod watcher;
 
-pub use store::{GraphStore, GraphNode, GraphEdge, GraphStats};
-pub use schema::{NodeInfo, EdgeInfo};
-pub use detect::CodeDetector;
-pub use extract::{ExtractionResult, NodeKind, EdgeKind, ConfidenceTier, extract, extract_all};
+pub use analyze::Analyzer;
 pub use build::GraphBuilder;
 pub use cluster::Clusterer;
-pub use analyze::Analyzer;
+pub use detect::CodeDetector;
+pub use extract::{extract, extract_all, ConfidenceTier, EdgeKind, ExtractionResult, NodeKind};
 pub use query::QueryEngine;
 pub use registry::GraphRegistry;
+pub use schema::{EdgeInfo, NodeInfo};
+pub use store::{GraphEdge, GraphNode, GraphStats, GraphStore};
 pub use watcher::GraphWatcher;

@@ -15,18 +15,18 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstallResult {
-    pub success:       bool,
-    pub version:       String,
-    pub message:       String,
+    pub success: bool,
+    pub version: String,
+    pub message: String,
     pub requires_restart: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateRecord {
-    pub version:      String,
+    pub version: String,
     pub installed_at: String,
     pub previous_version: String,
-    pub channel:      String,
+    pub channel: String,
 }
 
 /// Prepare the update for installation and schedule it on the next restart.
@@ -88,9 +88,9 @@ fn schedule_windows(installer_path: &Path, version: &str) -> Result<InstallResul
     write_runonce_key(&batch_path)?;
 
     Ok(InstallResult {
-        success:          true,
-        version:          version.to_string(),
-        message:          "Update ready. Restart AutoDev to apply.".into(),
+        success: true,
+        version: version.to_string(),
+        message: "Update ready. Restart AutoDev to apply.".into(),
         requires_restart: true,
     })
 }
@@ -102,8 +102,10 @@ fn write_runonce_key(batch_path: &Path) -> Result<()> {
         .args([
             "add",
             "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
-            "/v", "AutoDevUpdate",
-            "/d", &format!("\"{}\"", batch_path.display()),
+            "/v",
+            "AutoDevUpdate",
+            "/d",
+            &format!("\"{}\"", batch_path.display()),
             "/f",
         ])
         .status()
@@ -176,12 +178,15 @@ rm -- "$0"
         .unwrap_or_else(|| PathBuf::from("."))
         .join("Library/LaunchAgents");
     std::fs::create_dir_all(&agents_dir)?;
-    std::fs::write(agents_dir.join("com.airs-foundry.autodev.update.plist"), plist)?;
+    std::fs::write(
+        agents_dir.join("com.airs-foundry.autodev.update.plist"),
+        plist,
+    )?;
 
     Ok(InstallResult {
-        success:          true,
-        version:          version.to_string(),
-        message:          "Update ready. Quit AutoDev to apply.".into(),
+        success: true,
+        version: version.to_string(),
+        message: "Update ready. Quit AutoDev to apply.".into(),
         requires_restart: true,
     })
 }
@@ -233,32 +238,31 @@ exec "{current}"
         std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))?;
 
         Ok(InstallResult {
-            success:          true,
-            version:          version.to_string(),
-            message:          "AppImage update ready. Restart AutoDev to apply.".into(),
+            success: true,
+            version: version.to_string(),
+            message: "AppImage update ready. Restart AutoDev to apply.".into(),
             requires_restart: true,
         })
     } else if ext == "deb" {
         // Schedule deb installation via pkexec
         let script_path = PathBuf::from("/tmp/autodev-update.sh");
-        let script = format!(
-            "#!/usr/bin/env bash\npkexec apt-get install -y \"{installer_str}\"\n"
-        );
+        let script =
+            format!("#!/usr/bin/env bash\npkexec apt-get install -y \"{installer_str}\"\n");
         std::fs::write(&script_path, &script)?;
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))?;
 
         Ok(InstallResult {
-            success:          true,
-            version:          version.to_string(),
-            message:          "Deb package ready. Restart AutoDev to install (requires pkexec).".into(),
+            success: true,
+            version: version.to_string(),
+            message: "Deb package ready. Restart AutoDev to install (requires pkexec).".into(),
             requires_restart: true,
         })
     } else {
         Ok(InstallResult {
-            success:          false,
-            version:          version.to_string(),
-            message:          format!("Unsupported installer format: .{ext}"),
+            success: false,
+            version: version.to_string(),
+            message: format!("Unsupported installer format: .{ext}"),
             requires_restart: false,
         })
     }
@@ -277,10 +281,10 @@ pub fn record_pending_update(version: &str, current_version: &str) -> Result<()>
     };
 
     records.push(UpdateRecord {
-        version:          version.to_string(),
-        installed_at:     iso_now(),
+        version: version.to_string(),
+        installed_at: iso_now(),
         previous_version: current_version.to_string(),
-        channel:          "stable".to_string(),
+        channel: "stable".to_string(),
     });
 
     // Keep last 20 records
@@ -297,7 +301,9 @@ pub fn record_pending_update(version: &str, current_version: &str) -> Result<()>
 
 pub fn get_update_history() -> Vec<UpdateRecord> {
     let path = update_history_path();
-    if !path.exists() { return vec![]; }
+    if !path.exists() {
+        return vec![];
+    }
     let s = std::fs::read_to_string(&path).unwrap_or_default();
     serde_json::from_str(&s).unwrap_or_default()
 }
@@ -322,7 +328,9 @@ pub fn skip_version(version: &str) -> Result<()> {
 
 pub fn is_skipped(version: &str) -> bool {
     let path = skipped_versions_path();
-    if !path.exists() { return false; }
+    if !path.exists() {
+        return false;
+    }
     let s = std::fs::read_to_string(&path).unwrap_or_default();
     let skipped: Vec<String> = serde_json::from_str(&s).unwrap_or_default();
     skipped.contains(&version.to_string())
@@ -338,14 +346,18 @@ fn update_history_path() -> PathBuf {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".autodev").join("update_history.json")
+    PathBuf::from(home)
+        .join(".autodev")
+        .join("update_history.json")
 }
 
 fn skipped_versions_path() -> PathBuf {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".autodev").join("skipped_versions.json")
+    PathBuf::from(home)
+        .join(".autodev")
+        .join("skipped_versions.json")
 }
 
 fn iso_now() -> String {
@@ -353,17 +365,42 @@ fn iso_now() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let s = secs % 60; let m = (secs/60)%60; let h = (secs/3600)%24;
-    let days = secs/86400;
-    let y400=days/146097; let rem=days%146097;
-    let y100=rem/36524;   let rem=rem%36524;
-    let y4=rem/1461;      let rem=rem%1461;
-    let y1=rem/365;
-    let year=y400*400+y100*100+y4*4+y1+1970;
-    let leap=(year%4==0&&year%100!=0)||year%400==0;
-    let mdays:[u64;12]=[31,if leap{29}else{28},31,30,31,30,31,31,30,31,30,31];
-    let mut doy=rem%365+if y1==4{365}else{0}; let mut mo=1u64;
-    for md in &mdays { if doy < *md { break; } doy -= md; mo += 1; }
+    let s = secs % 60;
+    let m = (secs / 60) % 60;
+    let h = (secs / 3600) % 24;
+    let days = secs / 86400;
+    let y400 = days / 146097;
+    let rem = days % 146097;
+    let y100 = rem / 36524;
+    let rem = rem % 36524;
+    let y4 = rem / 1461;
+    let rem = rem % 1461;
+    let y1 = rem / 365;
+    let year = y400 * 400 + y100 * 100 + y4 * 4 + y1 + 1970;
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let mdays: [u64; 12] = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    let mut doy = rem % 365 + if y1 == 4 { 365 } else { 0 };
+    let mut mo = 1u64;
+    for md in &mdays {
+        if doy < *md {
+            break;
+        }
+        doy -= md;
+        mo += 1;
+    }
     let day = doy + 1;
     format!("{year}-{mo:02}-{day:02}T{h:02}:{m:02}:{s:02}Z")
 }

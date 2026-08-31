@@ -9,10 +9,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use notify::{RecommendedWatcher, RecursiveMode, Watcher, Config, EventKind};
 use notify::event::{CreateKind, ModifyKind, RemoveKind};
+use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tauri::{AppHandle, Emitter};
-use tracing::{info, warn, debug};
+use tracing::{debug, info, warn};
 
 use super::registry::SkillRegistry;
 
@@ -20,9 +20,9 @@ use super::registry::SkillRegistry;
 /// Returns immediately — the watcher runs for the lifetime of the tokio runtime.
 /// Emits Tauri event `"skills:reloaded"` with the new skill count after each reload.
 pub fn start_skill_watcher(
-    registry:    Arc<SkillRegistry>,
-    skills_dir:  PathBuf,
-    app_handle:  AppHandle,
+    registry: Arc<SkillRegistry>,
+    skills_dir: PathBuf,
+    app_handle: AppHandle,
 ) {
     // Channel: notify thread → tokio task
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
@@ -36,17 +36,20 @@ pub fn start_skill_watcher(
                 match result {
                     Ok(event) => {
                         // Only care about .md file changes
-                        let is_md = event.paths.iter().any(|p| {
-                            p.extension().map(|e| e == "md").unwrap_or(false)
-                        });
-                        if !is_md { return; }
+                        let is_md = event
+                            .paths
+                            .iter()
+                            .any(|p| p.extension().map(|e| e == "md").unwrap_or(false));
+                        if !is_md {
+                            return;
+                        }
 
                         let relevant = matches!(
                             event.kind,
                             EventKind::Create(CreateKind::File)
-                            | EventKind::Modify(ModifyKind::Data(_))
-                            | EventKind::Modify(ModifyKind::Name(_))
-                            | EventKind::Remove(RemoveKind::File)
+                                | EventKind::Modify(ModifyKind::Data(_))
+                                | EventKind::Modify(ModifyKind::Name(_))
+                                | EventKind::Remove(RemoveKind::File)
                         );
                         if relevant {
                             debug!("[SkillWatcher] change detected: {:?}", event.paths);
@@ -85,14 +88,16 @@ pub fn start_skill_watcher(
         // Debounce: wait 500 ms after the last event before reloading
         loop {
             // Wait for first signal
-            if rx.recv().await.is_none() { break; }
+            if rx.recv().await.is_none() {
+                break;
+            }
 
             // Drain any additional signals that arrive within the debounce window
             let debounce = Duration::from_millis(500);
             loop {
                 match tokio::time::timeout(debounce, rx.recv()).await {
-                    Ok(None) => return,   // channel closed
-                    Ok(Some(_)) => {}     // more events — keep draining
+                    Ok(None) => return,     // channel closed
+                    Ok(Some(_)) => {}       // more events — keep draining
                     Err(_timeout) => break, // window expired → reload now
                 }
             }

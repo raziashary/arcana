@@ -77,8 +77,10 @@ mod tests {
         let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for k in &kinds {
             assert!(seen.insert(*k), "duplicate kind: {k}");
-            assert!(k.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
-                    "kind '{k}' must be snake_case ASCII");
+            assert!(
+                k.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+                "kind '{k}' must be snake_case ASCII"
+            );
         }
     }
 }

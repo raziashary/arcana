@@ -12,11 +12,16 @@ use super::manifest::{DependencyCheck, PluginManifest, RunResult, VerifyResult};
 pub fn exec_shell(cmd_str: &str, work_dir: Option<&std::path::Path>) -> RunResult {
     let result = shell_command(cmd_str, work_dir);
     match result {
-        Ok((code, stdout, stderr)) => RunResult { success: code == 0, stdout, stderr, exit_code: code },
+        Ok((code, stdout, stderr)) => RunResult {
+            success: code == 0,
+            stdout,
+            stderr,
+            exit_code: code,
+        },
         Err(e) => RunResult {
-            success:   false,
-            stdout:    String::new(),
-            stderr:    e.to_string(),
+            success: false,
+            stdout: String::new(),
+            stderr: e.to_string(),
             exit_code: -1,
         },
     }
@@ -63,10 +68,7 @@ fn make_shell_cmd(cmd_str: &str) -> Command {
 /// Run the platform install command for a plugin.
 /// First tries a script file (`install.sh` / `install.ps1`) in the plugin dir,
 /// then falls back to the inline manifest command.
-pub fn install_plugin(
-    manifest: &PluginManifest,
-    install_dir: &std::path::Path,
-) -> RunResult {
+pub fn install_plugin(manifest: &PluginManifest, install_dir: &std::path::Path) -> RunResult {
     // Try a script file first
     #[cfg(target_os = "windows")]
     let script = install_dir.join("install.ps1");
@@ -75,7 +77,10 @@ pub fn install_plugin(
 
     if script.exists() {
         #[cfg(target_os = "windows")]
-        let cmd = format!("powershell -ExecutionPolicy Bypass -File \"{}\"", script.display());
+        let cmd = format!(
+            "powershell -ExecutionPolicy Bypass -File \"{}\"",
+            script.display()
+        );
         #[cfg(not(target_os = "windows"))]
         let cmd = format!("bash \"{}\"", script.display());
         return exec_shell(&cmd, Some(install_dir));
@@ -84,18 +89,21 @@ pub fn install_plugin(
     // Fall back to manifest inline command
     let Some(os_cmds) = &manifest.commands.install else {
         return RunResult {
-            success:   false,
-            stdout:    String::new(),
-            stderr:    "Plugin has no install command defined".into(),
+            success: false,
+            stdout: String::new(),
+            stderr: "Plugin has no install command defined".into(),
             exit_code: 1,
         };
     };
 
     let Some(cmd) = os_cmds.for_current_os() else {
         return RunResult {
-            success:   false,
-            stdout:    String::new(),
-            stderr:    format!("Plugin '{}' has no install command for this OS", manifest.name),
+            success: false,
+            stdout: String::new(),
+            stderr: format!(
+                "Plugin '{}' has no install command for this OS",
+                manifest.name
+            ),
             exit_code: 1,
         };
     };
@@ -129,11 +137,11 @@ pub fn verify_plugin(manifest: &PluginManifest) -> VerifyResult {
         }
 
         checks.push(DependencyCheck {
-            name:     dep.name.clone(),
+            name: dep.name.clone(),
             required: !dep.optional,
             present,
             version,
-            message:  if present {
+            message: if present {
                 "OK".into()
             } else if dep.optional {
                 format!("Optional dependency '{}' not found", dep.name)
@@ -146,7 +154,9 @@ pub fn verify_plugin(manifest: &PluginManifest) -> VerifyResult {
     // Also run the manifest-level verify command if present
     let verify_msg = if let Some(v_cmd) = &manifest.commands.verify {
         match shell_command(v_cmd, None) {
-            Ok((0, stdout, _)) => format!("Verify OK: {}", stdout.lines().next().unwrap_or("").trim()),
+            Ok((0, stdout, _)) => {
+                format!("Verify OK: {}", stdout.lines().next().unwrap_or("").trim())
+            }
             Ok((code, _, stderr)) => {
                 all_required_ok = false;
                 format!("Verify command exited {code}: {}", stderr.trim())
@@ -162,7 +172,7 @@ pub fn verify_plugin(manifest: &PluginManifest) -> VerifyResult {
 
     VerifyResult {
         success: all_required_ok,
-        plugin:  manifest.name.clone(),
+        plugin: manifest.name.clone(),
         checks,
         message: verify_msg,
     }
@@ -180,7 +190,10 @@ pub fn uninstall_plugin(manifest: &PluginManifest, install_dir: &std::path::Path
 
     if script.exists() {
         #[cfg(target_os = "windows")]
-        let cmd = format!("powershell -ExecutionPolicy Bypass -File \"{}\"", script.display());
+        let cmd = format!(
+            "powershell -ExecutionPolicy Bypass -File \"{}\"",
+            script.display()
+        );
         #[cfg(not(target_os = "windows"))]
         let cmd = format!("bash \"{}\"", script.display());
         return exec_shell(&cmd, Some(install_dir));
@@ -189,9 +202,9 @@ pub fn uninstall_plugin(manifest: &PluginManifest, install_dir: &std::path::Path
     let Some(cmd) = &manifest.commands.uninstall else {
         // No uninstall command — succeed silently (dir cleanup handled by manager)
         return RunResult {
-            success:   true,
-            stdout:    "No uninstall command; directory will be removed.".into(),
-            stderr:    String::new(),
+            success: true,
+            stdout: "No uninstall command; directory will be removed.".into(),
+            stderr: String::new(),
             exit_code: 0,
         };
     };
@@ -240,7 +253,10 @@ pub fn write_plugin_scripts(
     #[cfg(target_os = "windows")]
     {
         let script = install_dir.join("install.ps1");
-        std::fs::write(&script, format!("# Auto-generated install script\r\n{cmd}\r\n"))?;
+        std::fs::write(
+            &script,
+            format!("# Auto-generated install script\r\n{cmd}\r\n"),
+        )?;
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -254,13 +270,19 @@ pub fn write_plugin_scripts(
         #[cfg(target_os = "windows")]
         {
             let script = install_dir.join("uninstall.ps1");
-            std::fs::write(&script, format!("# Auto-generated uninstall script\r\n{uninstall_cmd}\r\n"))?;
+            std::fs::write(
+                &script,
+                format!("# Auto-generated uninstall script\r\n{uninstall_cmd}\r\n"),
+            )?;
         }
         #[cfg(not(target_os = "windows"))]
         {
             use std::os::unix::fs::PermissionsExt;
             let script = install_dir.join("uninstall.sh");
-            std::fs::write(&script, format!("#!/usr/bin/env bash\nset -e\n{uninstall_cmd}\n"))?;
+            std::fs::write(
+                &script,
+                format!("#!/usr/bin/env bash\nset -e\n{uninstall_cmd}\n"),
+            )?;
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))?;
         }
     }

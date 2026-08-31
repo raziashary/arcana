@@ -14,14 +14,14 @@ use serde::{Deserialize, Serialize};
 use crate::db::autodev_dir;
 use crate::errors::{AutoDevError, Result};
 
-const KEY_OPEN_TABS:     &str = "ide_open_tabs";
-const KEY_ACTIVE_TAB:    &str = "ide_active_tab";
+const KEY_OPEN_TABS: &str = "ide_open_tabs";
+const KEY_ACTIVE_TAB: &str = "ide_active_tab";
 const KEY_EXPANDED_DIRS: &str = "ide_expanded_dirs";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IdeWorkspaceState {
-    pub open_tabs:     Vec<String>,
-    pub active_tab:    Option<String>,
+    pub open_tabs: Vec<String>,
+    pub active_tab: Option<String>,
     pub expanded_dirs: Vec<String>,
 }
 
@@ -29,8 +29,8 @@ pub struct IdeWorkspaceState {
 
 fn open_config_db() -> Result<Connection> {
     let path = autodev_dir()?.join("config.db");
-    let conn = Connection::open(&path)
-        .map_err(|e| AutoDevError::Agent(format!("config.db open: {e}")))?;
+    let conn =
+        Connection::open(&path).map_err(|e| AutoDevError::Agent(format!("config.db open: {e}")))?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS app_settings (
              key        TEXT PRIMARY KEY,
@@ -75,7 +75,11 @@ pub fn load() -> Result<IdeWorkspaceState> {
         .unwrap_or_default();
     let active_tab: Option<String> = read_key(&conn, KEY_ACTIVE_TAB)?;
 
-    Ok(IdeWorkspaceState { open_tabs, active_tab, expanded_dirs })
+    Ok(IdeWorkspaceState {
+        open_tabs,
+        active_tab,
+        expanded_dirs,
+    })
 }
 
 pub fn save(state: &IdeWorkspaceState) -> Result<()> {

@@ -3,16 +3,18 @@
 // The task enters the board with status="ready" for Supervisor to pick up.
 // See: DEVELOPMENT_PLAN.md Phase 2.1 — PA Mode Toggle / create_task Tool
 
+use super::super::tool_trait::{Tool, ToolContext, ToolResult};
+use crate::db::tasks::{CreateTaskInput, TasksDb};
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use crate::db::tasks::{CreateTaskInput, TasksDb};
-use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 
 pub struct CreateTaskTool;
 
 #[async_trait]
 impl Tool for CreateTaskTool {
-    fn name(&self) -> &str { "create_task" }
+    fn name(&self) -> &str {
+        "create_task"
+    }
 
     fn description(&self) -> &str {
         "Create a new task on the internal AutoDev task board. Use this in Delegate Mode to assign work to the Worker fleet. The task enters with status 'ready' and will be picked up by the Supervisor within 2 minutes. Always include specific, testable acceptance criteria."
@@ -49,7 +51,9 @@ impl Tool for CreateTaskTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let title = match input["title"].as_str() {
@@ -64,7 +68,9 @@ impl Tool for CreateTaskTool {
         let task_type = input["task_type"].as_str().unwrap_or("feature").to_string();
         let acceptance_criteria = match input["acceptance_criteria"].as_str() {
             Some(ac) if !ac.trim().is_empty() => ac.trim().to_string(),
-            _ => return ToolResult::error("'acceptance_criteria' is required and must not be empty"),
+            _ => {
+                return ToolResult::error("'acceptance_criteria' is required and must not be empty")
+            }
         };
         let description = input["description"].as_str().map(|s| s.to_string());
 
@@ -74,12 +80,12 @@ impl Tool for CreateTaskTool {
         };
 
         let task = match db.create(CreateTaskInput {
-            title:               title.clone(),
+            title: title.clone(),
             description,
-            priority:            priority.clone(),
-            task_type:           task_type.clone(),
+            priority: priority.clone(),
+            task_type: task_type.clone(),
             acceptance_criteria: acceptance_criteria.clone(),
-            created_by:          Some("pa".to_string()),
+            created_by: Some("pa".to_string()),
         }) {
             Ok(t) => t,
             Err(e) => return ToolResult::error(&format!("Failed to create task: {e}")),
@@ -95,8 +101,8 @@ impl Tool for CreateTaskTool {
         // to `task:changed` and re-fetches `list_tasks` on any event.
         crate::events::emit_task_changed_global(crate::events::TaskChangedPayload {
             task_id: Some(task.id),
-            kind:    "created".into(),
-            status:  Some("ready".into()),
+            kind: "created".into(),
+            status: Some("ready".into()),
             assigned_worker: None,
         });
 

@@ -12,10 +12,10 @@
 // All modules operate within the configured workspace_dir (see workspace_commands.rs).
 // Commands are wired in commands/ide_commands.rs and registered in lib.rs.
 
-pub mod types;
-pub mod file_tree;
 pub mod file_reader;
 pub mod file_search;
-pub mod symbols;
+pub mod file_tree;
 pub mod symbol_nav;
+pub mod symbols;
+pub mod types;
 pub mod workspace;

@@ -49,7 +49,9 @@ const KNOWN_UNREACHABLE: &[(&str, &str)] = &[
 /// Walk `src/`, returning every `.rs` file relative to it.
 fn all_rust_files(src: &Path) -> Vec<PathBuf> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -73,7 +75,9 @@ fn all_rust_files(src: &Path) -> Vec<PathBuf> {
 fn declared_module_names(files: &[PathBuf]) -> HashSet<String> {
     let mut names = HashSet::new();
     for file in files {
-        let Ok(source) = std::fs::read_to_string(file) else { continue };
+        let Ok(source) = std::fs::read_to_string(file) else {
+            continue;
+        };
         for line in source.lines() {
             let line = line.trim();
             if line.starts_with("//") {
@@ -81,7 +85,11 @@ fn declared_module_names(files: &[PathBuf]) -> HashSet<String> {
             }
             // `mod foo;` / `pub mod foo;` / `pub(crate) mod foo;` — declaration
             // only, not `mod foo {` which is an inline module.
-            let Some(rest) = line.split(" mod ").nth(1).or_else(|| line.strip_prefix("mod ")) else {
+            let Some(rest) = line
+                .split(" mod ")
+                .nth(1)
+                .or_else(|| line.strip_prefix("mod "))
+            else {
                 continue;
             };
             if let Some(name) = rest.strip_suffix(';') {
@@ -103,7 +111,11 @@ mod tests {
     fn every_source_file_is_reachable_from_the_crate_root() {
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let files = all_rust_files(&src);
-        assert!(files.len() > 100, "expected to walk the crate; found {}", files.len());
+        assert!(
+            files.len() > 100,
+            "expected to walk the crate; found {}",
+            files.len()
+        );
 
         let declared = declared_module_names(&files);
         let known: HashSet<&str> = KNOWN_UNREACHABLE.iter().map(|(p, _)| *p).collect();

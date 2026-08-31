@@ -1,7 +1,7 @@
+use crate::output::{status_colored, OutputContext};
 use anyhow::Result;
+use autodev_shared::db::workers::{CreateWorkerInput, WorkersDb};
 use clap::{Args, Subcommand};
-use autodev_shared::db::workers::{WorkersDb, CreateWorkerInput};
-use crate::output::{OutputContext, status_colored};
 
 #[derive(Subcommand)]
 pub enum WorkerCmd {
@@ -88,7 +88,10 @@ fn register(args: RegisterArgs, ctx: OutputContext) -> Result<()> {
         description: args.description,
     };
     let worker = db.create(input)?;
-    ctx.success(&format!("Registered worker '{}' (id: {})", worker.slug, worker.id));
+    ctx.success(&format!(
+        "Registered worker '{}' (id: {})",
+        worker.slug, worker.id
+    ));
     print_worker_detail(&ctx, &worker);
     Ok(())
 }
@@ -103,15 +106,20 @@ fn list(args: ListArgs, ctx: OutputContext) -> Result<()> {
     }
 
     let headers = ["ID", "Slug", "Name", "Type", "Status", "Model", "Last Seen"];
-    let rows: Vec<Vec<String>> = workers.iter().map(|w| vec![
-        w.id.to_string(),
-        w.slug.clone(),
-        w.name.clone(),
-        w.worker_type.clone(),
-        status_colored(&w.status),
-        w.model.clone(),
-        w.last_seen.as_deref().unwrap_or("-").to_string(),
-    ]).collect();
+    let rows: Vec<Vec<String>> = workers
+        .iter()
+        .map(|w| {
+            vec![
+                w.id.to_string(),
+                w.slug.clone(),
+                w.name.clone(),
+                w.worker_type.clone(),
+                status_colored(&w.status),
+                w.model.clone(),
+                w.last_seen.as_deref().unwrap_or("-").to_string(),
+            ]
+        })
+        .collect();
 
     ctx.print_table(&headers, rows);
     Ok(())
@@ -127,21 +135,24 @@ fn status(args: StatusArgs, ctx: OutputContext) -> Result<()> {
                 return Ok(());
             }
             let headers = ["ID", "Slug", "Status", "Type", "Last Seen"];
-            let rows: Vec<Vec<String>> = workers.iter().map(|w| vec![
-                w.id.to_string(),
-                w.slug.clone(),
-                status_colored(&w.status),
-                w.worker_type.clone(),
-                w.last_seen.as_deref().unwrap_or("-").to_string(),
-            ]).collect();
+            let rows: Vec<Vec<String>> = workers
+                .iter()
+                .map(|w| {
+                    vec![
+                        w.id.to_string(),
+                        w.slug.clone(),
+                        status_colored(&w.status),
+                        w.worker_type.clone(),
+                        w.last_seen.as_deref().unwrap_or("-").to_string(),
+                    ]
+                })
+                .collect();
             ctx.print_table(&headers, rows);
         }
-        Some(slug) => {
-            match db.get_by_slug(&slug)? {
-                None => ctx.error(&format!("Worker '{slug}' not found")),
-                Some(w) => print_worker_detail(&ctx, &w),
-            }
-        }
+        Some(slug) => match db.get_by_slug(&slug)? {
+            None => ctx.error(&format!("Worker '{slug}' not found")),
+            Some(w) => print_worker_detail(&ctx, &w),
+        },
     }
     Ok(())
 }
@@ -162,15 +173,15 @@ fn unregister(args: UnregisterArgs, ctx: OutputContext) -> Result<()> {
 
 fn print_worker_detail(ctx: &OutputContext, w: &autodev_shared::db::workers::Worker) {
     ctx.print_kv(&[
-        ("id",          &w.id.to_string()),
-        ("slug",        &w.slug),
-        ("name",        &w.name),
-        ("type",        &w.worker_type),
-        ("status",      &w.status),
-        ("model",       &w.model),
+        ("id", &w.id.to_string()),
+        ("slug", &w.slug),
+        ("name", &w.name),
+        ("type", &w.worker_type),
+        ("status", &w.status),
+        ("model", &w.model),
         ("description", w.description.as_deref().unwrap_or("-")),
-        ("last_seen",   w.last_seen.as_deref().unwrap_or("-")),
-        ("created_at",  &w.created_at),
-        ("updated_at",  &w.updated_at),
+        ("last_seen", w.last_seen.as_deref().unwrap_or("-")),
+        ("created_at", &w.created_at),
+        ("updated_at", &w.updated_at),
     ]);
 }

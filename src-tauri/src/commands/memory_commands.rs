@@ -17,12 +17,8 @@
 
 use crate::errors::Result;
 use crate::memory::{
-    EpisodicMemory, EpisodicStore,
-    FactCategory, SemanticFact, SemanticStore,
-    ProceduralMemory, ProceduralStore,
-    RecallRequest, RecallResult,
-    MemoryStats,
-    recall,
+    recall, EpisodicMemory, EpisodicStore, FactCategory, MemoryStats, ProceduralMemory,
+    ProceduralStore, RecallRequest, RecallResult, SemanticFact, SemanticStore,
 };
 
 // ─── Episodic commands ───────────────────────────────────────────────────────
@@ -44,11 +40,11 @@ pub fn recall_facts(limit: Option<u32>) -> Result<Vec<SemanticFact>> {
 /// Explicitly store a fact (user-explicit, confidence = 1.0).
 #[tauri::command]
 pub fn store_fact_cmd(
-    fact_text:   String,
-    category:    String,
-    session_id:  Option<String>,
+    fact_text: String,
+    category: String,
+    session_id: Option<String>,
     working_dir: Option<String>,
-    tags:        Option<Vec<String>>,
+    tags: Option<Vec<String>>,
 ) -> Result<String> {
     SemanticStore::store_fact(
         &fact_text,
@@ -63,11 +59,7 @@ pub fn store_fact_cmd(
 
 /// Update an existing fact's text (records old value in fact_history).
 #[tauri::command]
-pub fn update_fact_cmd(
-    id:          String,
-    new_text:    String,
-    confidence:  Option<f64>,
-) -> Result<()> {
+pub fn update_fact_cmd(id: String, new_text: String, confidence: Option<f64>) -> Result<()> {
     SemanticStore::update_fact(&id, &new_text, confidence)
 }
 
@@ -118,17 +110,12 @@ pub fn get_memory_topic(topic: String) -> Result<ProceduralMemory> {
 /// Create or overwrite a topic file + SQLite mirror.
 #[tauri::command]
 pub fn save_memory_topic(
-    topic:   String,
-    title:   String,
+    topic: String,
+    title: String,
     content: String,
-    tags:    Option<Vec<String>>,
+    tags: Option<Vec<String>>,
 ) -> Result<()> {
-    ProceduralStore::save_topic(
-        &topic,
-        &title,
-        &content,
-        tags.as_deref().unwrap_or(&[]),
-    )
+    ProceduralStore::save_topic(&topic, &title, &content, tags.as_deref().unwrap_or(&[]))
 }
 
 /// Delete a topic file.
@@ -148,10 +135,10 @@ pub fn search_procedural(query: String, limit: Option<u32>) -> Result<Vec<Proced
 /// Full cross-tier search — used by the search bar in the Memory Sidebar.
 #[tauri::command]
 pub fn search_memory(
-    session_id:  String,
-    query:       String,
+    session_id: String,
+    query: String,
     working_dir: Option<String>,
-    limit:       Option<u32>,
+    limit: Option<u32>,
 ) -> Result<Vec<RecallResult>> {
     let req = RecallRequest {
         session_id,
@@ -171,9 +158,6 @@ pub fn get_memory_stats() -> Result<MemoryStats> {
 
 /// Manually trigger session summarization (e.g. from "End Session" button).
 #[tauri::command]
-pub fn summarize_session_cmd(
-    session_id:  String,
-    working_dir: Option<String>,
-) -> Result<String> {
+pub fn summarize_session_cmd(session_id: String, working_dir: Option<String>) -> Result<String> {
     crate::memory::Summarizer::summarize_session(&session_id, working_dir.as_deref())
 }

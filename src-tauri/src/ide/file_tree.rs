@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 
 use git2::{Repository, Status, StatusOptions};
 
-use crate::errors::{AutoDevError, Result};
 use super::types::{FileTreeNode, GitStatus};
+use crate::errors::{AutoDevError, Result};
 
 /// Directory names that are always pruned from the tree.
 const DEFAULT_SKIP_DIRS: &[&str] = &[
@@ -47,12 +47,12 @@ const DEFAULT_SKIP_DIRS: &[&str] = &[
 /// `extra_ignore` is merged with DEFAULT_SKIP_DIRS.
 pub fn read_tree(
     workspace_root: &str,
-    root:           &str,
-    depth:          usize,
-    extra_ignore:   &[String],
+    root: &str,
+    depth: usize,
+    extra_ignore: &[String],
 ) -> Result<FileTreeNode> {
     let workspace = Path::new(workspace_root);
-    let abs_root  = resolve_inside_workspace(workspace, root)?;
+    let abs_root = resolve_inside_workspace(workspace, root)?;
 
     if !abs_root.exists() {
         return Err(AutoDevError::Agent(format!(
@@ -77,17 +77,18 @@ pub fn read_tree(
 // ─── Node construction ────────────────────────────────────────────────────────
 
 fn build_node(
-    abs:        &Path,
-    workspace:  &Path,
-    depth:      usize,
-    ignore:     &[&str],
-    git_index:  Option<&HashMap<PathBuf, GitStatus>>,
+    abs: &Path,
+    workspace: &Path,
+    depth: usize,
+    ignore: &[&str],
+    git_index: Option<&HashMap<PathBuf, GitStatus>>,
 ) -> Result<FileTreeNode> {
     let meta = std::fs::metadata(abs)
         .map_err(|e| AutoDevError::Agent(format!("metadata {}: {e}", abs.display())))?;
     let is_dir = meta.is_dir();
 
-    let name = abs.file_name()
+    let name = abs
+        .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| abs.to_string_lossy().into_owned());
 
@@ -96,12 +97,13 @@ fn build_node(
         .map(|p| p.to_string_lossy().replace('\\', "/"))
         .unwrap_or_default();
 
-    let modified_ms = meta.modified().ok()
+    let modified_ms = meta
+        .modified()
+        .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as i64);
 
-    let git_status = git_index
-        .and_then(|idx| idx.get(&normalize(abs)).copied());
+    let git_status = git_index.and_then(|idx| idx.get(&normalize(abs)).copied());
 
     let (children, has_more) = if is_dir {
         read_children(abs, workspace, depth, ignore, git_index)
@@ -113,8 +115,8 @@ fn build_node(
         name,
         relative_path,
         absolute_path: abs.to_string_lossy().into_owned(),
-        is_directory:  is_dir,
-        size_bytes:    if is_dir { None } else { Some(meta.len()) },
+        is_directory: is_dir,
+        size_bytes: if is_dir { None } else { Some(meta.len()) },
         modified_ms,
         git_status,
         children,
@@ -123,14 +125,14 @@ fn build_node(
 }
 
 fn read_children(
-    dir:       &Path,
+    dir: &Path,
     workspace: &Path,
-    depth:     usize,
-    ignore:    &[&str],
+    depth: usize,
+    ignore: &[&str],
     git_index: Option<&HashMap<PathBuf, GitStatus>>,
 ) -> (Vec<FileTreeNode>, bool) {
     let reader = match std::fs::read_dir(dir) {
-        Ok(r)  => r,
+        Ok(r) => r,
         Err(_) => return (Vec::new(), false),
     };
 
@@ -147,7 +149,9 @@ fn read_children(
     entries.sort_by(|a, b| {
         let a_dir = a.file_type().map(|t| t.is_dir()).unwrap_or(false);
         let b_dir = b.file_type().map(|t| t.is_dir()).unwrap_or(false);
-        b_dir.cmp(&a_dir).then_with(|| a.file_name().cmp(&b.file_name()))
+        b_dir
+            .cmp(&a_dir)
+            .then_with(|| a.file_name().cmp(&b.file_name()))
     });
 
     let mut children = Vec::with_capacity(entries.len());
@@ -170,11 +174,12 @@ fn read_children(
 }
 
 fn placeholder_dir(
-    abs:        &Path,
-    workspace:  &Path,
-    git_index:  Option<&HashMap<PathBuf, GitStatus>>,
+    abs: &Path,
+    workspace: &Path,
+    git_index: Option<&HashMap<PathBuf, GitStatus>>,
 ) -> FileTreeNode {
-    let name = abs.file_name()
+    let name = abs
+        .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
     let relative_path = abs
@@ -187,12 +192,12 @@ fn placeholder_dir(
         name,
         relative_path,
         absolute_path: abs.to_string_lossy().into_owned(),
-        is_directory:  true,
-        size_bytes:    None,
-        modified_ms:   None,
+        is_directory: true,
+        size_bytes: None,
+        modified_ms: None,
         git_status,
-        children:      Vec::new(),
-        has_more:      true,
+        children: Vec::new(),
+        has_more: true,
     }
 }
 
@@ -200,11 +205,15 @@ fn placeholder_dir(
 
 fn resolve_inside_workspace(workspace: &Path, target: &str) -> Result<PathBuf> {
     let p = Path::new(target);
-    let abs = if p.is_absolute() { p.to_path_buf() } else { workspace.join(p) };
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        workspace.join(p)
+    };
 
     // Security: prevent escaping workspace via ".." components.
     let normalized = normalize(&abs);
-    let ws_norm    = normalize(workspace);
+    let ws_norm = normalize(workspace);
     if !normalized.starts_with(&ws_norm) {
         return Err(AutoDevError::Agent(format!(
             "Path is outside workspace: {}",
@@ -222,9 +231,12 @@ fn normalize(p: &Path) -> PathBuf {
 
 // ─── Git status overlay ───────────────────────────────────────────────────────
 
-fn build_git_status_index(workspace: &Path) -> std::result::Result<HashMap<PathBuf, GitStatus>, git2::Error> {
+fn build_git_status_index(
+    workspace: &Path,
+) -> std::result::Result<HashMap<PathBuf, GitStatus>, git2::Error> {
     let repo = Repository::discover(workspace)?;
-    let repo_root = repo.workdir()
+    let repo_root = repo
+        .workdir()
         .ok_or_else(|| git2::Error::from_str("bare repositories are not supported"))?
         .to_path_buf();
 

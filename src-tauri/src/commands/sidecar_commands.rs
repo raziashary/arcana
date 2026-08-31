@@ -16,7 +16,9 @@ use tracing::info;
 
 use crate::agent::ToolRegistry;
 use crate::sidecar::client::OrchestratorClient;
-use crate::sidecar::{resolve_memory_path, resolve_orchestrator_path, SidecarManager, SidecarStatus};
+use crate::sidecar::{
+    resolve_memory_path, resolve_orchestrator_path, SidecarManager, SidecarStatus,
+};
 
 // ─── Status ───────────────────────────────────────────────────────────────────
 
@@ -35,11 +37,11 @@ pub fn get_sidecar_status(sidecar: State<'_, Arc<SidecarManager>>) -> String {
 /// Updates sidecar manager state and returns true only when both respond OK.
 #[tauri::command]
 pub async fn check_sidecar_connectivity(
-    client:  State<'_, Arc<OrchestratorClient>>,
+    client: State<'_, Arc<OrchestratorClient>>,
     sidecar: State<'_, Arc<SidecarManager>>,
 ) -> Result<bool, String> {
-    let mem_ok   = client.is_memory_healthy().await;
-    let orch_ok  = client.is_healthy().await;
+    let mem_ok = client.is_memory_healthy().await;
+    let orch_ok = client.is_healthy().await;
     let redis_ok = client.is_redis_healthy().await;
 
     if mem_ok && !sidecar.memory_is_running() {
@@ -87,20 +89,18 @@ pub async fn check_sidecar_connectivity(
 /// service is required for fleet readiness.
 #[derive(serde::Serialize)]
 pub struct ServiceStatus {
-    pub id:         String,
-    pub name:       String,
-    pub status:     String,
-    pub required:   bool,
-    pub port:       u16,
-    pub note:       String,
+    pub id: String,
+    pub name: String,
+    pub status: String,
+    pub required: bool,
+    pub port: u16,
+    pub note: String,
 }
 
 /// Returns a snapshot of all 4 managed services. Non-blocking — uses cached
 /// status only; call `check_sidecar_connectivity` first to refresh liveness.
 #[tauri::command]
-pub fn get_full_sidecar_status(
-    sidecar: State<'_, Arc<SidecarManager>>,
-) -> Vec<ServiceStatus> {
+pub fn get_full_sidecar_status(sidecar: State<'_, Arc<SidecarManager>>) -> Vec<ServiceStatus> {
     vec![
         ServiceStatus {
             id:       "memory-mcp-server".into(),
@@ -134,10 +134,7 @@ pub fn get_full_sidecar_status(
 /// crashes, instead of leaving the user staring at "Mode 1 fallback" with no
 /// explanation. `id` accepts "core-orchestrator" or "memory-mcp-server".
 #[tauri::command]
-pub fn get_sidecar_stderr_tail(
-    id:      String,
-    sidecar: State<'_, Arc<SidecarManager>>,
-) -> Vec<String> {
+pub fn get_sidecar_stderr_tail(id: String, sidecar: State<'_, Arc<SidecarManager>>) -> Vec<String> {
     sidecar.stderr_tail(&id)
 }
 
@@ -148,9 +145,9 @@ pub fn get_sidecar_stderr_tail(
 /// Returns "running" when both sidecars are healthy.
 #[tauri::command]
 pub async fn start_sidecar(
-    path:    Option<String>,
+    path: Option<String>,
     sidecar: State<'_, Arc<SidecarManager>>,
-    client:  State<'_, Arc<OrchestratorClient>>,
+    client: State<'_, Arc<OrchestratorClient>>,
 ) -> Result<String, String> {
     // ── Phase 1: memory-mcp-server (:8000) ──────────────────────────────────
     if client.is_memory_healthy().await {
@@ -209,7 +206,7 @@ pub async fn start_sidecar(
 #[tauri::command]
 pub fn stop_sidecar(
     sidecar: State<'_, Arc<SidecarManager>>,
-    client:  State<'_, Arc<OrchestratorClient>>,
+    client: State<'_, Arc<OrchestratorClient>>,
 ) -> String {
     sidecar.stop_all();
     client.clear_cache();
@@ -225,7 +222,7 @@ pub fn stop_sidecar(
 #[tauri::command]
 pub async fn restart_sidecar(
     sidecar: State<'_, Arc<SidecarManager>>,
-    client:  State<'_, Arc<OrchestratorClient>>,
+    client: State<'_, Arc<OrchestratorClient>>,
 ) -> Result<String, String> {
     info!("[sidecar_commands] restart_sidecar: stopping fleet");
     sidecar.stop_all();
@@ -280,7 +277,7 @@ pub async fn restart_sidecar(
 /// directly from the in-process ToolRegistry to avoid a JSON-RPC round-trip.
 #[derive(serde::Serialize)]
 pub struct McpToolInfo {
-    pub name:        String,
+    pub name: String,
     pub description: String,
     pub input_schema: serde_json::Value,
 }
@@ -289,15 +286,13 @@ pub struct McpToolInfo {
 /// this list in the MCP tool browser so developers can inspect available
 /// capabilities without connecting an external MCP client.
 #[tauri::command]
-pub fn list_mcp_tools(
-    registry: State<'_, Arc<ToolRegistry>>,
-) -> Vec<McpToolInfo> {
+pub fn list_mcp_tools(registry: State<'_, Arc<ToolRegistry>>) -> Vec<McpToolInfo> {
     let mut tools: Vec<McpToolInfo> = registry
         .all()
         .into_iter()
         .map(|t| McpToolInfo {
-            name:         t.name().to_string(),
-            description:  t.description().to_string(),
+            name: t.name().to_string(),
+            description: t.description().to_string(),
             input_schema: t.input_schema(),
         })
         .collect();
@@ -313,7 +308,7 @@ pub fn list_mcp_tools(
 #[tauri::command]
 pub async fn start_memory_mcp(
     sidecar: State<'_, Arc<SidecarManager>>,
-    client:  State<'_, Arc<OrchestratorClient>>,
+    client: State<'_, Arc<OrchestratorClient>>,
 ) -> Result<String, String> {
     if client.is_memory_healthy().await {
         sidecar.mark_memory_running();
@@ -347,9 +342,9 @@ pub fn stop_memory_mcp(sidecar: State<'_, Arc<SidecarManager>>) -> String {
 /// Returns "running" when health probe passes, or error string.
 #[tauri::command]
 pub async fn start_orchestrator(
-    path:    Option<String>,
+    path: Option<String>,
     sidecar: State<'_, Arc<SidecarManager>>,
-    client:  State<'_, Arc<OrchestratorClient>>,
+    client: State<'_, Arc<OrchestratorClient>>,
 ) -> Result<String, String> {
     if client.is_healthy().await {
         sidecar.mark_running();
@@ -376,7 +371,7 @@ pub async fn start_orchestrator(
 #[tauri::command]
 pub fn stop_orchestrator(
     sidecar: State<'_, Arc<SidecarManager>>,
-    client:  State<'_, Arc<OrchestratorClient>>,
+    client: State<'_, Arc<OrchestratorClient>>,
 ) -> String {
     sidecar.stop();
     client.clear_cache();
@@ -391,15 +386,16 @@ pub fn stop_orchestrator(
 /// Requires the process to be currently running (PID known).
 #[derive(serde::Serialize)]
 pub struct ResourceSnapshot {
-    pub cpu_percent:  f32,
+    pub cpu_percent: f32,
     pub memory_bytes: u64,
-    pub pid:          u32,
+    pub pid: u32,
 }
 
 #[tauri::command]
-pub fn get_resource_usage(service_id: String, sidecar: State<'_, Arc<SidecarManager>>)
-    -> Result<ResourceSnapshot, String>
-{
+pub fn get_resource_usage(
+    service_id: String,
+    sidecar: State<'_, Arc<SidecarManager>>,
+) -> Result<ResourceSnapshot, String> {
     use sysinfo::System;
 
     let pid = match service_id.as_str() {
@@ -417,11 +413,12 @@ pub fn get_resource_usage(service_id: String, sidecar: State<'_, Arc<SidecarMana
     std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
     sys.refresh_cpu_usage();
 
-    let process = sys.process(sysinfo::Pid::from(pid as usize))
+    let process = sys
+        .process(sysinfo::Pid::from(pid as usize))
         .ok_or_else(|| format!("Process {pid} not found in system table"))?;
 
     Ok(ResourceSnapshot {
-        cpu_percent:  process.cpu_usage(),
+        cpu_percent: process.cpu_usage(),
         memory_bytes: process.memory(),
         pid,
     })
@@ -444,8 +441,8 @@ pub fn read_sidecar_log(service_id: String, tail_lines: Option<usize>) -> Result
     let log_dir = std::path::PathBuf::from(home).join(".autodev").join("logs");
 
     let file_name = match service_id.as_str() {
-        "memory-mcp-server"  => "memory-mcp.log",
-        "core-orchestrator"  => "core-orchestrator.log",
+        "memory-mcp-server" => "memory-mcp.log",
+        "core-orchestrator" => "core-orchestrator.log",
         other => return Err(format!("No log file mapped for service '{other}'")),
     };
 
@@ -455,13 +452,20 @@ pub fn read_sidecar_log(service_id: String, tail_lines: Option<usize>) -> Result
     }
 
     let limit = tail_lines.unwrap_or(500);
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read log file: {e}"))?;
+    let content =
+        std::fs::read_to_string(&path).map_err(|e| format!("Failed to read log file: {e}"))?;
 
     let lines: Vec<&str> = content.lines().collect();
     let total = lines.len();
     let visible = if total > limit {
-        lines.into_iter().rev().take(limit).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>()
+        lines
+            .into_iter()
+            .rev()
+            .take(limit)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
     } else {
         lines
     };
@@ -474,12 +478,12 @@ pub fn read_sidecar_log(service_id: String, tail_lines: Option<usize>) -> Result
 /// Status of a submodule (core-orchestrator or memory-mcp-server).
 #[derive(serde::Serialize)]
 pub struct SubmoduleStatus {
-    pub id:          String,
-    pub name:        String,
-    pub path:        String,
-    pub exists:      bool,
-    pub source:      String,  // "installed" | "env_var" | "relative" | "not_found"
-    pub required:    bool,
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub exists: bool,
+    pub source: String, // "installed" | "env_var" | "relative" | "not_found"
+    pub required: bool,
 }
 
 /// Check if both submodules exist and return their resolved paths.
@@ -504,20 +508,20 @@ pub fn get_submodule_paths() -> Vec<SubmoduleStatus> {
                 "relative".to_string()
             };
             SubmoduleStatus {
-                id:       "core-orchestrator".into(),
-                name:     "Core Orchestrator".into(),
-                path:     path_str,
-                exists:   true,
+                id: "core-orchestrator".into(),
+                name: "Core Orchestrator".into(),
+                path: path_str,
+                exists: true,
                 source,
                 required: true,
             }
         }
         Err(_) => SubmoduleStatus {
-            id:       "core-orchestrator".into(),
-            name:     "Core Orchestrator".into(),
-            path:     "not found".into(),
-            exists:   false,
-            source:   "not_found".into(),
+            id: "core-orchestrator".into(),
+            name: "Core Orchestrator".into(),
+            path: "not found".into(),
+            exists: false,
+            source: "not_found".into(),
             required: true,
         },
     };
@@ -535,20 +539,20 @@ pub fn get_submodule_paths() -> Vec<SubmoduleStatus> {
                 "relative".to_string()
             };
             SubmoduleStatus {
-                id:       "memory-mcp-server".into(),
-                name:     "Memory MCP Server".into(),
-                path:     path_str,
-                exists:   true,
+                id: "memory-mcp-server".into(),
+                name: "Memory MCP Server".into(),
+                path: path_str,
+                exists: true,
                 source,
                 required: true,
             }
         }
         Err(_) => SubmoduleStatus {
-            id:       "memory-mcp-server".into(),
-            name:     "Memory MCP Server".into(),
-            path:     "not found".into(),
-            exists:   false,
-            source:   "not_found".into(),
+            id: "memory-mcp-server".into(),
+            name: "Memory MCP Server".into(),
+            path: "not found".into(),
+            exists: false,
+            source: "not_found".into(),
             required: true,
         },
     };
@@ -572,8 +576,8 @@ pub async fn get_mcp_health(
 #[tauri::command]
 pub async fn force_reconnect_mcp(
     server_name: String,
-    monitor:     State<'_, Arc<crate::mcp::health::McpHealthMonitor>>,
-    app:         tauri::AppHandle,
+    monitor: State<'_, Arc<crate::mcp::health::McpHealthMonitor>>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
     monitor.force_reconnect(&server_name, &app).await;
     Ok(())

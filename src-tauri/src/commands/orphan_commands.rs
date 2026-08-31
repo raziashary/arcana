@@ -20,9 +20,9 @@ pub fn force_release_task(task_id: i64, reason: Option<String>) -> Result<()> {
     let note = reason.as_deref().unwrap_or("manual release via UI");
     db.release_orphaned_task(task_id, note)?;
     emit_task_changed_global(TaskChangedPayload {
-        task_id:         Some(task_id),
-        kind:            "status".into(),
-        status:          Some("ready".into()),
+        task_id: Some(task_id),
+        kind: "status".into(),
+        status: Some("ready".into()),
         assigned_worker: None,
     });
     Ok(())

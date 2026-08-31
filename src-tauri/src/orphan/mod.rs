@@ -7,8 +7,8 @@
 
 pub mod pid_checker;
 
-use tracing::warn;
 use crate::db::tasks::{Task, TasksDb};
+use tracing::warn;
 
 const STALE_TTL_HOURS: i64 = 4;
 
@@ -77,20 +77,21 @@ fn reconcile_stranded_qc_claims(db: &TasksDb) {
             return;
         }
     };
-    if claims.is_empty() { return; }
+    if claims.is_empty() {
+        return;
+    }
 
     // Snapshot live subagent slugs via the global manager. If the manager
     // hasn't been installed yet (very early boot), we treat every claim as
     // stranded — which is correct: nothing from a previous lifecycle can
     // possibly still be running.
-    let live_ids: std::collections::HashSet<String> =
-        match crate::subagent::manager::global() {
-            Some(mgr) => {
-                let summaries = futures::executor::block_on(mgr.list(None));
-                summaries.into_iter().map(|s| s.id).collect()
-            }
-            None => std::collections::HashSet::new(),
-        };
+    let live_ids: std::collections::HashSet<String> = match crate::subagent::manager::global() {
+        Some(mgr) => {
+            let summaries = futures::executor::block_on(mgr.list(None));
+            summaries.into_iter().map(|s| s.id).collect()
+        }
+        None => std::collections::HashSet::new(),
+    };
 
     for (task_id, slug) in claims {
         // After spawn_qc_review's `upgrade_qc_claim`, the `slug` value is
@@ -107,9 +108,7 @@ fn reconcile_stranded_qc_claims(db: &TasksDb) {
         };
         if !still_claimed {
             if let Err(e) = db.release_qc_claim(task_id) {
-                warn!(
-                    "[OrphanDetector] release_qc_claim task #{task_id} ({slug}) failed: {e}"
-                );
+                warn!("[OrphanDetector] release_qc_claim task #{task_id} ({slug}) failed: {e}");
                 continue;
             }
             warn!(
@@ -137,7 +136,7 @@ fn is_claim_recent_and_live(
     let parts: Vec<&str> = claim_token.rsplitn(2, '-').collect();
     let ts_ms: i64 = match parts.first().and_then(|s| s.parse().ok()) {
         Some(n) => n,
-        None    => return false,   // malformed → treat as stranded
+        None => return false, // malformed → treat as stranded
     };
     let now_ms = chrono::Utc::now().timestamp_millis();
     let age_ms = now_ms.saturating_sub(ts_ms);
@@ -155,7 +154,8 @@ fn check_task(task: &Task) -> Option<String> {
         // liveness check and fall through to the TTL fallback below so we
         // don't incorrectly release another machine's in-flight work.
         let current_host = current_hostname();
-        let same_host = task.claim_host
+        let same_host = task
+            .claim_host
             .as_deref()
             .map(|h| h.eq_ignore_ascii_case(&current_host))
             .unwrap_or(true); // missing host metadata → treat as local (back-compat)

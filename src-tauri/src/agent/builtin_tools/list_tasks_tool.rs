@@ -3,16 +3,18 @@
 // without needing to write Python scripts.
 // Returns JSON array of Task objects, optionally filtered by status.
 
+use super::super::tool_trait::{Tool, ToolContext, ToolResult};
+use crate::db::tasks::TasksDb;
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use crate::db::tasks::TasksDb;
-use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 
 pub struct ListTasksTool;
 
 #[async_trait]
 impl Tool for ListTasksTool {
-    fn name(&self) -> &str { "list_tasks" }
+    fn name(&self) -> &str {
+        "list_tasks"
+    }
 
     fn description(&self) -> &str {
         "List tasks on the AutoDev internal board. Optionally filter by status. \
@@ -40,7 +42,9 @@ impl Tool for ListTasksTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let status_filter = input["status"].as_str();
@@ -54,50 +58,54 @@ impl Tool for ListTasksTool {
         };
 
         let tasks = match db.list(status_filter) {
-            Ok(t)  => t,
+            Ok(t) => t,
             Err(e) => return ToolResult::error(&format!("Failed to list tasks: {e}")),
         };
 
-        let result = tasks.iter().map(|t| {
-            if compact {
-                // Compact: decision-relevant fields only (~80 chars per task vs ~500+)
-                json!({
-                    "id":              t.id,
-                    "title":           t.title,
-                    "priority":        t.priority.as_str(),
-                    "task_type":       t.task_type.as_str(),
-                    "status":          t.status.as_str(),
-                    "assigned_worker": t.assigned_worker,
-                    "rejection_reason": t.rejection_reason,
-                    "retry_count":     t.retry_count,
-                })
-            } else {
-                // Full: everything including description and acceptance_criteria
-                json!({
-                    "id":                  t.id,
-                    "title":               t.title,
-                    "description":         t.description,
-                    "priority":            t.priority.as_str(),
-                    "task_type":           t.task_type.as_str(),
-                    "status":              t.status.as_str(),
-                    "acceptance_criteria": t.acceptance_criteria,
-                    "assigned_worker":     t.assigned_worker,
-                    "rejection_reason":    t.rejection_reason,
-                    "retry_count":         t.retry_count,
-                    "created_by":          t.created_by,
-                    "created_at":          t.created_at,
-                    "updated_at":          t.updated_at,
-                    "completed_at":        t.completed_at,
-                })
-            }
-        }).collect::<Vec<_>>();
+        let result = tasks
+            .iter()
+            .map(|t| {
+                if compact {
+                    // Compact: decision-relevant fields only (~80 chars per task vs ~500+)
+                    json!({
+                        "id":              t.id,
+                        "title":           t.title,
+                        "priority":        t.priority.as_str(),
+                        "task_type":       t.task_type.as_str(),
+                        "status":          t.status.as_str(),
+                        "assigned_worker": t.assigned_worker,
+                        "rejection_reason": t.rejection_reason,
+                        "retry_count":     t.retry_count,
+                    })
+                } else {
+                    // Full: everything including description and acceptance_criteria
+                    json!({
+                        "id":                  t.id,
+                        "title":               t.title,
+                        "description":         t.description,
+                        "priority":            t.priority.as_str(),
+                        "task_type":           t.task_type.as_str(),
+                        "status":              t.status.as_str(),
+                        "acceptance_criteria": t.acceptance_criteria,
+                        "assigned_worker":     t.assigned_worker,
+                        "rejection_reason":    t.rejection_reason,
+                        "retry_count":         t.retry_count,
+                        "created_by":          t.created_by,
+                        "created_at":          t.created_at,
+                        "updated_at":          t.updated_at,
+                        "completed_at":        t.completed_at,
+                    })
+                }
+            })
+            .collect::<Vec<_>>();
 
         let payload = json!({
             "count":   result.len(),
             "filter":  status_filter.unwrap_or("all"),
             "compact": compact,
             "tasks":   result
-        }).to_string();
+        })
+        .to_string();
 
         if compact {
             ToolResult::success_with_hint(

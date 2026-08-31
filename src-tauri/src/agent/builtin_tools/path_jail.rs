@@ -24,11 +24,13 @@ use std::path::{Path, PathBuf};
 /// enforce, and we surface that as an error so the caller doesn't silently
 /// degrade into a no-op.
 fn canonicalize_workspace(workspace: &Path) -> Result<PathBuf, String> {
-    workspace.canonicalize().map_err(|e| format!(
-        "Workspace path '{}' could not be canonicalized: {e}. \
+    workspace.canonicalize().map_err(|e| {
+        format!(
+            "Workspace path '{}' could not be canonicalized: {e}. \
          This is a configuration problem in AutoDev — the worker has no valid workspace.",
-        workspace.display()
-    ))
+            workspace.display()
+        )
+    })
 }
 
 /// Canonicalize a *target* path, including the case where the target file
@@ -38,10 +40,12 @@ fn canonicalize_workspace(workspace: &Path) -> Result<PathBuf, String> {
 /// `canonicalize_workspace` so the two can be compared via `starts_with`.
 fn canonicalize_target(target: &Path) -> Result<PathBuf, String> {
     if target.exists() {
-        return target.canonicalize().map_err(|e| format!(
-            "Path '{}' exists but could not be canonicalized: {e}",
-            target.display()
-        ));
+        return target.canonicalize().map_err(|e| {
+            format!(
+                "Path '{}' exists but could not be canonicalized: {e}",
+                target.display()
+            )
+        });
     }
 
     // Walk up to the first existing ancestor. Track the tail components we
@@ -55,11 +59,13 @@ fn canonicalize_target(target: &Path) -> Result<PathBuf, String> {
                     tail.push(name);
                 }
                 if parent.exists() {
-                    break parent.canonicalize().map_err(|e| format!(
-                        "Ancestor '{}' of target '{}' could not be canonicalized: {e}",
-                        parent.display(),
-                        target.display()
-                    ))?;
+                    break parent.canonicalize().map_err(|e| {
+                        format!(
+                            "Ancestor '{}' of target '{}' could not be canonicalized: {e}",
+                            parent.display(),
+                            target.display()
+                        )
+                    })?;
                 }
                 cursor = parent;
             }
@@ -107,7 +113,11 @@ fn paths_match_prefix(target: &Path, workspace: &Path) -> bool {
         // Trailing-separator tolerance — `starts_with` on strings can be wrong
         // when one has trailing `\` and the other doesn't, so normalize.
         let w = w.trim_end_matches(['/', '\\']).to_string();
-        let t_prefix = if t.len() >= w.len() { &t[..w.len()] } else { return false; };
+        let t_prefix = if t.len() >= w.len() {
+            &t[..w.len()]
+        } else {
+            return false;
+        };
         if t_prefix != w {
             return false;
         }
@@ -137,7 +147,7 @@ fn paths_match_prefix(target: &Path, workspace: &Path) -> bool {
 pub fn validate_workspace_path(target: &Path, workspace: &str) -> Result<PathBuf, String> {
     let workspace_path = Path::new(workspace);
     let canonical_workspace = strip_verbatim_prefix(&canonicalize_workspace(workspace_path)?);
-    let canonical_target    = strip_verbatim_prefix(&canonicalize_target(target)?);
+    let canonical_target = strip_verbatim_prefix(&canonicalize_target(target)?);
 
     if paths_match_prefix(&canonical_target, &canonical_workspace) {
         Ok(canonical_target)
@@ -224,8 +234,11 @@ mod tests {
         fs::create_dir_all(&sibling).unwrap();
         let target = sibling.join("file.txt");
         let result = validate_workspace_path(&target, &ws_dir.to_string_lossy());
-        assert!(result.is_err(),
-            "shared-prefix sibling must be rejected, got: {:?}", result);
+        assert!(
+            result.is_err(),
+            "shared-prefix sibling must be rejected, got: {:?}",
+            result
+        );
     }
 
     #[test]

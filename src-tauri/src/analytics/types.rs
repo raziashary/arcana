@@ -1,6 +1,6 @@
 // Analytics types — data structures for cost tracking, token usage, worker metrics
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc, NaiveDate};
 use std::collections::HashMap;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -12,7 +12,7 @@ pub struct TokenUsageRecord {
     pub id: Option<i64>,
     pub timestamp: DateTime<Utc>,
     pub session_id: String,
-    pub agent_type: String,  // PA, Supervisor, Worker, QC
+    pub agent_type: String, // PA, Supervisor, Worker, QC
     pub provider: String,
     pub model: String,
     pub prompt_tokens: i32,
@@ -20,7 +20,7 @@ pub struct TokenUsageRecord {
     pub total_tokens: i32,
     pub thinking_tokens: Option<i32>,
     pub cost_usd: f64,
-    pub request_type: String,  // chat, tool_use, summarization
+    pub request_type: String, // chat, tool_use, summarization
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,7 +31,7 @@ pub struct DailyCostRecord {
     pub session_count: i32,
     pub message_count: i32,
     pub tool_call_count: i32,
-    pub provider_breakdown: HashMap<String, f64>,  // {"anthropic": 1.23, "openai": 0.45}
+    pub provider_breakdown: HashMap<String, f64>, // {"anthropic": 1.23, "openai": 0.45}
     pub agent_type_breakdown: HashMap<String, f64>, // {"PA": 0.80, "Worker": 0.88}
 }
 
@@ -61,7 +61,7 @@ pub struct ApiFailureRecord {
     pub id: Option<i64>,
     pub timestamp: DateTime<Utc>,
     pub provider: String,
-    pub error_type: String,  // rate_limit, auth, timeout, model_error
+    pub error_type: String, // rate_limit, auth, timeout, model_error
     pub error_message: String,
     pub request_id: Option<String>,
     pub retry_count: i32,
@@ -75,8 +75,8 @@ pub struct SystemEventRecord {
     pub component: String,  // sidecar, provider, tool, agent
     pub event_type: String, // start, stop, error, warning
     pub message: String,
-    pub severity: String,   // info, warning, error, critical
-    pub metadata: Option<String>,  // JSON
+    pub severity: String,         // info, warning, error, critical
+    pub metadata: Option<String>, // JSON
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -103,7 +103,7 @@ pub struct DashboardSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CostAnalytics {
     pub date_range: String,
-    pub granularity: String,  // daily, hourly
+    pub granularity: String, // daily, hourly
     pub data_points: Vec<CostDataPoint>,
     pub total_cost: f64,
     pub average_daily_cost: f64,
@@ -182,7 +182,7 @@ pub struct CostPrediction {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportResult {
-    pub format: String,  // csv, json
+    pub format: String, // csv, json
     pub path: String,
     pub rows_exported: i32,
     pub file_size_bytes: i64,

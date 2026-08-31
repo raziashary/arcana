@@ -3,10 +3,10 @@
 // Used by: PA (create plans in any mode), Supervisor (breakdown epics), Workers (claim items)
 // See: DEVELOPMENT_PLAN.md Phase 3.5 — Plan Management System
 
-use rusqlite::{Connection, OptionalExtension, params};
-use serde::{Deserialize, Serialize};
-use crate::errors::{AutoDevError, Result};
 use super::autodev_dir;
+use crate::errors::{AutoDevError, Result};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -125,70 +125,70 @@ impl AgentType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Plan {
-    pub id:              String,
-    pub session_id:      Option<String>,
-    pub title:           String,
-    pub description:     Option<String>,
-    pub status:          PlanStatus,
-    pub created_at:      String,
-    pub updated_at:      String,
-    pub assigned_agent:  Option<String>,
-    pub created_by:      Option<String>,
-    pub agent_scope:     PlanScope,
-    pub parent_plan_id:  Option<String>,
-    pub task_id:         Option<i64>,
+    pub id: String,
+    pub session_id: Option<String>,
+    pub title: String,
+    pub description: Option<String>,
+    pub status: PlanStatus,
+    pub created_at: String,
+    pub updated_at: String,
+    pub assigned_agent: Option<String>,
+    pub created_by: Option<String>,
+    pub agent_scope: PlanScope,
+    pub parent_plan_id: Option<String>,
+    pub task_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanItem {
-    pub id:              String,
-    pub plan_id:         String,
-    pub parent_id:       Option<String>,
-    pub title:           String,
-    pub description:     Option<String>,
-    pub status:          PlanItemStatus,
-    pub order_index:     i64,
-    pub agent_type:      Option<AgentType>,
+    pub id: String,
+    pub plan_id: String,
+    pub parent_id: Option<String>,
+    pub title: String,
+    pub description: Option<String>,
+    pub status: PlanItemStatus,
+    pub order_index: i64,
+    pub agent_type: Option<AgentType>,
     pub estimated_tools: Option<String>,
-    pub created_at:      String,
-    pub completed_at:    Option<String>,
+    pub created_at: String,
+    pub completed_at: Option<String>,
     pub assigned_worker: Option<String>,
     pub worktree_branch: Option<String>,
-    pub pr_url:          Option<String>,
-    pub result_summary:  Option<String>,
+    pub pr_url: Option<String>,
+    pub result_summary: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanExecution {
-    pub id:              String,
-    pub plan_id:         String,
-    pub started_at:      Option<String>,
-    pub completed_at:    Option<String>,
-    pub total_items:     i64,
+    pub id: String,
+    pub plan_id: String,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub total_items: i64,
     pub completed_items: i64,
-    pub error_log:       Option<String>,
+    pub error_log: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreatePlanInput {
-    pub title:           String,
-    pub description:     Option<String>,
-    pub session_id:      Option<String>,
-    pub assigned_agent:  Option<String>,
-    pub created_by:      Option<String>,
-    pub agent_scope:     PlanScope,
-    pub parent_plan_id:  Option<String>,
-    pub task_id:         Option<i64>,
+    pub title: String,
+    pub description: Option<String>,
+    pub session_id: Option<String>,
+    pub assigned_agent: Option<String>,
+    pub created_by: Option<String>,
+    pub agent_scope: PlanScope,
+    pub parent_plan_id: Option<String>,
+    pub task_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreatePlanItemInput {
-    pub plan_id:         String,
-    pub parent_id:       Option<String>,
-    pub title:           String,
-    pub description:     Option<String>,
-    pub order_index:     i64,
-    pub agent_type:      Option<AgentType>,
+    pub plan_id: String,
+    pub parent_id: Option<String>,
+    pub title: String,
+    pub description: Option<String>,
+    pub order_index: i64,
+    pub agent_type: Option<AgentType>,
     pub estimated_tools: Option<Vec<String>>,
     pub assigned_worker: Option<String>,
     pub worktree_branch: Option<String>,
@@ -281,7 +281,7 @@ impl PlansDb {
             );
 
             CREATE INDEX IF NOT EXISTS idx_exec_plan         ON plan_executions(plan_id);
-            "
+            ",
         )?;
         Ok(())
     }
@@ -309,33 +309,39 @@ impl PlansDb {
                 input.task_id,
             ],
         )?;
-        self.get_plan(&id)?.ok_or_else(|| AutoDevError::Agent("Plan not found after insert".into()))
+        self.get_plan(&id)?
+            .ok_or_else(|| AutoDevError::Agent("Plan not found after insert".into()))
     }
 
     pub fn get_plan(&self, id: &str) -> Result<Option<Plan>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, title, description, status, created_at, updated_at,
                     assigned_agent, created_by, agent_scope, parent_plan_id, task_id
-             FROM plans WHERE id = ?1"
+             FROM plans WHERE id = ?1",
         )?;
         let plan = stmt.query_row(params![id], row_to_plan).optional()?;
         Ok(plan)
     }
 
-    pub fn list_plans(&self, status_filter: Option<&str>, scope_filter: Option<&str>, session_id: Option<&str>) -> Result<Vec<Plan>> {
+    pub fn list_plans(
+        &self,
+        status_filter: Option<&str>,
+        scope_filter: Option<&str>,
+        session_id: Option<&str>,
+    ) -> Result<Vec<Plan>> {
         let mut conditions: Vec<String> = Vec::new();
         let mut params_vec: Vec<String> = Vec::new();
 
         if let Some(s) = status_filter {
-            conditions.push(format!("status = ?{}" , conditions.len() + 1));
+            conditions.push(format!("status = ?{}", conditions.len() + 1));
             params_vec.push(s.to_string());
         }
         if let Some(s) = scope_filter {
-            conditions.push(format!("agent_scope = ?{}" , conditions.len() + 1));
+            conditions.push(format!("agent_scope = ?{}", conditions.len() + 1));
             params_vec.push(s.to_string());
         }
         if let Some(s) = session_id {
-            conditions.push(format!("session_id = ?{}" , conditions.len() + 1));
+            conditions.push(format!("session_id = ?{}", conditions.len() + 1));
             params_vec.push(s.to_string());
         }
 
@@ -347,7 +353,8 @@ impl PlansDb {
         sql.push_str(" ORDER BY created_at ASC");
 
         let mut stmt = self.conn.prepare(&sql)?;
-        let plans = stmt.query_map(rusqlite::params_from_iter(params_vec.iter()), row_to_plan)?
+        let plans = stmt
+            .query_map(rusqlite::params_from_iter(params_vec.iter()), row_to_plan)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(plans)
     }
@@ -361,7 +368,8 @@ impl PlansDb {
     }
 
     pub fn delete_plan(&self, id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM plans WHERE id = ?1", params![id])?;
+        self.conn
+            .execute("DELETE FROM plans WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -369,7 +377,10 @@ impl PlansDb {
 
     pub fn add_plan_item(&self, input: CreatePlanItemInput) -> Result<PlanItem> {
         let id = uuid::Uuid::new_v4().to_string();
-        let estimated_tools = input.estimated_tools.as_ref().map(|t| serde_json::to_string(t).unwrap_or_default());
+        let estimated_tools = input
+            .estimated_tools
+            .as_ref()
+            .map(|t| serde_json::to_string(t).unwrap_or_default());
         let agent_type = input.agent_type.as_ref().map(|a| a.as_str().to_string());
         self.conn.execute(
             "INSERT INTO plan_items (id, plan_id, parent_id, title, description, order_index, agent_type, estimated_tools, assigned_worker, worktree_branch)
@@ -387,7 +398,8 @@ impl PlansDb {
                 input.worktree_branch,
             ],
         )?;
-        self.get_plan_item(&id)?.ok_or_else(|| AutoDevError::Agent("Plan item not found after insert".into()))
+        self.get_plan_item(&id)?
+            .ok_or_else(|| AutoDevError::Agent("Plan item not found after insert".into()))
     }
 
     pub fn get_plan_item(&self, id: &str) -> Result<Option<PlanItem>> {
@@ -404,13 +416,23 @@ impl PlansDb {
             "SELECT id, plan_id, parent_id, title, description, status, order_index, agent_type, estimated_tools, created_at, completed_at, assigned_worker, worktree_branch, pr_url, result_summary
              FROM plan_items WHERE plan_id = ?1 ORDER BY order_index ASC, created_at ASC"
         )?;
-        let items = stmt.query_map(params![plan_id], row_to_plan_item)?
+        let items = stmt
+            .query_map(params![plan_id], row_to_plan_item)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(items)
     }
 
-    pub fn update_plan_item_status(&self, id: &str, status: &str, notes: Option<&str>) -> Result<()> {
-        let completed_at = if status == "done" { "datetime('now')" } else { "NULL" };
+    pub fn update_plan_item_status(
+        &self,
+        id: &str,
+        status: &str,
+        notes: Option<&str>,
+    ) -> Result<()> {
+        let completed_at = if status == "done" {
+            "datetime('now')"
+        } else {
+            "NULL"
+        };
         if let Some(n) = notes {
             let sql = format!(
                 "UPDATE plan_items SET status = ?1, result_summary = ?2, completed_at = {completed_at} WHERE id = ?3"
@@ -433,7 +455,9 @@ impl PlansDb {
              ORDER BY order_index ASC, created_at ASC
              LIMIT 1"
         )?;
-        let item = stmt.query_row(params![plan_id], row_to_plan_item).optional()?;
+        let item = stmt
+            .query_row(params![plan_id], row_to_plan_item)
+            .optional()?;
         if let Some(ref it) = item {
             self.conn.execute(
                 "UPDATE plan_items SET status = 'in_progress', assigned_worker = ?1 WHERE id = ?2",
@@ -458,12 +482,14 @@ impl PlansDb {
             "SELECT i.status
              FROM plan_item_dependencies d
              JOIN plan_items i ON d.depends_on_item_id = i.id
-             WHERE d.item_id = ?1"
+             WHERE d.item_id = ?1",
         )?;
-        let statuses: Vec<bool> = stmt.query_map(params![item_id], |row| {
-            let status: String = row.get(0)?;
-            Ok(status == "done")
-        })?.collect::<std::result::Result<Vec<_>, _>>()?;
+        let statuses: Vec<bool> = stmt
+            .query_map(params![item_id], |row| {
+                let status: String = row.get(0)?;
+                Ok(status == "done")
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(statuses)
     }
 
@@ -481,37 +507,40 @@ impl PlansDb {
 
 fn row_to_plan(row: &rusqlite::Row<'_>) -> rusqlite::Result<Plan> {
     Ok(Plan {
-        id:             row.get(0)?,
-        session_id:     row.get(1)?,
-        title:          row.get(2)?,
-        description:    row.get(3)?,
-        status:         PlanStatus::from_str(row.get::<_, String>(4)?.as_str()),
-        created_at:     row.get(5)?,
-        updated_at:     row.get(6)?,
+        id: row.get(0)?,
+        session_id: row.get(1)?,
+        title: row.get(2)?,
+        description: row.get(3)?,
+        status: PlanStatus::from_str(row.get::<_, String>(4)?.as_str()),
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
         assigned_agent: row.get(7)?,
-        created_by:     row.get(8)?,
-        agent_scope:    PlanScope::from_str(row.get::<_, String>(9)?.as_str()),
+        created_by: row.get(8)?,
+        agent_scope: PlanScope::from_str(row.get::<_, String>(9)?.as_str()),
         parent_plan_id: row.get(10)?,
-        task_id:        row.get(11)?,
+        task_id: row.get(11)?,
     })
 }
 
 fn row_to_plan_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<PlanItem> {
     Ok(PlanItem {
-        id:              row.get(0)?,
-        plan_id:         row.get(1)?,
-        parent_id:       row.get(2)?,
-        title:           row.get(3)?,
-        description:     row.get(4)?,
-        status:          PlanItemStatus::from_str(row.get::<_, String>(5)?.as_str()),
-        order_index:     row.get(6)?,
-        agent_type:      row.get::<_, Option<String>>(7)?.as_ref().map(|s| AgentType::from_str(s.as_str())),
+        id: row.get(0)?,
+        plan_id: row.get(1)?,
+        parent_id: row.get(2)?,
+        title: row.get(3)?,
+        description: row.get(4)?,
+        status: PlanItemStatus::from_str(row.get::<_, String>(5)?.as_str()),
+        order_index: row.get(6)?,
+        agent_type: row
+            .get::<_, Option<String>>(7)?
+            .as_ref()
+            .map(|s| AgentType::from_str(s.as_str())),
         estimated_tools: row.get(8)?,
-        created_at:      row.get(9)?,
-        completed_at:    row.get(10)?,
+        created_at: row.get(9)?,
+        completed_at: row.get(10)?,
         assigned_worker: row.get(11)?,
         worktree_branch: row.get(12)?,
-        pr_url:          row.get(13)?,
-        result_summary:  row.get(14)?,
+        pr_url: row.get(13)?,
+        result_summary: row.get(14)?,
     })
 }

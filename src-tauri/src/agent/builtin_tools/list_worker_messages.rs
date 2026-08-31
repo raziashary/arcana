@@ -12,14 +12,16 @@
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use crate::db::tasks::TasksDb;
 use super::super::tool_trait::{Tool, ToolContext, ToolResult};
+use crate::db::tasks::TasksDb;
 
 pub struct ListWorkerMessagesTool;
 
 #[async_trait]
 impl Tool for ListWorkerMessagesTool {
-    fn name(&self) -> &str { "list_worker_messages" }
+    fn name(&self) -> &str {
+        "list_worker_messages"
+    }
 
     fn description(&self) -> &str {
         "Read your ACP inbox. Returns every message addressed to you, oldest \

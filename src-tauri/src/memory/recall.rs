@@ -15,13 +15,13 @@ use tracing::debug;
 use super::episodic::EpisodicStore;
 use super::procedural::ProceduralStore;
 use super::semantic::SemanticStore;
-use super::types::{MemoryStats, RecallRequest, RecallResult, MemoryTier};
+use super::types::{MemoryStats, MemoryTier, RecallRequest, RecallResult};
 use crate::errors::Result;
 
 // ─── Per-spec injection limits ───────────────────────────────────────────────
 
-const EPISODIC_LIMIT:   u32 = 5;
-const SEMANTIC_LIMIT:   u32 = 10;
+const EPISODIC_LIMIT: u32 = 5;
+const SEMANTIC_LIMIT: u32 = 10;
 const PROCEDURAL_LIMIT: u32 = 3;
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -29,12 +29,10 @@ const PROCEDURAL_LIMIT: u32 = 3;
 /// Build the `## Memory` section injected into the system prompt.
 /// Returns `None` when all tiers are empty (avoids a blank section).
 pub fn build_memory_context(session_id: &str, query: &str, _working_dir: &str) -> Option<String> {
-    let summaries = EpisodicStore::get_recent_summaries(session_id, EPISODIC_LIMIT)
-        .unwrap_or_default();
-    let facts     = SemanticStore::recall_facts(SEMANTIC_LIMIT)
-        .unwrap_or_default();
-    let procs     = ProceduralStore::search(query, PROCEDURAL_LIMIT)
-        .unwrap_or_default();
+    let summaries =
+        EpisodicStore::get_recent_summaries(session_id, EPISODIC_LIMIT).unwrap_or_default();
+    let facts = SemanticStore::recall_facts(SEMANTIC_LIMIT).unwrap_or_default();
+    let procs = ProceduralStore::search(query, PROCEDURAL_LIMIT).unwrap_or_default();
 
     if summaries.is_empty() && facts.is_empty() && procs.is_empty() {
         return None;
@@ -53,7 +51,11 @@ pub fn build_memory_context(session_id: &str, query: &str, _working_dir: &str) -
     if !facts.is_empty() {
         parts.push("\n### What I know about you and this project\n".to_string());
         for f in &facts {
-            let conf_label = if f.confidence >= 0.95 { "confirmed" } else { "likely" };
+            let conf_label = if f.confidence >= 0.95 {
+                "confirmed"
+            } else {
+                "likely"
+            };
             parts.push(format!("- ({conf_label}) {}\n", f.fact_text));
         }
     }
@@ -89,9 +91,9 @@ pub fn search_all(req: &RecallRequest) -> Result<Vec<RecallResult>> {
             let score = keyword_score(&s.content, &req.query);
             if score > 0.0 {
                 results.push(RecallResult {
-                    tier:       MemoryTier::Episodic,
-                    id:         s.id,
-                    content:    truncate(&s.content, 400),
+                    tier: MemoryTier::Episodic,
+                    id: s.id,
+                    content: truncate(&s.content, 400),
                     score,
                     created_at: s.created_at,
                 });
@@ -104,9 +106,9 @@ pub fn search_all(req: &RecallRequest) -> Result<Vec<RecallResult>> {
         for f in facts {
             let score = keyword_score(&f.fact_text, &req.query) * f.confidence;
             results.push(RecallResult {
-                tier:       MemoryTier::Semantic,
-                id:         f.id,
-                content:    f.fact_text,
+                tier: MemoryTier::Semantic,
+                id: f.id,
+                content: f.fact_text,
                 score,
                 created_at: f.created_at,
             });
@@ -118,9 +120,9 @@ pub fn search_all(req: &RecallRequest) -> Result<Vec<RecallResult>> {
         for p in procs {
             let score = keyword_score(&p.content, &req.query);
             results.push(RecallResult {
-                tier:       MemoryTier::Procedural,
-                id:         p.id,
-                content:    format!("**{}**: {}", p.title, truncate(&p.content, 300)),
+                tier: MemoryTier::Procedural,
+                id: p.id,
+                content: format!("**{}**: {}", p.title, truncate(&p.content, 300)),
                 score,
                 created_at: p.created_at,
             });
@@ -129,7 +131,8 @@ pub fn search_all(req: &RecallRequest) -> Result<Vec<RecallResult>> {
 
     // Sort by score descending, then by recency.
     results.sort_by(|a, b| {
-        b.score.partial_cmp(&a.score)
+        b.score
+            .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| b.created_at.cmp(&a.created_at))
     });
@@ -140,18 +143,20 @@ pub fn search_all(req: &RecallRequest) -> Result<Vec<RecallResult>> {
 /// Aggregate statistics across all three tiers.
 pub fn get_stats() -> MemoryStats {
     let last_updated = super::db::MemoryDb::open().ok().and_then(|db| {
-        db.conn.query_row(
-            "SELECT MAX(created_at) FROM episodic_memories",
-            [],
-            |r| r.get::<_, Option<String>>(0),
-        ).ok().flatten().and_then(|s| s.parse().ok())
+        db.conn
+            .query_row("SELECT MAX(created_at) FROM episodic_memories", [], |r| {
+                r.get::<_, Option<String>>(0)
+            })
+            .ok()
+            .flatten()
+            .and_then(|s| s.parse().ok())
     });
 
     MemoryStats {
-        episodic_count:   EpisodicStore::count_total(),
-        semantic_count:   SemanticStore::count_total(),
+        episodic_count: EpisodicStore::count_total(),
+        semantic_count: SemanticStore::count_total(),
         procedural_count: ProceduralStore::count_total(),
-        session_count:    EpisodicStore::count_sessions(),
+        session_count: EpisodicStore::count_sessions(),
         last_updated,
     }
 }
@@ -163,15 +168,15 @@ fn keyword_score(text: &str, query: &str) -> f64 {
     if query.trim().is_empty() {
         return 1.0; // empty query: everything matches
     }
-    let text_lower  = text.to_lowercase();
-    let query_words: Vec<&str> = query
-        .split_whitespace()
-        .filter(|w| w.len() > 2)
-        .collect();
+    let text_lower = text.to_lowercase();
+    let query_words: Vec<&str> = query.split_whitespace().filter(|w| w.len() > 2).collect();
     if query_words.is_empty() {
         return 1.0;
     }
-    let hits = query_words.iter().filter(|w| text_lower.contains(*w)).count();
+    let hits = query_words
+        .iter()
+        .filter(|w| text_lower.contains(*w))
+        .count();
     hits as f64 / query_words.len() as f64
 }
 

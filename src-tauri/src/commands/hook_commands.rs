@@ -4,9 +4,7 @@
 
 use crate::errors::Result;
 use crate::hooks::db::HooksDb;
-use crate::hooks::types::{
-    AddHookInput, HookConfig, HookContext, HookExecutionLog,
-};
+use crate::hooks::types::{AddHookInput, HookConfig, HookContext, HookExecutionLog};
 
 // ── list_hooks ────────────────────────────────────────────────────────────────
 
@@ -44,15 +42,11 @@ pub fn remove_hook(hook_id: String) -> Result<()> {
 // ── test_hook ─────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn test_hook(
-    hook_id: String,
-    context: HookContext,
-) -> Result<Vec<HookExecutionLog>> {
-    let db   = HooksDb::open()?;
-    let hook = db.get(&hook_id)?
-        .ok_or_else(|| crate::errors::AutoDevError::Agent(
-            format!("Hook '{}' not found", hook_id)
-        ))?;
+pub async fn test_hook(hook_id: String, context: HookContext) -> Result<Vec<HookExecutionLog>> {
+    let db = HooksDb::open()?;
+    let hook = db.get(&hook_id)?.ok_or_else(|| {
+        crate::errors::AutoDevError::Agent(format!("Hook '{}' not found", hook_id))
+    })?;
 
     use crate::hooks::executor::HookExecutor;
     let log = HookExecutor::execute(&hook, &context).await;
@@ -64,7 +58,7 @@ pub async fn test_hook(
 #[tauri::command]
 pub fn get_hook_logs(
     hook_id: Option<String>,
-    limit:   Option<usize>,
+    limit: Option<usize>,
 ) -> Result<Vec<HookExecutionLog>> {
     HooksDb::open()?.get_logs(hook_id.as_deref(), limit.unwrap_or(100))
 }

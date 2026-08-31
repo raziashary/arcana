@@ -5,10 +5,12 @@
 // blocking thread so they don't stall the UI thread.
 
 use crate::errors::{AutoDevError, Result};
-use crate::git::{branch, checkpoint, commit, diff, history, remote, repo, stash, status, worktree};
 use crate::git::types::{
     BlameLine, BranchInfo, CheckpointInfo, CommitInfo, DiffResult, GitStatusReport, PullResult,
     RepoInfo, RestoreResult, StashInfo, WorktreeInfo,
+};
+use crate::git::{
+    branch, checkpoint, commit, diff, history, remote, repo, stash, status, worktree,
 };
 
 // ─── Repository ───────────────────────────────────────────────────────────────
@@ -38,7 +40,11 @@ pub fn git_status(repo_path: String) -> Result<GitStatusReport> {
 }
 
 #[tauri::command]
-pub fn git_diff(repo_path: String, file: Option<String>, staged: Option<bool>) -> Result<DiffResult> {
+pub fn git_diff(
+    repo_path: String,
+    file: Option<String>,
+    staged: Option<bool>,
+) -> Result<DiffResult> {
     diff::diff(&repo_path, file.as_deref(), staged.unwrap_or(false))
 }
 
@@ -77,17 +83,29 @@ pub fn git_commit(
 // ─── Remote ───────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn git_push(repo_path: String, remote_name: Option<String>, branch: Option<String>) -> Result<()> {
-    tokio::task::spawn_blocking(move || remote::push(&repo_path, remote_name.as_deref(), branch.as_deref()))
-        .await
-        .map_err(|e| AutoDevError::Git(format!("push join: {e}")))?
+pub async fn git_push(
+    repo_path: String,
+    remote_name: Option<String>,
+    branch: Option<String>,
+) -> Result<()> {
+    tokio::task::spawn_blocking(move || {
+        remote::push(&repo_path, remote_name.as_deref(), branch.as_deref())
+    })
+    .await
+    .map_err(|e| AutoDevError::Git(format!("push join: {e}")))?
 }
 
 #[tauri::command]
-pub async fn git_pull(repo_path: String, remote_name: Option<String>, branch: Option<String>) -> Result<PullResult> {
-    tokio::task::spawn_blocking(move || remote::pull(&repo_path, remote_name.as_deref(), branch.as_deref()))
-        .await
-        .map_err(|e| AutoDevError::Git(format!("pull join: {e}")))?
+pub async fn git_pull(
+    repo_path: String,
+    remote_name: Option<String>,
+    branch: Option<String>,
+) -> Result<PullResult> {
+    tokio::task::spawn_blocking(move || {
+        remote::pull(&repo_path, remote_name.as_deref(), branch.as_deref())
+    })
+    .await
+    .map_err(|e| AutoDevError::Git(format!("pull join: {e}")))?
 }
 
 #[tauri::command]
@@ -127,7 +145,11 @@ pub fn git_worktree_list(repo_path: String) -> Result<Vec<WorktreeInfo>> {
 }
 
 #[tauri::command]
-pub fn git_worktree_add(repo_path: String, path: String, branch: Option<String>) -> Result<WorktreeInfo> {
+pub fn git_worktree_add(
+    repo_path: String,
+    path: String,
+    branch: Option<String>,
+) -> Result<WorktreeInfo> {
     worktree::add(&repo_path, &path, branch.as_deref())
 }
 
@@ -139,7 +161,11 @@ pub fn git_worktree_remove(repo_path: String, path: String, force: Option<bool>)
 // ─── History ──────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn git_log(repo_path: String, max_count: Option<usize>, file: Option<String>) -> Result<Vec<CommitInfo>> {
+pub fn git_log(
+    repo_path: String,
+    max_count: Option<usize>,
+    file: Option<String>,
+) -> Result<Vec<CommitInfo>> {
     history::log(&repo_path, max_count, file.as_deref())
 }
 
@@ -156,8 +182,16 @@ pub fn git_stash_list(repo_path: String) -> Result<Vec<StashInfo>> {
 }
 
 #[tauri::command]
-pub fn git_stash_push(repo_path: String, message: Option<String>, include_untracked: Option<bool>) -> Result<String> {
-    stash::push(&repo_path, message.as_deref(), include_untracked.unwrap_or(false))
+pub fn git_stash_push(
+    repo_path: String,
+    message: Option<String>,
+    include_untracked: Option<bool>,
+) -> Result<String> {
+    stash::push(
+        &repo_path,
+        message.as_deref(),
+        include_untracked.unwrap_or(false),
+    )
 }
 
 #[tauri::command]
@@ -173,7 +207,11 @@ pub fn git_stash_drop(repo_path: String, index: usize) -> Result<()> {
 // ─── Checkpoints ──────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn create_checkpoint(session_id: String, file_path: String, reason: String) -> Result<Option<CheckpointInfo>> {
+pub fn create_checkpoint(
+    session_id: String,
+    file_path: String,
+    reason: String,
+) -> Result<Option<CheckpointInfo>> {
     checkpoint::create(&session_id, &file_path, &reason)
 }
 
@@ -183,7 +221,10 @@ pub fn restore_checkpoint(checkpoint_id: String) -> Result<RestoreResult> {
 }
 
 #[tauri::command]
-pub fn list_checkpoints(file_path: Option<String>, session_id: Option<String>) -> Result<Vec<CheckpointInfo>> {
+pub fn list_checkpoints(
+    file_path: Option<String>,
+    session_id: Option<String>,
+) -> Result<Vec<CheckpointInfo>> {
     checkpoint::list(file_path.as_deref(), session_id.as_deref())
 }
 

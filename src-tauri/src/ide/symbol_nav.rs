@@ -27,14 +27,28 @@ use std::path::{Path, PathBuf};
 use regex::Regex;
 use walkdir::WalkDir;
 
-use crate::errors::{AutoDevError, Result};
 use super::symbols::extract;
 use super::types::{SymbolDefinition, SymbolReference};
+use crate::errors::{AutoDevError, Result};
 
 const SKIP_DIRS: &[&str] = &[
-    ".git", "node_modules", "target", ".next", "dist", "build",
-    "__pycache__", ".venv", "venv", ".cache", "coverage",
-    ".turbo", ".svelte-kit", "out", ".output", ".idea", ".vscode",
+    ".git",
+    "node_modules",
+    "target",
+    ".next",
+    "dist",
+    "build",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".cache",
+    "coverage",
+    ".turbo",
+    ".svelte-kit",
+    "out",
+    ".output",
+    ".idea",
+    ".vscode",
 ];
 
 // ── resolve_symbol ────────────────────────────────────────────────────────────
@@ -45,12 +59,12 @@ const SKIP_DIRS: &[&str] = &[
 /// Errors only on I/O problems with the source file itself.
 pub fn resolve_symbol(
     workspace_root: &str,
-    path:           &str,
-    line:           usize,   // 1-indexed
-    column:         usize,   // 0-indexed byte offset
+    path: &str,
+    line: usize,   // 1-indexed
+    column: usize, // 0-indexed byte offset
 ) -> Result<Option<SymbolDefinition>> {
     let workspace = Path::new(workspace_root);
-    let abs_path  = resolve_abs(workspace, path)?;
+    let abs_path = resolve_abs(workspace, path)?;
 
     // Step 1: Read the target file and extract the identifier at (line, col).
     let source = std::fs::read_to_string(&abs_path)
@@ -65,7 +79,7 @@ pub fn resolve_symbol(
     // We check the file that contains the cursor first (common case: fn → def
     // in the same file), then expand to the whole workspace.
     let preferred = std::iter::once(abs_path.clone());
-    let rest      = walk_source_files(workspace);
+    let rest = walk_source_files(workspace);
 
     // The workspace walk yields the source file again, so it would be scanned
     // twice. The guard that was here — `candidate == abs_path && candidate !=
@@ -91,12 +105,12 @@ pub fn resolve_symbol(
                     // Read the declaration line for the preview snippet.
                     let preview = read_line(&candidate, sym.line).unwrap_or_default();
                     return Ok(Some(SymbolDefinition {
-                        name:          sym.name,
-                        kind:          sym.kind,
+                        name: sym.name,
+                        kind: sym.kind,
                         relative_path: rel,
                         absolute_path: candidate.to_string_lossy().into_owned(),
-                        line:          sym.line,
-                        column:        sym.column,
+                        line: sym.line,
+                        column: sym.column,
                         preview,
                     }));
                 }
@@ -113,8 +127,8 @@ pub fn resolve_symbol(
 /// whole word.  Results are sorted by (path, line).
 pub fn find_symbol_references(
     workspace_root: &str,
-    symbol_name:    &str,
-    max_results:    usize,
+    symbol_name: &str,
+    max_results: usize,
 ) -> Result<Vec<SymbolReference>> {
     if symbol_name.trim().is_empty() {
         return Ok(Vec::new());
@@ -136,7 +150,7 @@ pub fn find_symbol_references(
 
         // Skip binary files
         let text = match std::fs::read_to_string(&abs) {
-            Ok(t)  => t,
+            Ok(t) => t,
             Err(_) => continue,
         };
 
@@ -145,9 +159,9 @@ pub fn find_symbol_references(
                 refs.push(SymbolReference {
                     relative_path: rel.clone(),
                     absolute_path: abs.to_string_lossy().into_owned(),
-                    line:          idx + 1,
-                    column:        m.start(),
-                    line_text:     line_text.to_string(),
+                    line: idx + 1,
+                    column: m.start(),
+                    line_text: line_text.to_string(),
                 });
                 if refs.len() >= max_results {
                     break 'outer;
@@ -166,7 +180,7 @@ fn flatten_symbols(
     symbols: Vec<super::types::Symbol>,
 ) -> impl Iterator<Item = super::types::Symbol> {
     let mut stack = symbols;
-    let mut out   = Vec::new();
+    let mut out = Vec::new();
     while let Some(sym) = stack.pop() {
         let children = sym.children.clone();
         out.push(sym);
@@ -194,10 +208,33 @@ fn walk_source_files(workspace: &Path) -> impl Iterator<Item = PathBuf> {
 fn is_source_file(p: &Path) -> bool {
     matches!(
         p.extension().and_then(|e| e.to_str()),
-        Some("rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "go"
-           | "c" | "cpp" | "h" | "hpp" | "cs" | "java" | "kt"
-           | "swift" | "rb" | "php" | "lua" | "toml" | "yaml"
-           | "yml" | "json" | "md" | "html" | "css" | "scss")
+        Some(
+            "rs" | "ts"
+                | "tsx"
+                | "js"
+                | "jsx"
+                | "py"
+                | "go"
+                | "c"
+                | "cpp"
+                | "h"
+                | "hpp"
+                | "cs"
+                | "java"
+                | "kt"
+                | "swift"
+                | "rb"
+                | "php"
+                | "lua"
+                | "toml"
+                | "yaml"
+                | "yml"
+                | "json"
+                | "md"
+                | "html"
+                | "css"
+                | "scss"
+        )
     )
 }
 
@@ -206,7 +243,7 @@ fn is_source_file(p: &Path) -> bool {
 fn extract_identifier_at(source: &str, line: usize, column: usize) -> Option<String> {
     let line_text = source.lines().nth(line.saturating_sub(1))?;
     let bytes = line_text.as_bytes();
-    let col   = column.min(bytes.len().saturating_sub(1));
+    let col = column.min(bytes.len().saturating_sub(1));
 
     // Identify the extent of the identifier token at `col`.
     let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
@@ -215,8 +252,15 @@ fn extract_identifier_at(source: &str, line: usize, column: usize) -> Option<Str
         return None;
     }
 
-    let start = (0..=col).rev().take_while(|&i| is_ident(bytes[i])).last().unwrap_or(col);
-    let end   = (col..bytes.len()).take_while(|&i| is_ident(bytes[i])).last().map(|i| i + 1)?;
+    let start = (0..=col)
+        .rev()
+        .take_while(|&i| is_ident(bytes[i]))
+        .last()
+        .unwrap_or(col);
+    let end = (col..bytes.len())
+        .take_while(|&i| is_ident(bytes[i]))
+        .last()
+        .map(|i| i + 1)?;
 
     Some(line_text[start..end].to_string())
 }
@@ -228,9 +272,16 @@ fn read_line(path: &Path, line: usize) -> Option<String> {
 
 fn resolve_abs(workspace: &Path, path: &str) -> Result<PathBuf> {
     let p = Path::new(path);
-    let abs = if p.is_absolute() { p.to_path_buf() } else { workspace.join(p) };
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        workspace.join(p)
+    };
     if !abs.exists() {
-        return Err(AutoDevError::Agent(format!("file not found: {}", abs.display())));
+        return Err(AutoDevError::Agent(format!(
+            "file not found: {}",
+            abs.display()
+        )));
     }
     Ok(abs)
 }

@@ -2,17 +2,19 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::path::Path;
 
-use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
-use crate::hooks::{HookRegistry, HookType, HookContext, ToolCallContext};
 use super::path_jail::validate_workspace_path;
 use super::path_lock;
 use super::validate;
+use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
+use crate::hooks::{HookContext, HookRegistry, HookType, ToolCallContext};
 
 pub struct WriteFileTool;
 
 #[async_trait]
 impl Tool for WriteFileTool {
-    fn name(&self) -> &str { "write_file" }
+    fn name(&self) -> &str {
+        "write_file"
+    }
 
     fn description(&self) -> &str {
         "Create a NEW file at the given path. Refuses by default if the file already \
@@ -45,17 +47,21 @@ impl Tool for WriteFileTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
-    fn requires_permission(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        false
+    }
+    fn requires_permission(&self) -> bool {
+        true
+    }
 
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         let path_str = match input["path"].as_str() {
             Some(p) => p,
-            None    => return ToolResult::error("Missing required field: path"),
+            None => return ToolResult::error("Missing required field: path"),
         };
         let content = match input["content"].as_str() {
             Some(c) => c,
-            None    => return ToolResult::error("Missing required field: content"),
+            None => return ToolResult::error("Missing required field: content"),
         };
         let overwrite = input["overwrite"].as_bool().unwrap_or(false);
 
@@ -69,7 +75,7 @@ impl Tool for WriteFileTool {
         // message tells the LLM exactly how to retry.
         let path = match validate_workspace_path(&resolved, &ctx.working_dir) {
             Ok(canonical) => canonical,
-            Err(msg)      => return ToolResult::error(msg),
+            Err(msg) => return ToolResult::error(msg),
         };
 
         // Cross-tool, cross-worker per-path serialisation. Held for the
@@ -107,7 +113,10 @@ impl Tool for WriteFileTool {
         // Create parent directories if needed
         if let Some(parent) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
-                return ToolResult::error(format!("Cannot create directories for '{}': {e}", path.display()));
+                return ToolResult::error(format!(
+                    "Cannot create directories for '{}': {e}",
+                    path.display()
+                ));
             }
         }
 
@@ -118,7 +127,7 @@ impl Tool for WriteFileTool {
         );
 
         match std::fs::write(&path, content) {
-            Ok(_)  => {
+            Ok(_) => {
                 // Fire PostFileWrite hook after successful write
                 let hook_ctx = HookContext {
                     hook_type: HookType::PostFileWrite.as_str().to_string(),
@@ -209,5 +218,9 @@ impl Tool for WriteFileTool {
 
 fn resolve_path(path: &str, working_dir: &str) -> std::path::PathBuf {
     let p = Path::new(path);
-    if p.is_absolute() { p.to_path_buf() } else { Path::new(working_dir).join(path) }
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        Path::new(working_dir).join(path)
+    }
 }

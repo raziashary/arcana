@@ -5,9 +5,9 @@
 //   SmartApprove   — auto-approve safe patterns, prompt on unknowns (Phase 2)
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::oneshot;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use tokio::sync::oneshot;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -18,14 +18,16 @@ pub enum PermissionMode {
 }
 
 impl Default for PermissionMode {
-    fn default() -> Self { Self::ManualApproval }
+    fn default() -> Self {
+        Self::ManualApproval
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionRequest {
-    pub call_id:     String,
-    pub tool_name:   String,
-    pub input:       serde_json::Value,
+    pub call_id: String,
+    pub tool_name: String,
+    pub input: serde_json::Value,
     pub description: String,
 }
 
@@ -34,7 +36,7 @@ pub struct PermissionRequest {
 pub enum PermissionResponse {
     Allow,
     Deny,
-    AllowAlways,  // Auto-approve this tool for the rest of session
+    AllowAlways, // Auto-approve this tool for the rest of session
 }
 
 /// Pending permission requests awaiting user response.

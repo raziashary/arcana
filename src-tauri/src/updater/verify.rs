@@ -100,9 +100,9 @@ fn verify_signature_with_key(file_path: &Path, sig_bytes: &[u8], pubkey_b64: &st
     let pubkey_bytes =
         base64_decode(pubkey_b64).context("Update-signing public key is not valid base64")?;
     let pubkey_len = pubkey_bytes.len();
-    let pubkey_arr: [u8; 32] = pubkey_bytes.try_into().map_err(|_| {
-        anyhow!("Update-signing public key is {pubkey_len} bytes; expected 32.")
-    })?;
+    let pubkey_arr: [u8; 32] = pubkey_bytes
+        .try_into()
+        .map_err(|_| anyhow!("Update-signing public key is {pubkey_len} bytes; expected 32."))?;
     let verifying_key = VerifyingKey::from_bytes(&pubkey_arr)
         .context("Update-signing public key is not a valid Ed25519 key")?;
 
@@ -117,11 +117,7 @@ fn verify_signature_with_key(file_path: &Path, sig_bytes: &[u8], pubkey_b64: &st
 }
 
 /// Verify both checksum and signature. Returns Ok(()) only if BOTH pass.
-pub async fn verify_update(
-    file_path: &Path,
-    expected_checksum: &str,
-    sig_url: &str,
-) -> Result<()> {
+pub async fn verify_update(file_path: &Path, expected_checksum: &str, sig_url: &str) -> Result<()> {
     // 1. SHA-256 checksum (fast, local)
     verify_checksum(file_path, expected_checksum).context("Checksum verification failed")?;
 
@@ -207,7 +203,10 @@ mod tests {
         // the checksum fetch failed.
         let path = temp_file("ck-empty", b"payload");
         let err = verify_checksum(&path, "").unwrap_err().to_string();
-        assert!(err.contains("no SHA-256 checksum"), "unexpected error: {err}");
+        assert!(
+            err.contains("no SHA-256 checksum"),
+            "unexpected error: {err}"
+        );
         assert!(verify_checksum(&path, "   ").is_err());
         let _ = std::fs::remove_file(&path);
     }
@@ -254,10 +253,17 @@ mod tests {
     #[test]
     fn signature_refuses_empty_and_wrong_length() {
         let path = temp_file("sig-len", b"payload");
-        let key = b64(SigningKey::from_bytes(&[3u8; 32]).verifying_key().as_bytes());
+        let key = b64(SigningKey::from_bytes(&[3u8; 32])
+            .verifying_key()
+            .as_bytes());
 
-        let err = verify_signature_with_key(&path, &[], &key).unwrap_err().to_string();
-        assert!(err.contains("signature is empty"), "unexpected error: {err}");
+        let err = verify_signature_with_key(&path, &[], &key)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("signature is empty"),
+            "unexpected error: {err}"
+        );
 
         assert!(verify_signature_with_key(&path, &[0u8; 63], &key).is_err());
         assert!(verify_signature_with_key(&path, &[0u8; 65], &key).is_err());
@@ -268,12 +274,15 @@ mod tests {
     #[test]
     fn signature_refuses_a_malformed_trust_root() {
         let path = temp_file("sig-key", b"payload");
-        let sig = SigningKey::from_bytes(&[5u8; 32]).sign(b"payload").to_bytes();
+        let sig = SigningKey::from_bytes(&[5u8; 32])
+            .sign(b"payload")
+            .to_bytes();
 
         // Not base64.
         assert!(verify_signature_with_key(&path, &sig, "!!!not base64!!!").is_err());
         // Valid base64, wrong length — this is the shape of the old placeholder key.
-        let placeholder = "dW5kZWZpbmVkLXB1YmxpYy1rZXktZm9yLWRldmVsb3BtZW50LW9ubHktcGxhY2Vob2xkZXI=";
+        let placeholder =
+            "dW5kZWZpbmVkLXB1YmxpYy1rZXktZm9yLWRldmVsb3BtZW50LW9ubHktcGxhY2Vob2xkZXI=";
         let err = verify_signature_with_key(&path, &sig, placeholder)
             .unwrap_err()
             .to_string();
@@ -293,8 +302,14 @@ mod tests {
         // Correct checksum, no signature URL — must still refuse. This is the
         // second of the three bypasses: `if !sig_url.is_empty()` used to skip
         // the entire Ed25519 branch.
-        let err = verify_update(&path, &checksum, "").await.unwrap_err().to_string();
-        assert!(err.contains("no signature was published"), "unexpected error: {err}");
+        let err = verify_update(&path, &checksum, "")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("no signature was published"),
+            "unexpected error: {err}"
+        );
         assert!(verify_update(&path, &checksum, "   ").await.is_err());
 
         let _ = std::fs::remove_file(&path);

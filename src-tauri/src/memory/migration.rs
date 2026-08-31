@@ -9,10 +9,10 @@
 
 use tracing::{debug, info, warn};
 
+use super::episodic::EpisodicStore;
 use crate::errors::Result;
 use crate::session::manager::SessionManager;
 use crate::session::types::MessageRole;
-use super::episodic::EpisodicStore;
 
 pub struct MemoryMigration;
 
@@ -31,11 +31,14 @@ impl MemoryMigration {
     /// backfills episodic memory. Skips sessions that already have entries.
     pub fn run() -> Result<()> {
         let session_mgr = SessionManager::new()?;
-        let sessions    = session_mgr.list_sessions()?;
+        let sessions = session_mgr.list_sessions()?;
 
-        info!("[MemoryMigration] migrating {} sessions to episodic memory", sessions.len());
+        info!(
+            "[MemoryMigration] migrating {} sessions to episodic memory",
+            sessions.len()
+        );
         let mut migrated = 0usize;
-        let mut skipped  = 0usize;
+        let mut skipped = 0usize;
 
         for session in &sessions {
             // Skip if this session already has episodic entries.
@@ -47,7 +50,10 @@ impl MemoryMigration {
 
             let session_with_msgs = match session_mgr.get_session(&session.id)? {
                 Some(s) => s,
-                None    => { skipped += 1; continue; }
+                None => {
+                    skipped += 1;
+                    continue;
+                }
             };
             let msgs = session_with_msgs.messages;
 
@@ -91,9 +97,7 @@ impl MemoryMigration {
             migrated += 1;
         }
 
-        info!(
-            "[MemoryMigration] done — migrated={migrated} skipped={skipped}"
-        );
+        info!("[MemoryMigration] done — migrated={migrated} skipped={skipped}");
         Ok(())
     }
 }

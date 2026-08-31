@@ -36,31 +36,31 @@ pub const EVT_STARTUP_PROGRESS: &str = "startup:progress";
 #[serde(rename_all = "snake_case")]
 pub enum StartupPhase {
     /// App process started, logging + vault + state ready.
-    Init            = 0,
+    Init = 0,
     /// Built-in skills loaded from disk.
-    Skills          = 1,
+    Skills = 1,
     /// `uv run python main.py` for memory-mcp-server has been spawned.
-    MemoryStarting  = 2,
+    MemoryStarting = 2,
     /// memory-mcp-server is loading mem0 / Qdrant.
-    VectorDb        = 3,
+    VectorDb = 3,
     /// memory-mcp-server `/health` returned 200.
-    MemoryReady     = 4,
+    MemoryReady = 4,
     /// `uv run uvicorn api_gateway.api.main:app` has been spawned.
-    OrchStarting    = 5,
+    OrchStarting = 5,
     /// core-orchestrator FastAPI routers are being registered.
-    Routers         = 6,
+    Routers = 6,
     /// core-orchestrator is loading agent YAML configs from `config/agents/`.
-    Agents          = 7,
+    Agents = 7,
     /// LivingAgent instances are being created with memory cores wired up.
-    LivingAgents    = 8,
+    LivingAgents = 8,
     /// core-orchestrator `/api/system/health` returned 200.
-    OrchReady       = 9,
+    OrchReady = 9,
     /// RecipeScheduler has started the worker fleet.
-    Workers         = 10,
+    Workers = 10,
     /// All 7 fleet agents verified registered in core-orchestrator.
-    FleetReady      = 11,
+    FleetReady = 11,
     /// Both sidecars healthy, fleet warm — app is usable.
-    Ready           = 12,
+    Ready = 12,
 }
 
 impl StartupPhase {
@@ -68,38 +68,38 @@ impl StartupPhase {
     /// `id` values in `src/stores/startupStore.ts`.
     pub fn id(self) -> &'static str {
         match self {
-            Self::Init           => "init",
-            Self::Skills         => "skills",
+            Self::Init => "init",
+            Self::Skills => "skills",
             Self::MemoryStarting => "memory_starting",
-            Self::VectorDb       => "vector_db",
-            Self::MemoryReady    => "memory_ready",
-            Self::OrchStarting   => "orch_starting",
-            Self::Routers        => "routers",
-            Self::Agents         => "agents",
-            Self::LivingAgents   => "living_agents",
-            Self::OrchReady      => "orch_ready",
-            Self::Workers        => "workers",
-            Self::FleetReady     => "fleet_ready",
-            Self::Ready          => "ready",
+            Self::VectorDb => "vector_db",
+            Self::MemoryReady => "memory_ready",
+            Self::OrchStarting => "orch_starting",
+            Self::Routers => "routers",
+            Self::Agents => "agents",
+            Self::LivingAgents => "living_agents",
+            Self::OrchReady => "orch_ready",
+            Self::Workers => "workers",
+            Self::FleetReady => "fleet_ready",
+            Self::Ready => "ready",
         }
     }
 
     /// Human-readable message shown alongside the spinner.
     pub fn message(self) -> &'static str {
         match self {
-            Self::Init           => "Initializing AutoDev…",
-            Self::Skills         => "Loading skills…",
+            Self::Init => "Initializing AutoDev…",
+            Self::Skills => "Loading skills…",
             Self::MemoryStarting => "Starting Memory MCP Server…",
-            Self::VectorDb       => "Connecting to vector database…",
-            Self::MemoryReady    => "Memory MCP Server ready",
-            Self::OrchStarting   => "Starting Core Orchestrator…",
-            Self::Routers        => "Loading API routers…",
-            Self::Agents         => "Initializing agent registry…",
-            Self::LivingAgents   => "Creating LivingAgents…",
-            Self::OrchReady      => "Core Orchestrator ready",
-            Self::Workers        => "Starting worker fleet…",
-            Self::FleetReady     => "Verifying fleet agents…",
-            Self::Ready          => "AutoDev is ready",
+            Self::VectorDb => "Connecting to vector database…",
+            Self::MemoryReady => "Memory MCP Server ready",
+            Self::OrchStarting => "Starting Core Orchestrator…",
+            Self::Routers => "Loading API routers…",
+            Self::Agents => "Initializing agent registry…",
+            Self::LivingAgents => "Creating LivingAgents…",
+            Self::OrchReady => "Core Orchestrator ready",
+            Self::Workers => "Starting worker fleet…",
+            Self::FleetReady => "Verifying fleet agents…",
+            Self::Ready => "AutoDev is ready",
         }
     }
 }
@@ -108,9 +108,9 @@ impl StartupPhase {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StartupProgressPayload {
-    pub phase:   &'static str,
-    pub index:   u8,
-    pub total:   u8,
+    pub phase: &'static str,
+    pub index: u8,
+    pub total: u8,
     pub message: &'static str,
 }
 
@@ -118,7 +118,7 @@ pub struct StartupProgressPayload {
 
 /// Monotonic startup phase tracker with event emission.
 pub struct StartupProgress {
-    app:     AppHandle,
+    app: AppHandle,
     current: Mutex<StartupPhase>,
 }
 
@@ -152,9 +152,9 @@ impl StartupProgress {
         drop(cur);
 
         let payload = StartupProgressPayload {
-            phase:   target.id(),
-            index:   target as u8,
-            total:   Self::total(),
+            phase: target.id(),
+            index: target as u8,
+            total: Self::total(),
             message: target.message(),
         };
         info!(
@@ -183,9 +183,9 @@ impl StartupProgress {
     pub fn snapshot(&self) -> StartupProgressPayload {
         let phase = self.current();
         StartupProgressPayload {
-            phase:   phase.id(),
-            index:   phase as u8,
-            total:   Self::total(),
+            phase: phase.id(),
+            index: phase as u8,
+            total: Self::total(),
             message: phase.message(),
         }
     }

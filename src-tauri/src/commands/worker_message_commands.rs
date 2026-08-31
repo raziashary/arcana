@@ -11,7 +11,10 @@ use crate::errors::Result;
 /// Full message history for one task, oldest first. Used by Fleet Chat
 /// when the user clicks a task to expand its transcript.
 #[tauri::command]
-pub fn list_worker_messages_for_task(task_id: i64, limit: Option<i64>) -> Result<Vec<WorkerMessage>> {
+pub fn list_worker_messages_for_task(
+    task_id: i64,
+    limit: Option<i64>,
+) -> Result<Vec<WorkerMessage>> {
     let db = TasksDb::open()?;
     db.list_worker_messages_for_task(task_id, limit.unwrap_or(500))
 }

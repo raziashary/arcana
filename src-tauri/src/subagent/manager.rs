@@ -26,32 +26,31 @@ use tracing::{debug, info, warn};
 /// to display the final result card, short enough to prevent unbounded growth.
 const TERMINAL_RETENTION: Duration = Duration::from_secs(60);
 
-use crate::errors::{AutoDevError, Result};
-use crate::events::{emit_subagent_event_global, SubagentEventPayload};
 use super::native_runner::{self, RunnerDeps};
 use super::pool::{PoolPermit, SubagentPool};
 use super::slug;
 use super::types::{
-    SubagentConfig, SubagentEvent, SubagentHandle, SubagentResult,
-    SubagentStatus, SubagentSummary,
+    SubagentConfig, SubagentEvent, SubagentHandle, SubagentResult, SubagentStatus, SubagentSummary,
 };
+use crate::errors::{AutoDevError, Result};
+use crate::events::{emit_subagent_event_global, SubagentEventPayload};
 
 struct ManagerEntry {
-    handle:   SubagentHandle,
+    handle: SubagentHandle,
     last_event: Option<String>,
     /// Drop guard — releases the global / per-parent pool slot.
-    _permit:  PoolPermit,
+    _permit: PoolPermit,
     /// Background task running `native_runner::run`. Aborting this future
     /// cancels the child engine's turn loop (used by `abort_subagent`).
-    task:     Option<JoinHandle<Result<SubagentResult>>>,
+    task: Option<JoinHandle<Result<SubagentResult>>>,
     /// Set when the entry reaches a terminal state. Used by `prune_terminal`
     /// to sweep entries older than TERMINAL_RETENTION.
     terminated_at: Option<Instant>,
 }
 
 pub struct SubagentManager {
-    deps:     RunnerDeps,
-    pool:     Arc<SubagentPool>,
+    deps: RunnerDeps,
+    pool: Arc<SubagentPool>,
     registry: Mutex<HashMap<String, ManagerEntry>>,
 }
 
@@ -69,7 +68,11 @@ impl SubagentManager {
     ///
     /// Use `await_result(id)` to block on the final SubagentResult, or
     /// `terminate(id)` / `abort(id)` to stop early.
-    pub async fn spawn(self: &Arc<Self>, mut config: SubagentConfig, prompt: String) -> Result<SubagentHandle> {
+    pub async fn spawn(
+        self: &Arc<Self>,
+        mut config: SubagentConfig,
+        prompt: String,
+    ) -> Result<SubagentHandle> {
         // Reserve a slot before generating the slug so depth/per-parent
         // rejections happen before any HTTP work.
         let permit = self.pool.acquire(&config.parent_slug, config.depth).await?;
@@ -98,15 +101,16 @@ impl SubagentManager {
 
         // Launch the runner task.
         let run_deps = self.deps.clone();
-        let run_id   = id.clone();
-        let run_cfg  = config.clone();
-        let task = tokio::spawn(async move {
-            native_runner::run(run_deps, run_id, run_cfg, prompt, tx).await
-        });
+        let run_id = id.clone();
+        let run_cfg = config.clone();
+        let task =
+            tokio::spawn(
+                async move { native_runner::run(run_deps, run_id, run_cfg, prompt, tx).await },
+            );
 
         // Launch the event pump (consumes rx, fans out to global bus + state).
         let pump_manager = self.clone();
-        let pump_id      = id.clone();
+        let pump_id = id.clone();
         tokio::spawn(async move {
             pump_manager.pump_events(pump_id, rx).await;
         });
@@ -116,15 +120,21 @@ impl SubagentManager {
         self.prune_terminal().await;
 
         // Insert into registry.
-        self.registry.lock().await.insert(id.clone(), ManagerEntry {
-            handle: handle.clone(),
-            last_event: None,
-            _permit: permit,
-            task: Some(task),
-            terminated_at: None,
-        });
+        self.registry.lock().await.insert(
+            id.clone(),
+            ManagerEntry {
+                handle: handle.clone(),
+                last_event: None,
+                _permit: permit,
+                task: Some(task),
+                terminated_at: None,
+            },
+        );
 
-        info!("[SubagentManager] spawned {id} (parent={}, depth={})", config.parent_slug, config.depth);
+        info!(
+            "[SubagentManager] spawned {id} (parent={}, depth={})",
+            config.parent_slug, config.depth
+        );
         Ok(handle)
     }
 
@@ -133,9 +143,12 @@ impl SubagentManager {
     pub async fn await_result(self: &Arc<Self>, id: &str) -> Result<SubagentResult> {
         let task = {
             let mut reg = self.registry.lock().await;
-            let entry = reg.get_mut(id)
+            let entry = reg
+                .get_mut(id)
                 .ok_or_else(|| AutoDevError::Agent(format!("unknown subagent {id}")))?;
-            entry.task.take()
+            entry
+                .task
+                .take()
                 .ok_or_else(|| AutoDevError::Agent(format!("subagent {id} already awaited")))?
         };
 
@@ -150,7 +163,9 @@ impl SubagentManager {
             }
             Err(join_err) => {
                 self.finalise(id, &SubagentStatus::Failed).await;
-                Err(AutoDevError::Agent(format!("subagent {id} task join error: {join_err}")))
+                Err(AutoDevError::Agent(format!(
+                    "subagent {id} task join error: {join_err}"
+                )))
             }
         }
     }
@@ -191,7 +206,8 @@ impl SubagentManager {
     pub async fn terminate(self: &Arc<Self>, id: &str, force: bool) -> Result<()> {
         let task = {
             let mut reg = self.registry.lock().await;
-            let entry = reg.get_mut(id)
+            let entry = reg
+                .get_mut(id)
                 .ok_or_else(|| AutoDevError::Agent(format!("unknown subagent {id}")))?;
             entry.handle.status = SubagentStatus::Terminated;
             entry.task.take()
@@ -234,7 +250,11 @@ impl SubagentManager {
     /// Background task that consumes the bridge's event channel and:
     ///   1. Updates the registry's status / last_event fields
     ///   2. Forwards the event to the Tauri event bus
-    async fn pump_events(self: Arc<Self>, id: String, mut rx: mpsc::UnboundedReceiver<SubagentEvent>) {
+    async fn pump_events(
+        self: Arc<Self>,
+        id: String,
+        mut rx: mpsc::UnboundedReceiver<SubagentEvent>,
+    ) {
         while let Some(evt) = rx.recv().await {
             // Update entry's mirror fields for the Monitor UI.
             {
@@ -312,19 +332,27 @@ pub fn global() -> Option<Arc<SubagentManager>> {
 /// Compact human-readable label for "last event" tooltip / list view.
 fn short_label(evt: &SubagentEvent) -> String {
     match evt {
-        SubagentEvent::Token { .. }     => "streaming…".into(),
-        SubagentEvent::Thinking { .. }  => "thinking…".into(),
+        SubagentEvent::Token { .. } => "streaming…".into(),
+        SubagentEvent::Thinking { .. } => "thinking…".into(),
         SubagentEvent::ToolStart { tool, .. } => format!("tool: {tool}"),
-        SubagentEvent::ToolEnd   { tool, is_error, .. } => {
-            if *is_error { format!("tool failed: {tool}") } else { format!("tool ok: {tool}") }
+        SubagentEvent::ToolEnd { tool, is_error, .. } => {
+            if *is_error {
+                format!("tool failed: {tool}")
+            } else {
+                format!("tool ok: {tool}")
+            }
         }
-        SubagentEvent::Final { .. }     => "final".into(),
-        SubagentEvent::Cost { .. }      => "cost update".into(),
+        SubagentEvent::Final { .. } => "final".into(),
+        SubagentEvent::Cost { .. } => "cost update".into(),
         SubagentEvent::Status { status, .. } => format!("status: {}", status.as_str()),
         SubagentEvent::Error { message, .. } => format!("error: {}", truncate(message, 60)),
     }
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max { s.to_string() } else { format!("{}…", &s[..max]) }
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max])
+    }
 }

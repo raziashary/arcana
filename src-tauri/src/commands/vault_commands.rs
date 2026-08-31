@@ -249,7 +249,11 @@ mod tests {
             let source = std::fs::read_to_string(&path).expect("read command file");
             let production = source.split("#[cfg(test)]").next().unwrap_or_default();
             scanned += 1;
-            let file = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let file = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
 
             for banned in ["fn get_provider_key", "fn get_github_pat"] {
                 assert!(
@@ -270,8 +274,10 @@ mod tests {
                 let header = block.split_once('{').map(|(h, _)| h).unwrap_or(block);
 
                 if let Some(rest) = header.split("pub fn ").nth(1) {
-                    let name: String =
-                        rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                    let name: String = rest
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
                     found.push(name);
                 }
 
@@ -322,7 +328,10 @@ mod tests {
         })
         .expect("serialize");
 
-        assert!(!json.contains("value"), "VaultEntryStatus must never carry a value: {json}");
+        assert!(
+            !json.contains("value"),
+            "VaultEntryStatus must never carry a value: {json}"
+        );
         assert!(json.contains("present"));
     }
 }

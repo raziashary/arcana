@@ -1,13 +1,13 @@
 // Incremental layer — incremental graph updates
 
+use super::build;
+use super::extract;
+use super::store::GraphStore;
+use crate::errors::Result;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use serde::{Deserialize, Serialize};
-use crate::errors::Result;
-use super::store::GraphStore;
-use super::extract;
-use super::build;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateStats {
@@ -27,32 +27,32 @@ pub fn get_git_changed_files(repo_root: &Path, base_ref: &str) -> Result<Vec<Pat
     {
         return Err(anyhow::anyhow!("Invalid git ref: {}", base_ref).into());
     }
-    
+
     let output = Command::new("git")
         .arg("diff")
         .arg("--name-only")
         .arg(base_ref)
         .current_dir(repo_root)
         .output()?;
-    
+
     if !output.status.success() {
         tracing::warn!("[IncrementalUpdate] git diff failed, returning empty list");
         return Ok(Vec::new());
     }
-    
+
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let files: Vec<PathBuf> = stdout
-        .lines()
-        .map(|line| repo_root.join(line))
-        .collect();
-    
-    tracing::info!("[IncrementalUpdate] Found {} changed files via git", files.len());
+    let files: Vec<PathBuf> = stdout.lines().map(|line| repo_root.join(line)).collect();
+
+    tracing::info!(
+        "[IncrementalUpdate] Found {} changed files via git",
+        files.len()
+    );
     Ok(files)
 }
 
 pub fn find_changed_by_hash(store: &GraphStore, files: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let mut changed = Vec::new();
-    
+
     for file_path in files {
         if let Ok(new_hash) = extract::hash_file(file_path) {
             let old_hash = store.get_file_hash(&file_path.to_string_lossy());
@@ -70,29 +70,36 @@ pub fn find_changed_by_hash(store: &GraphStore, files: &[PathBuf]) -> Result<Vec
             }
         }
     }
-    
-    tracing::info!("[IncrementalUpdate] {} files have hash changes", changed.len());
+
+    tracing::info!(
+        "[IncrementalUpdate] {} files have hash changes",
+        changed.len()
+    );
     Ok(changed)
 }
 
-pub fn find_dependents(store: &GraphStore, changed_qualified_names: &[String]) -> Result<Vec<PathBuf>> {
+pub fn find_dependents(
+    store: &GraphStore,
+    changed_qualified_names: &[String],
+) -> Result<Vec<PathBuf>> {
     let all_edges = store.get_all_edges_for_graph(i64::MAX, 0)?;
     let mut dependent_files = HashSet::new();
-    
+
     for changed_name in changed_qualified_names {
         for edge in &all_edges {
             if edge.target_qualified == *changed_name {
                 dependent_files.insert(edge.file_path.clone());
-                tracing::debug!("[IncrementalUpdate] {} depends on {}", edge.source_qualified, changed_name);
+                tracing::debug!(
+                    "[IncrementalUpdate] {} depends on {}",
+                    edge.source_qualified,
+                    changed_name
+                );
             }
         }
     }
-    
-    let result: Vec<PathBuf> = dependent_files
-        .into_iter()
-        .map(PathBuf::from)
-        .collect();
-    
+
+    let result: Vec<PathBuf> = dependent_files.into_iter().map(PathBuf::from).collect();
+
     tracing::info!("[IncrementalUpdate] Found {} dependent files", result.len());
     Ok(result)
 }
@@ -105,7 +112,7 @@ pub fn incremental_update(
     task_id: Option<i64>,
 ) -> Result<UpdateStats> {
     let start = std::time::Instant::now();
-    
+
     if changed_files.is_empty() {
         return Ok(UpdateStats {
             files_changed: 0,
@@ -116,27 +123,37 @@ pub fn incremental_update(
             elapsed_ms: start.elapsed().as_millis() as u64,
         });
     }
-    
-    tracing::info!("[IncrementalUpdate] Updating {} changed files", changed_files.len());
-    
+
+    tracing::info!(
+        "[IncrementalUpdate] Updating {} changed files",
+        changed_files.len()
+    );
+
     // STEP 1: Delete old nodes/edges for changed files
     let mut nodes_removed = 0;
     let mut edges_removed = 0;
-    
+
     for file_path in changed_files {
         let file_path_str = file_path.to_string_lossy();
         nodes_removed += store.delete_file_nodes(&file_path_str)?;
         edges_removed += store.delete_file_edges(&file_path_str)?;
     }
-    
-    tracing::info!("[IncrementalUpdate] Deleted {} nodes, {} edges", nodes_removed, edges_removed);
-    
+
+    tracing::info!(
+        "[IncrementalUpdate] Deleted {} nodes, {} edges",
+        nodes_removed,
+        edges_removed
+    );
+
     // STEP 2: Extract changed files in parallel
-    tracing::info!("[IncrementalUpdate] Extracting {} changed files", changed_files.len());
+    tracing::info!(
+        "[IncrementalUpdate] Extracting {} changed files",
+        changed_files.len()
+    );
     let extractions = extract::extract_all(changed_files, repo_root);
     let mut extraction_results = Vec::new();
     let mut changed_qualified_names = Vec::new();
-    
+
     for (_, result) in extractions {
         if let Ok(extraction) = result {
             for node in &extraction.nodes {
@@ -145,27 +162,31 @@ pub fn incremental_update(
             extraction_results.push(extraction);
         }
     }
-    
-    tracing::info!("[IncrementalUpdate] Extracted {} files, {} nodes", extraction_results.len(), changed_qualified_names.len());
-    
+
+    tracing::info!(
+        "[IncrementalUpdate] Extracted {} files, {} nodes",
+        extraction_results.len(),
+        changed_qualified_names.len()
+    );
+
     // STEP 3: Find dependent files (one hop)
     let dependent_files = find_dependents(store, &changed_qualified_names)?;
     let mut all_files_to_extract = changed_files.to_vec();
     all_files_to_extract.extend(dependent_files);
     all_files_to_extract.sort();
     all_files_to_extract.dedup();
-    
+
     // STEP 4: Build graph (upsert new nodes/edges)
     let build_stats = build::build(extraction_results, store, agent_author, task_id)?;
-    
+
     // STEP 5: Rebuild FTS5 index
     store.rebuild_fts_index()?;
-    
+
     let elapsed_ms = start.elapsed().as_millis() as u64;
-    
+
     tracing::info!("[IncrementalUpdate] ✅ Incremental update complete: {} nodes added, {} edges added in {}ms",
         build_stats.nodes_upserted, build_stats.edges_upserted, elapsed_ms);
-    
+
     Ok(UpdateStats {
         files_changed: changed_files.len(),
         nodes_added: build_stats.nodes_upserted,

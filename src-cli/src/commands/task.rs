@@ -1,7 +1,7 @@
+use crate::output::{status_colored, OutputContext};
 use anyhow::Result;
+use autodev_shared::db::tasks::{CreateTaskInput, TasksDb};
 use clap::{Args, Subcommand};
-use autodev_shared::db::tasks::{TasksDb, CreateTaskInput};
-use crate::output::{OutputContext, status_colored};
 
 #[derive(Subcommand)]
 pub enum TaskCmd {
@@ -137,16 +137,23 @@ fn list(args: ListArgs, ctx: OutputContext) -> Result<()> {
         return Ok(());
     }
 
-    let headers = ["ID", "Title", "Status", "Priority", "Type", "Worker", "Created"];
-    let rows: Vec<Vec<String>> = tasks.iter().map(|t| vec![
-        t.id.to_string(),
-        truncate(&t.title, 40),
-        status_colored(&t.status.to_string()),
-        t.priority.to_string(),
-        t.task_type.to_string(),
-        t.assigned_worker.clone().unwrap_or_else(|| "-".into()),
-        t.created_at[..10].to_string(),
-    ]).collect();
+    let headers = [
+        "ID", "Title", "Status", "Priority", "Type", "Worker", "Created",
+    ];
+    let rows: Vec<Vec<String>> = tasks
+        .iter()
+        .map(|t| {
+            vec![
+                t.id.to_string(),
+                truncate(&t.title, 40),
+                status_colored(&t.status.to_string()),
+                t.priority.to_string(),
+                t.task_type.to_string(),
+                t.assigned_worker.clone().unwrap_or_else(|| "-".into()),
+                t.created_at[..10].to_string(),
+            ]
+        })
+        .collect();
 
     ctx.print_table(&headers, rows);
     Ok(())
@@ -164,7 +171,10 @@ fn get(args: GetArgs, ctx: OutputContext) -> Result<()> {
 fn assign(args: AssignArgs, ctx: OutputContext) -> Result<()> {
     let db = TasksDb::open()?;
     db.assign(args.id, &args.worker)?;
-    ctx.success(&format!("Assigned task #{} to worker '{}'", args.id, args.worker));
+    ctx.success(&format!(
+        "Assigned task #{} to worker '{}'",
+        args.id, args.worker
+    ));
     Ok(())
 }
 
@@ -203,21 +213,24 @@ fn delete(args: DeleteArgs, ctx: OutputContext) -> Result<()> {
 
 fn print_task_detail(ctx: &OutputContext, t: &autodev_shared::db::tasks::Task) {
     ctx.print_kv(&[
-        ("id",                  &t.id.to_string()),
-        ("title",               &t.title),
-        ("status",              &t.status.to_string()),
-        ("priority",            &t.priority.to_string()),
-        ("type",                &t.task_type.to_string()),
-        ("worker",              t.assigned_worker.as_deref().unwrap_or("-")),
-        ("description",         t.description.as_deref().unwrap_or("-")),
+        ("id", &t.id.to_string()),
+        ("title", &t.title),
+        ("status", &t.status.to_string()),
+        ("priority", &t.priority.to_string()),
+        ("type", &t.task_type.to_string()),
+        ("worker", t.assigned_worker.as_deref().unwrap_or("-")),
+        ("description", t.description.as_deref().unwrap_or("-")),
         ("acceptance_criteria", &t.acceptance_criteria),
-        ("created_by",          &t.created_by),
-        ("created_at",          &t.created_at),
-        ("updated_at",          &t.updated_at),
+        ("created_by", &t.created_by),
+        ("created_at", &t.created_at),
+        ("updated_at", &t.updated_at),
     ]);
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max { s.to_string() }
-    else { format!("{}…", &s[..max.saturating_sub(1)]) }
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max.saturating_sub(1)])
+    }
 }

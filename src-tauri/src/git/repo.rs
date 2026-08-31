@@ -14,8 +14,7 @@ use super::types::RepoInfo;
 /// Open an existing repository at `path` (or at any parent of it — libgit2
 /// performs a walk-up discovery by default).
 pub fn open(path: &str) -> Result<Repository> {
-    Repository::discover(path)
-        .map_err(|e| AutoDevError::Git(format!("open({path}): {e}")))
+    Repository::discover(path).map_err(|e| AutoDevError::Git(format!("open({path}): {e}")))
 }
 
 /// Return a serialisable snapshot of the repository at `path`.

@@ -3,29 +3,41 @@
 // Returns both files and directories, sorted by match quality.
 // Skips common generated/irrelevant dirs (node_modules, target, .git, etc.)
 
-use walkdir::WalkDir;
-use serde::{Deserialize, Serialize};
-use crate::errors::Result;
 use crate::commands::workspace_commands::load_workspace_dir;
+use crate::errors::Result;
+use serde::{Deserialize, Serialize};
+use walkdir::WalkDir;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileEntry {
-    pub name:           String,
-    pub absolute_path:  String,
-    pub relative_path:  String,
+    pub name: String,
+    pub absolute_path: String,
+    pub relative_path: String,
     /// True when this entry is a directory (shown with folder icon + file count).
-    pub is_dir:         bool,
+    pub is_dir: bool,
     /// For directories: number of files contained (recursive, capped at 999).
     pub children_count: u32,
 }
 
 // Directories to skip entirely during workspace walk
 const SKIP_DIRS: &[&str] = &[
-    ".git", "node_modules", "target", ".next", "dist", "build",
-    "__pycache__", ".venv", "venv", ".cache", "coverage",
-    ".turbo", ".svelte-kit", "out", ".output",
+    ".git",
+    "node_modules",
+    "target",
+    ".next",
+    "dist",
+    "build",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".cache",
+    "coverage",
+    ".turbo",
+    ".svelte-kit",
+    "out",
+    ".output",
 ];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -63,7 +75,7 @@ pub fn search_workspace_files(query: String) -> Result<Vec<FileEntry>> {
         return Ok(vec![]);
     }
 
-    let q       = query.to_lowercase();
+    let q = query.to_lowercase();
     let ws_path = std::path::Path::new(&workspace);
     let mut results: Vec<(u8, FileEntry)> = vec![];
 
@@ -83,9 +95,9 @@ pub fn search_workspace_files(query: String) -> Result<Vec<FileEntry>> {
         // Skip the workspace root itself
         .filter(|e| e.depth() > 0)
     {
-        let abs    = entry.path();
+        let abs = entry.path();
         let is_dir = entry.file_type().is_dir();
-        let name   = entry.file_name().to_string_lossy().to_string();
+        let name = entry.file_name().to_string_lossy().to_string();
 
         let relative = abs
             .strip_prefix(ws_path)
@@ -95,11 +107,15 @@ pub fn search_workspace_files(query: String) -> Result<Vec<FileEntry>> {
 
         // Match against name, relative path, and (for dir queries with /) the path prefix
         let name_lc = name.to_lowercase();
-        let rel_lc  = relative.to_lowercase();
+        let rel_lc = relative.to_lowercase();
 
         let score: u8 = if q.is_empty() {
             // Empty query: show dirs first (score 0), then files (score 1)
-            if is_dir { 0 } else { 1 }
+            if is_dir {
+                0
+            } else {
+                1
+            }
         } else if name_lc == q || rel_lc == q {
             0
         } else if name_lc.starts_with(&q) || rel_lc.starts_with(&q) {
@@ -107,20 +123,25 @@ pub fn search_workspace_files(query: String) -> Result<Vec<FileEntry>> {
         } else if name_lc.contains(&q) || rel_lc.contains(&q) {
             2
         } else {
-            continue
+            continue;
         };
 
         let children_count = if is_dir { count_files_in_dir(abs) } else { 0 };
 
-        results.push((score, FileEntry {
-            name,
-            absolute_path: abs.to_string_lossy().into_owned(),
-            relative_path: relative,
-            is_dir,
-            children_count,
-        }));
+        results.push((
+            score,
+            FileEntry {
+                name,
+                absolute_path: abs.to_string_lossy().into_owned(),
+                relative_path: relative,
+                is_dir,
+                children_count,
+            },
+        ));
 
-        if results.len() >= 30 { break; }
+        if results.len() >= 30 {
+            break;
+        }
     }
 
     // Sort: score asc, then dirs before files, then alphabetical

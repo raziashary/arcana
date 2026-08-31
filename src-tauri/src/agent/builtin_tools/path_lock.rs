@@ -60,7 +60,9 @@ fn lexically_normalise(p: &Path) -> PathBuf {
     for c in p.components() {
         match c {
             Component::CurDir => continue,
-            Component::ParentDir => { out.pop(); }
+            Component::ParentDir => {
+                out.pop();
+            }
             _ => out.push(c.as_os_str()),
         }
     }
@@ -118,12 +120,12 @@ mod tests {
     #[test]
     fn equivalent_paths_hash_to_same_key() {
         let workspace = "/work";
-        let absolute   = Path::new("/work/src/x.rs");
-        let relative   = Path::new("src/x.rs");
-        let with_dots  = Path::new("./src/./x.rs");
+        let absolute = Path::new("/work/src/x.rs");
+        let relative = Path::new("src/x.rs");
+        let with_dots = Path::new("./src/./x.rs");
 
-        let k1 = lock_key(absolute,  workspace);
-        let k2 = lock_key(relative,  workspace);
+        let k1 = lock_key(absolute, workspace);
+        let k2 = lock_key(relative, workspace);
         let k3 = lock_key(with_dots, workspace);
 
         assert_eq!(k1, k2);
@@ -134,8 +136,11 @@ mod tests {
     fn parent_dir_collapses() {
         let workspace = "/work";
         let with_parent = Path::new("src/foo/../x.rs");
-        let canonical   = Path::new("src/x.rs");
-        assert_eq!(lock_key(with_parent, workspace), lock_key(canonical, workspace));
+        let canonical = Path::new("src/x.rs");
+        assert_eq!(
+            lock_key(with_parent, workspace),
+            lock_key(canonical, workspace)
+        );
     }
 
     #[tokio::test]
@@ -158,12 +163,20 @@ mod tests {
 
         // Give h1 time to grab the lock.
         tokio::time::sleep(Duration::from_millis(10)).await;
-        assert_eq!(counter.load(Ordering::SeqCst), 1, "h1 should be holding the lock");
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            1,
+            "h1 should be holding the lock"
+        );
 
         // h2 tries to acquire; should block until h1 finishes.
         let _g2 = acquire_owned(key).await;
         // When we get here, h1 has released, so counter must be 2.
-        assert_eq!(counter.load(Ordering::SeqCst), 2, "h2 must wait for h1 to release");
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            2,
+            "h2 must wait for h1 to release"
+        );
 
         h1.await.unwrap();
     }

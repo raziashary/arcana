@@ -17,10 +17,10 @@ use crate::runtime_config;
 /// internal code that bypasses the MCP tool layer.
 #[command]
 pub async fn cmd_set_task_budget(
-    task_id:    i64,
+    task_id: i64,
     max_tokens: Option<u64>,
-    max_usd:    Option<f64>,
-    max_turns:  Option<u32>,
+    max_usd: Option<f64>,
+    max_turns: Option<u32>,
 ) -> Result<TaskBudget> {
     let budget = validate_budget(max_tokens, max_usd, max_turns)
         .map_err(|code| crate::errors::AutoDevError::Agent(code.to_string()))?;
@@ -58,22 +58,24 @@ pub async fn get_daily_budget_summary() -> Result<DailyBudgetSummary> {
 #[command]
 pub async fn set_default_worker_budget(
     max_tokens: u64,
-    max_usd:    f64,
-    max_turns:  u32,
-    warn_pct:   u8,
+    max_usd: f64,
+    max_turns: u32,
+    warn_pct: u8,
 ) -> Result<runtime_config::RuntimeConfig> {
     // Validate using the same ceiling rules as validate_budget
     if let Err(code) = validate_budget(Some(max_tokens), Some(max_usd), Some(max_turns)) {
         return Err(crate::errors::AutoDevError::Agent(code.to_string()));
     }
     if warn_pct > 100 {
-        return Err(crate::errors::AutoDevError::Agent("warn_pct must be 0-100".into()));
+        return Err(crate::errors::AutoDevError::Agent(
+            "warn_pct must be 0-100".into(),
+        ));
     }
     let mut cfg = runtime_config::read();
     cfg.default_worker_budget_tokens = max_tokens;
-    cfg.default_worker_budget_usd    = max_usd;
-    cfg.default_worker_budget_turns  = max_turns;
-    cfg.budget_warn_pct              = warn_pct;
+    cfg.default_worker_budget_usd = max_usd;
+    cfg.default_worker_budget_turns = max_turns;
+    cfg.budget_warn_pct = warn_pct;
     runtime_config::write(&cfg)
         .map_err(|e| crate::errors::AutoDevError::Agent(format!("Config write failed: {e}")))?;
     Ok(cfg)

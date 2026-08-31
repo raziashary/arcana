@@ -11,9 +11,9 @@
 
 use tracing::{debug, info};
 
-use crate::errors::Result;
 use super::episodic::EpisodicStore;
 use super::types::EpisodicRole;
+use crate::errors::Result;
 
 /// Summarize every N turns (both user + agent counted together = 1 turn).
 pub const AUTO_SUMMARIZE_EVERY: u32 = 20;
@@ -37,8 +37,8 @@ impl Summarizer {
     /// Generate and store a summary for the given session.
     pub fn summarize_session(session_id: &str, working_dir: Option<&str>) -> Result<String> {
         let timeline = EpisodicStore::get_session_timeline(session_id)?;
-        let summary  = condense(&timeline);
-        let id       = EpisodicStore::store_session_summary(session_id, &summary, working_dir)?;
+        let summary = condense(&timeline);
+        let id = EpisodicStore::store_session_summary(session_id, &summary, working_dir)?;
         Ok(id)
     }
 
@@ -70,20 +70,13 @@ fn condense(timeline: &[super::types::EpisodicMemory]) -> String {
         return "Session with no user messages.".to_string();
     }
 
-    let turn_count = timeline
-        .iter()
-        .map(|m| m.turn_index)
-        .max()
-        .unwrap_or(0);
+    let turn_count = timeline.iter().map(|m| m.turn_index).max().unwrap_or(0);
 
     let first = user_msgs.first().copied().unwrap_or("");
-    let last  = user_msgs.last().copied().unwrap_or("");
+    let last = user_msgs.last().copied().unwrap_or("");
 
     // Collect distinct keywords from all user messages for the topics line.
-    let mut keywords: Vec<String> = user_msgs
-        .iter()
-        .flat_map(|m| extract_nouns(m))
-        .collect();
+    let mut keywords: Vec<String> = user_msgs.iter().flat_map(|m| extract_nouns(m)).collect();
     keywords.dedup();
     keywords.truncate(8);
 
@@ -101,7 +94,11 @@ fn condense(timeline: &[super::types::EpisodicMemory]) -> String {
             tc.as_array()
                 .map(|arr| {
                     arr.iter()
-                        .filter_map(|v| v.get("tool_name").and_then(|n| n.as_str()).map(str::to_string))
+                        .filter_map(|v| {
+                            v.get("tool_name")
+                                .and_then(|n| n.as_str())
+                                .map(str::to_string)
+                        })
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default()
@@ -130,7 +127,7 @@ fn condense(timeline: &[super::types::EpisodicMemory]) -> String {
          First request: {first_excerpt}\n\
          Last request: {last_excerpt}{tools_line}{cost_line}",
         first_excerpt = truncate(first, 200),
-        last_excerpt  = truncate(last, 200),
+        last_excerpt = truncate(last, 200),
     )
 }
 
@@ -138,7 +135,11 @@ fn extract_nouns(text: &str) -> Vec<String> {
     text.split_whitespace()
         .filter(|w| {
             let c = w.trim_matches(|c: char| !c.is_alphabetic());
-            c.len() > 4 && c.chars().next().map(|ch| ch.is_uppercase()).unwrap_or(false)
+            c.len() > 4
+                && c.chars()
+                    .next()
+                    .map(|ch| ch.is_uppercase())
+                    .unwrap_or(false)
         })
         .map(|w| w.trim_matches(|c: char| !c.is_alphabetic()).to_lowercase())
         .collect()
@@ -149,6 +150,8 @@ fn truncate(s: &str, max: usize) -> String {
         return s.to_string();
     }
     let mut end = max;
-    while !s.is_char_boundary(end) { end -= 1; }
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
     format!("{}…", &s[..end])
 }

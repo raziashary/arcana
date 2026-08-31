@@ -3,16 +3,18 @@
 // via create_phased_task and reference this epic's ID.
 // Available in FastDevelopment | Review modes (Supervisor / PA).
 
+use super::super::tool_trait::{Tool, ToolContext, ToolResult};
+use crate::db::tasks::TasksDb;
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use crate::db::tasks::TasksDb;
-use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 
 pub struct CreateEpicTool;
 
 #[async_trait]
 impl Tool for CreateEpicTool {
-    fn name(&self) -> &str { "create_epic" }
+    fn name(&self) -> &str {
+        "create_epic"
+    }
 
     fn description(&self) -> &str {
         "Create an Epic — a parent task that groups phased subtasks. \
@@ -39,7 +41,9 @@ impl Tool for CreateEpicTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let title = match input["title"].as_str() {
@@ -64,20 +68,23 @@ impl Tool for CreateEpicTool {
 
         crate::events::emit_task_changed_global(crate::events::TaskChangedPayload {
             task_id: Some(epic.id),
-            kind:    "created".into(),
-            status:  Some("ready".into()),
+            kind: "created".into(),
+            status: Some("ready".into()),
             assigned_worker: None,
         });
 
-        ToolResult::success(json!({
-            "epic_id": epic.id,
-            "title":   epic.title,
-            "status":  "ready",
-            "message": format!(
-                "✅ Epic #{} created. Now call create_phased_task with epic_id={} \
-                 to add subtasks for each phase.",
-                epic.id, epic.id
-            )
-        }).to_string())
+        ToolResult::success(
+            json!({
+                "epic_id": epic.id,
+                "title":   epic.title,
+                "status":  "ready",
+                "message": format!(
+                    "✅ Epic #{} created. Now call create_phased_task with epic_id={} \
+                     to add subtasks for each phase.",
+                    epic.id, epic.id
+                )
+            })
+            .to_string(),
+        )
     }
 }

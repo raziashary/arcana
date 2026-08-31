@@ -6,17 +6,19 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::timeout;
 
-use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
 use super::path_jail::validate_workspace_path;
+use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
-const MAX_OUTPUT_BYTES: usize   = 50_000;
+const MAX_OUTPUT_BYTES: usize = 50_000;
 
 pub struct BashTool;
 
 #[async_trait]
 impl Tool for BashTool {
-    fn name(&self) -> &str { "bash" }
+    fn name(&self) -> &str {
+        "bash"
+    }
 
     fn description(&self) -> &str {
         #[cfg(target_os = "windows")]
@@ -42,15 +44,21 @@ impl Tool for BashTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
-    fn requires_permission(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        false
+    }
+    fn requires_permission(&self) -> bool {
+        true
+    }
 
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         let command = match input["command"].as_str() {
             Some(c) => c.to_string(),
-            None    => return ToolResult::error("Missing required field: command"),
+            None => return ToolResult::error("Missing required field: command"),
         };
-        let timeout_secs = input["timeout_secs"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS);
+        let timeout_secs = input["timeout_secs"]
+            .as_u64()
+            .unwrap_or(DEFAULT_TIMEOUT_SECS);
 
         // Workspace path-jail (Phase 1 of docs/endtoendrun/14may2026/07).
         //
@@ -99,7 +107,8 @@ impl Tool for BashTool {
         let result = timeout(
             Duration::from_secs(timeout_secs),
             run_command(shell_cmd, &ctx.working_dir),
-        ).await;
+        )
+        .await;
 
         match result {
             Err(_) => ToolResult::error(format!(
@@ -121,7 +130,9 @@ impl Tool for BashTool {
                     output.push_str(&stdout);
                 }
                 if !stderr.is_empty() {
-                    if !output.is_empty() { output.push('\n'); }
+                    if !output.is_empty() {
+                        output.push('\n');
+                    }
                     output.push_str("=== STDERR ===\n");
                     output.push_str(&stderr);
                 }
@@ -131,7 +142,8 @@ impl Tool for BashTool {
                 if output.len() > MAX_OUTPUT_BYTES {
                     let tail_start = output.len() - MAX_OUTPUT_BYTES;
                     // Walk forward to a newline boundary to avoid cutting mid-line.
-                    let boundary = output[tail_start..].find('\n')
+                    let boundary = output[tail_start..]
+                        .find('\n')
                         .map(|i| tail_start + i + 1)
                         .unwrap_or(tail_start);
                     output = format!(
@@ -146,7 +158,11 @@ impl Tool for BashTool {
                     output = format!("Command exited with code {exit_code}");
                 }
                 // Fix 10c: structured suggestion on exit 255 + "not recognized" (Windows)
-                if is_error && exit_code == 255 && cfg!(target_os = "windows") && output.contains("is not recognized") {
+                if is_error
+                    && exit_code == 255
+                    && cfg!(target_os = "windows")
+                    && output.contains("is not recognized")
+                {
                     let suggestion = format!(
                         "{output}\n\n[SUGGESTION] This command uses a Unix utility not available on Windows. \
                         Try rewriting it with PowerShell-compatible syntax (e.g. `Select-Object -First N` instead of `head -n`, \
@@ -154,7 +170,11 @@ impl Tool for BashTool {
                     );
                     return ToolResult::error(suggestion);
                 }
-                if is_error { ToolResult::error(output) } else { ToolResult::success(output) }
+                if is_error {
+                    ToolResult::error(output)
+                } else {
+                    ToolResult::success(output)
+                }
             }
         }
     }
@@ -185,8 +205,8 @@ async fn run_command(
         .stderr(Stdio::piped());
 
     let output = cmd.output().await?;
-    let stdout   = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr   = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let exit_code = output.status.code().unwrap_or(-1);
     Ok((stdout, stderr, exit_code))
 }
@@ -220,12 +240,20 @@ fn check_redirect_targets(command: &str, workspace: &str) -> Option<String> {
         let (target_start, target_kind) = if bytes[i] == b'>' {
             // `>` or `>>` — skip the marker and any whitespace.
             let mut j = i + 1;
-            if j < bytes.len() && bytes[j] == b'>' { j += 1; }
-            while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') { j += 1; }
+            if j < bytes.len() && bytes[j] == b'>' {
+                j += 1;
+            }
+            while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
+                j += 1;
+            }
             (j, "redirect")
         } else if i + 3 <= bytes.len()
             && &bytes[i..i + 3] == b"tee"
-            && (i == 0 || matches!(bytes[i.saturating_sub(1)], b' ' | b'\t' | b'|' | b'&' | b';'))
+            && (i == 0
+                || matches!(
+                    bytes[i.saturating_sub(1)],
+                    b' ' | b'\t' | b'|' | b'&' | b';'
+                ))
             && (i + 3 == bytes.len() || matches!(bytes[i + 3], b' ' | b'\t'))
         {
             // `tee` token — skip token + flags + whitespace to first non-flag arg.
@@ -233,11 +261,17 @@ fn check_redirect_targets(command: &str, workspace: &str) -> Option<String> {
             // Skip leading spaces and flags (`-a`, `--append`, etc.) until we
             // find a non-flag argument.
             loop {
-                while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') { j += 1; }
-                if j >= bytes.len() { break; }
+                while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
+                    j += 1;
+                }
+                if j >= bytes.len() {
+                    break;
+                }
                 if bytes[j] == b'-' {
                     // Skip the flag token.
-                    while j < bytes.len() && bytes[j] != b' ' && bytes[j] != b'\t' { j += 1; }
+                    while j < bytes.len() && bytes[j] != b' ' && bytes[j] != b'\t' {
+                        j += 1;
+                    }
                     continue;
                 }
                 break;
@@ -251,7 +285,10 @@ fn check_redirect_targets(command: &str, workspace: &str) -> Option<String> {
         // Extract target token: up to next whitespace / shell metachar.
         let mut end = target_start;
         while end < bytes.len()
-            && !matches!(bytes[end], b' ' | b'\t' | b'\n' | b'|' | b'&' | b';' | b'<' | b'>')
+            && !matches!(
+                bytes[end],
+                b' ' | b'\t' | b'\n' | b'|' | b'&' | b';' | b'<' | b'>'
+            )
         {
             end += 1;
         }
@@ -332,20 +369,24 @@ fn strip_heredoc_bodies(command: &str) -> Option<String> {
     let mut found = false;
     while i < bytes.len() {
         // Look for `<<` not preceded by another `<`.
-        if i + 2 <= bytes.len()
-            && &bytes[i..i + 2] == b"<<"
-            && (i == 0 || bytes[i - 1] != b'<')
-        {
+        if i + 2 <= bytes.len() && &bytes[i..i + 2] == b"<<" && (i == 0 || bytes[i - 1] != b'<') {
             found = true;
             // Skip the `<<` (and an optional `-` for `<<-`)
             let mut j = i + 2;
-            if j < bytes.len() && bytes[j] == b'-' { j += 1; }
+            if j < bytes.len() && bytes[j] == b'-' {
+                j += 1;
+            }
             // Skip whitespace before the delimiter token.
-            while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') { j += 1; }
+            while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
+                j += 1;
+            }
             // Capture delimiter (strip optional quotes).
             let delim_start = j;
             while j < bytes.len()
-                && !matches!(bytes[j], b' ' | b'\t' | b'\n' | b'|' | b'&' | b';' | b'<' | b'>')
+                && !matches!(
+                    bytes[j],
+                    b' ' | b'\t' | b'\n' | b'|' | b'&' | b';' | b'<' | b'>'
+                )
             {
                 j += 1;
             }
@@ -363,7 +404,8 @@ fn strip_heredoc_bodies(command: &str) -> Option<String> {
             // Walk line by line until we find a line containing only `delim`.
             let mut search_pos = 0usize;
             while search_pos < tail.len() {
-                let line_end = tail[search_pos..].find('\n')
+                let line_end = tail[search_pos..]
+                    .find('\n')
                     .map(|p| search_pos + p)
                     .unwrap_or(tail.len());
                 let line = tail[search_pos..line_end].trim();
@@ -380,7 +422,9 @@ fn strip_heredoc_bodies(command: &str) -> Option<String> {
             // Skip everything up to and including the closing delim line.
             i = body_end;
             // Consume the newline after the closing delim if present.
-            if i < bytes.len() && bytes[i] == b'\n' { i += 1; }
+            if i < bytes.len() && bytes[i] == b'\n' {
+                i += 1;
+            }
             // Insert a space so the outer scanner doesn't glue tokens.
             out.push(' ');
         } else {
@@ -388,7 +432,11 @@ fn strip_heredoc_bodies(command: &str) -> Option<String> {
             i += 1;
         }
     }
-    if found { Some(out) } else { None }
+    if found {
+        Some(out)
+    } else {
+        None
+    }
 }
 
 /// Fix 10b: Unix → PowerShell command pre-processor for Windows.
@@ -406,10 +454,10 @@ fn rewrite_for_windows(cmd: &str, working_dir: &str) -> String {
 
     // Strip redundant `cd "<working_dir>" &&` or `cd <working_dir> &&` prefix.
     // Agents frequently generate these even though current_dir is already set.
-    let quoted_cd   = format!("cd \"{}\" && ", working_dir);
+    let quoted_cd = format!("cd \"{}\" && ", working_dir);
     let unquoted_cd = format!("cd {} && ", working_dir);
-    let set_loc     = format!("Set-Location \"{}\" ; ", working_dir);
-    let set_loc_sl  = format!("Set-Location {} ; ", working_dir);
+    let set_loc = format!("Set-Location \"{}\" ; ", working_dir);
+    let set_loc_sl = format!("Set-Location {} ; ", working_dir);
     if out.starts_with(&quoted_cd) {
         out = out[quoted_cd.len()..].to_string();
     } else if out.starts_with(&unquoted_cd) {

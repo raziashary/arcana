@@ -3,10 +3,10 @@
 // Two scopes: 'global' (applies to all sessions) and 'repo' (per working dir).
 // See: DEVELOPMENT_PLAN.md Phase 2.1.2 — AUTODEV.md System
 
-use rusqlite::{Connection, OptionalExtension, params};
-use serde::{Deserialize, Serialize};
-use crate::errors::{AutoDevError, Result};
 use super::autodev_dir;
+use crate::errors::{AutoDevError, Result};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 
 const MAX_CONTENT_CHARS: usize = 40_000;
 
@@ -14,11 +14,11 @@ const MAX_CONTENT_CHARS: usize = 40_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutodevInstruction {
-    pub id:         i64,
-    pub scope:      String,       // "global" | "repo"
-    pub repo_path:  Option<String>,
-    pub content:    String,
-    pub is_active:  bool,
+    pub id: i64,
+    pub scope: String, // "global" | "repo"
+    pub repo_path: Option<String>,
+    pub content: String,
+    pub is_active: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -66,7 +66,7 @@ impl AutodevInstructionsDb {
             BEGIN
                 UPDATE autodev_instructions SET updated_at = datetime('now') WHERE id = NEW.id;
             END;
-            "
+            ",
         )?;
         Ok(())
     }

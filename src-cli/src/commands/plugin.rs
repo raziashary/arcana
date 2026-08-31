@@ -135,98 +135,98 @@ pub struct WorkerSetupRedeemArgs {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginInfo {
-    pub name:        String,
-    pub version:     String,
+    pub name: String,
+    pub version: String,
     pub description: String,
-    pub author:      String,
+    pub author: String,
     pub plugin_type: String,
-    pub os_support:  Vec<String>,
-    pub tags:        Vec<String>,
-    pub icon:        String,
-    pub installed:   bool,
-    pub builtin:     bool,
+    pub os_support: Vec<String>,
+    pub tags: Vec<String>,
+    pub icon: String,
+    pub installed: bool,
+    pub builtin: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstallResult {
-    pub success:  bool,
-    pub plugin:   String,
-    pub version:  String,
-    pub message:  String,
+    pub success: bool,
+    pub plugin: String,
+    pub version: String,
+    pub message: String,
     pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateResult {
-    pub success:      bool,
-    pub plugin:       String,
+    pub success: bool,
+    pub plugin: String,
     pub from_version: String,
-    pub to_version:   String,
-    pub message:      String,
+    pub to_version: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerifyResult {
-    pub success:  bool,
-    pub plugin:   String,
-    pub checks:   Vec<DependencyCheck>,
-    pub message:  String,
+    pub success: bool,
+    pub plugin: String,
+    pub checks: Vec<DependencyCheck>,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DependencyCheck {
-    pub name:     String,
+    pub name: String,
     pub required: bool,
-    pub present:  bool,
-    pub version:  Option<String>,
-    pub message:  String,
+    pub present: bool,
+    pub version: Option<String>,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunResult {
-    pub success:   bool,
-    pub stdout:    String,
-    pub stderr:    String,
+    pub success: bool,
+    pub stdout: String,
+    pub stderr: String,
     pub exit_code: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetupToken {
-    pub token:       String,
+    pub token: String,
     pub worker_type: String,
-    pub expires_at:  String,
-    pub one_liner:   String,
+    pub expires_at: String,
+    pub one_liner: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenClaims {
-    pub fleet_id:    String,
+    pub fleet_id: String,
     pub worker_type: String,
-    pub repos:       Vec<String>,
-    pub expires_at:  String,
-    pub issued_at:   String,
+    pub repos: Vec<String>,
+    pub expires_at: String,
+    pub issued_at: String,
 }
 
 // ─── Entry points ─────────────────────────────────────────────────────────────
 
 pub async fn run_plugin_cmd(cmd: PluginCmd, ctx: OutputContext) -> Result<()> {
     match cmd {
-        PluginCmd::List(args)       => list(args, &ctx),
-        PluginCmd::Install(args)    => install(args, &ctx),
-        PluginCmd::Uninstall(args)  => uninstall(args, &ctx),
-        PluginCmd::Update(args)     => update(args, &ctx),
-        PluginCmd::Verify(args)     => verify(args, &ctx),
-        PluginCmd::Run(args)        => run(args, &ctx),
-        PluginCmd::Info(args)       => info(args, &ctx),
-        PluginCmd::Config(args)     => set_config(args, &ctx),
+        PluginCmd::List(args) => list(args, &ctx),
+        PluginCmd::Install(args) => install(args, &ctx),
+        PluginCmd::Uninstall(args) => uninstall(args, &ctx),
+        PluginCmd::Update(args) => update(args, &ctx),
+        PluginCmd::Verify(args) => verify(args, &ctx),
+        PluginCmd::Run(args) => run(args, &ctx),
+        PluginCmd::Info(args) => info(args, &ctx),
+        PluginCmd::Config(args) => set_config(args, &ctx),
     }
 }
 
 pub async fn run_worker_setup(cmd: WorkerSetupCmd, ctx: OutputContext) -> Result<()> {
     match cmd {
-        WorkerSetupCmd::Generate(args)  => generate_token(args, &ctx),
-        WorkerSetupCmd::Validate(args)  => validate_token(args, &ctx),
-        WorkerSetupCmd::Redeem(args)    => redeem_token(args, &ctx),
+        WorkerSetupCmd::Generate(args) => generate_token(args, &ctx),
+        WorkerSetupCmd::Validate(args) => validate_token(args, &ctx),
+        WorkerSetupCmd::Redeem(args) => redeem_token(args, &ctx),
     }
 }
 
@@ -236,9 +236,12 @@ fn list(args: PluginListArgs, ctx: &OutputContext) -> Result<()> {
     // Read from the local built-in list + installed registry
     let plugins = collect_local_plugins();
 
-    let filtered: Vec<&PluginInfo> = plugins.iter()
+    let filtered: Vec<&PluginInfo> = plugins
+        .iter()
         .filter(|p| {
-            if args.installed && !p.installed { return false; }
+            if args.installed && !p.installed {
+                return false;
+            }
             if let Some(ref tag) = args.tag {
                 return p.tags.iter().any(|t| t.contains(tag.as_str()));
             }
@@ -259,8 +262,13 @@ fn list(args: PluginListArgs, ctx: &OutputContext) -> Result<()> {
             println!("{}", "Available Plugins".cyan().bold());
             println!("{}", "─".repeat(72).dimmed());
             for p in filtered {
-                let status = if p.installed { "✓ installed".green() } else { "  available".dimmed() };
-                println!("  {} {} {}  {}  [{}]",
+                let status = if p.installed {
+                    "✓ installed".green()
+                } else {
+                    "  available".dimmed()
+                };
+                println!(
+                    "  {} {} {}  {}  [{}]",
                     p.icon,
                     p.name.yellow().bold(),
                     format!("v{}", p.version).dimmed(),
@@ -325,11 +333,13 @@ fn update(args: PluginUpdateArgs, ctx: &OutputContext) -> Result<()> {
         for p in installed {
             ctx.info(&format!("  Updating {}...", p.name));
             match exec_update(&p.name) {
-                Ok(r) => if r.success {
-                    ctx.success(&format!("  {} → v{}", p.name, r.to_version));
-                } else {
-                    ctx.error(&format!("  {}: {}", p.name, r.message));
-                },
+                Ok(r) => {
+                    if r.success {
+                        ctx.success(&format!("  {} → v{}", p.name, r.to_version));
+                    } else {
+                        ctx.error(&format!("  {}: {}", p.name, r.message));
+                    }
+                }
                 Err(e) => ctx.error(&format!("  {}: {e}", p.name)),
             }
         }
@@ -347,24 +357,32 @@ fn update(args: PluginUpdateArgs, ctx: &OutputContext) -> Result<()> {
 fn verify(args: PluginNameArgs, ctx: &OutputContext) -> Result<()> {
     ctx.info(&format!("Verifying plugin '{}'...", args.name));
     match exec_verify(&args.name) {
-        Ok(r) => {
-            match ctx.format {
-                crate::output::OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&r)?),
-                _ => {
-                    let overall = if r.success { "✓ PASS".green() } else { "✗ FAIL".red() };
-                    println!("{} {}", overall, r.plugin.bold());
-                    for check in &r.checks {
-                        let icon = if check.present { "✓".green() } else if check.required { "✗".red() } else { "~".yellow() };
-                        let ver = check.version.as_deref().unwrap_or("").dimmed();
-                        println!("  {} {} {}", icon, check.name.yellow(), ver);
-                        if !check.present {
-                            println!("    → {}", check.message.dimmed());
-                        }
+        Ok(r) => match ctx.format {
+            crate::output::OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&r)?),
+            _ => {
+                let overall = if r.success {
+                    "✓ PASS".green()
+                } else {
+                    "✗ FAIL".red()
+                };
+                println!("{} {}", overall, r.plugin.bold());
+                for check in &r.checks {
+                    let icon = if check.present {
+                        "✓".green()
+                    } else if check.required {
+                        "✗".red()
+                    } else {
+                        "~".yellow()
+                    };
+                    let ver = check.version.as_deref().unwrap_or("").dimmed();
+                    println!("  {} {} {}", icon, check.name.yellow(), ver);
+                    if !check.present {
+                        println!("    → {}", check.message.dimmed());
                     }
-                    println!("{}", r.message.dimmed());
                 }
+                println!("{}", r.message.dimmed());
             }
-        }
+        },
         Err(e) => ctx.error(&format!("Verify error: {e}")),
     }
     Ok(())
@@ -374,8 +392,12 @@ fn run(args: PluginRunArgs, ctx: &OutputContext) -> Result<()> {
     ctx.info(&format!("Running plugin '{}'...", args.name));
     match exec_run(&args.name, &args.args) {
         Ok(r) => {
-            if !r.stdout.is_empty() { print!("{}", r.stdout); }
-            if !r.stderr.is_empty() { eprint!("{}", r.stderr); }
+            if !r.stdout.is_empty() {
+                print!("{}", r.stdout);
+            }
+            if !r.stderr.is_empty() {
+                eprint!("{}", r.stderr);
+            }
             if !r.success {
                 ctx.error(&format!("Plugin exited with code {}", r.exit_code));
             }
@@ -399,10 +421,17 @@ fn info(args: PluginNameArgs, ctx: &OutputContext) -> Result<()> {
                 println!("  Tags:     {}", p.tags.join(", "));
                 println!("  OS:       {}", p.os_support.join(", "));
                 println!("  Desc:     {}", p.description);
-                println!("  Status:   {}", if p.installed { "installed".green() } else { "not installed".dimmed() });
+                println!(
+                    "  Status:   {}",
+                    if p.installed {
+                        "installed".green()
+                    } else {
+                        "not installed".dimmed()
+                    }
+                );
                 println!("  Built-in: {}", p.builtin);
             }
-        }
+        },
     }
     Ok(())
 }
@@ -423,14 +452,19 @@ fn set_config(args: PluginConfigArgs, ctx: &OutputContext) -> Result<()> {
 // ─── Worker setup implementations ─────────────────────────────────────────────
 
 fn generate_token(args: WorkerSetupGenerateArgs, ctx: &OutputContext) -> Result<()> {
-    ctx.info(&format!("Generating setup token for worker type '{}'...", args.worker_type));
+    ctx.info(&format!(
+        "Generating setup token for worker type '{}'...",
+        args.worker_type
+    ));
     match exec_generate_token(&args.fleet_id, &args.worker_type, &args.repo, args.ttl) {
         Ok(token) => {
             if args.one_liner {
                 println!("{}", token.one_liner);
             } else {
                 match ctx.format {
-                    crate::output::OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&token)?),
+                    crate::output::OutputFormat::Json => {
+                        println!("{}", serde_json::to_string_pretty(&token)?)
+                    }
                     _ => {
                         println!("\n{}", "Setup Token".cyan().bold());
                         println!("{}", "─".repeat(60).dimmed());
@@ -451,20 +485,20 @@ fn generate_token(args: WorkerSetupGenerateArgs, ctx: &OutputContext) -> Result<
 
 fn validate_token(args: WorkerSetupValidateArgs, ctx: &OutputContext) -> Result<()> {
     match exec_validate_token(&args.token) {
-        Ok(claims) => {
-            match ctx.format {
-                crate::output::OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&claims)?),
-                _ => {
-                    println!("{}", "Token Claims".cyan().bold());
-                    println!("Fleet ID:    {}", claims.fleet_id);
-                    println!("Worker type: {}", claims.worker_type);
-                    println!("Repos:       {}", claims.repos.join(", "));
-                    println!("Issued:      {}", claims.issued_at);
-                    println!("Expires:     {}", claims.expires_at);
-                    ctx.success("Token is valid.");
-                }
+        Ok(claims) => match ctx.format {
+            crate::output::OutputFormat::Json => {
+                println!("{}", serde_json::to_string_pretty(&claims)?)
             }
-        }
+            _ => {
+                println!("{}", "Token Claims".cyan().bold());
+                println!("Fleet ID:    {}", claims.fleet_id);
+                println!("Worker type: {}", claims.worker_type);
+                println!("Repos:       {}", claims.repos.join(", "));
+                println!("Issued:      {}", claims.issued_at);
+                println!("Expires:     {}", claims.expires_at);
+                ctx.success("Token is valid.");
+            }
+        },
         Err(e) => ctx.error(&format!("Token invalid: {e}")),
     }
     Ok(())
@@ -508,15 +542,59 @@ fn collect_local_plugins() -> Vec<PluginInfo> {
 
     // Return the 5 built-in plugins + anything installed on top
     let mut builtins = vec![
-        mk_builtin("worker-backend", "1.0.0", "Backend worker environment: Rust toolchain, Python + uv, Docker (optional)", "⚙️", &["rust","python","backend","docker"], &installed),
-        mk_builtin("worker-frontend", "1.0.0", "Frontend worker environment: Node.js, npm, and common build tools", "🌐", &["node","npm","frontend","react"], &installed),
-        mk_builtin("worker-devops", "1.0.0", "DevOps worker environment: Docker, kubectl, Terraform, and CI/CD tools", "🚀", &["docker","kubernetes","terraform","devops","ci"], &installed),
-        mk_builtin("worker-qa", "1.0.0", "QA worker environment: Python, pytest, playwright, and testing tools", "🧪", &["testing","pytest","playwright","qa"], &installed),
-        mk_builtin("worker-security", "1.0.0", "Security worker environment: static analysis, secret scanning, and CVE tooling", "🔒", &["security","sast","secrets","audit"], &installed),
+        mk_builtin(
+            "worker-backend",
+            "1.0.0",
+            "Backend worker environment: Rust toolchain, Python + uv, Docker (optional)",
+            "⚙️",
+            &["rust", "python", "backend", "docker"],
+            &installed,
+        ),
+        mk_builtin(
+            "worker-frontend",
+            "1.0.0",
+            "Frontend worker environment: Node.js, npm, and common build tools",
+            "🌐",
+            &["node", "npm", "frontend", "react"],
+            &installed,
+        ),
+        mk_builtin(
+            "worker-devops",
+            "1.0.0",
+            "DevOps worker environment: Docker, kubectl, Terraform, and CI/CD tools",
+            "🚀",
+            &["docker", "kubernetes", "terraform", "devops", "ci"],
+            &installed,
+        ),
+        mk_builtin(
+            "worker-qa",
+            "1.0.0",
+            "QA worker environment: Python, pytest, playwright, and testing tools",
+            "🧪",
+            &["testing", "pytest", "playwright", "qa"],
+            &installed,
+        ),
+        mk_builtin(
+            "worker-security",
+            "1.0.0",
+            "Security worker environment: static analysis, secret scanning, and CVE tooling",
+            "🔒",
+            &["security", "sast", "secrets", "audit"],
+            &installed,
+        ),
     ];
 
     // Append any user-installed non-builtin plugins
-    let builtin_names: std::collections::HashSet<&str> = ["worker-backend","worker-frontend","worker-devops","worker-qa","worker-security"].iter().copied().collect();
+    let builtin_names: std::collections::HashSet<&str> = [
+        "worker-backend",
+        "worker-frontend",
+        "worker-devops",
+        "worker-qa",
+        "worker-security",
+    ]
+    .iter()
+    .copied()
+    .collect();
     for name in installed.iter() {
         if !builtin_names.contains(name.as_str()) {
             builtins.push(PluginInfo {
@@ -525,7 +603,7 @@ fn collect_local_plugins() -> Vec<PluginInfo> {
                 description: "(user-installed plugin)".into(),
                 author: "?".into(),
                 plugin_type: "custom".into(),
-                os_support: vec!["windows".into(),"linux".into(),"macos".into()],
+                os_support: vec!["windows".into(), "linux".into(), "macos".into()],
                 tags: vec![],
                 icon: "🔌".into(),
                 installed: true,
@@ -536,18 +614,25 @@ fn collect_local_plugins() -> Vec<PluginInfo> {
     builtins
 }
 
-fn mk_builtin(name: &str, ver: &str, desc: &str, icon: &str, tags: &[&str], installed: &[String]) -> PluginInfo {
+fn mk_builtin(
+    name: &str,
+    ver: &str,
+    desc: &str,
+    icon: &str,
+    tags: &[&str],
+    installed: &[String],
+) -> PluginInfo {
     PluginInfo {
-        name:        name.into(),
-        version:     ver.into(),
+        name: name.into(),
+        version: ver.into(),
         description: desc.into(),
-        author:      "AIRS Foundry".into(),
+        author: "AIRS Foundry".into(),
         plugin_type: "worker-setup".into(),
-        os_support:  vec!["windows".into(),"linux".into(),"macos".into()],
-        tags:        tags.iter().map(|s| s.to_string()).collect(),
-        icon:        icon.into(),
-        installed:   installed.iter().any(|n| n == name),
-        builtin:     true,
+        os_support: vec!["windows".into(), "linux".into(), "macos".into()],
+        tags: tags.iter().map(|s| s.to_string()).collect(),
+        icon: icon.into(),
+        installed: installed.iter().any(|n| n == name),
+        builtin: true,
     }
 }
 
@@ -556,7 +641,9 @@ fn scan_installed_names() -> Vec<String> {
         return vec![];
     };
     let dir = std::path::PathBuf::from(home).join(".airs").join("plugins");
-    let Ok(entries) = std::fs::read_dir(&dir) else { return vec![]; };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return vec![];
+    };
     entries
         .filter_map(|e| e.ok())
         .filter(|e| e.path().is_dir())
@@ -568,7 +655,10 @@ fn plugin_install_dir(name: &str) -> anyhow::Result<std::path::PathBuf> {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .map_err(|_| anyhow::anyhow!("Cannot determine home directory"))?;
-    Ok(std::path::PathBuf::from(home).join(".airs").join("plugins").join(name))
+    Ok(std::path::PathBuf::from(home)
+        .join(".airs")
+        .join("plugins")
+        .join(name))
 }
 
 fn exec_install_by_name(name: &str) -> anyhow::Result<InstallResult> {
@@ -577,7 +667,8 @@ fn exec_install_by_name(name: &str) -> anyhow::Result<InstallResult> {
     std::fs::create_dir_all(&install_dir)?;
 
     // Get the inline command from builtins map
-    let cmd = builtin_install_cmd(name).ok_or_else(|| anyhow::anyhow!("Plugin '{name}' not found"))?;
+    let cmd =
+        builtin_install_cmd(name).ok_or_else(|| anyhow::anyhow!("Plugin '{name}' not found"))?;
 
     let result = exec_shell_cmd(&cmd);
     if !result.success {
@@ -608,7 +699,8 @@ fn exec_install_by_name(name: &str) -> anyhow::Result<InstallResult> {
 
 fn exec_install_from_yaml(yaml: &str) -> anyhow::Result<InstallResult> {
     // Minimal parse to get name
-    let name = yaml.lines()
+    let name = yaml
+        .lines()
         .find(|l| l.starts_with("name:"))
         .and_then(|l| l.split(':').nth(1))
         .map(|s| s.trim().to_string())
@@ -629,7 +721,9 @@ fn exec_install_from_yaml(yaml: &str) -> anyhow::Result<InstallResult> {
 
 fn exec_uninstall(name: &str) -> anyhow::Result<bool> {
     let dir = plugin_install_dir(name)?;
-    if !dir.exists() { return Ok(false); }
+    if !dir.exists() {
+        return Ok(false);
+    }
     std::fs::remove_dir_all(&dir)?;
     Ok(true)
 }
@@ -639,11 +733,11 @@ fn exec_update(name: &str) -> anyhow::Result<UpdateResult> {
     let _ = exec_uninstall(name);
     let install = exec_install_by_name(name)?;
     Ok(UpdateResult {
-        success:      install.success,
-        plugin:       name.to_string(),
+        success: install.success,
+        plugin: name.to_string(),
         from_version: old_ver,
-        to_version:   install.version,
-        message:      install.message,
+        to_version: install.version,
+        message: install.message,
     })
 }
 
@@ -653,8 +747,8 @@ fn exec_verify(name: &str) -> anyhow::Result<VerifyResult> {
     let result = exec_shell_cmd(&cmd);
     Ok(VerifyResult {
         success: result.success,
-        plugin:  name.to_string(),
-        checks:  vec![],
+        plugin: name.to_string(),
+        checks: vec![],
         message: if result.success {
             result.stdout.trim().to_string()
         } else {
@@ -672,9 +766,17 @@ fn exec_run(name: &str, args: &[String]) -> anyhow::Result<RunResult> {
 
     let cmd = if script.exists() {
         #[cfg(target_os = "windows")]
-        { format!("powershell -ExecutionPolicy Bypass -File \"{}\" {}", script.display(), args.join(" ")) }
+        {
+            format!(
+                "powershell -ExecutionPolicy Bypass -File \"{}\" {}",
+                script.display(),
+                args.join(" ")
+            )
+        }
         #[cfg(not(target_os = "windows"))]
-        { format!("bash \"{}\" {}", script.display(), args.join(" ")) }
+        {
+            format!("bash \"{}\" {}", script.display(), args.join(" "))
+        }
     } else {
         return Err(anyhow::anyhow!("Plugin '{}' has no run command", name));
     };
@@ -718,21 +820,36 @@ fn exec_generate_token(
     let one_liner = format!(
         "curl -fsSL {base_url}/setup.sh | bash -s -- --token \"{token}\" --type \"{worker_type}\""
     );
-    Ok(SetupToken { token, worker_type: worker_type.to_string(), expires_at, one_liner })
+    Ok(SetupToken {
+        token,
+        worker_type: worker_type.to_string(),
+        expires_at,
+        one_liner,
+    })
 }
 
 fn exec_validate_token(token: &str) -> anyhow::Result<TokenClaims> {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
     // Strip any .signature suffix (the Tauri version uses HMAC; CLI just decodes)
     let payload = token.split('.').next().unwrap_or(token);
-    let bytes = URL_SAFE_NO_PAD.decode(payload).map_err(|e| anyhow::anyhow!("Invalid token: {e}"))?;
-    let val: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| anyhow::anyhow!("Invalid token JSON: {e}"))?;
+    let bytes = URL_SAFE_NO_PAD
+        .decode(payload)
+        .map_err(|e| anyhow::anyhow!("Invalid token: {e}"))?;
+    let val: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| anyhow::anyhow!("Invalid token JSON: {e}"))?;
     Ok(TokenClaims {
-        fleet_id:    val["fleet_id"].as_str().unwrap_or("?").into(),
+        fleet_id: val["fleet_id"].as_str().unwrap_or("?").into(),
         worker_type: val["worker_type"].as_str().unwrap_or("?").into(),
-        repos:       val["repos"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default(),
-        expires_at:  val["expires_at"].as_str().unwrap_or("?").into(),
-        issued_at:   val["issued_at"].as_str().unwrap_or("?").into(),
+        repos: val["repos"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        expires_at: val["expires_at"].as_str().unwrap_or("?").into(),
+        issued_at: val["issued_at"].as_str().unwrap_or("?").into(),
     })
 }
 
@@ -740,9 +857,17 @@ fn exec_validate_token(token: &str) -> anyhow::Result<TokenClaims> {
 
 fn exec_shell_cmd(cmd: &str) -> RunResult {
     #[cfg(target_os = "windows")]
-    let mut c = { let mut c = std::process::Command::new("cmd"); c.args(["/C", cmd]); c };
+    let mut c = {
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/C", cmd]);
+        c
+    };
     #[cfg(not(target_os = "windows"))]
-    let mut c = { let mut c = std::process::Command::new("sh"); c.args(["-c", cmd]); c };
+    let mut c = {
+        let mut c = std::process::Command::new("sh");
+        c.args(["-c", cmd]);
+        c
+    };
     c.stdout(std::process::Stdio::piped());
     c.stderr(std::process::Stdio::piped());
     match c.output() {
@@ -752,7 +877,12 @@ fn exec_shell_cmd(cmd: &str) -> RunResult {
             stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
             exit_code: out.status.code().unwrap_or(-1),
         },
-        Err(e) => RunResult { success: false, stdout: String::new(), stderr: e.to_string(), exit_code: -1 },
+        Err(e) => RunResult {
+            success: false,
+            stdout: String::new(),
+            stderr: e.to_string(),
+            exit_code: -1,
+        },
     }
 }
 
@@ -790,20 +920,26 @@ fn builtin_install_cmd(name: &str) -> Option<String> {
 
 fn builtin_verify_cmd(name: &str) -> Option<String> {
     match name {
-        "worker-backend"  => Some("rustc --version && python3 --version && uv --version".into()),
+        "worker-backend" => Some("rustc --version && python3 --version && uv --version".into()),
         "worker-frontend" => Some("node --version && npm --version".into()),
-        "worker-devops"   => Some("docker --version".into()),
-        "worker-qa"       => Some("python3 -m pytest --version && playwright --version".into()),
+        "worker-devops" => Some("docker --version".into()),
+        "worker-qa" => Some("python3 -m pytest --version && playwright --version".into()),
         "worker-security" => Some("bandit --version && semgrep --version".into()),
         _ => None,
     }
 }
 
 fn read_installed_version(name: &str) -> String {
-    let Ok(dir) = plugin_install_dir(name) else { return "unknown".into(); };
+    let Ok(dir) = plugin_install_dir(name) else {
+        return "unknown".into();
+    };
     let yaml_path = dir.join("manifest.yaml");
-    if !yaml_path.exists() { return "unknown".into(); }
-    let Ok(yaml) = std::fs::read_to_string(&yaml_path) else { return "unknown".into(); };
+    if !yaml_path.exists() {
+        return "unknown".into();
+    }
+    let Ok(yaml) = std::fs::read_to_string(&yaml_path) else {
+        return "unknown".into();
+    };
     yaml.lines()
         .find(|l| l.starts_with("version:"))
         .and_then(|l| l.split(':').nth(1))

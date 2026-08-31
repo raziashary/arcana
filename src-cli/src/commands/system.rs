@@ -1,7 +1,7 @@
+use crate::output::OutputContext;
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use colored::Colorize;
-use crate::output::OutputContext;
 
 #[derive(Subcommand)]
 pub enum SystemCmd {
@@ -62,9 +62,9 @@ async fn status(ctx: OutputContext) -> Result<()> {
     let orchestrator_ok = probe_http(&ctx.orchestrator_url, "/health").await;
 
     // Probe common sidecar ports
-    let redis_ok    = probe_tcp("127.0.0.1:6379").await;
+    let redis_ok = probe_tcp("127.0.0.1:6379").await;
     let postgres_ok = probe_tcp("127.0.0.1:5432").await;
-    let mcp_ok      = probe_tcp("127.0.0.1:3100").await;
+    let mcp_ok = probe_tcp("127.0.0.1:3100").await;
 
     // AutoDev DB presence
     let autodev_db = autodev_dir_exists();
@@ -76,10 +76,26 @@ async fn status(ctx: OutputContext) -> Result<()> {
             bool_status(orchestrator_ok),
             ctx.orchestrator_url.clone(),
         ],
-        vec!["redis/memurai".to_string(), bool_status(redis_ok), "127.0.0.1:6379".into()],
-        vec!["postgres".to_string(),       bool_status(postgres_ok), "127.0.0.1:5432".into()],
-        vec!["mcp-server".to_string(),     bool_status(mcp_ok), "127.0.0.1:3100".into()],
-        vec!["autodev-db".to_string(),     bool_status(autodev_db), "~/.autodev/".into()],
+        vec![
+            "redis/memurai".to_string(),
+            bool_status(redis_ok),
+            "127.0.0.1:6379".into(),
+        ],
+        vec![
+            "postgres".to_string(),
+            bool_status(postgres_ok),
+            "127.0.0.1:5432".into(),
+        ],
+        vec![
+            "mcp-server".to_string(),
+            bool_status(mcp_ok),
+            "127.0.0.1:3100".into(),
+        ],
+        vec![
+            "autodev-db".to_string(),
+            bool_status(autodev_db),
+            "~/.autodev/".into(),
+        ],
     ];
 
     ctx.print_table(&headers, rows);
@@ -91,19 +107,15 @@ async fn sidecars(ctx: OutputContext) -> Result<()> {
 
     let checks: &[(&str, &str)] = &[
         ("Redis/Memurai", "127.0.0.1:6379"),
-        ("Postgres",      "127.0.0.1:5432"),
-        ("MCP Server",    "127.0.0.1:3100"),
-        ("Orchestrator",  "127.0.0.1:4000"),
+        ("Postgres", "127.0.0.1:5432"),
+        ("MCP Server", "127.0.0.1:3100"),
+        ("Orchestrator", "127.0.0.1:4000"),
     ];
 
     let mut rows = vec![];
     for (name, addr) in checks {
         let ok = probe_tcp(addr).await;
-        rows.push(vec![
-            name.to_string(),
-            bool_status(ok),
-            addr.to_string(),
-        ]);
+        rows.push(vec![name.to_string(), bool_status(ok), addr.to_string()]);
     }
 
     ctx.print_table(&["Service", "Status", "Address"], rows);
@@ -135,7 +147,10 @@ fn backup(args: BackupArgs, ctx: OutputContext) -> Result<()> {
 
     let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
     let output = args.output.unwrap_or_else(|| {
-        autodev_dir.join(format!("backup-{timestamp}.zip")).display().to_string()
+        autodev_dir
+            .join(format!("backup-{timestamp}.zip"))
+            .display()
+            .to_string()
     });
 
     ctx.info(&format!("Backing up ~/.autodev/ to {output}…"));
@@ -155,7 +170,8 @@ fn backup(args: BackupArgs, ctx: OutputContext) -> Result<()> {
         .compression_method(zip::CompressionMethod::Deflated);
 
     for entry in &entries {
-        let rel = entry.strip_prefix(&autodev_dir)
+        let rel = entry
+            .strip_prefix(&autodev_dir)
             .unwrap_or(entry)
             .display()
             .to_string();
@@ -167,7 +183,10 @@ fn backup(args: BackupArgs, ctx: OutputContext) -> Result<()> {
     }
     zip.finish()?;
 
-    ctx.success(&format!("Backup saved to {output} ({} files)", entries.len()));
+    ctx.success(&format!(
+        "Backup saved to {output} ({} files)",
+        entries.len()
+    ));
     Ok(())
 }
 
@@ -215,25 +234,28 @@ async fn probe_http(base_url: &str, path: &str) -> bool {
     else {
         return false;
     };
-    client.get(&url).send().await
+    client
+        .get(&url)
+        .send()
+        .await
         .map(|r| r.status().is_success())
         .unwrap_or(false)
 }
 
 async fn probe_tcp(addr: &str) -> bool {
-    tokio::net::TcpStream::connect(addr)
-        .await
-        .is_ok()
+    tokio::net::TcpStream::connect(addr).await.is_ok()
 }
 
 fn bool_status(ok: bool) -> String {
-    if ok { "up".green().to_string() } else { "down".red().to_string() }
+    if ok {
+        "up".green().to_string()
+    } else {
+        "down".red().to_string()
+    }
 }
 
 fn autodev_dir_exists() -> bool {
-    get_autodev_dir()
-        .map(|d| d.exists())
-        .unwrap_or(false)
+    get_autodev_dir().map(|d| d.exists()).unwrap_or(false)
 }
 
 fn get_autodev_dir() -> Result<std::path::PathBuf> {
@@ -244,11 +266,17 @@ fn get_autodev_dir() -> Result<std::path::PathBuf> {
 }
 
 fn find_log_files(service: Option<&str>) -> Vec<std::path::PathBuf> {
-    let Ok(dir) = get_autodev_dir() else { return vec![]; };
+    let Ok(dir) = get_autodev_dir() else {
+        return vec![];
+    };
     let logs_dir = dir.join("logs");
-    if !logs_dir.exists() { return vec![]; }
+    if !logs_dir.exists() {
+        return vec![];
+    }
 
-    let Ok(entries) = std::fs::read_dir(&logs_dir) else { return vec![]; };
+    let Ok(entries) = std::fs::read_dir(&logs_dir) else {
+        return vec![];
+    };
 
     entries
         .filter_map(|e| e.ok())
@@ -275,7 +303,9 @@ fn read_tail(path: &std::path::Path, lines: usize) -> Result<String> {
 }
 
 fn walkdir_collect(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
-    let Ok(entries) = std::fs::read_dir(dir) else { return vec![]; };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return vec![];
+    };
     let mut result = vec![];
     for entry in entries.filter_map(|e| e.ok()) {
         let path = entry.path();

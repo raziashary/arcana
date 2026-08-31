@@ -7,14 +7,16 @@
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use crate::db::tasks::TasksDb;
 use super::super::tool_trait::{Tool, ToolContext, ToolResult};
+use crate::db::tasks::TasksDb;
 
 pub struct AcknowledgeWorkerMessageTool;
 
 #[async_trait]
 impl Tool for AcknowledgeWorkerMessageTool {
-    fn name(&self) -> &str { "acknowledge_worker_message" }
+    fn name(&self) -> &str {
+        "acknowledge_worker_message"
+    }
 
     fn description(&self) -> &str {
         "Mark an ACP inbox message as acknowledged. Call this after you've \
@@ -37,7 +39,9 @@ impl Tool for AcknowledgeWorkerMessageTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let id = match input["id"].as_i64() {
@@ -65,7 +69,7 @@ impl Tool for AcknowledgeWorkerMessageTool {
         let msg = match db.get_worker_message(id) {
             Ok(Some(m)) => m,
             Ok(None) => return ToolResult::error(format!("Message #{id} not found.")),
-            Err(e)   => return ToolResult::error(format!("Failed to fetch message #{id}: {e}")),
+            Err(e) => return ToolResult::error(format!("Failed to fetch message #{id}: {e}")),
         };
         if msg.to_slug != caller {
             return ToolResult::error(format!(
@@ -79,10 +83,13 @@ impl Tool for AcknowledgeWorkerMessageTool {
             return ToolResult::error(format!("Failed to acknowledge #{id}: {e}"));
         }
 
-        ToolResult::success(json!({
-            "message_id": id,
-            "status":     "acknowledged",
-            "message":    format!("✅ Message #{id} acknowledged."),
-        }).to_string())
+        ToolResult::success(
+            json!({
+                "message_id": id,
+                "status":     "acknowledged",
+                "message":    format!("✅ Message #{id} acknowledged."),
+            })
+            .to_string(),
+        )
     }
 }

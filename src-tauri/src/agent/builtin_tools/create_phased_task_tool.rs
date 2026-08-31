@@ -4,16 +4,18 @@
 // all their blockers complete (handled by unblock_ready_tasks in the DB layer).
 // Available in FastDevelopment | Review modes (Supervisor / PA).
 
+use super::super::tool_trait::{Tool, ToolContext, ToolResult};
+use crate::db::tasks::{CreatePhasedTaskInput, TasksDb};
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use crate::db::tasks::{CreatePhasedTaskInput, TasksDb};
-use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 
 pub struct CreatePhasedTaskTool;
 
 #[async_trait]
 impl Tool for CreatePhasedTaskTool {
-    fn name(&self) -> &str { "create_phased_task" }
+    fn name(&self) -> &str {
+        "create_phased_task"
+    }
 
     fn description(&self) -> &str {
         "Add a subtask to an existing Epic with phase metadata and optional blocker dependencies. \
@@ -73,7 +75,9 @@ impl Tool for CreatePhasedTaskTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let epic_id = match input["epic_id"].as_str() {
@@ -86,7 +90,7 @@ impl Tool for CreatePhasedTaskTool {
         };
         let phase_order = match input["phase_order"].as_i64() {
             Some(n) => n as i32,
-            None    => return ToolResult::error("'phase_order' must be an integer"),
+            None => return ToolResult::error("'phase_order' must be an integer"),
         };
         let title = match input["title"].as_str() {
             Some(t) if !t.trim().is_empty() => t.trim().to_string(),
@@ -100,13 +104,17 @@ impl Tool for CreatePhasedTaskTool {
             _ => return ToolResult::error("'acceptance_criteria' is required"),
         };
 
-        let priority  = input["priority"].as_str().unwrap_or("p2").to_string();
+        let priority = input["priority"].as_str().unwrap_or("p2").to_string();
         let task_type = input["task_type"].as_str().unwrap_or("feature").to_string();
         let description = input["description"].as_str().map(|s| s.to_string());
-        let milestone   = input["milestone"].as_str().map(|s| s.to_string());
+        let milestone = input["milestone"].as_str().map(|s| s.to_string());
         let blocked_by: Vec<String> = input["blocked_by"]
             .as_array()
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
             .unwrap_or_default();
 
         let db = match TasksDb::open() {
@@ -118,22 +126,30 @@ impl Tool for CreatePhasedTaskTool {
         // epic_id must parse as an integer AND refer to a task with type='epic'.
         let epic_row_id: i64 = match epic_id.parse::<i64>() {
             Ok(id) if id > 0 => id,
-            _ => return ToolResult::error(&format!(
-                "'epic_id' must be a positive integer task ID (got '{epic_id}'). \
+            _ => {
+                return ToolResult::error(&format!(
+                    "'epic_id' must be a positive integer task ID (got '{epic_id}'). \
                  Use create_epic to create an epic first, then pass its returned task_id here."
-            )),
+                ))
+            }
         };
         match db.get_by_id(epic_row_id) {
             Ok(Some(ref epic)) if epic.task_type == crate::db::tasks::TaskType::Epic => {}
-            Ok(Some(_)) => return ToolResult::error(&format!(
-                "Task #{epic_row_id} exists but is not an Epic. \
+            Ok(Some(_)) => {
+                return ToolResult::error(&format!(
+                    "Task #{epic_row_id} exists but is not an Epic. \
                  Pass the task_id returned by create_epic, not a regular task ID."
-            )),
-            Ok(None) => return ToolResult::error(&format!(
-                "Epic #{epic_row_id} not found. Create it first with create_epic, \
+                ))
+            }
+            Ok(None) => {
+                return ToolResult::error(&format!(
+                    "Epic #{epic_row_id} not found. Create it first with create_epic, \
                  then pass the returned task_id as epic_id."
-            )),
-            Err(e) => return ToolResult::error(&format!("Failed to look up epic #{epic_row_id}: {e}")),
+                ))
+            }
+            Err(e) => {
+                return ToolResult::error(&format!("Failed to look up epic #{epic_row_id}: {e}"))
+            }
         }
 
         // ── Validate blocked_by IDs ──────────────────────────────────────────
@@ -142,13 +158,11 @@ impl Tool for CreatePhasedTaskTool {
             let mut invalid: Vec<String> = Vec::new();
             for blocker_id_str in &blocked_by {
                 match blocker_id_str.parse::<i64>() {
-                    Ok(bid) if bid > 0 => {
-                        match db.get_by_id(bid) {
-                            Ok(None) => invalid.push(format!("#{bid} (not found)")),
-                            Err(e)   => invalid.push(format!("#{bid} (lookup error: {e})")),
-                            Ok(Some(_)) => {}
-                        }
-                    }
+                    Ok(bid) if bid > 0 => match db.get_by_id(bid) {
+                        Ok(None) => invalid.push(format!("#{bid} (not found)")),
+                        Err(e) => invalid.push(format!("#{bid} (lookup error: {e})")),
+                        Ok(Some(_)) => {}
+                    },
                     _ => invalid.push(format!("'{blocker_id_str}' (not a valid task ID)")),
                 }
             }
@@ -162,17 +176,17 @@ impl Tool for CreatePhasedTaskTool {
         }
 
         let task = match db.create_phased_task(CreatePhasedTaskInput {
-            epic_id:             epic_id.clone(),
-            phase:               phase.clone(),
+            epic_id: epic_id.clone(),
+            phase: phase.clone(),
             phase_order,
-            title:               title.clone(),
+            title: title.clone(),
             description,
-            priority:            priority.clone(),
-            task_type:           task_type.clone(),
+            priority: priority.clone(),
+            task_type: task_type.clone(),
             acceptance_criteria: acceptance_criteria.clone(),
-            blocked_by:          blocked_by.clone(),
-            milestone:           milestone.clone(),
-            created_by:          Some(ctx.session_id.clone()),
+            blocked_by: blocked_by.clone(),
+            milestone: milestone.clone(),
+            created_by: Some(ctx.session_id.clone()),
         }) {
             Ok(t) => t,
             Err(e) => return ToolResult::error(&format!("Failed to create phased task: {e}")),
@@ -181,28 +195,34 @@ impl Tool for CreatePhasedTaskTool {
         let status_str = task.status.as_str().to_string();
         crate::events::emit_task_changed_global(crate::events::TaskChangedPayload {
             task_id: Some(task.id),
-            kind:    "created".into(),
-            status:  Some(status_str.clone()),
+            kind: "created".into(),
+            status: Some(status_str.clone()),
             assigned_worker: None,
         });
 
         let blocked_msg = if !blocked_by.is_empty() {
-            format!(" Blocked by tasks: [{}]. Will auto-unlock when they complete.", blocked_by.join(", "))
+            format!(
+                " Blocked by tasks: [{}]. Will auto-unlock when they complete.",
+                blocked_by.join(", ")
+            )
         } else {
             String::new()
         };
 
-        ToolResult::success(json!({
-            "task_id":    task.id,
-            "epic_id":    epic_id,
-            "phase":      phase,
-            "phase_order": phase_order,
-            "title":      title,
-            "status":     status_str,
-            "message": format!(
-                "✅ Task #{} created in phase '{}' (order {}) of epic #{}.{}",
-                task.id, phase, phase_order, epic_id, blocked_msg
-            )
-        }).to_string())
+        ToolResult::success(
+            json!({
+                "task_id":    task.id,
+                "epic_id":    epic_id,
+                "phase":      phase,
+                "phase_order": phase_order,
+                "title":      title,
+                "status":     status_str,
+                "message": format!(
+                    "✅ Task #{} created in phase '{}' (order {}) of epic #{}.{}",
+                    task.id, phase, phase_order, epic_id, blocked_msg
+                )
+            })
+            .to_string(),
+        )
     }
 }

@@ -5,8 +5,8 @@ use crate::errors::AutoDevError;
 use crate::plugin::{
     manager::PluginManager,
     manifest::{
-        InstalledPlugin, InstallResult, PluginConfig, PluginInfo,
-        RunResult, SetupToken, TokenClaims, UpdateResult, VerifyResult,
+        InstallResult, InstalledPlugin, PluginConfig, PluginInfo, RunResult, SetupToken,
+        TokenClaims, UpdateResult, VerifyResult,
     },
 };
 
@@ -28,7 +28,9 @@ pub async fn list_installed_plugins() -> Result<Vec<InstalledPlugin>, AutoDevErr
 
 /// Get the full manifest for a single plugin by name.
 #[tauri::command]
-pub async fn get_plugin(name: String) -> Result<Option<crate::plugin::manifest::PluginManifest>, AutoDevError> {
+pub async fn get_plugin(
+    name: String,
+) -> Result<Option<crate::plugin::manifest::PluginManifest>, AutoDevError> {
     let mgr = PluginManager::new();
     Ok(mgr.get_plugin(&name))
 }
@@ -94,7 +96,10 @@ pub async fn get_plugin_config(name: String) -> Result<Option<serde_json::Value>
 
 /// Set / update the config for an installed plugin.
 #[tauri::command]
-pub async fn set_plugin_config(name: String, values: serde_json::Value) -> Result<(), AutoDevError> {
+pub async fn set_plugin_config(
+    name: String,
+    values: serde_json::Value,
+) -> Result<(), AutoDevError> {
     let mgr = PluginManager::new();
     let cfg = PluginConfig { name, values };
     mgr.set_config(&cfg).map_err(AutoDevError::from)
@@ -105,10 +110,10 @@ pub async fn set_plugin_config(name: String, values: serde_json::Value) -> Resul
 /// Generate a one-click worker setup token.
 #[tauri::command]
 pub async fn generate_setup_token(
-    fleet_id:    String,
+    fleet_id: String,
     worker_type: String,
-    repos:       Vec<String>,
-    ttl_hours:   Option<u64>,
+    repos: Vec<String>,
+    ttl_hours: Option<u64>,
 ) -> Result<SetupToken, AutoDevError> {
     let mgr = PluginManager::new();
     let ttl = ttl_hours.unwrap_or(24);

@@ -13,23 +13,23 @@ use std::panic::catch_unwind;
 use std::panic::AssertUnwindSafe;
 use tracing::{debug, error, info, warn};
 
-use crate::errors::{AutoDevError, Result};
 use super::traits::{Provider, StreamResult};
 use super::types::{
-    CompletionRequest, CompletionResponse, MessageContent, ModelInfo,
-    ProviderStatus, RequestMessage, StreamChunk,
+    CompletionRequest, CompletionResponse, MessageContent, ModelInfo, ProviderStatus,
+    RequestMessage, StreamChunk,
 };
+use crate::errors::{AutoDevError, Result};
 
 // ── Ollama client & types ────────────────────────────────────────────────────
 
-use ollama_rs::Ollama;
-use ollama_rs::generation::chat::{ChatMessage, ChatMessageResponse};
 use ollama_rs::generation::chat::request::ChatMessageRequest;
+use ollama_rs::generation::chat::{ChatMessage, ChatMessageResponse};
+use ollama_rs::Ollama;
 
 /// Local Ollama provider.
 pub struct OllamaProvider {
-    host:   String,
-    port:   u16,
+    host: String,
+    port: u16,
     client: Ollama,
 }
 
@@ -67,14 +67,21 @@ impl OllamaProvider {
             };
 
             let mut parts = rest.split(':');
-            let host = parts.next().unwrap_or("localhost").trim_end_matches('/').to_string();
+            let host = parts
+                .next()
+                .unwrap_or("localhost")
+                .trim_end_matches('/')
+                .to_string();
             let port = parts
                 .next()
                 .and_then(|p| p.parse::<u16>().ok())
                 .unwrap_or(11434);
 
             let host_with_scheme = format!("{}://{}", scheme, host);
-            debug!("[OllamaProvider] Parsed OLLAMA_HOST={} → host={}, port={}", url, host_with_scheme, port);
+            debug!(
+                "[OllamaProvider] Parsed OLLAMA_HOST={} → host={}, port={}",
+                url, host_with_scheme, port
+            );
             Self::new(host_with_scheme, port)
         } else {
             Self::new("http://localhost".to_string(), 11434)
@@ -101,13 +108,13 @@ impl OllamaProvider {
             }
 
             out.push(ModelInfo {
-                id:                name.clone(),
-                name:              name.clone(),
-                context_window:    ctx,
-                supports_vision:   is_vision,
+                id: name.clone(),
+                name: name.clone(),
+                context_window: ctx,
+                supports_vision: is_vision,
                 supports_thinking: false,
-                cost_in_per_1m:    0.0,
-                cost_out_per_1m:   0.0,
+                cost_in_per_1m: 0.0,
+                cost_out_per_1m: 0.0,
             });
         }
         out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -117,8 +124,12 @@ impl OllamaProvider {
 
 #[async_trait]
 impl Provider for OllamaProvider {
-    fn id(&self) -> &str { "ollama" }
-    fn name(&self) -> &str { "Ollama" }
+    fn id(&self) -> &str {
+        "ollama"
+    }
+    fn name(&self) -> &str {
+        "Ollama"
+    }
 
     /// Returns a static fallback list of well-known Ollama models.
     /// Use [`OllamaProvider::fetch_models`] for the live local list.
@@ -155,8 +166,8 @@ impl Provider for OllamaProvider {
                 }),
                 Ok(StreamChunk::MessageDelta {
                     stop_reason: response.stop_reason.clone(),
-                    tokens_in:   response.tokens_in,
-                    tokens_out:  response.tokens_out,
+                    tokens_in: response.tokens_in,
+                    tokens_out: response.tokens_out,
                 }),
                 Ok(StreamChunk::Done),
             ];
@@ -164,40 +175,36 @@ impl Provider for OllamaProvider {
         }
 
         let chat_request = build_chat_request(&request)?;
-        
+
         // Task D2: Wrap Ollama stream in catch_unwind to prevent panics from
         // malformed URLs or other ollama-rs internal errors from crashing the app.
         let ollama_stream = match catch_unwind(AssertUnwindSafe(|| {
             // This closure captures the async call; we'll await it below
             self.client.send_chat_messages_stream(chat_request)
         })) {
-            Ok(stream_future) => {
-                match stream_future.await {
-                    Ok(stream) => stream,
-                    Err(e) => {
-                        error!("[OllamaProvider] Stream error: {}", e);
-                        return Err(map_ollama_err(e));
-                    }
+            Ok(stream_future) => match stream_future.await {
+                Ok(stream) => stream,
+                Err(e) => {
+                    error!("[OllamaProvider] Stream error: {}", e);
+                    return Err(map_ollama_err(e));
                 }
-            }
+            },
             Err(_) => {
                 error!("[OllamaProvider] Ollama stream panicked (likely URL parsing issue)");
                 return Err(AutoDevError::Provider(
-                    "Ollama stream panicked — check OLLAMA_HOST env var".to_string()
+                    "Ollama stream panicked — check OLLAMA_HOST env var".to_string(),
                 ));
             }
         };
 
-        let mapped = ollama_stream.flat_map(move |result| {
-            match result {
-                Ok(chunk) => {
-                    let chunks = map_ollama_stream_chunks(chunk);
-                    futures::stream::iter(chunks)
-                }
-                Err(()) => futures::stream::iter(vec![
-                    Err(AutoDevError::Provider("Ollama stream error".to_string())),
-                ]),
+        let mapped = ollama_stream.flat_map(move |result| match result {
+            Ok(chunk) => {
+                let chunks = map_ollama_stream_chunks(chunk);
+                futures::stream::iter(chunks)
             }
+            Err(()) => futures::stream::iter(vec![Err(AutoDevError::Provider(
+                "Ollama stream error".to_string(),
+            ))]),
         });
 
         Ok(Box::pin(mapped))
@@ -207,15 +214,26 @@ impl Provider for OllamaProvider {
         match self.client.list_local_models().await {
             Ok(models) => {
                 if models.is_empty() {
-                    warn!("Ollama reachable at {}:{}, but no models pulled yet", self.host, self.port);
+                    warn!(
+                        "Ollama reachable at {}:{}, but no models pulled yet",
+                        self.host, self.port
+                    );
                     Ok(ProviderStatus::Connected)
                 } else {
-                    info!("Ollama connected at {}:{} — {} models available", self.host, self.port, models.len());
+                    info!(
+                        "Ollama connected at {}:{} — {} models available",
+                        self.host,
+                        self.port,
+                        models.len()
+                    );
                     Ok(ProviderStatus::Connected)
                 }
             }
             Err(e) => {
-                error!("Ollama connection test failed at {}:{}: {e}", self.host, self.port);
+                error!(
+                    "Ollama connection test failed at {}:{}: {e}",
+                    self.host, self.port
+                );
                 Ok(ProviderStatus::Error(format!(
                     "Ollama not reachable at {}:{} — {e}",
                     self.host, self.port
@@ -239,10 +257,7 @@ fn build_chat_request(req: &CompletionRequest) -> Result<ChatMessageRequest> {
     Ok(request)
 }
 
-fn to_ollama_messages(
-    msgs: &[RequestMessage],
-    system: Option<&str>,
-) -> Result<Vec<ChatMessage>> {
+fn to_ollama_messages(msgs: &[RequestMessage], system: Option<&str>) -> Result<Vec<ChatMessage>> {
     let mut out = Vec::new();
 
     if let Some(sys) = system {
@@ -252,10 +267,14 @@ fn to_ollama_messages(
     for msg in msgs {
         // Determine effective role from our request; map content blocks.
         let role = msg.role.as_str();
-        let text_parts: Vec<String> = msg.content.iter().filter_map(|c| match c {
-            MessageContent::Text { text } => Some(text.clone()),
-            _ => None,
-        }).collect();
+        let text_parts: Vec<String> = msg
+            .content
+            .iter()
+            .filter_map(|c| match c {
+                MessageContent::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
 
         let text = if text_parts.is_empty() {
             String::new()
@@ -288,7 +307,10 @@ fn to_ollama_messages(
                             content.push_str(&format!("\n[Tool call: {} — {}]", name, input));
                         }
                     }
-                    if let MessageContent::ToolResult { content: result, .. } = block {
+                    if let MessageContent::ToolResult {
+                        content: result, ..
+                    } = block
+                    {
                         // Assistant should not emit tool results; they are separate messages.
                         // If present, treat as assistant text annotation.
                         content.push_str(&format!("\n[Tool result: {}]", result));
@@ -313,16 +335,18 @@ fn parse_chat_response(resp: ChatMessageResponse, model: &str) -> Result<Complet
     let mut content = Vec::new();
 
     if !content_text.is_empty() {
-        content.push(MessageContent::Text {
-            text: content_text,
-        });
+        content.push(MessageContent::Text { text: content_text });
     }
 
     // Handle tool_calls in response if present.
     // ollama-rs ChatMessageResponseMessage may have `tool_calls` field.
     // TODO: verify field names against actual ollama-rs struct when tool API stabilizes.
 
-    let stop_reason = if resp.done { "end_turn".to_string() } else { "end_turn".to_string() };
+    let stop_reason = if resp.done {
+        "end_turn".to_string()
+    } else {
+        "end_turn".to_string()
+    };
 
     let (tokens_in, tokens_out) = match &resp.final_data {
         Some(data) => (data.prompt_eval_count as u32, data.eval_count as u32),
@@ -373,17 +397,24 @@ fn map_ollama_err(e: impl std::fmt::Display) -> AutoDevError {
 }
 
 fn extract_text(content: &[MessageContent]) -> String {
-    content.iter().filter_map(|c| match c {
-        MessageContent::Text { text } => Some(text.clone()),
-        _ => None,
-    }).collect::<Vec<_>>().join("")
+    content
+        .iter()
+        .filter_map(|c| match c {
+            MessageContent::Text { text } => Some(text.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 // ── Model family context-window lookup ───────────────────────────────────────
 
 fn context_window_for_model(name: &str) -> u32 {
     let lower = name.to_lowercase();
-    if lower.starts_with("llama3.2") || lower.starts_with("llama3.1") || lower.starts_with("llama3.3") {
+    if lower.starts_with("llama3.2")
+        || lower.starts_with("llama3.1")
+        || lower.starts_with("llama3.3")
+    {
         128_000
     } else if lower.starts_with("llama3") {
         8_000 // catch-all for other llama3 variants
@@ -413,76 +444,76 @@ fn context_window_for_model(name: &str) -> u32 {
 fn models_static() -> Vec<ModelInfo> {
     vec![
         ModelInfo {
-            id:                "llama3.2".into(),
-            name:              "Llama 3.2".into(),
-            context_window:    128_000,
-            supports_vision:   true,
+            id: "llama3.2".into(),
+            name: "Llama 3.2".into(),
+            context_window: 128_000,
+            supports_vision: true,
             supports_thinking: false,
-            cost_in_per_1m:    0.0,
-            cost_out_per_1m:   0.0,
+            cost_in_per_1m: 0.0,
+            cost_out_per_1m: 0.0,
         },
         ModelInfo {
-            id:                "llama3.1".into(),
-            name:              "Llama 3.1".into(),
-            context_window:    128_000,
-            supports_vision:   false,
+            id: "llama3.1".into(),
+            name: "Llama 3.1".into(),
+            context_window: 128_000,
+            supports_vision: false,
             supports_thinking: false,
-            cost_in_per_1m:    0.0,
-            cost_out_per_1m:   0.0,
+            cost_in_per_1m: 0.0,
+            cost_out_per_1m: 0.0,
         },
         ModelInfo {
-            id:                "mistral".into(),
-            name:              "Mistral 7B".into(),
-            context_window:    32_768,
-            supports_vision:   false,
+            id: "mistral".into(),
+            name: "Mistral 7B".into(),
+            context_window: 32_768,
+            supports_vision: false,
             supports_thinking: false,
-            cost_in_per_1m:    0.0,
-            cost_out_per_1m:   0.0,
+            cost_in_per_1m: 0.0,
+            cost_out_per_1m: 0.0,
         },
         ModelInfo {
-            id:                "mixtral".into(),
-            name:              "Mixtral 8x7B".into(),
-            context_window:    32_768,
-            supports_vision:   false,
+            id: "mixtral".into(),
+            name: "Mixtral 8x7B".into(),
+            context_window: 32_768,
+            supports_vision: false,
             supports_thinking: false,
-            cost_in_per_1m:    0.0,
-            cost_out_per_1m:   0.0,
+            cost_in_per_1m: 0.0,
+            cost_out_per_1m: 0.0,
         },
         ModelInfo {
-            id:                "codellama".into(),
-            name:              "CodeLlama".into(),
-            context_window:    16_384,
-            supports_vision:   false,
+            id: "codellama".into(),
+            name: "CodeLlama".into(),
+            context_window: 16_384,
+            supports_vision: false,
             supports_thinking: false,
-            cost_in_per_1m:    0.0,
-            cost_out_per_1m:   0.0,
+            cost_in_per_1m: 0.0,
+            cost_out_per_1m: 0.0,
         },
         ModelInfo {
-            id:                "deepseek-coder".into(),
-            name:              "DeepSeek Coder".into(),
-            context_window:    16_384,
-            supports_vision:   false,
+            id: "deepseek-coder".into(),
+            name: "DeepSeek Coder".into(),
+            context_window: 16_384,
+            supports_vision: false,
             supports_thinking: false,
-            cost_in_per_1m:    0.0,
-            cost_out_per_1m:   0.0,
+            cost_in_per_1m: 0.0,
+            cost_out_per_1m: 0.0,
         },
         ModelInfo {
-            id:                "qwen2.5".into(),
-            name:              "Qwen 2.5".into(),
-            context_window:    32_768,
-            supports_vision:   false,
+            id: "qwen2.5".into(),
+            name: "Qwen 2.5".into(),
+            context_window: 32_768,
+            supports_vision: false,
             supports_thinking: false,
-            cost_in_per_1m:    0.0,
-            cost_out_per_1m:   0.0,
+            cost_in_per_1m: 0.0,
+            cost_out_per_1m: 0.0,
         },
         ModelInfo {
-            id:                "custom".into(),
-            name:              "Custom (any pulled model)".into(),
-            context_window:    4_096,
-            supports_vision:   false,
+            id: "custom".into(),
+            name: "Custom (any pulled model)".into(),
+            context_window: 4_096,
+            supports_vision: false,
             supports_thinking: false,
-            cost_in_per_1m:    0.0,
-            cost_out_per_1m:   0.0,
+            cost_in_per_1m: 0.0,
+            cost_out_per_1m: 0.0,
         },
     ]
 }

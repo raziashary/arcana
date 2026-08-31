@@ -1,10 +1,10 @@
 // SessionManager — high-level session lifecycle management.
 // Wraps SessionStorage with business logic for create/list/get/delete.
 
-use std::sync::{Arc, Mutex};
-use crate::errors::Result;
 use super::storage::SessionStorage;
 use super::types::{Message, Session};
+use crate::errors::Result;
+use std::sync::{Arc, Mutex};
 
 pub struct SessionManager {
     storage: Arc<Mutex<SessionStorage>>,
@@ -35,11 +35,19 @@ impl SessionManager {
     }
 
     pub fn get_session(&self, session_id: &str) -> Result<Option<Session>> {
-        self.storage.lock().unwrap().get_session_with_messages(session_id)
+        self.storage
+            .lock()
+            .unwrap()
+            .get_session_with_messages(session_id)
     }
 
     pub fn get_session_messages(&self, session_id: &str) -> Result<Vec<Message>> {
-        match self.storage.lock().unwrap().get_session_with_messages(session_id)? {
+        match self
+            .storage
+            .lock()
+            .unwrap()
+            .get_session_with_messages(session_id)?
+        {
             Some(session) => Ok(session.messages),
             None => Ok(vec![]),
         }
@@ -63,6 +71,9 @@ impl SessionManager {
 
     /// Phase 3.0 R3 — persist the PA mode toggle for a session.
     pub fn set_pa_mode(&self, session_id: &str, pa_mode: &str) -> Result<()> {
-        self.storage.lock().unwrap().update_session_pa_mode(session_id, pa_mode)
+        self.storage
+            .lock()
+            .unwrap()
+            .update_session_pa_mode(session_id, pa_mode)
     }
 }

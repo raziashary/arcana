@@ -6,13 +6,13 @@
 //   HookRegistry::fire(&HookType::PostFileWrite, &ctx).await;
 //   let logs = HookRegistry::fire_with_logs(&HookType::PreToolUse, &ctx).await;
 
-pub mod types;
 pub mod conditions;
-pub mod executor;
-pub mod registry;
 pub mod db;
 pub mod ecosystem;
+pub mod executor;
+pub mod registry;
+pub mod types;
 
+pub use ecosystem::Ecosystem;
 pub use registry::HookRegistry;
 pub use types::{HookContext, HookType, ToolCallContext};
-pub use ecosystem::Ecosystem;

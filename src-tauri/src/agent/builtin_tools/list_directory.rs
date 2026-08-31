@@ -8,7 +8,9 @@ pub struct ListDirectoryTool;
 
 #[async_trait]
 impl Tool for ListDirectoryTool {
-    fn name(&self) -> &str { "list_directory" }
+    fn name(&self) -> &str {
+        "list_directory"
+    }
 
     fn description(&self) -> &str {
         "List files and subdirectories at a path. Returns structured JSON with name, path, is_directory, size_bytes."
@@ -35,11 +37,13 @@ impl Tool for ListDirectoryTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         let path_str = input["path"].as_str().unwrap_or(&ctx.working_dir);
-        let recursive   = input["recursive"].as_bool().unwrap_or(false);
+        let recursive = input["recursive"].as_bool().unwrap_or(false);
         let max_entries = input["max_entries"].as_u64().unwrap_or(500) as usize;
 
         let base = if Path::new(path_str).is_absolute() {
@@ -56,7 +60,14 @@ impl Tool for ListDirectoryTool {
         }
 
         let mut entries: Vec<serde_json::Value> = Vec::new();
-        collect_entries(&base, &base, 0, if recursive { 3 } else { 1 }, max_entries, &mut entries);
+        collect_entries(
+            &base,
+            &base,
+            0,
+            if recursive { 3 } else { 1 },
+            max_entries,
+            &mut entries,
+        );
 
         let truncated = entries.len() == max_entries;
         let output = json!({
@@ -82,22 +93,35 @@ impl Tool for ListDirectoryTool {
 
 // Skip common noise directories
 const SKIP: &[&str] = &[
-    ".git", "node_modules", "target", "__pycache__", ".venv", "venv",
-    "dist", "build", ".airs",
+    ".git",
+    "node_modules",
+    "target",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    ".airs",
 ];
 
 fn collect_entries(
-    root:       &Path,
-    path:       &Path,
-    depth:      usize,
-    max_depth:  usize,
+    root: &Path,
+    path: &Path,
+    depth: usize,
+    max_depth: usize,
     max_entries: usize,
-    out:        &mut Vec<serde_json::Value>,
+    out: &mut Vec<serde_json::Value>,
 ) {
-    if depth >= max_depth { return; }
-    if out.len() >= max_entries { return; }
+    if depth >= max_depth {
+        return;
+    }
+    if out.len() >= max_entries {
+        return;
+    }
 
-    let Ok(read) = std::fs::read_dir(path) else { return };
+    let Ok(read) = std::fs::read_dir(path) else {
+        return;
+    };
 
     let mut dir_entries: Vec<_> = read.filter_map(|e| e.ok()).collect();
     dir_entries.sort_by_key(|e| {
@@ -108,10 +132,12 @@ fn collect_entries(
     for entry in dir_entries {
         let name = entry.file_name();
         let name_str = name.to_string_lossy().to_string();
-        if SKIP.iter().any(|s| *s == name_str) { continue; }
+        if SKIP.iter().any(|s| *s == name_str) {
+            continue;
+        }
 
         let entry_path = entry.path();
-        let is_dir     = entry_path.is_dir();
+        let is_dir = entry_path.is_dir();
         let size_bytes: Option<u64> = if is_dir {
             None
         } else {
@@ -119,7 +145,8 @@ fn collect_entries(
         };
 
         // Path relative to root for display
-        let rel = entry_path.strip_prefix(root)
+        let rel = entry_path
+            .strip_prefix(root)
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| entry_path.display().to_string());
 

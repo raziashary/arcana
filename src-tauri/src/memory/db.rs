@@ -3,9 +3,9 @@
 // Migration is purely additive via CREATE TABLE IF NOT EXISTS so new columns
 // can be appended in later schema revisions without breaking old installs.
 
+use crate::errors::{AutoDevError, Result};
 use rusqlite::Connection;
 use std::path::PathBuf;
-use crate::errors::{AutoDevError, Result};
 
 pub struct MemoryDb {
     pub conn: Connection,
@@ -116,8 +116,6 @@ pub fn db_path() -> Result<PathBuf> {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .map(PathBuf::from)
-        .map_err(|_| AutoDevError::Agent(
-            "Cannot determine home directory for memory.db".into()
-        ))?;
+        .map_err(|_| AutoDevError::Agent("Cannot determine home directory for memory.db".into()))?;
     Ok(home.join(".autodev").join("memory.db"))
 }

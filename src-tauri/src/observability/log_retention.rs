@@ -32,47 +32,59 @@ pub fn prune(log_dir: &Path) {
         return;
     }
 
-    let cutoff = match SystemTime::now()
-        .checked_sub(Duration::from_secs(retention_days * 24 * 60 * 60))
-    {
-        Some(t) => t,
-        None    => {
-            warn!("[log_retention] cutoff math overflowed; skipping prune");
-            return;
-        }
-    };
+    let cutoff =
+        match SystemTime::now().checked_sub(Duration::from_secs(retention_days * 24 * 60 * 60)) {
+            Some(t) => t,
+            None => {
+                warn!("[log_retention] cutoff math overflowed; skipping prune");
+                return;
+            }
+        };
 
     let entries = match std::fs::read_dir(log_dir) {
         Ok(e) => e,
         Err(e) => {
-            warn!("[log_retention] cannot read {:?}: {e} — skipping prune", log_dir);
+            warn!(
+                "[log_retention] cannot read {:?}: {e} — skipping prune",
+                log_dir
+            );
             return;
         }
     };
 
     let mut dropped: u64 = 0;
-    let mut bytes:   u64 = 0;
-    let mut errors:  u64 = 0;
+    let mut bytes: u64 = 0;
+    let mut errors: u64 = 0;
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if !is_autodev_log(&path) { continue; }
+        if !is_autodev_log(&path) {
+            continue;
+        }
 
         let meta = match entry.metadata() {
             Ok(m) => m,
-            Err(_) => { errors += 1; continue; }
+            Err(_) => {
+                errors += 1;
+                continue;
+            }
         };
         let modified = match meta.modified() {
             Ok(t) => t,
-            Err(_) => { errors += 1; continue; }
+            Err(_) => {
+                errors += 1;
+                continue;
+            }
         };
-        if modified >= cutoff { continue; }
+        if modified >= cutoff {
+            continue;
+        }
 
         let size = meta.len();
         match std::fs::remove_file(&path) {
             Ok(_) => {
                 dropped += 1;
-                bytes   += size;
+                bytes += size;
                 debug!("[log_retention] dropped {:?} ({} bytes)", path, size);
             }
             Err(e) => {
@@ -94,7 +106,7 @@ pub fn prune(log_dir: &Path) {
 fn retention_days_from_env() -> u64 {
     match std::env::var(ENV_VAR) {
         Ok(v) => match v.parse::<u64>() {
-            Ok(n)  => n,
+            Ok(n) => n,
             Err(_) => {
                 warn!(
                     "[log_retention] {ENV_VAR}='{v}' is not an integer — using \
@@ -114,7 +126,7 @@ fn retention_days_from_env() -> u64 {
 fn is_autodev_log(path: &PathBuf) -> bool {
     let name = match path.file_name().and_then(|s| s.to_str()) {
         Some(n) => n,
-        None    => return false,
+        None => return false,
     };
     name.starts_with("autodev-") && (name.ends_with(".log") || name.contains(".log."))
 }
@@ -127,7 +139,9 @@ mod tests {
     fn matches_canonical_log_filenames() {
         assert!(is_autodev_log(&PathBuf::from("autodev-2026-05-14.log")));
         assert!(is_autodev_log(&PathBuf::from("autodev-.2026-05-14..log")));
-        assert!(is_autodev_log(&PathBuf::from("/tmp/autodev-2026-05-14.log")));
+        assert!(is_autodev_log(&PathBuf::from(
+            "/tmp/autodev-2026-05-14.log"
+        )));
         // Negative cases — must never delete these
         assert!(!is_autodev_log(&PathBuf::from("user-notes.md")));
         assert!(!is_autodev_log(&PathBuf::from("autodev.log")));

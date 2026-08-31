@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::RwLock;
-use tracing::{debug, warn, info};
+use tracing::{debug, info, warn};
 
 // ─── Connection state ─────────────────────────────────────────────────────────
 
@@ -26,23 +26,23 @@ use tracing::{debug, warn, info};
 #[serde(rename_all = "snake_case")]
 pub enum McpConnectionState {
     Connected,
-    Degraded,       // responded slowly or with errors
+    Degraded, // responded slowly or with errors
     Disconnected,
     Reconnecting,
-    NotMonitored,   // stdio transport — cannot ping
+    NotMonitored, // stdio transport — cannot ping
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerHealth {
-    pub server_name:          String,
-    pub endpoint:             String,       // URL for HTTP; "stdio" marker for stdio
-    pub transport:            String,       // "http" | "stdio"
-    pub state:                McpConnectionState,
-    pub last_ping_at:         Option<String>,
-    pub last_success_at:      Option<String>,
+    pub server_name: String,
+    pub endpoint: String,  // URL for HTTP; "stdio" marker for stdio
+    pub transport: String, // "http" | "stdio"
+    pub state: McpConnectionState,
+    pub last_ping_at: Option<String>,
+    pub last_success_at: Option<String>,
     pub consecutive_failures: u32,
-    pub avg_latency_ms:       f64,
-    pub error_message:        Option<String>,
+    pub avg_latency_ms: f64,
+    pub error_message: Option<String>,
 }
 
 // ─── Ping internals ──────────────────────────────────────────────────────────
@@ -61,15 +61,15 @@ enum PingError {
 // ─── Health monitor ───────────────────────────────────────────────────────────
 
 pub struct McpHealthMonitor {
-    connections:          Arc<RwLock<HashMap<String, McpServerHealth>>>,
+    connections: Arc<RwLock<HashMap<String, McpServerHealth>>>,
     /// How often to run a ping cycle (default: 30s)
-    pub ping_interval_secs:   u64,
+    pub ping_interval_secs: u64,
     /// How many consecutive failures before transitioning to Disconnected (default: 3)
-    pub failure_threshold:    u32,
+    pub failure_threshold: u32,
     /// Seconds to wait before first reconnect attempt (default: 10s)
     pub reconnect_delay_secs: u64,
     /// HTTP client shared across pings (one connection pool)
-    http_client:          reqwest::Client,
+    http_client: reqwest::Client,
 }
 
 impl McpHealthMonitor {
@@ -90,21 +90,35 @@ impl McpHealthMonitor {
     /// Register an external MCP server for health monitoring.
     /// If endpoint starts with "http" it will be polled; otherwise it's treated as stdio.
     pub async fn register_server(&self, name: &str, endpoint: &str) {
-        let transport = if endpoint.starts_with("http") { "http" } else { "stdio" };
-        let state     = if transport == "http" { McpConnectionState::Disconnected } else { McpConnectionState::NotMonitored };
-        let health = McpServerHealth {
-            server_name:          name.to_string(),
-            endpoint:             endpoint.to_string(),
-            transport:            transport.to_string(),
-            state,
-            last_ping_at:         None,
-            last_success_at:      None,
-            consecutive_failures: 0,
-            avg_latency_ms:       0.0,
-            error_message:        None,
+        let transport = if endpoint.starts_with("http") {
+            "http"
+        } else {
+            "stdio"
         };
-        self.connections.write().await.insert(name.to_string(), health);
-        info!("[mcp-health] registered '{}' ({} {})", name, transport, endpoint);
+        let state = if transport == "http" {
+            McpConnectionState::Disconnected
+        } else {
+            McpConnectionState::NotMonitored
+        };
+        let health = McpServerHealth {
+            server_name: name.to_string(),
+            endpoint: endpoint.to_string(),
+            transport: transport.to_string(),
+            state,
+            last_ping_at: None,
+            last_success_at: None,
+            consecutive_failures: 0,
+            avg_latency_ms: 0.0,
+            error_message: None,
+        };
+        self.connections
+            .write()
+            .await
+            .insert(name.to_string(), health);
+        info!(
+            "[mcp-health] registered '{}' ({} {})",
+            name, transport, endpoint
+        );
     }
 
     /// Remove a server from the registry (e.g. when user removes it from Settings).
@@ -130,7 +144,7 @@ impl McpHealthMonitor {
             {
                 let mut guard = self.connections.write().await;
                 if let Some(h) = guard.get_mut(name) {
-                    h.state               = McpConnectionState::Reconnecting;
+                    h.state = McpConnectionState::Reconnecting;
                     h.consecutive_failures = 0;
                 }
             }
@@ -148,14 +162,13 @@ impl McpHealthMonitor {
     }
 
     async fn monitoring_loop(monitor: Arc<Self>, app: AppHandle) {
-        let mut interval = tokio::time::interval(
-            Duration::from_secs(monitor.ping_interval_secs)
-        );
+        let mut interval = tokio::time::interval(Duration::from_secs(monitor.ping_interval_secs));
         loop {
             interval.tick().await;
 
             // Snapshot names to avoid holding lock during I/O
-            let server_names: Vec<String> = monitor.connections.read().await.keys().cloned().collect();
+            let server_names: Vec<String> =
+                monitor.connections.read().await.keys().cloned().collect();
 
             for name in &server_names {
                 let result = monitor.ping_server(name).await;
@@ -178,7 +191,7 @@ impl McpHealthMonitor {
             let guard = self.connections.read().await;
             match guard.get(name) {
                 Some(h) => (h.endpoint.clone(), h.transport.clone()),
-                None    => return Err(PingError::InvalidResponse("server not found".into())),
+                None => return Err(PingError::InvalidResponse("server not found".into())),
             }
         };
 
@@ -198,11 +211,14 @@ impl McpHealthMonitor {
         match self.http_client.get(&url).send().await {
             Ok(resp) if resp.status().is_success() || resp.status().as_u16() == 404 => {
                 // 404 on /health = server is up but has no health endpoint (fine)
-                Ok(PingResult { latency_ms: start.elapsed().as_millis() as u64 })
+                Ok(PingResult {
+                    latency_ms: start.elapsed().as_millis() as u64,
+                })
             }
-            Ok(resp) => {
-                Err(PingError::InvalidResponse(format!("HTTP {}", resp.status())))
-            }
+            Ok(resp) => Err(PingError::InvalidResponse(format!(
+                "HTTP {}",
+                resp.status()
+            ))),
             Err(e) if e.is_timeout() => Err(PingError::Timeout),
             Err(e) if e.is_connect() => Err(PingError::ConnectionRefused),
             Err(e) => Err(PingError::InvalidResponse(e.to_string())),
@@ -213,16 +229,16 @@ impl McpHealthMonitor {
 
     async fn process_ping_result(
         &self,
-        name:   &str,
+        name: &str,
         result: Result<PingResult, PingError>,
-        app:    &AppHandle,
+        app: &AppHandle,
     ) {
         let now = chrono::Utc::now().to_rfc3339();
 
         let mut guard = self.connections.write().await;
-        let health    = match guard.get_mut(name) {
+        let health = match guard.get_mut(name) {
             Some(h) => h,
-            None    => return,
+            None => return,
         };
 
         // Stdio: just mark last_ping_at and stay NotMonitored
@@ -233,11 +249,11 @@ impl McpHealthMonitor {
 
         match result {
             Ok(ping) => {
-                let prev_state          = health.state.clone();
-                health.last_ping_at     = Some(now.clone());
-                health.last_success_at  = Some(now);
+                let prev_state = health.state.clone();
+                health.last_ping_at = Some(now.clone());
+                health.last_success_at = Some(now);
                 health.consecutive_failures = 0;
-                health.error_message    = None;
+                health.error_message = None;
 
                 // Update rolling average latency (EMA with α=0.3)
                 health.avg_latency_ms = if health.avg_latency_ms == 0.0 {
@@ -253,7 +269,9 @@ impl McpHealthMonitor {
                     McpConnectionState::Connected
                 };
 
-                if new_state == McpConnectionState::Degraded && prev_state != McpConnectionState::Degraded {
+                if new_state == McpConnectionState::Degraded
+                    && prev_state != McpConnectionState::Degraded
+                {
                     // Transition into Degraded BEFORE dropping the guard.
                     // Earlier this assignment happened after an early return,
                     // so the state field stayed on the previous value and
@@ -261,10 +279,13 @@ impl McpHealthMonitor {
                     // event because prev_state never advanced.
                     health.state = McpConnectionState::Degraded;
                     drop(guard);
-                    let _ = app.emit(crate::events::EVT_MCP_CONNECTION_DEGRADED, &serde_json::json!({
-                        "server_name": name,
-                        "latency_ms":  ping.latency_ms,
-                    }));
+                    let _ = app.emit(
+                        crate::events::EVT_MCP_CONNECTION_DEGRADED,
+                        &serde_json::json!({
+                            "server_name": name,
+                            "latency_ms":  ping.latency_ms,
+                        }),
+                    );
                     return;
                 }
 
@@ -273,9 +294,12 @@ impl McpHealthMonitor {
                 {
                     health.state = McpConnectionState::Connected;
                     drop(guard);
-                    let _ = app.emit(crate::events::EVT_MCP_RECONNECTED, &serde_json::json!({
-                        "server_name": name,
-                    }));
+                    let _ = app.emit(
+                        crate::events::EVT_MCP_RECONNECTED,
+                        &serde_json::json!({
+                            "server_name": name,
+                        }),
+                    );
                     return;
                 }
 
@@ -284,31 +308,39 @@ impl McpHealthMonitor {
 
             Err(e) => {
                 let err_str = match &e {
-                    PingError::Timeout            => "timeout".to_string(),
-                    PingError::ConnectionRefused  => "connection refused".to_string(),
+                    PingError::Timeout => "timeout".to_string(),
+                    PingError::ConnectionRefused => "connection refused".to_string(),
                     PingError::InvalidResponse(s) => s.clone(),
                 };
                 debug!("[mcp-health] ping '{}' failed: {}", name, err_str);
 
-                health.last_ping_at     = Some(now);
-                health.error_message    = Some(err_str.clone());
+                health.last_ping_at = Some(now);
+                health.error_message = Some(err_str.clone());
                 health.consecutive_failures += 1;
 
-                let threshold   = self.failure_threshold;
-                let prev_state  = health.state.clone();
-                let name_owned  = name.to_string();
-                let endpoint    = health.endpoint.clone();
-                let delay       = self.reconnect_delay_secs;
+                let threshold = self.failure_threshold;
+                let prev_state = health.state.clone();
+                let name_owned = name.to_string();
+                let endpoint = health.endpoint.clone();
+                let delay = self.reconnect_delay_secs;
 
-                if health.consecutive_failures >= threshold && prev_state == McpConnectionState::Connected {
+                if health.consecutive_failures >= threshold
+                    && prev_state == McpConnectionState::Connected
+                {
                     health.state = McpConnectionState::Disconnected;
                     drop(guard);
-                    warn!("[mcp-health] '{}' disconnected after {} failures", name_owned, threshold);
-                    let _ = app.emit(crate::events::EVT_MCP_CONNECTION_LOST, &serde_json::json!({
-                        "server_name":           name_owned,
-                        "endpoint":              endpoint,
-                        "consecutive_failures":  threshold,
-                    }));
+                    warn!(
+                        "[mcp-health] '{}' disconnected after {} failures",
+                        name_owned, threshold
+                    );
+                    let _ = app.emit(
+                        crate::events::EVT_MCP_CONNECTION_LOST,
+                        &serde_json::json!({
+                            "server_name":           name_owned,
+                            "endpoint":              endpoint,
+                            "consecutive_failures":  threshold,
+                        }),
+                    );
                     return;
                 }
 
@@ -317,14 +349,19 @@ impl McpHealthMonitor {
                     drop(guard);
                     // Spawn reconnect attempt in background — don't block the ping loop
                     let self_connections = self.connections.clone();
-                    let http_client      = self.http_client.clone();
-                    let app_clone        = app.clone();
+                    let http_client = self.http_client.clone();
+                    let app_clone = app.clone();
                     tauri::async_runtime::spawn(async move {
                         tokio::time::sleep(Duration::from_secs(delay)).await;
                         Self::attempt_reconnect_inner(
-                            &self_connections, &http_client,
-                            &name_owned, &endpoint, &app_clone, delay,
-                        ).await;
+                            &self_connections,
+                            &http_client,
+                            &name_owned,
+                            &endpoint,
+                            &app_clone,
+                            delay,
+                        )
+                        .await;
                     });
                     return;
                 }
@@ -338,18 +375,23 @@ impl McpHealthMonitor {
 
     async fn attempt_reconnect(&self, name: &str, endpoint: &str, app: &AppHandle) {
         Self::attempt_reconnect_inner(
-            &self.connections, &self.http_client,
-            name, endpoint, app, self.reconnect_delay_secs,
-        ).await;
+            &self.connections,
+            &self.http_client,
+            name,
+            endpoint,
+            app,
+            self.reconnect_delay_secs,
+        )
+        .await;
     }
 
     async fn attempt_reconnect_inner(
-        connections:         &Arc<RwLock<HashMap<String, McpServerHealth>>>,
-        http_client:         &reqwest::Client,
-        name:                &str,
-        endpoint:            &str,
-        app:                 &AppHandle,
-        _reconnect_delay:    u64,
+        connections: &Arc<RwLock<HashMap<String, McpServerHealth>>>,
+        http_client: &reqwest::Client,
+        name: &str,
+        endpoint: &str,
+        app: &AppHandle,
+        _reconnect_delay: u64,
     ) {
         // For stdio servers, we can't reconnect automatically
         let is_stdio = {
@@ -357,9 +399,12 @@ impl McpHealthMonitor {
             guard.get(name).map_or(false, |h| h.transport == "stdio")
         };
         if is_stdio {
-            let _ = app.emit(crate::events::EVT_MCP_REQUIRES_RESTART, &serde_json::json!({
-                "server_name": name,
-            }));
+            let _ = app.emit(
+                crate::events::EVT_MCP_REQUIRES_RESTART,
+                &serde_json::json!({
+                    "server_name": name,
+                }),
+            );
             return;
         }
 
@@ -373,28 +418,34 @@ impl McpHealthMonitor {
         let start = Instant::now();
         let ok = match http_client.get(&url).send().await {
             Ok(resp) => resp.status().is_success() || resp.status().as_u16() == 404,
-            Err(_)   => false,
+            Err(_) => false,
         };
 
         if ok {
             let latency = start.elapsed().as_millis() as u64;
             let mut guard = connections.write().await;
             if let Some(h) = guard.get_mut(name) {
-                h.state               = McpConnectionState::Connected;
+                h.state = McpConnectionState::Connected;
                 h.consecutive_failures = 0;
-                h.error_message       = None;
-                h.avg_latency_ms      = latency as f64;
-                h.last_success_at     = Some(chrono::Utc::now().to_rfc3339());
+                h.error_message = None;
+                h.avg_latency_ms = latency as f64;
+                h.last_success_at = Some(chrono::Utc::now().to_rfc3339());
             }
             drop(guard);
-            let _ = app.emit(crate::events::EVT_MCP_RECONNECTED, &serde_json::json!({
-                "server_name": name,
-            }));
+            let _ = app.emit(
+                crate::events::EVT_MCP_RECONNECTED,
+                &serde_json::json!({
+                    "server_name": name,
+                }),
+            );
         } else {
-            let _ = app.emit(crate::events::EVT_MCP_RECONNECT_FAILED, &serde_json::json!({
-                "server_name": name,
-                "attempt":     1,
-            }));
+            let _ = app.emit(
+                crate::events::EVT_MCP_RECONNECT_FAILED,
+                &serde_json::json!({
+                    "server_name": name,
+                    "attempt":     1,
+                }),
+            );
         }
     }
 }

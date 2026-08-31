@@ -25,41 +25,45 @@ pub fn list(repo_path: &str) -> Result<Vec<WorktreeInfo>> {
             Err(_) => continue,
         };
         let path = wt.path().to_string_lossy().to_string();
-        let is_locked = matches!(
-            wt.is_locked(),
-            Ok(git2::WorktreeLockStatus::Locked(_))
-        );
+        let is_locked = matches!(wt.is_locked(), Ok(git2::WorktreeLockStatus::Locked(_)));
 
         // Resolve current branch of the worktree by opening it and reading HEAD.
         let branch: Option<String> = match git2::Repository::open(Path::new(&path)) {
             Ok(r) => {
-                let name: Option<String> = r.head().ok().and_then(|h| {
-                    h.shorthand().map(|s| s.to_owned())
-                });
+                let name: Option<String> = r
+                    .head()
+                    .ok()
+                    .and_then(|h| h.shorthand().map(|s| s.to_owned()));
                 name
             }
             Err(_) => None,
         };
 
         out.push(WorktreeInfo {
-            name:    n.to_string(),
+            name: n.to_string(),
             path,
             branch,
             is_main: false,
-            locked:  is_locked,
+            locked: is_locked,
         });
     }
 
     // Also report the main worktree (repo workdir) for UI completeness.
     if let Some(wd) = repo.workdir() {
-        let branch = repo.head().ok().and_then(|h| h.shorthand().map(|s| s.to_string()));
-        out.insert(0, WorktreeInfo {
-            name:    "(main)".into(),
-            path:    wd.to_string_lossy().to_string(),
-            branch,
-            is_main: true,
-            locked:  false,
-        });
+        let branch = repo
+            .head()
+            .ok()
+            .and_then(|h| h.shorthand().map(|s| s.to_string()));
+        out.insert(
+            0,
+            WorktreeInfo {
+                name: "(main)".into(),
+                path: wd.to_string_lossy().to_string(),
+                branch,
+                is_main: true,
+                locked: false,
+            },
+        );
     }
     Ok(out)
 }
@@ -96,11 +100,11 @@ pub fn add(repo_path: &str, path: &str, branch: Option<&str>) -> Result<Worktree
         .map_err(|e| AutoDevError::Git(format!("worktree add: {e}")))?;
 
     Ok(WorktreeInfo {
-        name:    name.to_string(),
-        path:    wt.path().to_string_lossy().to_string(),
-        branch:  branch.map(|s| s.to_string()),
+        name: name.to_string(),
+        path: wt.path().to_string_lossy().to_string(),
+        branch: branch.map(|s| s.to_string()),
         is_main: false,
-        locked:  false,
+        locked: false,
     })
 }
 
@@ -129,5 +133,7 @@ pub fn remove(repo_path: &str, wt_path: &str, force: bool) -> Result<()> {
             }
         }
     }
-    Err(AutoDevError::Git(format!("no worktree registered at '{wt_path}'")))
+    Err(AutoDevError::Git(format!(
+        "no worktree registered at '{wt_path}'"
+    )))
 }

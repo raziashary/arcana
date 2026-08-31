@@ -1,13 +1,13 @@
+use crate::noninteractive;
+use crate::output::OutputContext;
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use colored::Colorize;
+use futures::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use futures::StreamExt;
-use crate::output::OutputContext;
-use crate::noninteractive;
 
 #[derive(Subcommand)]
 pub enum AgentCmd {
@@ -158,7 +158,8 @@ async fn agent_run(args: RunArgs, ctx: OutputContext) -> Result<()> {
         anyhow::anyhow!(
             "Cannot reach core-orchestrator at {}.\n  \
              Start it with: cargo run --bin core-orchestrator\n  Error: {}",
-            ctx.orchestrator_url, e
+            ctx.orchestrator_url,
+            e
         )
     })?;
 
@@ -168,7 +169,8 @@ async fn agent_run(args: RunArgs, ctx: OutputContext) -> Result<()> {
         return Err(anyhow::anyhow!("Orchestrator returned {status}: {body}"));
     }
 
-    let content_type = resp.headers()
+    let content_type = resp
+        .headers()
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
@@ -188,9 +190,11 @@ async fn agent_run(args: RunArgs, ctx: OutputContext) -> Result<()> {
 async fn stream_sse_response(resp: reqwest::Response, ctx: &OutputContext) -> Result<()> {
     let pb = if !ctx.quiet {
         let pb = ProgressBar::new_spinner();
-        pb.set_style(ProgressStyle::default_spinner()
-            .template("{spinner:.cyan} {msg}")
-            .unwrap());
+        pb.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.cyan} {msg}")
+                .unwrap(),
+        );
         pb.set_message("Agent working…");
         pb.enable_steady_tick(Duration::from_millis(100));
         Some(pb)
@@ -214,10 +218,16 @@ async fn stream_sse_response(resp: reqwest::Response, ctx: &OutputContext) -> Re
             for line in block.lines() {
                 if let Some(data) = line.strip_prefix("data: ") {
                     if data == "[DONE]" {
-                        if let Some(pb) = &pb { pb.finish_and_clear(); }
+                        if let Some(pb) = &pb {
+                            pb.finish_and_clear();
+                        }
                         if !ctx.quiet {
                             if let Some(sid) = &session_id {
-                                println!("{} session {}", "✓ Completed".green().bold(), sid.dimmed());
+                                println!(
+                                    "{} session {}",
+                                    "✓ Completed".green().bold(),
+                                    sid.dimmed()
+                                );
                             } else {
                                 println!("{}", "✓ Completed".green().bold());
                             }
@@ -233,18 +243,25 @@ async fn stream_sse_response(resp: reqwest::Response, ctx: &OutputContext) -> Re
                         match event.event_type.as_str() {
                             "content" | "text" => {
                                 if let Some(content) = &event.content {
-                                    if let Some(pb) = &pb { pb.suspend(|| print!("{content}")); }
-                                    else { print!("{content}"); }
+                                    if let Some(pb) = &pb {
+                                        pb.suspend(|| print!("{content}"));
+                                    } else {
+                                        print!("{content}");
+                                    }
                                 }
                             }
                             "error" => {
-                                if let Some(pb) = &pb { pb.finish_and_clear(); }
+                                if let Some(pb) = &pb {
+                                    pb.finish_and_clear();
+                                }
                                 let err = event.error.as_deref().unwrap_or("Unknown error");
                                 return Err(anyhow::anyhow!("Agent error: {err}"));
                             }
                             "status" => {
                                 if let Some(content) = &event.content {
-                                    if let Some(pb) = &pb { pb.set_message(content.clone()); }
+                                    if let Some(pb) = &pb {
+                                        pb.set_message(content.clone());
+                                    }
                                 }
                             }
                             _ => {}
@@ -255,7 +272,9 @@ async fn stream_sse_response(resp: reqwest::Response, ctx: &OutputContext) -> Re
         }
     }
 
-    if let Some(pb) = pb { pb.finish_and_clear(); }
+    if let Some(pb) = pb {
+        pb.finish_and_clear();
+    }
     Ok(())
 }
 
@@ -265,9 +284,10 @@ async fn agent_list(args: ListArgs, ctx: OutputContext) -> Result<()> {
 
     let req = client.get(&url);
 
-    let resp = req.send().await.map_err(|e| {
-        anyhow::anyhow!("Cannot reach orchestrator: {e}")
-    })?;
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("Cannot reach orchestrator: {e}"))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -281,16 +301,23 @@ async fn agent_list(args: ListArgs, ctx: OutputContext) -> Result<()> {
     }
 
     let headers = ["Session ID", "Status", "Provider", "Model", "Created"];
-    let rows: Vec<Vec<String>> = list.sessions.iter().map(|s| vec![
-        s.id[..8].to_string() + "…",
-        crate::output::status_colored(&s.status),
-        s.provider.clone().unwrap_or_else(|| "-".into()),
-        s.model.clone().unwrap_or_else(|| "-".into()),
-        s.created_at.as_deref()
-            .map(|t| t.get(..19).unwrap_or(t))
-            .unwrap_or("-")
-            .to_string(),
-    ]).collect();
+    let rows: Vec<Vec<String>> = list
+        .sessions
+        .iter()
+        .map(|s| {
+            vec![
+                s.id[..8].to_string() + "…",
+                crate::output::status_colored(&s.status),
+                s.provider.clone().unwrap_or_else(|| "-".into()),
+                s.model.clone().unwrap_or_else(|| "-".into()),
+                s.created_at
+                    .as_deref()
+                    .map(|t| t.get(..19).unwrap_or(t))
+                    .unwrap_or("-")
+                    .to_string(),
+            ]
+        })
+        .collect();
 
     ctx.print_table(&headers, rows);
     Ok(())
@@ -302,7 +329,10 @@ async fn agent_status(args: StatusArgs, ctx: OutputContext) -> Result<()> {
 
     let req = client.get(&url);
 
-    let resp = req.send().await.map_err(|e| anyhow::anyhow!("Cannot reach orchestrator: {e}"))?;
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("Cannot reach orchestrator: {e}"))?;
 
     if resp.status().as_u16() == 404 {
         ctx.error(&format!("Session '{}' not found", args.session_id));
@@ -320,11 +350,17 @@ async fn agent_status(args: StatusArgs, ctx: OutputContext) -> Result<()> {
 
 async fn agent_stop(args: StopArgs, ctx: OutputContext) -> Result<()> {
     let client = build_client(30)?;
-    let url = format!("{}/api/agents/{}/stop", ctx.orchestrator_url, args.session_id);
+    let url = format!(
+        "{}/api/agents/{}/stop",
+        ctx.orchestrator_url, args.session_id
+    );
 
     let req = client.post(&url);
 
-    let resp = req.send().await.map_err(|e| anyhow::anyhow!("Cannot reach orchestrator: {e}"))?;
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("Cannot reach orchestrator: {e}"))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -345,7 +381,10 @@ async fn agent_logs(args: LogsArgs, ctx: OutputContext) -> Result<()> {
 
     let req = client.get(&url);
 
-    let resp = req.send().await.map_err(|e| anyhow::anyhow!("Cannot reach orchestrator: {e}"))?;
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("Cannot reach orchestrator: {e}"))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -360,10 +399,10 @@ async fn agent_logs(args: LogsArgs, ctx: OutputContext) -> Result<()> {
 fn print_session(ctx: &OutputContext, s: &AgentSession) {
     ctx.print_kv(&[
         ("session_id", &s.id),
-        ("status",     &s.status),
-        ("task",       s.task.as_deref().unwrap_or("-")),
-        ("provider",   s.provider.as_deref().unwrap_or("-")),
-        ("model",      s.model.as_deref().unwrap_or("-")),
+        ("status", &s.status),
+        ("task", s.task.as_deref().unwrap_or("-")),
+        ("provider", s.provider.as_deref().unwrap_or("-")),
+        ("model", s.model.as_deref().unwrap_or("-")),
         ("created_at", s.created_at.as_deref().unwrap_or("-")),
         ("updated_at", s.updated_at.as_deref().unwrap_or("-")),
     ]);

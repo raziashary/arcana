@@ -27,7 +27,11 @@ static SEQ: AtomicU64 = AtomicU64::new(1);
 /// agent_id slugification rules. Empty parent_slug becomes "anon".
 pub fn generate(parent_slug: &str) -> String {
     let parent = sanitise(parent_slug);
-    let parent = if parent.is_empty() { "anon".to_string() } else { parent };
+    let parent = if parent.is_empty() {
+        "anon".to_string()
+    } else {
+        parent
+    };
 
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -61,7 +65,9 @@ fn sanitise(s: &str) -> String {
             last_hyphen = true;
         }
     }
-    while out.ends_with('-') { out.pop(); }
+    while out.ends_with('-') {
+        out.pop();
+    }
     out
 }
 

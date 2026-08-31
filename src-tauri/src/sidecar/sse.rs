@@ -13,7 +13,6 @@ use tracing::debug;
 
 use crate::subagent::SubagentEvent;
 
-
 /// Locate the byte offset *just before* the blank-line separator (`\n\n` or
 /// `\r\n\r\n`). Returns None if the buffer does not yet contain a full frame.
 pub fn find_frame_end(buf: &[u8]) -> Option<usize> {
@@ -25,7 +24,7 @@ pub fn find_frame_end(buf: &[u8]) -> Option<usize> {
     if let Some(i) = find_subsequence(buf, b"\n\n") {
         earliest = Some(match earliest {
             Some(e) => e.min(i),
-            None    => i,
+            None => i,
         });
     }
     earliest
@@ -71,8 +70,16 @@ pub fn parse_event_frame(frame: &str, subagent_id: &str) -> Option<SubagentEvent
     };
 
     let kind = event_name
-        .or_else(|| data.get("type").and_then(|v| v.as_str()).map(|s| s.to_string()))
-        .or_else(|| data.get("event").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .or_else(|| {
+            data.get("type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .or_else(|| {
+            data.get("event")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
         .unwrap_or_else(|| "token".to_string());
 
     let id = subagent_id.to_string();
@@ -86,41 +93,67 @@ pub fn parse_event_frame(frame: &str, subagent_id: &str) -> Option<SubagentEvent
 
     let evt = match kind.as_str() {
         "token" | "text" | "delta" => SubagentEvent::Token {
-            subagent_id: id, text: text_field(),
+            subagent_id: id,
+            text: text_field(),
         },
         "thinking" | "thought" | "reasoning" => SubagentEvent::Thinking {
-            subagent_id: id, text: text_field(),
+            subagent_id: id,
+            text: text_field(),
         },
         "tool_start" | "tool_call" => SubagentEvent::ToolStart {
             subagent_id: id,
-            tool: data.get("tool").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            input: data.get("input").cloned().unwrap_or(serde_json::Value::Null),
+            tool: data
+                .get("tool")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            input: data
+                .get("input")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
         },
         "tool_end" | "tool_result" => SubagentEvent::ToolEnd {
             subagent_id: id,
-            tool: data.get("tool").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            output: data.get("output").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            is_error: data.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false),
+            tool: data
+                .get("tool")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            output: data
+                .get("output")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            is_error: data
+                .get("is_error")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
         },
         "final" | "done" | "complete" | "completed" => SubagentEvent::Final {
-            subagent_id: id, text: text_field(),
+            subagent_id: id,
+            text: text_field(),
         },
         "cost" | "usage" => SubagentEvent::Cost {
             subagent_id: id,
-            cost_usd:    data.get("cost_usd").and_then(|v| v.as_f64()).unwrap_or(0.0),
-            tokens_in:   data.get("tokens_in").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            tokens_out:  data.get("tokens_out").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            cost_usd: data.get("cost_usd").and_then(|v| v.as_f64()).unwrap_or(0.0),
+            tokens_in: data.get("tokens_in").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            tokens_out: data.get("tokens_out").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
         },
         "error" => SubagentEvent::Error {
             subagent_id: id,
-            message: data.get("message").and_then(|v| v.as_str())
+            message: data
+                .get("message")
+                .and_then(|v| v.as_str())
                 .or_else(|| data.get("error").and_then(|v| v.as_str()))
                 .unwrap_or("unknown error")
                 .to_string(),
         },
         _ => {
             debug!("[OrchestratorSSE] unknown SSE event kind '{kind}' (forwarding as token)");
-            SubagentEvent::Token { subagent_id: id, text: text_field() }
+            SubagentEvent::Token {
+                subagent_id: id,
+                text: text_field(),
+            }
         }
     };
 

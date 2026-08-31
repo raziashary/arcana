@@ -14,7 +14,7 @@
 // Call once at app startup before any other code.
 
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{fmt, EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 pub fn init() -> Option<WorkerGuard> {
     let env_filter = EnvFilter::try_from_default_env()
@@ -36,7 +36,7 @@ pub fn init() -> Option<WorkerGuard> {
         .and_then(|home| {
             let dir = std::path::PathBuf::from(home).join(".autodev").join("logs");
             match std::fs::create_dir_all(&dir) {
-                Ok(_)  => Some(dir),
+                Ok(_) => Some(dir),
                 Err(e) => {
                     eprintln!("[AutoDev] Failed to create log dir {}: {e}", dir.display());
                     None

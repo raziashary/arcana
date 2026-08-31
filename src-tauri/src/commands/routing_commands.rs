@@ -12,9 +12,7 @@ pub fn suggest_worker_for_task(task_id: i64) -> Result<AffinityScore> {
     let db = TasksDb::open()?;
     let task = db
         .get_by_id(task_id)?
-        .ok_or_else(|| crate::errors::AutoDevError::Agent(
-            format!("Task #{task_id} not found"),
-        ))?;
+        .ok_or_else(|| crate::errors::AutoDevError::Agent(format!("Task #{task_id} not found")))?;
     TaskRouter::suggest_worker(&task)
 }
 

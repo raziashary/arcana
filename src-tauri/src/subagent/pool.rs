@@ -48,9 +48,9 @@ pub struct PoolPermit {
     /// Doc 04 Phase 3 — held only when `parent == QC_DISPATCHER_SLUG`.
     /// Released-on-drop alongside the global permit so the QC sub-cap
     /// behaves identically to the rest of the pool.
-    _qc:     Option<OwnedSemaphorePermit>,
-    pool:    Arc<SubagentPool>,
-    parent:  String,
+    _qc: Option<OwnedSemaphorePermit>,
+    pool: Arc<SubagentPool>,
+    parent: String,
 }
 
 impl Drop for PoolPermit {
@@ -63,7 +63,9 @@ impl Drop for PoolPermit {
             let mut counts = pool.per_parent.lock().await;
             if let Some(c) = counts.get_mut(&parent) {
                 *c = c.saturating_sub(1);
-                if *c == 0 { counts.remove(&parent); }
+                if *c == 0 {
+                    counts.remove(&parent);
+                }
             }
         });
     }
@@ -74,7 +76,7 @@ pub struct SubagentPool {
     /// Doc 04 Phase 3 — dedicated semaphore for QC reviewer subagents.
     /// Acquired BEFORE the global semaphore so the QC cap stays tight under
     /// pressure (rejecting a QC spawn rather than back-pressuring everything).
-    qc:     Arc<Semaphore>,
+    qc: Arc<Semaphore>,
     per_parent: Mutex<HashMap<String, usize>>,
 }
 
@@ -82,7 +84,7 @@ impl SubagentPool {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             global: Arc::new(Semaphore::new(MAX_GLOBAL_CONCURRENT)),
-            qc:     Arc::new(Semaphore::new(MAX_CONCURRENT_QC)),
+            qc: Arc::new(Semaphore::new(MAX_CONCURRENT_QC)),
             per_parent: Mutex::new(HashMap::new()),
         })
     }
@@ -158,9 +160,9 @@ impl SubagentPool {
 
         Ok(PoolPermit {
             _global: global_permit,
-            _qc:     qc_permit,
-            pool:    self.clone(),
-            parent:  parent_slug.to_string(),
+            _qc: qc_permit,
+            pool: self.clone(),
+            parent: parent_slug.to_string(),
         })
     }
 

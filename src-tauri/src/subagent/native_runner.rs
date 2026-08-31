@@ -47,7 +47,7 @@ use super::types::{SubagentConfig, SubagentEvent, SubagentResult, SubagentStatus
 /// because the manager is constructed before Tauri has one.
 #[derive(Clone)]
 pub struct RunnerDeps {
-    pub state:   Arc<Mutex<AppState>>,
+    pub state: Arc<Mutex<AppState>>,
     pub pending: PendingPermissions,
 }
 
@@ -67,26 +67,35 @@ pub async fn run(
 ) -> Result<SubagentResult> {
     let started_at = Instant::now();
 
-    emit(&events_tx, SubagentEvent::Status {
-        subagent_id: subagent_id.clone(),
-        status: SubagentStatus::Spawning,
-        message: Some("Starting in-process subagent".into()),
-    });
+    emit(
+        &events_tx,
+        SubagentEvent::Status {
+            subagent_id: subagent_id.clone(),
+            status: SubagentStatus::Spawning,
+            message: Some("Starting in-process subagent".into()),
+        },
+    );
 
     let outcome = run_inner(&deps, &subagent_id, &config, &prompt, &events_tx).await;
     let duration_secs = started_at.elapsed().as_secs_f64();
 
     match outcome {
         Ok(summary) => {
-            emit(&events_tx, SubagentEvent::Final {
-                subagent_id: subagent_id.clone(),
-                text: summary.clone(),
-            });
-            emit(&events_tx, SubagentEvent::Status {
-                subagent_id: subagent_id.clone(),
-                status: SubagentStatus::Completed,
-                message: None,
-            });
+            emit(
+                &events_tx,
+                SubagentEvent::Final {
+                    subagent_id: subagent_id.clone(),
+                    text: summary.clone(),
+                },
+            );
+            emit(
+                &events_tx,
+                SubagentEvent::Status {
+                    subagent_id: subagent_id.clone(),
+                    status: SubagentStatus::Completed,
+                    message: None,
+                },
+            );
             info!("[NativeSubagent] {subagent_id} completed in {duration_secs:.1}s");
 
             Ok(SubagentResult {
@@ -111,11 +120,14 @@ pub async fn run(
         Err(e) => {
             let message = e.to_string();
             warn!("[NativeSubagent] {subagent_id} failed: {message}");
-            emit(&events_tx, SubagentEvent::Status {
-                subagent_id: subagent_id.clone(),
-                status: SubagentStatus::Failed,
-                message: Some(message.clone()),
-            });
+            emit(
+                &events_tx,
+                SubagentEvent::Status {
+                    subagent_id: subagent_id.clone(),
+                    status: SubagentStatus::Failed,
+                    message: Some(message.clone()),
+                },
+            );
 
             Ok(SubagentResult {
                 subagent_id,
@@ -142,9 +154,11 @@ async fn run_inner(
     events_tx: &mpsc::UnboundedSender<SubagentEvent>,
 ) -> Result<String> {
     let app = crate::events::app_handle()
-        .ok_or_else(|| AutoDevError::Agent(
-            "Cannot run a subagent before the application window is ready".into()
-        ))?
+        .ok_or_else(|| {
+            AutoDevError::Agent(
+                "Cannot run a subagent before the application window is ready".into(),
+            )
+        })?
         .clone();
 
     let (provider_id, fallback_model) = {
@@ -163,16 +177,19 @@ async fn run_inner(
 
     let provider = build_provider(&provider_id)?;
 
-    emit(events_tx, SubagentEvent::Status {
-        subagent_id: subagent_id.to_string(),
-        status: SubagentStatus::Running,
-        message: Some(format!("Running on {provider_id}/{model}")),
-    });
+    emit(
+        events_tx,
+        SubagentEvent::Status {
+            subagent_id: subagent_id.to_string(),
+            status: SubagentStatus::Running,
+            message: Some(format!("Running on {provider_id}/{model}")),
+        },
+    );
 
     // The child's identity is derived from the parent's, so its depth is one
     // greater by construction rather than by the model's say-so.
     let identity = AgentIdentity {
-        role:  config.parent_slug.clone(),
+        role: config.parent_slug.clone(),
         depth: config.depth,
     }
     .child(subagent_id.to_string());
@@ -194,8 +211,8 @@ async fn run_inner(
     );
 
     let working_dir = config.working_dir.clone();
-    let system_prompt = (!config.system_prompt.trim().is_empty())
-        .then(|| config.system_prompt.clone());
+    let system_prompt =
+        (!config.system_prompt.trim().is_empty()).then(|| config.system_prompt.clone());
 
     let run_future = engine.run(
         subagent_id,
@@ -215,7 +232,8 @@ async fn run_inner(
         Ok(result) => result?,
         Err(_) => {
             return Err(AutoDevError::Agent(format!(
-                "Subagent exceeded its {}s timeout", config.timeout_secs
+                "Subagent exceeded its {}s timeout",
+                config.timeout_secs
             )))
         }
     };
@@ -239,9 +257,9 @@ fn build_provider(provider_id: &str) -> Result<Arc<dyn Provider>> {
 
     Ok(match provider_id {
         "anthropic" => Arc::new(AnthropicProvider::new(api_key)) as Arc<dyn Provider>,
-        "openai"    => Arc::new(OpenAIProvider::new(api_key)),
-        "google"    => Arc::new(GoogleProvider::new(api_key)),
-        "ollama"    => Arc::new(OllamaProvider::default_from_env()),
+        "openai" => Arc::new(OpenAIProvider::new(api_key)),
+        "google" => Arc::new(GoogleProvider::new(api_key)),
+        "ollama" => Arc::new(OllamaProvider::default_from_env()),
         other => {
             return Err(AutoDevError::Agent(format!(
                 "Unsupported provider for subagent: {other}"

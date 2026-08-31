@@ -1,15 +1,18 @@
 use anyhow::Result;
-use rustyline::{DefaultEditor, error::ReadlineError};
 use colored::Colorize;
+use rustyline::{error::ReadlineError, DefaultEditor};
 
-use crate::output::OutputContext;
 use crate::commands;
+use crate::output::OutputContext;
 
 const HISTORY_FILE: &str = ".airs_history";
 
 pub async fn run(ctx: OutputContext) -> Result<()> {
     println!("{}", "airsctl REPL — type 'help' or 'exit'".cyan().bold());
-    println!("{}", "Use arrow keys for history, Tab for fuzzy completion.".dimmed());
+    println!(
+        "{}",
+        "Use arrow keys for history, Tab for fuzzy completion.".dimmed()
+    );
 
     let mut rl = DefaultEditor::new()?;
 
@@ -23,7 +26,9 @@ pub async fn run(ctx: OutputContext) -> Result<()> {
         match line {
             Ok(input) => {
                 let input = input.trim().to_string();
-                if input.is_empty() { continue; }
+                if input.is_empty() {
+                    continue;
+                }
 
                 let _ = rl.add_history_entry(&input);
 
@@ -71,27 +76,27 @@ fn history_path() -> Option<std::path::PathBuf> {
 fn print_help() {
     println!("{}", "Available commands:".cyan().bold());
     let cmds = [
-        ("agent run <task>",         "Run an agent with the given task"),
-        ("agent list",               "List recent agent runs"),
-        ("task create <title>",      "Create a new task"),
-        ("task list",                "List tasks"),
-        ("task get <id>",            "Get task details"),
-        ("worker list",              "List registered workers"),
-        ("worker status <id>",       "Show worker status"),
-        ("config list",              "Show all config keys"),
-        ("config get <key>",         "Get a config value"),
+        ("agent run <task>", "Run an agent with the given task"),
+        ("agent list", "List recent agent runs"),
+        ("task create <title>", "Create a new task"),
+        ("task list", "List tasks"),
+        ("task get <id>", "Get task details"),
+        ("worker list", "List registered workers"),
+        ("worker status <id>", "Show worker status"),
+        ("config list", "Show all config keys"),
+        ("config get <key>", "Get a config value"),
         ("config set <key> <value>", "Set a config value"),
-        ("plan list",                "List all plans"),
-        ("plan create <title>",      "Create a new plan"),
-        ("system status",            "Show system and sidecar status"),
-        ("analytics cost",           "Show cost summary"),
-        ("analytics tokens",         "Show token usage"),
-        ("plugin list",              "List marketplace plugins"),
-        ("plugin install <name>",    "Install a plugin"),
-        ("plugin verify <name>",     "Verify plugin dependencies"),
-        ("plugin info <name>",       "Show plugin details"),
-        ("help",                     "Show this help"),
-        ("exit / quit",              "Exit the REPL"),
+        ("plan list", "List all plans"),
+        ("plan create <title>", "Create a new plan"),
+        ("system status", "Show system and sidecar status"),
+        ("analytics cost", "Show cost summary"),
+        ("analytics tokens", "Show token usage"),
+        ("plugin list", "List marketplace plugins"),
+        ("plugin install <name>", "Install a plugin"),
+        ("plugin verify <name>", "Verify plugin dependencies"),
+        ("plugin info <name>", "Show plugin details"),
+        ("help", "Show this help"),
+        ("exit / quit", "Exit the REPL"),
     ];
     for (cmd, desc) in &cmds {
         println!("  {:<32} {}", cmd.yellow(), desc);
@@ -118,14 +123,16 @@ async fn dispatch(input: &str, ctx: OutputContext) -> Result<()> {
         "analytics" => dispatch_analytics(rest, ctx).await,
         "plugin" => dispatch_plugin(rest, ctx).await,
         other => {
-            ctx.error(&format!("Unknown command: '{other}'. Type 'help' for available commands."));
+            ctx.error(&format!(
+                "Unknown command: '{other}'. Type 'help' for available commands."
+            ));
             Ok(())
         }
     }
 }
 
 async fn dispatch_agent(args: &[&str], ctx: OutputContext) -> Result<()> {
-    use crate::commands::agent::{AgentCmd, RunArgs, ListArgs};
+    use crate::commands::agent::{AgentCmd, ListArgs, RunArgs};
     let cmd = match args.first().copied() {
         Some("run") => {
             let task = args.get(1..).unwrap_or_default().join(" ");
@@ -151,7 +158,7 @@ async fn dispatch_agent(args: &[&str], ctx: OutputContext) -> Result<()> {
 }
 
 async fn dispatch_task(args: &[&str], ctx: OutputContext) -> Result<()> {
-    use crate::commands::task::{TaskCmd, CreateArgs, ListArgs, GetArgs};
+    use crate::commands::task::{CreateArgs, GetArgs, ListArgs, TaskCmd};
     let cmd = match args.first().copied() {
         Some("create") => {
             let title = args.get(1..).unwrap_or_default().join(" ");
@@ -167,7 +174,11 @@ async fn dispatch_task(args: &[&str], ctx: OutputContext) -> Result<()> {
                 acceptance_criteria: None,
             })
         }
-        Some("list") => TaskCmd::List(ListArgs { status: None, worker: None, limit: 20 }),
+        Some("list") => TaskCmd::List(ListArgs {
+            status: None,
+            worker: None,
+            limit: 20,
+        }),
         Some("get") => {
             let id: i64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
             TaskCmd::Get(GetArgs { id })
@@ -185,9 +196,12 @@ async fn dispatch_task(args: &[&str], ctx: OutputContext) -> Result<()> {
 }
 
 async fn dispatch_worker(args: &[&str], ctx: OutputContext) -> Result<()> {
-    use crate::commands::worker::{WorkerCmd, ListArgs, StatusArgs};
+    use crate::commands::worker::{ListArgs, StatusArgs, WorkerCmd};
     let cmd = match args.first().copied() {
-        Some("list") => WorkerCmd::List(ListArgs { worker_type: None, status: None }),
+        Some("list") => WorkerCmd::List(ListArgs {
+            worker_type: None,
+            status: None,
+        }),
         Some("status") => {
             let slug = args.get(1).map(|s| s.to_string());
             WorkerCmd::Status(StatusArgs { slug })
@@ -230,7 +244,7 @@ async fn dispatch_config(args: &[&str], ctx: OutputContext) -> Result<()> {
 }
 
 async fn dispatch_plan(args: &[&str], ctx: OutputContext) -> Result<()> {
-    use crate::commands::plan::{PlanCmd, CreateArgs, ListArgs, GetArgs};
+    use crate::commands::plan::{CreateArgs, GetArgs, ListArgs, PlanCmd};
     let cmd = match args.first().copied() {
         Some("list") => PlanCmd::List(ListArgs { status: None }),
         Some("create") => {
@@ -239,7 +253,11 @@ async fn dispatch_plan(args: &[&str], ctx: OutputContext) -> Result<()> {
                 ctx.error("Usage: plan create <title>");
                 return Ok(());
             }
-            PlanCmd::Create(CreateArgs { title, description: None, scope: None })
+            PlanCmd::Create(CreateArgs {
+                title,
+                description: None,
+                scope: None,
+            })
         }
         Some("get") => {
             let id: i64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
@@ -258,11 +276,14 @@ async fn dispatch_plan(args: &[&str], ctx: OutputContext) -> Result<()> {
 }
 
 async fn dispatch_system(args: &[&str], ctx: OutputContext) -> Result<()> {
-    use crate::commands::system::{SystemCmd, LogsArgs};
+    use crate::commands::system::{LogsArgs, SystemCmd};
     let cmd = match args.first().copied() {
         Some("status") => SystemCmd::Status,
         Some("sidecars") => SystemCmd::Sidecars,
-        Some("logs") => SystemCmd::Logs(LogsArgs { lines: 50, service: None }),
+        Some("logs") => SystemCmd::Logs(LogsArgs {
+            lines: 50,
+            service: None,
+        }),
         Some(other) => {
             ctx.error(&format!("Unknown system subcommand: '{other}'"));
             return Ok(());
@@ -278,9 +299,16 @@ async fn dispatch_system(args: &[&str], ctx: OutputContext) -> Result<()> {
 async fn dispatch_analytics(args: &[&str], ctx: OutputContext) -> Result<()> {
     use crate::commands::analytics::{AnalyticsCmd, CostArgs, TokensArgs, WorkersArgs};
     let cmd = match args.first().copied() {
-        Some("cost") => AnalyticsCmd::Cost(CostArgs { window: "month".into() }),
-        Some("tokens") => AnalyticsCmd::Tokens(TokensArgs { session_id: None, limit: 50 }),
-        Some("workers") => AnalyticsCmd::Workers(WorkersArgs { window: "month".into() }),
+        Some("cost") => AnalyticsCmd::Cost(CostArgs {
+            window: "month".into(),
+        }),
+        Some("tokens") => AnalyticsCmd::Tokens(TokensArgs {
+            session_id: None,
+            limit: 50,
+        }),
+        Some("workers") => AnalyticsCmd::Workers(WorkersArgs {
+            window: "month".into(),
+        }),
         Some("export") => AnalyticsCmd::Export { output: None },
         Some(other) => {
             ctx.error(&format!("Unknown analytics subcommand: '{other}'"));
@@ -295,9 +323,15 @@ async fn dispatch_analytics(args: &[&str], ctx: OutputContext) -> Result<()> {
 }
 
 async fn dispatch_plugin(args: &[&str], ctx: OutputContext) -> Result<()> {
-    use crate::commands::plugin::{PluginCmd, PluginListArgs, PluginNameArgs, PluginInstallArgs, PluginUninstallArgs, PluginUpdateArgs, PluginRunArgs};
+    use crate::commands::plugin::{
+        PluginCmd, PluginInstallArgs, PluginListArgs, PluginNameArgs, PluginRunArgs,
+        PluginUninstallArgs, PluginUpdateArgs,
+    };
     let cmd = match args.first().copied() {
-        Some("list") => PluginCmd::List(PluginListArgs { tag: None, installed: false }),
+        Some("list") => PluginCmd::List(PluginListArgs {
+            tag: None,
+            installed: false,
+        }),
         Some("install") => {
             let name = args.get(1).map(|s| s.to_string()).unwrap_or_default();
             if name.is_empty() {
@@ -311,7 +345,10 @@ async fn dispatch_plugin(args: &[&str], ctx: OutputContext) -> Result<()> {
             PluginCmd::Uninstall(PluginUninstallArgs { name, force: false })
         }
         Some("update") => {
-            let name = args.get(1).map(|s| s.to_string()).unwrap_or_else(|| "all".to_string());
+            let name = args
+                .get(1)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "all".to_string());
             PluginCmd::Update(PluginUpdateArgs { name })
         }
         Some("verify") => {
@@ -324,7 +361,12 @@ async fn dispatch_plugin(args: &[&str], ctx: OutputContext) -> Result<()> {
         }
         Some("run") => {
             let name = args.get(1).map(|s| s.to_string()).unwrap_or_default();
-            let extra = args.get(2..).unwrap_or_default().iter().map(|s| s.to_string()).collect();
+            let extra = args
+                .get(2..)
+                .unwrap_or_default()
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
             PluginCmd::Run(PluginRunArgs { name, args: extra })
         }
         Some(other) => {

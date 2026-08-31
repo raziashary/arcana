@@ -1,7 +1,7 @@
-use anyhow::Result;
-use clap::{Args, Subcommand};
-use autodev_shared::db::analytics::AnalyticsReader;
 use crate::output::OutputContext;
+use anyhow::Result;
+use autodev_shared::db::analytics::AnalyticsReader;
+use clap::{Args, Subcommand};
 
 #[derive(Subcommand)]
 pub enum AnalyticsCmd {
@@ -62,15 +62,27 @@ fn cost(args: CostArgs, ctx: OutputContext) -> Result<()> {
         return Ok(());
     }
 
-    let headers = ["Date", "Cost (USD)", "Tokens", "Sessions", "Messages", "Tool Calls"];
-    let table_rows: Vec<Vec<String>> = rows.iter().map(|r| vec![
-        r.date.clone(),
-        format!("${:.4}", r.total_cost_usd),
-        r.total_tokens.to_string(),
-        r.session_count.to_string(),
-        r.message_count.to_string(),
-        r.tool_call_count.to_string(),
-    ]).collect();
+    let headers = [
+        "Date",
+        "Cost (USD)",
+        "Tokens",
+        "Sessions",
+        "Messages",
+        "Tool Calls",
+    ];
+    let table_rows: Vec<Vec<String>> = rows
+        .iter()
+        .map(|r| {
+            vec![
+                r.date.clone(),
+                format!("${:.4}", r.total_cost_usd),
+                r.total_tokens.to_string(),
+                r.session_count.to_string(),
+                r.message_count.to_string(),
+                r.tool_call_count.to_string(),
+            ]
+        })
+        .collect();
 
     ctx.print_table(&headers, table_rows);
 
@@ -96,18 +108,33 @@ fn tokens(args: TokensArgs, ctx: OutputContext) -> Result<()> {
         return Ok(());
     }
 
-    let headers = ["ID", "Time", "Session", "Agent", "Model", "Prompt", "Completion", "Total", "Cost"];
-    let table_rows: Vec<Vec<String>> = rows.iter().map(|r| vec![
-        r.id.to_string(),
-        r.timestamp[..19].to_string(),
-        r.session_id[..8].to_string() + "…",
-        r.agent_type.clone(),
-        r.model.clone(),
-        r.prompt_tokens.to_string(),
-        r.completion_tokens.to_string(),
-        r.total_tokens.to_string(),
-        format!("${:.4}", r.cost_usd),
-    ]).collect();
+    let headers = [
+        "ID",
+        "Time",
+        "Session",
+        "Agent",
+        "Model",
+        "Prompt",
+        "Completion",
+        "Total",
+        "Cost",
+    ];
+    let table_rows: Vec<Vec<String>> = rows
+        .iter()
+        .map(|r| {
+            vec![
+                r.id.to_string(),
+                r.timestamp[..19].to_string(),
+                r.session_id[..8].to_string() + "…",
+                r.agent_type.clone(),
+                r.model.clone(),
+                r.prompt_tokens.to_string(),
+                r.completion_tokens.to_string(),
+                r.total_tokens.to_string(),
+                format!("${:.4}", r.cost_usd),
+            ]
+        })
+        .collect();
 
     ctx.print_table(&headers, table_rows);
     Ok(())
@@ -122,17 +149,31 @@ fn workers(args: WorkersArgs, ctx: OutputContext) -> Result<()> {
         return Ok(());
     }
 
-    let headers = ["Worker", "Date", "Completed", "Failed", "Time (min)", "Cost", "Avg Duration", "Success %"];
-    let table_rows: Vec<Vec<String>> = rows.iter().map(|r| vec![
-        r.worker_id.clone(),
-        r.date.clone(),
-        r.tasks_completed.to_string(),
-        r.tasks_failed.to_string(),
-        r.time_spent_minutes.to_string(),
-        format!("${:.4}", r.cost_usd),
-        format!("{}m", r.avg_task_duration_minutes),
-        format!("{:.1}%", r.success_rate * 100.0),
-    ]).collect();
+    let headers = [
+        "Worker",
+        "Date",
+        "Completed",
+        "Failed",
+        "Time (min)",
+        "Cost",
+        "Avg Duration",
+        "Success %",
+    ];
+    let table_rows: Vec<Vec<String>> = rows
+        .iter()
+        .map(|r| {
+            vec![
+                r.worker_id.clone(),
+                r.date.clone(),
+                r.tasks_completed.to_string(),
+                r.tasks_failed.to_string(),
+                r.time_spent_minutes.to_string(),
+                format!("${:.4}", r.cost_usd),
+                format!("{}m", r.avg_task_duration_minutes),
+                format!("{:.1}%", r.success_rate * 100.0),
+            ]
+        })
+        .collect();
 
     ctx.print_table(&headers, table_rows);
     Ok(())

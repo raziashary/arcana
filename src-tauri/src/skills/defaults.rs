@@ -2,9 +2,9 @@
 // Code is the source of truth: builtin skills are always overwritten.
 // Phase 3.1
 
-use std::path::Path;
-use crate::errors::Result;
 use crate::db::autodev_dir;
+use crate::errors::Result;
+use std::path::Path;
 
 /// Write all default skills to disk. Always overwrites builtin skills.
 pub fn ensure_default_skills() -> Result<()> {
@@ -16,28 +16,58 @@ pub fn ensure_default_skills() -> Result<()> {
     }
 
     // ── Coding ──────────────────────────────────────────────────────────────
-    write(&base.join("coding").join("feature-implementation.md"), FEATURE_IMPLEMENTATION)?;
-    write(&base.join("coding").join("api-endpoint.md"),           API_ENDPOINT)?;
-    write(&base.join("coding").join("refactoring.md"),            REFACTORING)?;
-    write(&base.join("coding").join("code-review.md"),            CODE_REVIEW)?;
-    write(&base.join("coding").join("test-addition.md"),          TEST_ADDITION)?;
-    write(&base.join("coding").join("database-migration.md"),     DATABASE_MIGRATION)?;
+    write(
+        &base.join("coding").join("feature-implementation.md"),
+        FEATURE_IMPLEMENTATION,
+    )?;
+    write(&base.join("coding").join("api-endpoint.md"), API_ENDPOINT)?;
+    write(&base.join("coding").join("refactoring.md"), REFACTORING)?;
+    write(&base.join("coding").join("code-review.md"), CODE_REVIEW)?;
+    write(&base.join("coding").join("test-addition.md"), TEST_ADDITION)?;
+    write(
+        &base.join("coding").join("database-migration.md"),
+        DATABASE_MIGRATION,
+    )?;
 
     // ── Debugging ───────────────────────────────────────────────────────────
-    write(&base.join("debugging").join("error-investigation.md"),     ERROR_INVESTIGATION)?;
-    write(&base.join("debugging").join("performance-optimization.md"), PERFORMANCE_OPTIMIZATION)?;
-    write(&base.join("debugging").join("race-condition-debug.md"),    RACE_CONDITION_DEBUG)?;
+    write(
+        &base.join("debugging").join("error-investigation.md"),
+        ERROR_INVESTIGATION,
+    )?;
+    write(
+        &base.join("debugging").join("performance-optimization.md"),
+        PERFORMANCE_OPTIMIZATION,
+    )?;
+    write(
+        &base.join("debugging").join("race-condition-debug.md"),
+        RACE_CONDITION_DEBUG,
+    )?;
 
     // ── DevOps ──────────────────────────────────────────────────────────────
-    write(&base.join("devops").join("docker-setup.md"),       DOCKER_SETUP)?;
-    write(&base.join("devops").join("ci-pipeline-fix.md"),    CI_PIPELINE_FIX)?;
-    write(&base.join("devops").join("dependency-update.md"),  DEPENDENCY_UPDATE)?;
+    write(&base.join("devops").join("docker-setup.md"), DOCKER_SETUP)?;
+    write(
+        &base.join("devops").join("ci-pipeline-fix.md"),
+        CI_PIPELINE_FIX,
+    )?;
+    write(
+        &base.join("devops").join("dependency-update.md"),
+        DEPENDENCY_UPDATE,
+    )?;
 
     // ── Fleet ───────────────────────────────────────────────────────────────
-    write(&base.join("fleet").join("worker-task-execution.md"),    WORKER_TASK_EXECUTION)?;
-    write(&base.join("fleet").join("supervisor-orchestration.md"), SUPERVISOR_ORCHESTRATION)?;
-    write(&base.join("fleet").join("qc-review.md"),                QC_REVIEW)?;
-    write(&base.join("fleet").join("epic-breakdown.md"),           EPIC_BREAKDOWN)?;
+    write(
+        &base.join("fleet").join("worker-task-execution.md"),
+        WORKER_TASK_EXECUTION,
+    )?;
+    write(
+        &base.join("fleet").join("supervisor-orchestration.md"),
+        SUPERVISOR_ORCHESTRATION,
+    )?;
+    write(&base.join("fleet").join("qc-review.md"), QC_REVIEW)?;
+    write(
+        &base.join("fleet").join("epic-breakdown.md"),
+        EPIC_BREAKDOWN,
+    )?;
 
     // ── DevOps (continued) — Ruflo Feature 7 ────────────────────────────────
     write(&base.join("devops").join("browser-test.md"), BROWSER_TEST)?;

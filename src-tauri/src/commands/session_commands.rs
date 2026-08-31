@@ -1,22 +1,23 @@
 // Session commands — list, get, delete sessions.
 
+use crate::errors::AutoDevError;
+use crate::errors::Result;
+use crate::hooks::{HookContext, HookRegistry, HookType};
+use crate::session::{
+    manager::SessionManager,
+    types::{Message, Session, PA_MODES},
+};
 use std::sync::Arc;
 use tauri::State;
-use crate::errors::Result;
-use crate::hooks::{HookRegistry, HookType, HookContext};
-use crate::session::{manager::SessionManager, types::{Session, Message, PA_MODES}};
-use crate::errors::AutoDevError;
 
 #[tauri::command]
-pub fn list_sessions(
-    session_mgr: State<'_, Arc<SessionManager>>,
-) -> Result<Vec<Session>> {
+pub fn list_sessions(session_mgr: State<'_, Arc<SessionManager>>) -> Result<Vec<Session>> {
     session_mgr.list_sessions()
 }
 
 #[tauri::command]
 pub fn get_session(
-    session_id:  String,
+    session_id: String,
     session_mgr: State<'_, Arc<SessionManager>>,
 ) -> Result<Option<Session>> {
     session_mgr.get_session(&session_id)
@@ -24,7 +25,7 @@ pub fn get_session(
 
 #[tauri::command]
 pub fn get_session_messages(
-    session_id:  String,
+    session_id: String,
     session_mgr: State<'_, Arc<SessionManager>>,
 ) -> Result<Vec<Message>> {
     session_mgr.get_session_messages(&session_id)
@@ -32,7 +33,7 @@ pub fn get_session_messages(
 
 #[tauri::command]
 pub fn delete_session(
-    session_id:  String,
+    session_id: String,
     session_mgr: State<'_, Arc<SessionManager>>,
 ) -> Result<()> {
     // Fire SessionEnd hook before deleting
@@ -47,24 +48,24 @@ pub fn delete_session(
         worker_id: None,
         extra: serde_json::json!({}),
     };
-    
+
     // Use tauri async runtime to fire hook
     tauri::async_runtime::spawn(async move {
         HookRegistry::fire(&HookType::SessionEnd, &ctx).await;
     });
-    
+
     session_mgr.delete_session(&session_id)
 }
 
 #[tauri::command]
 pub fn create_session(
     working_dir: String,
-    provider:    String,
-    model:       String,
+    provider: String,
+    model: String,
     session_mgr: State<'_, Arc<SessionManager>>,
 ) -> Result<Session> {
     let session = session_mgr.create_session(&working_dir, &provider, &model)?;
-    
+
     // Fire SessionStart hook after creation
     let ctx = HookContext {
         hook_type: HookType::SessionStart.as_str().to_string(),
@@ -80,24 +81,25 @@ pub fn create_session(
             "model": model,
         }),
     };
-    
+
     // Use tauri async runtime to fire hook
     tauri::async_runtime::spawn(async move {
         HookRegistry::fire(&HookType::SessionStart, &ctx).await;
     });
-    
+
     Ok(session)
 }
 
 #[tauri::command]
 pub fn update_session_title(
     session_id: String,
-    title:      String,
+    title: String,
     session_mgr: State<'_, Arc<SessionManager>>,
 ) -> Result<()> {
-    let session = session_mgr.get_session(&session_id)?
-        .ok_or_else(|| crate::errors::AutoDevError::Session(format!("Session {} not found", session_id)))?;
-    
+    let session = session_mgr.get_session(&session_id)?.ok_or_else(|| {
+        crate::errors::AutoDevError::Session(format!("Session {} not found", session_id))
+    })?;
+
     let mut updated_session = session;
     updated_session.title = title;
     session_mgr.update_session_title(&updated_session)
@@ -109,8 +111,8 @@ pub fn update_session_title(
 /// stored value as the source of truth.
 #[tauri::command]
 pub fn set_session_pa_mode(
-    session_id:  String,
-    pa_mode:     String,
+    session_id: String,
+    pa_mode: String,
     session_mgr: State<'_, Arc<SessionManager>>,
 ) -> Result<()> {
     if !PA_MODES.contains(&pa_mode.as_str()) {

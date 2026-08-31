@@ -16,7 +16,10 @@
 //   POST /api/agents/{id}/invoke      — run LivingAgent, returns AgentInvokeResponse (requires JWT)
 
 use std::collections::HashMap;
-use std::sync::{atomic::{AtomicBool, AtomicUsize, Ordering}, Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    Arc, Mutex,
+};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
@@ -27,12 +30,12 @@ use crate::errors::{AutoDevError, Result};
 /// and update the cost meter without modifying core-orchestrator.
 #[derive(Debug, Clone)]
 pub struct WorkerInvokeResult {
-    pub content:    String,
-    pub tokens_in:  u32,
+    pub content: String,
+    pub tokens_in: u32,
     pub tokens_out: u32,
     /// Model reported by core-orchestrator's response metadata (if any).
     /// May be in core-orchestrator's normalized key format (e.g. "anthropic_claude_sonnet").
-    pub model:      Option<String>,
+    pub model: Option<String>,
 }
 
 /// Extract token usage from core-orchestrator's `response.metadata.tokens_used`,
@@ -55,17 +58,29 @@ fn extract_usage(
     // Try dict shape first: {prompt_tokens, completion_tokens, total_tokens}
     if let Some(v) = tokens_used {
         if let Some(obj) = v.as_object() {
-            let pin  = obj.get("prompt_tokens").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
-            let pout = obj.get("completion_tokens").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+            let pin = obj
+                .get("prompt_tokens")
+                .and_then(|x| x.as_u64())
+                .unwrap_or(0) as u32;
+            let pout = obj
+                .get("completion_tokens")
+                .and_then(|x| x.as_u64())
+                .unwrap_or(0) as u32;
             if pin > 0 || pout > 0 {
                 debug!("[extract_usage] branch=dict_split prompt={pin} completion={pout}");
                 return (pin, pout);
             }
             // Some providers only report total_tokens; split 70/30 in favor of input.
-            let total = obj.get("total_tokens").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+            let total = obj
+                .get("total_tokens")
+                .and_then(|x| x.as_u64())
+                .unwrap_or(0) as u32;
             if total > 0 {
                 let pin = (total as f64 * 0.7) as u32;
-                debug!("[extract_usage] branch=dict_total_70_30 total={total} pin={pin} pout={}", total - pin);
+                debug!(
+                    "[extract_usage] branch=dict_total_70_30 total={total} pin={pin} pout={}",
+                    total - pin
+                );
                 return (pin, total - pin);
             }
         }
@@ -74,7 +89,10 @@ fn extract_usage(
             let total = total as u32;
             if total > 0 {
                 let pin = (total as f64 * 0.7) as u32;
-                debug!("[extract_usage] branch=int_total_70_30 total={total} pin={pin} pout={}", total - pin);
+                debug!(
+                    "[extract_usage] branch=int_total_70_30 total={total} pin={pin} pout={}",
+                    total - pin
+                );
                 return (pin, total - pin);
             }
         }
@@ -84,19 +102,19 @@ fn extract_usage(
     // whether real `tokens_used` is arriving from core-orchestrator or whether
     // the char/4 fallback is doing all the work (the answer determines whether
     // billing numbers are accurate or merely proportional).
-    let est_in  = ((prompt_chars / 4) as u32).saturating_mul(4);
+    let est_in = ((prompt_chars / 4) as u32).saturating_mul(4);
     let est_out = (response_chars / 4) as u32;
     debug!("[extract_usage] branch=char_fallback prompt_chars={prompt_chars} response_chars={response_chars} est_in={est_in} est_out={est_out}");
     (est_in, est_out)
 }
 
 const BASE_URL: &str = "http://127.0.0.1:4000";
-const MEMORY_URL: &str = "http://127.0.0.1:8000";  // memory-mcp-server base URL
-const API_KEY: &str = "dev-key-123";               // matches core-orchestrator .env API_KEYS[0]
-// Phase 8.3 — bumped from 5s to 10s so a busy event loop running 3 parallel
-// LivingAgent invokes still has time to schedule the lightweight /health route.
+const MEMORY_URL: &str = "http://127.0.0.1:8000"; // memory-mcp-server base URL
+const API_KEY: &str = "dev-key-123"; // matches core-orchestrator .env API_KEYS[0]
+                                     // Phase 8.3 — bumped from 5s to 10s so a busy event loop running 3 parallel
+                                     // LivingAgent invokes still has time to schedule the lightweight /health route.
 const HEALTH_TIMEOUT_SECS: u64 = 10;
-const INVOKE_TIMEOUT_SECS: u64 = 600;              // 10-minute ceiling per recipe tick
+const INVOKE_TIMEOUT_SECS: u64 = 600; // 10-minute ceiling per recipe tick
 
 // Phase 8.3 — Use the lightweight /health route (api_gateway/modules/ops/router.py)
 // instead of the heavy /api/system/health route which calls
@@ -127,10 +145,10 @@ const HEALTH_FAIL_THRESHOLD: usize = 6;
 /// 2. Cache JWT and use Authorization: Bearer <token> on all API requests
 /// 3. If token expires, re-authenticate automatically
 pub struct OrchestratorClient {
-    client:      reqwest::Client,
-    base_url:    String,
-    api_key:     String,
-    jwt_token:   Mutex<Option<String>>,           // cached JWT token from service-login
+    client: reqwest::Client,
+    base_url: String,
+    api_key: String,
+    jwt_token: Mutex<Option<String>>, // cached JWT token from service-login
     // worker_slug → (core-orchestrator agent_id, last-applied llm_model).
     // The model component lets us detect when the Tauri-side settings
     // (or per-worker override in workers.db) have changed so we can
@@ -172,16 +190,15 @@ impl OrchestratorClient {
             .expect("reqwest::Client build failed (should not happen)");
         Self {
             client,
-            base_url:    BASE_URL.into(),
-            api_key:     API_KEY.into(),
-            jwt_token:   Mutex::new(None),
+            base_url: BASE_URL.into(),
+            api_key: API_KEY.into(),
+            jwt_token: Mutex::new(None),
             agent_cache: Mutex::new(HashMap::new()),
             model_registry_cache: Mutex::new(HashMap::new()),
             health_fail_count: Arc::new(AtomicUsize::new(0)),
             // 30s grace: core-orchestrator typically boots in ~18s.
             // Failures logged at DEBUG during this window to keep the log clean.
-            startup_grace_until: std::time::Instant::now()
-                + std::time::Duration::from_secs(30),
+            startup_grace_until: std::time::Instant::now() + std::time::Duration::from_secs(30),
             first_health_success: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -213,12 +230,13 @@ impl OrchestratorClient {
     /// be sent as Authorization: Bearer <token> on all subsequent API requests.
     pub async fn authenticate(&self) -> Result<()> {
         let login_url = format!("{}/api/auth/service-login", self.base_url);
-        
+
         let body = serde_json::json!({
             "api_key": self.api_key,
         });
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(&login_url)
             .json(&body)
             .timeout(Duration::from_secs(HEALTH_TIMEOUT_SECS))
@@ -290,17 +308,21 @@ impl OrchestratorClient {
     ];
 
     /// Verify that all 7 fleet agents are registered in core-orchestrator.
-    /// 
-    /// Returns `(true, Vec<agent_name>)` if all agents exist, 
+    ///
+    /// Returns `(true, Vec<agent_name>)` if all agents exist,
     /// or `(false, Vec<missing_agent_names>)` if some are missing.
     /// Used by the startup progress FSM to gate "FleetReady" phase.
     pub async fn verify_fleet_ready(&self) -> (bool, Vec<String>) {
         if !self.ensure_authenticated().await.is_ok() {
-            return (false, Self::FLEET_AGENTS.iter().map(|s| s.to_string()).collect());
+            return (
+                false,
+                Self::FLEET_AGENTS.iter().map(|s| s.to_string()).collect(),
+            );
         }
 
         let list_url = format!("{}/api/agents", self.base_url);
-        let list_resp = self.client
+        let list_resp = self
+            .client
             .get(&list_url)
             .header("Authorization", self.get_auth_header())
             .send()
@@ -311,7 +333,12 @@ impl OrchestratorClient {
                 let raw: serde_json::Value = resp.json().await.unwrap_or_default();
                 parse_agents_list(raw)
             }
-            _ => return (false, Self::FLEET_AGENTS.iter().map(|s| s.to_string()).collect()),
+            _ => {
+                return (
+                    false,
+                    Self::FLEET_AGENTS.iter().map(|s| s.to_string()).collect(),
+                )
+            }
         };
 
         let registered_names: std::collections::HashSet<String> = agents
@@ -329,7 +356,10 @@ impl OrchestratorClient {
         if ready {
             debug!("[OrchestratorClient] Fleet verification passed — all 7 agents registered");
         } else {
-            debug!("[OrchestratorClient] Fleet verification pending — missing: {:?}", missing);
+            debug!(
+                "[OrchestratorClient] Fleet verification pending — missing: {:?}",
+                missing
+            );
         }
 
         (ready, missing)
@@ -350,7 +380,8 @@ impl OrchestratorClient {
             return out;
         }
         let list_url = format!("{}/api/agents", self.base_url);
-        let resp = match self.client
+        let resp = match self
+            .client
             .get(&list_url)
             .header("Authorization", self.get_auth_header())
             .send()
@@ -388,7 +419,8 @@ impl OrchestratorClient {
     /// and queue worker dispatches that all fail at auth-login.
     pub async fn is_healthy_strict(&self) -> bool {
         let url = format!("{}{}", self.base_url, HEALTH_PATH);
-        match self.client
+        match self
+            .client
             .get(&url)
             .timeout(Duration::from_secs(HEALTH_TIMEOUT_SECS))
             .send()
@@ -416,7 +448,8 @@ impl OrchestratorClient {
         use tokio::net::TcpStream;
         use tokio::time::timeout;
         // Parse "http://127.0.0.1:4000" → "127.0.0.1:4000"
-        let addr = self.base_url
+        let addr = self
+            .base_url
             .trim_start_matches("http://")
             .trim_start_matches("https://");
         matches!(
@@ -427,7 +460,8 @@ impl OrchestratorClient {
 
     pub async fn is_healthy(&self) -> bool {
         let url = format!("{}{}", self.base_url, HEALTH_PATH);
-        let result = self.client
+        let result = self
+            .client
             .get(&url)
             .timeout(Duration::from_secs(HEALTH_TIMEOUT_SECS))
             .send()
@@ -451,7 +485,9 @@ impl OrchestratorClient {
                     debug!(
                         "[OrchestratorClient] health check returned HTTP {} during startup grace \
                          ({}/{} consecutive failures)",
-                        r.status(), count, HEALTH_FAIL_THRESHOLD
+                        r.status(),
+                        count,
+                        HEALTH_FAIL_THRESHOLD
                     );
                 } else {
                     debug!(
@@ -481,7 +517,7 @@ impl OrchestratorClient {
                         "[OrchestratorClient] health check failed ({count}/{HEALTH_FAIL_THRESHOLD}): {e} — \
                          treating as healthy until threshold reached"
                     );
-                    true  // still optimistic — orch may just be busy
+                    true // still optimistic — orch may just be busy
                 } else {
                     // Phase 8.3 — Before declaring orch dead, ask the network
                     // whether port 4000 still accepts TCP connections. If yes,
@@ -531,14 +567,15 @@ impl OrchestratorClient {
     /// Returns true if memory-mcp-server responds with 2xx on GET /health within 3 seconds.
     pub async fn is_memory_healthy(&self) -> bool {
         let url = format!("{}/health", MEMORY_URL);
-        let result = self.client
+        let result = self
+            .client
             .get(&url)
             .timeout(Duration::from_secs(HEALTH_TIMEOUT_SECS))
             .send()
             .await;
 
         match result {
-            Ok(r)  => r.status().is_success(),
+            Ok(r) => r.status().is_success(),
             Err(e) => {
                 debug!("[OrchestratorClient] memory-mcp-server health check failed: {e}");
                 false
@@ -563,10 +600,11 @@ impl OrchestratorClient {
         let connect = timeout(
             Duration::from_secs(HEALTH_TIMEOUT_SECS),
             TcpStream::connect("127.0.0.1:6379"),
-        ).await;
+        )
+        .await;
 
         let mut stream = match connect {
-            Ok(Ok(s))  => s,
+            Ok(Ok(s)) => s,
             Ok(Err(e)) => {
                 debug!("[OrchestratorClient] Redis connect failed: {e}");
                 return false;
@@ -581,7 +619,12 @@ impl OrchestratorClient {
         if timeout(
             Duration::from_secs(HEALTH_TIMEOUT_SECS),
             stream.write_all(b"PING\r\n"),
-        ).await.ok().and_then(|r| r.ok()).is_none() {
+        )
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .is_none()
+        {
             return false;
         }
 
@@ -589,7 +632,9 @@ impl OrchestratorClient {
         match timeout(
             Duration::from_secs(HEALTH_TIMEOUT_SECS),
             stream.read(&mut buf),
-        ).await {
+        )
+        .await
+        {
             Ok(Ok(n)) if n > 0 => {
                 let reply = &buf[..n];
                 reply.starts_with(b"+PONG")
@@ -649,7 +694,8 @@ impl OrchestratorClient {
         let url = format!("{}/api/agents/{}/config", self.base_url, agent_id);
         let body = serde_json::json!({ "llm_model": model });
 
-        let resp = self.client
+        let resp = self
+            .client
             .put(&url)
             .header("Authorization", self.get_auth_header())
             .json(&body)
@@ -659,7 +705,7 @@ impl OrchestratorClient {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let text   = resp.text().await.unwrap_or_default();
+            let text = resp.text().await.unwrap_or_default();
             return Err(AutoDevError::Agent(format!(
                 "agent config update failed (HTTP {status}): {}",
                 &text[..text.len().min(400)]
@@ -680,7 +726,8 @@ impl OrchestratorClient {
 
         // ── 1. Try to find existing agent by name ─────────────────────────────
         let list_url = format!("{}/api/agents", self.base_url);
-        let list_resp = self.client
+        let list_resp = self
+            .client
             .get(&list_url)
             .header("Authorization", self.get_auth_header())
             .send()
@@ -765,7 +812,8 @@ impl OrchestratorClient {
         });
 
         let create_url = format!("{}/api/agents", self.base_url);
-        let create_resp = self.client
+        let create_resp = self
+            .client
             .post(&create_url)
             .header("Authorization", self.get_auth_header())
             .json(&create_body)
@@ -775,7 +823,7 @@ impl OrchestratorClient {
 
         if !create_resp.status().is_success() {
             let status = create_resp.status();
-            let body   = create_resp.text().await.unwrap_or_default();
+            let body = create_resp.text().await.unwrap_or_default();
 
             // HTTP 500 with "already exists" means the agent's YAML file is on
             // disk in `config/agents/{slug}.yaml` but the in-memory AgentRegistry
@@ -844,9 +892,9 @@ impl OrchestratorClient {
     /// Returns the text content from StructuredResponse.content on success.
     pub async fn invoke_worker(
         &self,
-        agent_id:     &str,
+        agent_id: &str,
         instructions: &str,
-        trigger:      &str,
+        trigger: &str,
     ) -> Result<WorkerInvokeResult> {
         // Ensure we're authenticated before making API calls
         self.ensure_authenticated().await?;
@@ -875,7 +923,7 @@ impl OrchestratorClient {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let text   = resp.text().await.unwrap_or_default();
+            let text = resp.text().await.unwrap_or_default();
             return Err(AutoDevError::Agent(format!(
                 "invoke failed (HTTP {status}): {}",
                 &text[..text.len().min(400)]
@@ -949,13 +997,13 @@ impl OrchestratorClient {
     /// `extract_usage`).
     pub async fn invoke_worker_streaming(
         &self,
-        agent_id:     &str,
+        agent_id: &str,
         instructions: &str,
-        trigger:      &str,
-        worker_slug:  &str,
+        trigger: &str,
+        worker_slug: &str,
     ) -> Result<WorkerInvokeResult> {
-        use crate::events::{emit_subagent_event_global, SubagentEventPayload};
         use super::sse::{find_frame_end, parse_event_frame};
+        use crate::events::{emit_subagent_event_global, SubagentEventPayload};
         use crate::subagent::SubagentEvent;
         use futures::StreamExt;
 
@@ -980,9 +1028,9 @@ impl OrchestratorClient {
 
         // Accumulators — mirror SubagentBridge::consume_stream behaviour.
         let mut accumulated_text = String::new();
-        let mut last_final_text  = String::new();
-        let mut cost_usd:   f64 = 0.0;
-        let mut tokens_in:  u32 = 0;
+        let mut last_final_text = String::new();
+        let mut cost_usd: f64 = 0.0;
+        let mut tokens_in: u32 = 0;
         let mut tokens_out: u32 = 0;
         // model_seen — currently the SSE stream from core-orchestrator
         // doesn't carry a `model` field per-frame, so we leave this None
@@ -991,20 +1039,30 @@ impl OrchestratorClient {
         let model_seen: Option<String> = None;
 
         while let Some(chunk_res) = byte_stream.next().await {
-            let chunk = chunk_res
-                .map_err(|e| AutoDevError::Agent(format!("SSE chunk read: {e}")))?;
+            let chunk =
+                chunk_res.map_err(|e| AutoDevError::Agent(format!("SSE chunk read: {e}")))?;
             buf.extend_from_slice(&chunk);
 
             loop {
-                let Some(end) = find_frame_end(&buf) else { break };
+                let Some(end) = find_frame_end(&buf) else {
+                    break;
+                };
                 let frame_bytes: Vec<u8> = buf.drain(..end).collect();
                 let trailer_len = if buf.starts_with(b"\r\n\r\n") || buf.starts_with(b"\n\n") {
-                    if buf.starts_with(b"\r\n\r\n") { 4 } else { 2 }
-                } else { 0 };
+                    if buf.starts_with(b"\r\n\r\n") {
+                        4
+                    } else {
+                        2
+                    }
+                } else {
+                    0
+                };
                 buf.drain(..trailer_len);
 
                 let frame = String::from_utf8_lossy(&frame_bytes).to_string();
-                if frame.trim().is_empty() { continue; }
+                if frame.trim().is_empty() {
+                    continue;
+                }
 
                 // Parse using the bridge's existing logic but key the resulting
                 // event by the *worker slug*, not the agent_id. The frontend
@@ -1019,8 +1077,13 @@ impl OrchestratorClient {
                         SubagentEvent::Final { text, .. } => {
                             last_final_text = text.clone();
                         }
-                        SubagentEvent::Cost { cost_usd: c, tokens_in: ti, tokens_out: to_, .. } => {
-                            cost_usd  = *c;
+                        SubagentEvent::Cost {
+                            cost_usd: c,
+                            tokens_in: ti,
+                            tokens_out: to_,
+                            ..
+                        } => {
+                            cost_usd = *c;
                             tokens_in = *ti;
                             tokens_out = *to_;
                         }
@@ -1028,7 +1091,7 @@ impl OrchestratorClient {
                     }
                     emit_subagent_event_global(SubagentEventPayload {
                         subagent_id: worker_slug.to_string(),
-                        event:       evt,
+                        event: evt,
                     });
                 }
             }
@@ -1063,9 +1126,9 @@ impl OrchestratorClient {
 
         Ok(WorkerInvokeResult {
             content,
-            tokens_in:  final_tokens_in,
+            tokens_in: final_tokens_in,
             tokens_out: final_tokens_out,
-            model:      model_seen,
+            model: model_seen,
         })
     }
 
@@ -1081,7 +1144,8 @@ impl OrchestratorClient {
         body: &serde_json::Value,
         agent_id: &str,
     ) -> Result<reqwest::Response> {
-        let req_builder = self.client
+        let req_builder = self
+            .client
             .post(url)
             .header("Authorization", self.get_auth_header())
             .json(body);
@@ -1089,31 +1153,28 @@ impl OrchestratorClient {
         match req_builder.try_clone() {
             None => {
                 // Cannot clone (e.g. streaming body) — single-shot, no retry
-                return req_builder
-                    .send()
-                    .await
-                    .map_err(|e| AutoDevError::Agent(format!("POST /api/agents/{agent_id}/invoke: {e}")));
+                return req_builder.send().await.map_err(|e| {
+                    AutoDevError::Agent(format!("POST /api/agents/{agent_id}/invoke: {e}"))
+                });
             }
-            Some(cloned) => {
-                match cloned.send().await {
-                    Ok(resp) => return Ok(resp),
-                    Err(e) if e.is_connect() || e.is_timeout() => {
-                        tracing::warn!(
+            Some(cloned) => match cloned.send().await {
+                Ok(resp) => return Ok(resp),
+                Err(e) if e.is_connect() || e.is_timeout() => {
+                    tracing::warn!(
                             "[OrchestratorClient] invoke connection error for '{agent_id}' ({e}), retrying in 100ms"
                         );
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        match req_builder.send().await {
-                            Ok(resp) => Ok(resp),
-                            Err(e2) => Err(AutoDevError::Agent(format!(
-                                "POST /api/agents/{agent_id}/invoke (retry failed): {e2}"
-                            ))),
-                        }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    match req_builder.send().await {
+                        Ok(resp) => Ok(resp),
+                        Err(e2) => Err(AutoDevError::Agent(format!(
+                            "POST /api/agents/{agent_id}/invoke (retry failed): {e2}"
+                        ))),
                     }
-                    Err(e) => Err(AutoDevError::Agent(format!(
-                        "POST /api/agents/{agent_id}/invoke: {e}"
-                    ))),
                 }
-            }
+                Err(e) => Err(AutoDevError::Agent(format!(
+                    "POST /api/agents/{agent_id}/invoke: {e}"
+                ))),
+            },
         }
     }
 
@@ -1141,7 +1202,8 @@ impl OrchestratorClient {
             return None;
         }
         let url = format!("{}/api/llm/models", self.base_url);
-        match self.client
+        match self
+            .client
             .get(&url)
             .header("Authorization", self.get_auth_header())
             .send()
@@ -1160,7 +1222,10 @@ impl OrchestratorClient {
                 cache.get(key).cloned()
             }
             Ok(resp) => {
-                debug!("[OrchestratorClient] model registry fetch returned HTTP {}", resp.status());
+                debug!(
+                    "[OrchestratorClient] model registry fetch returned HTTP {}",
+                    resp.status()
+                );
                 None
             }
             Err(e) => {
@@ -1182,7 +1247,7 @@ impl OrchestratorClient {
     // ─── Immediate Model Update (UI-triggered) ────────────────────────────────
 
     /// Immediately update an agent's model in core-orchestrator.
-    /// 
+    ///
     /// Unlike the lazy update in `find_or_create_agent` (which waits for the
     /// next recipe tick), this actively looks up the agent by slug and pushes
     /// the model change immediately. Used when the user changes a worker's
@@ -1203,7 +1268,8 @@ impl OrchestratorClient {
 
         // Look up agent by name
         let list_url = format!("{}/api/agents", self.base_url);
-        let list_resp = self.client
+        let list_resp = self
+            .client
             .get(&list_url)
             .header("Authorization", self.get_auth_header())
             .send()
@@ -1211,7 +1277,9 @@ impl OrchestratorClient {
             .map_err(|e| AutoDevError::Agent(format!("GET /api/agents: {e}")))?;
 
         if !list_resp.status().is_success() {
-            return Err(AutoDevError::Agent("Failed to list agents from orchestrator".into()));
+            return Err(AutoDevError::Agent(
+                "Failed to list agents from orchestrator".into(),
+            ));
         }
 
         // Normalise response: handles both raw `[...]` and wrapped `{"agents":[...]}`
@@ -1219,15 +1287,15 @@ impl OrchestratorClient {
         let agents = parse_agents_list(raw);
 
         // Find agent by slug
-        let agent_info = agents.iter().find(|a| {
-            a["name"].as_str().map(|n| n == slug).unwrap_or(false)
-        });
+        let agent_info = agents
+            .iter()
+            .find(|a| a["name"].as_str().map(|n| n == slug).unwrap_or(false));
 
         let (agent_id, current_model) = match agent_info {
             Some(agent) => {
-                let id = agent["id"]
-                    .as_str()
-                    .ok_or_else(|| AutoDevError::Agent(format!("Agent '{slug}' missing 'id' field")))?;
+                let id = agent["id"].as_str().ok_or_else(|| {
+                    AutoDevError::Agent(format!("Agent '{slug}' missing 'id' field"))
+                })?;
                 let current = agent["llm_model"].as_str().unwrap_or("");
                 (id.to_string(), current.to_string())
             }
@@ -1259,9 +1327,7 @@ impl OrchestratorClient {
 
     // ─── MCP Server Registration ────────────────────────────────────────────────
 
-
     // ─── Pre-flight MCP health check (BUG-002b safety net) ───────────────────
-
 
     // ─── Phase 4.9 — Ephemeral Subagent Lifecycle ────────────────────────────
     //
@@ -1280,11 +1346,11 @@ impl OrchestratorClient {
     /// orphan-cleanup safety nets).
     pub async fn create_ephemeral_agent(
         &self,
-        slug:           &str,
-        system_prompt:  &str,
-        llm_model:      &str,
-        mcp_servers:    &[String],
-        capabilities:   &[String],
+        slug: &str,
+        system_prompt: &str,
+        llm_model: &str,
+        mcp_servers: &[String],
+        capabilities: &[String],
     ) -> Result<String> {
         self.ensure_authenticated().await?;
 
@@ -1308,7 +1374,8 @@ impl OrchestratorClient {
         });
 
         let create_url = format!("{}/api/agents", self.base_url);
-        let resp = self.client
+        let resp = self
+            .client
             .post(&create_url)
             .header("Authorization", self.get_auth_header())
             .json(&create_body)
@@ -1318,7 +1385,7 @@ impl OrchestratorClient {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body   = resp.text().await.unwrap_or_default();
+            let body = resp.text().await.unwrap_or_default();
             return Err(AutoDevError::Agent(format!(
                 "subagent creation failed (HTTP {status}): {}",
                 &body[..body.len().min(400)]
@@ -1347,7 +1414,8 @@ impl OrchestratorClient {
         self.ensure_authenticated().await?;
 
         let url = format!("{}/api/agents/{}", self.base_url, agent_id);
-        let resp = self.client
+        let resp = self
+            .client
             .delete(&url)
             .header("Authorization", self.get_auth_header())
             .timeout(Duration::from_secs(HEALTH_TIMEOUT_SECS * 2))
@@ -1377,7 +1445,7 @@ impl OrchestratorClient {
     pub async fn invoke_agent_stream_raw(
         &self,
         agent_id: &str,
-        prompt:   &str,
+        prompt: &str,
     ) -> Result<reqwest::Response> {
         self.ensure_authenticated().await?;
 
@@ -1399,18 +1467,21 @@ impl OrchestratorClient {
             "parameters": serde_json::Value::Null,
         });
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(&url)
             .header("Authorization", self.get_auth_header())
             .header("Accept", "text/event-stream")
             .json(&body)
             .send()
             .await
-            .map_err(|e| AutoDevError::Agent(format!("POST /api/agents/{agent_id}/invoke/stream: {e}")))?;
+            .map_err(|e| {
+                AutoDevError::Agent(format!("POST /api/agents/{agent_id}/invoke/stream: {e}"))
+            })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let text   = resp.text().await.unwrap_or_default();
+            let text = resp.text().await.unwrap_or_default();
             return Err(AutoDevError::Agent(format!(
                 "stream invoke failed (HTTP {status}): {}",
                 &text[..text.len().min(400)]
@@ -1425,7 +1496,8 @@ impl OrchestratorClient {
     pub async fn list_ephemeral_subagent_slugs(&self) -> Result<Vec<String>> {
         self.ensure_authenticated().await?;
         let list_url = format!("{}/api/agents", self.base_url);
-        let resp = self.client
+        let resp = self
+            .client
             .get(&list_url)
             .header("Authorization", self.get_auth_header())
             .send()
@@ -1469,7 +1541,7 @@ impl Default for OrchestratorClient {
 fn to_orch_model_key(model: &str) -> &str {
     match model {
         // Legacy seed value → correct registry key
-        "claude-haiku-4-5"          => "claude-4-5-haiku",
+        "claude-haiku-4-5" => "claude-4-5-haiku",
         "claude-haiku-4-5-thinking" => "claude-4-5-haiku-thinking",
         // Everything else is already a valid registry key; pass through as-is.
         other => other,

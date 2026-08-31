@@ -16,11 +16,11 @@
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
+use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 use crate::db::tasks::TasksDb;
 use crate::events::{emit_worker_message_global, WorkerMessagePayload};
 use crate::recipes::defaults::FLEET_WORKERS;
 use crate::recipes::scheduler;
-use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 
 pub struct SendWorkerMessageTool;
 
@@ -38,7 +38,9 @@ fn is_known_recipient(slug: &str) -> bool {
 
 #[async_trait]
 impl Tool for SendWorkerMessageTool {
-    fn name(&self) -> &str { "send_worker_message" }
+    fn name(&self) -> &str {
+        "send_worker_message"
+    }
 
     fn description(&self) -> &str {
         "Send a structured message to another fleet worker. Asynchronous: the \
@@ -82,7 +84,9 @@ impl Tool for SendWorkerMessageTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         // ── Validate `to` ────────────────────────────────────────────────────
@@ -106,12 +110,14 @@ impl Tool for SendWorkerMessageTool {
             return ToolResult::error(format!(
                 "Message body is {} bytes; maximum is {}. Trim the message or split \
                  into multiple sends.",
-                body.len(), MAX_BODY_BYTES
+                body.len(),
+                MAX_BODY_BYTES
             ));
         }
 
         // ── Validate `kind` ──────────────────────────────────────────────────
-        let kind = input["kind"].as_str()
+        let kind = input["kind"]
+            .as_str()
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|| "nudge".into());
         if !VALID_KINDS.contains(&kind.as_str()) {
@@ -158,8 +164,7 @@ impl Tool for SendWorkerMessageTool {
         }
 
         // ── Optional task_id (typed as integer in schema) ────────────────────
-        let task_id: Option<i64> = input["task_id"].as_i64()
-            .filter(|n| *n > 0);
+        let task_id: Option<i64> = input["task_id"].as_i64().filter(|n| *n > 0);
 
         // ── Open DB + persist ────────────────────────────────────────────────
         let db = match TasksDb::open() {
@@ -184,20 +189,22 @@ impl Tool for SendWorkerMessageTool {
         for target in &targets {
             let msg = match db.insert_worker_message(&from, target, &body, &kind, task_id) {
                 Ok(m) => m,
-                Err(e) => return ToolResult::error(format!(
-                    "Failed to persist message to '{target}': {e}"
-                )),
+                Err(e) => {
+                    return ToolResult::error(format!(
+                        "Failed to persist message to '{target}': {e}"
+                    ))
+                }
             };
 
             // Emit Tauri event so the Fleet Chat panel updates in real time.
             emit_worker_message_global(WorkerMessagePayload {
                 message_id: msg.id,
-                from:       msg.from_slug.clone(),
-                to:         msg.to_slug.clone(),
-                body:       msg.body.clone(),
-                kind:       msg.kind.clone(),
-                task_id:    msg.task_id,
-                timestamp:  msg.created_at.clone(),
+                from: msg.from_slug.clone(),
+                to: msg.to_slug.clone(),
+                body: msg.body.clone(),
+                kind: msg.kind.clone(),
+                task_id: msg.task_id,
+                timestamp: msg.created_at.clone(),
             });
 
             // Push the target's recipe so they read the inbox on the very
@@ -215,17 +222,24 @@ impl Tool for SendWorkerMessageTool {
             format!(
                 "Broadcast delivered to {} recipients (ids: {}).",
                 delivered.len(),
-                delivered.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ")
+                delivered
+                    .iter()
+                    .map(|i| i.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )
         };
 
-        ToolResult::success(json!({
-            "delivered_message_ids": delivered,
-            "from":                  from,
-            "to":                    targets,
-            "kind":                  kind,
-            "task_id":               task_id,
-            "message":               summary,
-        }).to_string())
+        ToolResult::success(
+            json!({
+                "delivered_message_ids": delivered,
+                "from":                  from,
+                "to":                    targets,
+                "kind":                  kind,
+                "task_id":               task_id,
+                "message":               summary,
+            })
+            .to_string(),
+        )
     }
 }

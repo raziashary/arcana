@@ -2,8 +2,8 @@
 // All agent → frontend communication uses named Tauri events.
 // The frontend subscribes to these via @tauri-apps/api listen().
 
-use std::sync::OnceLock;
 use serde::Serialize;
+use std::sync::OnceLock;
 use tauri::{AppHandle, Emitter};
 
 // Global AppHandle installed from main.rs after setup. Lets non-Tauri
@@ -26,34 +26,34 @@ pub fn app_handle() -> Option<&'static AppHandle> {
 
 // ── Event name constants ──────────────────────────────────────────────────────
 
-pub const EVT_AGENT_TOKEN:       &str = "agent:token";
-pub const EVT_AGENT_THINKING:    &str = "agent:thinking";
-pub const EVT_AGENT_TOOL_START:  &str = "agent:tool-start";
-pub const EVT_AGENT_TOOL_END:    &str = "agent:tool-end";
-pub const EVT_AGENT_PERMISSION:  &str = "agent:permission-request";
-pub const EVT_AGENT_DONE:        &str = "agent:done";
-pub const EVT_AGENT_ERROR:       &str = "agent:error";
-pub const EVT_COST_UPDATE:       &str = "cost:update";
+pub const EVT_AGENT_TOKEN: &str = "agent:token";
+pub const EVT_AGENT_THINKING: &str = "agent:thinking";
+pub const EVT_AGENT_TOOL_START: &str = "agent:tool-start";
+pub const EVT_AGENT_TOOL_END: &str = "agent:tool-end";
+pub const EVT_AGENT_PERMISSION: &str = "agent:permission-request";
+pub const EVT_AGENT_DONE: &str = "agent:done";
+pub const EVT_AGENT_ERROR: &str = "agent:error";
+pub const EVT_COST_UPDATE: &str = "cost:update";
 
 // Phase 3.0 R2 — fleet status push channel. Replaces polling-based derivation
 // of worker status in the Agent Roster. Emitted from RecipeRunner on every
 // transition (working / idle / error) and at tick boundaries.
-pub const EVT_WORKER_STATUS:     &str = "worker:status";
+pub const EVT_WORKER_STATUS: &str = "worker:status";
 pub const EVT_WORKER_TICK_START: &str = "worker:tick-start";
-pub const EVT_WORKER_TICK_END:   &str = "worker:tick-end";
-pub const EVT_WORKER_REQUEST:    &str = "worker:request";
+pub const EVT_WORKER_TICK_END: &str = "worker:tick-end";
+pub const EVT_WORKER_REQUEST: &str = "worker:request";
 
 // Doc 06 Phase 3 — free-form one-line breadcrumb pushed into a worker's
 // Live Monitor card. Used by the qc-agent skip path to leave a visible
 // "idle — no qc_review tasks" trail instead of an empty card body.
-pub const EVT_WORKER_LOG_LINE:   &str = "worker:log-line";
+pub const EVT_WORKER_LOG_LINE: &str = "worker:log-line";
 
 // Phase 3.0 R1 — task board changes push channel. Emitted from every task DB
 // write path so the AutoDev Panel refreshes without polling.
-pub const EVT_TASK_CHANGED:      &str = "task:changed";
+pub const EVT_TASK_CHANGED: &str = "task:changed";
 
 // Phase 3.5 — plan changes push channel. Emitted from every plan DB write.
-pub const EVT_PLAN_CHANGED:      &str = "plan:changed";
+pub const EVT_PLAN_CHANGED: &str = "plan:changed";
 
 // Ruflo Feature 2 — PID orphan detection. Fired when the Supervisor poll cycle
 // releases one or more stale tasks back to the ready queue.
@@ -66,31 +66,31 @@ pub const EVT_AGENT_BUDGET_EXCEEDED: &str = "agent:budget-exceeded";
 // Ruflo Feature 5 — Phase-Based Task Decomposition. Fired when a blocked task
 // is unblocked (all its prerequisites are done) or when an entire phase of an
 // epic is complete (all subtasks in that phase are done).
-pub const EVT_TASK_UNBLOCKED:      &str = "task:unblocked";
+pub const EVT_TASK_UNBLOCKED: &str = "task:unblocked";
 pub const EVT_TASK_PHASE_COMPLETE: &str = "task:phase-complete";
 
 // Ruflo Feature 6 — MCP Connection Health Monitor. Emitted by McpHealthMonitor
 // on each ping cycle and on connection state transitions.
-pub const EVT_MCP_HEALTH_UPDATE:       &str = "mcp:health-update";
-pub const EVT_MCP_CONNECTION_LOST:     &str = "mcp:connection-lost";
+pub const EVT_MCP_HEALTH_UPDATE: &str = "mcp:health-update";
+pub const EVT_MCP_CONNECTION_LOST: &str = "mcp:connection-lost";
 pub const EVT_MCP_CONNECTION_DEGRADED: &str = "mcp:connection-degraded";
-pub const EVT_MCP_RECONNECTED:         &str = "mcp:reconnected";
-pub const EVT_MCP_RECONNECT_FAILED:    &str = "mcp:reconnect-failed";
-pub const EVT_MCP_REQUIRES_RESTART:    &str = "mcp:requires-restart";
+pub const EVT_MCP_RECONNECTED: &str = "mcp:reconnected";
+pub const EVT_MCP_RECONNECT_FAILED: &str = "mcp:reconnect-failed";
+pub const EVT_MCP_REQUIRES_RESTART: &str = "mcp:requires-restart";
 
 // In-process MCP server port conflict. Emitted ONCE at startup when the
 // preferred port (8767) is held by another process and we had to fall
 // back to 8768/8769/8770. Payload is `McpPortStatus`.
-pub const EVT_MCP_PORT_CONFLICT:       &str = "mcp:port-conflict";
+pub const EVT_MCP_PORT_CONFLICT: &str = "mcp:port-conflict";
 
 // Phase 4.9 — subagent lifecycle events. One event per SSE frame received
 // from core-orchestrator's `/api/agents/{id}/invoke/stream`, plus internal
 // status transitions (Spawning / Idle / Running / Completed / Failed /
 // Terminated). Fan-out is handled by SubagentManager::pump_events.
-pub const EVT_SUBAGENT_EVENT:    &str = "subagent:event";
+pub const EVT_SUBAGENT_EVENT: &str = "subagent:event";
 
 // Phase 4.9b — QC approve/reject decisions surfaced as UI toasts.
-pub const EVT_QC_DECISION:       &str = "qc:decision";
+pub const EVT_QC_DECISION: &str = "qc:decision";
 
 // Doc 07 Phase 3/4 — workspace-related startup signals.
 //   • workspace:strays-detected — list of stray worker-generated files
@@ -98,82 +98,82 @@ pub const EVT_QC_DECISION:       &str = "qc:decision";
 //     them with "delete" / "move to workspace" affordances.
 //   • workspace:mismatch — current_dir() differs from the configured
 //     workspace. Surfaces as a warning banner with a "set workspace" CTA.
-pub const EVT_WORKSPACE_STRAYS:   &str = "workspace:strays-detected";
+pub const EVT_WORKSPACE_STRAYS: &str = "workspace:strays-detected";
 pub const EVT_WORKSPACE_MISMATCH: &str = "workspace:mismatch";
 
 // Doc 05 Phase 1 — sidecar circuit-breaker open. The watchdog gives up on
 // restart attempts after N crashes in a sliding window; this event
 // surfaces the captured stderr tail to the frontend so the user can copy
 // a triage report without opening the log file.
-pub const EVT_SIDECAR_CRASH:      &str = "sidecar:crash";
+pub const EVT_SIDECAR_CRASH: &str = "sidecar:crash";
 
 // AutoDev Communication Protocol (ACP) — structured worker↔worker message.
 // Fires once per insert into `worker_messages`. Powers the Fleet Chat panel
 // and the per-worker "N unread" badge on AgentLiveCard.
-pub const EVT_WORKER_MESSAGE:     &str = "worker:message";
+pub const EVT_WORKER_MESSAGE: &str = "worker:message";
 
 // ── Payload types ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Clone)]
 pub struct TokenPayload {
     pub session_id: String,
-    pub text:       String,
+    pub text: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
 pub struct ThinkingPayload {
     pub session_id: String,
-    pub text:       String,
+    pub text: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
 pub struct ToolStartPayload {
     pub session_id: String,
-    pub call_id:    String,
-    pub tool_name:  String,
-    pub input:      serde_json::Value,
+    pub call_id: String,
+    pub tool_name: String,
+    pub input: serde_json::Value,
 }
 
 #[derive(Debug, Serialize, Clone)]
 pub struct ToolEndPayload {
     pub session_id: String,
-    pub call_id:    String,
-    pub tool_name:  String,
-    pub output:     String,
-    pub is_error:   bool,
+    pub call_id: String,
+    pub tool_name: String,
+    pub output: String,
+    pub is_error: bool,
 }
 
 #[derive(Debug, Serialize, Clone)]
 pub struct PermissionPayload {
     pub session_id: String,
-    pub call_id:    String,
-    pub tool_name:  String,
-    pub input:      serde_json::Value,
+    pub call_id: String,
+    pub tool_name: String,
+    pub input: serde_json::Value,
     pub description: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
 pub struct AgentDonePayload {
-    pub session_id:    String,
-    pub message_id:    String,
-    pub tokens_in:     u32,
-    pub tokens_out:    u32,
-    pub cost_usd:      f64,
+    pub session_id: String,
+    pub message_id: String,
+    pub tokens_in: u32,
+    pub tokens_out: u32,
+    pub cost_usd: f64,
 }
 
 #[derive(Debug, Serialize, Clone)]
 pub struct AgentErrorPayload {
     pub session_id: String,
-    pub message:    String,
+    pub message: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
 pub struct CostUpdatePayload {
-    pub session_id:   String,
-    pub tokens_in:    u32,
-    pub tokens_out:   u32,
-    pub cost_usd:     f64,
-    pub total_today:  f64,
+    pub session_id: String,
+    pub tokens_in: u32,
+    pub tokens_out: u32,
+    pub cost_usd: f64,
+    pub total_today: f64,
 }
 
 // ── Emit helpers ──────────────────────────────────────────────────────────────
@@ -214,27 +214,27 @@ pub fn emit_cost_update(app: &AppHandle, payload: CostUpdatePayload) {
 
 #[derive(Debug, Serialize, Clone)]
 pub struct WorkerStatusPayload {
-    pub slug:               String,
-    pub status:             String,
-    pub previous_status:    Option<String>,
-    pub reason:             Option<String>,
-    pub cooldown_seconds:   Option<u32>,
-    pub timestamp:          String,
-    pub tick_duration_ms:   Option<u64>,   // wall-clock ms of the last agent tick
-    pub last_outcome:       Option<String>, // "success" | "fallback" | "error"
+    pub slug: String,
+    pub status: String,
+    pub previous_status: Option<String>,
+    pub reason: Option<String>,
+    pub cooldown_seconds: Option<u32>,
+    pub timestamp: String,
+    pub tick_duration_ms: Option<u64>, // wall-clock ms of the last agent tick
+    pub last_outcome: Option<String>,  // "success" | "fallback" | "error"
 }
 
 #[derive(Debug, Serialize, Clone)]
 pub struct WorkerTickStartPayload {
-    pub slug:      String,
-    pub mode:      String,
+    pub slug: String,
+    pub mode: String,
     pub timestamp: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
 pub struct WorkerTickEndPayload {
-    pub slug:      String,
-    pub outcome:   String,
+    pub slug: String,
+    pub outcome: String,
     pub timestamp: String,
 }
 
@@ -253,8 +253,8 @@ pub fn emit_worker_tick_end(app: &AppHandle, payload: WorkerTickEndPayload) {
 // ── Doc 06 Phase 3 — worker log-line breadcrumb ───────────────────────────────
 #[derive(Debug, Serialize, Clone)]
 pub struct WorkerLogLinePayload {
-    pub slug:      String,
-    pub text:      String,
+    pub slug: String,
+    pub text: String,
     pub timestamp: String,
 }
 
@@ -296,11 +296,11 @@ pub fn emit_workspace_mismatch_global(payload: WorkspaceMismatchPayload) {
 
 #[derive(Debug, Serialize, Clone)]
 pub struct SidecarCrashPayload {
-    pub sidecar_id:    String,        // "core-orchestrator" / "memory-mcp-server"
+    pub sidecar_id: String, // "core-orchestrator" / "memory-mcp-server"
     pub restart_count: u32,
-    pub window_secs:   u64,
-    pub stderr_tail:   Vec<String>,
-    pub timestamp:     String,
+    pub window_secs: u64,
+    pub stderr_tail: Vec<String>,
+    pub timestamp: String,
 }
 
 pub fn emit_sidecar_crash_global(payload: SidecarCrashPayload) {
@@ -313,12 +313,12 @@ pub fn emit_sidecar_crash_global(payload: SidecarCrashPayload) {
 
 #[derive(Debug, Serialize, Clone)]
 pub struct WorkerRequestPayload {
-    pub id:             i64,
-    pub worker_slug:    String,
-    pub task_id:        Option<i64>,
-    pub request_type:   String,
-    pub status:         String,
-    pub payload:        String,
+    pub id: i64,
+    pub worker_slug: String,
+    pub task_id: Option<i64>,
+    pub request_type: String,
+    pub status: String,
+    pub payload: String,
 }
 
 pub fn emit_worker_request(app: &AppHandle, payload: WorkerRequestPayload) {
@@ -336,8 +336,8 @@ pub fn emit_worker_request_global(payload: WorkerRequestPayload) {
 #[derive(Debug, Serialize, Clone)]
 pub struct TaskChangedPayload {
     pub task_id: Option<i64>,
-    pub kind:    String,
-    pub status:  Option<String>,
+    pub kind: String,
+    pub status: Option<String>,
     pub assigned_worker: Option<String>,
 }
 
@@ -374,12 +374,12 @@ pub fn emit_worker_status_global(payload: WorkerStatusPayload) {
 #[derive(Debug, Serialize, Clone)]
 pub struct WorkerMessagePayload {
     pub message_id: i64,
-    pub from:       String,
-    pub to:         String,
-    pub body:       String,
-    pub kind:       String,
-    pub task_id:    Option<i64>,
-    pub timestamp:  String,
+    pub from: String,
+    pub to: String,
+    pub body: String,
+    pub kind: String,
+    pub task_id: Option<i64>,
+    pub timestamp: String,
 }
 
 pub fn emit_worker_message(app: &AppHandle, payload: WorkerMessagePayload) {
@@ -394,7 +394,9 @@ pub fn emit_worker_message_global(payload: WorkerMessagePayload) {
             "emit_worker_message_global skipped: AppHandle not installed. \
              Worker message #{} from '{}' to '{}' will not appear in Fleet Chat \
              until next reload.",
-            payload.message_id, payload.from, payload.to
+            payload.message_id,
+            payload.from,
+            payload.to
         );
     }
 }
@@ -404,8 +406,8 @@ pub fn emit_worker_message_global(payload: WorkerMessagePayload) {
 #[derive(Debug, Serialize, Clone)]
 pub struct PlanChangedPayload {
     pub plan_id: Option<String>,
-    pub kind:    String,
-    pub status:  Option<String>,
+    pub kind: String,
+    pub status: Option<String>,
 }
 
 pub fn emit_plan_changed(app: &AppHandle, payload: PlanChangedPayload) {
@@ -422,11 +424,11 @@ pub fn emit_plan_changed_global(payload: PlanChangedPayload) {
 
 #[derive(Debug, Serialize, Clone)]
 pub struct QcDecisionPayload {
-    pub task_id:          i64,
-    pub task_title:       String,
-    pub decision:         String, // "approved" | "rejected"
+    pub task_id: i64,
+    pub task_title: String,
+    pub decision: String, // "approved" | "rejected"
     pub rejection_reason: Option<String>,
-    pub worker_slug:      String,
+    pub worker_slug: String,
 }
 
 pub fn emit_qc_decision(app: &AppHandle, payload: QcDecisionPayload) {
@@ -447,7 +449,7 @@ pub fn emit_qc_decision_global(payload: QcDecisionPayload) {
 #[derive(Debug, Serialize, Clone)]
 pub struct SubagentEventPayload {
     pub subagent_id: String,
-    pub event:       crate::subagent::SubagentEvent,
+    pub event: crate::subagent::SubagentEvent,
 }
 
 pub fn emit_subagent_event(app: &AppHandle, payload: SubagentEventPayload) {
@@ -465,13 +467,16 @@ pub fn emit_subagent_event_global(payload: SubagentEventPayload) {
 #[derive(Debug, Serialize, Clone)]
 pub struct OrphansReleasedPayload {
     pub task_ids: Vec<String>,
-    pub count:    usize,
+    pub count: usize,
 }
 
 pub fn emit_orphans_released_global(task_ids: Vec<String>) {
     if let Some(app) = app_handle() {
         let count = task_ids.len();
-        let _ = app.emit(EVT_TASK_ORPHANS_RELEASED, OrphansReleasedPayload { task_ids, count });
+        let _ = app.emit(
+            EVT_TASK_ORPHANS_RELEASED,
+            OrphansReleasedPayload { task_ids, count },
+        );
     }
 }
 
@@ -479,12 +484,12 @@ pub fn emit_orphans_released_global(task_ids: Vec<String>) {
 
 #[derive(Debug, Serialize, Clone)]
 pub struct BudgetExceededEvent {
-    pub session_id:  String,
-    pub task_id:     Option<i64>,
-    pub reason:      String,   // "BUDGET_EXCEEDED_TOKENS" | "BUDGET_EXCEEDED_USD" | "BUDGET_EXCEEDED_TURNS"
+    pub session_id: String,
+    pub task_id: Option<i64>,
+    pub reason: String, // "BUDGET_EXCEEDED_TOKENS" | "BUDGET_EXCEEDED_USD" | "BUDGET_EXCEEDED_TURNS"
     pub tokens_used: u64,
-    pub cost_usd:    f64,
-    pub turns_used:  u32,
+    pub cost_usd: f64,
+    pub turns_used: u32,
 }
 
 pub fn emit_budget_exceeded(app: &AppHandle, payload: BudgetExceededEvent) {
@@ -510,8 +515,8 @@ pub struct TaskUnblockedPayload {
 /// that the next phase's tasks may now be assigned.
 #[derive(Debug, Serialize, Clone)]
 pub struct PhaseCompletePayload {
-    pub epic_id:   String,
-    pub phase:     String,
+    pub epic_id: String,
+    pub phase: String,
     pub milestone: Option<String>,
 }
 
@@ -523,6 +528,13 @@ pub fn emit_task_unblocked_global(task_id: i64) {
 
 pub fn emit_phase_complete_global(epic_id: String, phase: String, milestone: Option<String>) {
     if let Some(app) = app_handle() {
-        let _ = app.emit(EVT_TASK_PHASE_COMPLETE, PhaseCompletePayload { epic_id, phase, milestone });
+        let _ = app.emit(
+            EVT_TASK_PHASE_COMPLETE,
+            PhaseCompletePayload {
+                epic_id,
+                phase,
+                milestone,
+            },
+        );
     }
 }

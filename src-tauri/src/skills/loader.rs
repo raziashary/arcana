@@ -5,9 +5,9 @@
 use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
 
+use super::types::{Skill, SkillCategory, SkillFrontmatter};
 use crate::db::autodev_dir;
 use crate::errors::{AutoDevError, Result};
-use super::types::{Skill, SkillCategory, SkillFrontmatter};
 
 pub struct SkillLoader {
     skills_dir: PathBuf,
@@ -32,19 +32,29 @@ impl SkillLoader {
 
         for cat in &categories {
             let cat_dir = self.skills_dir.join(cat);
-            if !cat_dir.exists() { continue; }
+            if !cat_dir.exists() {
+                continue;
+            }
 
             let entries = match std::fs::read_dir(&cat_dir) {
                 Ok(e) => e,
-                Err(e) => { warn!("[SkillLoader] read_dir {cat}: {e}"); continue; }
+                Err(e) => {
+                    warn!("[SkillLoader] read_dir {cat}: {e}");
+                    continue;
+                }
             };
 
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().map(|e| e == "md").unwrap_or(false) {
                     match self.load_file(&path, cat) {
-                        Ok(skill) => { debug!("[SkillLoader] loaded {}", skill.name); skills.push(skill); }
-                        Err(e)    => { warn!("[SkillLoader] failed {}: {e}", path.display()); }
+                        Ok(skill) => {
+                            debug!("[SkillLoader] loaded {}", skill.name);
+                            skills.push(skill);
+                        }
+                        Err(e) => {
+                            warn!("[SkillLoader] failed {}: {e}", path.display());
+                        }
                     }
                 }
             }
@@ -73,18 +83,24 @@ impl SkillLoader {
 
         // Find closing ---
         let after_open = &trimmed[3..];
-        let close_pos = after_open.find("\n---")
-            .ok_or_else(|| AutoDevError::Agent(
-                format!("Skill file {} has unclosed frontmatter", path.display())
-            ))?;
+        let close_pos = after_open.find("\n---").ok_or_else(|| {
+            AutoDevError::Agent(format!(
+                "Skill file {} has unclosed frontmatter",
+                path.display()
+            ))
+        })?;
 
         let frontmatter_str = &after_open[..close_pos].trim_start_matches('\n');
-        let template = after_open[close_pos + 4..].trim_start_matches('\n').to_string();
+        let template = after_open[close_pos + 4..]
+            .trim_start_matches('\n')
+            .to_string();
 
-        let fm: SkillFrontmatter = serde_yaml::from_str(frontmatter_str)
-            .map_err(|e| AutoDevError::Agent(
-                format!("Skill frontmatter parse error in {}: {e}", path.display())
-            ))?;
+        let fm: SkillFrontmatter = serde_yaml::from_str(frontmatter_str).map_err(|e| {
+            AutoDevError::Agent(format!(
+                "Skill frontmatter parse error in {}: {e}",
+                path.display()
+            ))
+        })?;
 
         let category = if fm.category.is_empty() {
             SkillCategory::from_str(category_hint)
@@ -96,15 +112,15 @@ impl SkillLoader {
         let is_builtin = self.is_builtin_path(path);
 
         Ok(Skill {
-            name:                fm.name,
-            description:         fm.description,
+            name: fm.name,
+            description: fm.description,
             category,
-            parameters:          fm.parameters,
-            version:             fm.version,
-            author:              fm.author.unwrap_or_else(|| "AutoDev".into()),
-            tags:                fm.tags.unwrap_or_default(),
+            parameters: fm.parameters,
+            version: fm.version,
+            author: fm.author.unwrap_or_else(|| "AutoDev".into()),
+            tags: fm.tags.unwrap_or_default(),
             template,
-            file_path:           path.to_string_lossy().into_owned(),
+            file_path: path.to_string_lossy().into_owned(),
             is_builtin,
             requires_capability: fm.requires_capability,
         })

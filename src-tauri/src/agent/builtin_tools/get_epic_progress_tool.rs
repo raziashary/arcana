@@ -3,16 +3,18 @@
 // Supervisor uses this to decide which phase's tasks can be assigned next.
 // Available in FastDevelopment | Review modes.
 
+use super::super::tool_trait::{Tool, ToolContext, ToolResult};
+use crate::db::tasks::TasksDb;
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use crate::db::tasks::TasksDb;
-use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 
 pub struct GetEpicProgressTool;
 
 #[async_trait]
 impl Tool for GetEpicProgressTool {
-    fn name(&self) -> &str { "get_epic_progress" }
+    fn name(&self) -> &str {
+        "get_epic_progress"
+    }
 
     fn description(&self) -> &str {
         "Get phase-by-phase progress for an epic. Returns each phase with task counts \
@@ -34,7 +36,9 @@ impl Tool for GetEpicProgressTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let epic_id = match input["epic_id"].as_str() {
@@ -60,29 +64,37 @@ impl Tool for GetEpicProgressTool {
             }).to_string());
         }
 
-        let total_tasks: i32  = summaries.iter().map(|s| s.total_tasks).sum();
-        let total_done: i32   = summaries.iter().map(|s| s.done_tasks).sum();
-        let all_complete      = summaries.iter().all(|s| s.is_complete);
+        let total_tasks: i32 = summaries.iter().map(|s| s.total_tasks).sum();
+        let total_done: i32 = summaries.iter().map(|s| s.done_tasks).sum();
+        let all_complete = summaries.iter().all(|s| s.is_complete);
 
-        let phases_json: Vec<Value> = summaries.iter().map(|s| json!({
-            "phase":           s.phase,
-            "phase_order":     s.phase_order,
-            "milestone":       s.milestone,
-            "total_tasks":     s.total_tasks,
-            "done_tasks":      s.done_tasks,
-            "in_progress":     s.in_progress_tasks,
-            "ready_tasks":     s.ready_tasks,
-            "blocked_tasks":   s.blocked_tasks,
-            "is_complete":     s.is_complete,
-            "is_unlocked":     s.is_unlocked,
-        })).collect();
+        let phases_json: Vec<Value> = summaries
+            .iter()
+            .map(|s| {
+                json!({
+                    "phase":           s.phase,
+                    "phase_order":     s.phase_order,
+                    "milestone":       s.milestone,
+                    "total_tasks":     s.total_tasks,
+                    "done_tasks":      s.done_tasks,
+                    "in_progress":     s.in_progress_tasks,
+                    "ready_tasks":     s.ready_tasks,
+                    "blocked_tasks":   s.blocked_tasks,
+                    "is_complete":     s.is_complete,
+                    "is_unlocked":     s.is_unlocked,
+                })
+            })
+            .collect();
 
-        ToolResult::success(json!({
-            "epic_id":      epic_id,
-            "total_tasks":  total_tasks,
-            "total_done":   total_done,
-            "all_complete": all_complete,
-            "phases":       phases_json,
-        }).to_string())
+        ToolResult::success(
+            json!({
+                "epic_id":      epic_id,
+                "total_tasks":  total_tasks,
+                "total_done":   total_done,
+                "all_complete": all_complete,
+                "phases":       phases_json,
+            })
+            .to_string(),
+        )
     }
 }

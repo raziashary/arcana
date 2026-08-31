@@ -3,31 +3,31 @@
 // Phase 2:   start/stop now wired to the real RecipeScheduler (cron engine).
 // See: DEVELOPMENT_PLAN.md Phase 2 — Recipe Execution Engine
 
-use std::path::Path;
-use std::sync::Arc;
-use tauri::State;
+use crate::db::workers::{slugify, Worker, WorkersDb};
 use crate::errors::{AutoDevError, Result};
-use crate::db::workers::{Worker, WorkersDb, slugify};
 use crate::recipes::scheduler::RecipeScheduler;
 use crate::sidecar::client::OrchestratorClient;
 use crate::sidecar::resolve_orchestrator_path;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
+use std::sync::Arc;
+use tauri::State;
 
 // ─── Input / Output types ─────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 pub struct CreateWorkerInput {
-    pub name:             String,
-    pub worker_type:      String,
-    pub model:            String,
-    pub primary_repos:    Vec<String>,
+    pub name: String,
+    pub worker_type: String,
+    pub model: String,
+    pub primary_repos: Vec<String>,
     pub polling_interval: Option<i64>,
-    pub description:      Option<String>,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct CreateWorkerOutput {
-    pub id:   i64,
+    pub id: i64,
     pub slug: String,
 }
 
@@ -47,9 +47,7 @@ pub struct UpdateModelSyncResult {
 // ─── Commands ─────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn list_workers(
-    orch_client: State<'_, Arc<OrchestratorClient>>,
-) -> Result<Vec<Worker>> {
+pub async fn list_workers(orch_client: State<'_, Arc<OrchestratorClient>>) -> Result<Vec<Worker>> {
     let mut workers = WorkersDb::open()?.list()?;
 
     // Source 1 (preferred): query the live core-orchestrator over HTTP. This is
@@ -88,13 +86,14 @@ pub fn get_worker_by_slug(slug: String) -> Result<Option<Worker>> {
 
 #[tauri::command]
 pub fn create_worker(input: CreateWorkerInput) -> Result<CreateWorkerOutput> {
-    let db   = WorkersDb::open()?;
+    let db = WorkersDb::open()?;
     let slug = slugify(&input.name);
 
     if db.slug_exists(&slug)? {
-        return Err(crate::errors::AutoDevError::Agent(
-            format!("Worker slug '{}' already exists", slug)
-        ));
+        return Err(crate::errors::AutoDevError::Agent(format!(
+            "Worker slug '{}' already exists",
+            slug
+        )));
     }
 
     let interval = input.polling_interval.unwrap_or(120);
@@ -116,21 +115,22 @@ pub fn update_worker_status(worker_id: i64, status: String) -> Result<()> {
     let db = WorkersDb::open()?;
     // Resolve slug for the status push event before mutating so a missing
     // worker row still surfaces as a clean error without a phantom emit.
-    let worker = db.get_by_id(worker_id)?
+    let worker = db
+        .get_by_id(worker_id)?
         .ok_or_else(|| AutoDevError::Agent(format!("Worker id={worker_id} not found")))?;
     db.update_status(worker_id, &status)?;
     // Phase 3.0 R2 — mirror UI-driven status edits through the push channel
     // so any other subscriber (another open window, a future mobile client)
     // sees the change instantly.
     crate::events::emit_worker_status_global(crate::events::WorkerStatusPayload {
-        slug:               worker.slug,
+        slug: worker.slug,
         status,
-        previous_status:    None,
-        reason:             None,
-        cooldown_seconds:   None,
-        tick_duration_ms:   None,
-        last_outcome:       None,
-        timestamp:          chrono::Utc::now().to_rfc3339(),
+        previous_status: None,
+        reason: None,
+        cooldown_seconds: None,
+        tick_duration_ms: None,
+        last_outcome: None,
+        timestamp: chrono::Utc::now().to_rfc3339(),
     });
     Ok(())
 }
@@ -141,7 +141,7 @@ pub fn update_worker_model(worker_id: i64, model: String) -> Result<()> {
 }
 
 /// Update worker model and immediately sync to core-orchestrator.
-/// 
+///
 /// Unlike `update_worker_model` which only updates the DB, this command:
 /// 1. Updates workers.db
 /// 2. Calls core-orchestrator API to rewrite the agent YAML immediately
@@ -154,25 +154,47 @@ pub async fn update_worker_model_sync(
 ) -> Result<UpdateModelSyncResult> {
     // Step 1: Update database
     let db = WorkersDb::open()?;
-    let worker = db.get_by_id(worker_id)?
+    let worker = db
+        .get_by_id(worker_id)?
         .ok_or_else(|| AutoDevError::Agent(format!("Worker id={worker_id} not found")))?;
-    
+
     db.update_model(worker_id, &model)?;
-    
+
     // Step 2: Try to sync to core-orchestrator immediately
     let sync_result = if orch_client.is_healthy().await {
-        match orch_client.update_agent_model_by_slug(&worker.slug, &model).await {
-            Ok(true) => ("synced", format!("Model updated to {} — change active immediately", model)),
-            Ok(false) => ("pending", format!("Model updated to {} — will take effect on next agent run", model)),
+        match orch_client
+            .update_agent_model_by_slug(&worker.slug, &model)
+            .await
+        {
+            Ok(true) => (
+                "synced",
+                format!("Model updated to {} — change active immediately", model),
+            ),
+            Ok(false) => (
+                "pending",
+                format!(
+                    "Model updated to {} — will take effect on next agent run",
+                    model
+                ),
+            ),
             Err(e) => {
                 tracing::warn!("[update_worker_model_sync] orchestrator sync failed: {e}");
-                ("failed", format!("Model saved, but sync failed: {e}. Will retry on next tick."))
+                (
+                    "failed",
+                    format!("Model saved, but sync failed: {e}. Will retry on next tick."),
+                )
             }
         }
     } else {
-        ("pending", format!("Model updated to {} — will sync when core-orchestrator is online", model))
+        (
+            "pending",
+            format!(
+                "Model updated to {} — will sync when core-orchestrator is online",
+                model
+            ),
+        )
     };
-    
+
     // Step 3: Write directly to YAML so the file stays in sync regardless of
     // whether core-orchestrator is running. This is the authoritative source the
     // agent reads on boot — without this step a "pending" orchestrator sync would
@@ -180,11 +202,15 @@ pub async fn update_worker_model_sync(
     if let Ok(orch_dir) = resolve_orchestrator_path(None) {
         let agents_dir = orch_dir.join("config").join("agents");
         if let Err(e) = write_yaml_model(&agents_dir, &worker.slug, &model) {
-            tracing::warn!("[update_worker_model_sync] YAML write failed for '{}': {e}", worker.slug);
+            tracing::warn!(
+                "[update_worker_model_sync] YAML write failed for '{}': {e}",
+                worker.slug
+            );
         } else {
             tracing::info!(
                 "[update_worker_model_sync] YAML updated for '{}' → '{}'",
-                worker.slug, model
+                worker.slug,
+                model
             );
         }
     }
@@ -219,8 +245,9 @@ pub fn start_worker_recipe(
     worker_id: i64,
     scheduler: State<'_, Arc<RecipeScheduler>>,
 ) -> Result<()> {
-    let db     = WorkersDb::open()?;
-    let worker = db.get_by_id(worker_id)?
+    let db = WorkersDb::open()?;
+    let worker = db
+        .get_by_id(worker_id)?
         .ok_or_else(|| AutoDevError::Agent(format!("Worker id={worker_id} not found")))?;
     scheduler.start_worker(&worker.slug)
 }
@@ -231,8 +258,9 @@ pub fn stop_worker_recipe(
     worker_id: i64,
     scheduler: State<'_, Arc<RecipeScheduler>>,
 ) -> Result<()> {
-    let db     = WorkersDb::open()?;
-    let worker = db.get_by_id(worker_id)?
+    let db = WorkersDb::open()?;
+    let worker = db
+        .get_by_id(worker_id)?
         .ok_or_else(|| AutoDevError::Agent(format!("Worker id={worker_id} not found")))?;
     scheduler.stop_worker(&worker.slug)
 }
@@ -245,7 +273,11 @@ fn read_yaml_model(agents_dir: &Path, slug: &str) -> Option<String> {
     let yaml_path = agents_dir.join(format!("{}.yaml", slug));
     let content = std::fs::read_to_string(&yaml_path).ok()?;
     let value: serde_yaml::Value = serde_yaml::from_str(&content).ok()?;
-    value.get("llm")?.get("model")?.as_str().map(|s| s.to_string())
+    value
+        .get("llm")?
+        .get("model")?
+        .as_str()
+        .map(|s| s.to_string())
 }
 
 /// Surgically rewrite `llm.model` and `llm.provider` in `{agents_dir}/{slug}.yaml`
@@ -262,7 +294,7 @@ fn write_yaml_model(agents_dir: &Path, slug: &str, model: &str) -> Result<()> {
     let provider = model_to_provider(model);
     let mut result: Vec<String> = Vec::with_capacity(content.lines().count() + 2);
     let mut in_llm_block = false;
-    let mut model_written    = false;
+    let mut model_written = false;
     let mut provider_written = false;
 
     for line in content.lines() {
@@ -316,11 +348,12 @@ fn model_to_provider(model: &str) -> &str {
     if model.starts_with("claude") {
         "anthropic"
     } else if model.starts_with("gpt-5")
-           || model.starts_with("gpt-4")
-           || model.starts_with("gpt-3")
-           || model.starts_with("o1-")
-           || model.starts_with("o3")
-           || model.starts_with("o4-") {
+        || model.starts_with("gpt-4")
+        || model.starts_with("gpt-3")
+        || model.starts_with("o1-")
+        || model.starts_with("o3")
+        || model.starts_with("o4-")
+    {
         "openai"
     } else if model.starts_with("gemini") {
         "google"
@@ -333,9 +366,7 @@ fn model_to_provider(model: &str) -> &str {
     } else if model.starts_with("sea-lion") {
         "sealion"
     // Groq-hosted: Llama models, gpt-oss, and the groq-specific qwen variant
-    } else if model.starts_with("llama")
-           || model.starts_with("gpt-oss")
-           || model == "qwen3-32b" {
+    } else if model.starts_with("llama") || model.starts_with("gpt-oss") || model == "qwen3-32b" {
         "groq"
     // Alibaba Dashscope Qwen (qwen3-max, qwen-*)
     } else if model.starts_with("qwen") {

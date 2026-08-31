@@ -5,11 +5,11 @@ use std::path::PathBuf;
 use tokio::fs;
 use tracing::debug;
 
-use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
-use crate::hooks::{HookRegistry, HookType, HookContext, ToolCallContext};
 use super::path_jail::validate_workspace_path;
 use super::path_lock;
 use super::validate;
+use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
+use crate::hooks::{HookContext, HookRegistry, HookType, ToolCallContext};
 
 pub struct EditFileTool;
 
@@ -89,7 +89,7 @@ impl Tool for EditFileTool {
         // destination escapes the configured workspace.
         let file_path = match validate_workspace_path(&resolved, &ctx.working_dir) {
             Ok(canonical) => canonical,
-            Err(msg)      => return ToolResult::error(msg),
+            Err(msg) => return ToolResult::error(msg),
         };
 
         // Cross-tool, cross-worker per-path lock. Held across the entire
@@ -120,11 +120,14 @@ impl Tool for EditFileTool {
                         "File '{}' does not exist. To create a new file, call \
                          `write_file(path='{}', content=...)` instead — edit_file only \
                          modifies existing files.",
-                        file_path.display(), params.path
+                        file_path.display(),
+                        params.path
                     ));
                 }
                 return ToolResult::error(format!(
-                    "Failed to read file '{}': {}", file_path.display(), e
+                    "Failed to read file '{}': {}",
+                    file_path.display(),
+                    e
                 ));
             }
         };
@@ -177,27 +180,31 @@ impl Tool for EditFileTool {
         );
 
         if let Err(e) = fs::write(&file_path, &new_content).await {
-            return ToolResult::error(format!("Failed to write file '{}': {}", file_path.display(), e));
+            return ToolResult::error(format!(
+                "Failed to write file '{}': {}",
+                file_path.display(),
+                e
+            ));
         }
 
         // K.3 — Fire PostFileWrite hook (same as write_file.rs) so the graph
         // engine, telemetry, and hook consumers observe agent edits.
         let file_path_str = file_path.to_string_lossy().to_string();
         let hook_ctx = HookContext {
-            hook_type:  HookType::PostFileWrite.as_str().to_string(),
-            timestamp:  chrono::Utc::now(),
+            hook_type: HookType::PostFileWrite.as_str().to_string(),
+            timestamp: chrono::Utc::now(),
             session_id: Some(ctx.session_id.clone()),
             agent_mode: None,
             tool_call: Some(ToolCallContext {
-                id:       ctx.call_id.clone(),
-                name:     "edit_file".to_string(),
-                input:    input_for_hook,
-                result:   Some(json!({"bytes_written": new_content.len()})),
+                id: ctx.call_id.clone(),
+                name: "edit_file".to_string(),
+                input: input_for_hook,
+                result: Some(json!({"bytes_written": new_content.len()})),
                 is_error: false,
             }),
-            file_path:  Some(file_path_str),
-            task_id:    None,
-            worker_id:  None,
+            file_path: Some(file_path_str),
+            task_id: None,
+            worker_id: None,
             extra: json!({
                 "bytes_written": new_content.len(),
                 "occurrences_replaced": if params.replace_all { match_count } else { 1 },

@@ -7,22 +7,22 @@
 // Data Collection Pipeline:
 //   Events (Tauri, CLI, Workers) → Event Bus → Analytics DB → Aggregator → Dashboard UI
 
-pub mod db;
-pub mod collector;
 pub mod aggregator;
-pub mod queries;
+pub mod collector;
+pub mod db;
 pub mod exporter;
+pub mod queries;
 pub mod types;
 
-pub use db::AnalyticsDb;
-pub use collector::AnalyticsCollector;
 pub use aggregator::AnalyticsAggregator;
-pub use queries::AnalyticsQueries;
+pub use collector::AnalyticsCollector;
+pub use db::AnalyticsDb;
 pub use exporter::AnalyticsExporter;
+pub use queries::AnalyticsQueries;
 pub use types::*;
 
-use std::sync::Arc;
 use crate::errors::Result;
+use std::sync::Arc;
 
 /// Global analytics manager — singleton for event collection and queries
 pub struct AnalyticsManager {
@@ -82,15 +82,13 @@ impl AnalyticsManager {
     /// Start background aggregation job (hourly and daily rollups)
     pub fn start_aggregation_job(&self) {
         let aggregator = self.aggregator.clone();
-        std::thread::spawn(move || {
-            loop {
-                std::thread::sleep(std::time::Duration::from_secs(3600));
-                if let Err(e) = aggregator.run_hourly_rollup() {
-                    eprintln!("Hourly aggregation failed: {}", e);
-                }
-                if let Err(e) = aggregator.run_daily_rollup() {
-                    eprintln!("Daily aggregation failed: {}", e);
-                }
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(3600));
+            if let Err(e) = aggregator.run_hourly_rollup() {
+                eprintln!("Hourly aggregation failed: {}", e);
+            }
+            if let Err(e) = aggregator.run_daily_rollup() {
+                eprintln!("Daily aggregation failed: {}", e);
             }
         });
     }
@@ -115,12 +113,9 @@ pub fn install_global(manager: Arc<AnalyticsManager>) {
 /// lifetime — see `docs/endtoendrun/14may2026/02-dashboard-not-live.md`.
 /// Loud failure is strictly cheaper than another silent-data audit cycle.
 pub fn global() -> Arc<AnalyticsManager> {
-    ANALYTICS_MANAGER
-        .get()
-        .cloned()
-        .expect(
-            "analytics::install_global was not called during startup. \
+    ANALYTICS_MANAGER.get().cloned().expect(
+        "analytics::install_global was not called during startup. \
              AutoDev cannot run without a real analytics DB — see \
-             docs/endtoendrun/14may2026/02-dashboard-not-live.md."
-        )
+             docs/endtoendrun/14may2026/02-dashboard-not-live.md.",
+    )
 }

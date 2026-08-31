@@ -3,18 +3,20 @@
 // Available in FastDevelopment mode — recipe agents run in this mode.
 // Eliminates the need for Python scripts to manipulate tasks.db directly.
 
+use super::super::tool_trait::{Tool, ToolContext, ToolResult};
+use crate::db::tasks::TasksDb;
+use crate::hooks::{HookContext, HookRegistry, HookType, ToolCallContext};
+use crate::recipes::defaults::FLEET_WORKERS;
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use crate::db::tasks::TasksDb;
-use crate::hooks::{HookRegistry, HookType, HookContext, ToolCallContext};
-use crate::recipes::defaults::FLEET_WORKERS;
-use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 
 pub struct UpdateTaskStatusTool;
 
 #[async_trait]
 impl Tool for UpdateTaskStatusTool {
-    fn name(&self) -> &str { "update_task_status" }
+    fn name(&self) -> &str {
+        "update_task_status"
+    }
 
     fn description(&self) -> &str {
         "Update the status and/or assigned worker for a task on the AutoDev board. \
@@ -50,7 +52,9 @@ impl Tool for UpdateTaskStatusTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let id = match input["id"].as_i64() {
@@ -83,7 +87,7 @@ impl Tool for UpdateTaskStatusTool {
             return ToolResult::error(
                 "Invalid state: status='ready' requires assigned_worker=null. \
                  If you meant to dispatch work, call `assign_task(id, worker_slug)` instead — \
-                 it atomically sets status='assigned' AND assigned_worker."
+                 it atomically sets status='assigned' AND assigned_worker.",
             );
         }
         if matches!(status.as_str(), "assigned" | "in_progress") && assigned_worker.is_none() {
@@ -108,7 +112,7 @@ impl Tool for UpdateTaskStatusTool {
             if reason.is_empty() {
                 return ToolResult::error(
                     "status='rejected' requires a non-empty 'rejection_reason'. \
-                     Describe what failed so the worker knows what to fix."
+                     Describe what failed so the worker knows what to fix.",
                 );
             }
         }
@@ -138,27 +142,30 @@ impl Tool for UpdateTaskStatusTool {
             // just review someone else's. The qc-reviewer-* slugs all start
             // with a stable prefix; match on that.
             let role = ctx.agent_role.as_str();
-            let is_qc_reviewer = role.starts_with("qc-")
-                || role.starts_with("subagent-qc-dispatcher");
+            let is_qc_reviewer =
+                role.starts_with("qc-") || role.starts_with("subagent-qc-dispatcher");
             if !is_qc_reviewer {
                 match super::build_evidence::most_recent_build(&ctx.session_id) {
-                    None => return ToolResult::error(
-                        "Cannot move task to qc_review without recorded build evidence. \
+                    None => {
+                        return ToolResult::error(
+                            "Cannot move task to qc_review without recorded build evidence. \
                          Run your recipe's Build Validation step in the SAME tick as this \
                          status update — e.g. `bash('npm run build 2>&1 | tee build.log; \
                          echo \"EXIT:$?\"')` for Node, `bash('cargo test 2>&1 | tee \
                          build.log; echo \"EXIT:$?\"')` for Rust, or `bash('uv run pytest \
                          2>&1 | tee build.log; echo \"EXIT:$?\"')` for Python. The \
                          supervisor / qc-dispatcher requires proof the artifact builds \
-                         before any review can begin."
-                    ),
-                    Some(ev) if ev.exit_code != 0 => return ToolResult::error(&format!(
-                        "Cannot move task to qc_review — the most recent build invocation \
+                         before any review can begin.",
+                        )
+                    }
+                    Some(ev) if ev.exit_code != 0 => {
+                        return ToolResult::error(&format!(
+                            "Cannot move task to qc_review — the most recent build invocation \
                          exited with code {}. Transition to status='build_failed' instead \
                          (the worker recipe's failure branch). Most recent build: '{}'.",
-                        ev.exit_code,
-                        ev.command,
-                    )),
+                            ev.exit_code, ev.command,
+                        ))
+                    }
                     Some(_) => { /* ok — proceed */ }
                 }
             }
@@ -172,12 +179,15 @@ impl Tool for UpdateTaskStatusTool {
         // Verify task exists
         let task = match db.get_by_id(id) {
             Ok(Some(t)) => t,
-            Ok(None)    => return ToolResult::error(&format!("Task #{id} not found")),
-            Err(e)      => return ToolResult::error(&format!("Failed to fetch task: {e}")),
+            Ok(None) => return ToolResult::error(&format!("Task #{id} not found")),
+            Err(e) => return ToolResult::error(&format!("Failed to fetch task: {e}")),
         };
 
         if let Err(e) = db.update_status_with_reason(
-            id, &status, assigned_worker.as_deref(), rejection_reason.as_deref()
+            id,
+            &status,
+            assigned_worker.as_deref(),
+            rejection_reason.as_deref(),
         ) {
             return ToolResult::error(&format!("Failed to update task #{id}: {e}"));
         }
@@ -189,7 +199,7 @@ impl Tool for UpdateTaskStatusTool {
         // the target is already running.
         match status.as_str() {
             "qc_review" => crate::recipes::scheduler::kick("qc-agent"),
-            "assigned"  => {
+            "assigned" => {
                 if let Some(ref w) = assigned_worker {
                     crate::recipes::scheduler::kick(w);
                 }
@@ -198,8 +208,9 @@ impl Tool for UpdateTaskStatusTool {
             // and can begin rework without waiting for the next polling cycle.
             // Use the input assigned_worker first; fall back to the pre-existing DB value.
             // This handles QC rejections where the caller omits assigned_worker.
-            "rejected"  => {
-                let worker_to_kick = assigned_worker.as_deref()
+            "rejected" => {
+                let worker_to_kick = assigned_worker
+                    .as_deref()
                     .or_else(|| task.assigned_worker.as_deref());
                 if let Some(w) = worker_to_kick {
                     crate::recipes::scheduler::kick(w);
@@ -211,21 +222,23 @@ impl Tool for UpdateTaskStatusTool {
         // Phase 3.0 R1 — task-board push event for the UI.
         crate::events::emit_task_changed_global(crate::events::TaskChangedPayload {
             task_id: Some(id),
-            kind:    "status".into(),
-            status:  Some(status.clone()),
+            kind: "status".into(),
+            status: Some(status.clone()),
             assigned_worker: assigned_worker.clone(),
         });
 
         // BUG-004 — QC decision toast event.
         // When a task moves from qc_review → done / rejected, the QC agent has
         // rendered its verdict. Surface it as a toast so the user sees progress.
-        if matches!(task.status.as_str(), "qc_review") && matches!(status.as_str(), "done" | "rejected") {
+        if matches!(task.status.as_str(), "qc_review")
+            && matches!(status.as_str(), "done" | "rejected")
+        {
             crate::events::emit_qc_decision_global(crate::events::QcDecisionPayload {
-                task_id:          id,
-                task_title:       task.title.clone(),
-                decision:         status.clone(),
+                task_id: id,
+                task_title: task.title.clone(),
+                decision: status.clone(),
                 rejection_reason: rejection_reason.clone(),
-                worker_slug:      assigned_worker.clone().unwrap_or_else(|| "qc-agent".into()),
+                worker_slug: assigned_worker.clone().unwrap_or_else(|| "qc-agent".into()),
             });
         }
 
@@ -234,12 +247,12 @@ impl Tool for UpdateTaskStatusTool {
         // (reuses OnQcReviewStart) so telemetry and hook consumers observe
         // these transitions. Previously they fired no hooks.
         let hook_type = match status.as_str() {
-            "assigned"     => Some(HookType::OnTaskClaim),
-            "done"         => Some(HookType::OnTaskComplete),
-            "failed"       => Some(HookType::OnTaskFail),
-            "build_failed" => Some(HookType::OnTaskFail),      // K.8
-            "qc_review"    => Some(HookType::OnQcReviewStart),
-            "rejected"     => Some(HookType::OnQcReviewStart), // K.8
+            "assigned" => Some(HookType::OnTaskClaim),
+            "done" => Some(HookType::OnTaskComplete),
+            "failed" => Some(HookType::OnTaskFail),
+            "build_failed" => Some(HookType::OnTaskFail), // K.8
+            "qc_review" => Some(HookType::OnQcReviewStart),
+            "rejected" => Some(HookType::OnQcReviewStart), // K.8
             _ => None,
         };
 
@@ -276,14 +289,17 @@ impl Tool for UpdateTaskStatusTool {
             });
         }
 
-        ToolResult::success(json!({
-            "task_id":          id,
-            "title":            task.title,
-            "previous_status":  task.status.as_str(),
-            "new_status":       status,
-            "assigned_worker":  assigned_worker,
-            "rejection_reason": rejection_reason,
-            "message":          format!("✅ Task #{id} updated: status={status}")
-        }).to_string())
+        ToolResult::success(
+            json!({
+                "task_id":          id,
+                "title":            task.title,
+                "previous_status":  task.status.as_str(),
+                "new_status":       status,
+                "assigned_worker":  assigned_worker,
+                "rejection_reason": rejection_reason,
+                "message":          format!("✅ Task #{id} updated: status={status}")
+            })
+            .to_string(),
+        )
     }
 }

@@ -1,11 +1,11 @@
 // The Provider trait — common interface for all LLM providers in PA mode.
 // Pattern adopted from Goose's Provider trait (goose-main/crates/goose/src/providers/).
 
+use super::types::{CompletionRequest, CompletionResponse, ModelInfo, ProviderStatus, StreamChunk};
+use crate::errors::Result;
 use async_trait::async_trait;
 use futures::Stream;
 use std::pin::Pin;
-use crate::errors::Result;
-use super::types::{CompletionRequest, CompletionResponse, ModelInfo, ProviderStatus, StreamChunk};
 
 pub type StreamResult = Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>;
 

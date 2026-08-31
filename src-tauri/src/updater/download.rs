@@ -19,13 +19,13 @@ use super::check::PlatformAsset;
 /// Progress snapshot sent to the frontend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DownloadProgress {
-    pub version:         String,
+    pub version: String,
     pub bytes_downloaded: u64,
-    pub total_bytes:     u64,
-    pub percent:         f32,
-    pub speed_bps:       u64,
-    pub stage:           DownloadStage,
-    pub path:            Option<String>,
+    pub total_bytes: u64,
+    pub percent: f32,
+    pub speed_bps: u64,
+    pub stage: DownloadStage,
+    pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -86,7 +86,10 @@ pub async fn download_update(
 
     let append = status == reqwest::StatusCode::PARTIAL_CONTENT;
     let mut file = if append {
-        tokio::fs::OpenOptions::new().append(true).open(&dest).await?
+        tokio::fs::OpenOptions::new()
+            .append(true)
+            .open(&dest)
+            .await?
     } else {
         tokio::fs::File::create(&dest).await?
     };
@@ -95,15 +98,17 @@ pub async fn download_update(
     let mut stream = resp.bytes_stream();
     let start_time = std::time::Instant::now();
 
-    let _ = progress_tx.send(DownloadProgress {
-        version: version.to_string(),
-        bytes_downloaded,
-        total_bytes,
-        percent: 0.0,
-        speed_bps: 0,
-        stage: DownloadStage::Downloading,
-        path: None,
-    }).await;
+    let _ = progress_tx
+        .send(DownloadProgress {
+            version: version.to_string(),
+            bytes_downloaded,
+            total_bytes,
+            percent: 0.0,
+            speed_bps: 0,
+            stage: DownloadStage::Downloading,
+            path: None,
+        })
+        .await;
 
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.context("Download stream error")?;
@@ -111,37 +116,41 @@ pub async fn download_update(
         bytes_downloaded += chunk.len() as u64;
 
         let elapsed = start_time.elapsed().as_secs_f64().max(0.001);
-        let speed   = (bytes_downloaded as f64 / elapsed) as u64;
+        let speed = (bytes_downloaded as f64 / elapsed) as u64;
         let percent = if total_bytes > 0 {
             (bytes_downloaded as f32 / total_bytes as f32 * 100.0).min(100.0)
         } else {
             0.0
         };
 
-        let _ = progress_tx.send(DownloadProgress {
-            version: version.to_string(),
-            bytes_downloaded,
-            total_bytes,
-            percent,
-            speed_bps: speed,
-            stage: DownloadStage::Downloading,
-            path: None,
-        }).await;
+        let _ = progress_tx
+            .send(DownloadProgress {
+                version: version.to_string(),
+                bytes_downloaded,
+                total_bytes,
+                percent,
+                speed_bps: speed,
+                stage: DownloadStage::Downloading,
+                path: None,
+            })
+            .await;
     }
 
     file.flush().await?;
     drop(file);
 
     // Signal ready for verification
-    let _ = progress_tx.send(DownloadProgress {
-        version: version.to_string(),
-        bytes_downloaded,
-        total_bytes,
-        percent: 100.0,
-        speed_bps: 0,
-        stage: DownloadStage::Verifying,
-        path: Some(dest.to_string_lossy().into_owned()),
-    }).await;
+    let _ = progress_tx
+        .send(DownloadProgress {
+            version: version.to_string(),
+            bytes_downloaded,
+            total_bytes,
+            percent: 100.0,
+            speed_bps: 0,
+            stage: DownloadStage::Verifying,
+            path: Some(dest.to_string_lossy().into_owned()),
+        })
+        .await;
 
     Ok(dest)
 }
@@ -154,13 +163,19 @@ pub async fn download_update(
 pub async fn download_signature(sig_url: &str) -> Result<Vec<u8>> {
     require_https(sig_url).context("Signature URL rejected")?;
     let client = sidecar_client()?;
-    let resp = client.get(sig_url).send().await
+    let resp = client
+        .get(sig_url)
+        .send()
+        .await
         .with_context(|| format!("Signature request failed: {sig_url}"))?;
     let status = resp.status();
     if !status.is_success() {
         anyhow::bail!("Signature server returned {status} for {sig_url}");
     }
-    let bytes = resp.bytes().await.context("Reading signature body failed")?;
+    let bytes = resp
+        .bytes()
+        .await
+        .context("Reading signature body failed")?;
     Ok(bytes.to_vec())
 }
 
@@ -172,7 +187,10 @@ pub async fn download_signature(sig_url: &str) -> Result<Vec<u8>> {
 pub async fn download_checksum(checksum_url: &str) -> Result<String> {
     require_https(checksum_url).context("Checksum URL rejected")?;
     let client = sidecar_client()?;
-    let resp = client.get(checksum_url).send().await
+    let resp = client
+        .get(checksum_url)
+        .send()
+        .await
         .with_context(|| format!("Checksum request failed: {checksum_url}"))?;
     let status = resp.status();
     if !status.is_success() {
@@ -235,7 +253,14 @@ pub fn download_dir() -> Result<PathBuf> {
 
 /// Filenames we are willing to write, by extension.
 const KNOWN_EXTENSIONS: &[&str] = &[
-    ".msi", ".exe", ".deb", ".appimage", ".dmg", ".zip", ".gz", ".sig",
+    ".msi",
+    ".exe",
+    ".deb",
+    ".appimage",
+    ".dmg",
+    ".zip",
+    ".gz",
+    ".sig",
 ];
 
 /// Derive a safe on-disk filename for a download URL.
@@ -328,14 +353,14 @@ mod tests {
         let dir = PathBuf::from("/base/updates");
 
         for url in [
-            r"https://example.com/..\..\evil.exe",        // Windows separator
-            "https://example.com/../../evil.exe",         // POSIX traversal
+            r"https://example.com/..\..\evil.exe", // Windows separator
+            "https://example.com/../../evil.exe",  // POSIX traversal
             r"https://example.com/C:\Users\Public\x.exe", // absolute → join discarded base
-            "https://example.com/a.msi?token=abc",        // query string
-            "https://example.com/releases/",              // trailing slash → empty
-            "https://example.com/..",                     // parent directory
-            "https://example.com/a%2F..%2Fevil.exe",      // percent-encoded separator
-            "https://example.com/payload.bat",            // extension off the allow-list
+            "https://example.com/a.msi?token=abc", // query string
+            "https://example.com/releases/",       // trailing slash → empty
+            "https://example.com/..",              // parent directory
+            "https://example.com/a%2F..%2Fevil.exe", // percent-encoded separator
+            "https://example.com/payload.bat",     // extension off the allow-list
         ] {
             let name = safe_filename(url);
             let joined = dir.join(&name);
@@ -348,7 +373,10 @@ mod tests {
                 !name.contains(['/', '\\', ':', '?', '%']),
                 "unsafe characters survived in {name:?} (from {url})"
             );
-            assert!(!name.is_empty() && name != "." && name != "..", "bad name {name:?}");
+            assert!(
+                !name.is_empty() && name != "." && name != "..",
+                "bad name {name:?}"
+            );
         }
     }
 
@@ -359,10 +387,22 @@ mod tests {
     /// which would reintroduce the escape, fails here.
     #[test]
     fn safe_filename_normalises_rather_than_rejecting_where_it_can() {
-        assert_eq!(safe_filename(r"https://example.com/..\..\evil.exe"), "evil.exe");
-        assert_eq!(safe_filename("https://example.com/../../evil.exe"), "evil.exe");
-        assert_eq!(safe_filename(r"https://example.com/C:\Users\Public\x.exe"), "x.exe");
-        assert_eq!(safe_filename("https://example.com/a.msi?token=abc"), "a.msi");
+        assert_eq!(
+            safe_filename(r"https://example.com/..\..\evil.exe"),
+            "evil.exe"
+        );
+        assert_eq!(
+            safe_filename("https://example.com/../../evil.exe"),
+            "evil.exe"
+        );
+        assert_eq!(
+            safe_filename(r"https://example.com/C:\Users\Public\x.exe"),
+            "x.exe"
+        );
+        assert_eq!(
+            safe_filename("https://example.com/a.msi?token=abc"),
+            "a.msi"
+        );
     }
 
     /// The shapes that cannot yield a safe name must fall back, not improvise.

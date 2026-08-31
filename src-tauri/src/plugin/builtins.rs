@@ -218,40 +218,52 @@ fn worker_qa() -> PluginManifest {
 
 fn worker_security() -> PluginManifest {
     PluginManifest {
-        name:        "worker-security".into(),
-        version:     "1.0.0".into(),
-        description: "Security worker environment: static analysis, secret scanning, and CVE tooling".into(),
-        author:      "AIRS Foundry".into(),
+        name: "worker-security".into(),
+        version: "1.0.0".into(),
+        description:
+            "Security worker environment: static analysis, secret scanning, and CVE tooling".into(),
+        author: "AIRS Foundry".into(),
         plugin_type: PluginType::Security,
-        os_support:  vec!["windows".into(), "linux".into(), "macos".into()],
-        builtin:     true,
-        icon:        "🔒".into(),
-        tags:        vec!["security".into(), "sast".into(), "secrets".into(), "audit".into()],
+        os_support: vec!["windows".into(), "linux".into(), "macos".into()],
+        builtin: true,
+        icon: "🔒".into(),
+        tags: vec![
+            "security".into(),
+            "sast".into(),
+            "secrets".into(),
+            "audit".into(),
+        ],
         dependencies: vec![
             PluginDependency {
-                name:        "python".into(),
-                version:     ">=3.10".into(),
-                check_cmd:   Some("python3 --version".into()),
+                name: "python".into(),
+                version: ">=3.10".into(),
+                check_cmd: Some("python3 --version".into()),
                 install_cmd: None,
-                optional:    false,
+                optional: false,
             },
             PluginDependency {
-                name:        "git".into(),
-                version:     ">=2.0".into(),
-                check_cmd:   Some("git --version".into()),
+                name: "git".into(),
+                version: ">=2.0".into(),
+                check_cmd: Some("git --version".into()),
                 install_cmd: None,
-                optional:    false,
+                optional: false,
             },
         ],
         commands: PluginCommands {
             install: Some(PluginOsCommands {
-                linux:   Some("uv pip install bandit trufflehog semgrep && cargo install cargo-audit".into()),
-                macos:   Some("uv pip install bandit trufflehog semgrep && cargo install cargo-audit".into()),
-                windows: Some("uv pip install bandit trufflehog semgrep; cargo install cargo-audit".into()),
+                linux: Some(
+                    "uv pip install bandit trufflehog semgrep && cargo install cargo-audit".into(),
+                ),
+                macos: Some(
+                    "uv pip install bandit trufflehog semgrep && cargo install cargo-audit".into(),
+                ),
+                windows: Some(
+                    "uv pip install bandit trufflehog semgrep; cargo install cargo-audit".into(),
+                ),
             }),
-            verify:    Some("bandit --version && semgrep --version".into()),
+            verify: Some("bandit --version && semgrep --version".into()),
             uninstall: None,
-            run:       None,
+            run: None,
         },
         config: None,
     }

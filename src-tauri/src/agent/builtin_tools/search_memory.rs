@@ -8,7 +8,7 @@ use serde_json::json;
 use tracing::debug;
 
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
-use crate::memory::{RecallRequest, recall};
+use crate::memory::{recall, RecallRequest};
 
 pub struct SearchMemoryTool;
 
@@ -49,60 +49,68 @@ impl Tool for SearchMemoryTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         let query = match input["query"].as_str() {
             Some(q) => q.to_string(),
-            None    => return ToolResult::error("Missing required field: query"),
+            None => return ToolResult::error("Missing required field: query"),
         };
 
-        let limit = input["limit"].as_u64().map(|n| n.min(30) as u32).unwrap_or(10);
+        let limit = input["limit"]
+            .as_u64()
+            .map(|n| n.min(30) as u32)
+            .unwrap_or(10);
 
         let tier_filter = match input["tier"].as_str().unwrap_or("all") {
-            "episodic"   => Some(vec![crate::memory::MemoryTier::Episodic]),
-            "semantic"   => Some(vec![crate::memory::MemoryTier::Semantic]),
+            "episodic" => Some(vec![crate::memory::MemoryTier::Episodic]),
+            "semantic" => Some(vec![crate::memory::MemoryTier::Semantic]),
             "procedural" => Some(vec![crate::memory::MemoryTier::Procedural]),
-            _            => None,
+            _ => None,
         };
 
         let req = RecallRequest {
-            session_id:  ctx.session_id.clone(),
-            query:       query.clone(),
+            session_id: ctx.session_id.clone(),
+            query: query.clone(),
             working_dir: Some(ctx.working_dir.clone()),
             tier_filter,
-            limit:       Some(limit),
+            limit: Some(limit),
         };
 
         debug!("[search_memory] query={query:?} limit={limit}");
 
         let results = match recall::search_all(&req) {
-            Ok(r)  => r,
+            Ok(r) => r,
             Err(e) => return ToolResult::error(format!("Memory search failed: {e}")),
         };
 
         if results.is_empty() {
             return ToolResult::success(
                 serde_json::to_string_pretty(
-                    &json!({ "results": [], "message": "No memory entries found for this query." })
-                ).unwrap_or_default()
+                    &json!({ "results": [], "message": "No memory entries found for this query." }),
+                )
+                .unwrap_or_default(),
             );
         }
 
         let items: Vec<serde_json::Value> = results
             .iter()
-            .map(|r| json!({
-                "tier":       format!("{:?}", r.tier).to_lowercase(),
-                "id":         r.id,
-                "content":    r.content,
-                "score":      format!("{:.2}", r.score),
-                "created_at": r.created_at.to_rfc3339()
-            }))
+            .map(|r| {
+                json!({
+                    "tier":       format!("{:?}", r.tier).to_lowercase(),
+                    "id":         r.id,
+                    "content":    r.content,
+                    "score":      format!("{:.2}", r.score),
+                    "created_at": r.created_at.to_rfc3339()
+                })
+            })
             .collect();
 
         ToolResult::success(
             serde_json::to_string_pretty(&json!({ "results": items, "total": items.len() }))
-                .unwrap_or_default()
+                .unwrap_or_default(),
         )
     }
 }

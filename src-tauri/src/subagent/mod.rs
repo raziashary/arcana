@@ -13,15 +13,15 @@
 //   pool.rs     — concurrency limits (global / per-parent / depth)
 //   manager.rs  — registry + event pump + orphan cleanup
 
-pub mod types;
-pub mod slug;
+pub mod manager;
 pub mod native_runner;
 pub mod pool;
-pub mod manager;
+pub mod slug;
+pub mod types;
 
-pub use types::{
-    SubagentConfig, SubagentHandle, SubagentStatus, SubagentSummary,
-    SubagentResult, SubagentEvent, SpawnSubagentInput, SpawnParallelSubagentsInput,
-};
 pub use manager::SubagentManager;
-pub use pool::{SubagentPool, MAX_GLOBAL_CONCURRENT, MAX_PER_PARENT, MAX_NESTING_DEPTH};
+pub use pool::{SubagentPool, MAX_GLOBAL_CONCURRENT, MAX_NESTING_DEPTH, MAX_PER_PARENT};
+pub use types::{
+    SpawnParallelSubagentsInput, SpawnSubagentInput, SubagentConfig, SubagentEvent, SubagentHandle,
+    SubagentResult, SubagentStatus, SubagentSummary,
+};

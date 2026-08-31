@@ -1,5 +1,5 @@
 use colored::Colorize;
-use comfy_table::{Table, Cell, Attribute, Color};
+use comfy_table::{Attribute, Cell, Color, Table};
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -22,19 +22,28 @@ pub struct OutputContext {
 
 impl OutputContext {
     pub fn print_table(&self, headers: &[&str], rows: Vec<Vec<String>>) {
-        if self.quiet { return; }
+        if self.quiet {
+            return;
+        }
         match self.format {
             OutputFormat::Json => {
-                let objects: Vec<serde_json::Value> = rows.iter().map(|row| {
-                    let mut map = serde_json::Map::new();
-                    for (i, h) in headers.iter().enumerate() {
-                        map.insert(h.to_string(), serde_json::Value::String(
-                            row.get(i).cloned().unwrap_or_default()
-                        ));
-                    }
-                    serde_json::Value::Object(map)
-                }).collect();
-                println!("{}", serde_json::to_string_pretty(&objects).unwrap_or_default());
+                let objects: Vec<serde_json::Value> = rows
+                    .iter()
+                    .map(|row| {
+                        let mut map = serde_json::Map::new();
+                        for (i, h) in headers.iter().enumerate() {
+                            map.insert(
+                                h.to_string(),
+                                serde_json::Value::String(row.get(i).cloned().unwrap_or_default()),
+                            );
+                        }
+                        serde_json::Value::Object(map)
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&objects).unwrap_or_default()
+                );
             }
             OutputFormat::Plain => {
                 for row in &rows {
@@ -44,9 +53,9 @@ impl OutputContext {
             OutputFormat::Table => {
                 let mut table = Table::new();
                 table.set_header(
-                    headers.iter().map(|h| {
-                        Cell::new(h).add_attribute(Attribute::Bold).fg(Color::Cyan)
-                    })
+                    headers
+                        .iter()
+                        .map(|h| Cell::new(h).add_attribute(Attribute::Bold).fg(Color::Cyan)),
                 );
                 for row in rows {
                     table.add_row(row);
@@ -57,10 +66,15 @@ impl OutputContext {
     }
 
     pub fn print_json<T: Serialize>(&self, value: &T) {
-        if self.quiet { return; }
+        if self.quiet {
+            return;
+        }
         match self.format {
             OutputFormat::Json | OutputFormat::Table => {
-                println!("{}", serde_json::to_string_pretty(value).unwrap_or_default());
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(value).unwrap_or_default()
+                );
             }
             OutputFormat::Plain => {
                 println!("{}", serde_json::to_string(value).unwrap_or_default());
@@ -69,7 +83,9 @@ impl OutputContext {
     }
 
     pub fn print_kv(&self, pairs: &[(&str, &str)]) {
-        if self.quiet { return; }
+        if self.quiet {
+            return;
+        }
         match self.format {
             OutputFormat::Json => {
                 let mut map = serde_json::Map::new();
@@ -86,8 +102,12 @@ impl OutputContext {
             OutputFormat::Table => {
                 let mut table = Table::new();
                 table.set_header(vec![
-                    Cell::new("Key").add_attribute(Attribute::Bold).fg(Color::Cyan),
-                    Cell::new("Value").add_attribute(Attribute::Bold).fg(Color::Cyan),
+                    Cell::new("Key")
+                        .add_attribute(Attribute::Bold)
+                        .fg(Color::Cyan),
+                    Cell::new("Value")
+                        .add_attribute(Attribute::Bold)
+                        .fg(Color::Cyan),
                 ]);
                 for (k, v) in pairs {
                     table.add_row(vec![k.to_string(), v.to_string()]);
@@ -98,7 +118,9 @@ impl OutputContext {
     }
 
     pub fn success(&self, msg: &str) {
-        if self.quiet { return; }
+        if self.quiet {
+            return;
+        }
         if self.format == OutputFormat::Json {
             println!("{}", serde_json::json!({"status": "ok", "message": msg}));
         } else {
@@ -115,13 +137,19 @@ impl OutputContext {
     }
 
     pub fn info(&self, msg: &str) {
-        if self.quiet { return; }
-        if self.format == OutputFormat::Json { return; }
+        if self.quiet {
+            return;
+        }
+        if self.format == OutputFormat::Json {
+            return;
+        }
         println!("{}", msg.dimmed());
     }
 
     pub fn warn(&self, msg: &str) {
-        if self.quiet { return; }
+        if self.quiet {
+            return;
+        }
         if self.format == OutputFormat::Json {
             eprintln!("{}", serde_json::json!({"status": "warn", "message": msg}));
         } else {

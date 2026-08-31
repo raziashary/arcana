@@ -1,11 +1,11 @@
 // Analytics database — SQLite schema and migrations for cost tracking
-use rusqlite::{Connection, params, OptionalExtension};
-use chrono::{Utc, NaiveDate};
+use super::types::*;
+use crate::db::autodev_dir;
+use crate::errors::{AutoDevError, Result};
+use chrono::{NaiveDate, Utc};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::json;
 use std::collections::HashMap;
-use crate::errors::{AutoDevError, Result};
-use crate::db::autodev_dir;
-use super::types::*;
 use std::sync::Mutex;
 
 pub struct AnalyticsDb {
@@ -22,14 +22,16 @@ impl AnalyticsDb {
         let dir = autodev_dir()?;
         let db_path = dir.join("analytics.db");
 
-        let conn = Connection::open(&db_path)
-            .map_err(|e| AutoDevError::Database(e))?;
+        let conn = Connection::open(&db_path).map_err(|e| AutoDevError::Database(e))?;
 
         // Enable foreign keys
         conn.execute("PRAGMA foreign_keys = ON", [])
             .map_err(|e| AutoDevError::Database(e))?;
 
-        let db = Self { conn: Mutex::new(conn), path: db_path };
+        let db = Self {
+            conn: Mutex::new(conn),
+            path: db_path,
+        };
         db.migrate().await?;
         Ok(db)
     }
@@ -41,7 +43,10 @@ impl AnalyticsDb {
 
     /// Run migrations to create tables if they don't exist
     async fn migrate(&self) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
         conn.execute_batch(
             r#"
             CREATE TABLE IF NOT EXISTS token_usage (
@@ -120,8 +125,9 @@ impl AnalyticsDb {
             CREATE INDEX IF NOT EXISTS idx_worker_stats_date ON worker_stats(date);
             CREATE INDEX IF NOT EXISTS idx_worker_stats_worker ON worker_stats(worker_id);
             CREATE INDEX IF NOT EXISTS idx_system_events_timestamp ON system_events(timestamp);
-            "#
-        ).map_err(|e| AutoDevError::Database(e))?;
+            "#,
+        )
+        .map_err(|e| AutoDevError::Database(e))?;
 
         Ok(())
     }
@@ -131,7 +137,10 @@ impl AnalyticsDb {
     // ═══════════════════════════════════════════════════════════════════════════
 
     pub fn insert_token_usage(&self, record: &TokenUsageRecord) -> Result<i64> {
-        let mut conn = self.conn.lock().map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
         conn.execute(
             "INSERT INTO token_usage (timestamp, session_id, agent_type, provider, model, 
              prompt_tokens, completion_tokens, total_tokens, thinking_tokens, cost_usd, request_type)
@@ -155,34 +164,41 @@ impl AnalyticsDb {
     }
 
     pub fn get_token_usage_by_date(&self, date: NaiveDate) -> Result<Vec<TokenUsageRecord>> {
-        let conn = self.conn.lock().map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
-        let mut stmt = conn.prepare(
-            "SELECT id, timestamp, session_id, agent_type, provider, model, prompt_tokens, 
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, timestamp, session_id, agent_type, provider, model, prompt_tokens, 
              completion_tokens, total_tokens, thinking_tokens, cost_usd, request_type
-             FROM token_usage WHERE DATE(timestamp) = ? ORDER BY timestamp DESC"
-        ).map_err(|e| AutoDevError::Database(e))?;
+             FROM token_usage WHERE DATE(timestamp) = ? ORDER BY timestamp DESC",
+            )
+            .map_err(|e| AutoDevError::Database(e))?;
 
         let date_str = date.to_string();
-        let records = stmt.query_map(params![date_str], |row| {
-            let ts_str: String = row.get(1)?;
-            let timestamp = chrono::DateTime::parse_from_rfc3339(&ts_str)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now());
-            Ok(TokenUsageRecord {
-                id: row.get(0)?,
-                timestamp,
-                session_id: row.get(2)?,
-                agent_type: row.get(3)?,
-                provider: row.get(4)?,
-                model: row.get(5)?,
-                prompt_tokens: row.get(6)?,
-                completion_tokens: row.get(7)?,
-                total_tokens: row.get(8)?,
-                thinking_tokens: row.get(9)?,
-                cost_usd: row.get(10)?,
-                request_type: row.get(11)?,
+        let records = stmt
+            .query_map(params![date_str], |row| {
+                let ts_str: String = row.get(1)?;
+                let timestamp = chrono::DateTime::parse_from_rfc3339(&ts_str)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now());
+                Ok(TokenUsageRecord {
+                    id: row.get(0)?,
+                    timestamp,
+                    session_id: row.get(2)?,
+                    agent_type: row.get(3)?,
+                    provider: row.get(4)?,
+                    model: row.get(5)?,
+                    prompt_tokens: row.get(6)?,
+                    completion_tokens: row.get(7)?,
+                    total_tokens: row.get(8)?,
+                    thinking_tokens: row.get(9)?,
+                    cost_usd: row.get(10)?,
+                    request_type: row.get(11)?,
+                })
             })
-        }).map_err(|e| AutoDevError::Database(e))?
+            .map_err(|e| AutoDevError::Database(e))?
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| AutoDevError::Database(e))?;
 
@@ -194,9 +210,12 @@ impl AnalyticsDb {
     // ═══════════════════════════════════════════════════════════════════════════
 
     pub fn insert_daily_cost(&self, record: &DailyCostRecord) -> Result<()> {
-        let mut conn = self.conn.lock().map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
-        let provider_json = serde_json::to_string(&record.provider_breakdown)
-            .unwrap_or_else(|_| "{}".to_string());
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
+        let provider_json =
+            serde_json::to_string(&record.provider_breakdown).unwrap_or_else(|_| "{}".to_string());
         let agent_json = serde_json::to_string(&record.agent_type_breakdown)
             .unwrap_or_else(|_| "{}".to_string());
 
@@ -220,59 +239,77 @@ impl AnalyticsDb {
     }
 
     pub fn get_daily_cost(&self, date: NaiveDate) -> Result<Option<DailyCostRecord>> {
-        let conn = self.conn.lock().map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
-        let mut stmt = conn.prepare(
-            "SELECT date, total_cost_usd, total_tokens, session_count, message_count, 
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT date, total_cost_usd, total_tokens, session_count, message_count, 
              tool_call_count, provider_breakdown, agent_type_breakdown
-             FROM daily_costs WHERE date = ?"
-        ).map_err(|e| AutoDevError::Database(e))?;
+             FROM daily_costs WHERE date = ?",
+            )
+            .map_err(|e| AutoDevError::Database(e))?;
 
         let date_str = date.to_string();
-        let record = stmt.query_row(params![date_str], |row| {
-            let provider_json: String = row.get(6)?;
-            let agent_json: String = row.get(7)?;
-            let date_str: String = row.get(0)?;
-            Ok(DailyCostRecord {
-                date: NaiveDate::parse_from_str(&date_str, "%Y-%m-%d").unwrap_or(date),
-                total_cost_usd: row.get(1)?,
-                total_tokens: row.get(2)?,
-                session_count: row.get(3)?,
-                message_count: row.get(4)?,
-                tool_call_count: row.get(5)?,
-                provider_breakdown: serde_json::from_str(&provider_json).unwrap_or_default(),
-                agent_type_breakdown: serde_json::from_str(&agent_json).unwrap_or_default(),
+        let record = stmt
+            .query_row(params![date_str], |row| {
+                let provider_json: String = row.get(6)?;
+                let agent_json: String = row.get(7)?;
+                let date_str: String = row.get(0)?;
+                Ok(DailyCostRecord {
+                    date: NaiveDate::parse_from_str(&date_str, "%Y-%m-%d").unwrap_or(date),
+                    total_cost_usd: row.get(1)?,
+                    total_tokens: row.get(2)?,
+                    session_count: row.get(3)?,
+                    message_count: row.get(4)?,
+                    tool_call_count: row.get(5)?,
+                    provider_breakdown: serde_json::from_str(&provider_json).unwrap_or_default(),
+                    agent_type_breakdown: serde_json::from_str(&agent_json).unwrap_or_default(),
+                })
             })
-        }).optional()
+            .optional()
             .map_err(|e| AutoDevError::Database(e))?;
 
         Ok(record)
     }
 
-    pub fn get_daily_costs_range(&self, start: NaiveDate, end: NaiveDate) -> Result<Vec<DailyCostRecord>> {
-        let conn = self.conn.lock().map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
-        let mut stmt = conn.prepare(
-            "SELECT date, total_cost_usd, total_tokens, session_count, message_count, 
+    pub fn get_daily_costs_range(
+        &self,
+        start: NaiveDate,
+        end: NaiveDate,
+    ) -> Result<Vec<DailyCostRecord>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT date, total_cost_usd, total_tokens, session_count, message_count, 
              tool_call_count, provider_breakdown, agent_type_breakdown
-             FROM daily_costs WHERE date BETWEEN ? AND ? ORDER BY date ASC"
-        ).map_err(|e| AutoDevError::Database(e))?;
+             FROM daily_costs WHERE date BETWEEN ? AND ? ORDER BY date ASC",
+            )
+            .map_err(|e| AutoDevError::Database(e))?;
 
         let start_str = start.to_string();
         let end_str = end.to_string();
-        let records = stmt.query_map(params![start_str, end_str], |row| {
-            let provider_json: String = row.get(6)?;
-            let agent_json: String = row.get(7)?;
-            let date_str: String = row.get(0)?;
-            Ok(DailyCostRecord {
-                date: NaiveDate::parse_from_str(&date_str, "%Y-%m-%d").unwrap_or(start),
-                total_cost_usd: row.get(1)?,
-                total_tokens: row.get(2)?,
-                session_count: row.get(3)?,
-                message_count: row.get(4)?,
-                tool_call_count: row.get(5)?,
-                provider_breakdown: serde_json::from_str(&provider_json).unwrap_or_default(),
-                agent_type_breakdown: serde_json::from_str(&agent_json).unwrap_or_default(),
+        let records = stmt
+            .query_map(params![start_str, end_str], |row| {
+                let provider_json: String = row.get(6)?;
+                let agent_json: String = row.get(7)?;
+                let date_str: String = row.get(0)?;
+                Ok(DailyCostRecord {
+                    date: NaiveDate::parse_from_str(&date_str, "%Y-%m-%d").unwrap_or(start),
+                    total_cost_usd: row.get(1)?,
+                    total_tokens: row.get(2)?,
+                    session_count: row.get(3)?,
+                    message_count: row.get(4)?,
+                    tool_call_count: row.get(5)?,
+                    provider_breakdown: serde_json::from_str(&provider_json).unwrap_or_default(),
+                    agent_type_breakdown: serde_json::from_str(&agent_json).unwrap_or_default(),
+                })
             })
-        }).map_err(|e| AutoDevError::Database(e))?
+            .map_err(|e| AutoDevError::Database(e))?
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| AutoDevError::Database(e))?;
 
@@ -284,7 +321,10 @@ impl AnalyticsDb {
     // ═══════════════════════════════════════════════════════════════════════════
 
     pub fn insert_worker_stats(&self, record: &WorkerStatsRecord) -> Result<()> {
-        let mut conn = self.conn.lock().map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
         conn.execute(
             "INSERT OR REPLACE INTO worker_stats (worker_id, date, tasks_completed, tasks_failed, 
              time_spent_minutes, cost_usd, avg_task_duration_minutes, success_rate, last_heartbeat)
@@ -300,7 +340,8 @@ impl AnalyticsDb {
                 record.success_rate,
                 record.last_heartbeat.map(|dt| dt.to_rfc3339()),
             ],
-        ).map_err(|e| AutoDevError::Database(e))?;
+        )
+        .map_err(|e| AutoDevError::Database(e))?;
 
         Ok(())
     }
@@ -314,9 +355,13 @@ impl AnalyticsDb {
         start: NaiveDate,
         end: NaiveDate,
     ) -> Result<Option<WorkerStatsRecord>> {
-        let conn = self.conn.lock().map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
-        let mut stmt = conn.prepare(
-            "SELECT
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT
                  worker_id,
                  SUM(tasks_completed)        AS tasks_completed,
                  SUM(tasks_failed)           AS tasks_failed,
@@ -326,43 +371,55 @@ impl AnalyticsDb {
                  MAX(last_heartbeat)         AS last_heartbeat
              FROM worker_stats
              WHERE worker_id = ? AND date BETWEEN ? AND ?
-             GROUP BY worker_id"
-        ).map_err(|e| AutoDevError::Database(e))?;
+             GROUP BY worker_id",
+            )
+            .map_err(|e| AutoDevError::Database(e))?;
 
         let start_str = start.to_string();
-        let end_str   = end.to_string();
-        let record = stmt.query_row(params![worker_id, start_str, end_str], |row| {
-            let tasks_completed: i32 = row.get(1)?;
-            let tasks_failed: i32    = row.get(2)?;
-            let total = tasks_completed + tasks_failed;
-            let success_rate = if total > 0 {
-                tasks_completed as f64 / total as f64
-            } else {
-                0.0
-            };
-            let hb_str: Option<String> = row.get(6)?;
-            let last_heartbeat = hb_str.and_then(|s| {
-                chrono::DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))
-            });
-            Ok(WorkerStatsRecord {
-                worker_id:                row.get(0)?,
-                date:                     end,   // range end as the "as of" date
-                tasks_completed,
-                tasks_failed,
-                time_spent_minutes:       row.get(3)?,
-                cost_usd:                 row.get(4)?,
-                avg_task_duration_minutes: row.get::<_, f64>(5).unwrap_or(0.0) as i32,
-                success_rate,
-                last_heartbeat,
+        let end_str = end.to_string();
+        let record = stmt
+            .query_row(params![worker_id, start_str, end_str], |row| {
+                let tasks_completed: i32 = row.get(1)?;
+                let tasks_failed: i32 = row.get(2)?;
+                let total = tasks_completed + tasks_failed;
+                let success_rate = if total > 0 {
+                    tasks_completed as f64 / total as f64
+                } else {
+                    0.0
+                };
+                let hb_str: Option<String> = row.get(6)?;
+                let last_heartbeat = hb_str.and_then(|s| {
+                    chrono::DateTime::parse_from_rfc3339(&s)
+                        .ok()
+                        .map(|dt| dt.with_timezone(&Utc))
+                });
+                Ok(WorkerStatsRecord {
+                    worker_id: row.get(0)?,
+                    date: end, // range end as the "as of" date
+                    tasks_completed,
+                    tasks_failed,
+                    time_spent_minutes: row.get(3)?,
+                    cost_usd: row.get(4)?,
+                    avg_task_duration_minutes: row.get::<_, f64>(5).unwrap_or(0.0) as i32,
+                    success_rate,
+                    last_heartbeat,
+                })
             })
-        }).optional()
+            .optional()
             .map_err(|e| AutoDevError::Database(e))?;
 
         Ok(record)
     }
 
-    pub fn get_worker_stats(&self, worker_id: &str, date: NaiveDate) -> Result<Option<WorkerStatsRecord>> {
-        let conn = self.conn.lock().map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
+    pub fn get_worker_stats(
+        &self,
+        worker_id: &str,
+        date: NaiveDate,
+    ) -> Result<Option<WorkerStatsRecord>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
         let mut stmt = conn.prepare(
             "SELECT worker_id, date, tasks_completed, tasks_failed, time_spent_minutes, cost_usd, 
              avg_task_duration_minutes, success_rate, last_heartbeat
@@ -370,22 +427,28 @@ impl AnalyticsDb {
         ).map_err(|e| AutoDevError::Database(e))?;
 
         let date_str = date.to_string();
-        let record = stmt.query_row(params![worker_id, date_str], |row| {
-            let date_str: String = row.get(1)?;
-            let hb_str: Option<String> = row.get(8)?;
-            let last_heartbeat = hb_str.and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc)));
-            Ok(WorkerStatsRecord {
-                worker_id: row.get(0)?,
-                date: NaiveDate::parse_from_str(&date_str, "%Y-%m-%d").unwrap_or(date),
-                tasks_completed: row.get(2)?,
-                tasks_failed: row.get(3)?,
-                time_spent_minutes: row.get(4)?,
-                cost_usd: row.get(5)?,
-                avg_task_duration_minutes: row.get(6)?,
-                success_rate: row.get(7)?,
-                last_heartbeat,
+        let record = stmt
+            .query_row(params![worker_id, date_str], |row| {
+                let date_str: String = row.get(1)?;
+                let hb_str: Option<String> = row.get(8)?;
+                let last_heartbeat = hb_str.and_then(|s| {
+                    chrono::DateTime::parse_from_rfc3339(&s)
+                        .ok()
+                        .map(|dt| dt.with_timezone(&Utc))
+                });
+                Ok(WorkerStatsRecord {
+                    worker_id: row.get(0)?,
+                    date: NaiveDate::parse_from_str(&date_str, "%Y-%m-%d").unwrap_or(date),
+                    tasks_completed: row.get(2)?,
+                    tasks_failed: row.get(3)?,
+                    time_spent_minutes: row.get(4)?,
+                    cost_usd: row.get(5)?,
+                    avg_task_duration_minutes: row.get(6)?,
+                    success_rate: row.get(7)?,
+                    last_heartbeat,
+                })
             })
-        }).optional()
+            .optional()
             .map_err(|e| AutoDevError::Database(e))?;
 
         Ok(record)
@@ -396,7 +459,10 @@ impl AnalyticsDb {
     // ═══════════════════════════════════════════════════════════════════════════
 
     pub fn insert_api_failure(&self, record: &ApiFailureRecord) -> Result<i64> {
-        let mut conn = self.conn.lock().map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
         conn.execute(
             "INSERT INTO api_failures (timestamp, provider, error_type, error_message, request_id, retry_count, resolved)
              VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -415,28 +481,33 @@ impl AnalyticsDb {
     }
 
     pub fn get_api_failures_recent(&self, hours: i32) -> Result<Vec<ApiFailureRecord>> {
-        let conn = self.conn.lock().map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
         let mut stmt = conn.prepare(
             "SELECT id, timestamp, provider, error_type, error_message, request_id, retry_count, resolved
              FROM api_failures WHERE timestamp > datetime('now', ? || ' hours') ORDER BY timestamp DESC"
         ).map_err(|e| AutoDevError::Database(e))?;
 
-        let records = stmt.query_map(params![format!("-{}", hours)], |row| {
-            let ts_str: String = row.get(1)?;
-            let timestamp = chrono::DateTime::parse_from_rfc3339(&ts_str)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now());
-            Ok(ApiFailureRecord {
-                id: row.get(0)?,
-                timestamp,
-                provider: row.get(2)?,
-                error_type: row.get(3)?,
-                error_message: row.get(4)?,
-                request_id: row.get(5)?,
-                retry_count: row.get(6)?,
-                resolved: row.get(7)?,
+        let records = stmt
+            .query_map(params![format!("-{}", hours)], |row| {
+                let ts_str: String = row.get(1)?;
+                let timestamp = chrono::DateTime::parse_from_rfc3339(&ts_str)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now());
+                Ok(ApiFailureRecord {
+                    id: row.get(0)?,
+                    timestamp,
+                    provider: row.get(2)?,
+                    error_type: row.get(3)?,
+                    error_message: row.get(4)?,
+                    request_id: row.get(5)?,
+                    retry_count: row.get(6)?,
+                    resolved: row.get(7)?,
+                })
             })
-        }).map_err(|e| AutoDevError::Database(e))?
+            .map_err(|e| AutoDevError::Database(e))?
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| AutoDevError::Database(e))?;
 
@@ -458,25 +529,31 @@ impl AnalyticsDb {
             Err(_) => return (0, 0, 0),
         };
 
-        let sessions: i32 = conn.query_row(
-            "SELECT COUNT(DISTINCT session_id) FROM token_usage WHERE DATE(timestamp) = ?1",
-            params![today_str],
-            |r| r.get(0),
-        ).unwrap_or(0);
+        let sessions: i32 = conn
+            .query_row(
+                "SELECT COUNT(DISTINCT session_id) FROM token_usage WHERE DATE(timestamp) = ?1",
+                params![today_str],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
 
-        let messages: i32 = conn.query_row(
-            "SELECT COUNT(*) FROM token_usage WHERE DATE(timestamp) = ?1",
-            params![today_str],
-            |r| r.get(0),
-        ).unwrap_or(0);
+        let messages: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM token_usage WHERE DATE(timestamp) = ?1",
+                params![today_str],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
 
-        let tool_calls: i32 = conn.query_row(
-            "SELECT COUNT(*) FROM token_usage \
+        let tool_calls: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM token_usage \
              WHERE DATE(timestamp) = ?1 \
                AND request_type IN ('tool_use', 'tool', 'function_call')",
-            params![today_str],
-            |r| r.get(0),
-        ).unwrap_or(0);
+                params![today_str],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
 
         (sessions, messages, tool_calls)
     }
@@ -489,21 +566,34 @@ impl AnalyticsDb {
         &self,
         start: NaiveDate,
         end: NaiveDate,
-    ) -> Result<(i64, i64, i64, Option<i64>,
-                 HashMap<String, i64>,
-                 HashMap<String, i64>,
-                 HashMap<String, i64>,
-                 Vec<SessionTokenUsage>)>
-    {
+    ) -> Result<(
+        i64,
+        i64,
+        i64,
+        Option<i64>,
+        HashMap<String, i64>,
+        HashMap<String, i64>,
+        HashMap<String, i64>,
+        Vec<SessionTokenUsage>,
+    )> {
         let s = start.to_string();
         let e = end.to_string();
-        let totals       = self.token_totals(&s, &e);
-        let by_model     = self.token_by_group("model",       &s, &e)?;
-        let by_provider  = self.token_by_group("provider",    &s, &e)?;
-        let by_agent     = self.token_by_group("agent_type",  &s, &e)?;
+        let totals = self.token_totals(&s, &e);
+        let by_model = self.token_by_group("model", &s, &e)?;
+        let by_provider = self.token_by_group("provider", &s, &e)?;
+        let by_agent = self.token_by_group("agent_type", &s, &e)?;
         let top_sessions = self.token_top_sessions(&s, &e)?;
         let (total, prompt, completion, thinking) = totals;
-        Ok((total, prompt, completion, thinking, by_agent, by_model, by_provider, top_sessions))
+        Ok((
+            total,
+            prompt,
+            completion,
+            thinking,
+            by_agent,
+            by_model,
+            by_provider,
+            top_sessions,
+        ))
     }
 
     // ── private helpers — one lock/stmt per function (mirrors existing methods) ──
@@ -522,7 +612,8 @@ impl AnalyticsDb {
              WHERE DATE(timestamp) BETWEEN ?1 AND ?2",
             params![start, end],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-        ).unwrap_or((0, 0, 0, None))
+        )
+        .unwrap_or((0, 0, 0, None))
     }
 
     fn token_by_group(&self, col: &str, start: &str, end: &str) -> Result<HashMap<String, i64>> {
@@ -534,23 +625,29 @@ impl AnalyticsDb {
              WHERE DATE(timestamp) BETWEEN ?1 AND ?2 \
              GROUP BY {col} ORDER BY 2 DESC"
         );
-        let conn = self.conn.lock()
+        let conn = self
+            .conn
+            .lock()
             .map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {e}")))?;
-        let mut stmt = conn.prepare(&sql)
+        let mut stmt = conn.prepare(&sql).map_err(|e| AutoDevError::Database(e))?;
+        let rows = stmt
+            .query_map(params![start, end], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })
+            .map_err(|e| AutoDevError::Database(e))?
+            .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| AutoDevError::Database(e))?;
-        let rows = stmt.query_map(params![start, end], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
-        }).map_err(|e| AutoDevError::Database(e))?
-          .collect::<std::result::Result<Vec<_>, _>>()
-          .map_err(|e| AutoDevError::Database(e))?;
         Ok(rows.into_iter().collect())
     }
 
     fn token_top_sessions(&self, start: &str, end: &str) -> Result<Vec<SessionTokenUsage>> {
-        let conn = self.conn.lock()
+        let conn = self
+            .conn
+            .lock()
             .map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {e}")))?;
-        let mut stmt = conn.prepare(
-            "SELECT session_id, \
+        let mut stmt = conn
+            .prepare(
+                "SELECT session_id, \
                     COALESCE(SUM(total_tokens),0) AS tokens, \
                     COALESCE(SUM(cost_usd),0.0)   AS cost, \
                     MAX(agent_type)               AS agent_type \
@@ -558,20 +655,24 @@ impl AnalyticsDb {
              WHERE DATE(timestamp) BETWEEN ?1 AND ?2 \
              GROUP BY session_id \
              ORDER BY tokens DESC LIMIT 10",
-        ).map_err(|e| AutoDevError::Database(e))?;
+            )
+            .map_err(|e| AutoDevError::Database(e))?;
         // Collect into an owned Vec before stmt/conn drop — same pattern as
         // get_daily_costs_range and other methods in this file.
-        let rows = stmt.query_map(params![start, end], |r| {
-            Ok(SessionTokenUsage {
-                session_id: r.get(0)?,
-                tokens:     r.get(1)?,
-                cost_usd:   r.get(2)?,
-                agent_type: r.get::<_, Option<String>>(3)?
-                              .unwrap_or_else(|| "unknown".into()),
+        let rows = stmt
+            .query_map(params![start, end], |r| {
+                Ok(SessionTokenUsage {
+                    session_id: r.get(0)?,
+                    tokens: r.get(1)?,
+                    cost_usd: r.get(2)?,
+                    agent_type: r
+                        .get::<_, Option<String>>(3)?
+                        .unwrap_or_else(|| "unknown".into()),
+                })
             })
-        }).map_err(|e| AutoDevError::Database(e))?
-          .collect::<std::result::Result<Vec<_>, _>>()
-          .map_err(|e| AutoDevError::Database(e))?;
+            .map_err(|e| AutoDevError::Database(e))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| AutoDevError::Database(e))?;
         Ok(rows)
     }
 
@@ -587,7 +688,10 @@ impl AnalyticsDb {
         severity: Option<&str>,
         hours: i32,
     ) -> Result<Vec<SystemEventRecord>> {
-        let conn = self.conn.lock().map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
 
         // Build the cutoff timestamp string. `hours` is clamped to 1–168 by the
         // command layer so this format is safe to embed in SQL.
@@ -598,7 +702,9 @@ impl AnalyticsDb {
         // injection risk is low; we additionally sanitise by rejecting non-ASCII
         // and stripping quotes.
         let sanitize = |s: &str| -> String {
-            s.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect()
+            s.chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                .collect()
         };
 
         let component_filter = component
@@ -617,21 +723,23 @@ impl AnalyticsDb {
 
         let mut stmt = conn.prepare(&sql).map_err(|e| AutoDevError::Database(e))?;
 
-        let records = stmt.query_map(params![cutoff], |row| {
-            let ts_str: String = row.get(1)?;
-            let timestamp = chrono::DateTime::parse_from_rfc3339(&ts_str)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now());
-            Ok(SystemEventRecord {
-                id: row.get(0)?,
-                timestamp,
-                component: row.get(2)?,
-                event_type: row.get(3)?,
-                message: row.get(4)?,
-                severity: row.get(5)?,
-                metadata: row.get(6)?,
+        let records = stmt
+            .query_map(params![cutoff], |row| {
+                let ts_str: String = row.get(1)?;
+                let timestamp = chrono::DateTime::parse_from_rfc3339(&ts_str)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now());
+                Ok(SystemEventRecord {
+                    id: row.get(0)?,
+                    timestamp,
+                    component: row.get(2)?,
+                    event_type: row.get(3)?,
+                    message: row.get(4)?,
+                    severity: row.get(5)?,
+                    metadata: row.get(6)?,
+                })
             })
-        }).map_err(|e| AutoDevError::Database(e))?
+            .map_err(|e| AutoDevError::Database(e))?
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| AutoDevError::Database(e))?;
 
@@ -639,7 +747,10 @@ impl AnalyticsDb {
     }
 
     pub fn insert_system_event(&self, record: &SystemEventRecord) -> Result<i64> {
-        let mut conn = self.conn.lock().map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
         conn.execute(
             "INSERT INTO system_events (timestamp, component, event_type, message, severity, metadata)
              VALUES (?, ?, ?, ?, ?, ?)",

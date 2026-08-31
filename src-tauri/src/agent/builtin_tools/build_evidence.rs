@@ -28,10 +28,10 @@ pub const EVIDENCE_TTL: Duration = Duration::from_secs(15 * 60);
 #[derive(Debug, Clone)]
 pub struct BuildEvidence {
     pub session_id: String,
-    pub command:    String,
-    pub exit_code:  i32,
+    pub command: String,
+    pub exit_code: i32,
     pub recorded_at: Instant,
-    pub kind:       BuildEvidenceKind,
+    pub kind: BuildEvidenceKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,11 +51,11 @@ pub enum BuildEvidenceKind {
 impl BuildEvidenceKind {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Node   => "node",
-            Self::Cargo  => "cargo",
+            Self::Node => "node",
+            Self::Cargo => "cargo",
             Self::Python => "python",
-            Self::Go     => "go",
-            Self::Smoke  => "smoke",
+            Self::Go => "go",
+            Self::Smoke => "smoke",
         }
     }
 }
@@ -76,9 +76,12 @@ pub fn classify(command: &str) -> Option<BuildEvidenceKind> {
 
     // Smoke takes priority — it's literally a `timeout N <start-cmd>`.
     if c.starts_with("timeout ") || c.contains(" timeout ") {
-        if c.contains("npm run dev") || c.contains("npm start")
-            || c.contains("uvicorn") || c.contains("flask run")
-            || c.contains("cargo run") || c.contains("go run")
+        if c.contains("npm run dev")
+            || c.contains("npm start")
+            || c.contains("uvicorn")
+            || c.contains("flask run")
+            || c.contains("cargo run")
+            || c.contains("go run")
         {
             return Some(BuildEvidenceKind::Smoke);
         }
@@ -86,10 +89,20 @@ pub fn classify(command: &str) -> Option<BuildEvidenceKind> {
 
     // Node ecosystem
     let node_hits = [
-        "npm run build", "npm install", "npm ci", "npm test", "npm run test",
-        "pnpm build", "pnpm install", "pnpm test",
-        "yarn build", "yarn install", "yarn test",
-        "vite build", "tsc --noemit", "tsc -b",
+        "npm run build",
+        "npm install",
+        "npm ci",
+        "npm test",
+        "npm run test",
+        "pnpm build",
+        "pnpm install",
+        "pnpm test",
+        "yarn build",
+        "yarn install",
+        "yarn test",
+        "vite build",
+        "tsc --noemit",
+        "tsc -b",
     ];
     if node_hits.iter().any(|h| c.contains(h)) {
         return Some(BuildEvidenceKind::Node);
@@ -103,8 +116,13 @@ pub fn classify(command: &str) -> Option<BuildEvidenceKind> {
 
     // Python (covers uv + bare interpreter forms)
     let py_hits = [
-        "uv run pytest", "uv sync", "pytest", "python -m pytest", "py.test",
-        "uv pip install", "pip install -r",
+        "uv run pytest",
+        "uv sync",
+        "pytest",
+        "python -m pytest",
+        "py.test",
+        "uv pip install",
+        "pip install -r",
     ];
     if py_hits.iter().any(|h| c.contains(h)) {
         return Some(BuildEvidenceKind::Python);
@@ -123,16 +141,20 @@ pub fn classify(command: &str) -> Option<BuildEvidenceKind> {
 /// command back-to-back are not deduplicated; the GC just sweeps the
 /// expired ones out on the next read.
 pub fn record(session_id: &str, command: &str, exit_code: i32) {
-    let Some(kind) = classify(command) else { return };
+    let Some(kind) = classify(command) else {
+        return;
+    };
     let evidence = BuildEvidence {
-        session_id:  session_id.to_string(),
-        command:     command.chars().take(200).collect(),
+        session_id: session_id.to_string(),
+        command: command.chars().take(200).collect(),
         exit_code,
         recorded_at: Instant::now(),
         kind,
     };
     let mut map = ring().lock().unwrap();
-    map.entry(session_id.to_string()).or_default().push(evidence);
+    map.entry(session_id.to_string())
+        .or_default()
+        .push(evidence);
 }
 
 /// Return the most-recent build evidence (excluding smoke) for a session,
@@ -141,9 +163,12 @@ pub fn record(session_id: &str, command: &str, exit_code: i32) {
 pub fn most_recent_build(session_id: &str) -> Option<BuildEvidence> {
     let now = Instant::now();
     let mut map = ring().lock().unwrap();
-    let Some(entries) = map.get_mut(session_id) else { return None };
+    let Some(entries) = map.get_mut(session_id) else {
+        return None;
+    };
     entries.retain(|e| now.duration_since(e.recorded_at) < EVIDENCE_TTL);
-    entries.iter()
+    entries
+        .iter()
         .filter(|e| e.kind != BuildEvidenceKind::Smoke)
         .max_by_key(|e| e.recorded_at)
         .cloned()
@@ -153,9 +178,12 @@ pub fn most_recent_build(session_id: &str) -> Option<BuildEvidence> {
 pub fn most_recent_smoke(session_id: &str) -> Option<BuildEvidence> {
     let now = Instant::now();
     let mut map = ring().lock().unwrap();
-    let Some(entries) = map.get_mut(session_id) else { return None };
+    let Some(entries) = map.get_mut(session_id) else {
+        return None;
+    };
     entries.retain(|e| now.duration_since(e.recorded_at) < EVIDENCE_TTL);
-    entries.iter()
+    entries
+        .iter()
         .filter(|e| e.kind == BuildEvidenceKind::Smoke)
         .max_by_key(|e| e.recorded_at)
         .cloned()
@@ -167,22 +195,29 @@ mod tests {
 
     #[test]
     fn classifies_npm_build() {
-        assert_eq!(classify("npm run build"),    Some(BuildEvidenceKind::Node));
-        assert_eq!(classify("npm run build 2>&1 | tee build.log"),
-                                                 Some(BuildEvidenceKind::Node));
-        assert_eq!(classify("NPM RUN BUILD"),    Some(BuildEvidenceKind::Node));
+        assert_eq!(classify("npm run build"), Some(BuildEvidenceKind::Node));
+        assert_eq!(
+            classify("npm run build 2>&1 | tee build.log"),
+            Some(BuildEvidenceKind::Node)
+        );
+        assert_eq!(classify("NPM RUN BUILD"), Some(BuildEvidenceKind::Node));
     }
 
     #[test]
     fn classifies_cargo() {
-        assert_eq!(classify("cargo test"),       Some(BuildEvidenceKind::Cargo));
-        assert_eq!(classify("cargo check --all"),Some(BuildEvidenceKind::Cargo));
+        assert_eq!(classify("cargo test"), Some(BuildEvidenceKind::Cargo));
+        assert_eq!(
+            classify("cargo check --all"),
+            Some(BuildEvidenceKind::Cargo)
+        );
     }
 
     #[test]
     fn classifies_smoke() {
-        assert_eq!(classify("timeout 5 npm run dev > smoke.log 2>&1"),
-                                                 Some(BuildEvidenceKind::Smoke));
+        assert_eq!(
+            classify("timeout 5 npm run dev > smoke.log 2>&1"),
+            Some(BuildEvidenceKind::Smoke)
+        );
     }
 
     #[test]

@@ -1,10 +1,10 @@
 // Analytics exporter — CSV and JSON export for reports
-use std::sync::Arc;
-use std::path::Path;
-use chrono::NaiveDate;
-use crate::errors::{AutoDevError, Result};
 use super::db::AnalyticsDb;
 use super::types::*;
+use crate::errors::{AutoDevError, Result};
+use chrono::NaiveDate;
+use std::path::Path;
+use std::sync::Arc;
 
 pub struct AnalyticsExporter {
     db: Arc<AnalyticsDb>,
@@ -24,7 +24,9 @@ impl AnalyticsExporter {
     ) -> Result<ExportResult> {
         let records = self.db.get_daily_costs_range(start, end)?;
 
-        let mut csv_content = String::from("date,total_cost_usd,total_tokens,session_count,message_count,tool_call_count\n");
+        let mut csv_content = String::from(
+            "date,total_cost_usd,total_tokens,session_count,message_count,tool_call_count\n",
+        );
 
         for record in &records {
             csv_content.push_str(&format!(
@@ -39,8 +41,7 @@ impl AnalyticsExporter {
         }
 
         let file_size = csv_content.len() as i64;
-        std::fs::write(path, csv_content)
-            .map_err(|e| AutoDevError::Io(e))?;
+        std::fs::write(path, csv_content).map_err(|e| AutoDevError::Io(e))?;
 
         Ok(ExportResult {
             format: "csv".to_string(),
@@ -63,8 +64,7 @@ impl AnalyticsExporter {
             .map_err(|e| AutoDevError::Agent(format!("JSON serialization failed: {}", e)))?;
 
         let file_size = json.len() as i64;
-        std::fs::write(path, json)
-            .map_err(|e| AutoDevError::Io(e))?;
+        std::fs::write(path, json).map_err(|e| AutoDevError::Io(e))?;
 
         Ok(ExportResult {
             format: "json".to_string(),

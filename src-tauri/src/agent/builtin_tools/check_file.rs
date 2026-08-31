@@ -12,14 +12,16 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::path::PathBuf;
 
-use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
 use super::validate;
+use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
 
 pub struct CheckFileTool;
 
 #[async_trait]
 impl Tool for CheckFileTool {
-    fn name(&self) -> &str { "check_file" }
+    fn name(&self) -> &str {
+        "check_file"
+    }
 
     fn description(&self) -> &str {
         "Run lint / syntax / import checks on a file without executing it. \
@@ -68,14 +70,18 @@ impl Tool for CheckFileTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
-    fn requires_permission(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        true
+    }
+    fn requires_permission(&self) -> bool {
+        false
+    }
 
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         // ── Resolve path ──────────────────────────────────────────────────────
         let path_str = match input["path"].as_str() {
             Some(p) => p,
-            None    => return ToolResult::error("Missing required field: path"),
+            None => return ToolResult::error("Missing required field: path"),
         };
         let path = if PathBuf::from(path_str).is_absolute() {
             PathBuf::from(path_str)
@@ -101,16 +107,22 @@ impl Tool for CheckFileTool {
                 .filter_map(|v| v.as_str().map(String::from))
                 .collect()
         } else {
-            vec!["syntax".into(), "imports".into(), "exports".into(), "contract".into()]
+            vec![
+                "syntax".into(),
+                "imports".into(),
+                "exports".into(),
+                "contract".into(),
+            ]
         };
 
-        let run_syntax   = checks.iter().any(|c| c == "syntax");
-        let run_imports  = checks.iter().any(|c| c == "imports");
-        let run_exports  = checks.iter().any(|c| c == "exports");
+        let run_syntax = checks.iter().any(|c| c == "syntax");
+        let run_imports = checks.iter().any(|c| c == "imports");
+        let run_exports = checks.iter().any(|c| c == "exports");
         let run_contract = checks.iter().any(|c| c == "contract");
-        let run_types    = checks.iter().any(|c| c == "types");
+        let run_types = checks.iter().any(|c| c == "types");
 
-        let type_checker = input["type_checker"].as_str()
+        let type_checker = input["type_checker"]
+            .as_str()
             .filter(|&s| s != "auto")
             .map(String::from);
 
@@ -153,7 +165,10 @@ impl Tool for CheckFileTool {
         if run_exports {
             if let Some(result) = validate::tier2_5_exports(&path, &ctx.working_dir) {
                 let status = if result.is_clean() {
-                    format!("[{}] ✓ All named imports resolve to actual exports.", result.checker)
+                    format!(
+                        "[{}] ✓ All named imports resolve to actual exports.",
+                        result.checker
+                    )
                 } else {
                     has_errors = true;
                     format!(
@@ -169,7 +184,10 @@ impl Tool for CheckFileTool {
         if run_contract {
             if let Some(result) = validate::tier2_6_api_contract(&path, &ctx.working_dir) {
                 let status = if result.is_clean() {
-                    format!("[{}] ✓ All API URLs documented in INTERFACE.md.", result.checker)
+                    format!(
+                        "[{}] ✓ All API URLs documented in INTERFACE.md.",
+                        result.checker
+                    )
                 } else {
                     has_errors = true;
                     format!(
@@ -183,11 +201,8 @@ impl Tool for CheckFileTool {
 
         // Tier 3 — types
         if run_types {
-            let result = validate::tier3_types(
-                &path,
-                &ctx.working_dir,
-                type_checker.as_deref(),
-            ).await;
+            let result =
+                validate::tier3_types(&path, &ctx.working_dir, type_checker.as_deref()).await;
             let status = if result.is_clean() {
                 format!("[{}] ✓ No type errors.", result.checker)
             } else {
@@ -198,7 +213,8 @@ impl Tool for CheckFileTool {
         }
 
         // ── Build response ────────────────────────────────────────────────────
-        let display_path = path.strip_prefix(&ctx.working_dir)
+        let display_path = path
+            .strip_prefix(&ctx.working_dir)
             .unwrap_or(&path)
             .to_string_lossy()
             .replace('\\', "/");
@@ -206,7 +222,8 @@ impl Tool for CheckFileTool {
         // If no tier produced output (all checkers returned None for this extension),
         // surface a concise note rather than returning an empty body.
         if sections.is_empty() {
-            let ext = path.extension()
+            let ext = path
+                .extension()
                 .map(|e| format!(".{}", e.to_string_lossy().to_lowercase()))
                 .unwrap_or_else(|| "(no extension)".into());
             return ToolResult::success(format!(

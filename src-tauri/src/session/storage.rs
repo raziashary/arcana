@@ -1,10 +1,10 @@
 // SQLite-backed storage for sessions and messages.
 // Database path: ~/.airs/autodev.db
 
-use rusqlite::{Connection, params};
-use std::path::PathBuf;
-use crate::errors::{AutoDevError, Result};
 use super::types::{Message, MessageRole, Session};
+use crate::errors::{AutoDevError, Result};
+use rusqlite::{params, Connection};
+use std::path::PathBuf;
 
 pub struct SessionStorage {
     conn: Connection,
@@ -48,15 +48,18 @@ impl SessionStorage {
         // pattern used below for the `messages` table).
         let _ = self.conn.execute(
             "ALTER TABLE sessions ADD COLUMN pa_mode TEXT NOT NULL DEFAULT 'fast_development'",
-            []
+            [],
         );
 
         // Check if messages table exists
-        let table_exists: bool = self.conn.query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'",
-            [],
-            |_| Ok(true)
-        ).unwrap_or(false);
+        let table_exists: bool = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
 
         if !table_exists {
             // Create new table with V2 schema
@@ -83,11 +86,20 @@ impl SessionStorage {
         } else {
             // Migrate existing table: add new columns if they don't exist
             // SQLite doesn't have "ADD COLUMN IF NOT EXISTS", so we catch errors
-            let _ = self.conn.execute("ALTER TABLE messages ADD COLUMN tool_name TEXT", []);
-            let _ = self.conn.execute("ALTER TABLE messages ADD COLUMN tool_input TEXT", []);
-            let _ = self.conn.execute("ALTER TABLE messages ADD COLUMN tool_call_id TEXT", []);
-            let _ = self.conn.execute("ALTER TABLE messages ADD COLUMN is_error INTEGER NOT NULL DEFAULT 0", []);
-            
+            let _ = self
+                .conn
+                .execute("ALTER TABLE messages ADD COLUMN tool_name TEXT", []);
+            let _ = self
+                .conn
+                .execute("ALTER TABLE messages ADD COLUMN tool_input TEXT", []);
+            let _ = self
+                .conn
+                .execute("ALTER TABLE messages ADD COLUMN tool_call_id TEXT", []);
+            let _ = self.conn.execute(
+                "ALTER TABLE messages ADD COLUMN is_error INTEGER NOT NULL DEFAULT 0",
+                [],
+            );
+
             // Create indexes (these use IF NOT EXISTS)
             let _ = self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at)",
@@ -95,7 +107,7 @@ impl SessionStorage {
             );
             let _ = self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_messages_tool ON messages(tool_call_id)",
-                []
+                [],
             );
         }
 
@@ -144,10 +156,12 @@ impl SessionStorage {
     }
 
     pub fn insert_message(&self, msg: &Message) -> Result<()> {
-        let tool_input = msg.tool_input.as_ref()
+        let tool_input = msg
+            .tool_input
+            .as_ref()
             .map(|v| serde_json::to_string(v).unwrap_or_default())
             .unwrap_or_default();
-        
+
         self.conn.execute(
             "INSERT INTO messages
              (id, session_id, role, content, tool_name, tool_input, tool_call_id, is_error, tokens_in, tokens_out, cost_usd, created_at)
@@ -171,10 +185,12 @@ impl SessionStorage {
     }
 
     pub fn update_message(&self, msg: &Message) -> Result<()> {
-        let tool_input = msg.tool_input.as_ref()
+        let tool_input = msg
+            .tool_input
+            .as_ref()
             .map(|v| serde_json::to_string(v).unwrap_or_default())
             .unwrap_or_default();
-        
+
         self.conn.execute(
             "UPDATE messages SET
                content=?2, tool_name=?3, tool_input=?4, tool_call_id=?5, is_error=?6,
@@ -184,7 +200,11 @@ impl SessionStorage {
                 msg.id,
                 msg.content,
                 msg.tool_name.as_ref().map(String::as_str),
-                if tool_input.is_empty() { None } else { Some(tool_input.as_str()) },
+                if tool_input.is_empty() {
+                    None
+                } else {
+                    Some(tool_input.as_str())
+                },
                 msg.tool_call_id.as_ref().map(String::as_str),
                 msg.is_error as i32,
                 msg.tokens_in,
@@ -198,21 +218,26 @@ impl SessionStorage {
     pub fn list_sessions(&self) -> Result<Vec<Session>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, title, working_dir, provider, model, pa_mode, created_at, updated_at
-             FROM sessions ORDER BY updated_at DESC LIMIT 50"
+             FROM sessions ORDER BY updated_at DESC LIMIT 50",
         )?;
-        let sessions: Vec<Session> = stmt.query_map([], |row| {
-            Ok(Session {
-                id:          row.get(0)?,
-                title:       row.get(1)?,
-                working_dir: row.get(2)?,
-                provider:    row.get(3)?,
-                model:       row.get(4)?,
-                pa_mode:     row.get::<_, Option<String>>(5)?.unwrap_or_else(|| "fast_development".into()),
-                created_at:  row.get::<_, String>(6)?.parse().unwrap_or_default(),
-                updated_at:  row.get::<_, String>(7)?.parse().unwrap_or_default(),
-                messages:    vec![],
-            })
-        })?.filter_map(|r| r.ok()).collect();
+        let sessions: Vec<Session> = stmt
+            .query_map([], |row| {
+                Ok(Session {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    working_dir: row.get(2)?,
+                    provider: row.get(3)?,
+                    model: row.get(4)?,
+                    pa_mode: row
+                        .get::<_, Option<String>>(5)?
+                        .unwrap_or_else(|| "fast_development".into()),
+                    created_at: row.get::<_, String>(6)?.parse().unwrap_or_default(),
+                    updated_at: row.get::<_, String>(7)?.parse().unwrap_or_default(),
+                    messages: vec![],
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
         Ok(sessions)
     }
 
@@ -221,17 +246,21 @@ impl SessionStorage {
             "SELECT id, title, working_dir, provider, model, pa_mode, created_at, updated_at
              FROM sessions WHERE id=?1",
             params![session_id],
-            |row| Ok(Session {
-                id:          row.get(0)?,
-                title:       row.get(1)?,
-                working_dir: row.get(2)?,
-                provider:    row.get(3)?,
-                model:       row.get(4)?,
-                pa_mode:     row.get::<_, Option<String>>(5)?.unwrap_or_else(|| "fast_development".into()),
-                created_at:  row.get::<_, String>(6)?.parse().unwrap_or_default(),
-                updated_at:  row.get::<_, String>(7)?.parse().unwrap_or_default(),
-                messages:    vec![],
-            }),
+            |row| {
+                Ok(Session {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    working_dir: row.get(2)?,
+                    provider: row.get(3)?,
+                    model: row.get(4)?,
+                    pa_mode: row
+                        .get::<_, Option<String>>(5)?
+                        .unwrap_or_else(|| "fast_development".into()),
+                    created_at: row.get::<_, String>(6)?.parse().unwrap_or_default(),
+                    updated_at: row.get::<_, String>(7)?.parse().unwrap_or_default(),
+                    messages: vec![],
+                })
+            },
         );
         match session {
             Ok(mut s) => {
@@ -247,42 +276,47 @@ impl SessionStorage {
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, role, content, tool_name, tool_input, tool_call_id, is_error,
                     tokens_in, tokens_out, cost_usd, created_at
-             FROM messages WHERE session_id=?1 ORDER BY created_at ASC"
+             FROM messages WHERE session_id=?1 ORDER BY created_at ASC",
         )?;
-        let msgs: Vec<Message> = stmt.query_map(params![session_id], |row| {
-            let role_str: String = row.get(2)?;
-            let role = match role_str.as_str() {
-                "assistant" => MessageRole::Assistant,
-                "tool"      => MessageRole::Tool,
-                _           => MessageRole::User,
-            };
-            // Parse tool fields for tool messages
-            let tool_name: Option<String> = row.get(4)?;
-            let tool_input: Option<serde_json::Value> = row.get::<_, Option<String>>(5)?
-                .and_then(|s| serde_json::from_str(&s).ok());
-            let tool_call_id: Option<String> = row.get(6)?;
-            let is_error: bool = row.get::<_, i32>(7)? != 0;
-            
-            Ok(Message {
-                id:           row.get(0)?,
-                session_id:   row.get(1)?,
-                role,
-                content:      row.get(3)?,
-                tool_name,
-                tool_input,
-                tool_call_id,
-                is_error,
-                tokens_in:    row.get(8)?,
-                tokens_out:   row.get(9)?,
-                cost_usd:     row.get(10)?,
-                created_at:   row.get::<_, String>(11)?.parse().unwrap_or_default(),
-            })
-        })?.filter_map(|r| r.ok()).collect();
+        let msgs: Vec<Message> = stmt
+            .query_map(params![session_id], |row| {
+                let role_str: String = row.get(2)?;
+                let role = match role_str.as_str() {
+                    "assistant" => MessageRole::Assistant,
+                    "tool" => MessageRole::Tool,
+                    _ => MessageRole::User,
+                };
+                // Parse tool fields for tool messages
+                let tool_name: Option<String> = row.get(4)?;
+                let tool_input: Option<serde_json::Value> = row
+                    .get::<_, Option<String>>(5)?
+                    .and_then(|s| serde_json::from_str(&s).ok());
+                let tool_call_id: Option<String> = row.get(6)?;
+                let is_error: bool = row.get::<_, i32>(7)? != 0;
+
+                Ok(Message {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    role,
+                    content: row.get(3)?,
+                    tool_name,
+                    tool_input,
+                    tool_call_id,
+                    is_error,
+                    tokens_in: row.get(8)?,
+                    tokens_out: row.get(9)?,
+                    cost_usd: row.get(10)?,
+                    created_at: row.get::<_, String>(11)?.parse().unwrap_or_default(),
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
         Ok(msgs)
     }
 
     pub fn delete_session(&self, session_id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM sessions WHERE id=?1", params![session_id])?;
+        self.conn
+            .execute("DELETE FROM sessions WHERE id=?1", params![session_id])?;
         Ok(())
     }
 }
