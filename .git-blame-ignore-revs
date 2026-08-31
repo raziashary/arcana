@@ -1,0 +1,8 @@
+# Revisions to skip when running `git blame`.
+#
+# Enable locally with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# style: apply cargo fmt across both Rust crates (P0-D)
+# Pure rustfmt over 236 files; no semantic change.
+a4785430b0ea11ca170caa0a5d96969bbf6270c3
