@@ -27,10 +27,6 @@ pub struct Cli {
     #[arg(long, global = true, env = "AIRSCTL_WORKING_DIR")]
     pub working_dir: Option<String>,
 
-    /// API key override — also reads AIRSDEV_API_KEY or ANTHROPIC_API_KEY
-    #[arg(long, global = true, env = "AIRSDEV_API_KEY")]
-    pub api_key: Option<String>,
-
     /// LLM provider override (e.g. anthropic, openai, ollama)
     #[arg(long, global = true, env = "AIRSDEV_PROVIDER")]
     pub provider: Option<String>,
@@ -134,7 +130,6 @@ async fn main() -> Result<()> {
         quiet: cli.quiet,
         non_interactive: cli.non_interactive,
         orchestrator_url: orchestrator_url.clone(),
-        api_key: cli.api_key.clone(),
         provider: cli.provider.clone().or_else(|| {
             cfg.core.as_ref().and_then(|c| c.default_provider.clone())
         }),
@@ -142,14 +137,6 @@ async fn main() -> Result<()> {
         working_dir: cli.working_dir.clone().or_else(|| {
             cfg.core.as_ref().and_then(|c| c.working_dir.clone())
         }),
-    };
-
-    // Override api_key: prefer AIRSDEV_API_KEY, fall back to ANTHROPIC_API_KEY
-    let ctx = if ctx.api_key.is_none() {
-        let fallback = std::env::var("ANTHROPIC_API_KEY").ok();
-        OutputContext { api_key: fallback, ..ctx }
-    } else {
-        ctx
     };
 
     // Resolve effective non-interactive mode

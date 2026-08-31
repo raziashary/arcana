@@ -15,7 +15,6 @@ pub struct OutputContext {
     pub quiet: bool,
     pub non_interactive: bool,
     pub orchestrator_url: String,
-    pub api_key: Option<String>,
     pub provider: Option<String>,
     pub model: Option<String>,
     pub working_dir: Option<String>,

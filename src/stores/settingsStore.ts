@@ -108,7 +108,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   storeProviderKey: async (provider, key) => {
-    await invoke('store_provider_key', { provider, apiKey: key })
+    // Inbound only: set_provider_key returns a confirmation and a last-4 mask,
+    // never the key. There is deliberately no command to read one back.
+    await invoke<{ ok: boolean; masked_last4: string }>(
+      'set_provider_key', { provider, apiKey: key },
+    )
     await get().loadProviders()
   },
 

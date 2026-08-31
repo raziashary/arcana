@@ -49,8 +49,8 @@ pub fn register_commands(
             list_providers, set_active_provider, set_system_prompt, test_provider_connection,
         },
         vault_commands::{
-            delete_github_pat, delete_provider_key, get_github_pat, get_provider_key,
-            store_github_pat, store_provider_key,
+            delete_github_pat, delete_provider_key, has_github_pat, has_provider_key,
+            list_vault_entries, set_github_pat, set_provider_key,
         },
         task_commands::{
             list_tasks, get_task, update_task_status, delete_task, clear_all_tasks, get_qc_queue,
@@ -198,12 +198,13 @@ pub fn register_commands(
         set_system_prompt,
         get_default_system_prompt,
         // Vault
-        store_provider_key,
-        get_provider_key,
+        set_provider_key,
+        has_provider_key,
         delete_provider_key,
-        store_github_pat,
-        get_github_pat,
+        set_github_pat,
+        has_github_pat,
         delete_github_pat,
+        list_vault_entries,
         // Tasks (Internal Board)
         list_tasks,
         get_task,

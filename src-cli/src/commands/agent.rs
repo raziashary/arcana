@@ -152,10 +152,7 @@ async fn agent_run(args: RunArgs, ctx: OutputContext) -> Result<()> {
         }
     }
 
-    let mut req = client.post(&url).json(&body);
-    if let Some(key) = &ctx.api_key {
-        req = req.bearer_auth(key);
-    }
+    let req = client.post(&url).json(&body);
 
     let resp = req.send().await.map_err(|e| {
         anyhow::anyhow!(
@@ -266,8 +263,7 @@ async fn agent_list(args: ListArgs, ctx: OutputContext) -> Result<()> {
     let client = build_client(30)?;
     let url = format!("{}/api/agents?limit={}", ctx.orchestrator_url, args.limit);
 
-    let mut req = client.get(&url);
-    if let Some(key) = &ctx.api_key { req = req.bearer_auth(key); }
+    let req = client.get(&url);
 
     let resp = req.send().await.map_err(|e| {
         anyhow::anyhow!("Cannot reach orchestrator: {e}")
@@ -304,8 +300,7 @@ async fn agent_status(args: StatusArgs, ctx: OutputContext) -> Result<()> {
     let client = build_client(30)?;
     let url = format!("{}/api/agents/{}", ctx.orchestrator_url, args.session_id);
 
-    let mut req = client.get(&url);
-    if let Some(key) = &ctx.api_key { req = req.bearer_auth(key); }
+    let req = client.get(&url);
 
     let resp = req.send().await.map_err(|e| anyhow::anyhow!("Cannot reach orchestrator: {e}"))?;
 
@@ -327,8 +322,7 @@ async fn agent_stop(args: StopArgs, ctx: OutputContext) -> Result<()> {
     let client = build_client(30)?;
     let url = format!("{}/api/agents/{}/stop", ctx.orchestrator_url, args.session_id);
 
-    let mut req = client.post(&url);
-    if let Some(key) = &ctx.api_key { req = req.bearer_auth(key); }
+    let req = client.post(&url);
 
     let resp = req.send().await.map_err(|e| anyhow::anyhow!("Cannot reach orchestrator: {e}"))?;
 
@@ -349,8 +343,7 @@ async fn agent_logs(args: LogsArgs, ctx: OutputContext) -> Result<()> {
         ctx.orchestrator_url, args.session_id, args.lines
     );
 
-    let mut req = client.get(&url);
-    if let Some(key) = &ctx.api_key { req = req.bearer_auth(key); }
+    let req = client.get(&url);
 
     let resp = req.send().await.map_err(|e| anyhow::anyhow!("Cannot reach orchestrator: {e}"))?;
 

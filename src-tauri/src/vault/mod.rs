@@ -5,4 +5,4 @@
 //   Linux:   libsecret / KDE Wallet
 
 pub mod keychain;
-pub use keychain::{VaultManager, VaultEntry};
+pub use keychain::VaultManager;

@@ -459,9 +459,16 @@ function GitHubPATCard() {
   const [status,    setStatus]    = useState<string | null>(null)
 
   useEffect(() => {
-    invoke<string | null>('get_github_pat')
-      .then(v   => setHasPat(v !== null && v !== ''))
-      .catch(()  => setHasPat(false))
+    // has_github_pat replaces get_github_pat, which returned the token itself.
+    // The old .catch(() => setHasPat(false)) conflated "vault unreachable" with
+    // "no PAT stored", so a keychain error made this badge read "none" forever
+    // with nothing surfaced to the user.
+    invoke<boolean>('has_github_pat')
+      .then(present => setHasPat(present))
+      .catch(e => {
+        setHasPat(null)
+        setStatus(`Could not read the keychain: ${e instanceof Error ? e.message : String(e)}`)
+      })
   }, [])
 
   const handleSave = async () => {
@@ -469,10 +476,14 @@ function GitHubPATCard() {
     setSaving(true)
     setStatus(null)
     try {
-      await invoke('store_github_pat', { pat: pat.trim() })
+      const res = await invoke<{ ok: boolean; masked_last4: string }>(
+        'set_github_pat', { pat: pat.trim() },
+      )
       setHasPat(true)
       setPat('')
-      setStatus('PAT saved to OS keychain')
+      setStatus(res.masked_last4
+        ? `PAT saved to OS keychain (ends …${res.masked_last4})`
+        : 'PAT saved to OS keychain')
     } catch (e) {
       setStatus(`Error: ${e instanceof Error ? e.message : String(e)}`)
     } finally {

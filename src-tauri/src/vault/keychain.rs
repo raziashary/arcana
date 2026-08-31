@@ -6,12 +6,6 @@ use crate::errors::{AutoDevError, Result};
 
 const SERVICE: &str = "autodev";
 
-#[derive(Debug, Clone)]
-pub struct VaultEntry {
-    pub key:   String,
-    pub value: String,
-}
-
 pub struct VaultManager;
 
 impl VaultManager {
