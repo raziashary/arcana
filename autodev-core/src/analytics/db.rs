@@ -19,9 +19,13 @@ pub struct AnalyticsDb {
 impl AnalyticsDb {
     /// Initialize analytics database with schema
     pub async fn new() -> Result<Self> {
-        let dir = autodev_dir()?;
-        let db_path = dir.join("analytics.db");
+        Self::new_at(&autodev_dir()?.join("analytics.db")).await
+    }
 
+    /// As `new`, against an explicit path. Exists so tests never write to the
+    /// user's real `~/.autodev/analytics.db`.
+    pub async fn new_at(db_path: &std::path::Path) -> Result<Self> {
+        let db_path = db_path.to_path_buf();
         let conn = Connection::open(&db_path).map_err(|e| AutoDevError::Database(e))?;
 
         // Enable foreign keys

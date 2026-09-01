@@ -546,4 +546,115 @@ let x = 1;
 ";
         assert!(tauri_code_references(trailing).is_empty());
     }
+
+    // ── TG-P1-04 · one owner per table ────────────────────────────────────
+
+    /// Files declaring `CREATE TABLE … <table>`, as repo-relative paths.
+    fn table_creators(table: &str) -> Vec<String> {
+        let root = repo_root();
+        let mut out = Vec::new();
+        for krate in ["autodev-core", "src-tauri", "src-cli", "src-shared"] {
+            let src = root.join(krate).join("src");
+            let mut files = Vec::new();
+            collect_rust_files(&src, &mut files);
+            for f in files {
+                let Ok(text) = std::fs::read_to_string(&f) else {
+                    continue;
+                };
+                // Scan production code only. Test modules hold fixture SQL —
+                // including this gate's own detector test, which names the
+                // very statement it looks for. In P0 the vault gate matched
+                // its own source this way and reported a violation that did
+                // not exist (L-C7).
+                let production = text.split("#[cfg(test)]").next().unwrap_or("");
+                if creates_table(production, table) {
+                    out.push(
+                        f.strip_prefix(&root)
+                            .unwrap_or(&f)
+                            .display()
+                            .to_string()
+                            .replace('\\', "/"),
+                    );
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// Whether `source` contains a `CREATE TABLE` for `table`, ignoring
+    /// comments so that prose naming the table does not count as a creator.
+    fn creates_table(source: &str, table: &str) -> bool {
+        source.lines().any(|raw| {
+            let line = raw.trim();
+            if line.starts_with("//") || line.starts_with('*') || line.starts_with("///") {
+                return false;
+            }
+            let code = line.split("//").next().unwrap_or("");
+            let lower = code.to_ascii_lowercase();
+            lower.contains("create table") && lower.contains(&table.to_ascii_lowercase())
+        })
+    }
+
+    fn collect_rust_files(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                collect_rust_files(&p, out);
+            } else if p.extension().and_then(|e| e.to_str()) == Some("rs") {
+                out.push(p);
+            }
+        }
+    }
+
+    /// `app_settings` must have exactly one creator (`INV-10`, `P1-15`).
+    ///
+    /// It had three. They agreed on the columns and disagreed on the
+    /// `updated_at` trigger — only `github_mcp_commands.rs` declared it — so
+    /// whether the trigger existed depended on which caller happened to open
+    /// `config.db` first on a given machine. That is a schema decided by
+    /// startup order, and it is invisible until two installs behave
+    /// differently.
+    #[test]
+    fn tg_p1_04_app_settings_has_exactly_one_creator() {
+        let creators = table_creators("app_settings");
+        assert_eq!(
+            creators,
+            vec!["autodev-core/src/db/app_settings.rs".to_string()],
+            "app_settings must be created in exactly one place; found {} creator(s): {}",
+            creators.len(),
+            creators.join(" | ")
+        );
+    }
+
+    /// The detector fires on a real creator and ignores prose, so a broken
+    /// matcher cannot leave TG-P1-04 permanently green.
+    #[test]
+    fn tg_p1_04_detector_flags_code_but_not_prose() {
+        assert!(creates_table(
+            "conn.execute_batch(\"CREATE TABLE IF NOT EXISTS app_settings (\")",
+            "app_settings"
+        ));
+        assert!(creates_table(
+            "  CREATE TABLE app_settings (",
+            "app_settings"
+        ));
+        assert!(
+            !creates_table(
+                "// we used to CREATE TABLE app_settings here",
+                "app_settings"
+            ),
+            "a comment must not count as a creator"
+        );
+        assert!(
+            !creates_table(
+                "SELECT value FROM app_settings WHERE key = ?1",
+                "app_settings"
+            ),
+            "reading a table is not creating it"
+        );
+    }
 }

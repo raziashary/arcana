@@ -27,20 +27,10 @@ pub struct IdeWorkspaceState {
 
 // ─── Internal DB helpers ──────────────────────────────────────────────────────
 
-fn open_config_db() -> Result<Connection> {
-    let path = autodev_dir()?.join("config.db");
-    let conn =
-        Connection::open(&path).map_err(|e| AutoDevError::Agent(format!("config.db open: {e}")))?;
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS app_settings (
-             key        TEXT PRIMARY KEY,
-             value      TEXT NOT NULL,
-             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-         );",
-    )
-    .map_err(|e| AutoDevError::Agent(format!("app_settings migrate: {e}")))?;
-    Ok(conn)
-}
+// `config.db` is opened through `db::app_settings`, the single owner of the
+// `app_settings` table (P1-15). This file used to declare its own
+// `CREATE TABLE IF NOT EXISTS` — one of three that disagreed about whether
+// the `updated_at` trigger was part of the schema, so first caller won.
 
 fn read_key(conn: &Connection, key: &str) -> Result<Option<String>> {
     conn.query_row(
@@ -65,7 +55,7 @@ fn write_key(conn: &Connection, key: &str, value: &str) -> Result<()> {
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 pub fn load() -> Result<IdeWorkspaceState> {
-    let conn = open_config_db()?;
+    let conn = crate::db::app_settings::open()?;
 
     let open_tabs: Vec<String> = read_key(&conn, KEY_OPEN_TABS)?
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -83,7 +73,7 @@ pub fn load() -> Result<IdeWorkspaceState> {
 }
 
 pub fn save(state: &IdeWorkspaceState) -> Result<()> {
-    let conn = open_config_db()?;
+    let conn = crate::db::app_settings::open()?;
 
     let tabs_json = serde_json::to_string(&state.open_tabs)
         .map_err(|e| AutoDevError::Agent(format!("serialize tabs: {e}")))?;

@@ -553,9 +553,16 @@ src/                                [P6 anchor, P7 experience]
 - [ ] **P1-12** `journal_mode=WAL` and a `busy_timeout` on every connection. → `LIVE-DB-PROVEN`
 - [ ] **P1-13** One timestamp helper; replace every ad-hoc `parse_from_rfc3339` on a SQLite `datetime('now')` column (3+ known sites). → `UNIT-PROVEN`
 - [ ] **P1-14** Consolidate to **one data root** (`~/.autodev/`) with a one-time migration from `~/.airs/`. **⚠ Back up both roots first.** → `LIVE-DB-PROVEN`
-- [ ] **P1-15** One owner for `app_settings` (currently three independent creators). → `CODE-PRESENT`
-- [ ] **P1-16** Collapse the two checkpoint systems to one. → `LIVE-DB-PROVEN`
-- [ ] **P1-17** Delete or create `hourly_costs` (queried, never created). → `CODE-PRESENT`
+- [x] **P1-15** One owner for `app_settings`. → `CODE-PRESENT` · `UNIT-PROVEN` · `GATE-PROVEN`
+      Owner is `autodev-core/src/db/app_settings.rs`, created during `P1-B` to break the `recipes → commands` cycle; the three creators (`github_mcp_commands.rs`, `workspace_commands.rs`, `ide/workspace.rs`) now call it.
+      **The trigger question is settled by the live database, not by preference.** Only `github_mcp_commands.rs` declared `update_app_settings_ts`, so its existence depended on which caller opened `config.db` first — a schema decided by startup order. The live `config.db` **has** it (verified, alongside 4 real rows), so the owner creates it; omitting it would have made fresh installs differ from every existing one.
+      Gate `TG-P1-04` asserts exactly one creator, falsified by planting a second (caught it, naming both files). Its detector ignores comments and `#[cfg(test)]` fixtures — the first version matched its own falsification test, the same self-match that bit the vault gate in P0 (`L-C7`).
+- [x] **P1-16** Collapse the two checkpoint systems to one. → `LIVE-DB-PROVEN`
+      Already a one-way delete, exactly as `ADR-LOG-RESTRUCT-0012` predicted: `db/checkpoints.rs` was removed in `P1-A` rather than declared. Verified now — **zero** references to `checkpoints.db` anywhere in the four crates, and no `~/.autodev/checkpoints.db` on disk, so no second store was ever created and there is nothing to merge. `git/checkpoint.rs` is the sole owner.
+      ⚠ Still open, and **not** this task: `auto_checkpoint_before_write` returns `()` and logs a failure at `debug!` only, so a failed checkpoint is invisible and the write proceeds. That is `M-43`, owned by P4/P9.
+- [x] **P1-17** Delete `hourly_costs`. → `CODE-PRESENT` · `UNIT-PROVEN`
+      **Deleted, not created.** It had exactly one reference — the row-count loop in `analytics/queries.rs` — nothing has ever written to it, and it is absent from the live `analytics.db` (which holds `api_failures`, `daily_costs`, `system_events`, `token_usage`, `worker_stats`). Creating it would have produced a permanently empty table and a green diagnostic: inert-but-green.
+      The masking mattered more than the table: `.unwrap_or(-1)` meant the missing table reported `-1` forever rather than failing. The list is now the `DIAGNOSTIC_TABLES` constant, and a test builds a fresh database from the real migration and asserts every name in it exists — falsified by re-adding `hourly_costs`, which the test caught by name.
 - [ ] **P1-18** Add the **run/audit ledger** so every later act stamps a run id. → `LIVE-DB-PROVEN`
 - [ ] **P1-19** Add a **backup helper** and wire it into every destructive path (GAP-11). → `UNIT-PROVEN`
 

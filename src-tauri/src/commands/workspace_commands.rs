@@ -15,20 +15,10 @@ const WORKSPACE_KEY: &str = "workspace_dir";
 
 // ─── Storage helpers ──────────────────────────────────────────────────────────
 
-fn open_config_db() -> Result<Connection> {
-    let path = autodev_dir()?.join("config.db");
-    let conn =
-        Connection::open(&path).map_err(|e| AutoDevError::Agent(format!("config.db open: {e}")))?;
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS app_settings (
-             key        TEXT PRIMARY KEY,
-             value      TEXT NOT NULL,
-             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-         );",
-    )
-    .map_err(|e| AutoDevError::Agent(format!("app_settings migrate: {e}")))?;
-    Ok(conn)
-}
+// `config.db` is opened through `db::app_settings`, the single owner of the
+// `app_settings` table (P1-15). This file used to declare its own
+// `CREATE TABLE IF NOT EXISTS` — one of three that disagreed about whether
+// the `updated_at` trigger was part of the schema, so first caller won.
 
 // ─── Commands ─────────────────────────────────────────────────────────────────
 
@@ -36,7 +26,7 @@ fn open_config_db() -> Result<Connection> {
 /// Returns an empty string if none is set.
 #[tauri::command]
 pub fn get_workspace_dir() -> Result<String> {
-    let conn = open_config_db()?;
+    let conn = crate::db::app_settings::open()?;
     let row: Option<String> = conn
         .query_row(
             "SELECT value FROM app_settings WHERE key = ?1",
@@ -53,7 +43,7 @@ pub fn get_workspace_dir() -> Result<String> {
 /// Pass an empty string to clear the workspace.
 #[tauri::command]
 pub fn set_workspace_dir(path: String) -> Result<()> {
-    let conn = open_config_db()?;
+    let conn = crate::db::app_settings::open()?;
     if path.is_empty() {
         conn.execute(
             "DELETE FROM app_settings WHERE key = ?1",

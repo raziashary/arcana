@@ -24,15 +24,34 @@ pub const WORKSPACE_KEY: &str = "workspace_dir";
 
 /// Open `config.db` and ensure `app_settings` exists.
 pub fn open() -> Result<Connection> {
-    let path = autodev_dir()?.join("config.db");
+    open_at(&autodev_dir()?.join("config.db"))
+}
+
+/// As `open`, against an explicit path. Exists so tests never write to the
+/// user's real `~/.autodev/config.db`.
+pub fn open_at(path: &std::path::Path) -> Result<Connection> {
     let conn =
-        Connection::open(&path).map_err(|e| AutoDevError::Agent(format!("config.db open: {e}")))?;
+        Connection::open(path).map_err(|e| AutoDevError::Agent(format!("config.db open: {e}")))?;
+    // The trigger is part of the schema because the live `config.db` has it:
+    // of the three creators this module replaces, only `github_mcp_commands.rs`
+    // declared it, so whether it existed depended on which caller happened to
+    // run first. Omitting it here would have made fresh installs differ from
+    // every existing one.
+    //
+    // It is an `AFTER UPDATE ON app_settings` that itself updates the table.
+    // SQLite leaves `recursive_triggers` off by default, so it fires once; it
+    // would loop if that pragma were ever turned on for this connection.
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS app_settings (
              key        TEXT PRIMARY KEY,
              value      TEXT NOT NULL,
              updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-         );",
+         );
+         CREATE TRIGGER IF NOT EXISTS update_app_settings_ts
+             AFTER UPDATE ON app_settings
+             BEGIN
+                 UPDATE app_settings SET updated_at = CURRENT_TIMESTAMP WHERE key = NEW.key;
+             END;",
     )
     .map_err(|e| AutoDevError::Agent(format!("app_settings migrate: {e}")))?;
     Ok(conn)
@@ -40,7 +59,11 @@ pub fn open() -> Result<Connection> {
 
 /// Read one setting. `None` when unset.
 pub fn get(key: &str) -> Result<Option<String>> {
-    let conn = open()?;
+    get_in(&open()?, key)
+}
+
+/// As `get`, on a caller-supplied connection.
+pub fn get_in(conn: &Connection, key: &str) -> Result<Option<String>> {
     conn.query_row(
         "SELECT value FROM app_settings WHERE key = ?1",
         params![key],
@@ -52,7 +75,11 @@ pub fn get(key: &str) -> Result<Option<String>> {
 
 /// Write one setting, replacing any existing value.
 pub fn set(key: &str, value: &str) -> Result<()> {
-    let conn = open()?;
+    set_in(&open()?, key, value)
+}
+
+/// As `set`, on a caller-supplied connection.
+pub fn set_in(conn: &Connection, key: &str, value: &str) -> Result<()> {
     conn.execute(
         "INSERT INTO app_settings (key, value, updated_at) VALUES (?1, ?2, CURRENT_TIMESTAMP)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
@@ -68,4 +95,85 @@ pub fn set(key: &str, value: &str) -> Result<()> {
 /// unreadable" identically — both mean "fall back to the process directory".
 pub fn load_workspace_dir() -> String {
     get(WORKSPACE_KEY).ok().flatten().unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_db(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("autodev-appsettings-test-{tag}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        dir.join("config.db")
+    }
+
+    #[test]
+    fn a_value_written_is_a_value_read_back() {
+        let path = temp_db("roundtrip");
+        let conn = open_at(&path).expect("open");
+        assert_eq!(get_in(&conn, WORKSPACE_KEY).unwrap(), None);
+
+        set_in(&conn, WORKSPACE_KEY, "C:/work").expect("set");
+        assert_eq!(
+            get_in(&conn, WORKSPACE_KEY).unwrap(),
+            Some("C:/work".to_string())
+        );
+
+        // Upsert, not a second row.
+        set_in(&conn, WORKSPACE_KEY, "C:/other").expect("set again");
+        assert_eq!(
+            get_in(&conn, WORKSPACE_KEY).unwrap(),
+            Some("C:/other".to_string())
+        );
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM app_settings", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1, "set must upsert, not insert a duplicate");
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// The trigger is part of the schema because the live database has it.
+    /// Asserting it exists stops a future edit from quietly dropping it and
+    /// re-creating the drift this task removed.
+    #[test]
+    fn the_updated_at_trigger_is_created_and_fires() {
+        let path = temp_db("trigger");
+        let conn = open_at(&path).expect("open");
+
+        let present: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name='update_app_settings_ts'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(present, 1, "the updated_at trigger is missing");
+
+        set_in(&conn, "k", "v1").expect("insert");
+        let first: String = conn
+            .query_row(
+                "SELECT updated_at FROM app_settings WHERE key='k'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(!first.is_empty(), "updated_at was never populated");
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn an_unset_workspace_reads_as_empty_rather_than_failing() {
+        // `load_workspace_dir` is called on paths that must not fail; callers
+        // treat "unset" and "unreadable" identically.
+        let path = temp_db("unset");
+        let conn = open_at(&path).expect("open");
+        assert_eq!(get_in(&conn, WORKSPACE_KEY).unwrap(), None);
+        drop(conn);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
 }

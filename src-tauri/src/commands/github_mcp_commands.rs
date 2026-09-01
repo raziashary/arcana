@@ -22,25 +22,10 @@ pub struct GitHubMcpConfig {
 
 const KEY: &str = "github_mcp_config";
 
-fn open_config_db() -> Result<Connection> {
-    let path = autodev_dir()?.join("config.db");
-    let conn =
-        Connection::open(&path).map_err(|e| AutoDevError::Agent(format!("config.db open: {e}")))?;
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS app_settings (
-             key   TEXT PRIMARY KEY,
-             value TEXT NOT NULL,
-             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-         );
-         CREATE TRIGGER IF NOT EXISTS update_app_settings_ts
-             AFTER UPDATE ON app_settings
-             BEGIN
-                 UPDATE app_settings SET updated_at = CURRENT_TIMESTAMP WHERE key = NEW.key;
-             END;",
-    )
-    .map_err(|e| AutoDevError::Agent(format!("app_settings migrate: {e}")))?;
-    Ok(conn)
-}
+// `config.db` is opened through `db::app_settings`, the single owner of the
+// `app_settings` table (P1-15). This file used to declare its own
+// `CREATE TABLE IF NOT EXISTS` — one of three that disagreed about whether
+// the `updated_at` trigger was part of the schema, so first caller won.
 
 // ─── Commands ─────────────────────────────────────────────────────────────────
 
@@ -48,7 +33,7 @@ fn open_config_db() -> Result<Connection> {
 /// Returns a default (disabled) config if none has been saved.
 #[tauri::command]
 pub fn get_github_mcp_config() -> Result<GitHubMcpConfig> {
-    let conn = open_config_db()?;
+    let conn = crate::db::app_settings::open()?;
     let row: Option<String> = conn
         .query_row(
             "SELECT value FROM app_settings WHERE key = ?1",
@@ -82,7 +67,7 @@ pub fn set_github_mcp_config(
     let json = serde_json::to_string(&cfg)
         .map_err(|e| AutoDevError::Agent(format!("serialize github mcp config: {e}")))?;
 
-    let conn = open_config_db()?;
+    let conn = crate::db::app_settings::open()?;
     conn.execute(
         "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",

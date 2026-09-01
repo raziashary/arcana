@@ -11,6 +11,22 @@ pub struct AnalyticsQueries {
     db: Arc<AnalyticsDb>,
 }
 
+/// The tables `row_counts_for_diagnostic` reports on.
+///
+/// Must match what `AnalyticsDb::migrate` creates. This list used to include
+/// `hourly_costs`, a table nothing has ever created and which is absent from
+/// the live `analytics.db`. Because the count is read with `.unwrap_or(-1)`,
+/// the missing table reported `-1` forever instead of failing — a diagnostic
+/// that had been quietly wrong since it was written.
+/// `every_diagnostic_table_actually_exists` pins the two together.
+pub const DIAGNOSTIC_TABLES: &[&str] = &[
+    "token_usage",
+    "api_failures",
+    "system_events",
+    "worker_stats",
+    "daily_costs",
+];
+
 impl AnalyticsQueries {
     pub fn new(db: Arc<AnalyticsDb>) -> Self {
         Self { db }
@@ -26,14 +42,10 @@ impl AnalyticsQueries {
             self.db.conn.lock().map_err(|e| {
                 crate::errors::AutoDevError::Agent(format!("Mutex lock failed: {e}"))
             })?;
-        for table in &[
-            "token_usage",
-            "api_failures",
-            "system_events",
-            "worker_stats",
-            "daily_costs",
-            "hourly_costs",
-        ] {
+        for table in DIAGNOSTIC_TABLES {
+            // `-1` means "could not be counted". With the table list pinned to
+            // the schema it is a real signal (a corrupt or missing database)
+            // rather than the permanent state it was for `hourly_costs`.
             let count: i64 = conn
                 .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
                 .unwrap_or(-1);
@@ -297,5 +309,44 @@ impl AnalyticsQueries {
             confidence_percent: 75.0, // Based on 7-day sample
             based_on_days: days as i32,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A diagnostic that reports on a table nobody creates is not a
+    /// diagnostic. This builds a fresh analytics database from the real
+    /// migration and asserts every name in `DIAGNOSTIC_TABLES` is actually
+    /// there, so the list cannot drift from the schema again.
+    #[tokio::test]
+    async fn every_diagnostic_table_actually_exists() {
+        let dir = std::env::temp_dir().join("autodev-analytics-diag-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("analytics.db");
+
+        let db = crate::analytics::db::AnalyticsDb::new_at(&path)
+            .await
+            .expect("analytics db");
+
+        let conn = db.conn.lock().expect("lock");
+        for table in DIAGNOSTIC_TABLES {
+            let n: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?1",
+                    [table],
+                    |r| r.get(0),
+                )
+                .expect("sqlite_master query");
+            assert_eq!(
+                n, 1,
+                "DIAGNOSTIC_TABLES names '{table}', which the schema never creates"
+            );
+        }
+        drop(conn);
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
