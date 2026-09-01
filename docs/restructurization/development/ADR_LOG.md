@@ -616,6 +616,39 @@ The compensating revert I shipped first narrowed that window and did not close i
 
 **Links.** `_verify/P1-AUDIT-TRIAGE.md` `A-22` · `_verify/A4-P1-area-audit.md` · `P1-09`
 
+## ADR-LOG-RESTRUCT-0023 — P3 absorbs design ingestion; the layer IR is the agent-facing format, not the HTML
+
+**Status.** DECIDED
+**Author.** Claude · **Tier.** `razi-ruled`
+
+**What.**
+
+1. **P3 gains `P3-G`** (`P3-45`—`P3-54`): the PSD converter is vendored into AutoDev, the **layer IR** is built, and three kinds of adaptation run on it — reformat across aspect ratios, rebrand, content swap.
+2. **The IR is the agent-facing format. HTML is one serializer.**
+3. **P2 narrows** to what P3-G needs: Anthropic conforming (`P2-01`—`04`, `P2-17`) and honest cost with a real ceiling (`P2-18`, `21`, `22`).
+4. **Deferred with owners:** P3-F memory (14 tasks), P5 Graph, three adapters, P3-D subagents, P2 polish, P4 Fleet.
+5. **AutoDev publishes a capability contract and stops there.** It does **not** implement `source.psd.reference` or `integration.invoke`.
+
+**Why.**
+
+Razi: *"the ending is wiring AutoDev to AutoDesign — a design can be translated into HTML and CSS which in reality is lines of code or what AutoDev can do."*
+
+**On (2), which is the load-bearing decision.** The spike converted two real PSDs successfully — and produced **17.41 MB** and **25.27 MB** of HTML, because every layer is an embedded base64 PNG. That cannot enter a model's context, so an agent cannot adapt it. The converter's own architecture document already stated the answer before we started: *"the in-memory layer array is the universal intermediate representation — everything downstream is just a different serialization."* The IR is a few KB. Handing the model the HTML instead makes the feature impossible rather than merely slow, which is why `P3-46` is ordered before every adaptation task.
+
+**On (5).** AutoDesign's capability manifest has exactly **two** capabilities `available`. `source.psd.reference` is **planned** at G3B and `integration.invoke` — the capability that would invoke AutoDev at all — is **deferred** at **G6**, annotated `future_forge_extension`. The binding constraint on the wired outcome is therefore AutoDesign's roadmap, not AutoDev's, and Razi ruled that AutoDesign is owned elsewhere. Building to a published seam lets both halves proceed in parallel; building past it would be building against a schedule we do not control.
+
+**This also preserves P8.** The two apps talk over AutoDesign's existing loopback server, so AutoDev never contains Forge, and *"not one line of sidecar code survives"* stands unchanged. Embedding Forge was the only version that broke it.
+
+**On the estimate, stated rather than absorbed.** Razi accepted *"~8—9 days"* against a figure priced on **reformat only**. He then confirmed adaptation is **three** kinds. The number is now **~11—12 days**. An estimate that cannot express having grown is the same defect class as `L-C9` — a verification whose shape cannot express failure.
+
+**When.** 2026-09-01 · P1 closeout → P2/P3 re-scope
+
+**Where.** `MASTER_DEVELOPMENT_PLAN.md` §5 phase table, §9 P3-G, S3-06—S3-10 · `_verify/AUTODESIGN-INTEGRATION-RESEARCH.md`
+
+**How.** Conversion is already `SPIKE-PROVEN`: two real PSDs (31.8 MB / 41.9 MB, 37 layers), both orientations, verified **visually** rather than from a log. ⚠ The first spike used 1080×1080 — the size the refinements notes say already works — so the portrait case was run **specifically to check** rather than assumed; it renders correctly and that documented bug is already fixed. Two defects were found and are now tasks (`P3-47`, `P3-48`).
+
+**Links.** `_verify/AUTODESIGN-INTEGRATION-RESEARCH.md` · `P3-45`—`P3-54` · `S3-06`—`S3-10` · `ADR-LOG-RESTRUCT-0019`
+
 # §5 · Standing entries carried from planning
 
 Not build-time decisions — but recorded here because a future session will otherwise rediscover them the hard way. Each is already ratified in vision Part 8; these are the **operational consequences** that bite during implementation.

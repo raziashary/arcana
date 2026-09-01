@@ -199,15 +199,32 @@ Minimum from P2/P3 for C-6 to work at all:
 
 **Critical path total: ~8.5 working days.**
 
-### 5.1 The number I trust least
+### 5.1 Adaptation — scope confirmed by Razi, and C-6 re-sized
 
-"Adaptation" is not yet defined to a testable sentence. The evidence in `~/Downloads` points
-one way — the same design exists at 1080×1080, 1080×1920 **and** 1920×1080, and there is a
-file named `instagram_story_adapted.psd` — which reads as *reformat one design across aspect
-ratios*. If that is the target, the IR makes it tractable: reposition and rescale layers for
-a new canvas. **But it is an inference from filenames and needs confirming**; if adaptation
-means rebranding, copy rewriting, or generating a responsive component library, C-6 is a
-different size.
+Asked directly, Razi answered: **"adaptation means reformat across aspect ratio and rebrand
+and content swap."** Two of the three candidates, and — importantly — **not** the fourth
+option offered (design → semantic responsive codebase).
+
+That exclusion is the load-bearing half of the answer. The output stays a **faithful
+layer-based rendering, adapted** — it does not have to become a component library with
+inferred semantics (*is this a nav? a card? a button?*), which was the expensive
+interpretation. The IR carries everything the three confirmed kinds need.
+
+C-6 therefore splits and grows:
+
+| | Work | Days | Note |
+|---|---|---|---|
+| C-6a | **Reformat across aspect ratios** — reposition and rescale layers onto a new canvas | 1.5 | the hardest: it is layout reasoning, not substitution. Anchor/safe-area rules per layer. |
+| C-6b | **Rebrand + content swap** — palette, logo, type, and text replacement preserving `styleRuns` | 2.0 | these share one machinery: mutate the IR, re-serialize. Rebrand adds palette/type mapping; content swap adds text and per-character style handling. |
+| C-6c | **Brand-guide input** — a format for "what to rebrand *to*" | 1.0 | does not exist on our side today. AutoDesign's whole framing is *"findings can cite the brand guide they came from"*, so this must be a real input, not a prompt string. |
+| | **C-6 total** | **4.5** | was 1.5 when adaptation was assumed to be reformat only |
+
+**Revised critical path: 4.6 − 1.5 + 4.5 = 7.6 (C-series) + 4.0 (M-series) ≈ 11.5 days.**
+
+I am recording the increase rather than absorbing it. The ~8–9 day figure Razi accepted was
+priced on reformat alone; confirming three kinds of adaptation adds ~3 days, and quietly
+keeping the old number would be the same failure class as a green gate over an unfinished
+path.
 
 ### 5.2 Why P3-A is not droppable
 
@@ -242,24 +259,42 @@ deferral that reaches 3–4 days without cutting scope rather than schedule.
 | Outcome | Estimate | Confidence |
 |---|---|---|
 | **Spike — PSD → HTML/CSS proven** | **done** | `SPIKE-PROVEN`, both orientations, visually verified |
-| **Outcome 1 — standalone: PSD → IR → adapted code** | **~8–9 working days** | medium-high; weak number is C-6 (§5.1) |
-| — *demo slice* (convert + IR + one **scripted** adaptation, unhardened) | **~3–4 days** | this is what fits the stated window |
-| **Outcome 2 — AutoDesign drives AutoDev** | **not schedulable from this repo alone** | blocked on AutoDesign G3B + G6 |
+| **Outcome 1 — standalone: PSD → IR → adapted output** | **~11–12 working days** | medium-high. Was ~8–9 when adaptation was assumed to be reformat only; three confirmed kinds add ~3 (§5.1) |
+| **Outcome 2 — AutoDesign drives AutoDev** | **not ours to schedule** | AutoDesign is owned elsewhere (§7.2) |
 
-### 7.1 The 3–4 day version, precisely
+### 7.1 On the number changing
 
-A **demo spine**, labelled as one: C-1 through C-5 plus a *scripted* adaptation rather than
-an agent-driven one, Anthropic only, with fault isolation kept. It proves the pipeline end to
-end. It is **not** hardened and **not** the wired outcome, and calling it done would repeat
-exactly the P1 failure the post-phase audit caught — a green demo over an unfinished path.
+Razi accepted "~8–9 days" against an estimate priced on **reformat only**. He then confirmed
+adaptation is **three** kinds. The number is now **~11–12**, and it is stated here rather
+than absorbed silently. `L-C9` and `L-C6` in the learnings register are both about
+verification that could not express failure; an estimate that cannot express having grown is
+the same defect wearing a different hat.
+
+### 7.2 Ownership — decided
+
+**Razi's ruling: someone else owns AutoDesign.** So this repository builds to a defined seam
+and stops there:
+
+- AutoDev implements the **capability contract** it would expose, written to AutoDesign's
+  existing versioned contract shape (`@airs/auto-design-capability-contracts`), so both
+  halves can be built in parallel against one agreed seam.
+- AutoDev does **not** implement `source.psd.reference` or `integration.invoke`. Those stay
+  AutoDesign's, at its G3B and G6.
+- The contract is a **deliverable of this work**, not a byproduct: without it the parallel
+  build has nothing to agree on.
+
+This also means Outcome 1 must be genuinely useful standalone — it cannot be a half-feature
+waiting for a transport that another team schedules.
 
 ---
 
-## 8 · What I need from Razi
+## 8 · Decisions taken (2026-09-01)
 
-1. **Confirm what "adaptation" means** (§5.1). Reformatting across aspect ratios is my
-   reading of the evidence; it changes C-6 materially.
-2. **Choose: demo spine in 3–4 days, or Outcome 1 in ~8–9.** Both are real; only one ships.
-3. **Decide who owns AutoDesign's side.** `source.psd.reference` and `integration.invoke` are
-   AutoDesign work. If that is also us, it is additional days in a different repo under its
-   no-edit-Forge rule.
+| Question | Razi's answer |
+|---|---|
+| What is adaptation? | **reformat across aspect ratios + rebrand + content swap** (not design → semantic codebase) |
+| Which target? | **Outcome 1 properly** — not the demo spine |
+| Who owns AutoDesign's side? | **someone else**; AutoDev defines and publishes the contract |
+
+**Deferred, with owners, to fund this** (unchanged from §6): P3-F memory (14 tasks), P5 Graph,
+P2-05/06/07 (three adapters), P3-D subagents, P2 polish, P4 Fleet.

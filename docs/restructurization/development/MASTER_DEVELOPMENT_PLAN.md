@@ -417,7 +417,7 @@ src/                                [P6 anchor, P7 experience]
 | **P0** | Stop the bleeding | No unverified update can install · no command returns a key · the unauthenticated `/mcp` RCE is gone · **gates can fail** · all three platforms build on PR | — |
 | **P1** | Structural | Everything shipped is in the binary · one schema owner · `autodev-core` exists · redaction restored | P0 |
 | **P2** | Providers | Four providers conform · caching measurably works · cost is honest · **spend has a ceiling** | P1 |
-| **P3** | Runtime + memory | Context is bounded · one tool path with a real gate · subagents in-process · a panic cannot kill the app · memory works and is proven read | P2 |
+| **P3** | Runtime + **design ingestion** | Context is bounded · one tool path with a real gate · a panic cannot kill the app · **a PSD becomes an adaptable IR, and reformat / rebrand / content-swap run on it** | P2 |
 | **P4** | Fleet | A task runs end to end on three OSes and lands a **build-verified, reversible** artifact the user can run | P3 |
 | **P5** | Graph | The graph is compiled, correct across updates, and **read** for context scoping | P3 |
 | **P6** | UI | The anchor is implemented · no event is lost on a tab switch · every setting persists · every surface reachable | P2 |
@@ -758,12 +758,56 @@ src/                                [P6 anchor, P7 experience]
 - [ ] **P3-43** Fix the seven inherited defects rather than porting them (query-independent semantic recall · query-ignoring cache key · always-throwing HITL writer · unfiltered procedural recall · unscoped episodic recall · inert negative cache · uninvalidated semantic cache). → `UNIT-PROVEN`
 - [ ] **P3-44** Memory is **provably read** — a recalled memory appears in the outbound prompt bytes (INV-8). → `GATE-PROVEN`
 
+### P3-G · Design ingestion and adaptation — the AutoDesign endgame
+
+**Added 2026-09-01** on Razi's direction: *"the ending is wiring AutoDev to AutoDesign."*
+Sized in `_verify/AUTODESIGN-INTEGRATION-RESEARCH.md`; the conversion half is already
+`SPIKE-PROVEN` against two real PSDs. IDs continue from P3-44 and are never renumbered (§1).
+
+**The one architectural commitment.** The converter's output is 17–25 MB of embedded base64
+and **cannot enter a model's context**. The layer array is the intermediate representation —
+`psdtohtml_architecture.md`: *"Everything downstream — PSD, HTML, SVG, React, Flutter — is
+just a different serialization of that same structured data."* **The agent adapts the IR;
+HTML is one output serializer.** Inverting this makes the feature impossible, so `P3-46`
+precedes every adaptation task rather than following them.
+
+- [ ] **P3-45** Vendor `ag-psd@30.1.0` and the PSD→HTML core into the renderer. **No CDN script survives** — the CSP is `script-src 'self' blob:`, which blocks all four today. Google Fonts is already permitted (`style-src`/`font-src`) and stays. → `GATE-PROVEN`
+- [ ] **P3-46** **The layer IR** — a second serializer emitting structured JSON from the same walk that emits HTML: bounds, fonts, sizes, colors, tracking, `styleRuns`, blend modes, opacity, group nesting. The agent-facing format. → `UNIT-PROVEN`
+- [ ] **P3-47** Translate PSD's `U+0003` point-text separator to a line break. It renders as a visible glyph box today (*"Minggu␃30 Des"*), observed in both spike orientations. → `UNIT-PROVEN`
+- [ ] **P3-48** An unresolvable font is **reported**, never silently substituted. `Gimbal Extended` and `Bruce Forever` fall back to `sans-serif` today with no warning, losing the design's display typography while appearing to succeed. **The silence is the defect, not the fallback.** → `GATE-PROVEN`
+- [ ] **P3-49** Conversion is a registered agent tool with **bounded** output (`P3-29`), returning the IR and an artifact handle — never the 17 MB document. → `GATE-PROVEN`
+- [ ] **P3-50** **Adaptation A — reformat across aspect ratios.** Reposition and rescale layers onto a new canvas with per-layer anchor/safe-area rules. Layout reasoning, not substitution; the hardest of the three. → `SMOKE-PROVEN`
+- [ ] **P3-51** **Adaptation B — rebrand and content swap.** Palette, logo and type substitution plus text replacement that **preserves `styleRuns`** (per-character styling is real in these files — the spike found a three-run layer). → `SMOKE-PROVEN`
+- [ ] **P3-52** **Brand-guide input** — a real input format for *what to rebrand to*, not a prompt string. AutoDesign's premise is that findings *"cite the brand guide they came from"*, which a free-text instruction cannot satisfy. → `UNIT-PROVEN`
+- [ ] **P3-53** **Publish the capability contract** AutoDev exposes, written to AutoDesign's existing versioned shape (`@airs/auto-design-capability-contracts`). **AutoDesign is owned elsewhere (Razi, 2026-09-01)**, so this seam is a deliverable, not a byproduct — without it the two halves have nothing to build against. AutoDev does **not** implement `source.psd.reference` or `integration.invoke`; those are AutoDesign's G3B and G6. → `DOC-GATE` · `UNIT-PROVEN`
+- [ ] **P3-54** Conversion runs **inside** fault isolation (`P3-01`…`P3-04`). 25–35 s of canvas work over 30–45 MB holding a full layer bitmap set is where an OOM or panic actually happens, and `panic = "abort"` today takes the whole app with it. → `SMOKE-PROVEN`
+
+**Deferred to fund this**, each with an owner, recorded so nothing is dropped silently:
+
+| Deferred | Tasks | Owner | Why safe |
+|---|---|---|---|
+| **P3-F Memory** | `P3-30`…`P3-43` (14) | P3 later / P6 | sqlite-vec, ONNX vendoring, fastembed, reranker, gateway. Design→code needs none of it. `P3-44` stays as an FTS5-only stub so recall is never empty. The single largest saving in the plan. |
+| **P5 Graph** | whole phase | after the design path | graph-scoped context optimises code navigation; not a design→code dependency |
+| **Three adapters** | `P2-05`, `P2-06`, `P2-07` | P2 continued | one conforming provider proves the loop. A **sequencing** deferral — adapters are cheaper built together. |
+| **P3-D Subagents** | `P3-22`…`P3-24` | P3 continued | one conversion is one job; fan-out is not on the path |
+| **P2 polish** | `P2-20`, `P2-24`, `P2-26`, `P2-27` | P2 continued | none blocks a working turn on Windows |
+| **P4 Fleet** | whole phase | unchanged | AutoDev standalone still needs it; the wired mode would inherit AutoDesign's Apply/Reject surface |
+
+⚠ **P2 narrows rather than shrinks.** Its remit becomes *what P3-G needs*: `P2-01`…`P2-04`
+and `P2-17` (Anthropic conforming), `P2-18`/`P2-21`/`P2-22` (honest cost, real ceiling). The
+other twenty tasks are sequenced after the design path, not cancelled.
+
 ### Smoke — S3
 - [ ] **S3-01** A 30-turn session's input tokens do **not** grow linearly with turn count.
 - [ ] **S3-02** A deliberately panicking tool fails its turn; the app and other sessions survive.
 - [ ] **S3-03** A subagent spawns, streams, and returns with the sidecar **not running**.
 - [ ] **S3-04** Two different questions in one session produce **different** recall sets.
 - [ ] **S3-05** With the embedding model deleted, recall still returns results and reports itself degraded.
+- [ ] **S3-06** A real PSD converts inside AutoDev with **no network fetch** — vendored libraries only — and the render matches the source design.
+- [ ] **S3-07** The IR round-trips: PSD → IR → HTML yields the same layer count and the same bounds as PSD → HTML directly. *(If these disagree, one of the two serializers is lying about the design.)*
+- [ ] **S3-08** A 1080×1080 design is reformatted to 1080×1920 and **every visible layer lands inside the canvas** — no layer silently off-screen.
+- [ ] **S3-09** A rebrand swaps palette and logo, and a content swap replaces text **without losing per-character styling** on a multi-`styleRun` layer.
+- [ ] **S3-10** A design using a font with no resolvable source **reports it**; the run does not present a substituted render as faithful.
 
 **Exit.** S3 → `TG-P3` → matrix → progress → no-stale → commit.
 
