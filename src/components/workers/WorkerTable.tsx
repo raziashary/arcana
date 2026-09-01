@@ -75,13 +75,6 @@ const MODEL_GROUPS: Array<{ label: string; models: string[] }> = [
     ],
   },
   {
-    label: 'xAI Grok',
-    models: [
-      'grok-3-mini-beta',
-      'grok-3-mini-beta-thinking',
-    ],
-  },
-  {
     label: 'Moonshot / Kimi',
     models: [
       'kimi-k2',

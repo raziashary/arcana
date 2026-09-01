@@ -13,12 +13,23 @@
 ---
 
 ## Provider and runtime mechanics
+> ### Provider scope changed 2026-09-01
+>
+> The provider set is **Anthropic, OpenAI, Google** — three, not four.
+> xAI/Grok was removed on Razi's ruling and `P2-07` is struck.
+>
+> Rows below that describe the **external market** still name xAI, because
+> those statements remain true about the world. Rows stating **our adoption
+> scope** have been corrected to three. Where a rejection existed only
+> because xAI existed, it is marked moot rather than silently deleted — a
+> decision that no longer applies is not the same as one never made.
+
 
 ### N-01 · Prompt caching
 - **Source pattern** — vendor prompt/context caching across all four providers (`G6 §1.C.1`, `§2.C.1`, `§3.C`, `§4.C`)
 - **Known external shape** — Anthropic: explicit `cache_control`, ≤4 breakpoints, per-model minimums 512–4,096 tokens, 5m@1.25× / 1h@2.0× write, **0.1× read**. xAI: fully automatic, no `cache_control`, steered by `x-grok-conv-id`, 75–85% off. OpenAI/Gemini differ again.
-- **We adopt** — all four, behind a four-variant `CachePolicy`; one byte-stable prefix builder with ordered maps.
-- **We reject** — treating caching as a boolean. Collapsing four mechanisms to one flag loses the feature on at least two providers.
+- **We adopt** — all three in scope, behind a three-variant `CachePolicy`; one byte-stable prefix builder with ordered maps.
+- **We reject** — treating caching as a boolean. Collapsing the mechanisms to one flag loses the feature on at least two providers.
 - **Unique addition** — **the cache-hit alarm is built before the cache.** No provider errors below its minimum; the only evidence is a usage field. A cache that silently does nothing has no symptom but the bill.
 - **Proof** — `TG-P2` `G-CACHE-HIT`, `G-CACHE-STABLE`, `G-CACHE-MIN`
 - **Status** — `ADOPTED-INTENT`
@@ -41,15 +52,15 @@
 - **Source** — Anthropic Claude Agent SDK, OpenAI Agents SDK, Google ADK (`G6` Parts 1–3)
 - **External shape** — Runner, handoffs, sessions, guardrails, structured output, streaming event taxonomy
 - **We adopt** — the **semantics**: the turn loop, tool wire shape, parallel tool calls, streaming taxonomy, stop reasons.
-- **We reject** — the SDKs themselves. **No first-party Rust SDK exists for any of the four**, and hosting a Node/Python runtime to get one is a sidecar by another name — the exact defect this programme removes. **xAI ships no agent SDK in any language at all.**
-- **Unique addition** — `Item::Opaque` from day one, carrying four vendors' unreplayable reasoning state without interpreting it.
+- **We reject** — the SDKs themselves. **No first-party Rust SDK exists for any of the three**, and hosting a Node/Python runtime to get one is a sidecar by another name — the exact defect this programme removes. **xAI ships no agent SDK in any language at all.**
+- **Unique addition** — `Item::Opaque` from day one, carrying every in-scope vendor's unreplayable reasoning state without interpreting it.
 - **Proof** — `TG-P2` `G-CONFORM`, `G-OPAQUE` · **Status** — `ADOPTED-INTENT`
 
 ### N-05 · LiteLLM's normalised provider abstraction
 - **Source** — `core-orchestrator`'s `LiteLLMProvider` (`G4b §A.1`) · **External shape** — 11 providers behind one interface, normalised to OpenAI-shaped tool calls, per-request key injection with no env mutation
 - **We adopt** — the normalisation target, the ≤25-iteration tool loop, per-request keys, and the Anthropic thinking-block/signature special case.
-- **We reject** — the 11-provider breadth (four are mandated) and the model registry's contents, which are stale.
-- **Unique addition** — `capabilities()` keyed by **model**, not provider, because the four vendors vary per model.
+- **We reject** — the 11-provider breadth (three are mandated) and the model registry's contents, which are stale.
+- **Unique addition** — `capabilities()` keyed by **model**, not provider, because the vendors vary per model.
 - **Proof** — `TG-P2` `G-CONFORM` · **Status** — `ADOPTED-INTENT`
 
 ### N-06 · Provider-hosted tools
@@ -62,7 +73,7 @@
 ### N-07 · Batch APIs
 - **Source** — 50% discount at Anthropic, OpenAI, Google; 20% at xAI
 - **We adopt** — for offline work only (cleanup workers, bulk analysis).
-- **We reject** — xAI's 20% tier as not worth the code path; and batch for anything interactive.
+- **We reject** — batch for anything interactive. *(The line here also rejected xAI's 20% tier; xAI left the provider set 2026-09-01, so that rejection is now moot rather than a decision.)*
 - **Proof** — deferred; no gate until a batch consumer exists · **Status** — `TERRAIN`
 
 ---
@@ -133,7 +144,7 @@
 ### N-16 · The three-mode thinking detector (STREAM V2)
 - **Source** — `core-orchestrator/src/airs/streaming/` (`G4b §A.6`) · **External shape** — native reasoning · native thinking blocks · XML DFA fallback with a 4096-byte KMP ring buffer, TTFS < 250 ms
 - **We adopt** — the three-mode contract verbatim. Dependency-free, and Rust runs it strictly better.
-- **We reject** — the XML fallback branch's prompt-injection half (`ThoughtProcessor.inject_instructions`), needed only for models without native reasoning. All four mandated providers have it.
+- **We reject** — the XML fallback branch's prompt-injection half (`ThoughtProcessor.inject_instructions`), needed only for models without native reasoning. All three mandated providers have it.
 - **Proof** — `TG-P2` `G-CONFORM` (streaming taxonomy) · **Status** — `ADOPTED-INTENT`
 
 ### N-17 · Twenty finite state machines

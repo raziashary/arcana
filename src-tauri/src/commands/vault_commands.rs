@@ -31,10 +31,14 @@ const PROBED_PROVIDERS: &[&str] = &[
     "anthropic",
     "openai",
     "google",
-    "xai",
     // Retired or alternate spellings — probed so orphaned keys stay findable.
     "ollama",
     "gemini",
+    // xAI/Grok was dropped from the supported set (Razi, 2026-09-01). Both
+    // spellings stay probed: a user who already stored an xAI key must still
+    // be able to see and delete it. Removing the id would hide the secret in
+    // their keychain, which is the opposite of what this list is for.
+    "xai",
     "grok",
 ];
 
@@ -76,7 +80,7 @@ fn masked_last4(secret: &str) -> String {
 
 /// Whether a provider id is one AutoDev currently supports.
 fn is_supported_provider(id: &str) -> bool {
-    matches!(id, "anthropic" | "openai" | "google" | "xai")
+    matches!(id, "anthropic" | "openai" | "google")
 }
 
 // ── Provider keys ────────────────────────────────────────────────────────────
@@ -204,9 +208,14 @@ mod tests {
     #[test]
     fn retired_providers_are_reported_as_orphaned() {
         assert!(is_supported_provider("anthropic"));
-        assert!(is_supported_provider("xai"));
+        assert!(is_supported_provider("openai"));
+        assert!(is_supported_provider("google"));
         assert!(!is_supported_provider("ollama"));
         assert!(!is_supported_provider("gemini"));
+        // Dropped 2026-09-01. Still probed by PROBED_PROVIDERS so an existing
+        // key stays findable, but no longer offered.
+        assert!(!is_supported_provider("xai"));
+        assert!(!is_supported_provider("grok"));
     }
 
     /// INV-12 as a check that can fail, across **every** command file.

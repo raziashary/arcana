@@ -357,8 +357,6 @@ fn model_to_provider(model: &str) -> &str {
         "openai"
     } else if model.starts_with("gemini") {
         "google"
-    } else if model.starts_with("grok") {
-        "xai"
     } else if model.starts_with("deepseek") {
         "deepseek"
     } else if model.starts_with("kimi") {

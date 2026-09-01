@@ -41,7 +41,7 @@ export const A_SECTIONS: DocSection[] = [
         ['State Management', 'Zustand', 'Global state (sessions, config, agent status)'],
         ['Styling', 'Tailwind CSS 3', 'AIRS design system (industrial-minimal, #00FF88 accent)'],
         ['Backend', 'Rust (Tauri commands)', 'Code editing tools, file I/O, command execution'],
-        ['Provider Layer', 'Anthropic, OpenAI, Gemini, Grok', 'Multi-provider LLM abstraction'],
+        ['Provider Layer', 'Anthropic, OpenAI, Google', 'Multi-provider LLM abstraction'],
         ['MCP Health', 'reqwest', 'Liveness probes for user-configured external MCP servers'],
         ['Git Integration', 'git2-rs (libgit2)', 'Structured git operations, worktrees'],
         ['Orchestrator', 'Python 3.13 + FastAPI + litellm', 'Agent lifecycle, FSMs, A2A protocol'],

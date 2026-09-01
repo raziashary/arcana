@@ -135,7 +135,7 @@
 
 ## 5. P2 — The provider layer
 
-**Slice:** trait v2 with `Item::Opaque` and 6-field `Usage` (M-03) · the **Grok** adapter · prompt caching + the cache-hit alarm (M-04) · usage/cost rebuild (M-06) · model persistence (M-07) · BYOK lifecycle (M-30).
+**Slice:** trait v2 with `Item::Opaque` and 6-field `Usage` (M-03) · prompt caching + the cache-hit alarm (M-04) · usage/cost rebuild (M-06) · model persistence (M-07) · BYOK lifecycle (M-30). *(the Grok adapter was struck with `P2-07`, 2026-09-01.)*
 **Exit gate (Part 6):** all four providers pass a conformance suite; a 5-turn session shows non-zero cache reads from turn 2; an unknown model is an explicit error.
 
 - [ ] **TG2-01** `[seam]` — Per provider × model, the conformance suite asserts each capability the model **claims**: streaming, tools, **parallel** tools, structured output, system prompt, vision where claimed, reasoning, usage completeness, truncation detection, and error classification. A capability the capability table advertises and the adapter cannot deliver is a failure; a capability absent from the table is not exercised. Capabilities are keyed by **model, not provider** (spec `02 §1`).
