@@ -152,7 +152,41 @@ async fn main() -> Result<()> {
     // Resolve effective non-interactive mode
     let effective_non_interactive = noninteractive::is_non_interactive(cli.non_interactive);
 
-    match cli.command {
+    // The run/audit ledger (P1-18). Recorded per invocation, and closed with
+    // the invocation's real outcome below, so a failed command is visible in
+    // the ledger as failed rather than merely absent.
+    //
+    // The ledger is an audit trail, not a dependency: if it cannot be opened,
+    // the command still runs.
+    let ledger = autodev_core::db::runs::RunsDb::open().ok();
+    let run_id = ledger.as_ref().and_then(|db| {
+        let _ = db.reap_abandoned();
+        db.begin(autodev_core::db::runs::kind::CLI, Some("airsctl"))
+            .ok()
+    });
+
+    let dispatched = dispatch(cli.command, ctx, effective_non_interactive).await;
+
+    if let (Some(db), Some(id)) = (ledger.as_ref(), run_id.as_ref()) {
+        let result = if dispatched.is_ok() {
+            autodev_core::db::runs::outcome::OK
+        } else {
+            autodev_core::db::runs::outcome::FAILED
+        };
+        if let Err(e) = db.finish(id, result) {
+            tracing::warn!("[runs] could not close run {id}: {e}");
+        }
+    }
+
+    dispatched
+}
+
+async fn dispatch(
+    command: Option<Commands>,
+    ctx: OutputContext,
+    effective_non_interactive: bool,
+) -> Result<()> {
+    match command {
         None => {
             if effective_non_interactive {
                 Cli::parse_from(["airsctl", "--help"]);

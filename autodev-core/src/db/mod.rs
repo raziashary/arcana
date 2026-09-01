@@ -16,6 +16,7 @@ pub mod legacy_root;
 pub mod migrate;
 pub mod model_configs;
 pub mod plans;
+pub mod runs;
 pub mod tasks;
 pub mod timestamps;
 pub mod workers;

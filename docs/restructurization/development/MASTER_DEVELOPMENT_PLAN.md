@@ -586,7 +586,11 @@ src/                                [P6 anchor, P7 experience]
 - [x] **P1-17** Delete `hourly_costs`. → `CODE-PRESENT` · `UNIT-PROVEN`
       **Deleted, not created.** It had exactly one reference — the row-count loop in `analytics/queries.rs` — nothing has ever written to it, and it is absent from the live `analytics.db` (which holds `api_failures`, `daily_costs`, `system_events`, `token_usage`, `worker_stats`). Creating it would have produced a permanently empty table and a green diagnostic: inert-but-green.
       The masking mattered more than the table: `.unwrap_or(-1)` meant the missing table reported `-1` forever rather than failing. The list is now the `DIAGNOSTIC_TABLES` constant, and a test builds a fresh database from the real migration and asserts every name in it exists — falsified by re-adding `hourly_costs`, which the test caught by name.
-- [ ] **P1-18** Add the **run/audit ledger** so every later act stamps a run id. → `LIVE-DB-PROVEN`
+- [x] **P1-18** Add the **run/audit ledger**. → `LIVE-DB-PROVEN` · `UNIT-PROVEN`
+      `~/.autodev/runs.db`, one row per run — app launch, CLI invocation, and (later) agent turns and fleet ticks, which nest via `parent_run_id`.
+      **Live from day one rather than a table waiting for a consumer:** both binaries record their own run. Proven against the real ledger with three `airsctl` invocations — two succeeded and were recorded `ok`, one failed and was recorded **`failed`**, which is what shows the outcome is measured rather than hardcoded. All three closed; none left open.
+      A crash would otherwise leave a run open forever, and an open run reads as *"still running"* — so `reap_abandoned` runs at startup and closes rows belonging to a pid/host that is not this process, marking them `abandoned` rather than deleting them. `finish` on an unknown or already-closed run is an **error**: a ledger that quietly accepts a mismatched close is not an audit trail.
+      ⚠ **Scope stated honestly: nothing is stamped yet.** No other table carries a `run_id` column. What is proven is that runs are recorded and readable; attributing later acts to them belongs to the phases owning those tables. This module existing is not evidence that anything is attributed.
 - [ ] **P1-19** Add a **backup helper** and wire it into every destructive path (GAP-11). → `UNIT-PROVEN`
 
 ### P1-D · Redaction — the dropped port (M-40)

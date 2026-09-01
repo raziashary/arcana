@@ -43,6 +43,7 @@ fn main() {
     check!("workers.db", autodev_core::db::workers::WorkersDb::open());
     check!("tasks.db", autodev_core::db::tasks::TasksDb::open());
     check!("plans.db", autodev_core::db::plans::PlansDb::open());
+    check!("runs.db", autodev_core::db::runs::RunsDb::open());
     check!(
         "annotations.db",
         autodev_core::db::annotations::AnnotationsDb::open()

@@ -180,7 +180,7 @@ fn main() {
 
     // register_commands is defined in the lib crate so generate_handler! runs
     // where the #[tauri::command] __cmd__* macros are in scope.
-    autodev_lib::register_commands(
+    let app = autodev_lib::register_commands(
         tauri::Builder::default()
             .plugin(tauri_plugin_shell::init())
             .plugin(tauri_plugin_dialog::init())
@@ -517,6 +517,43 @@ fn main() {
                 Ok(())
             }),
     )
-    .run(tauri::generate_context!())
-    .expect("Error running AutoDev");
+    .build(tauri::generate_context!())
+    .expect("Error building AutoDev");
+
+    // The run/audit ledger (P1-18). Opening it here rather than in `.setup()`
+    // so the run is closed on the way out: `RunEvent::Exit` fires after setup's
+    // scope has gone.
+    //
+    // `reap_abandoned` first — a crash leaves a run open forever, and an open
+    // run reads as "still running" to anything querying the ledger.
+    let run_id = match autodev_lib::db::runs::RunsDb::open() {
+        Ok(runs) => {
+            let _ = runs.reap_abandoned();
+            match runs.begin(autodev_lib::db::runs::kind::APP, None) {
+                Ok(id) => Some(id),
+                Err(e) => {
+                    tracing::warn!("[runs] could not record this launch: {e}");
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            // The ledger is an audit trail, not a dependency. Failing to open
+            // it must not stop the application starting.
+            tracing::warn!("[runs] ledger unavailable: {e}");
+            None
+        }
+    };
+
+    app.run(move |_handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            if let Some(id) = &run_id {
+                if let Ok(runs) = autodev_lib::db::runs::RunsDb::open() {
+                    if let Err(e) = runs.finish(id, autodev_lib::db::runs::outcome::OK) {
+                        tracing::warn!("[runs] could not close run {id}: {e}");
+                    }
+                }
+            }
+        }
+    });
 }
