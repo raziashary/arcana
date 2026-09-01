@@ -530,10 +530,17 @@ src/                                [P6 anchor, P7 experience]
 - [ ] **P1-04** P0-22's reachability guard now **passes**. → `GATE-PROVEN`
 
 ### P1-B · Extract `autodev-core`
-- [ ] **P1-05** Create the crate; move `agent/`, `provider/`, `memory/`, `platform/`, `security/`. → `CODE-PRESENT`
-- [ ] **P1-06** Break the `AppState` coupling — but note the **real** coupling is `events.rs`'s global `OnceLock<AppHandle>` and **132 `emit_*` sites across 27 files, 11 inside `builtin_tools/`**. Replace with an injected event sink trait. → `UNIT-PROVEN`
-- [ ] **P1-07** `src-tauri` and `src-cli` both link `autodev-core`. → `CODE-PRESENT`
-- [ ] **P1-08** Restate **INV-1** in the vision suite: *no agent work in a foreign runtime or language* (G-02). → `DOC-GATE`
+- [x] **P1-05** Create the crate; move the runtime **and the infrastructure it owns** — 182 files. → `CODE-PRESENT` · `GATE-PROVEN`
+      *Scope corrected:* `agent/` makes 63 references into `db`·`graph`·`git`·`recipes`·`hooks`, so moving it forces those across; `§4`'s tree was the stale line (`ADR-LOG-RESTRUCT-0015`). `security/` is **not** part of the move — it does not exist until `P1-20` creates it.
+      Evidence: `cargo tree` reports **0** Tauri/GTK/webkit edges for `autodev-core` (28 for the desktop crate, proving the check sees them); gates `TG-P1-01/02/03`.
+- [x] **P1-06** Replace the `OnceLock<AppHandle>` with an injected event sink. → `UNIT-PROVEN`
+      *Counts corrected again:* not 132/27/11 and not the 71/24/21 of `P1-CORRECTIONS` either — the live figures were **19 `emit_X(&app, …)` / `emit_X_global(…)` pairs** collapsed to one function each, rewritten across **50 call sites in 21 files**, plus 30 handle-passing argument lines removed. The earlier count included `events.rs`'s own definitions.
+      `EventSink` lives in `autodev-core/src/events.rs`; the desktop installs a Tauri-backed sink in `main.rs` and reports double-installation rather than swallowing it; `airsctl` installs `NullEventSink` explicitly. Evidence: 4 unit tests on the sink, plus `src-cli/tests/core_runtime.rs`.
+- [x] **P1-07** `src-tauri` and `src-cli` both link `autodev-core`. → `CODE-PRESENT` · `UNIT-PROVEN`
+      Stronger than the stated class: `src-cli/tests/core_runtime.rs` constructs a real `AgentEngine` and registers the builtin tool set in a process with no UI framework linked — a file that could not have compiled before this phase.
+      ⚠ **Linking is not adoption.** `src-cli` still reads tasks/plans/workers/analytics through `src-shared`'s parallel implementations. Collapsing those is `P1-09`, and it carries a shipped-contract decision: `airsctl worker heartbeat` and the `Last Seen` column write and read `last_seen`, **a column the live `workers.db` does not have**, so that command errors today.
+- [x] **P1-08** Restate **INV-1** in the vision suite: *no agent work in a foreign runtime or language* (G-02). → `DOC-GATE`
+      `00-AUTODEV-RESTRUCTURE-MASTER-PLAN.md §Part 1`. The prior wording, *"outside the AutoDev process"*, was process-scoped — an embedded interpreter would have satisfied it while breaking the premise. Restated as runtime-and-language-scoped, with the P1 evidence and the still-unsatisfied half (`main.rs` spawns two Python processes; P8) recorded inline.
 
 ### P1-C · One schema owner *(all migrations, one linear unit)*
 - [ ] **P1-09** Move the task/worker/plan schema into `autodev-core`; **delete `src-shared`'s four hand-mirrored tables** (`tasks`, `workers`, `plans`, `plan_steps` — and `plans.db` has two incompatible designs). → `LIVE-DB-PROVEN`

@@ -12,6 +12,11 @@ path = "src/main.rs"
 [dependencies]
 autodev-shared = { path = "../src-shared" }
 
+# The agent runtime, shared with the desktop app. INV-1: one runtime, two
+# binaries. Linkable here only since P1 removed the tauri::AppHandle from every
+# event emission (ADR-LOG-RESTRUCT-0011).
+autodev-core = { path = "../autodev-core" }
+
 # CLI framework
 clap = { version = "4", features = ["derive", "env", "string"] }
 
@@ -56,3 +61,8 @@ zip = "2"
 
 # Base64 (for setup token generation)
 base64 = "0.22"
+
+[dev-dependencies]
+# The Provider trait core declares is an #[async_trait]; implementing a stub of
+# it in tests needs the same macro.
+async-trait = "0.1"

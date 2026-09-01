@@ -47,6 +47,8 @@ name = "airsctl"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "autodev-core",
  "autodev-shared",
  "base64 0.22.1",
  "chrono",

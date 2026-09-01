@@ -78,6 +78,42 @@ jobs:
       - name: Tests
         run: cargo test --workspace --all-targets -- --test-threads=4
 
+      # TG-P1-03 - the crate boundary, checked transitively.
+      #
+      # `cargo tree` sees through re-exports, path dependencies and feature
+      # unification, none of which the in-tree text gates (TG-P1-01/02) can
+      # observe: those read Cargo.toml and the .rs files, so a Tauri edge
+      # arriving through a third crate would pass both.
+      #
+      # It runs in CI rather than inside `cargo test`, where spawning cargo
+      # would contend for the build lock the running test already holds.
+      #
+      # It lives in this job because the whole workspace is already resolved
+      # here. The independent real-world proof is `cli-checks`, which installs
+      # no GTK or webkit at all - if core ever took a Tauri dependency, that
+      # job could not link airsctl. This step exists so the failure says what
+      # went wrong instead of surfacing as a missing system library.
+      - name: Crate boundary - autodev-core must not depend on Tauri
+        run: |
+          set -euo pipefail
+          for crate in autodev-core airsctl; do
+            echo "-- $crate"
+            hits=$(cargo tree -p "$crate" | awk 'tolower($0) ~ /tauri|gtk|webkit|glib/ {n++} END {print n+0}')
+            if [ "$hits" -ne 0 ]; then
+              echo "::error::$crate has $hits UI-framework dependencies. Core is linked by airsctl, which cannot link a UI framework - see ADR-LOG-RESTRUCT-0011."
+              cargo tree -p "$crate" | awk 'tolower($0) ~ /tauri|gtk|webkit|glib/'
+              exit 1
+            fi
+          done
+          # Prove the check can see a dependency when one exists, so a broken
+          # grep cannot leave this step permanently and silently green.
+          desktop=$(cargo tree -p autodev | awk 'tolower($0) ~ /tauri/ {n++} END {print n+0}')
+          if [ "$desktop" -eq 0 ]; then
+            echo "::error::found no tauri dependency in the desktop crate - this check is not working"
+            exit 1
+          fi
+          echo "core and CLI are UI-free; desktop has $desktop tauri edges"
+
   # ── Frontend lint, typecheck and unit tests ───────────────────────────────
 
   frontend-checks:

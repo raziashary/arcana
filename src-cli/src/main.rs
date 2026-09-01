@@ -121,6 +121,14 @@ async fn main() -> Result<()> {
 
     init_tracing(cli.verbose, cli.quiet);
 
+    // Declare this host's event policy before anything in the agent runtime can
+    // emit. `airsctl` has no window to deliver events to, and discarding them
+    // is the correct behaviour for a headless process rather than an error to
+    // report on every event. Stating it explicitly means a future host that
+    // *should* render events (a TUI, a log stream) has one obvious place to
+    // change, instead of inheriting the default by accident.
+    autodev_core::events::install_sink(std::sync::Arc::new(autodev_core::events::NullEventSink));
+
     let cfg = load_config(&cli)?;
     let fmt = resolve_output_format(&cli, &cfg);
     let orchestrator_url = resolve_orchestrator_url(&cli, &cfg);
