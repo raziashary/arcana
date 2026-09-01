@@ -171,7 +171,7 @@ Real progress from real events; cancellation wherever the backend supports it; e
 
 The sharpest tell: **Delete checkpoint is unconfirmed while the reversible Restore beside it is confirmed.** Three confirmation idioms coexist, and a 3-second auto-revert guards "Clear all tasks" — the least destructive of the set.
 
-**The rule: confirmation is proportional to blast radius, in one idiom.** Undo where feasible — noting — ⚠ **corrected 2026-09-01 (`ADR-LOG-RESTRUCT-0010`)**: undo ships via `git/checkpoint.rs`; `db/checkpoints.rs` was deleted in P1, and the real defect is that a *failed* checkpoint is logged at `debug!` while the write proceeds (`M-43`) — that `db/checkpoints.rs` is **not compiled**, so undo does not currently exist at all (spec `05 §1.1`).
+**The rule: confirmation is proportional to blast radius, in one idiom.** Undo where feasible — and undo **does** ship: `git/checkpoint.rs`, five registered commands, called from `gitStore.ts`, with a snapshot taken before every agent write. ⚠ *An earlier version of this line said undo did not exist because `db/checkpoints.rs` is not compiled. That was false (`ADR-LOG-RESTRUCT-0010`), and the file was **deleted** in P1 rather than declared (`ADR-0012`). A first correction was inserted mid-sentence and left the false claim as the conclusion — found by the post-phase doc audit (`D-38`) and rewritten here.* The real remaining defect is `M-43`: `auto_checkpoint_before_write` returns `()` and logs at `debug!`, so a **failed** checkpoint is invisible and the write proceeds anyway.
 
 ### 7.6 Coherence (M-39)
 

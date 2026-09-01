@@ -6,7 +6,7 @@
 |---|---|
 | **Parents** | `MASTER_DEVELOPMENT_PLAN.md` §0.11 · `../vision/00-…-MASTER-PLAN.md` Part 8 |
 | **Rev** | 1.0 — 2026-08-31 |
-| **Entries** | **0** — no build-time decisions yet; awaiting GO |
+| **Entries** | **19** — `ADR-LOG-RESTRUCT-0001` … `0019`, spanning P0 and P1 |
 
 ---
 
@@ -509,6 +509,59 @@ Unlike v5, v6 checks `PRAGMA table_info` before each `ALTER` (via `db::migrate::
 
 **Links.** `ADR-LOG-RESTRUCT-0013` (superseded in part) · `P1-CORRECTIONS.md §B` (corrected) · `§0.16 L-C2` · MDP `§7 P1-11`
 
+## ADR-LOG-RESTRUCT-0019 — Redaction is applied where the tool actually runs; egress is covered through logs and analytics, not by rewriting the request
+
+**Status.** DECIDED
+**Author.** Claude · **Tier.** `razi-ruled` (he chose *"full remediation including over-redaction"* when the audit reported the boundary was not on the production path)
+
+**What.**
+
+1. **Redaction moves onto the production path.** It is applied at **every** `tool.execute` call site — `ToolExecutor::execute` and both branches of `execute_batch` — rather than at one downstream point, because there is no single downstream point: each reaches the conversation, the `messages` table and the UI event independently.
+2. **Two more boundaries are wired:** the log appender (`src-tauri/src/logging.rs`, via a `RedactingWriter` around the file appender) and analytics (`record_api_failure`, `record_system_event`).
+3. **Egress is deliberately NOT redacted at the request body.** Its durable-storage risk is covered by the two above.
+4. **Key matching becomes segment-aware.** The Python source's raw substring test is not portable as written.
+5. **One `PIIRedactor` pattern stays narrowed, and now says so.**
+
+**Why.**
+
+`ToolExecutor::execute` had **no production caller.** The agent loop calls `execute_batch` (`agent/engine.rs:314`), which redacted nothing — raw tool input and output reached the model, the database and the renderer, and subagents inherited the same path. Both proofs were green: `S1-04` drove the dead method, and `TG-P1-06` was a substring check for `security::redaction` over the file, which matched the dead code. **Three independent post-phase auditors found it**, and the third refuted the claim that rested on it.
+
+That is `L-C12`'s **second** instance in one phase and `L-C9`'s fourth. Per `§0.2n` a finding whose class is already in the register is worse than a novel one, and this one is worse still: I wrote *"compiling is not wiring"* three times in this phase, about `graph_tools.rs`, and then shipped exactly that.
+
+**On egress (3).** M-40 names five boundaries and *egress* is one. Redacting the outbound provider request would strip the content the model must reason about — a config file the user asked about, a stack trace they pasted — breaking the product to protect a channel the user deliberately chose to use. What actually reaches durable storage from that path is what we **record** about a call: `record_api_failure` (an auth failure routinely echoes the request) and the log appender. Both are now redacted. The claim "every boundary" is therefore true of durable storage and explicitly not true of the wire, which is the honest formulation.
+
+**On segment matching (4).** `any(sk in key_lower for sk in SENSITIVE_KEYS)` ported literally redacts `author` (contains `auth`), `passed` (contains `pass`) and `prompt_tokens` (contains `token`). In JSON that also changed the **type** — a numeric token count became the string `"[REDACTED]"` — and in free text `let auth = build_auth(cfg);` became `let auth=[REDACTED];` in the transcript the model reads. The set of sensitive names is unchanged; only the matching is corrected.
+
+**On the narrowing (5).** `PIIRedactor`'s phone rule makes separators optional, so it matches any bare ten-digit number. `1777963265` is a Unix timestamp and this tree's checkpoint filenames are built from them. A separator is required. The card and `api_key`-prefix patterns, also narrowed by the first port, are **restored** — and the fact that two of the three narrowings had been *undocumented* is itself the `L-1` failure that lost redaction in the first place.
+
+**When.** 2026-09-01 · P1 · post-phase audit remediation
+
+**Where.** `autodev-core/src/agent/tool_executor.rs` · `autodev-core/src/security/redaction.rs` · `autodev-core/src/analytics/collector.rs` · `src-tauri/src/logging.rs` · `src-tauri/src/ci_gate.rs` · `autodev-core/tests/s1_04_secret_never_reaches_the_prompt.rs`
+
+**How.** `TG-P1-06` now checks the **shape of the call** — every `tool.execute` must be wrapped in `redact_result` — so a fourth branch added later fails the gate rather than passing on a substring. `S1-04` drives `execute_batch`, covers both branches and a mixed batch, and was **falsified**: removing the fix fails all three tests with *"THE SECRET REACHED THE PROMPT"*. 19 of the area auditor's 40 bypass attempts are closed, with each shape pinned by a test.
+
+⚠ **One regression the fix introduced, caught by a test rather than by reading.** `\s*` around the assignment separator crosses a newline, so a harmless `config:` ending one line swallowed the `AWS_SECRET_ACCESS_KEY=…` line below it as its value, found `config` not sensitive, returned the match unchanged — and consumed the real assignment. The secret survived. Now `[ \t]*`, pinned by `a_harmless_key_does_not_swallow_the_secret_on_the_following_line`.
+
+**Links.** `_verify/P1-AUDIT-TRIAGE.md` · `_verify/A4-P1-area-audit.md` `A-01`…`A-07` · `_verify/A3-P1-work-audit.md` `W-10`/`W-11` · `_verify/A6-P1-claims-refutation.md` claims 8 and 11 · `M-40` · `§0.2n`
+
+## ADR-LOG-RESTRUCT-0020 — `config.db`'s ladder owns all six of its tables
+
+**Status.** DECIDED
+**Author.** Claude · **Tier.** `razi-ruled` (*"fold checkpoints + hooks into the ladder"*)
+
+**What.** `git/checkpoint.rs` and `hooks/db.rs` stop issuing their own `CREATE TABLE`. `db/config_db.rs` owns all six tables in the file — `app_settings`, `autodev_instructions`, `model_configs`, `checkpoints`, `hooks`, `hook_logs` — adopting the last three at **v2**. `TG-P1-04` reads `config_db::TABLES` so the gate cannot drift from the owner.
+
+**Why.** `P1-15` said `config.db` had three tables from three creators. It has **six from five modules**. Both extra writers predate P1 (`git show eab345c^` confirms), so this was never a regression — but the ladder was declared the file's schema owner while half its contents sat outside it, and `INV-10` was scored **GREEN** on that count.
+
+The mechanism is `L-C6`: I searched for `CREATE TABLE … app_settings` — the **claim** — instead of for `config.db` — the **invariant**. My own justification for creating `config_db.rs` was *"`user_version` belongs to the **file**, not a table"*, and I then put three of six tables under it. The argument condemned the implementation and I did not notice.
+
+**When.** 2026-09-01 · P1 · post-phase audit remediation
+**Where.** `autodev-core/src/db/config_db.rs` · `autodev-core/src/git/checkpoint.rs` · `autodev-core/src/hooks/db.rs` · `src-tauri/src/ci_gate.rs`
+
+**How.** A `v2` rung rather than an edit to `v1`: every live `config.db` is already stamped 1, so a v1 edit would never run. The statements are `IF NOT EXISTS` and the tables already exist, so on every database that exists today v2 creates nothing and only advances the version — which is the point. Evidence `LIVE-DB-PROVEN`: proven on a copy, then applied — `uv 1 → 2`, `integrity_check = ok`, **all 108 rows of real undo history preserved**, backed up to `~/autodev-backups/p1-audit-configdb` first.
+
+**Links.** `_verify/A5-P1-doc-staleness.md` `D-27` · `_verify/A3-P1-work-audit.md` `W-07` · `INV-10` · `ADR-LOG-RESTRUCT-0015`
+
 # §5 · Standing entries carried from planning
 
 Not build-time decisions — but recorded here because a future session will otherwise rediscover them the hard way. Each is already ratified in vision Part 8; these are the **operational consequences** that bite during implementation.
@@ -517,7 +570,7 @@ Not build-time decisions — but recorded here because a future session will oth
 |---|---|---|
 | C-1 | `subagent/bridge.rs`'s SSE frame parsers are `pub(crate)` and **shared with** `sidecar/client.rs` | Those two deletions **cannot be sequenced independently**. Attempting one alone breaks the build. |
 | C-2 | ACP sender identity is set in **exactly one place** — the MCP adapter deleted in P0 | `ToolContext.agent_role` must be truthful **before** P4 relies on messaging, or a preserved capability dies silently. |
-| C-3 | `graph/` migration head **v5 is a broken statement** (`ADD COLUMN IF NOT EXISTS`) | It must be repaired before v6 is added, and the repair touches live per-repo graph DBs — back up first (§0.8). |
+| C-3 | ~~`graph/` migration head **v5 is a broken statement**~~ → **RESOLVED in `P1-11`.** v5's six dead statements were removed and `migration_v6` added; the live graph store is at v6. ⚠ And the *premise* was wrong: the columns were never missing — `CREATE_NODES` declared them from v1, so v6 is **defensive**, not corrective (`ADR-LOG-RESTRUCT-0017`). | Historical. |
 | C-4 | Four of seven surviving MCP items live inside **sidecar-named files** | They must be relocated **by address**, or sidecar code survives P8 by filename alone. |
 | C-5 | The correct UTF-8-safe truncation **already exists** at `validate.rs:846-853` | Three sites panic on byte-slice truncation; the fix is to use the existing helper, not to write a fourth implementation. |
 | C-6 | `is_read_only()` is documented as a **concurrency hint** and is currently the auto-approval key | Repurposing it back to concurrency and introducing `ToolEffect` must happen together, or a window opens where nothing gates prompting. |

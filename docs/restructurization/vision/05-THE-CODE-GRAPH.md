@@ -78,7 +78,7 @@ The path is hashed **verbatim**, so `C:\p`, `C:/p`, `c:\p` and `C:\p\` each prod
 
 ### 2.3 Schema
 
-`nodes`, `edges`, `communities`, `flows`, `snapshots`, `analysis_cache`, `repos`, `nodes_fts`. Migration head **v5** (`PRAGMA user_version`, `graph/migrations.rs:12-45`) — repair required before extension.
+`nodes`, `edges`, `communities`, `flows`, `snapshots`, `analysis_cache`, `repos`, `nodes_fts`. Migration head **v6** (`PRAGMA user_version`, `graph/migrations.rs`) since `P1-11`. ⚠ The "repair required" note is retracted: v5's six statements were invalid SQLite **and redundant** — `CREATE_NODES` had declared the columns since v1, so nothing was ever missing (`ADR-LOG-RESTRUCT-0017`). v6 ships as a defensive no-op.
 
 ---
 

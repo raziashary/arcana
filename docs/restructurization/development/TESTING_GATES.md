@@ -101,8 +101,10 @@
 
 ## 4. P1 — Make the invisible visible
 
-**Slice:** declare the undeclared modules (M-17 + `db/checkpoints.rs`) · the reachability guard test · the workspace resolver fails loudly (M-14).
-**Exit gate (Part 6):** `graph_tools`, `graph_prompts`, `checkpoints` are in the binary; a guard test proves every source file is reachable; no agent write can land outside a resolved workspace.
+**Slice:** declare the undeclared modules (M-17) · **delete** `db/checkpoints.rs` rather than declaring it (`ADR-LOG-RESTRUCT-0012` — undo already ships via `git/checkpoint.rs`) · the reachability guard test · the workspace resolver fails loudly (M-14).
+**Exit gate (Part 6):** `graph_tools` and `graph_prompts` are in the binary; a guard test proves every source file is reachable; no agent write can land outside a resolved workspace.
+
+> ⚠ **Corrected 2026-09-01.** This gate required `checkpoints` to be *in the binary*. `db/checkpoints.rs` was **deleted**, not declared (`ADR-LOG-RESTRUCT-0012`), so as written the P1 exit gate could never be satisfied. Undo ships via `git/checkpoint.rs`. Found by the post-phase doc audit (`D-16`).
 
 > P1 is where the **structural static guards** live. Every gate here is a check over the tree itself, which is why it can run before any subsystem is rebuilt — and why it must, since every later phase adds code these gates govern.
 
@@ -115,7 +117,7 @@
 
 - [x] **TG1-03** `[data]` — Every migration ladder applies cleanly **from the live head** captured in the `fx-migrate-heads` corpus, and a malformed statement fails the test. Applies to all eleven live databases.
       Source: spec `08 §4 G-MIGRATE-HEAD` (merged with spec `05 §5 G-MIGRATE`, head half) · Catches: `F-31` · **Evidence: `LIVE-DB-PROVEN`** — `examples/migrate_check` runs core's own shipped `open()` paths against the live data root: **10 of 10** databases reach their ladder head with `integrity_check = ok` and **zero row-count changes** (720 rows). Proven on copies first, then applied. Backed up to `~/autodev-backups/p1-10-preflight` and `p1-11-preflight`.
-      → the **`graph/` ladder clause is owned by P5**: v5 must be repaired before v6, and P5 is the slice that does it. Until then the graph ladder is quarantined out of this gate **with the quarantine list itself asserted** — a quarantine that can silently widen is a skipped gate (`§1`).
+      → ~~the **`graph/` ladder clause is owned by P5**~~ → **the quarantine is LIFTED.** `P1-11` repaired v5 and added v6, so the justification no longer exists — and §1's own rule is that a quarantine outliving its reason is a skipped gate. The graph ladder is inside this gate: the live store reaches **v6** through the shipped `open()` path, verified with `integrity_check = ok` and unchanged row counts.
 
 - [x] **TG1-04** `[data]` — A migration that drops, truncates, rewrites or type-changes a column **refuses to run** unless a restorable backup of that database was recorded in the same invocation, and the backup location is written to the migration log. No backup, no destruction.
       Source: spec `08 §4 G-MIGRATE-BACKUP` · Catches: the absent backup path · **Evidence: `UNIT-PROVEN`** — `run_ladder` backs up automatically before any rung containing `DROP`/`DELETE FROM`/`RENAME`/`TRUNCATE`, and **a failed backup stops the migration**. `a_destructive_migration_backs_up_first` reads the backup back and asserts it contains the row the migration then deleted — not merely that a file appeared. Baseline rungs are `CREATE … IF NOT EXISTS` and are skipped, so a fresh install does not copy everything it just created.
@@ -567,7 +569,7 @@ Gates are only as honest as what they run against. Every corpus below is **check
 |---|---|---|
 | **`fx-paths-hostile`** | `..` traversal in every encoding, symlinks and Windows junctions escaping the workspace, UNC paths, reserved device names (`CON`, `NUL`, `AUX`), trailing separators, mixed separators, case-collision pairs, unicode-normalisation collisions, over-long paths | `TG3-28` (refused, never rewritten), `TG3-27`, `TG5-02` |
 | **`fx-update-hostile`** | An update with **no** signature, a bad signature, a signature from a non-production key, a truncated payload, a valid signature over a swapped payload, a replayed older manifest, and a manifest with an empty `sig_url` | `TG0-01`, `TG9-03` |
-| **`fx-secrets`** | Synthetic credentials matching each of the 20 `SENSITIVE_KEYS` entries, planted in tool arguments, file contents, environment dumps, prompts, log lines and memory proposals | `TG3-38`, `TG0-04` |
+| **`fx-secrets`** | Synthetic credentials matching each of the **22** `SENSITIVE_KEYS` entries (the source has 22; "20" was never right — counted in `P1-20`), planted in tool arguments, file contents, environment dumps, prompts, log lines and memory proposals | `TG3-38`, `TG0-04` |
 
 ### 13.3 The no-fire / noise corpus — **first-class, not an afterthought**
 

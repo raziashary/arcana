@@ -1836,19 +1836,10 @@ mod tests {
         })
         .expect("create");
 
-        let prev = std::env::var("USERPROFILE").ok();
-        let prev_home = std::env::var("HOME").ok();
-        std::env::set_var("USERPROFILE", &dir);
-        std::env::set_var("HOME", &dir);
-        let cleared = db.clear_all();
-        match prev {
-            Some(v) => std::env::set_var("USERPROFILE", v),
-            None => std::env::remove_var("USERPROFILE"),
-        }
-        match prev_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
+        let cleared = {
+            let _home = crate::db::test_support::with_home(&dir);
+            db.clear_all()
+        };
         cleared.expect("clear_all");
 
         assert!(

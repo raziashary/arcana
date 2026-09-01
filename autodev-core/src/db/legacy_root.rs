@@ -158,29 +158,15 @@ mod tests {
         }
     }
 
-    /// `HOME`/`USERPROFILE` are process-global, so two tests swapping them at
-    /// once would read each other's sandbox — and so would any *other* test in
-    /// the binary that resolves a data path. Serialised rather than left to
-    /// `--test-threads=1`, which is a flag nobody remembers to pass.
-    static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
+    /// Point `~` at `dir` for the duration.
+    ///
+    /// Uses the **crate-wide** lock in `db::test_support`. This module had its
+    /// own private mutex, which serialised its own tests and nothing else — so
+    /// it did not protect against `db::migrate`'s tests swapping `HOME` at the
+    /// same time. A per-module lock on a process-global is not a lock.
     fn with_home<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
-        let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The two variables `legacy_dir` consults, set for the duration.
-        let old_user = std::env::var("USERPROFILE").ok();
-        let old_home = std::env::var("HOME").ok();
-        std::env::set_var("USERPROFILE", dir);
-        std::env::set_var("HOME", dir);
-        let out = f();
-        match old_user {
-            Some(v) => std::env::set_var("USERPROFILE", v),
-            None => std::env::remove_var("USERPROFILE"),
-        }
-        match old_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
-        out
+        let _guard = crate::db::test_support::with_home(dir);
+        f()
     }
 
     /// The property the whole design rests on: columns the current source does

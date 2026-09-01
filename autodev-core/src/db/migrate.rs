@@ -411,10 +411,10 @@ mod tests {
         )
         .expect("seed");
 
-        let prev = std::env::var("USERPROFILE").ok();
-        let prev_home = std::env::var("HOME").ok();
-        std::env::set_var("USERPROFILE", &dir);
-        std::env::set_var("HOME", &dir);
+        // Crate-wide lock: `HOME` is process-global and these tests run as
+        // threads. Without it this test and the refusal test below raced, and
+        // one created a file where the other expected a directory.
+        let _home = crate::db::test_support::with_home(&dir);
 
         // Make the backup impossible: put a DIRECTORY where the backup file
         // needs to be written, so `VACUUM INTO` cannot create it.
@@ -441,15 +441,6 @@ mod tests {
             },
         ];
         let outcome = run_ladder(&c, "victim.db", D);
-
-        match prev {
-            Some(v) => std::env::set_var("USERPROFILE", v),
-            None => std::env::remove_var("USERPROFILE"),
-        }
-        match prev_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
 
         let err = outcome.expect_err("a destructive migration must not run without a backup");
         assert!(
@@ -516,10 +507,10 @@ mod tests {
 
         // Point the backup root at the sandbox so the test never writes to
         // the user's real ~/.autodev/backups.
-        let prev = std::env::var("USERPROFILE").ok();
-        let prev_home = std::env::var("HOME").ok();
-        std::env::set_var("USERPROFILE", &dir);
-        std::env::set_var("HOME", &dir);
+        // Crate-wide lock: `HOME` is process-global and these tests run as
+        // threads. Without it this test and the refusal test below raced, and
+        // one created a file where the other expected a directory.
+        let _home = crate::db::test_support::with_home(&dir);
 
         const D: &[Migration] = &[
             Migration {
@@ -534,15 +525,6 @@ mod tests {
             },
         ];
         let reached = run_ladder(&c, "victim.db", D).expect("ladder");
-
-        match prev {
-            Some(v) => std::env::set_var("USERPROFILE", v),
-            None => std::env::remove_var("USERPROFILE"),
-        }
-        match prev_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
 
         assert_eq!(reached, 2);
         let left: i64 = c
