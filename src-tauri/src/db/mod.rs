@@ -9,6 +9,7 @@
 
 pub mod annotations;
 pub mod autodev_instructions;
+pub mod backup;
 pub mod model_configs;
 pub mod plans;
 pub mod tasks;

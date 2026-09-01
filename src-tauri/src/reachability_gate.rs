@@ -4,8 +4,20 @@
 // This exists because of 918 lines that were never compiled. `graph_tools.rs`
 // (840 LOC, 22 tool structs) and `graph_prompts.rs` (78 LOC) have no `mod`
 // declaration anywhere, so `cargo build` never saw them — and neither did
-// clippy, or any test. `db/checkpoints.rs` is in the same state, which is why
-// undo does not exist in the shipped binary.
+// clippy, or any test. `db/checkpoints.rs` is in the same state.
+//
+// ⚠ CORRECTED 2026-09-01. This comment used to end "...which is why undo does
+// not exist in the shipped binary". That is FALSE, and it contradicted this
+// file's own KNOWN_UNREACHABLE entry twenty lines below, which correctly calls
+// `git/checkpoint.rs` "the live, shipped" implementation. Undo ships: declared
+// at `git/mod.rs:21`, five Tauri commands registered (`lib.rs:386-390`), called
+// from `src/stores/gitStore.ts:238`, and a snapshot is taken automatically
+// before every agent write (`edit_file.rs:177`, `write_file.rs:124`).
+//
+// What IS true, and is a separate defect: `auto_checkpoint_before_write`
+// returns `()` and logs a failure at `debug!` level only
+// (`git/checkpoint.rs:256-260`), so a checkpoint that fails is invisible and
+// the overwrite proceeds regardless.
 //
 // The project's own plan records this as done: `docs/development/
 // DEVELOPMENT_PLAN.md` §6.12 checks off the literal instruction

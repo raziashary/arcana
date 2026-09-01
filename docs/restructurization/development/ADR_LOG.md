@@ -290,6 +290,124 @@ This is `L-C4` — a local change made without re-checking the code path I was c
 **Links.** `_verify/A1-P0-code-audit.md` F-10 · supersedes the consequence clause of ADR-LOG-RESTRUCT-0008 · `MDP §0.16 L-C4`
 
 
+---
+
+## ADR-LOG-RESTRUCT-0010 — Retraction: "undo does not exist in the shipped binary" is false
+
+**Status:** DECIDED
+**Author:** Claude
+**Tier:** decided-independently
+
+**What.** The claim that AutoDev has no undo is retracted. It was false when written and has been struck in place in all five locations that carried it. The *other half* of the same grounding finding — that a failed checkpoint is silently swallowed — stands and is preserved.
+
+**Why — the mechanism of the error.** Grounding `G3d F-44` recorded that `db/checkpoints.rs` is not compiled, and concluded from that alone that undo is absent. I adopted the conclusion without checking the load-bearing detail, and propagated it into **my own gate code** (`reachability_gate.rs:8`), two gate rows (`TESTING_GATES.md:110`, `:412`), and two master-plan rows (`00 §R3`, `§1175`).
+
+Undo ships. `pub mod checkpoint;` at `git/mod.rs:21`; five commands registered at `lib.rs:386-390`; `src/stores/gitStore.ts:238` calls `list_checkpoints`; and `auto_checkpoint_before_write` runs before every agent write (`edit_file.rs:177`, `write_file.rs:124`). `db/checkpoints.rs` is genuinely uncompiled but has **zero callers**, so it creates no second database today.
+
+The sharpest detail: `reachability_gate.rs` **contradicted itself**. Its header said undo does not exist; its own `KNOWN_UNREACHABLE` entry twenty lines below correctly described `git/checkpoint.rs` as "the live, shipped" implementation. Both were written by me in the same commit.
+
+**What survives.** `auto_checkpoint_before_write` returns `()` and logs failure at `debug!` level only (`git/checkpoint.rs:256-260`); the caller ignores it. A checkpoint that fails is invisible — in production, `debug!` is typically filtered out entirely — and the overwrite proceeds regardless. That is a real defect and remains what `TG5-xx` must prove.
+
+**When.** 2026-09-01 · phase P1 · pre-build verification (`§0.2m`), triggered by `P1-02`
+
+**Where.** `src-tauri/src/reachability_gate.rs` · `docs/restructurization/development/TESTING_GATES.md` · `docs/restructurization/vision/00-AUTODEV-RESTRUCTURE-MASTER-PLAN.md`
+
+**How.** Struck in place with the correction beside it, never deleted (§0.11). Evidence: `CODE-PRESENT` — the declaration, the five command registrations, the UI call site and the two auto-snapshot call sites are all cited above and were verified in the main session, not taken from the subagent report (§0.2a).
+
+**Links.** `_verify/V4-P1AB-core-extraction.md` C4 · `G3d F-44` · `MDP §0.16 L-C3` (4th instance) · `L-1` (a verdict with an "and" in it is a checklist)
+
+
+---
+
+## ADR-LOG-RESTRUCT-0011 — `autodev-core` is extracted in full; the four crate cycles are broken
+
+**Status:** DECIDED
+**Author:** Razi
+**Tier:** razi-ruled
+
+**What.** `P1-05` does the complete extraction: break all four crate cycles, then move `agent/` into `autodev-core` alongside `provider/`, `memory/` and `platform/`. The narrower option — move only the three clean directories and leave `agent/` behind — was offered and rejected.
+
+**Why.** The task as written was refuted. Tauri coupling, the assumed blocker, is six lines in two files; `provider/`, `memory/` and `platform/` have none. What actually blocks the move is four cycles Cargo rejects outright: `agent`↔`recipes` (13/9), `agent`↔`subagent` (5/11), `agent`↔`commands` (1/38, via `agent/builtin_tools/analyze_diff_tool.rs:92`), and `agent`→`diff_analysis`→`provider`. `agent/` also holds 114 references to 17 modules that stay behind. Razi chose the full job so P1's stated goal — *both binaries link the core* — is actually delivered rather than partially.
+
+**When.** 2026-09-01 · phase P1 · `P1-05`
+
+**Where.** new `autodev-core/` · `src-tauri/src/{agent,provider,memory,platform}/` · `src-tauri/src/{recipes,subagent,commands,diff_analysis}/`
+
+**How.** Cycles are broken before the move: invert `agent`→`commands` behind a callback, and split the `agent`↔`recipes` and `agent`↔`subagent` edges behind traits owned by core. `security/` is **not** part of the move — it does not exist until `P1-20` creates it. Evidence: `CODE-PRESENT` for the move, `GATE-PROVEN` by `cargo check --workspace` and by `S1-02` (`airsctl --version` linking core).
+
+**Links.** `_verify/V4-P1AB-core-extraction.md` C5 · `_verify/P1-CORRECTIONS.md §A` · MDP `§7 P1-05`
+
+---
+
+## ADR-LOG-RESTRUCT-0012 — `db/checkpoints.rs` is deleted, not declared
+
+**Status:** DECIDED
+**Author:** Claude
+**Tier:** decided-independently
+
+**What.** `P1-02` is reversed. `src-tauri/src/db/checkpoints.rs` is deleted rather than declared, and `P1-16` becomes "confirm the single owner and remove the dead implementation".
+
+**Why.** The task's justification — *"the undo feature is currently absent from the shipped app"* — is false, and is retracted in `ADR-LOG-RESTRUCT-0010`. Undo ships through `git/checkpoint.rs`.
+
+`db/checkpoints.rs` is uncompiled and has **zero callers**, so `checkpoints.db` does not exist on any machine. Declaring it would *create* the second checkpoint store that `P1-16` then has to merge — manufacturing a data-migration problem two tasks before solving it. As things stand `P1-16` is a one-way delete of dead code, and **that window closes the moment `P1-02` lands as written**.
+
+Decided independently rather than escalated because §0.12 governs: faithful implementation of a doc whose premise is false is not faithfulness, and the cheaper, less destructive path is the one with codebase precedent (`patch.rs` was deleted the same way in P0-08).
+
+**When.** 2026-09-01 · phase P1 · `P1-02`, `P1-16`
+
+**Where.** `src-tauri/src/db/checkpoints.rs` · `src-tauri/src/reachability_gate.rs` (its `KNOWN_UNREACHABLE` entry)
+
+**How.** Delete the file and its exception-list entry in one commit; the reachability gate then passes with one fewer exception, which is the direction that list is only ever allowed to move. Evidence: `CODE-PRESENT`, plus `GATE-PROVEN` by the reachability gate.
+
+**Links.** `_verify/V4-P1AB-core-extraction.md` C4 · `ADR-LOG-RESTRUCT-0010` · MDP `§7 P1-02`
+
+---
+
+## ADR-LOG-RESTRUCT-0013 — The graph migration repair is a new `v6`, not an edit to `v5`
+
+**Status:** DECIDED
+**Author:** Claude
+**Tier:** decided-independently
+
+**What.** `P1-11` is implemented as a new `migration_v6`. `migration_v5` is left as history.
+
+**Why.** Editing v5 in place is a no-op. Every existing graph database is already stamped `user_version = 5`, and `graph/migrations.rs:37` gates on `if current < 5`, so corrected v5 code is never invoked on any machine that has run the app.
+
+The reason it is stamped is the more serious finding: all six statements in v5 are `let _ = …`, so the invalid `ADD COLUMN IF NOT EXISTS` failed silently, the migration stamped `user_version = 5`, committed, and logged "✅ complete". An inert-but-green migration inside the migration system — the same defect class this programme exists to remove, in the component whose entire job is correctness under change.
+
+Fixing v5 would satisfy a reviewer reading the diff and change nothing on disk. That is the outcome §0.2e exists to forbid.
+
+**When.** 2026-09-01 · phase P1 · `P1-11`
+
+**Where.** `src-tauri/src/graph/migrations.rs`
+
+**How.** `migration_v6` adds, idempotently, the columns v5 failed to add — checking `PRAGMA table_info` rather than relying on `IF NOT EXISTS`, which SQLite does not support for `ADD COLUMN`. The `let _ =` swallowing is replaced with propagated errors so a future failure cannot stamp a version it did not achieve. Evidence: `LIVE-DB-PROVEN` against a copy of the real graph DB, never the original.
+
+**Links.** `_verify/V5-P1CD-schema-redaction.md` C3 · `_verify/P1-CORRECTIONS.md §B` · MDP `§7 P1-11` · §0.8 named-destructive list
+
+---
+
+## ADR-LOG-RESTRUCT-0014 — `P1-19` runs first; a backup helper is a precondition, not a deliverable
+
+**Status:** DECIDED
+**Author:** Claude
+**Tier:** decided-independently
+
+**What.** The backup helper moves from last in `P1-C` to first in the phase, before any task that mutates a database.
+
+**Why.** `P1-11` and `P1-14` both carry "⚠ back up first" in the plan and both are listed *before* the helper that would let them. There is no SQLite backup capability in the tree: no `VACUUM INTO`, no `Connection::backup`, and rusqlite's `backup` feature is not enabled. The two existing helpers do not qualify — `backup_recipe_file` is YAML-only, and `create_restore_point` writes a size/mtime manifest that nothing reads, which is a writer with no reader (INV-8).
+
+The ordering also has teeth: `~/.airs/autodev.db` carries a **4.1 MB uncheckpointed WAL**, so a helper built on `fs::copy` would silently discard newer data than the file it copied.
+
+**When.** 2026-09-01 · phase P1 · `P1-19`
+
+**Where.** `src-tauri/src/db/backup.rs`
+
+**How.** `VACUUM INTO`, which produces a consistent snapshot including WAL content and does not mutate the source, rather than a file copy. Wired into every destructive path per GAP-11. Evidence: `UNIT-PROVEN` — including a test that writes to a WAL-mode database without checkpointing and asserts the backup contains the uncheckpointed rows, because that is the failure a copy-based helper would have.
+
+**Links.** `_verify/V5-P1CD-schema-redaction.md` C9 · §0.8 · MDP `§7 P1-19`
+
+
 # §5 · Standing entries carried from planning
 
 Not build-time decisions — but recorded here because a future session will otherwise rediscover them the hard way. Each is already ratified in vision Part 8; these are the **operational consequences** that bite during implementation.

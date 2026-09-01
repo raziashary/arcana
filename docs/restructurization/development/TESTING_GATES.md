@@ -107,7 +107,7 @@
 > P1 is where the **structural static guards** live. Every gate here is a check over the tree itself, which is why it can run before any subsystem is rebuilt — and why it must, since every later phase adds code these gates govern.
 
 - [ ] **TG1-01** `[seam]` — Every `.rs` file under `src-tauri/src/` (and each workspace crate's `src/`) is reachable from its crate root by a `mod` chain. A file present on disk and absent from the module graph **fails the build**. Named minima: `agent/builtin_tools/graph_tools.rs`, `graph_prompts.rs` and `db/checkpoints.rs` are in the binary, and their tools/commands are registered — presence in the module graph is not enough if nothing registers them.
-      Source: spec `05 §5 G-REACHABLE` · Catches: 918 LOC never compiled (`G2a T32`); `db/checkpoints.rs`, which is why undo does not exist (`G3d F-44`) · Evidence: _pending_
+      Source: spec `05 §5 G-REACHABLE` · Catches: 918 LOC never compiled (`G2a T32`); `db/checkpoints.rs` (`G3d F-44` — ⚠ but see the correction: undo DOES ship via `git/checkpoint.rs`) · Evidence: _pending_
 
 - [ ] **TG1-02** `[data]` — Every migration ladder in the workspace applies cleanly to an **empty** database, in order, with no swallowed errors: a statement SQLite rejects fails the test loudly rather than being logged and skipped.
       Source: spec `08 §4 G-MIGRATE-FRESH` (merged with spec `05 §5 G-MIGRATE`, fresh half) · Catches: the swallow-and-continue pattern that hid `F-31` · Evidence: _pending_
@@ -409,7 +409,7 @@
       Source: spec `08 §4 G-TXN` · Catches: `SK-34` · Evidence: _pending_
 
 - [ ] **TG4-23** `[security]` — **NEW (uncovered decision G-08 / mechanic M-43).** A **failed checkpoint blocks the write** — `auto_checkpoint_before_write` cannot return `()` and let the overwrite proceed; each task runs on its **own worker branch**; and **the two never disagree about current state** (checkpoints are per-write and short-lived, the branch is the durable record). The two competing checkpoint tables — `checkpoints` in `config.db` and `file_checkpoints` in `checkpoints.db` — **collapse to one**, asserted by `TG1-05`.
-      Source: **NEW** — M-43 / `00 §Group G G-08` and its binding condition; spec `05 §5 G-REACHABLE` only proves the module is *compiled*, and spec `07 §8 G-DESTRUCTIVE` only proves the UI *confirms* — neither proves undo exists · Catches: `G3d F-44` — `db/checkpoints.rs` not compiled, so undo does not exist; a failed checkpoint being invisible while the write proceeds; workers running unattended with no blast-radius limit · Proves: **INV-5** · Evidence: _pending_
+      Source: **NEW** — M-43 / `00 §Group G G-08` and its binding condition; spec `05 §5 G-REACHABLE` only proves the module is *compiled*, and spec `07 §8 G-DESTRUCTIVE` only proves the UI *confirms* — neither proves undo exists · Catches: ⚠ **`G3d F-44` is half wrong — corrected 2026-09-01.** `db/checkpoints.rs` is not compiled (true), but undo DOES exist via the live `git/checkpoint.rs`. The half that stands, and that this gate must prove, is **a failed checkpoint being invisible while the write proceeds** — `auto_checkpoint_before_write` returns `()` and logs at `debug!` only; workers running unattended with no blast-radius limit · Proves: **INV-5** · Evidence: _pending_
 
 ---
 
