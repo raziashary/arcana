@@ -175,7 +175,11 @@ impl ToolExecutor {
             tool_call: Some(ToolCallContext {
                 id: call_id.clone(),
                 name: tool.name().to_string(),
-                input: input.clone(),
+                // A-08. Hooks are user-authored shell: whatever is in this
+                // payload reaches whatever the hook does with it — a curl, a
+                // log line, a file. The hook still learns which tool ran with
+                // which argument *names*; it does not learn the secrets.
+                input: reported.clone(),
                 result: None,
                 is_error: false,
             }),
@@ -214,7 +218,9 @@ impl ToolExecutor {
             tool_call: Some(ToolCallContext {
                 id: call_id.clone(),
                 name: tool.name().to_string(),
-                input: input.clone(),
+                // A-08 — see the PreToolUse context above. `result.output` is
+                // already redacted, having come through `redact_result`.
+                input: reported.clone(),
                 result: Some(serde_json::json!({"output": &result.output})),
                 is_error: result.is_error,
             }),
@@ -360,14 +366,18 @@ impl ToolExecutor {
             // Collect concurrent results
             for handle in read_handles {
                 match handle.await {
-                    Ok((idx, tool_use_id, result, call_id, tool_name, input)) => {
+                    // Bound as `reported`, not `input`: the task returns the
+                    // REDACTED copy. It was named `input` here, which reads
+                    // like a leak and invites someone to "restore" the raw
+                    // value into the messages table.
+                    Ok((idx, tool_use_id, result, call_id, tool_name, reported)) => {
                         // Persist tool message
                         if let Some(ref session_mgr) = self.session_mgr {
                             let tool_msg = Message::new_tool(
                                 &self.session_id,
                                 &call_id,
                                 &tool_name,
-                                input,
+                                reported,
                                 &result.output,
                                 result.is_error,
                             );
@@ -390,6 +400,13 @@ impl ToolExecutor {
             debug!("Executing {} write tools serially", write_tools.len());
 
             for (tool, input, tool_use_id, original_idx) in write_tools {
+                // Redaction boundary. The tool is given the raw input; the UI
+                // event, the hook context and the `messages` row all get this.
+                //
+                // ⚠ The first A-01 fix redacted this branch's *result* and left
+                // its *input* raw, so the write path still carried credentials
+                // to the renderer and the database. Found while wiring A-08.
+                let reported = Self::reported_input(&input);
                 let call_id = Uuid::new_v4().to_string();
                 let ctx = ToolContext {
                     session_id: self.session_id.clone(),
@@ -404,7 +421,7 @@ impl ToolExecutor {
                     session_id: self.session_id.clone(),
                     call_id: call_id.clone(),
                     tool_name: tool.name().to_string(),
-                    input: input.clone(),
+                    input: reported.clone(),
                 });
 
                 // Permission check (may prompt user)
@@ -432,7 +449,7 @@ impl ToolExecutor {
                     tool_call: Some(ToolCallContext {
                         id: call_id.clone(),
                         name: tool.name().to_string(),
-                        input: input.clone(),
+                        input: reported.clone(), // A-08
                         result: None,
                         is_error: false,
                     }),
@@ -472,7 +489,7 @@ impl ToolExecutor {
                     tool_call: Some(ToolCallContext {
                         id: call_id.clone(),
                         name: tool.name().to_string(),
-                        input: input.clone(),
+                        input: reported.clone(), // A-08
                         result: Some(serde_json::json!({"output": &result.output})),
                         is_error: result.is_error,
                     }),
@@ -492,7 +509,7 @@ impl ToolExecutor {
                 self.save_tool_message(
                     &call_id,
                     tool.name(),
-                    input,
+                    reported,
                     &result.output,
                     result.is_error,
                 );
@@ -525,6 +542,19 @@ impl ToolExecutor {
             pending.insert(call_id.to_string(), tx);
         }
 
+        // ⚠ Deliberately NOT redacted, and the only such site left.
+        //
+        // This payload is the permission prompt: the user is being asked to
+        // approve *this exact call*. Redacting it would mean approving a
+        // command they cannot see — `curl -H "Authorization: [REDACTED]"` tells
+        // them nothing about where their credential is about to be sent. The
+        // recipient is the user, on their own machine, looking at their own
+        // secret; the prompt is a *control* over exfiltration, so blinding it
+        // makes the product less safe, not more.
+        //
+        // It is also not durable: nothing persists this payload. Every path
+        // that outlives the dialog — the model's context, the `messages` row,
+        // the hook payload, the log — is redacted above.
         emit_permission_request(PermissionPayload {
             session_id: self.session_id.clone(),
             call_id: call_id.to_string(),

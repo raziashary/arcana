@@ -296,7 +296,7 @@ mod tests {
             let path = manifest.join(&rel);
             assert!(
                 path.exists(),
-                "tauri.conf.json declares bundle path `{rel}`, which does not exist.                  The build fails on any machine without it."
+                "tauri.conf.json declares bundle path `{rel}`, which does not exist. The build fails on any machine without it."
             );
 
             // Existing locally is not enough — CI checks out the repository.
@@ -307,7 +307,7 @@ mod tests {
             if let Ok(out) = tracked {
                 assert!(
                     out.status.success(),
-                    "tauri.conf.json declares bundle path `{rel}`, which exists here but                      is NOT tracked by git. A clean checkout cannot build: this is exactly                      how `resources/sidecars` kept CI red."
+                    "tauri.conf.json declares bundle path `{rel}`, which exists here but is NOT tracked by git. A clean checkout cannot build: this is exactly how `resources/sidecars` kept CI red."
                 );
             }
         }
@@ -735,7 +735,7 @@ let x = 1;
 
         assert!(
             offenders.is_empty(),
-            "these open a SQLite connection without db::open_tuned, so they get              whatever journal_mode the file happens to carry: {}",
+            "these open a SQLite connection without db::open_tuned, so they get whatever journal_mode the file happens to carry: {}",
             offenders.join(" | ")
         );
     }
@@ -810,11 +810,11 @@ let x = 1;
 
         assert!(
             total >= 3,
-            "expected at least 3 tool.execute call sites, found {total} — has the              executor been restructured? This gate must be re-pointed if so."
+            "expected at least 3 tool.execute call sites, found {total} — has the executor been restructured? This gate must be re-pointed if so."
         );
         assert!(
             unwrapped.is_empty(),
-            "these tool executions do not redact their result, so raw tool output              reaches the model, the messages table and the UI: {}",
+            "these tool executions do not redact their result, so raw tool output reaches the model, the messages table and the UI: {}",
             unwrapped.join(" | ")
         );
     }
@@ -865,6 +865,92 @@ let x = 1;
         );
         // A comment mentioning it is not a call.
         assert_eq!(unwrapped_sites("// we used to tool.execute(input) here"), 0);
+    }
+
+    /// Raw tool arguments may reach exactly ONE place: the permission dialog.
+    ///
+    /// The gate above guards the *result* side. This guards the *input* side,
+    /// and it exists because the first A-01 fix did the former and forgot the
+    /// latter: `execute_batch`'s write branch redacted what the tool returned
+    /// and still handed the renderer, the `messages` row and the hook the raw
+    /// arguments. A credential passed *to* a tool is as durable as one returned
+    /// *from* it, and no gate could see the difference.
+    ///
+    /// Everything that reports or persists must take `reported`, the redacted
+    /// copy. The dialog is the deliberate exception — the user is approving
+    /// that exact call, and a redacted prompt asks them to approve a command
+    /// they cannot see, which weakens the control rather than the leak.
+    #[test]
+    fn tg_p1_06_raw_tool_input_reaches_only_the_permission_dialog() {
+        let path = repo_root().join("autodev-core/src/agent/tool_executor.rs");
+        let text = std::fs::read_to_string(&path).expect("tool_executor.rs");
+        let production = text.split("#[cfg(test)]").next().unwrap_or("");
+
+        let sites = raw_input_sites(production);
+        assert_eq!(
+            sites.len(),
+            1,
+            "raw tool input must reach exactly one site (the permission dialog); found {}: {}",
+            sites.len(),
+            sites
+                .iter()
+                .map(|(n, f, l)| format!("{f}():{n} {l}"))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        );
+        let (line_no, enclosing, line) = &sites[0];
+        assert_eq!(
+            enclosing, "request_permission",
+            "the one site allowed to see raw tool arguments is the permission dialog, but the raw value is in {enclosing}() at line {line_no}:              {line} — this reaches the model, the database or a user-authored hook, all of which are durable"
+        );
+    }
+
+    /// Every line that hands a *raw* `input` to a payload, with the function
+    /// it sits in. Shared by the gate and its own falsification below.
+    fn raw_input_sites(src: &str) -> Vec<(usize, String, String)> {
+        let mut sites = Vec::new();
+        let mut current = "<none>".to_string();
+        for (i, raw) in src.lines().enumerate() {
+            let line = raw.trim();
+            for prefix in ["pub async fn ", "async fn ", "pub fn ", "fn "] {
+                if let Some(rest) = line.strip_prefix(prefix) {
+                    current = rest.split('(').next().unwrap_or("").to_string();
+                    break;
+                }
+            }
+            if line.starts_with("//") || line.starts_with('*') {
+                continue;
+            }
+            let code = line.split("//").next().unwrap_or("");
+            if code.contains("input: input.clone()") || code.contains("input: input,") {
+                sites.push((i + 1, current.clone(), line.to_string()));
+            }
+        }
+        sites
+    }
+
+    /// The detector must see a raw site, ignore a redacted one, and attribute
+    /// each to the right function — otherwise the gate above passes by being
+    /// blind rather than by the code being safe.
+    #[test]
+    fn tg_p1_06_raw_input_detector_can_fail() {
+        let safe = "    fn report(&self) {
+        Payload { input: reported.clone() }
+    }";
+        assert!(
+            raw_input_sites(safe).is_empty(),
+            "the redacted copy must not be reported as a leak"
+        );
+
+        let leaky = "    fn fire_hook(&self) {
+        Ctx { input: input.clone() }
+    }";
+        let found = raw_input_sites(leaky);
+        assert_eq!(found.len(), 1, "a raw site must be detected");
+        assert_eq!(found[0].1, "fire_hook", "attributed to its function");
+
+        // A comment is not a call site.
+        assert!(raw_input_sites("        // input: input.clone() was here").is_empty());
     }
 
     /// Redaction must also reach the boundaries that are not the tool path.
