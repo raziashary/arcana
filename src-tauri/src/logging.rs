@@ -13,7 +13,42 @@
 //
 // Call once at app startup before any other code.
 
+use std::io::Write;
+
 use tracing_appender::non_blocking::WorkerGuard;
+
+/// Redacts every byte on its way to the log file.
+///
+/// This wraps the **appender**, not the call sites, because the leak that
+/// motivated it did not come from a call site anyone would have thought to
+/// audit: a `tracing` DEBUG record emitted from the sidecar client wrote a
+/// 164-character `sk-` credential into `~/.autodev/logs/` in plain text, with
+/// the field name `api_key` beside it. Redacting at each `info!`/`debug!` would
+/// require every author of every log line to remember; redacting the writer
+/// cannot be forgotten.
+///
+/// `redact_text` is used rather than the stricter `redact_value_text`: log
+/// lines carry commit hashes, file digests and base64 payloads that are useful
+/// in a diagnostic and are not secrets.
+struct RedactingWriter<W: Write> {
+    inner: W,
+}
+
+impl<W: Write> Write for RedactingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let text = String::from_utf8_lossy(buf);
+        let redacted = autodev_core::security::redaction::redact_text(&text);
+        self.inner.write_all(redacted.as_bytes())?;
+        // Report the caller's buffer as fully consumed. Redaction changes the
+        // byte count, and a short write here would make `tracing` retry the
+        // tail of a line it has already emitted.
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 pub fn init() -> Option<WorkerGuard> {
@@ -68,7 +103,12 @@ pub fn init() -> Option<WorkerGuard> {
                     eprintln!("[AutoDev] Log appender builder failed ({e}), falling back to default rotation");
                     tracing_appender::rolling::daily(&dir, "autodev")
                 });
-            let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+            // Redaction boundary (M-40, P1-21). Wrapping the appender means
+            // every log line is redacted regardless of which subsystem emitted
+            // it — see `RedactingWriter`.
+            let (non_blocking, guard) = tracing_appender::non_blocking(RedactingWriter {
+                inner: file_appender,
+            });
 
             let file_layer = fmt::layer()
                 .with_writer(non_blocking)

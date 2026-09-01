@@ -91,6 +91,35 @@ impl ToolExecutor {
 
     /// Execute a tool call with permission check.
     /// Returns the tool result payload.
+    /// Redact a tool result on its way out of the executor.
+    ///
+    /// Applied at **every** `tool.execute` site rather than at one downstream
+    /// point, because there is no single downstream point: `execute` and both
+    /// branches of `execute_batch` each have their own path to the
+    /// conversation, the `messages` table and the UI event.
+    ///
+    /// P1 wired only `execute` — which has **no production caller**. The agent
+    /// loop calls `execute_batch` (`agent/engine.rs:314`), so redaction was
+    /// live in dead code while every real tool call carried raw output to the
+    /// model, the database and the renderer. The phase's own smoke test drove
+    /// the unused method and passed, and the gate was a substring check over
+    /// the file, so both proofs were green. Found by three independent
+    /// post-phase auditors.
+    fn redact_result(mut result: ToolResult) -> ToolResult {
+        result.output = crate::security::redaction::redact_text(&result.output);
+        result
+    }
+
+    /// The form of a tool's arguments that is safe to report.
+    ///
+    /// The tool itself is given the raw input — it needs the real value to do
+    /// its work. This is the copy that goes to the UI event, the hook context
+    /// and the `messages` table. `G4:486` recorded unredacted tool arguments
+    /// reaching procedural memory verbatim, and memory is permanent.
+    fn reported_input(input: &serde_json::Value) -> serde_json::Value {
+        crate::security::redaction::redact_args(input)
+    }
+
     pub async fn execute(
         &mut self,
         tool: Arc<dyn Tool>,
@@ -105,16 +134,17 @@ impl ToolExecutor {
             agent_role: self.identity.role.clone(),
         };
 
-        // Emit tool start event for UI.
-        //
         // Redacted: tool arguments routinely carry credentials — a token passed
         // to an HTTP call, a password in a connection string — and this payload
         // reaches the renderer and every log that records it (M-40).
+        let reported = Self::reported_input(&input);
+
+        // Emit tool start event for UI.
         emit_tool_start(ToolStartPayload {
             session_id: self.session_id.clone(),
             call_id: call_id.clone(),
             tool_name: tool.name().to_string(),
-            input: crate::security::redaction::redact_args(&input),
+            input: reported.clone(),
         });
 
         // Permission check
@@ -164,7 +194,7 @@ impl ToolExecutor {
             ToolResult::error(format!("Tool '{}' was blocked by a hook", tool.name()))
         } else if approved {
             debug!("Executing tool: {}", tool.name());
-            tool.execute(input.clone(), &ctx).await
+            Self::redact_result(tool.execute(input.clone(), &ctx).await)
         } else {
             warn!("Tool '{}' denied by user", tool.name());
             ToolResult::error(format!("Tool '{}' was denied by user", tool.name()))
@@ -199,30 +229,12 @@ impl ToolExecutor {
         };
         HookRegistry::fire(&post_hook_type, &post_ctx).await;
 
-        // ── Redaction boundary (M-40, P1-21) ────────────────────────────
-        //
-        // Every tool result in the application passes through here, which is
-        // why the redaction happens at this one point rather than in each of
-        // the twenty-odd tools. A `read_file` on a `.env`, a `bash` that echoes
-        // an environment, a `grep` that matches a credential — all of them
-        // arrive here, and from here the content goes three places at once:
-        // into the conversation the model sees, into the messages table, and
-        // into the UI event.
-        //
-        // `G4:486` recorded unredacted tool arguments landing in procedural
-        // memory verbatim. Memory is persistent, so "verbatim" means forever.
-        //
-        // Applied to the result *after* the tool has run: the tool needs the
-        // real content to do its work, and what is redacted is what escapes.
-        let mut result = result;
-        result.output = crate::security::redaction::redact_text(&result.output);
-        let redacted_input = crate::security::redaction::redact_args(&input);
-
-        // Persist tool message to database
+        // The result was redacted at the `tool.execute` call above, so
+        // everything below this line handles redacted content only.
         self.save_tool_message(
             &call_id,
             tool.name(),
-            redacted_input,
+            reported,
             &result.output,
             result.is_error,
         );
@@ -305,16 +317,20 @@ impl ToolExecutor {
                         agent_role: identity.role.clone(),
                     };
 
+                    // Redaction boundary — see `redact_result`. The tool is
+                    // given the raw input; everything reported is redacted.
+                    let reported = Self::reported_input(&input);
+
                     // Emit start event
                     emit_tool_start(ToolStartPayload {
                         session_id: session_id.clone(),
                         call_id: call_id.clone(),
                         tool_name: tool.name().to_string(),
-                        input: input.clone(),
+                        input: reported.clone(),
                     });
 
                     // Execute (read-only always approved)
-                    let result = tool.execute(input.clone(), &ctx).await;
+                    let result = Self::redact_result(tool.execute(input.clone(), &ctx).await);
 
                     // Get tool name for persistence
                     let tool_name = tool.name().to_string();
@@ -328,7 +344,14 @@ impl ToolExecutor {
                         is_error: result.is_error,
                     });
 
-                    (original_idx, tool_use_id, result, call_id, tool_name, input)
+                    (
+                        original_idx,
+                        tool_use_id,
+                        result,
+                        call_id,
+                        tool_name,
+                        reported,
+                    )
                 });
 
                 read_handles.push(handle);
@@ -429,7 +452,7 @@ impl ToolExecutor {
                     ToolResult::error(format!("Tool '{}' was blocked by a hook", tool.name()))
                 } else if approved {
                     debug!("Executing write tool: {}", tool.name());
-                    tool.execute(input.clone(), &ctx).await
+                    Self::redact_result(tool.execute(input.clone(), &ctx).await)
                 } else {
                     warn!("Write tool '{}' denied by user", tool.name());
                     ToolResult::error(format!("Tool '{}' was denied by user", tool.name()))

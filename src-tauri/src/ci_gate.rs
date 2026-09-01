@@ -760,47 +760,173 @@ let x = 1;
 
     // ── TG-P1-06 · redaction reaches every boundary ──────────────────────
 
-    /// Every place content leaves the process or enters durable storage must
-    /// redact (M-40, `P1-21`).
+    /// Every call that runs a tool must redact the result it returns.
     ///
-    /// This is the *coarse* half of the check and it is honest about that: it
-    /// asserts the boundary file references `security::redaction`, which a
-    /// caller could satisfy while discarding the result. The real proof is
-    /// behavioural — `autodev-core/tests/redaction_boundaries.rs` writes a
-    /// secret through each store and then reads the database back with plain
-    /// SQL to show it is not there.
+    /// **This gate replaces a substring check that was decorative.** Its first
+    /// version asserted only that each boundary file *contained the string*
+    /// `security::redaction`. `tool_executor.rs` did — inside
+    /// `ToolExecutor::execute`, a method with **no production caller**. The
+    /// agent loop calls `execute_batch`, which redacted nothing, so raw tool
+    /// output reached the model, the `messages` table and the UI while this
+    /// gate and the phase's headline smoke test were both green.
     ///
-    /// What this gate adds that the behavioural tests cannot: it fails when a
-    /// **new** boundary is added to the list without redaction, and it fails
-    /// when an existing one quietly drops it.
+    /// So it now checks the *shape of the call*, not the presence of a word:
+    /// every `tool.execute(` in the executor must be wrapped in
+    /// `redact_result(`. A new branch added later — a third execution path, a
+    /// retry, a streaming variant — fails this gate unless it redacts.
     #[test]
-    fn tg_p1_06_every_redaction_boundary_calls_the_redactor() {
-        // Each entry is a boundary named by `P1-21`: prompts, memory writes,
-        // logs, analytics, egress.
-        const BOUNDARIES: &[(&str, &str)] = &[
+    fn tg_p1_06_every_tool_execution_redacts_its_result() {
+        let path = repo_root().join("autodev-core/src/agent/tool_executor.rs");
+        let text = std::fs::read_to_string(&path).expect("tool_executor.rs");
+        let production = text.split("#[cfg(test)]").next().unwrap_or("");
+
+        let mut unwrapped = Vec::new();
+        let mut total = 0usize;
+        for (i, raw) in production.lines().enumerate() {
+            let line = raw.trim();
+            if line.starts_with("//") || line.starts_with('*') {
+                continue;
+            }
+            let code = line.split("//").next().unwrap_or("");
+            if !code.contains("tool.execute(") {
+                continue;
+            }
+            total += 1;
+            // The call may be wrapped on the same line, or on the line above
+            // when rustfmt has split it.
+            let previous = if i > 0 {
+                production.lines().nth(i - 1).unwrap_or("")
+            } else {
+                ""
+            };
+            if !code.contains("redact_result(") && !previous.contains("redact_result(") {
+                unwrapped.push(format!("{}: {}", i + 1, line));
+            }
+        }
+
+        assert!(
+            total >= 3,
+            "expected at least 3 tool.execute call sites, found {total} — has the              executor been restructured? This gate must be re-pointed if so."
+        );
+        assert!(
+            unwrapped.is_empty(),
+            "these tool executions do not redact their result, so raw tool output              reaches the model, the messages table and the UI: {}",
+            unwrapped.join(" | ")
+        );
+    }
+
+    /// The detector must fire on an unwrapped call and stay quiet on a wrapped
+    /// one, or the gate above is decorative in a new way.
+    #[test]
+    fn tg_p1_06_detector_distinguishes_wrapped_from_unwrapped() {
+        fn unwrapped_sites(src: &str) -> usize {
+            let mut n = 0;
+            for (i, raw) in src.lines().enumerate() {
+                let line = raw.trim();
+                if line.starts_with("//") {
+                    continue;
+                }
+                let code = line.split("//").next().unwrap_or("");
+                if !code.contains("tool.execute(") {
+                    continue;
+                }
+                let previous = if i > 0 {
+                    src.lines().nth(i - 1).unwrap_or("")
+                } else {
+                    ""
+                };
+                if !code.contains("redact_result(") && !previous.contains("redact_result(") {
+                    n += 1;
+                }
+            }
+            n
+        }
+
+        assert_eq!(
+            unwrapped_sites("let r = tool.execute(input, &ctx).await;"),
+            1
+        );
+        assert_eq!(
+            unwrapped_sites("let r = Self::redact_result(tool.execute(input, &ctx).await);"),
+            0
+        );
+        // rustfmt splits long calls across two lines; the wrapper is then on
+        // the previous line.
+        assert_eq!(
+            unwrapped_sites(
+                "let r =
+    Self::redact_result(tool.execute(input, &ctx).await);"
+            ),
+            0
+        );
+        // A comment mentioning it is not a call.
+        assert_eq!(unwrapped_sites("// we used to tool.execute(input) here"), 0);
+    }
+
+    /// Redaction must also reach the boundaries that are not the tool path.
+    ///
+    /// `P1-21` names five: prompts, logs, memory writes, analytics, egress.
+    /// Paths are crate-qualified because they are not all in core — the log
+    /// appender belongs to the desktop host.
+    ///
+    /// **On egress, stated rather than glossed.** There is deliberately no
+    /// redaction of the outbound provider request body. Redacting what is
+    /// *sent* would strip the very content the model has to reason about — a
+    /// config file the user asked about, a stack trace they pasted — and would
+    /// break the product to protect a channel the user chose to use. The egress
+    /// risk that actually reaches durable storage is what we **record** about a
+    /// provider call, and that is covered: `record_api_failure` redacts the
+    /// error message (an auth failure routinely echoes the request), and the
+    /// log appender redacts everything written to disk. See
+    /// ADR-LOG-RESTRUCT-0019.
+    #[test]
+    fn tg_p1_06_every_named_boundary_reaches_the_redactor() {
+        const BOUNDARIES: &[(&str, &str, &str)] = &[
             (
+                "autodev-core/src",
                 "agent/tool_executor.rs",
-                "every tool result on its way into the conversation, the messages table and the UI",
+                "prompts: tool results on their way into the conversation",
             ),
             (
+                "autodev-core/src",
                 "memory/episodic.rs",
-                "conversation memory, which is permanent",
+                "memory: conversation history, which is permanent",
             ),
-            ("memory/semantic.rs", "extracted facts"),
-            ("memory/procedural.rs", "skills written to disk"),
+            (
+                "autodev-core/src",
+                "memory/semantic.rs",
+                "memory: extracted facts",
+            ),
+            (
+                "autodev-core/src",
+                "memory/procedural.rs",
+                "memory: skills written to disk",
+            ),
+            (
+                "autodev-core/src",
+                "analytics/collector.rs",
+                "analytics + egress diagnostics: provider errors and system events",
+            ),
+            (
+                "src-tauri/src",
+                "logging.rs",
+                "logs: the file appender — a real sk- credential was found in a live log",
+            ),
         ];
 
-        let src = repo_root().join("autodev-core/src");
+        let root = repo_root();
         let mut missing = Vec::new();
-        for (rel, why) in BOUNDARIES {
-            let path = src.join(rel);
+        for (krate, rel, why) in BOUNDARIES {
+            let path = root.join(krate).join(rel);
             let Ok(text) = std::fs::read_to_string(&path) else {
-                missing.push(format!("{rel}: file not found — has the boundary moved?"));
+                missing.push(format!(
+                    "{krate}/{rel}: file not found — has the boundary moved?"
+                ));
                 continue;
             };
             let production = text.split("#[cfg(test)]").next().unwrap_or("");
             if !production.contains("security::redaction") {
-                missing.push(format!("{rel} ({why})"));
+                missing.push(format!("{krate}/{rel} ({why})"));
             }
         }
 

@@ -66,6 +66,12 @@ impl AnalyticsCollector {
         error_message: String,
         request_id: Option<String>,
     ) -> Result<i64> {
+        // Redaction boundary (M-40, P1-21). A provider error message is the
+        // most likely place for a credential to reach durable storage from the
+        // egress path: an auth failure routinely echoes the request, and some
+        // providers include the key prefix in the body they return.
+        let error_message = crate::security::redaction::redact_text(&error_message);
+
         let record = ApiFailureRecord {
             id: None,
             timestamp: Utc::now(),
@@ -89,6 +95,14 @@ impl AnalyticsCollector {
         severity: String,
         metadata: Option<String>,
     ) -> Result<i64> {
+        // Redaction boundary (M-40, P1-21). `message` and `metadata` are free
+        // text written to a database that is never rotated, unlike the log
+        // files — so a secret recorded here persists indefinitely.
+        let message = crate::security::redaction::redact_text(&message);
+        let metadata = metadata
+            .as_deref()
+            .map(crate::security::redaction::redact_value_text);
+
         let record = SystemEventRecord {
             id: None,
             timestamp: Utc::now(),
