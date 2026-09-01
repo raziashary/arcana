@@ -128,6 +128,8 @@ impl Tool for SpawnSubagentTool {
 
         let config = SubagentConfig {
             parent_slug: ctx.session_id.clone(),
+            // A generic delegated worker.
+            role: "subagent".to_string(),
             parent_session_id: ctx.session_id.clone(),
             system_prompt,
             tools: input

@@ -301,9 +301,18 @@ fn emit(tx: &mpsc::UnboundedSender<SubagentEvent>, event: SubagentEvent) {
 /// `config.depth` is ALREADY the child's depth — every spawn tool sets
 /// `depth: ctx.depth + 1` when it builds the config — so this must NOT
 /// increment again. Split out purely so that invariant is testable.
-fn identity_for(subagent_id: &str, config: &SubagentConfig) -> AgentIdentity {
+fn identity_for(_subagent_id: &str, config: &SubagentConfig) -> AgentIdentity {
+    // The ROLE, not the id. Using the generated per-spawn id here made every
+    // role comparison downstream fail: `annotate_file_tool` filed QC
+    // annotations as "user", and the messaging tools produced an inbox address
+    // no sender could know (F-04, F-05).
+    let role = if config.role.trim().is_empty() {
+        "subagent".to_string()
+    } else {
+        config.role.trim().to_string()
+    };
     AgentIdentity {
-        role: subagent_id.to_string(),
+        role,
         depth: config.depth,
     }
 }
@@ -315,6 +324,7 @@ mod tests {
     fn config_at_depth(depth: u32) -> SubagentConfig {
         SubagentConfig {
             parent_slug: "worker-backend".into(),
+            role: "subagent".into(),
             parent_session_id: "sess-1".into(),
             system_prompt: String::new(),
             tools: Vec::new(),
@@ -345,11 +355,28 @@ mod tests {
         }
     }
 
+    /// Regression for F-04/F-05: the identity carries the child's ROLE, not the
+    /// per-spawn id. A role is matched by consumers (`annotate_file_tool`) and
+    /// used as an inbox address; an id is unique per spawn and matches nothing.
     #[test]
-    fn the_subagents_role_is_its_own_id_not_its_parents() {
-        let identity = identity_for("subagent-worker-backend-1", &config_at_depth(1));
-        assert_eq!(identity.role, "subagent-worker-backend-1");
-        assert_ne!(identity.role, "worker-backend");
+    fn the_subagents_identity_is_its_role_not_its_generated_id() {
+        let mut config = config_at_depth(1);
+        config.role = "qc-agent".into();
+        let identity = identity_for("subagent-qc-dispatcher-1745740800123-1", &config);
+
+        assert_eq!(identity.role, "qc-agent");
+        assert!(
+            !identity.role.starts_with("subagent-qc-dispatcher-"),
+            "the generated id must not be used as a role"
+        );
+        assert_ne!(identity.role, "worker-backend", "nor the parent's role");
+    }
+
+    #[test]
+    fn a_blank_role_falls_back_to_a_real_one() {
+        let mut config = config_at_depth(1);
+        config.role = "  ".into();
+        assert_eq!(identity_for("subagent-x-1", &config).role, "subagent");
     }
 
     /// The end-to-end shape the guard depends on: a parent at depth N spawns a

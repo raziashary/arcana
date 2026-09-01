@@ -166,6 +166,9 @@ impl Tool for SpawnQcReviewTool {
 
         let config = SubagentConfig {
             parent_slug: QC_DISPATCHER_SLUG.to_string(),
+            // Matches the qc-agent recipe, so annotations this reviewer
+            // writes are attributed to QC and not to "user" (F-04).
+            role: "qc-agent".to_string(),
             parent_session_id: ctx.session_id.clone(),
             system_prompt,
             tools: Vec::new(), // MCP-only

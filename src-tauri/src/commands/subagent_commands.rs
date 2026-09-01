@@ -43,6 +43,7 @@ impl SpawnSubagentRequest {
     fn into_config(self) -> (SubagentConfig, String) {
         let cfg = SubagentConfig {
             parent_slug: self.parent_slug,
+            role: "subagent".to_string(),
             parent_session_id: self.parent_session_id,
             system_prompt: self.system_prompt.unwrap_or_default(),
             tools: self.tools,

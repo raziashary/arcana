@@ -19,6 +19,18 @@ pub struct SubagentConfig {
     /// Slug of the parent agent (e.g. "worker-backend", "supervisor", "pa").
     pub parent_slug: String,
 
+    /// The child's ROLE — what kind of agent it is ("qc-agent", "subagent"),
+    /// not which instance it is.
+    ///
+    /// These are different things and conflating them broke two consumers:
+    /// `annotate_file_tool` matches the role to attribute an annotation, and
+    /// the worker-messaging tools use it as an inbox address. When the role was
+    /// set to the generated per-spawn id (`subagent-qc-dispatcher-{millis}-{n}`)
+    /// every QC annotation was filed as `source = "user"` and no sender could
+    /// address a subagent's inbox. Found by the P0 post-phase audit (F-04, F-05).
+    #[serde(default = "default_subagent_role")]
+    pub role: String,
+
     /// Parent's session ID — preserved for lineage but not propagated to the
     /// subagent's LivingAgent (which always gets a fresh isolated session).
     pub parent_session_id: String,
@@ -236,4 +248,8 @@ fn default_max_concurrent() -> u32 {
 }
 fn default_aggregate() -> bool {
     true
+}
+
+fn default_subagent_role() -> String {
+    "subagent".to_string()
 }

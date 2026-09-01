@@ -177,23 +177,35 @@ mod identity_tests {
             "expected at least 3 ToolContext sites, found {sites}"
         );
 
-        assert!(
-            !source.contains("agent_role:  None") && !source.contains("agent_role: None"),
-            "a ToolContext is built with no agent_role. Every agent has an identity; \
-             an absent one silently disables the ACP tools and the qc_review gate."
+        // NOT `!contains("agent_role: None")`: `agent_role` is a `String` now, so
+        // that assertion is type-impossible and can never fail — it looks like a
+        // guard and is worth nothing. Found by the P0 post-phase audit (F-09).
+        //
+        // The property that must hold is positive: EVERY construction site takes
+        // both fields from the threaded identity. Assert that instead.
+        let role_from_identity = source.matches("identity.role").count();
+        let depth_from_identity = source.matches("identity.depth").count();
+
+        assert_eq!(
+            role_from_identity, sites,
+            "{role_from_identity} of {sites} ToolContext sites take agent_role from \
+             the threaded AgentIdentity. A site that hardcodes it silently disables \
+             the ACP tools and the qc_review gate for that path."
         );
-        assert!(
-            !source.contains("depth:       0,") && !source.contains("depth: 0,"),
-            "a ToolContext is built with a hardcoded depth of 0, which makes the \
-             subagent recursion guard unable to fire. Thread identity.depth instead."
+        assert_eq!(
+            depth_from_identity, sites,
+            "{depth_from_identity} of {sites} ToolContext sites take depth from the \
+             threaded AgentIdentity. A hardcoded depth makes the subagent recursion \
+             guard unable to fire on that path."
         );
 
-        // And every site must actually read from the threaded identity.
-        let from_identity = source.matches("identity.role").count();
-        assert!(
-            from_identity >= sites,
-            "only {from_identity} of {sites} ToolContext sites take their role from \
-             the threaded AgentIdentity"
-        );
+        // A literal depth defeats the guard whatever value it is given.
+        for forbidden in ["depth: 0", "depth: 1"] {
+            assert!(
+                !source.contains(forbidden),
+                "a ToolContext is built with a literal `{forbidden}` instead of the \
+                 threaded depth"
+            );
+        }
     }
 }
