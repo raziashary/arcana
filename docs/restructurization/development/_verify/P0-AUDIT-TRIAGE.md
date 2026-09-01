@@ -20,8 +20,7 @@ Four of those were regressions **P0 itself introduced** — `F-10`, `F-21`,
 
 | # | Sev | What | Why it needs you |
 |---|---|---|---|
-| `F-14` | HIGH | `dump.rdb` is gone from the index and gitignored, but it is **still in git history**. `TG0-04` therefore tests a weaker claim than the one it states. | Removing it means rewriting history and force-pushing — Rule 10 forbids me doing either without your explicit say-so. It is 175 KB of a local Redis snapshot; the exposure is repository size and the precedent, not a credential. Options: leave it and narrow the gate's wording (done), or purge with `git filter-repo` and force-push. |
-| `TG0-01` | HIGH | The updater's *accept* path is unproven and every update is currently refused. | Needs the signing keypair, which only you can generate. `docs/updater-signing.md` has the two commands and the secret names. |
+| `TG0-01` | HIGH | The updater's *accept* path is unproven and every update is currently refused. | Needs the signing keypair, which only you can generate. `docs/updater-signing.md` has the commands (now Windows-correct) and the secret names. |
 
 ---
 
@@ -41,6 +40,42 @@ Four of those were regressions **P0 itself introduced** — `F-10`, `F-21`,
 | `F-06` `F-25` `F-27` | LOW | Stale comment fragments and small claim/evidence gaps left by the P0 deletions. | **P1** | Swept with P1's own no-stale pass; each is a comment, none changes behaviour. |
 
 ---
+
+## `F-14` — assessed and closed, no history rewrite
+
+**Decision: leave git history alone.** Razi delegated the call; this is the
+reasoning, so it can be revisited on evidence rather than re-argued.
+
+What is actually in the file, checked rather than assumed: `dump.rdb` is a Redis
+snapshot holding **agent procedural memory** — `procedural:supervisor` keys
+containing reasoning traces from a development run. A credential scan over the
+extracted blob (`sk-*`, `ghp_*`, `AIza*`, `xai-*`, `api_key`, `secret`,
+`password`, `BEGIN … PRIVATE`) returns **zero hits**; the one `BEGIN` match is
+the word "begin" in prose. It is 175 KB and contains nothing that is not
+already in the repository.
+
+The rest of history is clean too, which is the check that would have forced a
+purge: `.env` has **never** been added in any commit on any branch, and no
+`.pem`, `.key`, `.p12`, `.pfx`, `id_rsa` or `credentials` file has ever been
+added. Razi's statement that `.env` was never committed is verified, not taken
+on trust.
+
+Against that, a purge costs: rewriting every commit SHA from the first
+`dump.rdb` commit forward (5 of 202 commits touch it), a force-push over
+already-published `main`, and `sidecar-backup` — the backup branch — losing
+shared ancestry with the branch it backs up. That is real disruption to buy the
+removal of 175 KB of non-secret text.
+
+So the file stays in history, and the claim is narrowed to match: `TG0-04`
+states that it checks the **index**, and `.gitignore` plus the gate make it
+impossible to reintroduce. If the repository is ever made public and those
+reasoning traces matter for a different reason, the purge is a
+`git filter-repo --path src-tauri/dump.rdb --invert-paths` away — it just is not
+justified by anything found here.
+
+*(Hardened in the same pass: `*.pem`, `*.key`, `*.p12` and `*.pfx` are now
+gitignored and covered by `TG0-04`, because the signing runbook has the owner
+generating a private key in the working directory.)*
 
 ## Accepted as stated, no work
 

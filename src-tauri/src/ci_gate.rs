@@ -276,7 +276,12 @@ mod tests {
         // how AutoDev is developed. What must never happen is it entering the
         // index or a shipped artifact.
         let mut checked_any = false;
-        for forbidden in [".env", "src-tauri/dump.rdb", "dump.rdb"] {
+        for forbidden in [
+            ".env",
+            "src-tauri/dump.rdb",
+            "dump.rdb",
+            "autodev-update-private.pem",
+        ] {
             let tracked = std::process::Command::new("git")
                 .args(["ls-files", "--error-unmatch", forbidden])
                 .current_dir(&root)
@@ -299,7 +304,7 @@ mod tests {
 
         // .gitignore must keep them out rather than relying on nobody adding them.
         let gitignore = std::fs::read_to_string(root.join(".gitignore")).expect("read .gitignore");
-        for pattern in [".env", "dump.rdb"] {
+        for pattern in [".env", "dump.rdb", "*.pem"] {
             assert!(
                 gitignore.contains(pattern),
                 ".gitignore does not exclude {pattern}"

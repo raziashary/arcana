@@ -69,3 +69,10 @@ logs/
 # writes its dump here. 175 KB of one was committed once already.
 dump.rdb
 *.rdb
+
+# Private keys. The update-signing key is generated locally (see
+# docs/updater-signing.md) and must never enter the repository.
+*.pem
+*.key
+*.p12
+*.pfx

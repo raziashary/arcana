@@ -291,6 +291,43 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// Interop: a signature produced by **OpenSSL** must verify here.
+    ///
+    /// The release pipeline signs with `openssl pkeyutl -sign -rawin`
+    /// (`.github/workflows/build-release.yml`), and this module verifies with
+    /// `ed25519-dalek`. Both implement RFC 8032, but "should be compatible" is
+    /// a claim, not a check — and if it were wrong, every release would be
+    /// signed by CI and refused by every client, with nothing failing until a
+    /// user tried to update.
+    ///
+    /// Fixed vector, generated once with a throwaway key that was then
+    /// destroyed. The private half never existed outside a scratch directory;
+    /// a public key and a signature over known bytes reveal nothing.
+    #[test]
+    fn a_signature_made_by_openssl_verifies_here() {
+        const PUBKEY_B64: &str = "IJX7mc5NQ/ZNHuuT7rbTj4Y9crlz/AHo6VbsIEtD5YU=";
+        const SIG_B64: &str = "xf0awXDLzghtk9Vzs8/f+CanJZEKbfGYY5y3UExkiXu/Xi4cNXFkA9x8vpeCnFrdIy4jaDpOxS9NgCoBRCC0DA==";
+        const PAYLOAD: &[u8] = b"autodev test artifact";
+
+        let sig = base64::engine::general_purpose::STANDARD
+            .decode(SIG_B64)
+            .expect("decode signature");
+        assert_eq!(sig.len(), 64, "openssl must emit a raw 64-byte signature");
+
+        let path = temp_file("openssl-interop", PAYLOAD);
+        assert!(
+            verify_signature_with_key(&path, &sig, PUBKEY_B64).is_ok(),
+            "an OpenSSL-produced Ed25519 signature must verify with ed25519-dalek —              if this fails, CI signs every release and every client refuses it"
+        );
+
+        // And the same signature must NOT verify over different bytes.
+        let tampered = temp_file("openssl-interop-tampered", b"autodev test artifactX");
+        assert!(verify_signature_with_key(&tampered, &sig, PUBKEY_B64).is_err());
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&tampered);
+    }
+
     // ── verify_update composition ────────────────────────────────────────────
 
     #[tokio::test]
