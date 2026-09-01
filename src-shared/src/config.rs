@@ -10,7 +10,7 @@ pub fn config_path() -> Result<PathBuf> {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .map_err(|_| SharedError::Other("Cannot determine home directory".into()))?;
-    let dir = PathBuf::from(home).join(".airs");
+    let dir = PathBuf::from(home).join(".autodev");
     std::fs::create_dir_all(&dir)?;
     Ok(dir.join("config.toml"))
 }

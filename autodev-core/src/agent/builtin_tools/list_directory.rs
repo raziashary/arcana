@@ -102,6 +102,7 @@ const SKIP: &[&str] = &[
     "dist",
     "build",
     ".airs",
+    ".autodev",
 ];
 
 fn collect_entries(

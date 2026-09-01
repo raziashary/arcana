@@ -105,7 +105,7 @@ fn fleet_secret_path() -> Result<std::path::PathBuf> {
         .or_else(|_| std::env::var("HOME"))
         .map_err(|_| anyhow!("Cannot determine home directory"))?;
     Ok(std::path::PathBuf::from(home)
-        .join(".airs")
+        .join(".autodev")
         .join("fleet_secret"))
 }
 

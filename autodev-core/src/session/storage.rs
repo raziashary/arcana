@@ -1,7 +1,8 @@
 // SQLite-backed storage for sessions and messages.
-// Database path: ~/.airs/autodev.db
+// Database path: ~/.autodev/autodev.db (was ~/.airs/autodev.db before P1-14)
 
 use super::types::{Message, MessageRole, Session};
+use crate::db::migrate::{self, Migration};
 use crate::errors::{AutoDevError, Result};
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
@@ -16,19 +17,47 @@ impl SessionStorage {
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
+
+        // One-time move off the retired `~/.airs` root. Copies the file rather
+        // than rebuilding it from this module's `CREATE TABLE`, which would
+        // drop `messages.tool_calls` and `messages.tool_results` — two columns
+        // the live database has and the source below no longer declares.
+        // Never overwrites an existing destination.
+        match crate::db::legacy_root::migrate_sqlite_once("autodev.db", &db_path)? {
+            crate::db::legacy_root::Migrated::Moved { from, to } => {
+                tracing::info!(
+                    "[sessions] migrated the session store from {} to {}",
+                    from.display(),
+                    to.display()
+                );
+            }
+            crate::db::legacy_root::Migrated::AlreadyPresent
+            | crate::db::legacy_root::Migrated::NothingToDo => {}
+        }
+
         let conn = crate::db::open_tuned(&db_path)?;
         let storage = Self { conn };
         storage.migrate()?;
         Ok(storage)
     }
 
-    fn migrate(&self) -> Result<()> {
-        // Initial setup
-        self.conn.execute_batch(
-            "
-            PRAGMA journal_mode = WAL;
-            PRAGMA foreign_keys = ON;
+    /// This store's schema version.
+    pub fn schema_version(&self) -> Result<i32> {
+        crate::db::migrate::user_version(&self.conn)
+    }
 
+    /// `autodev.db`'s ladder. `v1` is the schema as it stands, created
+    /// idempotently, so an existing store is stamped without being altered.
+    ///
+    /// `messages.tool_calls` and `messages.tool_results` are deliberately
+    /// **absent**. They exist in databases carried over from the V1 schema and
+    /// no code reads or writes them; a migrated store keeps them untouched, a
+    /// fresh one is not given dead columns. That asymmetry is intentional and
+    /// is the reason `P1-14` copies the file rather than rebuilding it.
+    const LADDER: &[Migration] = &[Migration {
+        version: 1,
+        name: "sessions-baseline",
+        sql: r#"
             CREATE TABLE IF NOT EXISTS sessions (
                 id          TEXT PRIMARY KEY,
                 title       TEXT NOT NULL,
@@ -39,78 +68,67 @@ impl SessionStorage {
                 created_at  TEXT NOT NULL,
                 updated_at  TEXT NOT NULL
             );
-            ",
-        )?;
 
-        // Phase 3.0 R3 — migrate existing `sessions` rows to include the new
-        // `pa_mode` column. SQLite has no `ADD COLUMN IF NOT EXISTS`, so the
-        // error-on-duplicate is swallowed intentionally (same best-effort
-        // pattern used below for the `messages` table).
-        let _ = self.conn.execute(
-            "ALTER TABLE sessions ADD COLUMN pa_mode TEXT NOT NULL DEFAULT 'fast_development'",
-            [],
-        );
-
-        // Check if messages table exists
-        let table_exists: bool = self
-            .conn
-            .query_row(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'",
-                [],
-                |_| Ok(true),
-            )
-            .unwrap_or(false);
-
-        if !table_exists {
-            // Create new table with V2 schema
-            self.conn.execute_batch(
-                "
-                CREATE TABLE messages (
-                    id           TEXT PRIMARY KEY,
-                    session_id   TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-                    role         TEXT NOT NULL,
-                    content      TEXT NOT NULL,
-                    tool_name    TEXT,
-                    tool_input   TEXT,
-                    tool_call_id TEXT,
-                    is_error     INTEGER NOT NULL DEFAULT 0,
-                    tokens_in    INTEGER NOT NULL DEFAULT 0,
-                    tokens_out   INTEGER NOT NULL DEFAULT 0,
-                    cost_usd     REAL NOT NULL DEFAULT 0.0,
-                    created_at   TEXT NOT NULL
-                );
-                CREATE INDEX idx_messages_session ON messages(session_id, created_at);
-                CREATE INDEX idx_messages_tool ON messages(tool_call_id);
-                ",
-            )?;
-        } else {
-            // Migrate existing table: add new columns if they don't exist
-            // SQLite doesn't have "ADD COLUMN IF NOT EXISTS", so we catch errors
-            let _ = self
-                .conn
-                .execute("ALTER TABLE messages ADD COLUMN tool_name TEXT", []);
-            let _ = self
-                .conn
-                .execute("ALTER TABLE messages ADD COLUMN tool_input TEXT", []);
-            let _ = self
-                .conn
-                .execute("ALTER TABLE messages ADD COLUMN tool_call_id TEXT", []);
-            let _ = self.conn.execute(
-                "ALTER TABLE messages ADD COLUMN is_error INTEGER NOT NULL DEFAULT 0",
-                [],
+            CREATE TABLE IF NOT EXISTS messages (
+                id           TEXT PRIMARY KEY,
+                session_id   TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                role         TEXT NOT NULL,
+                content      TEXT NOT NULL,
+                tool_name    TEXT,
+                tool_input   TEXT,
+                tool_call_id TEXT,
+                is_error     INTEGER NOT NULL DEFAULT 0,
+                tokens_in    INTEGER NOT NULL DEFAULT 0,
+                tokens_out   INTEGER NOT NULL DEFAULT 0,
+                cost_usd     REAL NOT NULL DEFAULT 0.0,
+                created_at   TEXT NOT NULL
             );
 
-            // Create indexes (these use IF NOT EXISTS)
-            let _ = self.conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at)",
-                []
-            );
-            let _ = self.conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_messages_tool ON messages(tool_call_id)",
-                [],
-            );
-        }
+            CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_messages_tool    ON messages(tool_call_id);
+        "#,
+    }];
 
+    /// Columns added to `sessions` after its original `CREATE TABLE`.
+    const SESSION_COLUMNS: &[(&str, &str)] = &[(
+        "pa_mode",
+        "ALTER TABLE sessions ADD COLUMN pa_mode TEXT NOT NULL DEFAULT 'fast_development'",
+    )];
+
+    /// Columns added to `messages` after its original `CREATE TABLE`.
+    ///
+    /// These were five `let _ = execute("ALTER TABLE …")` calls, an idiom that
+    /// cannot tell "already there" from "this statement is wrong".
+    const MESSAGE_COLUMNS: &[(&str, &str)] = &[
+        (
+            "tool_name",
+            "ALTER TABLE messages ADD COLUMN tool_name TEXT",
+        ),
+        (
+            "tool_input",
+            "ALTER TABLE messages ADD COLUMN tool_input TEXT",
+        ),
+        (
+            "tool_call_id",
+            "ALTER TABLE messages ADD COLUMN tool_call_id TEXT",
+        ),
+        (
+            "is_error",
+            "ALTER TABLE messages ADD COLUMN is_error INTEGER NOT NULL DEFAULT 0",
+        ),
+    ];
+
+    fn migrate(&self) -> Result<()> {
+        // Per-connection, and not carried by a migration rung.
+        self.conn
+            .execute_batch("PRAGMA foreign_keys = ON;")
+            .map_err(|e| AutoDevError::Agent(format!("autodev.db pragmas: {e}")))?;
+
+        // Repair a pre-ladder database's columns first, so the baseline rung is
+        // a genuine no-op against it.
+        migrate::ensure_columns(&self.conn, "sessions", Self::SESSION_COLUMNS)?;
+        migrate::ensure_columns(&self.conn, "messages", Self::MESSAGE_COLUMNS)?;
+        migrate::run_ladder(&self.conn, "autodev.db", Self::LADDER)?;
         Ok(())
     }
 
@@ -322,9 +340,10 @@ impl SessionStorage {
 }
 
 fn db_path() -> Result<PathBuf> {
-    let home = dirs_next::home_dir()
-        .ok_or_else(|| AutoDevError::Vault("Cannot find home directory".into()))?;
-    Ok(home.join(".airs").join("autodev.db"))
+    // One data root. This used to be `~/.airs/autodev.db`, the only thing that
+    // ever lived under the old root; `SessionStorage::open` migrates it across
+    // on first start (P1-14).
+    Ok(crate::db::autodev_dir()?.join("autodev.db"))
 }
 
 // Lightweight stub for dirs_next — we can't add a dep mid-build, use std::env

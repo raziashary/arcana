@@ -640,7 +640,9 @@ fn scan_installed_names() -> Vec<String> {
     let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) else {
         return vec![];
     };
-    let dir = std::path::PathBuf::from(home).join(".airs").join("plugins");
+    let dir = std::path::PathBuf::from(home)
+        .join(".autodev")
+        .join("plugins");
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return vec![];
     };
@@ -656,7 +658,7 @@ fn plugin_install_dir(name: &str) -> anyhow::Result<std::path::PathBuf> {
         .or_else(|_| std::env::var("HOME"))
         .map_err(|_| anyhow::anyhow!("Cannot determine home directory"))?;
     Ok(std::path::PathBuf::from(home)
-        .join(".airs")
+        .join(".autodev")
         .join("plugins")
         .join(name))
 }

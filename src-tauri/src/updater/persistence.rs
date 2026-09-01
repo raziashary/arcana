@@ -38,10 +38,10 @@ pub fn verify_data_integrity() -> Result<IntegrityReport> {
         ("Skills dir", autodev_dir.join("skills"), false),
         ("Hooks dir", autodev_dir.join("hooks"), false),
         ("Updates dir", autodev_dir.join("updates"), false),
-        ("Plugins dir", home.join(".airs").join("plugins"), false),
+        ("Plugins dir", home.join(".autodev").join("plugins"), false),
         (
             "Fleet secret",
-            home.join(".airs").join("fleet_secret"),
+            home.join(".autodev").join("fleet_secret"),
             false,
         ),
     ];

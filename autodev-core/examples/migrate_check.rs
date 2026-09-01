@@ -67,6 +67,22 @@ fn main() {
         }
     }
 
+    // The session store, which P1-14 moved off the retired `~/.airs` root.
+    // Opening it performs that migration if it has not happened yet.
+    match autodev_core::session::storage::SessionStorage::open() {
+        Ok(st) => match st.schema_version() {
+            Ok(n) => rows.push(("autodev.db (sessions)".into(), format!("v{n}"))),
+            Err(e) => {
+                failures.push(format!("autodev.db: {e}"));
+                rows.push(("autodev.db (sessions)".into(), format!("ERROR {e}")));
+            }
+        },
+        Err(e) => {
+            failures.push(format!("autodev.db: {e}"));
+            rows.push(("autodev.db (sessions)".into(), format!("OPEN FAILED {e}")));
+        }
+    }
+
     // Analytics is async and keeps its connection behind a mutex.
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     match rt.block_on(autodev_core::analytics::db::AnalyticsDb::new()) {

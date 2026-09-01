@@ -12,6 +12,7 @@ pub mod app_settings;
 pub mod autodev_instructions;
 pub mod backup;
 pub mod config_db;
+pub mod legacy_root;
 pub mod migrate;
 pub mod model_configs;
 pub mod plans;
