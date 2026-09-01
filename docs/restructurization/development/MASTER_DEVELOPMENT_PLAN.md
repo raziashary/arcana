@@ -528,10 +528,16 @@ src/                                [P6 anchor, P7 experience]
 **Spec anchors.** `01 §1`, `08` (all), `05 §1.1`, ADR-01-02, ADR-01-03, ADR-01-09, G-02, M-40.
 
 ### P1-A · Make the invisible visible
-- [ ] **P1-01** Declare `graph_tools` and `graph_prompts` in `agent/builtin_tools/mod.rs` (918 LOC never compiled). → `CODE-PRESENT`
-- [ ] **P1-02** Declare `db/checkpoints.rs` — **the undo feature is currently absent from the shipped app**. → `CODE-PRESENT`
-- [ ] **P1-03** Fix every compilation error the two above surface. → `CODE-PRESENT`
-- [ ] **P1-04** P0-22's reachability guard now **passes**. → `GATE-PROVEN`
+- [x] **P1-01** Declare `graph_tools` and `graph_prompts` in `agent/builtin_tools/mod.rs` (918 LOC never compiled). → `CODE-PRESENT`
+      `pub mod graph_prompts;` and `pub mod graph_tools;` are declared and the modules compile. Counts corrected against the source: **27** structs, not 22, and **6** E0609 errors, not 2.
+      ⚠ **Compiling is not wiring, and this task does not claim it.** **0 of the 27** structs implement `Tool` and nothing registers them, so the agent still has no graph tools. The reachability gate going green here proves the code is *built*, never that a capability exists — wiring is P3 (BUG-GRAPH). This is exactly why `TG1-01` is recorded as short of its registration clause rather than ticked.
+- [x] **P1-02** ~~Declare `db/checkpoints.rs`~~ → **DELETE it.** Task reversed. → `CODE-PRESENT`
+      ⚠ **The stated justification was false.** Undo is **not** absent from the shipped app: `pub mod checkpoint;` at `git/mod.rs`, five commands registered in `lib.rs`, `src/stores/gitStore.ts` calls `list_checkpoints`, and a snapshot is taken before every agent write (`edit_file.rs`, `write_file.rs`). Retracted in `ADR-LOG-RESTRUCT-0010`, which also corrected the claim where I had propagated it into my own gate code and four documents.
+      `db/checkpoints.rs` had **zero callers** and was never compiled, so `checkpoints.db` has never existed. Declaring it would have *created* the second checkpoint store `P1-16` then had to merge — manufacturing a problem in order to solve it two tasks later. Deleted instead (`ADR-LOG-RESTRUCT-0012`), which is why `P1-16` collapsed to a one-way confirmation.
+- [x] **P1-03** Fix every compilation error the two above surface. → `CODE-PRESENT`
+      Six `E0609`s in `graph_tools.rs`, at `:296-300` and one later — not the two at `:272` the task recorded. `get_node`'s `Option` handled with `.ok_or_else(…)`; `q.confidence_tier` corrected to `q.why`. `cargo check --workspace` exits 0.
+- [x] **P1-04** P0-22's reachability guard now **passes**. → `GATE-PROVEN`
+      `KNOWN_UNREACHABLE` is **empty**, which is the goal state: all three entries resolved by declaring two and deleting one. The gate was also **widened** in P1-B — it walked `src-tauri/src` alone and asserted `>100` files, which became false the moment 182 files moved into `autodev-core`. Lowering the floor would have left it green while protecting 84 files instead of 280, so it now walks all four crates with a floor each, and a total. Falsified by planting an orphan in `autodev-core`: caught and named.
 
 ### P1-B · Extract `autodev-core`
 - [x] **P1-05** Create the crate; move the runtime **and the infrastructure it owns** — 182 files. → `CODE-PRESENT` · `GATE-PROVEN`
