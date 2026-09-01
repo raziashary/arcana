@@ -9,6 +9,7 @@ pub mod openai;
 pub mod streaming;
 pub mod traits;
 pub mod types;
+pub mod usage;
 
 pub use ollama::OllamaProvider;
 pub use traits::Provider;
