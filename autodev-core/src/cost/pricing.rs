@@ -57,6 +57,23 @@ pub struct PriceTier {
 ///
 /// ⚠ **A model absent from this table is an error, not a default.** Adding one
 /// without a verified source re-creates the defect this module exists to close.
+///
+/// **Deliberately absent, awaiting Razi (2026-09-02):**
+///
+/// - `gemini-3.5-pro` — 🔴 **this model may not exist.** One source records it
+///   as announced at I/O 2026 for a June release that never shipped, and
+///   "delayed indefinitely as of August 2026". It is currently offered in
+///   `src/data/models.ts` as a primary option. Either the id is wrong or the
+///   model is unavailable; pricing it would be pricing a thing nobody can call.
+/// - `gpt-5.5-pro` and `gpt-5.3-codex` — not found in this pass at a source I
+///   would act on. Absent rather than guessed.
+///
+/// **One unresolved conflict, recorded rather than resolved by preference:**
+/// `gemini-3.5-flash` is quoted at **$1.50 / $9.00** by one source and
+/// **$0.750 / $4.50** by another — exactly 2×. The higher figure is used here
+/// because over-reporting a cost is the safer error under a spend cap, and the
+/// discrepancy is flagged for Razi. It matters more than most: this is
+/// `DEFAULT_MODEL`.
 const PRICES: &[(&str, ModelPrice)] = &[
     // Google — verified 2026-09-02. Cached read is a 90% discount on input.
     (
@@ -79,6 +96,73 @@ const PRICES: &[(&str, ModelPrice)] = &[
             // The 5-minute write rate. The 1-hour rate is $10.00; TTL-aware
             // pricing arrives with `CachePolicy::Explicit` in P2-B.
             cache_write: 6.25,
+            tier: None,
+        },
+    ),
+    (
+        "claude-haiku-4-5",
+        ModelPrice {
+            // Verified 2026-09-02.
+            input: 1.00,
+            output: 5.00,
+            // 90% off input, the rate Anthropic applies across the family.
+            cached_read: 0.10,
+            cache_write: 1.25,
+            tier: None,
+        },
+    ),
+    (
+        "claude-fable-5",
+        ModelPrice {
+            // Verified 2026-09-02. The most expensive model on offer — a
+            // fabricated $1/$3 default under-billed it by 10x on input and
+            // nearly 17x on output.
+            input: 10.00,
+            output: 50.00,
+            cached_read: 1.00,
+            cache_write: 12.50,
+            tier: None,
+        },
+    ),
+    // OpenAI — verified 2026-09-02. Every model carries a 90% cached-input
+    // discount, which is why cached_read is exactly input/10 throughout.
+    (
+        "gpt-5.5",
+        ModelPrice {
+            input: 5.00,
+            output: 30.00,
+            cached_read: 0.50,
+            cache_write: 0.0,
+            tier: None,
+        },
+    ),
+    (
+        "gpt-5.4",
+        ModelPrice {
+            input: 2.50,
+            output: 15.00,
+            cached_read: 0.25,
+            cache_write: 0.0,
+            tier: None,
+        },
+    ),
+    (
+        "gpt-5.4-mini",
+        ModelPrice {
+            input: 0.75,
+            output: 4.50,
+            cached_read: 0.075,
+            cache_write: 0.0,
+            tier: None,
+        },
+    ),
+    (
+        "gpt-5.4-nano",
+        ModelPrice {
+            input: 0.20,
+            output: 1.25,
+            cached_read: 0.02,
+            cache_write: 0.0,
             tier: None,
         },
     ),

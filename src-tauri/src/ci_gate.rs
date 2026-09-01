@@ -867,6 +867,76 @@ let x = 1;
         assert_eq!(unwrapped_sites("// we used to tool.execute(input) here"), 0);
     }
 
+    // ── TG-P2-02 · every model the app offers can be priced ───────────────────
+
+    /// A model the UI offers must be priceable, or documented as knowingly not.
+    ///
+    /// **This gate is the one that was missing.** The price table and the model
+    /// picker were maintained independently, and the drift was total: of the 12
+    /// models `models.ts` offered, **9 had no entry** and silently billed at an
+    /// invented $1.00/$3.00 — including `DEFAULT_MODEL`, so the common path was
+    /// the wrong one.
+    ///
+    /// Two lists that must agree, with nothing asserting they do, will diverge.
+    /// This reads both and fails when they do.
+    #[test]
+    fn tg_p2_02_every_offered_model_is_priced_or_documented() {
+        let offered_src =
+            std::fs::read_to_string(repo_root().join("src/data/models.ts")).expect("models.ts");
+        let pricing_src =
+            std::fs::read_to_string(repo_root().join("autodev-core/src/cost/pricing.rs"))
+                .expect("pricing.rs");
+
+        // Every quoted token in the MODEL_GROUPS block that looks like a model id.
+        //
+        // Scanned token-wise rather than line-wise, because the file uses BOTH
+        // layouts: Google and Anthropic list their models inline on one line,
+        // OpenAI one per line. The first version assumed one-per-line and
+        // silently found 6 of 12 — written from the formatting rather than from
+        // the invariant, which is L-C6 in miniature. The floor assertion below
+        // is what caught it.
+        let block = {
+            let from = offered_src
+                .find("MODEL_GROUPS")
+                .expect("MODEL_GROUPS not found — re-point this gate");
+            let rest = &offered_src[from..];
+            let to = rest.find("] as const").unwrap_or(rest.len());
+            &rest[..to]
+        };
+
+        let mut offered: Vec<String> = Vec::new();
+        for token in block.split('\'').skip(1).step_by(2) {
+            let has_digit = token.chars().any(|c| c.is_ascii_digit());
+            let has_sep = token.contains('-') || token.contains('.');
+            if has_digit && has_sep && !token.contains(' ') {
+                offered.push(token.to_string());
+            }
+        }
+
+        assert!(
+            offered.len() >= 10,
+            "could not read the offered model list — found {}: {:?}. Re-point this \
+             gate if models.ts changed shape.",
+            offered.len(),
+            offered
+        );
+
+        // Priced, or named in the module's "deliberately absent" note. Both are
+        // accounted for; silence is not.
+        let unaccounted: Vec<&String> = offered
+            .iter()
+            .filter(|id| !pricing_src.contains(id.as_str()))
+            .collect();
+
+        assert!(
+            unaccounted.is_empty(),
+            "these models are offered in the UI but are neither priced nor recorded \
+             as deliberately unpriced in cost/pricing.rs, so selecting one bills the \
+             user at a fabricated rate: {:?}",
+            unaccounted
+        );
+    }
+
     // ── TG-P2-01 · a credential never enters a URL, and both log sinks redact ──
 
     /// No provider may put an API key in a request URL.
