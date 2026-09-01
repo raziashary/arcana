@@ -746,7 +746,8 @@ stamp its run id. Sequence a phase after its data producer. Put the capstone las
 
 ### P2-A · The trait
 - [ ] **P2-01** `ModelProvider` trait v2 with `Item::Opaque` and six-field `Usage` **from day one** (retrofitting means touching every adapter twice). → `UNIT-PROVEN`
-- [ ] **P2-02** `CachePolicy` with three variants — Anthropic explicit, OpenAI automatic, Google differs. *(Was four; xAI struck with `P2-07`.)* → `UNIT-PROVEN`
+- [ ] **P2-02** `CachePolicy` keeps its **four variants** — `Off` · `Automatic { affinity_key }` · `Explicit { breakpoints, ttl }` · `Handle { id }`. → `UNIT-PROVEN`
+      ⚠ **My own edit of 2026-09-01 was wrong and is corrected here (§0.13 dual-anchor).** When xAI was struck I rewrote this as *"three variants — Anthropic explicit, OpenAI automatic, Google differs"*, mapping variants one-to-one onto providers. Spec `02 §2` does not do that: the variants are **policy shapes**, and several providers can share one. Striking xAI removes a *user* of `Automatic`, not the variant — and OpenAI's caching is automatic too, so `Automatic` survives on its own merits. `Handle` covers server-side state where it genuinely saves. Collapsing shapes to a per-provider count is exactly the *"collapsing this to a boolean"* the spec warns against.
 - [ ] **P2-03** `capabilities()` keyed by **model**, not provider. → `UNIT-PROVEN`
 - [ ] **P2-04** Anthropic adapter. → `GATE-PROVEN`
 - [ ] **P2-05** OpenAI adapter (`async-openai` tactically). → `GATE-PROVEN`
@@ -780,12 +781,33 @@ stamp its run id. Sequence a phase after its data producer. Put the capstone las
 - [ ] **P2-27** Wire `ModelConfigsDb` — temperature, top_p, reasoning effort, thinking are **written by the UI and read by nothing**. → `UNIT-PROVEN`
 - [ ] **P2-28** Create the dev `.env` + integration-test harness that reads it. **The harness is never linked into the app.** → `UNIT-PROVEN`
 
+### P2-E · Defects spec `02` names that this plan had dropped
+
+**Added 2026-09-02 during P2's `§0.2m` pre-build verification.** Re-reading spec `02`
+against this task list found five defects the spec states and the list did not carry. Two of
+them undermine tasks already written, which is why they are here rather than in a later
+phase. This is `L-C3` — *a source's conclusion adopted without checking its load-bearing
+detail* — caught before the build rather than by an auditor after it.
+
+- [ ] **P2-29** **`cost_today_usd` is never reset**, so *"today"* means *"since process start"* (`G3c IN-50`). → `UNIT-PROVEN`
+      🔴 **This invalidates `P2-21` as written.** A daily ceiling built on a counter that resets when the app restarts is not a daily ceiling — it is a per-process one, and a user who restarts twice spends three times the cap. The ceiling cannot be built until the counter means what its name says.
+- [ ] **P2-30** **The daily rollup sleeps an hour before its first run and aggregates only *yesterday*** (`G3c IN-56`), so a desktop app used in sub-hour sessions **never completes a single rollup**. → `UNIT-PROVEN`
+      Same dependency as `P2-29`: the ceiling reads what the rollup writes.
+- [ ] **P2-31** **18 hardcoded model strings**, and `analyze_diff_tool.rs:219-222` bypasses model selection entirely — via env vars set nowhere, falling back to a hardcoded `claude-sonnet-4-6`, **an id in no provider catalogue** (`G2a §3`). → `GATE-PROVEN`
+      A hardcoded id that no catalogue contains cannot route; with `P2-18`'s no-silent-fallback rule it becomes a hard error rather than a mystery bill.
+- [ ] **P2-32** **`airsctl` takes an API key as a CLI flag and falls back to `ANTHROPIC_API_KEY` from the environment.** A key in a CLI flag leaks into shell history **and the process table**. → `GATE-PROVEN`
+      🔴 **Directly contradicts `INV-12` and the `G-KEY-NOENV` gate**, which requires that with an empty keychain and every provider env var set, the app **refuses to run a turn**. The gate and the code cannot both stand; the code is what changes.
+- [ ] **P2-33** **The vault has no `enumerate`** — keys for removed providers linger in the OS keychain with no way to find them (`G3c IN-49`). → `UNIT-PROVEN`
+      ⚠ Partially closed already: `PROBED_PROVIDERS` in `vault_commands.rs` was widened on 2026-09-01 so retired ids stay probed. Verify whether that satisfies the invariant or only the symptom, and close the remainder.
+
 ### Smoke — S2
 - [ ] **S2-01** A turn completes on each of the three providers.
 - [ ] **S2-02** A 5-turn session shows non-zero `cached_read` from turn 2.
 - [ ] **S2-03** Session cost matches the provider's own reported usage.
 - [ ] **S2-04** With the keychain empty and every provider env var set, the app **refuses to run a turn**.
 - [ ] **S2-05** Exceeding the daily cap pauses the fleet with a visible message.
+- [ ] **S2-06** The daily counter **survives a restart**: spend, restart the app, and the cap still knows what was already spent.
+- [ ] **S2-07** `airsctl` refuses to run a turn from an environment variable with the keychain empty.
 
 **Exit.** S2 → `TG-P2` → matrix → progress → no-stale → commit.
 

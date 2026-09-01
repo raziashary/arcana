@@ -688,6 +688,80 @@ Razi: *"the ending is wiring AutoDev to AutoDesign — a design can be translate
 
 **Links.** `_verify/AUTODESIGN-INTEGRATION-RESEARCH.md` · `ADR-LOG-RESTRUCT-0023` (superseded in scope by this entry) · `PD0`—`PD6` · `P8`
 
+## ADR-LOG-RESTRUCT-0025 — P2's pre-build verification corrected the plan in five places before any code
+
+**Status.** DECIDED
+**Author.** Claude · **Tier.** `decided-independently` (`§0.2m` requires the plan be corrected before the first line of code; none of these narrows a `§0` rule or changes a shipped contract)
+
+**What.** Before writing P2, its load-bearing claims were checked against the code and against
+spec `02`. Five corrections landed in the plan first.
+
+1. **`P2-02` reverted to four `CachePolicy` variants.** My own edit of 2026-09-01 was wrong.
+2. **`P2-29`—`P2-33` added** — five defects spec `02` names that the task list had dropped.
+3. **`S2-06`/`S2-07` added** — smokes for the two new defects that undermine existing tasks.
+4. **The `§8` goal line** still read *"Four conforming providers"* after xAI was struck.
+5. **`P2-06`'s citation corrected** — the defect is at `google.rs:341`, not `:313`, and it is **streaming-only**.
+
+**Why.**
+
+**On (1), which is a `§0.13` dual-anchor conflict against my own work.** When Razi struck xAI I
+rewrote `P2-02` as *"three variants — Anthropic explicit, OpenAI automatic, Google differs"*,
+mapping variants one-to-one onto providers. Spec `02 §2` does not do that: `Off` /
+`Automatic { affinity_key }` / `Explicit { breakpoints, ttl }` / `Handle { id }` are **policy
+shapes**, and providers share them. Striking xAI removes a *user* of `Automatic`, not the
+variant — and OpenAI's caching is automatic too, so the variant survives on its own merits.
+Reducing shapes to a per-provider tally is precisely the *"collapsing this to a boolean"* the
+spec warns *"loses the feature on at least two providers."* The count was a coincidence of
+arithmetic, not a reading of the design.
+
+**On (2), which is `L-C3` caught before the build rather than after it.** Two of the five do
+not merely add work — they **invalidate a task already written**:
+
+- **`cost_today_usd` is never reset (`IN-50`)**, so *"today"* means *"since process start"*.
+  `P2-21` specifies a **daily** spend ceiling. A ceiling over a counter that resets on restart
+  is a per-process ceiling: restart twice, spend three times the cap. `P2-21` could have been
+  built, tested, and demonstrated passing while being wrong in exactly the way that costs
+  money.
+- **The daily rollup sleeps an hour before its first run and aggregates only *yesterday*
+  (`IN-56`)**, so a desktop app used in sub-hour sessions never completes one. The ceiling
+  reads what the rollup writes.
+
+The other three are `P2-31` (18 hardcoded model strings, and `analyze_diff_tool.rs:219-222`
+falling back to `claude-sonnet-4-6`, an id in no catalogue), `P2-32` (`airsctl` takes a key as
+a **CLI flag** — leaking into shell history *and the process table* — and falls back to
+`ANTHROPIC_API_KEY`), and `P2-33` (the vault's missing `enumerate`, `IN-49`).
+
+**`P2-32` is a standing contradiction, not a gap.** `INV-12` and the `G-KEY-NOENV` gate
+require that with an empty keychain and every provider env var set, the app **refuses to run
+a turn**. `airsctl` currently does the opposite. The gate and the code cannot both stand, and
+the code is what changes.
+
+**On (5).** The plan cites `google.rs:313` `let _args = ...`. The file moved into
+`autodev-core` during P1 and the line drifted to **341**. More importantly the description is
+imprecise: the **non-streaming** path at `:402` handles arguments correctly, so the defect is
+**streaming-only**. That changes the fix — `StreamChunk::ToolUseStart` carries no input field,
+so the arguments must follow as a `ToolInputDelta`, which the enum already supports. Read as a
+one-line fix it would have been mis-scoped.
+
+**When.** 2026-09-02 · P2 · before the first line of code
+
+**Where.** `MASTER_DEVELOPMENT_PLAN.md` `§8` (goal, `P2-02`, `P2-06`, new `P2-E`, `S2-06`/`S2-07`)
+
+**How.** Claims were checked against the tree, verbatim with `path:line`, per `§0.2L-1`:
+`max_tokens` appears **only** in `anthropic.rs:134` — OpenAI and Google never send it
+(`P2-08` CONFIRMED). `cost/tracker.rs:61` reads `_ => (1.0, 3.0), // Safe default`
+(`P2-18` CONFIRMED). `google.rs:341` discards `_args` in the streaming path while `:402` uses
+them (`P2-06` CONFIRMED, corrected). Three read-only refutation agents were dispatched in
+parallel over caching, cost and BYOK, each carrying `§0.2i`'s incremental-write clause
+verbatim and instructed not to read `.env`.
+
+⚠ **`§0.2m` earned its place again.** The rule exists because this plan's own pre-GO review
+found six errors in it. This pass found five more, one of which was **mine, made yesterday**,
+and two of which would have produced a spend ceiling that passes its own test and does not
+cap spending.
+
+**Links.** spec `02 §2`, `§4.2`, `§5`, `§7`, `§11` · `_verify/P2-REFUTE-*.md` · `L-C3` · `L-4` · `INV-12`
+
 # §5 · Standing entries carried from planning
 
 Not build-time decisions — but recorded here because a future session will otherwise rediscover them the hard way. Each is already ratified in vision Part 8; these are the **operational consequences** that bite during implementation.
