@@ -244,6 +244,8 @@ The two widenings are deliberate and are the point of the change, not side effec
 
 **What.** `RecipeRunner`'s Mode 2 branch is made unreachable in P0 by forcing its gate to `false`. Every fleet worker runs on the in-process Rust engine (Mode 1). The ~350 lines of Mode 2 control flow are removed with the rest of the sidecar in P8, not now.
 
+> ⚠ **PARTIALLY RETRACTED 2026-09-01 — see ADR-LOG-RESTRUCT-0009.** The decision stands; one of its stated consequences was false. ~~"Routing to Mode 1 keeps workers functional with no sidecar and no Python."~~ A latch twenty lines earlier in the same function held every tick until the orchestrator had been healthy at least once, so with no Python the fleet did not fall back to Mode 1 — it did not run at all.
+
 **Why.** A Mode 2 worker is a `core-orchestrator` LivingAgent that reaches AutoDev's tools by calling back into the in-process MCP server. P0 deletes that server, so a Mode 2 worker would run with **zero tools** while still consuming tokens. The pre-existing pre-flight at `runner.rs` already treated an unreachable MCP server as "abort the tick", so leaving the branch live would mean every Mode 2 tick aborting after paying for `ensure_agent` — worse than not entering it. Routing to Mode 1 keeps workers functional with no sidecar and no Python, which is what the headline acceptance test requires.
 
 Deleting the branch in this commit was considered and rejected: it is ~350 lines of deeply nested control flow (its own closing braces are comment-annotated), and unpicking it in the same change that removes the MCP server would put the build at risk for work P8 already owns. The gate is a single line with the reasoning attached, so the dead branch cannot be mistaken for a live path.
@@ -255,6 +257,38 @@ Deleting the branch in this commit was considered and rejected: it is ~350 lines
 **How.** `let orch_healthy = false;` with the original probe preserved as `_orch_reachable` so the health call still runs for logging. Evidence: `CODE-PRESENT` now; `SMOKE-PROVEN` at `S0` when a worker tick is observed taking the Mode 1 path. The P8 deletion is tracked as a task, not an intention.
 
 **Links.** MDP `§6 P0-C` sequencing hazard (Razi-ruled) · ADR-03-02 · ADR-LOG-RESTRUCT-0006
+
+---
+
+## ADR-LOG-RESTRUCT-0009 — Correcting ADR-0008: making Mode 2 inert did not make Mode 1 run
+
+**Status:** DECIDED
+**Author:** Claude
+**Tier:** decided-independently
+
+**What.** The fleet-ready latch in `RecipeRunner` is removed. `ADR-LOG-RESTRUCT-0008` is partially retracted: its decision (Mode 2 inert in P0, deleted in P8) stands, but its claim that *"every worker therefore runs on the in-process Rust engine (Mode 1), which needs no sidecar and no Python"* was **false when written**.
+
+**Why — the mechanism of my error, not just the correction.** I set `orch_healthy = false` to make the Mode 2 branch unreachable and verified that the code below that line routes to Mode 1. I did not read what ran *above* it. `runner.rs` opened with
+
+```rust
+if !self.orch_client.has_ever_been_healthy() {
+    self.set_worker_status(worker_slug, "idle");
+    return Ok(());
+}
+```
+
+a latch whose only purpose was to stop a cold start spamming Mode 2 `ensure_agent` warnings. On a machine with no Python the orchestrator never becomes healthy, the latch never opens, and **every worker tick returns early reporting "idle"**. The fleet was not falling back — it was silently dead, and reporting itself idle while dead. My own comment asserting the opposite sat twenty lines below the latch, in the same function, in the same commit.
+
+This is `L-C4` — a local change made without re-checking the code path I was changing. It is the second instance, and both were the same shape: I verified the consequence I intended and not the surrounding control flow.
+
+**When.** 2026-09-01 · phase P0 · post-phase audit finding `F-10`
+
+**Where.** `src-tauri/src/recipes/runner.rs`
+
+**How.** The latch is deleted, with its history in the replacing comment so it is not reinstated by someone reading only the cold-start rationale. Evidence: `CODE-PRESENT`; a worker tick reaching Mode 1 with no sidecar running is `S0` work for P1, since P0 has no fleet smoke.
+
+**Links.** `_verify/A1-P0-code-audit.md` F-10 · supersedes the consequence clause of ADR-LOG-RESTRUCT-0008 · `MDP §0.16 L-C4`
+
 
 # §5 · Standing entries carried from planning
 
