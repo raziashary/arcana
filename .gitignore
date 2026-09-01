@@ -76,3 +76,6 @@ dump.rdb
 *.key
 *.p12
 *.pfx
+# The DER intermediate the keygen runbook produces. Public half only, so not
+# a leak — but it is a stray build artifact, not source.
+*.der

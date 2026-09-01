@@ -68,12 +68,41 @@ openssl genpkey -algorithm ed25519 -out autodev-update-private.pem
 openssl pkey -in autodev-update-private.pem -pubout -outform DER | tail -c 32 | base64
 ```
 
-Either way the last command prints **one 44-character base64 line ending in
-`=`**. That is the value of `AUTODEV_UPDATE_PUBKEY`.
+### You now have TWO values, and only one of them was printed
+
+This trips people up: the commands above **print one thing**, but step 2 needs
+two secrets. The second one is a *file on disk*, not console output.
+
+| Secret | Where it is | What it looks like |
+|---|---|---|
+| `AUTODEV_UPDATE_PUBKEY` | **printed to your console** by the last command | one line, 44 characters, ends in `=` — e.g. `AAAA…44 chars…=` |
+| `AUTODEV_UPDATE_PRIVKEY` | the **file** `autodev-update-private.pem`, created by the *first* command | a multi-line block starting `-----BEGIN PRIVATE KEY-----` and ending `-----END PRIVATE KEY-----` |
+
+To display the private half so you can copy it into GitHub:
+
+```powershell
+Get-Content autodev-update-private.pem -Raw
+```
+
+```bash
+cat autodev-update-private.pem
+```
+
+Copy **everything**, including the `-----BEGIN`/`-----END` lines.
+
+> Paste it only into GitHub's secrets field. Not into a chat window, not into a
+> file in this repository, not into a commit message.
+
+**Then move `autodev-update-private.pem` out of the working directory** into a
+password manager or an encrypted backup, and delete the local copy along with
+`autodev-update-public.der`. Both are gitignored and `TG0-04` fails if either is
+staged, so neither can be committed — but a private key sitting in a source tree
+is still a private key sitting in a source tree.
 
 An Ed25519 public key is 44 bytes in DER with a fixed 12-byte header; both forms
 above take the trailing 32 raw bytes, which is what `verify.rs` expects. If the
-line is not 44 characters, something took the wrong slice — do not proceed.
+printed line is not 44 characters, something took the wrong slice — do not
+proceed.
 
 *(Both command sets were executed against a throwaway keypair before being
 written here, and that keypair was destroyed. They produce a 44-character key
@@ -87,8 +116,8 @@ In **Settings → Secrets and variables → Actions**, add two repository secret
 
 | Secret | Value | Used by |
 |---|---|---|
-| `AUTODEV_UPDATE_PUBKEY` | the base64 line from step 1 | compiled into the binary; also used to verify signatures before publishing |
-| `AUTODEV_UPDATE_PRIVKEY` | the **entire contents** of `autodev-update-private.pem`, including the `-----BEGIN`/`-----END` lines | the `sign-release` job only |
+| `AUTODEV_UPDATE_PUBKEY` | the 44-character line **printed** in step 1 | compiled into the binary; also used to verify signatures before publishing |
+| `AUTODEV_UPDATE_PRIVKEY` | the **entire contents of the file** `autodev-update-private.pem`, `-----BEGIN`/`-----END` lines included (this was never printed — see step 1) | the `sign-release` job only |
 
 Then store `autodev-update-private.pem` somewhere durable and offline (a password
 manager entry or an encrypted backup), and delete the copy in your working
