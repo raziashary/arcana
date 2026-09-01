@@ -191,9 +191,6 @@ fn assign(args: AssignArgs, ctx: OutputContext) -> Result<()> {
 fn claim(args: ClaimArgs, ctx: OutputContext) -> Result<()> {
     let db = TasksDb::open()?;
 
-    // The queue policy — oldest ready task first — stays here; the claim itself
-    // goes through core's `claim_task_with_pid`.
-    //
     // ⚠ Behaviour change, deliberate (P1-09). `src-shared`'s `claim_next` wrote
     // `status` and `assigned_worker` and nothing else. Core's claim also records
     // the claiming PID and host, and refuses a worker that already holds an
@@ -201,51 +198,28 @@ fn claim(args: ClaimArgs, ctx: OutputContext) -> Result<()> {
     // looking at `claimed_by_pid`, so a CLI-claimed task under the old path
     // could never be detected as orphaned, and a worker could hold several
     // tasks at once while the app assumed one.
-    let next = db
-        .list(Some("ready"))?
-        .into_iter()
-        .min_by(|a, b| a.created_at.cmp(&b.created_at));
-
-    match next {
+    //
+    // The queue policy — oldest ready task first — moved into core with the
+    // claim (A-22 below). It had to: a policy applied here, over a list read a
+    // round trip earlier, cannot be part of the same atomic write.
+    // A-22 · one atomic statement, not a select-then-assign-then-claim.
+    //
+    // This used to pick the oldest ready task in Rust, write `assigned`, then
+    // claim it — three round trips with two windows between them. A second
+    // worker landing in either window won the row, and the loser left it
+    // `assigned` with no PID, which the orphan detector only releases after its
+    // 4-hour TTL. A compensating `revert to ready` narrowed that window; it did
+    // not close it, and it could itself fail.
+    //
+    // `claim_next_ready` does the whole thing in one guarded `UPDATE`, so there
+    // is no intermediate state for a concurrent worker to observe or for this
+    // process to have to undo. The supervisor's two-step handoff is unchanged —
+    // this is the self-serve path only.
+    match db.claim_next_ready(&args.worker, std::process::id())? {
         None => ctx.info("No ready tasks available."),
         Some(t) => {
-            // Core models the handoff in two steps — a task is assigned to a
-            // worker, then that worker claims it — and `claim_task_with_pid`
-            // refuses anything not already `assigned`. `src-shared` went
-            // straight from `ready` to `in_progress`, so this walks both steps
-            // to keep the CLI's one-command behaviour while going through the
-            // guarded path.
-            db.update_status(t.id, "assigned", Some(&args.worker))?;
-
-            // ⚠ These two statements are not atomic together, and the window
-            // between them is exactly the race `claim_task_with_pid` exists to
-            // close: another worker can claim the task after the assign and
-            // before the claim. If that happens the claim fails and the task is
-            // left `assigned` with no PID — which the orphan detector only
-            // releases after its 4-hour TTL. Found by the post-phase audit
-            // (A-22).
-            //
-            // The compensating write puts it back on the queue immediately.
-            // This is a narrowing of the window, not a removal of it: a true
-            // fix needs a single atomic `ready -> in_progress` claim in core,
-            // which is a change to a shipped contract and belongs to the phase
-            // that owns the claim protocol.
-            if let Err(e) = db.claim_task_with_pid(t.id, &args.worker, std::process::id()) {
-                if let Err(revert) = db.update_status(t.id, "ready", None) {
-                    ctx.error(&format!(
-                        "Task #{} could not be claimed AND could not be returned to the \
-                         queue ({revert}); it is stranded in 'assigned' until the orphan \
-                         TTL releases it",
-                        t.id
-                    ));
-                }
-                return Err(e.into());
-            }
             ctx.success(&format!("Claimed task #{}: {}", t.id, t.title));
-            match db.get_by_id(t.id)? {
-                Some(claimed) => print_task_detail(&ctx, &claimed),
-                None => ctx.error("Task was claimed but could not be read back"),
-            }
+            print_task_detail(&ctx, &t);
         }
     }
     Ok(())

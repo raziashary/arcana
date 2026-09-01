@@ -500,7 +500,7 @@ impl TasksDb {
             "budget_exceeded_reason",
             "ALTER TABLE tasks ADD COLUMN budget_exceeded_reason TEXT;",
         ),
-        ("phase", "ALTER TABLE tasks ADD COLUMN phase       TEXT;"),
+        ("phase", "ALTER TABLE tasks ADD COLUMN phase TEXT;"),
         (
             "phase_order",
             "ALTER TABLE tasks ADD COLUMN phase_order INTEGER;",
@@ -1060,6 +1060,85 @@ impl TasksDb {
             )));
         }
         Ok(())
+    }
+
+    /// Claim the oldest `ready` task in ONE atomic statement.
+    ///
+    /// **Why this exists (A-22).** The two-step handoff — `update_status` to
+    /// `assigned`, then `claim_task_with_pid` — models the supervisor's
+    /// workflow, where a human or the orchestrator decides *who* gets a task
+    /// before that worker picks it up. A self-serve worker pulling from the
+    /// queue has no such decider, and running the two steps back to back leaves
+    /// a window: a second worker can claim the task in between. The loser's
+    /// claim then fails with the task left `assigned` and no PID, a state the
+    /// orphan detector only releases after its 4-hour TTL. The post-phase audit
+    /// found `airsctl task next --claim` doing exactly that.
+    ///
+    /// A single `UPDATE` is atomic in SQLite: the write lock is held for the
+    /// whole statement, so a concurrent claimer either waits and then re-runs
+    /// the subselect — seeing the row is no longer `ready` and taking the next
+    /// one — or finds the queue empty. There is no window to lose.
+    ///
+    /// `claim_task_with_pid` is untouched. This is an additional entry point
+    /// for the self-serve case, not a change to the assigned-handoff contract.
+    ///
+    /// Returns `Ok(None)` when no task was ready. The one-in-progress-per-worker
+    /// guard is enforced *inside* the statement, so a busy worker claims
+    /// nothing even under a race; `Err` then carries which of the two it was.
+    pub fn claim_next_ready(&self, worker_slug: &str, pid: u32) -> Result<Option<Task>> {
+        let host = std::env::var("COMPUTERNAME")
+            .or_else(|_| std::env::var("HOSTNAME"))
+            .unwrap_or_else(|_| "unknown".to_string());
+
+        // The guard is a subquery rather than a prior SELECT for the same
+        // reason the claim is one statement: a check that happens before the
+        // write can be true when it is read and false when it is used.
+        let claimed: Option<i64> = self
+            .conn
+            .query_row(
+                "UPDATE tasks
+                    SET status = 'in_progress', assigned_worker = ?1,
+                        claimed_by_pid = ?2, claim_host = ?3,
+                        updated_at = datetime('now')
+                  WHERE id = (SELECT id FROM tasks
+                               WHERE status = 'ready'
+                               ORDER BY created_at ASC, id ASC
+                               LIMIT 1)
+                    AND (SELECT COUNT(*) FROM tasks
+                          WHERE assigned_worker = ?1
+                            AND status = 'in_progress') = 0
+                RETURNING id",
+                params![worker_slug, pid as i64, host],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        match claimed {
+            Some(id) => self.get_by_id(id),
+            None => {
+                // Nothing changed. Two causes, and the caller needs to tell
+                // them apart: an empty queue is normal, a busy worker is a
+                // rule violation the worker recipe warns about.
+                let active: i64 = self
+                    .conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM tasks
+                          WHERE assigned_worker = ?1 AND status = 'in_progress'",
+                        params![worker_slug],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(0);
+                if active > 0 {
+                    return Err(AutoDevError::Agent(format!(
+                        "Worker '{worker_slug}' already owns {active} in_progress \
+                         task(s); finish or release them before claiming another. \
+                         This guard backs the worker recipe's 'NEVER claim a \
+                         second task while one is in_progress' rule."
+                    )));
+                }
+                Ok(None)
+            }
+        }
     }
 
     /// Returns all tasks in `assigned` or `in_progress` state — candidates for
@@ -1766,6 +1845,146 @@ fn row_to_worker_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkerMess
 mod tests {
     use super::*;
 
+    fn ready_task(db: &TasksDb, title: &str) -> Task {
+        db.create(CreateTaskInput {
+            title: title.to_string(),
+            description: None,
+            priority: "p2".to_string(),
+            task_type: "chore".to_string(),
+            acceptance_criteria: "n/a".to_string(),
+            created_by: Some("test".to_string()),
+        })
+        .expect("create")
+    }
+
+    fn sandbox(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("autodev-claim-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        dir.join("tasks.db")
+    }
+
+    /// A-22 · eight workers race for twelve tasks and no task is claimed twice.
+    ///
+    /// This is the test the two-step path could not pass. `airsctl task next
+    /// --claim` used to read the queue, write `assigned`, then claim — and a
+    /// worker that lost the race between those writes left the row `assigned`
+    /// with no PID, invisible to everything until the orphan detector's 4-hour
+    /// TTL. Both failure modes are asserted: no duplicate claim, and no row
+    /// stranded in `assigned`.
+    ///
+    /// Real threads on one real file, each with its own connection — the race
+    /// is between SQLite writers, so an in-process mock would prove nothing.
+    #[test]
+    fn a22_concurrent_claims_never_double_claim_or_strand_a_task() {
+        const WORKERS: usize = 8;
+        const TASKS: usize = 12;
+
+        let path = sandbox("race");
+        {
+            let db = TasksDb::open_at(&path).expect("open");
+            for i in 0..TASKS {
+                ready_task(&db, &format!("task {i}"));
+            }
+        }
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(WORKERS));
+        let mut handles = Vec::new();
+        for w in 0..WORKERS {
+            let path = path.clone();
+            let barrier = std::sync::Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                let db = TasksDb::open_at(&path).expect("open");
+                // Release every thread at the same instant; staggered starts
+                // would serialise themselves and the test would pass without
+                // ever exercising contention.
+                barrier.wait();
+                db.claim_next_ready(&format!("worker-{w}"), 1000 + w as u32)
+                    .expect("claim must not error: the queue is deep enough")
+                    .map(|t| t.id)
+            }));
+        }
+
+        let claimed: Vec<i64> = handles
+            .into_iter()
+            .map(|h| h.join().expect("thread panicked"))
+            .map(|id| id.expect("every worker had a task available"))
+            .collect();
+
+        let distinct: std::collections::HashSet<i64> = claimed.iter().copied().collect();
+        assert_eq!(
+            distinct.len(),
+            WORKERS,
+            "a task was claimed by more than one worker: {claimed:?}"
+        );
+
+        let db = TasksDb::open_at(&path).expect("reopen");
+        let stranded = db.list(Some("assigned")).expect("list assigned");
+        assert!(
+            stranded.is_empty(),
+            "{} task(s) left in 'assigned' with no owner — the exact state the two-step claim stranded rows in: {:?}",
+            stranded.len(),
+            stranded.iter().map(|t| t.id).collect::<Vec<_>>()
+        );
+
+        assert_eq!(db.list(Some("in_progress")).expect("list").len(), WORKERS);
+        assert_eq!(
+            db.list(Some("ready")).expect("list").len(),
+            TASKS - WORKERS,
+            "the untaken tasks must still be claimable"
+        );
+
+        // Every claim recorded its owner: a claim without a PID is precisely
+        // what makes orphan detection blind.
+        for t in db.list(Some("in_progress")).expect("list") {
+            assert!(t.claimed_by_pid.is_some(), "task #{} has no PID", t.id);
+            assert!(t.assigned_worker.is_some(), "task #{} has no worker", t.id);
+        }
+    }
+
+    /// The claim takes only `ready` rows — a task mid-handoff to someone else
+    /// is not up for grabs.
+    #[test]
+    fn a22_claim_ignores_tasks_that_are_not_ready() {
+        let path = sandbox("notready");
+        let db = TasksDb::open_at(&path).expect("open");
+        let t = ready_task(&db, "spoken for");
+        db.update_status(t.id, "assigned", Some("someone-else"))
+            .expect("assign");
+
+        assert!(
+            db.claim_next_ready("latecomer", 4242).expect("claim").is_none(),
+            "an assigned task was claimed out from under its worker"
+        );
+    }
+
+    /// The one-task-per-worker guard survives the move into the statement.
+    #[test]
+    fn a22_a_worker_holding_a_task_claims_nothing_further() {
+        let path = sandbox("guard");
+        let db = TasksDb::open_at(&path).expect("open");
+        ready_task(&db, "first");
+        ready_task(&db, "second");
+
+        let first = db.claim_next_ready("solo", 7).expect("first claim");
+        assert!(first.is_some(), "the first claim must succeed");
+
+        let err = db
+            .claim_next_ready("solo", 7)
+            .expect_err("a worker already holding a task must be refused");
+        assert!(
+            err.to_string().contains("already owns"),
+            "the refusal must say why, got: {err}"
+        );
+
+        // And the refusal must not have consumed the second task.
+        assert_eq!(
+            db.list(Some("ready")).expect("list").len(),
+            1,
+            "a refused claim still took a task off the queue"
+        );
+    }
+
     /// Every column the live `~/.autodev/tasks.db` carries, in its own order.
     ///
     /// A fresh database must match it. The two are built by different paths —
@@ -1887,7 +2106,7 @@ mod tests {
             .collect();
         assert!(
             missing.is_empty(),
-            "a fresh tasks.db is missing {missing:?}; the baseline rung and the              live schema have diverged"
+            "a fresh tasks.db is missing {missing:?}; the baseline rung and the live schema have diverged"
         );
 
         let unexpected: Vec<&String> = actual
@@ -1896,7 +2115,7 @@ mod tests {
             .collect();
         assert!(
             unexpected.is_empty(),
-            "a fresh tasks.db has columns the live schema does not: {unexpected:?}.              If they are intended, add them to EXPECTED_COLUMNS."
+            "a fresh tasks.db has columns the live schema does not: {unexpected:?}. If they are intended, add them to EXPECTED_COLUMNS."
         );
 
         drop(db);
