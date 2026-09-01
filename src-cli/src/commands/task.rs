@@ -1,6 +1,6 @@
 use crate::output::{status_colored, OutputContext};
 use anyhow::Result;
-use autodev_shared::db::tasks::{CreateTaskInput, TasksDb};
+use autodev_core::db::tasks::{CreateTaskInput, Task, TasksDb};
 use clap::{Args, Subcommand};
 
 #[derive(Subcommand)]
@@ -116,9 +116,9 @@ fn create(args: CreateArgs, ctx: OutputContext) -> Result<()> {
     let input = CreateTaskInput {
         title: args.title,
         description: args.description,
-        priority: Some(args.priority),
-        task_type: Some(args.task_type),
-        acceptance_criteria: args.acceptance_criteria,
+        priority: args.priority,
+        task_type: args.task_type,
+        acceptance_criteria: args.acceptance_criteria.unwrap_or_default(),
         created_by: Some("airsctl".into()),
     };
     let task = db.create(input)?;
@@ -129,8 +129,18 @@ fn create(args: CreateArgs, ctx: OutputContext) -> Result<()> {
 
 fn list(args: ListArgs, ctx: OutputContext) -> Result<()> {
     let db = TasksDb::open()?;
-    let tasks = db.list(args.status.as_deref(), args.worker.as_deref())?;
-    let tasks: Vec<_> = tasks.into_iter().take(args.limit).collect();
+    // Core filters by status in SQL; the worker filter is applied here rather
+    // than widening core's API for a caller-specific query.
+    let tasks: Vec<Task> = db
+        .list(args.status.as_deref())?
+        .into_iter()
+        .filter(|t| {
+            args.worker
+                .as_deref()
+                .is_none_or(|w| t.assigned_worker.as_deref() == Some(w))
+        })
+        .take(args.limit)
+        .collect();
 
     if tasks.is_empty() {
         ctx.info("No tasks found.");
@@ -146,9 +156,9 @@ fn list(args: ListArgs, ctx: OutputContext) -> Result<()> {
             vec![
                 t.id.to_string(),
                 truncate(&t.title, 40),
-                status_colored(&t.status.to_string()),
-                t.priority.to_string(),
-                t.task_type.to_string(),
+                status_colored(t.status.as_str()),
+                t.priority.as_str().to_string(),
+                t.task_type.as_str().to_string(),
                 t.assigned_worker.clone().unwrap_or_else(|| "-".into()),
                 t.created_at[..10].to_string(),
             ]
@@ -161,7 +171,7 @@ fn list(args: ListArgs, ctx: OutputContext) -> Result<()> {
 
 fn get(args: GetArgs, ctx: OutputContext) -> Result<()> {
     let db = TasksDb::open()?;
-    match db.get(args.id)? {
+    match db.get_by_id(args.id)? {
         None => ctx.error(&format!("Task #{} not found", args.id)),
         Some(t) => print_task_detail(&ctx, &t),
     }
@@ -170,7 +180,7 @@ fn get(args: GetArgs, ctx: OutputContext) -> Result<()> {
 
 fn assign(args: AssignArgs, ctx: OutputContext) -> Result<()> {
     let db = TasksDb::open()?;
-    db.assign(args.id, &args.worker)?;
+    db.update_status(args.id, "assigned", Some(&args.worker))?;
     ctx.success(&format!(
         "Assigned task #{} to worker '{}'",
         args.id, args.worker
@@ -180,11 +190,38 @@ fn assign(args: AssignArgs, ctx: OutputContext) -> Result<()> {
 
 fn claim(args: ClaimArgs, ctx: OutputContext) -> Result<()> {
     let db = TasksDb::open()?;
-    match db.claim_next(&args.worker)? {
+
+    // The queue policy — oldest ready task first — stays here; the claim itself
+    // goes through core's `claim_task_with_pid`.
+    //
+    // ⚠ Behaviour change, deliberate (P1-09). `src-shared`'s `claim_next` wrote
+    // `status` and `assigned_worker` and nothing else. Core's claim also records
+    // the claiming PID and host, and refuses a worker that already holds an
+    // in-progress task. Both matter: orphan detection releases stale tasks by
+    // looking at `claimed_by_pid`, so a CLI-claimed task under the old path
+    // could never be detected as orphaned, and a worker could hold several
+    // tasks at once while the app assumed one.
+    let next = db
+        .list(Some("ready"))?
+        .into_iter()
+        .min_by(|a, b| a.created_at.cmp(&b.created_at));
+
+    match next {
         None => ctx.info("No ready tasks available."),
         Some(t) => {
+            // Core models the handoff in two steps — a task is assigned to a
+            // worker, then that worker claims it — and `claim_task_with_pid`
+            // refuses anything not already `assigned`. `src-shared` went
+            // straight from `ready` to `in_progress`, so this walks both steps
+            // to keep the CLI's one-command behaviour while going through the
+            // guarded path.
+            db.update_status(t.id, "assigned", Some(&args.worker))?;
+            db.claim_task_with_pid(t.id, &args.worker, std::process::id())?;
             ctx.success(&format!("Claimed task #{}: {}", t.id, t.title));
-            print_task_detail(&ctx, &t);
+            match db.get_by_id(t.id)? {
+                Some(claimed) => print_task_detail(&ctx, &claimed),
+                None => ctx.error("Task was claimed but could not be read back"),
+            }
         }
     }
     Ok(())
@@ -211,13 +248,13 @@ fn delete(args: DeleteArgs, ctx: OutputContext) -> Result<()> {
     Ok(())
 }
 
-fn print_task_detail(ctx: &OutputContext, t: &autodev_shared::db::tasks::Task) {
+fn print_task_detail(ctx: &OutputContext, t: &Task) {
     ctx.print_kv(&[
         ("id", &t.id.to_string()),
         ("title", &t.title),
-        ("status", &t.status.to_string()),
-        ("priority", &t.priority.to_string()),
-        ("type", &t.task_type.to_string()),
+        ("status", t.status.as_str()),
+        ("priority", t.priority.as_str()),
+        ("type", t.task_type.as_str()),
         ("worker", t.assigned_worker.as_deref().unwrap_or("-")),
         ("description", t.description.as_deref().unwrap_or("-")),
         ("acceptance_criteria", &t.acceptance_criteria),

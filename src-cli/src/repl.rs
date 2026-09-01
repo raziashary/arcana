@@ -260,8 +260,19 @@ async fn dispatch_plan(args: &[&str], ctx: OutputContext) -> Result<()> {
             })
         }
         Some("get") => {
-            let id: i64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-            PlanCmd::Get(GetArgs { id })
+            // Plan ids are UUIDs. The previous version parsed an i64 and fell
+            // back to 0 when that failed, so a typo silently asked for a plan
+            // that cannot exist and reported "not found" as if the id were
+            // real.
+            match args.get(1) {
+                Some(id) if !id.is_empty() => PlanCmd::Get(GetArgs {
+                    id: (*id).to_string(),
+                }),
+                _ => {
+                    ctx.error("Usage: plan get <plan-id>");
+                    return Ok(());
+                }
+            }
         }
         Some(other) => {
             ctx.error(&format!("Unknown plan subcommand: '{other}'"));

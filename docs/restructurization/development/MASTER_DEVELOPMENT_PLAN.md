@@ -543,7 +543,11 @@ src/                                [P6 anchor, P7 experience]
       `00-AUTODEV-RESTRUCTURE-MASTER-PLAN.md §Part 1`. The prior wording, *"outside the AutoDev process"*, was process-scoped — an embedded interpreter would have satisfied it while breaking the premise. Restated as runtime-and-language-scoped, with the P1 evidence and the still-unsatisfied half (`main.rs` spawns two Python processes; P8) recorded inline.
 
 ### P1-C · One schema owner *(all migrations, one linear unit)*
-- [ ] **P1-09** Move the task/worker/plan schema into `autodev-core`; **delete `src-shared`'s four hand-mirrored tables** (`tasks`, `workers`, `plans`, `plan_steps` — and `plans.db` has two incompatible designs). → `LIVE-DB-PROVEN`
+- [x] **P1-09** Move the task/worker/plan schema into `autodev-core`; **delete `src-shared`'s hand-mirrored tables**. → `LIVE-DB-PROVEN` · `UNIT-PROVEN`
+      `src-shared/src/db/{tasks,workers,plans}.rs` deleted (22 / 19 / 23 write statements between them); `airsctl` now uses `autodev_core::db`.
+      **The mirror was a live outage, not a latent risk:** `workers.rs` selected `last_seen`/`notes`, the live table had neither, and its own `CREATE TABLE IF NOT EXISTS` was a silent no-op — so `airsctl worker list/status/heartbeat` had failed since they were written. Now: live DB migrated (7 rows preserved, `integrity_check = ok`), `worker list` exits **0**, `heartbeat` persists a timestamp `status` reads back, unknown slug exits **1**.
+      `plans.db` did not exist on disk at all, so the *"two incompatible designs"* carried **no data risk** — core's UUID-keyed design simply wins, and the CLI's `--id` arguments become strings.
+      Four forced decisions logged as `ADR-LOG-RESTRUCT-0016`. `src-shared/src/db/analytics.rs` deliberately **stays**: it is not one of the four tables this task names and holds zero write statements, so it cannot drift a schema.
 - [ ] **P1-10** Give **every** database `PRAGMA user_version` and a numbered ladder. → `LIVE-DB-PROVEN`
 - [ ] **P1-11** **Repair `graph/` migration v5** — `ADD COLUMN IF NOT EXISTS` is not valid SQLite. **⚠ Back up `~/.autodev/graphs/*.db` first (§0.8).** → `LIVE-DB-PROVEN`
 - [ ] **P1-12** `journal_mode=WAL` and a `busy_timeout` on every connection. → `LIVE-DB-PROVEN`

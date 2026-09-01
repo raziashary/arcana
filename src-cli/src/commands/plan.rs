@@ -1,6 +1,8 @@
 use crate::output::{status_colored, OutputContext};
 use anyhow::Result;
-use autodev_shared::db::plans::PlansDb;
+use autodev_core::db::plans::{
+    CreatePlanInput, CreatePlanItemInput, Plan, PlanItem, PlanScope, PlansDb,
+};
 use clap::{Args, Subcommand};
 
 #[derive(Subcommand)]
@@ -28,7 +30,10 @@ pub struct CreateArgs {
     #[arg(short, long)]
     pub description: Option<String>,
 
-    /// Scope: personal or team
+    /// Scope: personal, fleet or epic
+    ///
+    /// The old help text said "personal or team"; `team` was never a value the
+    /// store understood and silently fell back to `personal`.
     #[arg(short, long, default_value = "personal")]
     pub scope: Option<String>,
 }
@@ -43,13 +48,13 @@ pub struct ListArgs {
 #[derive(Args)]
 pub struct GetArgs {
     /// Plan ID
-    pub id: i64,
+    pub id: String,
 }
 
 #[derive(Args)]
 pub struct AddStepArgs {
     /// Plan ID
-    pub plan_id: i64,
+    pub plan_id: String,
     /// Step title
     pub title: String,
     /// Optional description
@@ -60,7 +65,7 @@ pub struct AddStepArgs {
 #[derive(Args)]
 pub struct UpdateStepArgs {
     /// Step ID
-    pub step_id: i64,
+    pub step_id: String,
     /// New status: pending, in_progress, completed, skipped
     pub status: String,
 }
@@ -68,7 +73,7 @@ pub struct UpdateStepArgs {
 #[derive(Args)]
 pub struct ActivateArgs {
     /// Plan ID
-    pub id: i64,
+    pub id: String,
 }
 
 pub async fn run(cmd: PlanCmd, ctx: OutputContext) -> Result<()> {
@@ -84,20 +89,24 @@ pub async fn run(cmd: PlanCmd, ctx: OutputContext) -> Result<()> {
 
 fn create(args: CreateArgs, ctx: OutputContext) -> Result<()> {
     let db = PlansDb::open()?;
-    let plan = db.create(
-        &args.title,
-        args.description.as_deref(),
-        args.scope.as_deref(),
-        "airsctl",
-    )?;
-    ctx.success(&format!("Created plan #{}", plan.id));
+    let plan = db.create_plan(CreatePlanInput {
+        title: args.title,
+        description: args.description,
+        session_id: None,
+        assigned_agent: None,
+        created_by: Some("airsctl".into()),
+        agent_scope: PlanScope::from_str(args.scope.as_deref().unwrap_or("personal")),
+        parent_plan_id: None,
+        task_id: None,
+    })?;
+    ctx.success(&format!("Created plan {}", plan.id));
     print_plan_detail(&ctx, &plan, &[]);
     Ok(())
 }
 
 fn list(args: ListArgs, ctx: OutputContext) -> Result<()> {
     let db = PlansDb::open()?;
-    let plans = db.list(args.status.as_deref())?;
+    let plans = db.list_plans(args.status.as_deref(), None, None)?;
 
     if plans.is_empty() {
         ctx.info("No plans found.");
@@ -109,11 +118,11 @@ fn list(args: ListArgs, ctx: OutputContext) -> Result<()> {
         .iter()
         .map(|p| {
             vec![
-                p.id.to_string(),
+                p.id.clone(),
                 truncate(&p.title, 40),
-                status_colored(&p.status),
-                p.scope.clone(),
-                p.created_by.clone(),
+                status_colored(p.status.as_str()),
+                p.agent_scope.as_str().to_string(),
+                p.created_by.clone().unwrap_or_else(|| "-".into()),
                 p.created_at[..10].to_string(),
             ]
         })
@@ -125,10 +134,10 @@ fn list(args: ListArgs, ctx: OutputContext) -> Result<()> {
 
 fn get(args: GetArgs, ctx: OutputContext) -> Result<()> {
     let db = PlansDb::open()?;
-    match db.get(args.id)? {
-        None => ctx.error(&format!("Plan #{} not found", args.id)),
+    match db.get_plan(&args.id)? {
+        None => ctx.error(&format!("Plan {} not found", args.id)),
         Some(plan) => {
-            let steps = db.list_steps(plan.id)?;
+            let steps = db.list_plan_items(&plan.id)?;
             print_plan_detail(&ctx, &plan, &steps);
         }
     }
@@ -137,15 +146,25 @@ fn get(args: GetArgs, ctx: OutputContext) -> Result<()> {
 
 fn add_step(args: AddStepArgs, ctx: OutputContext) -> Result<()> {
     let db = PlansDb::open()?;
-    let step = db.add_step(args.plan_id, &args.title, args.description.as_deref())?;
-    ctx.success(&format!(
-        "Added step #{} to plan #{}",
-        step.id, args.plan_id
-    ));
+    // Core takes an explicit order_index; append after whatever is already
+    // there rather than assuming the caller tracks it.
+    let order_index = db.list_plan_items(&args.plan_id)?.len() as i64;
+    let step = db.add_plan_item(CreatePlanItemInput {
+        plan_id: args.plan_id.clone(),
+        parent_id: None,
+        title: args.title,
+        description: args.description,
+        order_index,
+        agent_type: None,
+        estimated_tools: None,
+        assigned_worker: None,
+        worktree_branch: None,
+    })?;
+    ctx.success(&format!("Added step {} to plan {}", step.id, args.plan_id));
     ctx.print_kv(&[
-        ("step_id", &step.id.to_string()),
+        ("step_id", &step.id),
         ("title", &step.title),
-        ("status", &step.status),
+        ("status", step.status.as_str()),
         ("order_index", &step.order_index.to_string()),
     ]);
     Ok(())
@@ -153,9 +172,9 @@ fn add_step(args: AddStepArgs, ctx: OutputContext) -> Result<()> {
 
 fn update_step(args: UpdateStepArgs, ctx: OutputContext) -> Result<()> {
     let db = PlansDb::open()?;
-    db.update_step_status(args.step_id, &args.status)?;
+    db.update_plan_item_status(&args.step_id, &args.status, None)?;
     ctx.success(&format!(
-        "Step #{} status updated to '{}'",
+        "Step {} status updated to '{}'",
         args.step_id, args.status
     ));
     Ok(())
@@ -163,22 +182,18 @@ fn update_step(args: UpdateStepArgs, ctx: OutputContext) -> Result<()> {
 
 fn activate(args: ActivateArgs, ctx: OutputContext) -> Result<()> {
     let db = PlansDb::open()?;
-    db.activate(args.id)?;
-    ctx.success(&format!("Plan #{} is now active", args.id));
+    db.update_plan_status(&args.id, "active")?;
+    ctx.success(&format!("Plan {} is now active", args.id));
     Ok(())
 }
 
-fn print_plan_detail(
-    ctx: &OutputContext,
-    p: &autodev_shared::db::plans::Plan,
-    steps: &[autodev_shared::db::plans::PlanStep],
-) {
+fn print_plan_detail(ctx: &OutputContext, p: &Plan, steps: &[PlanItem]) {
     ctx.print_kv(&[
-        ("id", &p.id.to_string()),
+        ("id", &p.id),
         ("title", &p.title),
-        ("status", &p.status),
-        ("scope", &p.scope),
-        ("created_by", &p.created_by),
+        ("status", p.status.as_str()),
+        ("scope", p.agent_scope.as_str()),
+        ("created_by", p.created_by.as_deref().unwrap_or("-")),
         ("description", p.description.as_deref().unwrap_or("-")),
         ("created_at", &p.created_at),
         ("updated_at", &p.updated_at),
@@ -192,9 +207,9 @@ fn print_plan_detail(
             .map(|s| {
                 vec![
                     s.order_index.to_string(),
-                    s.id.to_string(),
+                    s.id.clone(),
                     s.title.clone(),
-                    status_colored(&s.status),
+                    status_colored(s.status.as_str()),
                 ]
             })
             .collect();

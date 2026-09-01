@@ -88,6 +88,15 @@ impl WorkerStatus {
     }
 }
 
+/// The model a worker gets when a caller does not choose one.
+///
+/// Must equal the `model` column's DEFAULT in `migrate()`. A caller that
+/// hardcodes its own string instead — as `airsctl worker register` would have
+/// had to — drifts from the schema the moment either changes, and the drift is
+/// invisible because both produce a valid-looking worker.
+/// `the_default_model_constant_matches_the_schema_default` pins them together.
+pub const DEFAULT_MODEL: &str = "claude-sonnet-4-5";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Worker {
     pub id: i64,
@@ -103,6 +112,13 @@ pub struct Worker {
     pub description: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// Last heartbeat, written by `heartbeat()`. `None` for a worker that has
+    /// never reported in.
+    ///
+    /// Added in P1-09. `airsctl` had been reading and writing this column since
+    /// it was written, against a table that never had it — see the migration
+    /// note on `add_missing_columns`.
+    pub last_seen: Option<String>,
 }
 
 // ─── Database Handle ──────────────────────────────────────────────────────────
@@ -114,11 +130,21 @@ pub struct WorkersDb {
 impl WorkersDb {
     /// Open (or create) ~/.autodev/workers.db and run migrations + seed.
     pub fn open() -> Result<Self> {
-        let db_path = autodev_dir()?.join("workers.db");
-        let conn = Connection::open(&db_path)
+        Self::open_at(&autodev_dir()?.join("workers.db"))
+    }
+
+    /// As `open`, against an explicit path.
+    ///
+    /// Exists so tests never touch the user's real `~/.autodev/workers.db`.
+    /// An earlier helper in this tree did exactly that, and one failed test
+    /// left a file behind that made every later run fail — an order-dependent
+    /// suite that also wrote to live user data.
+    pub fn open_at(db_path: &std::path::Path) -> Result<Self> {
+        let conn = Connection::open(db_path)
             .map_err(|e| AutoDevError::Agent(format!("workers.db open failed: {e}")))?;
         let db = Self { conn };
         db.migrate()?;
+        db.add_missing_columns()?; // P1-09 — columns added to an already-created table
         db.migrate_model_names()?; // Phase 7.1 — fix any stale old-format model slugs
         db.seed_defaults()?;
         Ok(db)
@@ -153,6 +179,98 @@ impl WorkersDb {
         "#,
             )
             .map_err(|e| AutoDevError::Agent(format!("workers.db migrate: {e}")))
+    }
+
+    /// Add columns that `CREATE TABLE IF NOT EXISTS` cannot add to a table that
+    /// already exists.
+    ///
+    /// This is the failure that broke `airsctl`. `src-shared` declared
+    /// `last_seen` and `notes` in its own `CREATE TABLE IF NOT EXISTS workers`,
+    /// but the table had already been created by `src-tauri` without them — so
+    /// the statement was a silent no-op and the columns were never added. Every
+    /// `airsctl worker list`, `status` and `heartbeat` call then failed with
+    /// *no such column: last_seen*, and had done since the command was written.
+    ///
+    /// Two rules this follows, both learned expensively elsewhere in this tree:
+    ///
+    /// * **`ADD COLUMN IF NOT EXISTS` is not valid SQLite.** The graph
+    ///   migration used it and every statement failed; because they were
+    ///   wrapped in `let _ = …` the migration still stamped `user_version = 5`
+    ///   and logged success (`ADR-LOG-RESTRUCT-0013`). Existence is checked
+    ///   with `PRAGMA table_info` instead.
+    /// * **A failed migration is an error, not a log line.** Nothing here is
+    ///   discarded; a column that cannot be added fails `open()`.
+    fn add_missing_columns(&self) -> Result<()> {
+        let existing: Vec<String> = {
+            let mut stmt = self
+                .conn
+                .prepare("PRAGMA table_info(workers)")
+                .map_err(|e| AutoDevError::Agent(format!("table_info prepare: {e}")))?;
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(1))
+                .map_err(|e| AutoDevError::Agent(format!("table_info query: {e}")))?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(|e| AutoDevError::Agent(format!("table_info collect: {e}")))?
+        };
+
+        // Only what a caller actually reads. `src-shared` also declared `notes`,
+        // which nothing has ever selected — adding it would import dead schema
+        // along with the fix.
+        for (column, ddl) in [("last_seen", "ALTER TABLE workers ADD COLUMN last_seen TEXT")] {
+            if existing.iter().any(|c| c == column) {
+                continue;
+            }
+            self.conn.execute_batch(ddl).map_err(|e| {
+                AutoDevError::Agent(format!("workers.db: adding column {column} failed: {e}"))
+            })?;
+            tracing::info!("[workers.db] added missing column '{column}'");
+        }
+        Ok(())
+    }
+
+    /// Record that a worker is alive.
+    ///
+    /// Returns an error when the slug matches nothing, rather than reporting
+    /// success for a worker that does not exist — a heartbeat that silently
+    /// does nothing is worse than one that fails, because it is read as
+    /// liveness.
+    pub fn heartbeat(&self, slug: &str) -> Result<()> {
+        let rows = self
+            .conn
+            .execute(
+                "UPDATE workers SET last_seen = datetime('now'), status = 'active'                  WHERE slug = ?1 AND status != 'deleted'",
+                params![slug],
+            )
+            .map_err(|e| AutoDevError::Agent(format!("heartbeat: {e}")))?;
+        if rows == 0 {
+            return Err(AutoDevError::Agent(format!(
+                "No active worker '{slug}' to record a heartbeat for"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Soft-delete a worker: mark it `deleted` so `list` stops returning it.
+    ///
+    /// Deliberately **not** routed to `delete`, which removes the row outright
+    /// and refuses system-defined workers. `airsctl worker unregister` has
+    /// always been reversible, and mapping it onto a hard delete during this
+    /// consolidation would have turned an undo-able command into permanent
+    /// loss of live rows without anyone asking for that.
+    pub fn deactivate(&self, slug: &str) -> Result<()> {
+        let rows = self
+            .conn
+            .execute(
+                "UPDATE workers SET status = 'deleted' WHERE slug = ?1 AND status != 'deleted'",
+                params![slug],
+            )
+            .map_err(|e| AutoDevError::Agent(format!("deactivate: {e}")))?;
+        if rows == 0 {
+            return Err(AutoDevError::Agent(format!(
+                "No active worker '{slug}' to unregister"
+            )));
+        }
+        Ok(())
     }
 
     /// Phase 7.1 — one-time data migration: rename any workers.db rows that were
@@ -287,7 +405,7 @@ impl WorkersDb {
             .prepare(
                 "SELECT id, name, slug, worker_type, status, model, primary_repos, \
                     polling_interval, recipe_id, is_system_defined, description, \
-                    created_at, updated_at \
+                    created_at, updated_at, last_seen \
              FROM workers WHERE status != 'deleted' ORDER BY is_system_defined DESC, id ASC",
             )
             .map_err(|e| AutoDevError::Agent(format!("workers list prepare: {e}")))?;
@@ -310,6 +428,7 @@ impl WorkersDb {
                     description: row.get(10)?,
                     created_at: row.get(11)?,
                     updated_at: row.get(12)?,
+                    last_seen: row.get(13)?,
                 })
             })
             .map_err(|e| AutoDevError::Agent(format!("workers list query: {e}")))?;
@@ -324,7 +443,7 @@ impl WorkersDb {
             .prepare(
                 "SELECT id, name, slug, worker_type, status, model, primary_repos, \
                     polling_interval, recipe_id, is_system_defined, description, \
-                    created_at, updated_at \
+                    created_at, updated_at, last_seen \
              FROM workers WHERE id = ?1 AND status != 'deleted'",
             )
             .map_err(|e| AutoDevError::Agent(format!("get_by_id prepare: {e}")))?;
@@ -346,6 +465,7 @@ impl WorkersDb {
                 description: row.get(10)?,
                 created_at: row.get(11)?,
                 updated_at: row.get(12)?,
+                last_seen: row.get(13)?,
             })
         })
         .optional()
@@ -358,7 +478,7 @@ impl WorkersDb {
             .prepare(
                 "SELECT id, name, slug, worker_type, status, model, primary_repos, \
                     polling_interval, recipe_id, is_system_defined, description, \
-                    created_at, updated_at \
+                    created_at, updated_at, last_seen \
              FROM workers WHERE slug = ?1 AND status != 'deleted'",
             )
             .map_err(|e| AutoDevError::Agent(format!("get_by_slug prepare: {e}")))?;
@@ -380,6 +500,7 @@ impl WorkersDb {
                 description: row.get(10)?,
                 created_at: row.get(11)?,
                 updated_at: row.get(12)?,
+                last_seen: row.get(13)?,
             })
         })
         .optional()
@@ -499,4 +620,177 @@ pub fn slugify(name: &str) -> String {
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("-")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_db(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("autodev-workers-test-{tag}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        dir.join("workers.db")
+    }
+
+    /// The regression this migration exists for.
+    ///
+    /// Reproduces the live `~/.autodev/workers.db` exactly: a `workers` table
+    /// created without `last_seen`. `CREATE TABLE IF NOT EXISTS` cannot repair
+    /// that — which is why `airsctl worker list/status/heartbeat` failed with
+    /// *no such column: last_seen* from the day they were written.
+    #[test]
+    fn a_pre_existing_table_without_last_seen_gains_the_column() {
+        let path = temp_db("legacy");
+
+        // The shipped schema as it exists on disk today, column-for-column.
+        {
+            let conn = Connection::open(&path).expect("open");
+            conn.execute_batch(
+                "CREATE TABLE workers (
+                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE,
+                     worker_type TEXT NOT NULL DEFAULT 'custom',
+                     status TEXT NOT NULL DEFAULT 'created',
+                     model TEXT NOT NULL DEFAULT 'claude-sonnet-4-5',
+                     primary_repos TEXT NOT NULL DEFAULT '[]',
+                     polling_interval INTEGER NOT NULL DEFAULT 120,
+                     recipe_id TEXT, is_system_defined INTEGER NOT NULL DEFAULT 0,
+                     description TEXT,
+                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                 );
+                 INSERT INTO workers (name, slug) VALUES ('Backend', 'worker-backend');",
+            )
+            .expect("seed legacy schema");
+
+            // Prove the fixture really is missing the column, or the test proves nothing.
+            let cols: Vec<String> = {
+                let mut st = conn.prepare("PRAGMA table_info(workers)").unwrap();
+                let r = st.query_map([], |r| r.get::<_, String>(1)).unwrap();
+                r.map(|c| c.unwrap()).collect()
+            };
+            assert!(!cols.iter().any(|c| c == "last_seen"), "fixture is wrong");
+        }
+
+        let db = WorkersDb::open_at(&path).expect("open_at");
+
+        // The row survived, and the column now exists and is readable.
+        let w = db
+            .get_by_slug("worker-backend")
+            .expect("get_by_slug")
+            .expect("the pre-existing row must survive the migration");
+        assert_eq!(w.slug, "worker-backend");
+        assert_eq!(w.last_seen, None, "a worker that never reported in");
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn the_column_migration_is_idempotent() {
+        let path = temp_db("idempotent");
+        drop(WorkersDb::open_at(&path).expect("first open"));
+        // Opening again must not fail with "duplicate column name".
+        let db = WorkersDb::open_at(&path).expect("second open must succeed");
+        assert!(!db.list().expect("list").is_empty(), "seeds should exist");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_heartbeat_is_recorded_and_readable() {
+        let path = temp_db("heartbeat");
+        let db = WorkersDb::open_at(&path).expect("open");
+        let slug = db.list().expect("list")[0].slug.clone();
+
+        assert_eq!(db.get_by_slug(&slug).unwrap().unwrap().last_seen, None);
+        db.heartbeat(&slug).expect("heartbeat");
+
+        // Prove the write is readable back — a heartbeat nothing can read is
+        // not a heartbeat.
+        let after = db.get_by_slug(&slug).unwrap().unwrap();
+        assert!(
+            after.last_seen.is_some(),
+            "heartbeat did not persist a last_seen"
+        );
+        assert_eq!(after.status, "active");
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_heartbeat_for_an_unknown_worker_is_an_error_not_a_silent_no_op() {
+        let path = temp_db("heartbeat-missing");
+        let db = WorkersDb::open_at(&path).expect("open");
+        let err = db.heartbeat("does-not-exist").expect_err("must fail");
+        assert!(err.to_string().contains("does-not-exist"), "got: {err}");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// `unregister` has always been reversible. This asserts the row is still
+    /// there after it, so a future refactor cannot quietly route it to
+    /// `delete` and turn it into permanent loss.
+    #[test]
+    fn deactivate_hides_a_worker_without_deleting_the_row() {
+        let path = temp_db("deactivate");
+        let db = WorkersDb::open_at(&path).expect("open");
+        let before = db.list().expect("list").len();
+        let slug = db.list().expect("list")[0].slug.clone();
+
+        db.deactivate(&slug).expect("deactivate");
+        assert_eq!(db.list().expect("list").len(), before - 1, "still listed");
+
+        // `get_by_slug` filters `status != 'deleted'` by design, so survival is
+        // asserted against the table itself. Reading it through an accessor
+        // that hides deleted rows could not tell a soft delete from a hard one
+        // — which is the entire property under test.
+        let (count, status): (i64, String) = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*), MAX(status) FROM workers WHERE slug = ?1",
+                params![slug],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("raw query");
+        assert_eq!(count, 1, "the row must survive a soft delete");
+        assert_eq!(status, "deleted");
+        assert!(
+            db.get_by_slug(&slug).expect("get_by_slug").is_none(),
+            "a deactivated worker must not come back from get_by_slug"
+        );
+
+        assert!(
+            db.deactivate(&slug).is_err(),
+            "deactivating twice must report that there was nothing to do"
+        );
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// A constant that merely *claims* to match the schema is worth nothing.
+    /// This inserts a row without naming a model and reads back what SQLite
+    /// chose, so the two cannot drift apart silently.
+    #[test]
+    fn the_default_model_constant_matches_the_schema_default() {
+        let path = temp_db("default-model");
+        let db = WorkersDb::open_at(&path).expect("open");
+        db.conn
+            .execute(
+                "INSERT INTO workers (name, slug) VALUES ('Probe', 'probe-default-model')",
+                [],
+            )
+            .expect("insert");
+        let chosen: String = db
+            .conn
+            .query_row(
+                "SELECT model FROM workers WHERE slug = 'probe-default-model'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("read back");
+        assert_eq!(
+            chosen, DEFAULT_MODEL,
+            "the schema default and DEFAULT_MODEL have drifted"
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
 }

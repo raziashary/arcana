@@ -1,7 +1,10 @@
 use crate::output::{status_colored, OutputContext};
 use anyhow::Result;
-use autodev_shared::db::workers::{CreateWorkerInput, WorkersDb};
+use autodev_core::db::workers::{Worker, WorkersDb, DEFAULT_MODEL};
 use clap::{Args, Subcommand};
+
+/// Matches the `polling_interval` DEFAULT in core's workers schema.
+const DEFAULT_POLLING_INTERVAL: i64 = 120;
 
 #[derive(Subcommand)]
 pub enum WorkerCmd {
@@ -80,25 +83,47 @@ pub async fn run(cmd: WorkerCmd, ctx: OutputContext) -> Result<()> {
 
 fn register(args: RegisterArgs, ctx: OutputContext) -> Result<()> {
     let db = WorkersDb::open()?;
-    let input = CreateWorkerInput {
-        slug: args.slug.clone(),
-        name: args.name.unwrap_or_else(|| args.slug.clone()),
-        worker_type: args.worker_type,
-        model: args.model,
-        description: args.description,
-    };
-    let worker = db.create(input)?;
-    ctx.success(&format!(
-        "Registered worker '{}' (id: {})",
-        worker.slug, worker.id
-    ));
-    print_worker_detail(&ctx, &worker);
+    let name = args.name.unwrap_or_else(|| args.slug.clone());
+    let model = args.model.as_deref().unwrap_or(DEFAULT_MODEL);
+
+    // `primary_repos` and `polling_interval` have no CLI flags; the empty repo
+    // list and the schema's own default interval keep a CLI-registered worker
+    // identical to a UI-registered one.
+    let id = db.create(
+        &name,
+        &args.slug,
+        &args.worker_type,
+        model,
+        &[],
+        DEFAULT_POLLING_INTERVAL,
+        args.description.as_deref(),
+    )?;
+    ctx.success(&format!("Registered worker '{}' (id: {id})", args.slug));
+
+    // Read back rather than echo the inputs: the row is what the app will see,
+    // including any defaults SQLite filled in.
+    match db.get_by_slug(&args.slug)? {
+        Some(w) => print_worker_detail(&ctx, &w),
+        None => ctx.error("Worker was created but could not be read back"),
+    }
     Ok(())
 }
 
 fn list(args: ListArgs, ctx: OutputContext) -> Result<()> {
     let db = WorkersDb::open()?;
-    let workers = db.list(args.worker_type.as_deref(), args.status.as_deref())?;
+    // Core's `list()` returns every non-deleted worker; the CLI's two filters
+    // are applied here rather than widening core's API for a caller-specific
+    // query.
+    let workers: Vec<Worker> = db
+        .list()?
+        .into_iter()
+        .filter(|w| {
+            args.worker_type
+                .as_deref()
+                .is_none_or(|t| w.worker_type == t)
+        })
+        .filter(|w| args.status.as_deref().is_none_or(|st| w.status == st))
+        .collect();
 
     if workers.is_empty() {
         ctx.info("No workers found.");
@@ -129,7 +154,7 @@ fn status(args: StatusArgs, ctx: OutputContext) -> Result<()> {
     let db = WorkersDb::open()?;
     match args.slug {
         None => {
-            let workers = db.list(None, None)?;
+            let workers = db.list()?;
             if workers.is_empty() {
                 ctx.info("No workers registered.");
                 return Ok(());
@@ -166,12 +191,12 @@ fn heartbeat(args: HeartbeatArgs, ctx: OutputContext) -> Result<()> {
 
 fn unregister(args: UnregisterArgs, ctx: OutputContext) -> Result<()> {
     let db = WorkersDb::open()?;
-    db.unregister(&args.slug)?;
+    db.deactivate(&args.slug)?;
     ctx.success(&format!("Unregistered worker '{}'", args.slug));
     Ok(())
 }
 
-fn print_worker_detail(ctx: &OutputContext, w: &autodev_shared::db::workers::Worker) {
+fn print_worker_detail(ctx: &OutputContext, w: &Worker) {
     ctx.print_kv(&[
         ("id", &w.id.to_string()),
         ("slug", &w.slug),

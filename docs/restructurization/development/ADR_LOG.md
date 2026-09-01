@@ -443,6 +443,39 @@ The criterion is stated as *"does the engine own this, or does the host?"* — *
 
 **Links.** `ADR-LOG-RESTRUCT-0011` (the full-extraction ruling this implements) · `P1-CORRECTIONS.md` §A · MDP `§3`, `§4`, `INV-1` · `P1-09`
 
+## ADR-LOG-RESTRUCT-0016 — `airsctl` adopts core's task/worker/plan store; four decisions the swap forced
+
+**Status.** DECIDED
+**Author.** Claude · **Tier.** `decided-independently` (each choice below is the additive or non-destructive option; the one alternative that would have removed a shipped command was rejected for that reason)
+
+**What.** `src-shared/src/db/{tasks,workers,plans}.rs` are deleted. `airsctl` now reads and writes those tables through `autodev_core::db`, the same code the desktop app runs. Four decisions were forced by the swap:
+
+1. **`last_seen` is added to core's `workers` schema** rather than removing `airsctl worker heartbeat`. Additive-by-default (§0); removing a shipped command is a contract change that would need Razi.
+2. **`unregister` maps to a new `deactivate` (soft), not to core's `delete` (hard).** Core's `delete` removes the row and refuses system-defined workers. `airsctl worker unregister` has always been reversible, and silently turning it into permanent deletion of live rows is not a consolidation, it is data loss.
+3. **`task claim` walks `assign → claim` through `claim_task_with_pid`.** Core models the handoff in two steps and refuses to claim anything not already `assigned`; `src-shared` went straight from `ready` to `in_progress`. The CLI keeps its one-command behaviour and gains what the two-step path carries.
+4. **`src-shared/src/db/analytics.rs` stays.** It is not one of the four tables `P1-09` names, and it contains **zero** `CREATE`/`INSERT`/`UPDATE`/`DELETE` statements — a pure reader cannot drift a schema. Consolidating it means porting aggregation semantics that decide the numbers users are shown (`cost_summary(window)` vs `get_cost_analytics(start, end)`), which is a separate task with its own risk.
+
+**Why.** The mirrors were not a latent risk, they were a live outage. `src-shared/src/db/workers.rs` selected `last_seen` and `notes`; the live `~/.autodev/workers.db`, written by `src-tauri`, had neither. Its own `CREATE TABLE IF NOT EXISTS workers (… last_seen …)` was a **silent no-op** against the already-existing table, so the columns were never added and `airsctl worker list`, `status` and `heartbeat` all failed with *no such column: last_seen* — from the day they were written. Proven by executing the statements against a copy of the live file before changing anything.
+
+Decision 3 was **found by testing, not by reading**: the first mapping called `claim_task_with_pid` directly on a `ready` task and every claim failed. The behaviour it buys is not cosmetic — `claimed_by_pid` and `claim_host` are what orphan detection uses to release stale tasks, so a CLI-claimed task under the old path could never be detected as orphaned, and one worker could hold several tasks while the app assumed one.
+
+**When.** 2026-09-01 · P1 · group `P1-C`, task `P1-09`
+
+**Where.** `autodev-core/src/db/workers.rs` (`last_seen`, `add_missing_columns`, `heartbeat`, `deactivate`, `open_at`, `DEFAULT_MODEL`) · `src-cli/src/commands/{worker,task,plan}.rs` · `src-cli/src/repl.rs` · `src-shared/src/db/` (three files deleted)
+
+**How.** `add_missing_columns` checks `PRAGMA table_info` and issues `ALTER TABLE`, because **`ADD COLUMN IF NOT EXISTS` is not valid SQLite** — the graph migration used it, wrapped every statement in `let _ = …`, and still stamped `user_version = 5` and logged success (`ADR-LOG-RESTRUCT-0013`). Nothing here is discarded: a column that cannot be added fails `open()`.
+
+Evidence — `LIVE-DB-PROVEN`:
+- Backup first (§0.8): `VACUUM INTO` to `~/autodev-backups/p1-09-preflight`, `integrity_check = ok`, 7 workers and 220 `routing_history` rows recorded.
+- Proven on an exact copy of the live file before touching the original: `last_seen` added, **7 rows preserved**, `integrity_check = ok`, all seven slugs intact.
+- Then on the live database: same result, and `airsctl worker list` exits **0** where it had always errored. `heartbeat` persists a timestamp that `status` reads back — the write is proven read, not merely accepted. An unknown slug exits **1** rather than silently doing nothing.
+- `task claim` records `claimed_by_pid=9392`, `claim_host=LAPTOP-3K58S1BQ`; a second claim by the same worker exits **1**.
+- `UNIT-PROVEN`: 6 tests in `db::workers`, including one that rebuilds the live schema **without** `last_seen` and asserts the fixture really lacks the column before migrating it, one asserting the migration is idempotent, one asserting `deactivate` leaves the row in the table, and one that inserts a row without a model to pin `DEFAULT_MODEL` to the schema default so the two cannot drift.
+
+**Known behaviour change, recorded rather than hidden.** Core's `get_by_slug` filters `status != 'deleted'`; `src-shared`'s did not. `airsctl worker status <deactivated-slug>` now reports not-found instead of showing the row. There is no regression from a working state — the command errored outright before this change — and it makes `list` and `status` agree.
+
+**Links.** `ADR-LOG-RESTRUCT-0015` · `P1-CORRECTIONS.md` §B (`P1-09`) · MDP `§7 P1-09` · `P1-15` (`app_settings`, whose single owner `db/app_settings.rs` was created in `P1-B`)
+
 # §5 · Standing entries carried from planning
 
 Not build-time decisions — but recorded here because a future session will otherwise rediscover them the hard way. Each is already ratified in vision Part 8; these are the **operational consequences** that bite during implementation.
