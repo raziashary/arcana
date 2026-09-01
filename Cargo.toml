@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "autodev-core",
     "src-tauri",
     "src-cli",
     "src-shared",

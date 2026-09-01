@@ -65,65 +65,7 @@ pub async fn analyze_pr_diff(
     head_branch: String,
     state: State<'_, Arc<Mutex<AppState>>>,
 ) -> Result<DiffAnalysisResult> {
-    let patch = generate_branch_diff(&repo_path, &base_branch, &head_branch)?;
+    let patch = crate::git::diff::branch_diff(&repo_path, &base_branch, &head_branch)?;
     let analyzer = build_analyzer(&state)?;
     analyzer.analyze(&patch).await
-}
-
-/// Generate a unified diff string between two branches using git2.
-/// Public so `analyze_diff_tool` can call it directly without going through Tauri state.
-pub fn generate_branch_diff_pub(
-    repo_path: &str,
-    base_branch: &str,
-    head_branch: &str,
-) -> Result<String> {
-    generate_branch_diff(repo_path, base_branch, head_branch)
-}
-
-fn generate_branch_diff(repo_path: &str, base_branch: &str, head_branch: &str) -> Result<String> {
-    let repo = git2::Repository::open(repo_path)
-        .map_err(|e| AutoDevError::Git(format!("open repo: {e}")))?;
-
-    let base_obj = repo
-        .revparse_single(base_branch)
-        .map_err(|e| AutoDevError::Git(format!("revparse '{base_branch}': {e}")))?;
-    let head_obj = repo
-        .revparse_single(head_branch)
-        .map_err(|e| AutoDevError::Git(format!("revparse '{head_branch}': {e}")))?;
-
-    let base_commit = base_obj
-        .peel_to_commit()
-        .map_err(|e| AutoDevError::Git(format!("peel to commit '{base_branch}': {e}")))?;
-    let head_commit = head_obj
-        .peel_to_commit()
-        .map_err(|e| AutoDevError::Git(format!("peel to commit '{head_branch}': {e}")))?;
-
-    let base_tree = base_commit
-        .tree()
-        .map_err(|e| AutoDevError::Git(format!("base tree: {e}")))?;
-    let head_tree = head_commit
-        .tree()
-        .map_err(|e| AutoDevError::Git(format!("head tree: {e}")))?;
-
-    let mut opts = git2::DiffOptions::new();
-    opts.context_lines(3).interhunk_lines(1);
-
-    let diff = repo
-        .diff_tree_to_tree(Some(&base_tree), Some(&head_tree), Some(&mut opts))
-        .map_err(|e| AutoDevError::Git(format!("diff_tree_to_tree: {e}")))?;
-
-    let mut patch = String::new();
-    diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
-        match line.origin() {
-            '+' | '-' | ' ' => patch.push(line.origin()),
-            _ => {}
-        }
-        if let Ok(s) = std::str::from_utf8(line.content()) {
-            patch.push_str(s);
-        }
-        true
-    })
-    .map_err(|e| AutoDevError::Git(format!("print patch: {e}")))?;
-
-    Ok(patch)
 }

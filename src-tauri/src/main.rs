@@ -198,10 +198,19 @@ fn main() {
                 // Startup progress state machine — drives the loading overlay.
                 // Attached to SidecarManager so spawn/health transitions + log
                 // lines from both Python sidecars all feed the same FSM.
-                // Phase 3.0 R1/R2 — install the process-wide AppHandle so
-                // background subsystems (task-board tools, RecipeRunner,
-                // hooks) can emit Tauri events without State plumbing.
-                autodev_lib::events::install_app_handle(app.handle().clone());
+                // Install the event sink before anything can emit. Core's
+                // agent runtime, RecipeRunner, hooks and task-board tools all
+                // emit through `EventSink`; until this runs they emit into a
+                // null sink, which is correct for a headless host but would
+                // silently drop the desktop's startup events.
+                if !autodev_lib::events::install_app_handle(app.handle().clone()) {
+                    // A sink was already installed. In a desktop process that
+                    // means setup ran twice, and the second window's events
+                    // would go to the first window's channel.
+                    tracing::error!(
+                        "[events] a sink was already installed before setup() —                          events may be delivered to a stale window"
+                    );
+                }
 
                 // Doc 07 Phase 3 — scan src-tauri/ + src/ for stray
                 // worker-generated files left behind by past runs. Emits
@@ -211,7 +220,7 @@ fn main() {
                 {
                     let strays = autodev_lib::observability::stray_files::scan(None);
                     if !strays.is_empty() {
-                        autodev_lib::events::emit_workspace_strays_global(
+                        autodev_lib::events::emit_workspace_strays(
                             autodev_lib::events::WorkspaceStraysPayload { strays },
                         );
                     }
@@ -233,7 +242,7 @@ fn main() {
                                 .canonicalize().unwrap_or_default())
                             .unwrap_or(false);
                     if !configured.trim().is_empty() && !normalised_eq {
-                        autodev_lib::events::emit_workspace_mismatch_global(
+                        autodev_lib::events::emit_workspace_mismatch(
                             autodev_lib::events::WorkspaceMismatchPayload {
                                 current_dir: current,
                                 configured_workspace: configured,
@@ -291,7 +300,6 @@ fn main() {
 
                 // Build RecipeRunner + RecipeScheduler now that we have AppHandle
                 let runner = Arc::new(RecipeRunner::new(
-                    app.handle().clone(),
                     app_state_for_setup,
                     session_mgr_for_setup,
                     pending_for_setup,

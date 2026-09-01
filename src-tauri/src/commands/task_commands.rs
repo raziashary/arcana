@@ -5,8 +5,7 @@
 use crate::db::tasks::{CreatePhasedTaskInput, PhaseSummary, Task, TasksDb, WorkerRequest};
 use crate::errors::Result;
 use crate::events::{
-    emit_phase_complete_global, emit_task_changed_global, emit_task_unblocked_global,
-    TaskChangedPayload,
+    emit_phase_complete, emit_task_changed, emit_task_unblocked, TaskChangedPayload,
 };
 
 /// List all tasks, optionally filtered by status.
@@ -73,7 +72,7 @@ pub fn update_task_status(id: i64, status: String, assigned_worker: Option<Strin
         let db2 = TasksDb::open()?;
         if let Ok(unblocked_ids) = db2.unblock_ready_tasks(id) {
             for tid in &unblocked_ids {
-                emit_task_unblocked_global(*tid);
+                emit_task_unblocked(*tid);
             }
             // Ruflo Feature 5 — kick the fleet so unblocked tasks dispatch on
             // the next event-loop tick instead of waiting up to a full cron
@@ -90,7 +89,7 @@ pub fn update_task_status(id: i64, status: String, assigned_worker: Option<Strin
                 if let Ok(summaries) = db2.get_phase_summary(epic_id) {
                     if let Some(summary) = summaries.iter().find(|s| &s.phase == phase) {
                         if summary.is_complete {
-                            emit_phase_complete_global(
+                            emit_phase_complete(
                                 epic_id.clone(),
                                 phase.clone(),
                                 summary.milestone.clone(),
@@ -102,7 +101,7 @@ pub fn update_task_status(id: i64, status: String, assigned_worker: Option<Strin
         }
     }
 
-    emit_task_changed_global(TaskChangedPayload {
+    emit_task_changed(TaskChangedPayload {
         task_id: Some(id),
         kind: "status".into(),
         status: Some(status),
@@ -116,7 +115,7 @@ pub fn update_task_status(id: i64, status: String, assigned_worker: Option<Strin
 pub fn delete_task(id: i64) -> Result<()> {
     let db = TasksDb::open()?;
     db.delete(id)?;
-    emit_task_changed_global(TaskChangedPayload {
+    emit_task_changed(TaskChangedPayload {
         task_id: Some(id),
         kind: "deleted".into(),
         status: None,
@@ -152,7 +151,7 @@ pub fn get_qc_queue() -> Result<Vec<(Task, i64)>> {
 pub fn clear_all_tasks() -> Result<()> {
     let db = TasksDb::open()?;
     db.clear_all()?;
-    emit_task_changed_global(TaskChangedPayload {
+    emit_task_changed(TaskChangedPayload {
         task_id: None,
         kind: "cleared".into(),
         status: None,
@@ -229,7 +228,7 @@ pub fn create_phased_task(
         milestone,
         created_by: None,
     })?;
-    emit_task_changed_global(TaskChangedPayload {
+    emit_task_changed(TaskChangedPayload {
         task_id: Some(task.id),
         kind: "created".into(),
         status: Some(if task.epic_id.is_some() {

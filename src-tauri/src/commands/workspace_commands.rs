@@ -85,20 +85,12 @@ pub async fn pick_workspace_dir() -> Result<Option<String>> {
 
 // ─── Internal helper (used by RecipeRunner + agent_commands) ──────────────────
 
-/// Load workspace_dir from config.db synchronously.
-/// Returns empty string if not set. Never fails.
+/// The configured workspace directory, or an empty string when unset.
+///
+/// Delegates to `autodev_core::db::app_settings`, the single owner of
+/// `config.db`'s `app_settings` table. This function used to hold its own copy
+/// of the query, which is how a database accessor came to live in the command
+/// layer and put `recipes/` behind `commands/` (ADR-LOG-RESTRUCT-0015).
 pub fn load_workspace_dir() -> String {
-    open_config_db()
-        .and_then(|conn| {
-            conn.query_row(
-                "SELECT value FROM app_settings WHERE key = ?1",
-                params![WORKSPACE_KEY],
-                |r| r.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(|e| AutoDevError::Agent(e.to_string()))
-        })
-        .ok()
-        .flatten()
-        .unwrap_or_default()
+    autodev_core::db::app_settings::load_workspace_dir()
 }

@@ -408,6 +408,41 @@ The ordering also has teeth: `~/.airs/autodev.db` carries a **4.1 MB uncheckpoin
 **Links.** `_verify/V5-P1CD-schema-redaction.md` C9 · §0.8 · MDP `§7 P1-19`
 
 
+## ADR-LOG-RESTRUCT-0015 — Core owns the infrastructure the engine owns; trait seams go only where behaviour forks
+
+**Status.** DECIDED
+**Author.** Claude · **Tier.** `razi-ruled` (conditional: *"check first if its possible and clean to do full trait seams, if not and risky then we do the hybrid"* — the condition was checked and failed; see **Why**)
+
+**What.** `autodev-core` takes the agent runtime **and the infrastructure that runtime genuinely owns**: `db/`, `graph/`, `git/`, `routing/`, `analytics/`, `hooks/`, `recipes/`, `subagent/`, `agent/`, plus the already-moved `provider/`, `memory/`, `platform/`, `session/`, `state/`, `vault/`, `budget/`, `cost/`, `plugin/`, `observability/`, `diff_analysis/`, `errors/`, `events/`.
+
+`src-tauri` keeps only what is genuinely host-bound: `commands/` (255 `#[tauri::command]`), `updater/`, `mcp/`, `sidecar/`, `skills/watcher.rs`, `main.rs`/`lib.rs`, and the CI gates.
+
+Trait seams are introduced at **exactly two** places, being the only two where desktop and CLI behaviour actually differ:
+- `events::EventSink` — the desktop emits to a window; `airsctl` logs or discards.
+- an approval seam — the desktop asks a human (`agent/tool_executor.rs:505` emits a permission request and waits); a CLI must resolve by policy.
+
+**Why.** Full trait inversion was measured before being rejected, not assumed away. `agent/`'s 63 cross-boundary references collapse to 20 distinct symbols, but behind them sit **91 distinct methods across 10 traits** — `TaskStore` 28, `PlanStore` 13, `GraphAccess` 12, `WorkerStore` 8, `GitOps` 8, `HookRegistry` 7, `Analytics` 6, `Annotations` 4, `Instructions` 3, `Router` 2.
+
+Three findings make that unclean rather than merely large:
+
+1. **Every trait would have exactly one implementation.** No polymorphism is gained; it is a header file for SQL.
+2. **The domain types cross into core regardless.** Trait signatures reference `Task`, `TaskType`, `WorkerRequest`, `PlanItem`, so only the SQL stays behind — and separating a repository's types from its queries across crates is the exact mechanism that already broke `airsctl`: `src-shared/src/db/workers.rs` selects `last_seen` and `notes`, while the live `~/.autodev/workers.db` written by `src-tauri` has neither column (`id, name, slug, worker_type, status, model, primary_repos, polling_interval, recipe_id, is_system_defined, description, created_at, updated_at`). Every `airsctl` worker list/get/heartbeat call errors today. `P1-09` exists to repair that; a blanket trait split would rebuild the same fault line.
+3. **These are synchronous `rusqlite` calls behind an async engine.** Routing them through trait objects across await points forces `async_trait` and `Send + Sync` bounds on all 91.
+
+Timing is decisive: MDP `§4` itself tags `agent/` **"[P1 move, P3 rework]"**. Authoring ten traits is a rework, so P3 would write them a second time.
+
+The criterion is stated as *"does the engine own this, or does the host?"* — **not** *"does it import `tauri`"*, which is mechanical and accidental. Both happen to give the same answer here, which is why the placement is principled rather than a coincidence of imports.
+
+**When.** 2026-09-01 · P1 · group `P1-B`, task `P1-05`/`P1-06`
+
+**Where.** `autodev-core/src/` (destination) · `src-tauri/src/` (shims) · `autodev-core/src/events.rs` (`EventSink`) · MDP `§4` module tree (corrected by this entry)
+
+**How.** `git mv` per module with a `pub use autodev_core::<m>::*;` re-export shim left behind, so no import path in 255 commands is rewritten. Proven by `cargo check --workspace` and `cargo test --workspace --all-targets` by **exit code** at each step. Evidence: `UNIT-PROVEN` + `GATE-PROVEN` (`TG-P1` crate-boundary gate asserts core contains no `tauri` reference).
+
+**Supersedes in part.** `MDP §4`'s module tree, which places `db · graph · git · recipes · hooks` in `src-tauri` while `§3`'s diagram and `INV-1` place them under core. §4 is the stale line and is corrected in the same step (§0 no-stale).
+
+**Links.** `ADR-LOG-RESTRUCT-0011` (the full-extraction ruling this implements) · `P1-CORRECTIONS.md` §A · MDP `§3`, `§4`, `INV-1` · `P1-09`
+
 # §5 · Standing entries carried from planning
 
 Not build-time decisions — but recorded here because a future session will otherwise rediscover them the hard way. Each is already ratified in vision Part 8; these are the **operational consequences** that bite during implementation.

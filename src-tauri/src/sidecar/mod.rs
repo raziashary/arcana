@@ -1126,7 +1126,7 @@ async fn orch_watchdog(mgr: Arc<SidecarManager>, client: Arc<client::Orchestrato
             // Doc 05 Phase 1 — surface the captured stderr tail through
             // a Tauri event so the SidecarCrashBanner can render it
             // without the user opening the log file.
-            crate::events::emit_sidecar_crash_global(crate::events::SidecarCrashPayload {
+            crate::events::emit_sidecar_crash(crate::events::SidecarCrashPayload {
                 sidecar_id: "core-orchestrator".to_string(),
                 restart_count: CIRCUIT_BREAKER_MAX as u32,
                 window_secs: CIRCUIT_BREAKER_WINDOW.as_secs(),

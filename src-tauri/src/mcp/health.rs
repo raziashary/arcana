@@ -177,9 +177,7 @@ impl McpHealthMonitor {
 
             // Emit a full health-update snapshot after each ping cycle
             let health = monitor.get_all_health().await;
-            if let Some(app_h) = crate::events::app_handle() {
-                let _ = app_h.emit(crate::events::EVT_MCP_HEALTH_UPDATE, &health);
-            }
+            crate::events::emit_serialized(crate::events::EVT_MCP_HEALTH_UPDATE, &health);
             let _ = app; // keep alive
         }
     }

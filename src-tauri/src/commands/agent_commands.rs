@@ -150,7 +150,6 @@ pub async fn send_message(
             provider,
             PermissionMode::ManualApproval,
             resolved_pa_mode,
-            app_clone,
             state_clone.clone(),
             pending_clone,
             // The interactive assistant is the supervisor — the same role the

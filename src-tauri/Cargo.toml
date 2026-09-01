@@ -23,6 +23,7 @@ tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 
 # Serialization
+autodev-core = { path = "../autodev-core" }
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
 

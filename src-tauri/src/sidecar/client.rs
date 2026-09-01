@@ -25,18 +25,12 @@ use tracing::{debug, info, warn};
 
 use crate::errors::{AutoDevError, Result};
 
-/// Result of a Mode 2 LivingAgent invocation. Carries both the response content
-/// and an approximation of token usage so the recipe runner can record analytics
-/// and update the cost meter without modifying core-orchestrator.
-#[derive(Debug, Clone)]
-pub struct WorkerInvokeResult {
-    pub content: String,
-    pub tokens_in: u32,
-    pub tokens_out: u32,
-    /// Model reported by core-orchestrator's response metadata (if any).
-    /// May be in core-orchestrator's normalized key format (e.g. "anthropic_claude_sonnet").
-    pub model: Option<String>,
-}
+/// Result of a Mode 2 LivingAgent invocation.
+///
+/// Defined by core's orchestrator seam (`autodev_core::recipes::orchestrator`)
+/// and re-exported here, so the runner and this client name the same type
+/// rather than two structurally identical ones.
+pub use autodev_core::recipes::orchestrator::WorkerInvokeResult;
 
 /// Extract token usage from core-orchestrator's `response.metadata.tokens_used`,
 /// with a char-length fallback when the field is missing or zero.
@@ -1003,7 +997,7 @@ impl OrchestratorClient {
         worker_slug: &str,
     ) -> Result<WorkerInvokeResult> {
         use super::sse::{find_frame_end, parse_event_frame};
-        use crate::events::{emit_subagent_event_global, SubagentEventPayload};
+        use crate::events::{emit_subagent_event, SubagentEventPayload};
         use crate::subagent::SubagentEvent;
         use futures::StreamExt;
 
@@ -1089,7 +1083,7 @@ impl OrchestratorClient {
                         }
                         _ => {}
                     }
-                    emit_subagent_event_global(SubagentEventPayload {
+                    emit_subagent_event(SubagentEventPayload {
                         subagent_id: worker_slug.to_string(),
                         event: evt,
                     });
@@ -1570,5 +1564,41 @@ fn parse_agents_list(json: serde_json::Value) -> Vec<serde_json::Value> {
             vec![]
         }
         _ => vec![],
+    }
+}
+
+// ── The host's implementation of core's orchestrator seam ────────────────────
+//
+// `RecipeRunner` lives in `autodev-core` and cannot name this type: the client
+// is HTTP plus process supervision owned by the desktop app, and it is deleted
+// in P8. Core declares `OrchestratorProbe`; this is the desktop's answer to it.
+//
+// See ADR-LOG-RESTRUCT-0015.
+
+#[async_trait::async_trait]
+impl autodev_core::recipes::orchestrator::OrchestratorProbe for OrchestratorClient {
+    async fn is_healthy(&self) -> bool {
+        OrchestratorClient::is_healthy(self).await
+    }
+
+    async fn ensure_agent(&self, slug: &str, model: &str) -> crate::errors::Result<String> {
+        OrchestratorClient::ensure_agent(self, slug, model).await
+    }
+
+    async fn invoke_worker_streaming(
+        &self,
+        agent_id: &str,
+        instructions: &str,
+        trigger: &str,
+        worker_slug: &str,
+    ) -> crate::errors::Result<WorkerInvokeResult> {
+        OrchestratorClient::invoke_worker_streaming(
+            self,
+            agent_id,
+            instructions,
+            trigger,
+            worker_slug,
+        )
+        .await
     }
 }

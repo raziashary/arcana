@@ -374,16 +374,33 @@ autodev-core/                       [P1]  ← new crate, extracted
   agent/{engine,context,compaction,tool_executor,permission}.rs   [P1 move, P3 rework]
   provider/{traits,anthropic,openai,google,xai,streaming}.rs      [P1 move, P2 rework]
   memory/{db,episodic,semantic,procedural,gateway,recall,embed}.rs[P1 move, P3 rework]
+  events.rs                         [P1]  ← EventSink trait: the host boundary
+  db/ · graph/ · git/ · recipes/ · hooks/ · subagent/ · routing/     [P1 move]
+  analytics/ · budget/ · cost/ · vault/ · state/ · session/          [P1 move]
+  observability/ · plugin/ · diff_analysis/ · errors.rs             [P1 move]
   platform/command.rs               [P0]  ← intent → platform-correct argv
   security/redaction.rs             [P1]  ← M-40, the dropped port
   verify/                           [P4]  ← Rust-native build verification (M-13)
-src-tauri/src/
-  commands/ · db/ · graph/ · git/ · ide/ · skills/ · recipes/ · hooks/  [existing]
+src-tauri/src/                            ← the desktop shell, host-bound only
+  commands/                         [existing]  255 #[tauri::command]
+  updater/ · mcp/ · skills/watcher.rs · main.rs · lib.rs
+  ci_gate.rs · reachability_gate.rs  [P0]
   sidecar/                          [P8 DELETE — 3,161 LOC]
   mcp_server/{server,tool_adapter,port_status}.rs [P0 DELETE — 705 LOC]
   mcp_server/health_monitor.rs      [P0 MOVE out of the sidecar-named tree]
 src/                                [P6 anchor, P7 experience]
 ```
+
+> **Corrected 2026-09-01 (`ADR-LOG-RESTRUCT-0015`).** This tree previously left
+> `db · graph · git · recipes · hooks` in `src-tauri`, which cannot hold: `agent/`
+> makes 63 references into exactly those modules, so moving `agent/` into core
+> — ruled in `ADR-LOG-RESTRUCT-0011` — forces them across. `§3`'s diagram and
+> `INV-1` already place Memory, Fleet and Code graph **below** core; `§4` was the
+> outlier. Full trait inversion was measured (**91 methods across 10 traits**,
+> each with exactly one implementation) and rejected as a P3-scale rework of a
+> runtime `§4` itself tags *"P1 move, P3 rework"*. The governing criterion is
+> **"does the engine own this, or does the host?"** — not *"does it import
+> `tauri`"*.
 
 ---
 

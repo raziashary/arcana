@@ -122,7 +122,7 @@ pub fn update_worker_status(worker_id: i64, status: String) -> Result<()> {
     // Phase 3.0 R2 — mirror UI-driven status edits through the push channel
     // so any other subscriber (another open window, a future mobile client)
     // sees the change instantly.
-    crate::events::emit_worker_status_global(crate::events::WorkerStatusPayload {
+    crate::events::emit_worker_status(crate::events::WorkerStatusPayload {
         slug: worker.slug,
         status,
         previous_status: None,

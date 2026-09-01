@@ -2,7 +2,7 @@
 
 use crate::db::tasks::{Task, TasksDb};
 use crate::errors::Result;
-use crate::events::{emit_task_changed_global, TaskChangedPayload};
+use crate::events::{emit_task_changed, TaskChangedPayload};
 
 /// Return all tasks currently stuck in `assigned` or `in_progress` state,
 /// with their PID and age. Used by the UI to surface potentially orphaned tasks.
@@ -19,7 +19,7 @@ pub fn force_release_task(task_id: i64, reason: Option<String>) -> Result<()> {
     let db = TasksDb::open()?;
     let note = reason.as_deref().unwrap_or("manual release via UI");
     db.release_orphaned_task(task_id, note)?;
-    emit_task_changed_global(TaskChangedPayload {
+    emit_task_changed(TaskChangedPayload {
         task_id: Some(task_id),
         kind: "status".into(),
         status: Some("ready".into()),

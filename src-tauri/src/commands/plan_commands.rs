@@ -67,14 +67,11 @@ pub fn get_plan_tree(plan_id: String) -> Result<Option<PlanTree>> {
 pub fn delete_plan(plan_id: String, app: AppHandle) -> Result<bool> {
     let db = PlansDb::open()?;
     db.delete_plan(&plan_id)?;
-    emit_plan_changed(
-        &app,
-        PlanChangedPayload {
-            plan_id: Some(plan_id),
-            kind: "deleted".to_string(),
-            status: None,
-        },
-    );
+    emit_plan_changed(PlanChangedPayload {
+        plan_id: Some(plan_id),
+        kind: "deleted".to_string(),
+        status: None,
+    });
     Ok(true)
 }
 
@@ -97,14 +94,11 @@ pub fn break_down_epic(epic_task_id: i64, supervisor_id: String, app: AppHandle)
 
     let plan = db.create_plan(input)?;
 
-    emit_plan_changed(
-        &app,
-        PlanChangedPayload {
-            plan_id: Some(plan.id.clone()),
-            kind: "epic_breakdown".to_string(),
-            status: Some("active".to_string()),
-        },
-    );
+    emit_plan_changed(PlanChangedPayload {
+        plan_id: Some(plan.id.clone()),
+        kind: "epic_breakdown".to_string(),
+        status: Some("active".to_string()),
+    });
 
     Ok(plan)
 }
@@ -130,14 +124,11 @@ pub fn claim_plan_item(
         item.assigned_worker = Some(worker_id.clone());
         // Update in DB (would need update_plan_item method)
 
-        emit_plan_changed(
-            &app,
-            PlanChangedPayload {
-                plan_id: Some(plan_id),
-                kind: "item_claimed".to_string(),
-                status: Some(worker_id),
-            },
-        );
+        emit_plan_changed(PlanChangedPayload {
+            plan_id: Some(plan_id),
+            kind: "item_claimed".to_string(),
+            status: Some(worker_id),
+        });
 
         Ok(Some(item))
     } else {
@@ -168,14 +159,11 @@ pub fn create_subplan(
 
     let plan = db.create_plan(input)?;
 
-    emit_plan_changed(
-        &app,
-        PlanChangedPayload {
-            plan_id: Some(plan.id.clone()),
-            kind: "subplan_created".to_string(),
-            status: Some("active".to_string()),
-        },
-    );
+    emit_plan_changed(PlanChangedPayload {
+        plan_id: Some(plan.id.clone()),
+        kind: "subplan_created".to_string(),
+        status: Some("active".to_string()),
+    });
 
     Ok(plan)
 }
@@ -193,14 +181,11 @@ pub fn submit_plan_for_qc(
     // Mark plan as completed
     db.delete_plan(&plan_id)?; // Placeholder — would need update_plan_status
 
-    emit_plan_changed(
-        &app,
-        PlanChangedPayload {
-            plan_id: Some(plan_id),
-            kind: "qc_submitted".to_string(),
-            status: Some(format!("submitted by {}", worker_id)),
-        },
-    );
+    emit_plan_changed(PlanChangedPayload {
+        plan_id: Some(plan_id),
+        kind: "qc_submitted".to_string(),
+        status: Some(format!("submitted by {}", worker_id)),
+    });
 
     Ok(true)
 }

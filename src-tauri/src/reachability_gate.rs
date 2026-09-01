@@ -1,5 +1,10 @@
-// Reachability gate — every .rs file under src/ must be reachable from the
-// crate root.
+// Reachability gate — every .rs file in the workspace must be reachable from
+// its own crate's root.
+//
+// Since P1 the application spans four crates (`autodev-core`, `src-tauri`,
+// `src-cli`, `src-shared`), so this gate walks all four. It lives in
+// `src-tauri` only because that is where it was written; it is a workspace-wide
+// check and covers every crate equally.
 //
 // This exists because of 918 lines that were never compiled. `graph_tools.rs`
 // (840 LOC, 27 tool structs — the plan said 22) and `graph_prompts.rs` (78 LOC)
@@ -35,9 +40,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-/// Files known to be unreachable, each with the reason and the phase that fixes
-/// it. **This list may only shrink.** Adding to it requires a deliberate edit
-/// and a reviewer asking why a new file cannot be reached.
 /// Files known to be unreachable, each with the reason and the phase that fixes
 /// it. **This list may only shrink.** Adding to it requires a deliberate edit
 /// and a reviewer asking why a new file cannot be reached.
@@ -113,45 +115,82 @@ fn declared_module_names(files: &[PathBuf]) -> HashSet<String> {
     names
 }
 
+/// Every crate in the workspace, with the smallest file count that is
+/// plausible for it.
+///
+/// The floors exist because this gate is only as wide as the tree it walks.
+/// Before P1 it walked `src-tauri/src` alone and asserted `> 100` files — which
+/// was true then and became false the moment P1 moved 182 files into
+/// `autodev-core`. Had the floor simply been lowered, the gate would have gone
+/// green while silently protecting 84 files instead of 280
+/// (ADR-LOG-RESTRUCT-0015). A per-crate floor makes that failure loud: moving a
+/// crate's contents elsewhere trips its own floor rather than shrinking the
+/// gate's reach unnoticed.
+fn crate_roots() -> Vec<(&'static str, PathBuf, usize)> {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("src-tauri always has a workspace parent")
+        .to_path_buf();
+    vec![
+        ("autodev-core", workspace.join("autodev-core/src"), 150),
+        ("src-tauri", workspace.join("src-tauri/src"), 50),
+        ("src-cli", workspace.join("src-cli/src"), 8),
+        ("src-shared", workspace.join("src-shared/src"), 5),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn every_source_file_is_reachable_from_the_crate_root() {
-        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let files = all_rust_files(&src);
-        assert!(
-            files.len() > 100,
-            "expected to walk the crate; found {}",
-            files.len()
-        );
-
-        let declared = declared_module_names(&files);
+    fn every_source_file_is_reachable_from_its_crate_root() {
         let known: HashSet<&str> = KNOWN_UNREACHABLE.iter().map(|(p, _)| *p).collect();
-
         let mut orphans = Vec::new();
-        for file in &files {
-            let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-            // Crate roots and directory modules are reachable by construction:
-            // `mod.rs` is named by its parent directory, checked via that
-            // directory's own name.
-            if matches!(stem, "main" | "lib" | "mod" | "build") {
-                continue;
-            }
-            if declared.contains(stem) {
-                continue;
-            }
+        let mut walked = 0usize;
 
-            let rel = file
-                .strip_prefix(&src)
-                .unwrap_or(file)
-                .to_string_lossy()
-                .replace('\\', "/");
-            if known.contains(rel.as_str()) {
-                continue;
+        for (krate, src, floor) in crate_roots() {
+            assert!(
+                src.is_dir(),
+                "{krate}: expected a source tree at {}",
+                src.display()
+            );
+            let files = all_rust_files(&src);
+            assert!(
+                files.len() >= floor,
+                "{krate}: walked only {} files, below the floor of {floor}. Either the \
+                 tree moved — in which case update crate_roots() so the gate follows \
+                 it — or this gate is now protecting far less than it claims.",
+                files.len()
+            );
+            walked += files.len();
+
+            // Declarations are collected per crate: a `mod` in `src-tauri` does
+            // not make a file in `autodev-core` reachable.
+            let declared = declared_module_names(&files);
+
+            for file in &files {
+                let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                // Crate roots and directory modules are reachable by
+                // construction: `mod.rs` is named by its parent directory,
+                // checked via that directory's own name.
+                if matches!(stem, "main" | "lib" | "mod" | "build") {
+                    continue;
+                }
+                if declared.contains(stem) {
+                    continue;
+                }
+
+                let rel = file
+                    .strip_prefix(&src)
+                    .unwrap_or(file)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if known.contains(rel.as_str()) {
+                    continue;
+                }
+                orphans.push(format!("{krate}/src/{rel}"));
             }
-            orphans.push(rel);
         }
 
         assert!(
@@ -162,6 +201,13 @@ mod tests {
              with a reason and an owning phase.",
             orphans.join("\n  ")
         );
+
+        // A floor per crate still permits the whole workspace shrinking toward
+        // its floors, so the total is asserted too.
+        assert!(
+            walked > 250,
+            "walked only {walked} files across the workspace; this gate has lost reach"
+        );
     }
 
     /// The exception list is a debt register, so it must not quietly accumulate
@@ -169,11 +215,12 @@ mod tests {
     /// by repair.
     #[test]
     fn every_known_unreachable_file_still_exists() {
-        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         for (rel, reason) in KNOWN_UNREACHABLE {
-            let path = src.join(rel);
+            let found = crate_roots()
+                .iter()
+                .any(|(_, src, _)| src.join(rel).exists());
             assert!(
-                path.exists(),
+                found,
                 "KNOWN_UNREACHABLE lists {rel}, which no longer exists. If it was \
                  declared or deleted, remove the entry.\n  recorded reason: {reason}"
             );

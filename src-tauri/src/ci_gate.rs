@@ -363,4 +363,187 @@ mod tests {
             );
         }
     }
+
+    // ── TG-P1 · the crate boundary that makes `autodev-core` worth having ────
+
+    /// Dependency lines in a Cargo manifest that pull in Tauri.
+    ///
+    /// A free function over text rather than a check welded to the real file,
+    /// so it can be proven to fire. Falsifying the welded version would mean
+    /// adding `tauri` to core's manifest, which stops the workspace compiling
+    /// — the test would then fail for the wrong reason and prove nothing.
+    fn tauri_dependency_lines(manifest: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for line in manifest.lines() {
+            let line = line.trim();
+            if line.starts_with('#') {
+                continue;
+            }
+            let name = line.split(['=', ' ']).next().unwrap_or("").trim();
+            if name == "tauri" || name.starts_with("tauri-") {
+                out.push(line.to_string());
+            }
+        }
+        out
+    }
+
+    /// Lines of Rust that reference Tauri in **code**, as `(line_number, text)`.
+    ///
+    /// Comments are stripped first, because core deliberately *discusses*
+    /// Tauri: `events.rs` explains at length why the `AppHandle` it replaced
+    /// does not belong here. A gate that failed on prose would pressure authors
+    /// into deleting the explanation.
+    fn tauri_code_references(source: &str) -> Vec<(usize, String)> {
+        let mut out = Vec::new();
+        for (i, raw) in source.lines().enumerate() {
+            let line = raw.trim();
+            if line.starts_with("//") || line.starts_with('*') || line.starts_with("/*") {
+                continue;
+            }
+            let code = line.split("//").next().unwrap_or("");
+            if code.contains("tauri::") || code.contains("use tauri") {
+                out.push((i + 1, line.to_string()));
+            }
+        }
+        out
+    }
+
+    fn core_rust_files() -> Vec<PathBuf> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().and_then(|e| e.to_str()) == Some("rs") {
+                    out.push(p);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(&repo_root().join("autodev-core/src"), &mut files);
+        files
+    }
+
+    /// `autodev-core` must not depend on Tauri.
+    ///
+    /// This is the whole point of the crate: `airsctl` links the same agent
+    /// runtime the desktop app does, and it cannot link a UI framework. Before
+    /// P1 the runtime was unusable from the CLI because every event it emitted
+    /// required a `tauri::AppHandle` (ADR-LOG-RESTRUCT-0011).
+    #[test]
+    fn tg_p1_01_autodev_core_does_not_depend_on_tauri() {
+        let manifest = std::fs::read_to_string(repo_root().join("autodev-core/Cargo.toml"))
+            .expect("autodev-core/Cargo.toml");
+        let offenders = tauri_dependency_lines(&manifest);
+        assert!(
+            offenders.is_empty(),
+            "autodev-core has taken a dependency on Tauri, which defeats the crate's purpose — airsctl links this runtime and cannot link a UI framework: {}",
+            offenders.join(" | ")
+        );
+    }
+
+    /// The detector actually fires. Without this, a broken regex would leave
+    /// TG-P1-01 permanently and silently green.
+    #[test]
+    fn tg_p1_01_detector_flags_a_tauri_dependency() {
+        let planted = "[dependencies]
+serde = \"1\"
+tauri = { version = \"2\" }
+tokio = \"1\"
+";
+        assert_eq!(tauri_dependency_lines(planted).len(), 1);
+        assert!(tauri_dependency_lines(planted)[0].starts_with("tauri"));
+        // Plugins count too — they drag the framework in just as surely.
+        assert_eq!(
+            tauri_dependency_lines(
+                "tauri-plugin-shell = \"2\"
+"
+            )
+            .len(),
+            1
+        );
+        // A commented-out dependency is not a dependency.
+        assert!(tauri_dependency_lines(
+            "# tauri = \"2\"
+"
+        )
+        .is_empty());
+        // Nor is an unrelated crate whose name merely contains the substring.
+        assert!(tauri_dependency_lines(
+            "nottauri = \"1\"
+"
+        )
+        .is_empty());
+    }
+
+    /// No source file in `autodev-core` may reference `tauri` in code.
+    ///
+    /// The manifest check is necessary but not sufficient: a path dependency,
+    /// workspace inheritance, or a re-export through another crate could
+    /// reintroduce the type without a literal `tauri = ` line.
+    #[test]
+    fn tg_p1_02_no_core_source_file_references_tauri_in_code() {
+        let files = core_rust_files();
+        assert!(
+            files.len() > 150,
+            "expected to walk autodev-core; found {} files",
+            files.len()
+        );
+
+        let src = repo_root().join("autodev-core/src");
+        let mut offenders = Vec::new();
+        for file in &files {
+            let Ok(text) = std::fs::read_to_string(file) else {
+                continue;
+            };
+            for (line_no, line) in tauri_code_references(&text) {
+                offenders.push(format!(
+                    "{}:{}: {}",
+                    file.strip_prefix(&src).unwrap_or(file).display(),
+                    line_no,
+                    line
+                ));
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "autodev-core references Tauri in code. Core depends on traits the host implements — see events::EventSink and recipes::orchestrator — never on the host's framework: {}",
+            offenders.join(" | ")
+        );
+    }
+
+    /// The detector fires on code and stays quiet on prose.
+    ///
+    /// Both halves matter. If it missed `use tauri`, the gate would be
+    /// decorative; if it flagged comments, `events.rs` — which must explain the
+    /// `AppHandle` it replaced — could not keep its explanation.
+    #[test]
+    fn tg_p1_02_detector_flags_code_but_not_prose() {
+        let planted = "use tauri::AppHandle;
+let x = 1;
+";
+        assert_eq!(tauri_code_references(planted).len(), 1);
+        assert_eq!(tauri_code_references(planted)[0].0, 1);
+
+        let qualified = "    let h: tauri::AppHandle = get();
+";
+        assert_eq!(tauri_code_references(qualified).len(), 1);
+
+        let prose = "// Before P1 every emit required a `tauri::AppHandle`.
+/// See tauri::Emitter for the shape this replaced.
+ * tauri::AppHandle in a block comment
+";
+        assert!(
+            tauri_code_references(prose).is_empty(),
+            "prose about Tauri must not trip the gate: {:?}",
+            tauri_code_references(prose)
+        );
+
+        let trailing = "let x = 1; // tauri::AppHandle mentioned after code
+";
+        assert!(tauri_code_references(trailing).is_empty());
+    }
 }

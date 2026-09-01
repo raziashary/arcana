@@ -1,0 +1,43 @@
+[package]
+name = "autodev-core"
+version = "1.0.0"
+edition = "2021"
+description = "AutoDev's agent runtime, providers, memory and platform layer — shared by the desktop app and the CLI, and free of any UI framework."
+
+[dependencies]
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+thiserror   = "1"
+anyhow      = "1"
+tracing     = "0.1"
+chrono      = { version = "0.4", features = ["serde"] }
+rusqlite    = { version = "0.31", features = ["bundled"] }
+reqwest     = { version = "0.12", features = ["json", "stream"] }
+async-trait = "0.1"
+futures     = "0.3"
+ollama-rs   = { version = "0.3.4", features = ["stream"] }
+uuid        = { version = "1", features = ["v4"] }
+keyring     = "2"
+serde_yaml  = "0.9"
+base64      = "0.22"
+tokio       = { version = "1", features = ["full"] }
+regex       = "1"
+git2        = "0.19"
+glob        = "0.3"
+walkdir     = "2"
+notify      = "6"
+hex         = "0.4"
+flate2      = "1"
+dirs        = "5"
+sysinfo     = "0.33"
+toml        = "0.8"
+rayon       = "1.10"
+sha2        = "0.10"
+rhai        = { version = "1", features = ["sync"] }
+semver      = "1"
+tempfile    = "3"
+tree-sitter = "0.22"
+petgraph    = "0.6"
+ignore      = "0.4"
+cron        = "0.12"
+
