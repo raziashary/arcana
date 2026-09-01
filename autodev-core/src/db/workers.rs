@@ -5,6 +5,7 @@
 // See: DEVELOPMENT_PLAN.md Phase 2.2 — Worker Management System
 
 use super::autodev_dir;
+use crate::db::migrate::{self, Migration};
 use crate::errors::{AutoDevError, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -129,6 +130,17 @@ pub struct WorkersDb {
 
 impl WorkersDb {
     /// Open (or create) ~/.autodev/workers.db and run migrations + seed.
+    /// This database's schema version, as recorded by the migration ladder.
+    ///
+    /// Exposed so a migration can be *verified* rather than assumed — see
+    /// `examples/migrate_check.rs`. Reading it through the same handle the
+    /// application uses is the point: a version read from a fresh connection
+    /// would prove the file's state, not that the shipped `open()` path put it
+    /// there.
+    pub fn schema_version(&self) -> Result<i32> {
+        migrate::user_version(&self.conn)
+    }
+
     pub fn open() -> Result<Self> {
         Self::open_at(&autodev_dir()?.join("workers.db"))
     }
@@ -143,17 +155,27 @@ impl WorkersDb {
         let conn = Connection::open(db_path)
             .map_err(|e| AutoDevError::Agent(format!("workers.db open failed: {e}")))?;
         let db = Self { conn };
-        db.migrate()?;
+        // Order matters: repair a pre-ladder database's columns first, so the
+        // baseline rung is a genuine no-op against it, then stamp the version.
         db.add_missing_columns()?; // P1-09 — columns added to an already-created table
+        migrate::run_ladder(&db.conn, "workers.db", Self::LADDER)?;
         db.migrate_model_names()?; // Phase 7.1 — fix any stale old-format model slugs
         db.seed_defaults()?;
         Ok(db)
     }
 
-    fn migrate(&self) -> Result<()> {
-        self.conn
-            .execute_batch(
-                r#"
+    /// `workers.db`'s ladder.
+    ///
+    /// `v1` is the schema as it stands, `last_seen` included, so a fresh
+    /// database is created complete. Databases that predate the column are
+    /// repaired by `add_missing_columns`, which runs **before** the ladder:
+    /// expressing that repair as a `v2` rung would issue
+    /// `ALTER TABLE … ADD COLUMN last_seen` against live databases that already
+    /// have the column and fail with *duplicate column name*.
+    const LADDER: &[Migration] = &[Migration {
+        version: 1,
+        name: "workers-baseline",
+        sql: r#"
             CREATE TABLE IF NOT EXISTS workers (
                 id                INTEGER PRIMARY KEY AUTOINCREMENT,
                 name              TEXT NOT NULL,
@@ -167,7 +189,8 @@ impl WorkersDb {
                 is_system_defined INTEGER NOT NULL DEFAULT 0,
                 description       TEXT,
                 created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+                updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_seen         TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_workers_slug   ON workers(slug);
             CREATE INDEX IF NOT EXISTS idx_workers_status ON workers(status);
@@ -177,54 +200,21 @@ impl WorkersDb {
                     UPDATE workers SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
                 END;
         "#,
-            )
-            .map_err(|e| AutoDevError::Agent(format!("workers.db migrate: {e}")))
-    }
+    }];
 
-    /// Add columns that `CREATE TABLE IF NOT EXISTS` cannot add to a table that
-    /// already exists.
+    /// Columns added to `workers` after its original `CREATE TABLE`.
     ///
-    /// This is the failure that broke `airsctl`. `src-shared` declared
-    /// `last_seen` and `notes` in its own `CREATE TABLE IF NOT EXISTS workers`,
-    /// but the table had already been created by `src-tauri` without them — so
-    /// the statement was a silent no-op and the columns were never added. Every
-    /// `airsctl worker list`, `status` and `heartbeat` call then failed with
-    /// *no such column: last_seen*, and had done since the command was written.
-    ///
-    /// Two rules this follows, both learned expensively elsewhere in this tree:
-    ///
-    /// * **`ADD COLUMN IF NOT EXISTS` is not valid SQLite.** The graph
-    ///   migration used it and every statement failed; because they were
-    ///   wrapped in `let _ = …` the migration still stamped `user_version = 5`
-    ///   and logged success (`ADR-LOG-RESTRUCT-0013`). Existence is checked
-    ///   with `PRAGMA table_info` instead.
-    /// * **A failed migration is an error, not a log line.** Nothing here is
-    ///   discarded; a column that cannot be added fails `open()`.
+    /// `src-shared` declared `last_seen` in its own
+    /// `CREATE TABLE IF NOT EXISTS workers`, but the table had already been
+    /// created without it, so the statement was a silent no-op and every
+    /// `airsctl worker` call failed with *no such column*
+    /// (`ADR-LOG-RESTRUCT-0016`). `notes` was declared there too and has never
+    /// been selected by anything, so it is deliberately not resurrected here.
+    const ADDED_COLUMNS: &[(&str, &str)] =
+        &[("last_seen", "ALTER TABLE workers ADD COLUMN last_seen TEXT")];
+
     fn add_missing_columns(&self) -> Result<()> {
-        let existing: Vec<String> = {
-            let mut stmt = self
-                .conn
-                .prepare("PRAGMA table_info(workers)")
-                .map_err(|e| AutoDevError::Agent(format!("table_info prepare: {e}")))?;
-            let rows = stmt
-                .query_map([], |r| r.get::<_, String>(1))
-                .map_err(|e| AutoDevError::Agent(format!("table_info query: {e}")))?;
-            rows.collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(|e| AutoDevError::Agent(format!("table_info collect: {e}")))?
-        };
-
-        // Only what a caller actually reads. `src-shared` also declared `notes`,
-        // which nothing has ever selected — adding it would import dead schema
-        // along with the fix.
-        for (column, ddl) in [("last_seen", "ALTER TABLE workers ADD COLUMN last_seen TEXT")] {
-            if existing.iter().any(|c| c == column) {
-                continue;
-            }
-            self.conn.execute_batch(ddl).map_err(|e| {
-                AutoDevError::Agent(format!("workers.db: adding column {column} failed: {e}"))
-            })?;
-            tracing::info!("[workers.db] added missing column '{column}'");
-        }
+        migrate::ensure_columns(&self.conn, "workers", Self::ADDED_COLUMNS)?;
         Ok(())
     }
 
@@ -683,6 +673,31 @@ mod tests {
         assert_eq!(w.slug, "worker-backend");
         assert_eq!(w.last_seen, None, "a worker that never reported in");
 
+        // The legacy database is also brought onto the ladder. This is the
+        // shape every live database is in today: schema present, version 0.
+        assert_eq!(
+            migrate::user_version(&db.conn).unwrap(),
+            1,
+            "a pre-ladder database must be stamped, not left at 0"
+        );
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_fresh_database_is_created_at_the_ladder_head() {
+        let path = temp_db("fresh-version");
+        let db = WorkersDb::open_at(&path).expect("open");
+        assert_eq!(migrate::user_version(&db.conn).unwrap(), 1);
+        // The baseline rung must create the column, not rely on the repair
+        // path — otherwise a fresh install differs from a migrated one.
+        let cols: Vec<String> = {
+            let mut st = db.conn.prepare("PRAGMA table_info(workers)").unwrap();
+            let r = st.query_map([], |r| r.get::<_, String>(1)).unwrap();
+            r.map(|c| c.unwrap()).collect()
+        };
+        assert!(cols.iter().any(|c| c == "last_seen"), "got {cols:?}");
+        drop(db);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

@@ -31,44 +31,11 @@ pub struct AutodevInstructionsDb {
 
 impl AutodevInstructionsDb {
     pub fn open() -> Result<Self> {
-        let path = autodev_dir()?.join("config.db");
-        let conn = Connection::open(&path)?;
-        let db = Self { conn };
-        db.migrate()?;
-        Ok(db)
-    }
-
-    fn migrate(&self) -> Result<()> {
-        self.conn.execute_batch(
-            "
-            PRAGMA journal_mode = WAL;
-
-            CREATE TABLE IF NOT EXISTS autodev_instructions (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                scope       TEXT    NOT NULL CHECK(scope IN ('global', 'repo')),
-                repo_path   TEXT,
-                content     TEXT    NOT NULL DEFAULT '',
-                is_active   INTEGER NOT NULL DEFAULT 1,
-                created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
-                updated_at  TEXT    NOT NULL DEFAULT (datetime('now')),
-                CONSTRAINT repo_path_required CHECK (
-                    (scope = 'global' AND repo_path IS NULL) OR
-                    (scope = 'repo'   AND repo_path IS NOT NULL)
-                ),
-                UNIQUE(scope, repo_path)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_autodev_scope_repo
-                ON autodev_instructions(scope, repo_path);
-
-            CREATE TRIGGER IF NOT EXISTS autodev_instructions_updated_at
-            AFTER UPDATE ON autodev_instructions
-            BEGIN
-                UPDATE autodev_instructions SET updated_at = datetime('now') WHERE id = NEW.id;
-            END;
-            ",
-        )?;
-        Ok(())
+        // `config.db`'s schema and version belong to `db::config_db`, which
+        // owns the file; this table is one of three it holds.
+        Ok(Self {
+            conn: crate::db::config_db::open()?,
+        })
     }
 
     /// Fetch content for a given scope/repo. Returns empty string if not found.

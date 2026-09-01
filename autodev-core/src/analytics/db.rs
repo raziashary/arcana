@@ -1,6 +1,7 @@
 // Analytics database — SQLite schema and migrations for cost tracking
 use super::types::*;
 use crate::db::autodev_dir;
+use crate::db::migrate::{self, Migration};
 use crate::errors::{AutoDevError, Result};
 use chrono::{NaiveDate, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -46,13 +47,12 @@ impl AnalyticsDb {
     }
 
     /// Run migrations to create tables if they don't exist
-    async fn migrate(&self) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
-        conn.execute_batch(
-            r#"
+    /// `analytics.db`'s ladder. `v1` is the schema as it stands, created
+    /// idempotently, so an existing database is stamped without being altered.
+    const LADDER: &[Migration] = &[Migration {
+        version: 1,
+        name: "analytics-baseline",
+        sql: r#"
             CREATE TABLE IF NOT EXISTS token_usage (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -129,10 +129,15 @@ impl AnalyticsDb {
             CREATE INDEX IF NOT EXISTS idx_worker_stats_date ON worker_stats(date);
             CREATE INDEX IF NOT EXISTS idx_worker_stats_worker ON worker_stats(worker_id);
             CREATE INDEX IF NOT EXISTS idx_system_events_timestamp ON system_events(timestamp);
-            "#,
-        )
-        .map_err(|e| AutoDevError::Database(e))?;
+        "#,
+    }];
 
+    async fn migrate(&self) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AutoDevError::Agent(format!("Mutex lock failed: {}", e)))?;
+        migrate::run_ladder(&conn, "analytics.db", Self::LADDER)?;
         Ok(())
     }
 

@@ -41,31 +41,11 @@ pub struct ModelConfigsDb {
 impl ModelConfigsDb {
     /// Open ~/.autodev/config.db and ensure model_configs table exists.
     pub fn open() -> Result<Self> {
-        let db_path = autodev_dir()?.join("config.db");
-        let conn = Connection::open(&db_path)
-            .map_err(|e| AutoDevError::Agent(format!("config.db open failed: {e}")))?;
-        let db = Self { conn };
-        db.migrate()?;
-        Ok(db)
-    }
-
-    fn migrate(&self) -> Result<()> {
-        self.conn.execute_batch(r#"
-            CREATE TABLE IF NOT EXISTS model_configs (
-                model_id          TEXT PRIMARY KEY,
-                temperature       REAL,
-                top_p             REAL,
-                reasoning_effort  TEXT,
-                thinking_enabled  INTEGER NOT NULL DEFAULT 0,
-                thinking_budget   INTEGER,
-                updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE TRIGGER IF NOT EXISTS update_model_configs_ts
-                AFTER UPDATE ON model_configs
-                BEGIN
-                    UPDATE model_configs SET updated_at = CURRENT_TIMESTAMP WHERE model_id = NEW.model_id;
-                END;
-        "#).map_err(|e| AutoDevError::Agent(format!("model_configs migrate: {e}")))
+        // `config.db`'s schema and version belong to `db::config_db`, which
+        // owns the file; this table is one of three it holds.
+        Ok(Self {
+            conn: crate::db::config_db::open()?,
+        })
     }
 
     // ─── Queries ──────────────────────────────────────────────────────────────

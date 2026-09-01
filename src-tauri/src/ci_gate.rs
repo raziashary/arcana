@@ -610,24 +610,33 @@ let x = 1;
         }
     }
 
-    /// `app_settings` must have exactly one creator (`INV-10`, `P1-15`).
+    /// Every table in `config.db` must have exactly one creator (`INV-10`,
+    /// `P1-15`, `P1-10`).
     ///
-    /// It had three. They agreed on the columns and disagreed on the
-    /// `updated_at` trigger — only `github_mcp_commands.rs` declared it — so
-    /// whether the trigger existed depended on which caller happened to open
+    /// `app_settings` had three. They agreed on the columns and disagreed on
+    /// the `updated_at` trigger — only `github_mcp_commands.rs` declared it —
+    /// so whether the trigger existed depended on which caller opened
     /// `config.db` first on a given machine. That is a schema decided by
     /// startup order, and it is invisible until two installs behave
     /// differently.
+    ///
+    /// The owner is `db/config_db.rs` rather than any one table's module,
+    /// because `user_version` belongs to the **file**: three modules each
+    /// running their own ladder over `config.db` would each see a version the
+    /// others wrote.
     #[test]
-    fn tg_p1_04_app_settings_has_exactly_one_creator() {
-        let creators = table_creators("app_settings");
-        assert_eq!(
-            creators,
-            vec!["autodev-core/src/db/app_settings.rs".to_string()],
-            "app_settings must be created in exactly one place; found {} creator(s): {}",
-            creators.len(),
-            creators.join(" | ")
-        );
+    fn tg_p1_04_config_db_tables_have_exactly_one_creator() {
+        const OWNER: &str = "autodev-core/src/db/config_db.rs";
+        for table in ["app_settings", "autodev_instructions", "model_configs"] {
+            let creators = table_creators(table);
+            assert_eq!(
+                creators,
+                vec![OWNER.to_string()],
+                "{table} must be created in exactly one place ({OWNER}); found {}: {}",
+                creators.len(),
+                creators.join(" | ")
+            );
+        }
     }
 
     /// The detector fires on a real creator and ignores prose, so a broken

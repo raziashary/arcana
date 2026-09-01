@@ -4,6 +4,7 @@
 // See: DEVELOPMENT_PLAN.md Phase 3.5 — Plan Management System
 
 use super::autodev_dir;
+use crate::db::migrate::{self, Migration};
 use crate::errors::{AutoDevError, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -201,6 +202,17 @@ pub struct PlansDb {
 }
 
 impl PlansDb {
+    /// This database's schema version, as recorded by the migration ladder.
+    ///
+    /// Exposed so a migration can be *verified* rather than assumed — see
+    /// `examples/migrate_check.rs`. Reading it through the same handle the
+    /// application uses is the point: a version read from a fresh connection
+    /// would prove the file's state, not that the shipped `open()` path put it
+    /// there.
+    pub fn schema_version(&self) -> Result<i32> {
+        migrate::user_version(&self.conn)
+    }
+
     pub fn open() -> Result<Self> {
         let path = autodev_dir()?.join("plans.db");
         let conn = Connection::open(&path)?;
@@ -209,11 +221,12 @@ impl PlansDb {
         Ok(db)
     }
 
-    fn migrate(&self) -> Result<()> {
-        self.conn.execute_batch(
-            "
-            PRAGMA journal_mode = WAL;
-            PRAGMA foreign_keys = ON;
+    /// `plans.db`'s ladder. `v1` is the schema as it stands, created idempotently,
+    /// so an existing database is stamped without being altered.
+    const LADDER: &[Migration] = &[Migration {
+        version: 1,
+        name: "plans-baseline",
+        sql: r#"
 
             CREATE TABLE IF NOT EXISTS plans (
                 id              TEXT PRIMARY KEY,
@@ -281,8 +294,15 @@ impl PlansDb {
             );
 
             CREATE INDEX IF NOT EXISTS idx_exec_plan         ON plan_executions(plan_id);
-            ",
-        )?;
+        "#,
+    }];
+
+    fn migrate(&self) -> Result<()> {
+        // PRAGMAs are per-connection and are not carried by a migration.
+        self.conn
+            .execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")
+            .map_err(|e| AutoDevError::Agent(format!("plans.db pragmas: {e}")))?;
+        migrate::run_ladder(&self.conn, "plans.db", Self::LADDER)?;
         Ok(())
     }
 

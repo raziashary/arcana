@@ -3,6 +3,7 @@
 // Used by: IDE CodeViewer (display), QC Agent (write), PA (write on Ask PA flow)
 
 use super::autodev_dir;
+use crate::db::migrate::{self, Migration};
 use crate::errors::{AutoDevError, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -47,6 +48,17 @@ pub struct AnnotationsDb {
 }
 
 impl AnnotationsDb {
+    /// This database's schema version, as recorded by the migration ladder.
+    ///
+    /// Exposed so a migration can be *verified* rather than assumed — see
+    /// `examples/migrate_check.rs`. Reading it through the same handle the
+    /// application uses is the point: a version read from a fresh connection
+    /// would prove the file's state, not that the shipped `open()` path put it
+    /// there.
+    pub fn schema_version(&self) -> Result<i32> {
+        migrate::user_version(&self.conn)
+    }
+
     pub fn open() -> Result<Self> {
         let db_path = autodev_dir()?.join("annotations.db");
         let conn = Connection::open(&db_path)
@@ -56,10 +68,12 @@ impl AnnotationsDb {
         Ok(db)
     }
 
-    fn migrate(&self) -> Result<()> {
-        self.conn
-            .execute_batch(
-                r#"
+    /// `annotations.db`'s ladder. `v1` is the schema as it stands, created idempotently,
+    /// so an existing database is stamped without being altered.
+    const LADDER: &[Migration] = &[Migration {
+        version: 1,
+        name: "annotations-baseline",
+        sql: r#"
             CREATE TABLE IF NOT EXISTS annotations (
                 id            TEXT PRIMARY KEY,
                 file_path     TEXT NOT NULL,
@@ -83,8 +97,12 @@ impl AnnotationsDb {
                     UPDATE annotations SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
                 END;
         "#,
-            )
-            .map_err(|e| AutoDevError::Agent(format!("annotations.db migrate: {e}")))
+    }];
+
+    fn migrate(&self) -> Result<()> {
+        // PRAGMAs are per-connection and are not carried by a migration.
+        migrate::run_ladder(&self.conn, "annotations.db", Self::LADDER)?;
+        Ok(())
     }
 
     // ─── Queries ──────────────────────────────────────────────────────────────

@@ -22,7 +22,8 @@ use crate::errors::{AutoDevError, Result};
 /// The workspace-directory setting key.
 pub const WORKSPACE_KEY: &str = "workspace_dir";
 
-/// Open `config.db` and ensure `app_settings` exists.
+/// Open `config.db`. The schema — this table, the two others the file
+/// holds, and the ladder — belongs to `db::config_db`, which owns the file.
 pub fn open() -> Result<Connection> {
     open_at(&autodev_dir()?.join("config.db"))
 }
@@ -30,31 +31,7 @@ pub fn open() -> Result<Connection> {
 /// As `open`, against an explicit path. Exists so tests never write to the
 /// user's real `~/.autodev/config.db`.
 pub fn open_at(path: &std::path::Path) -> Result<Connection> {
-    let conn =
-        Connection::open(path).map_err(|e| AutoDevError::Agent(format!("config.db open: {e}")))?;
-    // The trigger is part of the schema because the live `config.db` has it:
-    // of the three creators this module replaces, only `github_mcp_commands.rs`
-    // declared it, so whether it existed depended on which caller happened to
-    // run first. Omitting it here would have made fresh installs differ from
-    // every existing one.
-    //
-    // It is an `AFTER UPDATE ON app_settings` that itself updates the table.
-    // SQLite leaves `recursive_triggers` off by default, so it fires once; it
-    // would loop if that pragma were ever turned on for this connection.
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS app_settings (
-             key        TEXT PRIMARY KEY,
-             value      TEXT NOT NULL,
-             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-         );
-         CREATE TRIGGER IF NOT EXISTS update_app_settings_ts
-             AFTER UPDATE ON app_settings
-             BEGIN
-                 UPDATE app_settings SET updated_at = CURRENT_TIMESTAMP WHERE key = NEW.key;
-             END;",
-    )
-    .map_err(|e| AutoDevError::Agent(format!("app_settings migrate: {e}")))?;
-    Ok(conn)
+    crate::db::config_db::open_at(path)
 }
 
 /// Read one setting. `None` when unset.

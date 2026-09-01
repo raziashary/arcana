@@ -4,6 +4,7 @@
 // See: DEVELOPMENT_PLAN.md Phase 2.1 — AutoDev Panel & Internal Board
 
 use super::autodev_dir;
+use crate::db::migrate::{self, Migration};
 use crate::errors::{AutoDevError, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -308,6 +309,17 @@ pub struct TasksDb {
 }
 
 impl TasksDb {
+    /// This database's schema version, as recorded by the migration ladder.
+    ///
+    /// Exposed so a migration can be *verified* rather than assumed — see
+    /// `examples/migrate_check.rs`. Reading it through the same handle the
+    /// application uses is the point: a version read from a fresh connection
+    /// would prove the file's state, not that the shipped `open()` path put it
+    /// there.
+    pub fn schema_version(&self) -> Result<i32> {
+        migrate::user_version(&self.conn)
+    }
+
     pub fn open() -> Result<Self> {
         let path = autodev_dir()?.join("tasks.db");
         let conn = Connection::open(&path)?;
@@ -316,9 +328,23 @@ impl TasksDb {
         Ok(db)
     }
 
-    fn migrate(&self) -> Result<()> {
-        self.conn.execute_batch(
-            "
+    /// `tasks.db`'s ladder.
+    ///
+    /// `v1` is the schema as it stands. The twenty columns below are **not**
+    /// separate rungs: every live `tasks.db` already has them, so
+    /// `ALTER TABLE … ADD COLUMN` as a `v2` would fail with *duplicate column
+    /// name*. They are applied by `ensure_columns` before the ladder, which
+    /// checks `PRAGMA table_info` first.
+    ///
+    /// Until P1 these twenty were `let _ = execute_batch("ALTER TABLE …")` —
+    /// twenty swallowed results. That idiom cannot distinguish "the column is
+    /// already there" from "this statement is wrong", which is precisely how
+    /// the graph store stamped `user_version = 5` over six failed statements
+    /// (`ADR-LOG-RESTRUCT-0013`).
+    const LADDER: &[Migration] = &[Migration {
+        version: 1,
+        name: "tasks-baseline",
+        sql: r#"
             PRAGMA journal_mode = WAL;
             PRAGMA foreign_keys = ON;
 
@@ -385,110 +411,95 @@ impl TasksDb {
                 ON worker_messages(task_id);
             CREATE INDEX IF NOT EXISTS idx_worker_messages_created
                 ON worker_messages(created_at);
-            "
-        )?;
-        // Add columns to existing DBs that predate these migrations.
-        let _ = self
-            .conn
-            .execute_batch("ALTER TABLE tasks ADD COLUMN rejection_reason TEXT;");
-        let _ = self
-            .conn
-            .execute_batch("ALTER TABLE tasks ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;");
-        // Ruflo Feature 2 — PID-based orphan detection
-        let _ = self
-            .conn
-            .execute_batch("ALTER TABLE tasks ADD COLUMN claimed_by_pid INTEGER;");
-        let _ = self
-            .conn
-            .execute_batch("ALTER TABLE tasks ADD COLUMN claim_host TEXT;");
-        // Ruflo Feature 3 — Diff risk scoring result (JSON blob)
-        let _ = self
-            .conn
-            .execute_batch("ALTER TABLE tasks ADD COLUMN diff_analysis TEXT;");
-        // Ruflo Feature 4 — Budget Circuit Breaker columns
-        let _ = self
-            .conn
-            .execute_batch("ALTER TABLE tasks ADD COLUMN budget_max_tokens INTEGER;");
-        let _ = self
-            .conn
-            .execute_batch("ALTER TABLE tasks ADD COLUMN budget_max_usd    REAL;");
-        let _ = self
-            .conn
-            .execute_batch("ALTER TABLE tasks ADD COLUMN budget_max_turns  INTEGER DEFAULT 20;");
-        let _ = self
-            .conn
-            .execute_batch("ALTER TABLE tasks ADD COLUMN budget_tokens_used INTEGER DEFAULT 0;");
-        let _ = self
-            .conn
-            .execute_batch("ALTER TABLE tasks ADD COLUMN budget_cost_usd   REAL DEFAULT 0.0;");
-        let _ = self
-            .conn
-            .execute_batch("ALTER TABLE tasks ADD COLUMN budget_turns_used INTEGER DEFAULT 0;");
-        let _ = self
-            .conn
-            .execute_batch("ALTER TABLE tasks ADD COLUMN budget_exceeded   INTEGER DEFAULT 0;");
-        let _ = self
-            .conn
-            .execute_batch("ALTER TABLE tasks ADD COLUMN budget_exceeded_reason TEXT;");
-        // Ruflo Feature 5 — Phase-Based Task Decomposition columns
-        let _ = self
-            .conn
-            .execute_batch("ALTER TABLE tasks ADD COLUMN phase       TEXT;");
-        let _ = self
-            .conn
-            .execute_batch("ALTER TABLE tasks ADD COLUMN phase_order INTEGER;");
-        let _ = self
-            .conn
-            .execute_batch("ALTER TABLE tasks ADD COLUMN milestone   TEXT;");
-        let _ = self
-            .conn
-            .execute_batch("ALTER TABLE tasks ADD COLUMN epic_id     TEXT;");
-        let _ = self
-            .conn
-            .execute_batch("ALTER TABLE tasks ADD COLUMN blocked_by  TEXT;");
-        // Doc 04 Phase 2 / Phase 4 — per-task QC reviewer claim + cost rollup.
-        // `under_review_by` carries the subagent slug while a reviewer runs;
-        // `task_qc_cost_usd` is the running sum of every reviewer run for the
-        // task. Both are NULL-safe (defaulted on read via COALESCE).
-        let _ = self
-            .conn
-            .execute_batch("ALTER TABLE tasks ADD COLUMN under_review_by  TEXT;");
-        let _ = self
-            .conn
-            .execute_batch("ALTER TABLE tasks ADD COLUMN task_qc_cost_usd REAL DEFAULT 0.0;");
-        let _ = self.conn.execute_batch(
-            "CREATE INDEX IF NOT EXISTS idx_tasks_under_review_by ON tasks(under_review_by);",
-        );
-        // Indexes for phase queries
-        let _ = self
-            .conn
-            .execute_batch("CREATE INDEX IF NOT EXISTS idx_tasks_epic_id ON tasks(epic_id);");
-        let _ = self.conn.execute_batch(
-            "CREATE INDEX IF NOT EXISTS idx_tasks_phase ON tasks(phase, phase_order);",
-        );
-        // Routing history table (Ruflo Feature 1 — semantic task routing)
+        "#,
+    }];
+
+    /// Columns added to `tasks` after its original `CREATE TABLE`.
+    const ADDED_COLUMNS: &[(&str, &str)] = &[
+        (
+            "rejection_reason",
+            "ALTER TABLE tasks ADD COLUMN rejection_reason TEXT;",
+        ),
+        (
+            "retry_count",
+            "ALTER TABLE tasks ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;",
+        ),
+        (
+            "claimed_by_pid",
+            "ALTER TABLE tasks ADD COLUMN claimed_by_pid INTEGER;",
+        ),
+        (
+            "claim_host",
+            "ALTER TABLE tasks ADD COLUMN claim_host TEXT;",
+        ),
+        (
+            "diff_analysis",
+            "ALTER TABLE tasks ADD COLUMN diff_analysis TEXT;",
+        ),
+        (
+            "budget_max_tokens",
+            "ALTER TABLE tasks ADD COLUMN budget_max_tokens INTEGER;",
+        ),
+        (
+            "budget_max_usd",
+            "ALTER TABLE tasks ADD COLUMN budget_max_usd    REAL;",
+        ),
+        (
+            "budget_max_turns",
+            "ALTER TABLE tasks ADD COLUMN budget_max_turns  INTEGER DEFAULT 20;",
+        ),
+        (
+            "budget_tokens_used",
+            "ALTER TABLE tasks ADD COLUMN budget_tokens_used INTEGER DEFAULT 0;",
+        ),
+        (
+            "budget_cost_usd",
+            "ALTER TABLE tasks ADD COLUMN budget_cost_usd   REAL DEFAULT 0.0;",
+        ),
+        (
+            "budget_turns_used",
+            "ALTER TABLE tasks ADD COLUMN budget_turns_used INTEGER DEFAULT 0;",
+        ),
+        (
+            "budget_exceeded",
+            "ALTER TABLE tasks ADD COLUMN budget_exceeded   INTEGER DEFAULT 0;",
+        ),
+        (
+            "budget_exceeded_reason",
+            "ALTER TABLE tasks ADD COLUMN budget_exceeded_reason TEXT;",
+        ),
+        ("phase", "ALTER TABLE tasks ADD COLUMN phase       TEXT;"),
+        (
+            "phase_order",
+            "ALTER TABLE tasks ADD COLUMN phase_order INTEGER;",
+        ),
+        (
+            "milestone",
+            "ALTER TABLE tasks ADD COLUMN milestone   TEXT;",
+        ),
+        ("epic_id", "ALTER TABLE tasks ADD COLUMN epic_id     TEXT;"),
+        (
+            "blocked_by",
+            "ALTER TABLE tasks ADD COLUMN blocked_by  TEXT;",
+        ),
+        (
+            "under_review_by",
+            "ALTER TABLE tasks ADD COLUMN under_review_by  TEXT;",
+        ),
+        (
+            "task_qc_cost_usd",
+            "ALTER TABLE tasks ADD COLUMN task_qc_cost_usd REAL DEFAULT 0.0;",
+        ),
+    ];
+
+    fn migrate(&self) -> Result<()> {
+        // PRAGMAs are per-connection and are not carried by the ladder.
         self.conn.execute_batch(
-            "
-            CREATE TABLE IF NOT EXISTS routing_history (
-                id           TEXT PRIMARY KEY,
-                task_id      TEXT NOT NULL,
-                task_title   TEXT NOT NULL,
-                task_type    TEXT NOT NULL,
-                worker_slug  TEXT NOT NULL,
-                assigned_at  TEXT NOT NULL,
-                outcome      TEXT,
-                outcome_at   TEXT,
-                duration_ms  INTEGER,
-                tokens_used  INTEGER
-            );
-            CREATE INDEX IF NOT EXISTS idx_routing_history_worker
-                ON routing_history(worker_slug);
-            CREATE INDEX IF NOT EXISTS idx_routing_history_task_type
-                ON routing_history(task_type);
-            CREATE INDEX IF NOT EXISTS idx_routing_history_outcome
-                ON routing_history(outcome);
-            ",
+            "PRAGMA journal_mode = WAL;
+             PRAGMA foreign_keys = ON;",
         )?;
+        migrate::ensure_columns(&self.conn, "tasks", Self::ADDED_COLUMNS)?;
+        migrate::run_ladder(&self.conn, "tasks.db", Self::LADDER)?;
         Ok(())
     }
 

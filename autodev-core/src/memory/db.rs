@@ -3,6 +3,7 @@
 // Migration is purely additive via CREATE TABLE IF NOT EXISTS so new columns
 // can be appended in later schema revisions without breaking old installs.
 
+use crate::db::migrate::{self, Migration};
 use crate::errors::{AutoDevError, Result};
 use rusqlite::Connection;
 use std::path::PathBuf;
@@ -12,6 +13,17 @@ pub struct MemoryDb {
 }
 
 impl MemoryDb {
+    /// This database's schema version, as recorded by the migration ladder.
+    ///
+    /// Exposed so a migration can be *verified* rather than assumed — see
+    /// `examples/migrate_check.rs`. Reading it through the same handle the
+    /// application uses is the point: a version read from a fresh connection
+    /// would prove the file's state, not that the shipped `open()` path put it
+    /// there.
+    pub fn schema_version(&self) -> Result<i32> {
+        migrate::user_version(&self.conn)
+    }
+
     pub fn open() -> Result<Self> {
         let path = db_path()?;
         if let Some(parent) = path.parent() {
@@ -23,11 +35,12 @@ impl MemoryDb {
         Ok(db)
     }
 
-    fn migrate(&self) -> Result<()> {
-        self.conn.execute_batch(
-            "
-            PRAGMA journal_mode = WAL;
-            PRAGMA foreign_keys = ON;
+    /// `memory.db`'s ladder. `v1` is the schema as it stands, created idempotently,
+    /// so an existing database is stamped without being altered.
+    const LADDER: &[Migration] = &[Migration {
+        version: 1,
+        name: "memory-baseline",
+        sql: r#"
 
             -- ─────────────────────────────────────────────────────────────
             -- Tier 1: Episodic Memory (raw conversation experience)
@@ -106,8 +119,15 @@ impl MemoryDb {
                 ON procedural_memories(topic);
             CREATE INDEX IF NOT EXISTS idx_proc_updated
                 ON procedural_memories(updated_at DESC);
-            ",
-        )?;
+        "#,
+    }];
+
+    fn migrate(&self) -> Result<()> {
+        // PRAGMAs are per-connection and are not carried by a migration.
+        self.conn
+            .execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")
+            .map_err(|e| AutoDevError::Agent(format!("memory.db pragmas: {e}")))?;
+        migrate::run_ladder(&self.conn, "memory.db", Self::LADDER)?;
         Ok(())
     }
 }
