@@ -20,6 +20,28 @@ down and then not applied, which is how both P0 auditors were lost.
 claim that rested on it. That agreement is what makes it certain rather than
 arguable.
 
+### Razi's rulings on the triage (2026-09-01, after review)
+
+Three rows were re-tiered by the overseer after the triage was presented:
+
+| Row | Ruling | Effect |
+|---|---|---|
+| `A-08` | **pull forward** from P3 | hook payloads redacted now, not in the phase that reworks hooks |
+| `A-22` | **ship the changes** | the real atomic claim in core, not the compensating revert |
+| `~/.airs` | **delete it** | the retired data root removed from this machine |
+
+The `~/.airs` deletion is an operation, not a finding. It was verified before it
+was performed and not merely assumed migrated: the retired store held
+`sessions = 1` and `messages = 14`, the live `~/.autodev/autodev.db` holds the
+same counts at `user_version = 1`, and nothing in the retired file was absent or
+short in the live one. Backed up whole to `~/autodev-backups/p1-airs-retire`
+first, and the backup was opened read-only and checked (`integrity_check = ok`,
+counts confirmed) before the original was removed — a backup nobody has read
+back is not a backup. `db/legacy_root.rs` keeps the migration: other installs
+still have the old root, and the code already handles its absence.
+
+Pulling `A-08` forward is what exposed `A-08a`, which no auditor had found.
+
 ---
 
 ## 1 · Fixed in this phase
@@ -33,10 +55,13 @@ arguable.
 | `A-05` | connection-string credentials survive unless the host happens to contain a dot | bc9d655 — URL-credential pattern added (postgres://user:pw@host) |
 | `A-06` | is_sensitive_key substring matching destroys ordinary fields, and changes their JSON type | bc9d655 — key matching is segment-aware, so author/passed/prompt_tokens are no longer secrets and JSON numbers stay numbers |
 | `A-07` | redact_text corrupts source code and prose *in the transcript the model reads* | bc9d655 — the assignment rule skips values that look like code (parens, braces, ::) |
+| `A-08` | the PreToolUse / PostToolUse hook payload carries the unredacted input and output | **razi-ruled: pull forward from P3.** All four hook contexts now carry the redacted arguments. A hook still learns which tool ran with which argument *names* — what it can act on is unchanged — but not the values, which mattered because hooks are user-authored shell and whatever they do with a payload (a curl, a log line, a file) is outside our control. The results at both PostToolUse sites were already clean, arriving through `redact_result`. |
+| `A-08a` | **found while fixing A-08, not by an auditor:** `execute_batch`'s write branch passed the **raw input** to the UI start event and to the `messages` row. The A-01 fix had redacted that branch's *result* and left its *input* alone — so the write path still carried credentials to the renderer and the database, and `TG-P1-06` could not see it because that gate only inspects the result side. Fixed at all three write-branch sites, and the read branch's already-redacted value renamed from `input` to `reported` so it stops reading like a leak. New gate `tg_p1_06_raw_tool_input_reaches_only_the_permission_dialog` pins the input side, **falsified** by reverting one hook site (it names the function and line). |
+| `A-08b` | *no change, stated deliberately:* the **permission dialog** keeps the raw input | The user is approving that exact call. A redacted prompt would ask them to approve `curl -H "Authorization: [REDACTED]"` — the dialog is a control *over* exfiltration, so blinding it weakens the control rather than the leak. Nothing persists this payload; every path that outlives the dialog is redacted. Documented in the code so it is not "fixed" later. |
 | `A-09` | reap_abandoned marks *live sibling processes* as abandoned; it never checks whether the pid is alive | 903fa20 — reap_abandoned uses is_pid_alive on this host only; other hosts are left alone |
 | `A-14` | migrate.rs's is_destructive does not recognise DROP COLUMN or UPDATE, so the automatic backup is skipped for them | 903fa20 — is_destructive gained DROP COLUMN / UPDATE / INSERT OR REPLACE, with trigger bodies stripped so baselines stay non-destructive |
 | `A-21` | ~/.airs/config.toml is named in user-facing CLI help and in three docstrings; the code writes ~/.autodev/config.toml | 903fa20 — ~/.airs config comment corrected |
-| `A-22` | airsctl task claim defeats core's atomic claim guard by forcing status = 'assigned' first, and leaves the task stranded when the claim then fails | 903fa20 — compensating revert to ready on a lost claim, with the residual window named |
+| `A-22` | airsctl task claim defeats core's atomic claim guard by forcing status = 'assigned' first, and leaves the task stranded when the claim then fails | **razi-ruled: ship the fix.** Core gains `claim_next_ready` — one guarded `UPDATE` that takes the oldest `ready` row, records pid and host, and enforces the one-task-per-worker rule *inside the statement*. The CLI's select-then-assign-then-claim and its compensating revert are both deleted. `claim_task_with_pid` is untouched: the supervisor's two-step handoff still exists, this is the self-serve path only. **Proven by contention, not by reading** — 8 threads, 8 connections, one file, released together on a barrier: 8 distinct tasks, 0 stranded in `assigned`. **Falsified:** restoring the select-then-update shape makes all eight workers claim task #1. |
 | `A-26` | TG-P1-06 passes for tool_executor.rs while its live path redacts nothing, and no behavioural test covers that boundary | bc9d655 — the gate checks that every tool.execute is wrapped, not that the file contains a string |
 | `A-29` | config.db is opened, migrated and closed on every single-key read | 903fa20 — config.db ownership consolidated |
 | `A-30` | the graph ladder still has no "newer database" refusal and no backup on its destructive rung | 903fa20 — documented and pinned: nodes_fts is external-content, so dropping it loses nothing |
@@ -60,7 +85,6 @@ owns it and why it is not P1 work.
 
 | # | Finding | Owner | Why not now |
 |---|---|---|---|
-| `A-08` | the PreToolUse / PostToolUse hook payload carries the unredacted input and output | **P3** | the hook payload carries unredacted tool input. Hooks are user-authored shell; redacting their input changes what a hook can act on, which is a contract change owned by the phase that reworks hooks. |
 | `A-10` | hostname() returns "unknown" on essentially every non-shell Linux/macOS launch | **P4** | hostname() falls back to "unknown", so two hosts with no COMPUTERNAME collide. Multi-host is P4. |
 | `A-11` | runs.db is a writer with no reader | **P4** | runs has no index on parent_run_id. Matters only at fleet scale. |
 | `A-12` | two surviving let _ = self.conn.execute(...) in tasks.rs, each followed by an event announcing the write succeeded | **P3** | two surviving `let _ =` in the runtime path. |

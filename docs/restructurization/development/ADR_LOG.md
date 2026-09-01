@@ -562,6 +562,60 @@ The mechanism is `L-C6`: I searched for `CREATE TABLE … app_settings` — the 
 
 **Links.** `_verify/A5-P1-doc-staleness.md` `D-27` · `_verify/A3-P1-work-audit.md` `W-07` · `INV-10` · `ADR-LOG-RESTRUCT-0015`
 
+## ADR-LOG-RESTRUCT-0021 — Tool arguments are redacted on every reporting path; the permission dialog is the one deliberate exception
+
+**Status.** DECIDED
+**Author.** Claude · **Tier.** `razi-ruled` (*"A-08 pull forward"*)
+
+**What.**
+
+1. All four `ToolCallContext` hook payloads — PreToolUse and PostToolUse, in both `execute` and `execute_batch` — carry `reported`, the redacted arguments, instead of the raw input.
+2. `execute_batch`'s **write branch** gains the redacted copy it never had: its `emit_tool_start` and its `save_tool_message` were still passing raw input.
+3. The read branch's already-redacted value is renamed from `input` to `reported` at the point it is consumed.
+4. `request_permission` keeps the **raw** input, and now says why in the code.
+5. A second gate, `tg_p1_06_raw_tool_input_reaches_only_the_permission_dialog`, pins the input side.
+
+**Why.**
+
+A-08 was triaged to P3 on the reasoning that redacting a hook's input changes what a hook can act on. That reasoning was wrong in a specific way: a hook still receives the tool name and the argument *names*, so every dispatch decision it can make today it can still make. What it loses is the *values* — and hooks are user-authored shell, so a credential in that payload reaches whatever that shell does with it, outside anything this codebase controls.
+
+**The pull-forward is what found the real defect (2).** The A-01 remediation wrapped every `tool.execute` in `redact_result` and I recorded the boundary as closed. It was closed on the **result** side only. `execute_batch`'s write branch — the path every file edit, every command, every write tool takes — was still handing the renderer and the `messages` table the raw arguments. A credential passed *to* a tool is exactly as durable as one returned *from* it.
+
+`TG-P1-06` could not have caught it. I wrote that gate from the claim I had just implemented — *"every tool execution redacts its result"* — rather than from the invariant it exists to protect: *no secret reaches a durable or outbound surface*. This is `L-C6`'s **fifth** instance, and the second time in one phase that a gate was green over an unprotected path.
+
+**On the exception (4).** The permission dialog is the one place raw arguments still go, and that is correct. The user is being asked to approve *this exact call*; a redacted prompt asks them to approve `curl -H "Authorization: [REDACTED]"`, which tells them nothing about where their credential is about to be sent. The dialog is a **control over** exfiltration, so blinding it weakens the control rather than the leak. The recipient is the user, on their own machine, looking at their own secret, and nothing persists the payload — every path that outlives the dialog is redacted.
+
+**When.** 2026-09-01 · P1 · post-phase audit remediation (Razi's ruling)
+
+**Where.** `autodev-core/src/agent/tool_executor.rs` · `src-tauri/src/ci_gate.rs`
+
+**How.** The new gate walks the production half of `tool_executor.rs`, attributes every raw-input site to its enclosing function, and asserts there is exactly one and that it is `request_permission`. **Falsified**: reverting a single hook site to `input.clone()` fails it with *"found 2: execute_batch():452 … | request_permission():562 …"* — naming the function and line. Its detector has its own test, so the gate cannot pass by being blind.
+
+**Links.** `_verify/P1-AUDIT-TRIAGE.md` `A-08`/`A-08a`/`A-08b` · `ADR-LOG-RESTRUCT-0019` · `M-40` · `§0.16` `L-C6`
+
+## ADR-LOG-RESTRUCT-0022 — The self-serve claim is one atomic statement; the supervisor's two-step handoff is untouched
+
+**Status.** DECIDED
+**Author.** Claude · **Tier.** `razi-ruled` (*"A-22 ship the changes"*)
+
+**What.** `TasksDb::claim_next_ready(worker, pid)` — a single guarded `UPDATE` that takes the oldest `ready` task, records `claimed_by_pid` and `claim_host`, and enforces the one-in-progress-per-worker rule **inside the statement** via a subquery. `airsctl task claim` calls it; the CLI's read-then-`assign`-then-claim sequence and its compensating revert are both deleted. `claim_task_with_pid` is unchanged.
+
+**Why.**
+
+Core models the handoff in two steps because the supervisor decides *who* gets a task before that worker picks it up. A worker pulling from the queue has no such decider, so the CLI faked the first step — writing `assigned`, then claiming. Three round trips, two windows. A worker that lost the race left the row `assigned` with **no PID**, which orphan detection is blind to; nothing released it until the 4-hour TTL.
+
+The compensating revert I shipped first narrowed that window and did not close it, and could itself fail — the error path said as much. The audit called it a workaround and it was one.
+
+**A guard read before the write is not a guard.** The one-task-per-worker check was a separate `SELECT` in `claim_task_with_pid`; moved into the claim statement it cannot be true when read and false when used. The queue policy — oldest first — had to move into core with it, because a policy applied in Rust over a list read a round trip earlier cannot be part of the same atomic write.
+
+**When.** 2026-09-01 · P1 · post-phase audit remediation (Razi's ruling)
+
+**Where.** `autodev-core/src/db/tasks.rs` · `src-cli/src/commands/task.rs`
+
+**How.** A single `UPDATE` holds SQLite's write lock for its whole duration, so a concurrent claimer either waits and re-evaluates the subselect — seeing the row is no longer `ready` and taking the next one — or finds the queue empty. Evidence is **contention, not inspection**: 8 threads, 8 connections, one real file, released together on a `Barrier` → 8 distinct tasks claimed, 0 rows left in `assigned`, every claim carrying a pid and a worker. **Falsified:** restoring the select-then-update shape fails the test with all eight workers claiming task #1. Two further tests cover the `ready`-only guard and the per-worker guard. `SMOKE-PROVEN` end to end through `airsctl` against a throwaway data root: oldest-first claim, the guard's refusal, a second worker taking the next task, and a clean *"No ready tasks available."* on an empty queue.
+
+**Links.** `_verify/P1-AUDIT-TRIAGE.md` `A-22` · `_verify/A4-P1-area-audit.md` · `P1-09`
+
 # §5 · Standing entries carried from planning
 
 Not build-time decisions — but recorded here because a future session will otherwise rediscover them the hard way. Each is already ratified in vision Part 8; these are the **operational consequences** that bite during implementation.
