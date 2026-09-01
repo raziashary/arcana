@@ -3,7 +3,6 @@
 // Two scopes: 'global' (applies to all sessions) and 'repo' (per working dir).
 // See: DEVELOPMENT_PLAN.md Phase 2.1.2 — AUTODEV.md System
 
-use super::autodev_dir;
 use crate::errors::{AutoDevError, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};

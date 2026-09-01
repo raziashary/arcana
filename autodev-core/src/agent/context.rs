@@ -38,8 +38,11 @@ impl ContextBuilder {
         let base = override_prompt.unwrap_or(BASE_SYSTEM_PROMPT);
         let mut parts = vec![base.to_string()];
 
-        // LEGACY: ~/.airs/CLAUDE.md — will be replaced with SQLite query
-        // TODO: Query SQLite for global AUTODEV.md
+        // Reads `~/.autodev/config/autodev_global.md`. The comment here used
+        // to say `~/.airs/CLAUDE.md`, which was wrong twice over: the path moved
+        // in P1-14, and `CLAUDE.md` is forbidden by the naming lock (ADR-01-11)
+        // — this project uses `AUTODEV.md`.
+        // TODO: query SQLite for the global AUTODEV.md instead of the file.
         // let global_content = autodev_instructions::get("global", None);
         if let Some(home) = home_dir() {
             let global_autodev = home

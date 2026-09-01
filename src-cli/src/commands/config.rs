@@ -5,7 +5,7 @@ use clap::{Args, Subcommand};
 
 #[derive(Subcommand)]
 pub enum ConfigCmd {
-    /// Create default config at ~/.airs/config.toml
+    /// Create default config at ~/.autodev/config.toml
     Init,
     /// Get a config value (key format: section.field)
     Get(GetArgs),

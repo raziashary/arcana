@@ -2,7 +2,6 @@
 // Storage: ~/.autodev/config.db (shared with AUTODEV.md instructions).
 // Phase 2.3: T4a/T4b — Reasoning Effort + Temperature/Top-P per-model config.
 
-use super::autodev_dir;
 use crate::errors::{AutoDevError, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};

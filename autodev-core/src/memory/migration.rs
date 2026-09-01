@@ -1,5 +1,5 @@
 // Phase 4.8 — Migration from session message storage to episodic memory.
-// Reads all existing sessions from ~/.airs/autodev.db and backfills the
+// Reads all existing sessions from ~/.autodev/autodev.db and backfills the
 // episodic_memories table in ~/.autodev/memory.db so the PA has full
 // continuity from day-one sessions.
 //

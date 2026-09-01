@@ -1,5 +1,5 @@
 // Plugin registry — local disk scanner + remote registry stub.
-// The local registry lives at ~/.airs/plugins/<name>/manifest.yaml.
+// The local registry lives at ~/.autodev/plugins/<name>/manifest.yaml.
 // The remote registry is a future-facing struct ready for an HTTP source.
 
 use anyhow::{Context, Result};
@@ -26,7 +26,7 @@ pub fn plugin_install_dir(name: &str) -> Result<PathBuf> {
 
 // ─── Local registry ──────────────────────────────────────────────────────────
 
-/// Scan `~/.airs/plugins/` and return all installed plugin manifests.
+/// Scan `~/.autodev/plugins/` and return all installed plugin manifests.
 pub fn list_installed() -> Vec<InstalledPlugin> {
     let Ok(dir) = plugin_dir() else {
         return vec![];
@@ -90,7 +90,7 @@ pub fn is_installed(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Write a manifest and optional install metadata to `~/.airs/plugins/<name>/`.
+/// Write a manifest and optional install metadata to `~/.autodev/plugins/<name>/`.
 pub fn persist_install(
     manifest: &PluginManifest,
     config: Option<&serde_json::Value>,
@@ -116,7 +116,7 @@ pub fn persist_install(
     Ok(dir)
 }
 
-/// Remove a plugin directory from `~/.airs/plugins/<name>/`.
+/// Remove a plugin directory from `~/.autodev/plugins/<name>/`.
 pub fn remove_install(name: &str) -> Result<()> {
     let dir = plugin_install_dir(name)?;
     if dir.exists() {

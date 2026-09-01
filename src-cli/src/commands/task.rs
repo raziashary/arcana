@@ -216,7 +216,31 @@ fn claim(args: ClaimArgs, ctx: OutputContext) -> Result<()> {
             // to keep the CLI's one-command behaviour while going through the
             // guarded path.
             db.update_status(t.id, "assigned", Some(&args.worker))?;
-            db.claim_task_with_pid(t.id, &args.worker, std::process::id())?;
+
+            // ⚠ These two statements are not atomic together, and the window
+            // between them is exactly the race `claim_task_with_pid` exists to
+            // close: another worker can claim the task after the assign and
+            // before the claim. If that happens the claim fails and the task is
+            // left `assigned` with no PID — which the orphan detector only
+            // releases after its 4-hour TTL. Found by the post-phase audit
+            // (A-22).
+            //
+            // The compensating write puts it back on the queue immediately.
+            // This is a narrowing of the window, not a removal of it: a true
+            // fix needs a single atomic `ready -> in_progress` claim in core,
+            // which is a change to a shipped contract and belongs to the phase
+            // that owns the claim protocol.
+            if let Err(e) = db.claim_task_with_pid(t.id, &args.worker, std::process::id()) {
+                if let Err(revert) = db.update_status(t.id, "ready", None) {
+                    ctx.error(&format!(
+                        "Task #{} could not be claimed AND could not be returned to the \
+                         queue ({revert}); it is stranded in 'assigned' until the orphan \
+                         TTL releases it",
+                        t.id
+                    ));
+                }
+                return Err(e.into());
+            }
             ctx.success(&format!("Claimed task #{}: {}", t.id, t.title));
             match db.get_by_id(t.id)? {
                 Some(claimed) => print_task_detail(&ctx, &claimed),

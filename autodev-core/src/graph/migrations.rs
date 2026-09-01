@@ -101,7 +101,18 @@ fn migration_v4(conn: &mut Connection) -> Result<()> {
     // v4: analysis_cache table already in schema
     tx.execute_batch(CREATE_ANALYSIS_CACHE)?;
 
-    // Rebuild FTS5 index
+    // Rebuild the FTS5 index.
+    //
+    // ⚠ The post-phase audit flagged this `DROP TABLE` as a destructive
+    // statement outside `run_ladder`'s backup guard, which is literally true.
+    // No backup is taken, and that is correct: `nodes_fts` is declared
+    // `content='nodes'` — an **external-content** FTS5 table. It stores no data
+    // of its own, `nodes` is the source of truth, and the `rebuild` two lines
+    // below regenerates it in full. Backing up the whole graph database before
+    // re-indexing would copy megabytes to protect nothing.
+    //
+    // If `nodes_fts` ever stops being external-content, this comment is wrong
+    // and a backup becomes mandatory.
     tx.execute_batch("DROP TABLE IF EXISTS nodes_fts")?;
     tx.execute_batch(CREATE_NODES_FTS)?;
     tx.execute_batch("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')")?;
@@ -308,6 +319,44 @@ mod tests {
 
         assert_eq!(get_schema_version(&conn).unwrap(), 6);
         assert_eq!(columns(&conn, "nodes"), before, "schema must be unchanged");
+    }
+
+    /// The audit flagged `migration_v4`'s `DROP TABLE nodes_fts` as destruction
+    /// without a backup. It is safe only because the table is external-content
+    /// — this pins that property, so if the schema ever changes the assumption
+    /// fails loudly here rather than silently losing an index nobody can
+    /// rebuild.
+    #[test]
+    fn the_fts_table_is_external_content_so_dropping_it_loses_nothing() {
+        assert!(
+            super::super::schema::CREATE_NODES_FTS.contains("content='nodes'"),
+            "nodes_fts is no longer external-content: dropping it now loses data,              and migration_v4 must take a backup first"
+        );
+
+        let mut conn = Connection::open_in_memory().expect("mem");
+        run_migrations(&mut conn).expect("migrations");
+        conn.execute(
+            "INSERT INTO nodes              (kind, name, qualified_name, file_path, line_start, line_end, language, file_hash)              VALUES ('fn', 'probe', 'm::probe', 'src/m.rs', 1, 2, 'rust', 'deadbeef')",
+            [],
+        )
+        .expect("insert");
+
+        // Drop and rebuild exactly as v4 does, and show the content returns.
+        conn.execute_batch("DROP TABLE IF EXISTS nodes_fts")
+            .expect("drop");
+        conn.execute_batch(super::super::schema::CREATE_NODES_FTS)
+            .expect("recreate");
+        conn.execute_batch("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')")
+            .expect("rebuild");
+
+        let hits: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM nodes_fts WHERE nodes_fts MATCH 'probe'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("search");
+        assert_eq!(hits, 1, "the index did not come back from its source table");
     }
 
     /// Re-running the whole ladder changes nothing.

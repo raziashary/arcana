@@ -222,32 +222,53 @@ impl RunsDb {
             .map_err(|e| AutoDevError::Agent(format!("open runs collect: {e}")))
     }
 
-    /// Close runs left open by a process that is no longer this one.
+    /// Close runs left open by a process that is no longer alive.
     ///
-    /// A crash leaves a run open forever, and an open run means "still
-    /// running" to anything reading the ledger. Called at startup so the
-    /// previous launch's row tells the truth. Runs belonging to *this* pid on
-    /// *this* host are left alone — those are ours and genuinely open.
+    /// A crash leaves a run open forever, and an open run reads as "still
+    /// running" to anything querying the ledger.
+    ///
+    /// ⚠ **The first version tested `NOT (pid = ? AND host = ?)`** — "not my
+    /// pid" treated as "dead". Running `airsctl` while the desktop app was open
+    /// therefore marked the **live app's run** abandoned, every time. Worse,
+    /// `orphan::pid_checker::is_pid_alive` was sitting unused in the same
+    /// crate: the instrument was already there. Found by the post-phase audit
+    /// (A-09 / W-08).
+    ///
+    /// Now: a run is reaped only when it is on **this host** and its pid is
+    /// **not alive**. Runs from another host are left alone — this process
+    /// cannot see that machine's process table, and guessing is what caused the
+    /// bug.
     ///
     /// Returns how many were reaped.
     pub fn reap_abandoned(&self) -> Result<usize> {
-        let rows = self
-            .conn
-            .execute(
-                "UPDATE runs SET ended_at = ?1, outcome = ?2 \
-                 WHERE outcome IS NULL AND NOT (pid = ?3 AND host = ?4)",
-                params![
-                    now_rfc3339(),
-                    outcome::ABANDONED,
-                    std::process::id() as i64,
-                    hostname()
-                ],
-            )
-            .map_err(|e| AutoDevError::Agent(format!("reaping abandoned runs: {e}")))?;
-        if rows > 0 {
-            tracing::info!("[runs] closed {rows} run(s) left open by a previous process");
+        let this_host = hostname();
+        let mut reaped = 0usize;
+
+        for run in self.open_runs()? {
+            if run.host != this_host {
+                continue; // another machine's process table is not ours to read
+            }
+            let pid = match u32::try_from(run.pid) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            if crate::orphan::pid_checker::is_pid_alive(pid) {
+                continue; // genuinely still running — this includes our own run
+            }
+            self.conn
+                .execute(
+                    "UPDATE runs SET ended_at = ?1, outcome = ?2 \
+                     WHERE id = ?3 AND outcome IS NULL",
+                    params![now_rfc3339(), outcome::ABANDONED, &run.id],
+                )
+                .map_err(|e| AutoDevError::Agent(format!("reaping run {}: {e}", run.id)))?;
+            reaped += 1;
         }
-        Ok(rows)
+
+        if reaped > 0 {
+            tracing::info!("[runs] closed {reaped} run(s) left open by a dead process");
+        }
+        Ok(reaped)
     }
 }
 
@@ -334,34 +355,94 @@ mod tests {
     }
 
     /// A crash leaves a run open forever, and an open run reads as "still
-    /// running". Startup must correct that.
+    /// running". Startup must correct that — but only for processes that are
+    /// genuinely gone.
+    ///
+    /// The first version of `reap_abandoned` tested `NOT (pid = ? AND host = ?)`
+    /// and this test passed, because its fixture used a different *host*. That
+    /// hid the real defect: any run from another **process on this machine**
+    /// was reaped too, so `airsctl` marked the running desktop app abandoned.
+    /// The fixture now uses this host with a dead pid, which is the case that
+    /// actually matters.
     #[test]
     fn a_run_left_open_by_a_dead_process_is_reaped() {
         let path = temp_db("reap");
         let db = RunsDb::open_at(&path).expect("open");
 
-        // A row from some other process, as a crash would leave it.
+        // A crashed run: THIS host, a pid that is not alive.
+        let dead_pid = u32::MAX - 1;
+        assert!(
+            !crate::orphan::pid_checker::is_pid_alive(dead_pid),
+            "fixture needs a pid that is genuinely not running"
+        );
         db.conn
             .execute(
-                "INSERT INTO runs (id, kind, started_at, host, pid) \
-                 VALUES ('ghost', 'app', ?1, 'other-host', 999999)",
-                params![now_rfc3339()],
+                "INSERT INTO runs (id, kind, started_at, host, pid)                  VALUES ('ghost', 'app', ?1, ?2, ?3)",
+                params![now_rfc3339(), hostname(), dead_pid as i64],
             )
             .expect("insert ghost");
-        // And one of ours, genuinely open.
+
+        // A run on another machine. We cannot read that process table, so it
+        // must be left alone rather than guessed at.
+        db.conn
+            .execute(
+                "INSERT INTO runs (id, kind, started_at, host, pid)                  VALUES ('elsewhere', 'app', ?1, 'some-other-host', 4242)",
+                params![now_rfc3339()],
+            )
+            .expect("insert remote");
+
+        // And one of ours, genuinely open and genuinely alive.
         let mine = db.begin(kind::APP, None).expect("begin");
 
-        assert_eq!(db.open_runs().expect("open").len(), 2);
-        assert_eq!(db.reap_abandoned().expect("reap"), 1);
+        assert_eq!(db.open_runs().expect("open").len(), 3);
+        assert_eq!(db.reap_abandoned().expect("reap"), 1, "only the dead one");
 
-        let ghost = db.get("ghost").expect("get").expect("still recorded");
-        assert_eq!(ghost.outcome.as_deref(), Some(outcome::ABANDONED));
-
-        let ours = db.get(&mine).expect("get").expect("still there");
-        assert!(
-            ours.is_open(),
-            "this process's own run must not be reaped out from under it"
+        assert_eq!(
+            db.get("ghost")
+                .expect("get")
+                .expect("recorded")
+                .outcome
+                .as_deref(),
+            Some(outcome::ABANDONED)
         );
+        assert!(
+            db.get("elsewhere")
+                .expect("get")
+                .expect("recorded")
+                .is_open(),
+            "a run on another host must not be judged from here"
+        );
+        assert!(
+            db.get(&mine).expect("get").expect("there").is_open(),
+            "this process's own live run must not be reaped out from under it"
+        );
+
+        drop(db);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// The regression that motivated the fix, as its own case: a second live
+    /// process on the same host must not have its run reaped.
+    #[test]
+    fn a_run_from_another_live_process_on_this_host_is_not_reaped() {
+        let path = temp_db("reap-live");
+        let db = RunsDb::open_at(&path).expect("open");
+
+        // The current process stands in for "the desktop app, still running"
+        // — its pid is alive by definition.
+        db.conn
+            .execute(
+                "INSERT INTO runs (id, kind, started_at, host, pid)                  VALUES ('the-app', 'app', ?1, ?2, ?3)",
+                params![now_rfc3339(), hostname(), std::process::id() as i64],
+            )
+            .expect("insert");
+
+        assert_eq!(
+            db.reap_abandoned().expect("reap"),
+            0,
+            "a live process on this host was marked abandoned — this is exactly              what happened when airsctl ran while the app was open"
+        );
+        assert!(db.get("the-app").expect("get").expect("there").is_open());
 
         drop(db);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());

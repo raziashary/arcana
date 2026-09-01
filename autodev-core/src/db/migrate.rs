@@ -47,26 +47,61 @@ pub fn user_version(conn: &Connection) -> Result<i32> {
         .map_err(|e| AutoDevError::Agent(format!("reading user_version: {e}")))
 }
 
+/// Statements that can destroy data.
+///
+/// The first version of this list missed `DROP COLUMN` (valid and destructive
+/// on SQLite 3.35+), `UPDATE`, and `INSERT OR REPLACE` — so a migration using
+/// any of them would have run with **no backup attempted**. Found by the
+/// post-phase audit.
+const DESTRUCTIVE: &[&str] = &[
+    "drop table",
+    "drop index",
+    "drop view",
+    "drop trigger",
+    "drop column",
+    "delete from",
+    "rename to",
+    "rename column",
+    "truncate",
+    "insert or replace",
+    "update ",
+];
+
+/// Remove `CREATE TRIGGER … END;` bodies before scanning for destructive verbs.
+///
+/// Every baseline rung in this tree defines an `updated_at` trigger, and a
+/// trigger body *is* an `UPDATE`. Without this, adding `UPDATE` to the list
+/// above would mark **every** baseline destructive — so a fresh install would
+/// copy each database immediately after creating it, and the "baselines are
+/// skipped" property that keeps first run cheap would silently invert.
+fn strip_trigger_bodies(sql: &str) -> String {
+    let lower = sql.to_ascii_lowercase();
+    let mut out = String::with_capacity(sql.len());
+    let mut cursor = 0usize;
+    while let Some(rel) = lower[cursor..].find("create trigger") {
+        let start = cursor + rel;
+        out.push_str(&sql[cursor..start]);
+        // A trigger body ends at `end;`. An unterminated one drops the rest,
+        // which is the safe direction: it can only make this function *less*
+        // likely to report destructive, and SQLite would not parse it anyway.
+        match lower[start..].find("end;") {
+            Some(e) => cursor = start + e + "end;".len(),
+            None => return out,
+        }
+    }
+    out.push_str(&sql[cursor..]);
+    out
+}
+
 /// Whether a migration's SQL can destroy data.
 ///
-/// `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX` cannot; `DROP`, `DELETE` and
-/// a column or table rename can. This decides whether `run_ladder` takes a
-/// backup before applying a rung, so that the safety net is automatic rather
-/// than something each future migration's author has to remember.
+/// `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX` cannot. This decides whether
+/// `run_ladder` takes a backup before applying a rung, so the safety net is
+/// automatic rather than something each future migration's author has to
+/// remember.
 fn is_destructive(sql: &str) -> bool {
-    let lower = sql.to_ascii_lowercase();
-    [
-        "drop table",
-        "drop index",
-        "drop view",
-        "drop trigger",
-        "delete from",
-        "rename to",
-        "rename column",
-        "truncate",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
+    let lower = strip_trigger_bodies(sql).to_ascii_lowercase();
+    DESTRUCTIVE.iter().any(|needle| lower.contains(needle))
 }
 
 /// Apply every migration in `ladder` whose version is above the database's
@@ -116,7 +151,7 @@ pub fn run_ladder(conn: &Connection, db_name: &str, ladder: &[Migration]) -> Res
                     Ok(b) => tracing::info!("[migrate] {}", b.describe()),
                     Err(e) => {
                         return Err(AutoDevError::Agent(format!(
-                            "{db_name}: refusing to apply destructive migration v{} ({})                              because no backup could be taken: {e}",
+                            "{db_name}: refusing to apply destructive migration v{} ({}) because no backup could be taken: {e}",
                             m.version, m.name
                         )))
                     }
@@ -316,6 +351,11 @@ mod tests {
         assert!(is_destructive("delete from tasks where id = 1"));
         assert!(is_destructive("ALTER TABLE t RENAME TO u"));
         assert!(is_destructive("ALTER TABLE t RENAME COLUMN a TO b"));
+        // The four the first version missed.
+        assert!(is_destructive("ALTER TABLE t DROP COLUMN secret;"));
+        assert!(is_destructive("UPDATE tasks SET status = 'done';"));
+        assert!(is_destructive("INSERT OR REPLACE INTO t VALUES (1);"));
+        assert!(is_destructive("TRUNCATE t;"));
 
         // The shape every baseline rung has. If this were flagged, the first
         // run of a fresh install would copy every database it just created.
@@ -324,6 +364,112 @@ mod tests {
              CREATE INDEX IF NOT EXISTS i ON t(id);"
         ));
         assert!(!is_destructive("ALTER TABLE t ADD COLUMN b TEXT;"));
+    }
+
+    /// An `updated_at` trigger body contains an `UPDATE`, and every baseline
+    /// rung in this tree defines one. Without the trigger-stripping, adding
+    /// `UPDATE` to the destructive list would have made every first run copy
+    /// every database it had just created.
+    #[test]
+    fn a_trigger_body_containing_update_does_not_make_a_baseline_destructive() {
+        let baseline = "CREATE TABLE IF NOT EXISTS t (
+                            id INTEGER PRIMARY KEY,
+                            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                        );
+                        CREATE TRIGGER IF NOT EXISTS t_ts
+                            AFTER UPDATE ON t
+                            BEGIN
+                                UPDATE t SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+                            END;";
+        assert!(
+            !is_destructive(baseline),
+            "a baseline with an updated_at trigger must not be treated as destructive"
+        );
+
+        // But a real UPDATE outside a trigger still is.
+        let real = format!("{baseline}\nUPDATE t SET updated_at = NULL;");
+        assert!(
+            is_destructive(&real),
+            "an UPDATE outside a trigger is destructive"
+        );
+    }
+
+    /// The refusal branch, which was previously untested — so "a failed backup
+    /// stops the operation" was an unproven claim.
+    #[test]
+    fn a_destructive_migration_refuses_to_run_when_the_backup_fails() {
+        let dir = std::env::temp_dir().join("autodev-migrate-refuse-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let db_path = dir.join("victim.db");
+
+        let c = Connection::open(&db_path).expect("open");
+        c.execute_batch(
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT);
+             INSERT INTO t (v) VALUES ('precious');
+             PRAGMA user_version = 1;",
+        )
+        .expect("seed");
+
+        let prev = std::env::var("USERPROFILE").ok();
+        let prev_home = std::env::var("HOME").ok();
+        std::env::set_var("USERPROFILE", &dir);
+        std::env::set_var("HOME", &dir);
+
+        // Make the backup impossible: put a DIRECTORY where the backup file
+        // needs to be written, so `VACUUM INTO` cannot create it.
+        let backups = dir.join(".autodev").join("backups");
+        std::fs::create_dir_all(&backups).expect("mkdir backups");
+        // `backup_before` names the file `<stem>-<timestamp>-<reason>.db`; the
+        // timestamp is the clock, so block the whole directory instead by
+        // making it read-only is unreliable on Windows. Occupy the exact name
+        // is impossible without the clock — so remove write access by making
+        // `backups` a FILE rather than a directory.
+        std::fs::remove_dir_all(&backups).expect("rm");
+        std::fs::write(&backups, b"not a directory").expect("write blocker");
+
+        const D: &[Migration] = &[
+            Migration {
+                version: 1,
+                name: "baseline",
+                sql: "CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY, v TEXT);",
+            },
+            Migration {
+                version: 2,
+                name: "destroy",
+                sql: "DELETE FROM t;",
+            },
+        ];
+        let outcome = run_ladder(&c, "victim.db", D);
+
+        match prev {
+            Some(v) => std::env::set_var("USERPROFILE", v),
+            None => std::env::remove_var("USERPROFILE"),
+        }
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        let err = outcome.expect_err("a destructive migration must not run without a backup");
+        assert!(
+            err.to_string().contains("no backup could be taken"),
+            "unexpected error: {err}"
+        );
+
+        // The whole point: the data is still there.
+        let left: i64 = c
+            .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 1, "the row was deleted despite the backup failing");
+        assert_eq!(
+            user_version(&c).unwrap(),
+            1,
+            "the version must not advance past a refused migration"
+        );
+
+        drop(c);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A destructive rung must not run when its backup cannot be taken.

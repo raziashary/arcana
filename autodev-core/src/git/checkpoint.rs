@@ -26,24 +26,14 @@ pub const RETENTION_PER_FILE: usize = 50;
 
 // ─── Storage bootstrap ────────────────────────────────────────────────────────
 
+/// Open `config.db` through its schema owner.
+///
+/// This used to issue its own `CREATE TABLE IF NOT EXISTS checkpoints`, which
+/// made it one of three independent writers to a file whose `user_version` only
+/// described half its contents. The DDL now lives in `db::config_db`'s ladder
+/// (v2) — see that module's header for why the split was wrong.
 fn open_db() -> Result<Connection> {
-    let conn = crate::db::open_tuned(&autodev_dir()?.join("config.db"))
-        .map_err(|e| AutoDevError::Git(format!("config.db open: {e}")))?;
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS checkpoints (
-             id             TEXT PRIMARY KEY,
-             session_id     TEXT NOT NULL,
-             file_path      TEXT NOT NULL,
-             snapshot_path  TEXT NOT NULL,
-             created_ms     INTEGER NOT NULL,
-             reason         TEXT NOT NULL,
-             size_bytes     INTEGER NOT NULL
-         );
-         CREATE INDEX IF NOT EXISTS idx_checkpoints_file    ON checkpoints(file_path);
-         CREATE INDEX IF NOT EXISTS idx_checkpoints_session ON checkpoints(session_id);",
-    )
-    .map_err(|e| AutoDevError::Git(format!("checkpoints migrate: {e}")))?;
-    Ok(conn)
+    crate::db::config_db::open().map_err(|e| AutoDevError::Git(format!("config.db open: {e}")))
 }
 
 fn checkpoints_root() -> Result<PathBuf> {

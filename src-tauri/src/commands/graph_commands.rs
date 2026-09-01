@@ -821,6 +821,19 @@ pub async fn delete_graph(repo_path: Option<String>) -> Result<()> {
     let db_path = repo_db_path(&path)?;
 
     if db_path.exists() {
+        // GAP-11 / §0.8. This deletes an entire per-repo code graph — every
+        // node, edge and community extracted from that repository — and it is
+        // reachable from a single click in the Graph tab. P1-19 wired the
+        // backup helper to `run_ladder` and `clear_all` and called those "the
+        // two genuinely wholesale operations"; the post-phase audit found this
+        // third one (W-13). A failed backup stops the delete.
+        let backup = crate::db::backup::backup_before(&db_path, "delete-graph").map_err(|e| {
+            anyhow::anyhow!(
+                "refusing to delete the graph database because no backup could be taken: {e}"
+            )
+        })?;
+        tracing::info!("[GraphDelete] {}", backup.describe());
+
         std::fs::remove_file(&db_path)?;
         tracing::info!("[GraphDelete] Deleted graph DB: {:?}", db_path);
     }

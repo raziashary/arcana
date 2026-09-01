@@ -627,7 +627,11 @@ let x = 1;
     #[test]
     fn tg_p1_04_config_db_tables_have_exactly_one_creator() {
         const OWNER: &str = "autodev-core/src/db/config_db.rs";
-        for table in ["app_settings", "autodev_instructions", "model_configs"] {
+        // All six, not the three P1-15 knew about. `checkpoints` came from
+        // `git/checkpoint.rs` and `hooks`/`hook_logs` from `hooks/db.rs`; both
+        // predate P1 and both were missed because the search was for the table
+        // name rather than for the file. Adopted into the ladder at v2.
+        for table in autodev_core::db::config_db::TABLES {
             let creators = table_creators(table);
             assert_eq!(
                 creators,

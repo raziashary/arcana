@@ -5,7 +5,6 @@
 use super::types::{
     AddHookInput, HookAction, HookConditions, HookConfig, HookExecutionLog, HookOutcome, HookType,
 };
-use crate::db::autodev_dir;
 use crate::errors::{AutoDevError, Result};
 use rusqlite::{params, Connection};
 
@@ -14,48 +13,16 @@ pub struct HooksDb {
 }
 
 impl HooksDb {
+    /// Open `config.db` through its schema owner.
+    ///
+    /// The `hooks` and `hook_logs` DDL now lives in `db::config_db`'s ladder
+    /// (v2). This module used to create them itself, which left three of
+    /// `config.db`'s six tables outside the version that claimed to describe
+    /// the file.
     pub fn open() -> Result<Self> {
-        let path = autodev_dir()?.join("config.db");
-        let conn = crate::db::open_tuned(&path)
-            .map_err(|e| AutoDevError::Agent(format!("HooksDb open: {e}")))?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-            .map_err(|e| AutoDevError::Agent(format!("HooksDb pragma: {e}")))?;
-        let db = Self { conn };
-        db.migrate()?;
-        Ok(db)
-    }
-
-    fn migrate(&self) -> Result<()> {
-        self.conn
-            .execute_batch(
-                r#"
-            CREATE TABLE IF NOT EXISTS hooks (
-                id          TEXT PRIMARY KEY,
-                name        TEXT NOT NULL,
-                hook_type   TEXT NOT NULL,
-                enabled     INTEGER NOT NULL DEFAULT 1,
-                priority    INTEGER NOT NULL DEFAULT 100,
-                conditions  TEXT NOT NULL DEFAULT '{}',
-                action      TEXT NOT NULL,
-                created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS hook_logs (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                hook_id     TEXT NOT NULL,
-                hook_name   TEXT NOT NULL,
-                hook_type   TEXT NOT NULL,
-                outcome     TEXT NOT NULL,
-                output      TEXT,
-                error       TEXT,
-                executed_at TEXT NOT NULL DEFAULT (datetime('now')),
-                duration_ms INTEGER NOT NULL DEFAULT 0
-            );
-        "#,
-            )
-            .map_err(|e| AutoDevError::Agent(format!("HooksDb migrate: {e}")))?;
-        Ok(())
+        Ok(Self {
+            conn: crate::db::config_db::open()?,
+        })
     }
 
     pub fn list_all(&self) -> Result<Vec<HookConfig>> {

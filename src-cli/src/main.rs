@@ -19,7 +19,7 @@ use output::{OutputContext, OutputFormat};
     long_about = None,
 )]
 pub struct Cli {
-    /// Path to config file (default: ~/.airs/config.toml)
+    /// Path to config file (default: ~/.autodev/config.toml)
     #[arg(long, global = true, env = "AIRSCTL_CONFIG")]
     pub config: Option<String>,
 

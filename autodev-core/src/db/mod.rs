@@ -5,7 +5,8 @@
 //   ~/.autodev/config.db           — AUTODEV.md instructions + per-model configs
 //   ~/.autodev/workers.db          — Worker registry (Phase 2.2)
 //
-// Session data lives in the existing ~/.airs/autodev.db (see session/storage.rs).
+// Session data lives in ~/.autodev/autodev.db (see session/storage.rs). It was
+// ~/.airs/autodev.db until P1-14 consolidated the two data roots.
 
 pub mod annotations;
 pub mod app_settings;

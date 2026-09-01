@@ -537,7 +537,7 @@ fn redeem_token(args: WorkerSetupRedeemArgs, ctx: &OutputContext) -> Result<()> 
 // the full Tauri crate. It calls the same filesystem paths.
 
 fn collect_local_plugins() -> Vec<PluginInfo> {
-    // Read ~/.airs/plugins/ for installed plugins
+    // Read ~/.autodev/plugins/ for installed plugins
     let installed = scan_installed_names();
 
     // Return the 5 built-in plugins + anything installed on top

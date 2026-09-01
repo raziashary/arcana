@@ -1,8 +1,16 @@
 // `~/.autodev/config.db` — the schema owner for the whole file.
 //
-// Three modules keep tables here: `app_settings`, `autodev_instructions` and
-// `model_configs`. Their tables are disjoint, so for a long time each declared
-// its own `CREATE TABLE IF NOT EXISTS` and nothing collided.
+// **Five** modules keep tables here: `app_settings`, `autodev_instructions`,
+// `model_configs`, `git/checkpoint.rs` (`checkpoints`) and `hooks/db.rs`
+// (`hooks`, `hook_logs`). Their tables are disjoint, so for a long time each
+// declared its own `CREATE TABLE IF NOT EXISTS` and nothing collided.
+//
+// ⚠ P1-15 originally said "three". That was wrong, and the error is instructive:
+// I searched for `CREATE TABLE … app_settings` — the *claim* — instead of for
+// `config.db` — the *file*. The two extra writers predate P1, so this was never
+// a regression, but the ladder below was declared the file's schema owner while
+// three of its six tables sat outside it, and `INV-10` was scored GREEN on that
+// count. Found by the post-phase audit (D-27 / W-07 / A-??), corrected in v2.
 //
 // A `user_version` does collide. It belongs to the *file*, not to a table, so
 // three modules each running their own ladder over `config.db` would each see a
@@ -23,10 +31,11 @@ use crate::errors::{AutoDevError, Result};
 /// One rung, because this is the first version that carries a stamp — the
 /// tables themselves predate it and are created here idempotently, so an
 /// existing `config.db` is stamped without being altered.
-const LADDER: &[Migration] = &[Migration {
-    version: 1,
-    name: "config-baseline",
-    sql: r#"
+const LADDER: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "config-baseline",
+        sql: r#"
         CREATE TABLE IF NOT EXISTS app_settings (
             key        TEXT PRIMARY KEY,
             value      TEXT NOT NULL,
@@ -75,10 +84,70 @@ const LADDER: &[Migration] = &[Migration {
                 UPDATE model_configs SET updated_at = CURRENT_TIMESTAMP WHERE model_id = NEW.model_id;
             END;
     "#,
-}];
+    },
+    Migration {
+        version: 2,
+        name: "config-adopt-strays",
+        sql: V2_ADOPT_STRAYS,
+    },
+];
 
-/// The tables this file owns. Used by the one-owner gate and by tests.
-pub const TABLES: &[&str] = &["app_settings", "autodev_instructions", "model_configs"];
+/// v2 — adopt the tables that `git/checkpoint.rs` and `hooks/db.rs` used to
+/// create for themselves.
+///
+/// A separate rung rather than an edit to v1: every live `config.db` is already
+/// stamped `user_version = 1`, so a v1 edit would never run. The statements are
+/// `IF NOT EXISTS` and the tables already exist, so on every database that
+/// exists today this rung creates nothing and only advances the version — which
+/// is the point. From here on the file's `user_version` describes the whole
+/// file, which is what `INV-10` actually asks for.
+const V2_ADOPT_STRAYS: &str = r#"
+    CREATE TABLE IF NOT EXISTS checkpoints (
+        id             TEXT PRIMARY KEY,
+        session_id     TEXT NOT NULL,
+        file_path      TEXT NOT NULL,
+        snapshot_path  TEXT NOT NULL,
+        created_ms     INTEGER NOT NULL,
+        reason         TEXT NOT NULL,
+        size_bytes     INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_checkpoints_file    ON checkpoints(file_path);
+    CREATE INDEX IF NOT EXISTS idx_checkpoints_session ON checkpoints(session_id);
+
+    CREATE TABLE IF NOT EXISTS hooks (
+        id          TEXT PRIMARY KEY,
+        name        TEXT NOT NULL,
+        hook_type   TEXT NOT NULL,
+        enabled     INTEGER NOT NULL DEFAULT 1,
+        priority    INTEGER NOT NULL DEFAULT 100,
+        conditions  TEXT NOT NULL DEFAULT '{}',
+        action      TEXT NOT NULL,
+        created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS hook_logs (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        hook_id     TEXT NOT NULL,
+        hook_name   TEXT NOT NULL,
+        hook_type   TEXT NOT NULL,
+        outcome     TEXT NOT NULL,
+        output      TEXT,
+        error       TEXT,
+        executed_at TEXT NOT NULL DEFAULT (datetime('now')),
+        duration_ms INTEGER NOT NULL DEFAULT 0
+    );
+"#;
+
+/// Every table this file owns. Used by the one-owner gate and by tests.
+pub const TABLES: &[&str] = &[
+    "app_settings",
+    "autodev_instructions",
+    "model_configs",
+    "checkpoints",
+    "hooks",
+    "hook_logs",
+];
 
 /// Open `~/.autodev/config.db`, migrated and ready.
 pub fn open() -> Result<Connection> {
@@ -124,7 +193,7 @@ mod tests {
         for t in TABLES {
             assert!(table_exists(&conn, t), "missing table {t}");
         }
-        assert_eq!(migrate::user_version(&conn).unwrap(), 1);
+        assert_eq!(migrate::user_version(&conn).unwrap(), 2);
         drop(conn);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
@@ -139,11 +208,11 @@ mod tests {
     fn reopening_is_stable_rather_than_re_migrating() {
         let path = temp("stable");
         let first = open_at(&path).expect("first");
-        assert_eq!(migrate::user_version(&first).unwrap(), 1);
+        assert_eq!(migrate::user_version(&first).unwrap(), 2);
         drop(first);
 
         let second = open_at(&path).expect("second");
-        assert_eq!(migrate::user_version(&second).unwrap(), 1);
+        assert_eq!(migrate::user_version(&second).unwrap(), 2);
         for t in TABLES {
             assert!(table_exists(&second, t), "missing table {t} after reopen");
         }
@@ -170,7 +239,7 @@ mod tests {
         }
 
         let conn = open_at(&path).expect("migrate");
-        assert_eq!(migrate::user_version(&conn).unwrap(), 1);
+        assert_eq!(migrate::user_version(&conn).unwrap(), 2);
         let v: String = conn
             .query_row(
                 "SELECT value FROM app_settings WHERE key='workspace_dir'",

@@ -4,7 +4,7 @@
 // worker type, allowed repos, and an expiry timestamp.
 //
 // For the first-party use case (AIRS Foundry internal fleet) the secret is
-// simply a random 32-byte key stored in ~/.airs/fleet_secret. For multi-tenant
+// simply a random 32-byte key stored in ~/.autodev/fleet_secret. For multi-tenant
 // deployments the secret would come from the AIRS backend API.
 
 use anyhow::{anyhow, Context, Result};
