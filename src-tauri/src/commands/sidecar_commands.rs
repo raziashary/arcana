@@ -16,9 +16,7 @@ use tracing::info;
 
 use crate::agent::ToolRegistry;
 use crate::sidecar::client::OrchestratorClient;
-use crate::sidecar::{
-    resolve_memory_path, resolve_orchestrator_path, SidecarManager, SidecarStatus,
-};
+use crate::sidecar::{resolve_memory_path, resolve_orchestrator_path, SidecarManager};
 
 // ─── Status ───────────────────────────────────────────────────────────────────
 

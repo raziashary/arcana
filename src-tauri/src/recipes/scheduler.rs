@@ -107,19 +107,14 @@ impl RecipeScheduler {
                 slug_owned
             );
 
-            // Gate the first tick until core-orchestrator is reachable (T5.1/T5.2 — E-04 fix).
-            // Polls every 2 s for up to 120 s before proceeding regardless.
-            // 120s covers the observed ~106s Python venv cold-boot time.
-            // If still not ready after 120s, the orchestrator is genuinely unreachable
-            // and the startup tick will run via Mode 1 (the only legitimate Mode 1 path).
-            if !wait_for_orchestrator_ready(&runner, 120).await {
-                warn!(
-                    "[RecipeScheduler] Orchestrator not ready after 120s for '{}' — \
-                     starting schedule anyway. Mode 1 (Rust AgentEngine) will handle ticks \
-                     until orchestrator becomes reachable.",
-                    slug_owned
-                );
-            }
+            // The 120s wait for core-orchestrator that used to be here is REMOVED.
+            //
+            // It polled every 2s for up to two minutes before starting the
+            // schedule, so that the first tick could run in Mode 2. Mode 2 no
+            // longer runs (ADR-LOG-RESTRUCT-0008), so on a machine without the
+            // Python sidecar every worker sat idle for 120 seconds at boot and
+            // then did exactly what it would have done immediately. Found while
+            // fixing the P0 post-phase audit's F-11.
 
             // ── IMMEDIATE STARTUP TICK (Fleet Initialization) ─────────────────────
             // Fire one tick immediately after orchestrator is ready, regardless of
@@ -127,20 +122,10 @@ impl RecipeScheduler {
             // within seconds of boot, even if their normal schedule is 5 or 10 minutes.
             // Without this, worker-platform and worker-cleanup would wait 5-10 min
             // before first registration, breaking first-time user experience.
-            let orch_ready = runner.is_orchestrator_ready().await;
-            if orch_ready {
-                info!(
-                    "[RecipeScheduler] Orchestrator ready — firing STARTUP tick for '{}' (Mode 2)",
-                    slug_owned
-                );
-            } else {
-                info!(
-                    "[RecipeScheduler] Orchestrator not yet ready — firing STARTUP tick for '{}'. \
-                     Will run via Mode 1 since orchestrator is unreachable. \
-                     Catch-up tick will follow once orchestrator is healthy.",
-                    slug_owned
-                );
-            }
+            info!(
+                "[RecipeScheduler] Firing STARTUP tick for '{}' on the in-process engine",
+                slug_owned
+            );
 
             // Ruflo Feature 2 — run orphan detection before the Supervisor tick
             // so it sees freshly-released tasks on this poll.
@@ -171,30 +156,17 @@ impl RecipeScheduler {
                 // Non-fatal: continue to cron loop even if startup tick failed
             }
 
-            // ── MODE 2 CATCH-UP TICK ──────────────────────────────────────────────
-            // If the startup tick ran via Mode 1 (orchestrator was not yet ready),
-            // wait for the orchestrator and fire a Mode 2 tick once it becomes healthy.
-            // This is essential because agent YAML creation only happens in Mode 2
-            // (via ensure_agent). Workers whose startup tick ran in Mode 1 will not
-            // have their YAMLs created, making them invisible to the fleet until the
-            // catch-up tick runs.
-            // This handles the race where some workers (e.g. supervisor, worker-frontend)
-            // start before the orchestrator's cold-boot completes and get a Mode 1
-            // startup tick; the catch-up ensures they reach Mode 2 within 90s of orch readiness.
-            if !orch_ready {
-                if wait_for_orchestrator_ready(&runner, 90).await {
-                    info!(
-                        "[RecipeScheduler] Orchestrator now ready — firing Mode 2 catch-up tick for '{}'",
-                        slug_owned
-                    );
-                    if let Err(e) = runner.run_recipe(&recipe, &slug_owned).await {
-                        error!(
-                            "[RecipeScheduler] Mode 2 catch-up tick failed for '{}': {e}",
-                            slug_owned
-                        );
-                    }
-                }
-            }
+            // ── MODE 2 CATCH-UP TICK — REMOVED IN P0 ─────────────────────────────
+            //
+            // This waited up to 90s for the orchestrator and then ran the recipe a
+            // SECOND time, so that a worker whose startup tick fell back to Mode 1
+            // would still get its agent YAML created by Mode 2's `ensure_agent`.
+            //
+            // Mode 2 no longer runs at all (ADR-LOG-RESTRUCT-0008), so the second
+            // call could never be a Mode 2 tick — it was a duplicate Mode 1 run:
+            // a second, paid LLM invocation of the same recipe, minutes after the
+            // first, for a reason that can no longer occur. Found by the P0
+            // post-phase audit (F-11).
 
             // ── CRON SCHEDULE LOOP ───────────────────────────────────────────────
             // After startup tick, fall back to the worker's configured schedule.
@@ -545,24 +517,6 @@ impl RecipeScheduler {
 }
 
 // ─── Orchestrator readiness gate ────────────────────────────────────────────
-
-/// Poll orchestrator health until ready or timeout (T5.1 — E-04 fix).
-/// Returns true if healthy within `timeout_secs`, false if timed out.
-async fn wait_for_orchestrator_ready(
-    runner: &super::runner::RecipeRunner,
-    timeout_secs: u64,
-) -> bool {
-    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_secs);
-    loop {
-        if runner.is_orchestrator_ready().await {
-            return true;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return false;
-        }
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-    }
-}
 
 // ─── Global scheduler handle (Phase 3.0 R1) ──────────────────────────────────
 //
