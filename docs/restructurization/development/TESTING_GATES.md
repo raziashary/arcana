@@ -88,11 +88,14 @@
 
 - [ ] **TG0-05** `[portability]` — **NEW (uncovered risks R-4, R-10).** CI runs Windows, Linux **and macOS** jobs, on pull requests, all blocking; and the end-to-end harness (WebDriver/Playwright against the built Tauri app) exists and executes at least one assertion on each. This gate asserts that the lanes exist and can fail; what runs inside them grows through the programme and is finally sealed by `TG9-01`.
       Source: **NEW** — `00 §9.2 R-4`'s mitigation ("macOS enters CI in P0, not P9") and review fix 10 ("harness and macOS CI moved into P0") are mandates that no spec turned into a gate · Catches: "there is no macOS job at all" (`09 §5`); P4's exit gate naming three OSes with no lane to run them in · Covers: **R-4**, **R-10**
-      **Status 2026-09-01: PARTIAL — the lanes exist and can fail; the harness has not executed.**
+      **Status 2026-09-01 (revised after the first green CI run): PARTIAL — much stronger, still not green.**
       ✅ CI runs Windows, Linux **and** macOS (`macos-14`) build smokes, on pull requests, all blocking — a `build-smoke` matrix with `fail-fast: false`. `GATE-PROVEN` by `ci_gate::tests::tg0_02_every_required_check_is_present_and_distinct`.
       ✅ Windows leg of `S0-01` is `SMOKE-PROVEN` locally: the app builds in 2m24s and starts (logging initialises, retention runs).
-      ❌ The e2e harness exists (`e2e/wdio.conf.ts`, one scenario) and is wired into CI on Linux, but **has never executed an assertion**. It cannot run on the Windows dev machine: `msedgedriver` is not on PATH, which is the documented prerequisite, and the config now fails naming it. Its first real run is the Linux CI job.
-      ❌ **macOS can never run this harness**: `tauri-driver` has no WKWebView backend. macOS is covered by the build smoke only. Recorded here rather than hidden behind a skipped test that would report green.
+      ✅ The e2e harness **executes and asserts** on Linux, verified in run `33467890406`:
+      `✓ opens a window and renders the React root` · `✓ reports a document title` · `2 passing (1.7s)`, driving `wry 0.55.1` against the real binary. Not a vacuous pass — the assertions are named in the log.
+      ✅ **NEW — a launch smoke on the Linux build job.** Compiling is not starting: the three build smokes stop at `cargo build`, so an app that compiled and then died in `setup()` was invisible to all of them. The job now runs the binary under `xvfb` for 20s and requires it to still be alive (`OK - the application was still running after 20s`). This is the check that would have caught `"dialog": {}`; it needs no webdriver and is far more robust than the harness.
+      ❌ **"executes at least one assertion on EACH" is not met — Linux only.** `tauri-driver` has no WKWebView backend, so macOS can never run this harness, and Windows needs an Edge WebDriver matching the runner's Edge build. Recorded rather than hidden behind a skip that would report green.
+      ❌ The app is never **launched** on macOS — that lane builds only. Adding a macOS launch smoke is the cheapest way to close this and is carried to P1.
 
 ---
 

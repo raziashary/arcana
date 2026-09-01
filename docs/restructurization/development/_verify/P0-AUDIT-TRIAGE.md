@@ -96,3 +96,33 @@ opposite. Three further findings (`F-11`, `F-21`, `F-22`) are the same shape.
 
 That class is now `L-C4` at three instances and lesson `L-11` in `MDP §0.16`:
 **verifying the consequence you intended is not verifying the change.**
+
+---
+
+## F · Post-audit: the first green CI run, and what it cost to get there
+
+Four CI runs after the audit fixes, `33467890406` passed **all seven jobs** —
+the first green run in this repository's recent history.
+
+The three e2e failures on the way were not harness flakiness. In order they
+read: capabilities rejected → session timed out → **the application is crashing
+at startup**. The third carried
+`PluginInitialization("dialog", "invalid type: map, expected unit")`: a
+regression introduced by P0 itself, when registering `tauri-plugin-dialog` to
+fix the Logs export made Tauri parse a `"dialog": {}` block the plugin cannot
+deserialize.
+
+No other job could see it. All three build smokes stop at `cargo build`, so an
+application that compiles perfectly and then dies in `setup()` was invisible to
+every gate P0 had built. I had argued twice for deleting the e2e job as noise
+from an unfinished capability; it was the only honest signal in the workflow.
+
+Two things came out of that, both now permanent:
+
+- **A launch smoke on the Linux build job** — start the binary under `xvfb`,
+  wait 20s, require it to still be alive. No webdriver, no capability
+  negotiation, and it catches the whole "compiles but does not run" class that
+  three build smokes and 88 tests could not.
+- **`L-C9` and `L-C10` in `MDP §0.16`** — a verification whose shape cannot
+  express failure (three instances in this phase), and a failing check read as
+  worthless rather than as a finding.
