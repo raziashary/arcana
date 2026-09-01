@@ -121,7 +121,6 @@
   "plugins": {
     "shell": {
       "open": true
-    },
-    "dialog": {}
+    }
   }
 }

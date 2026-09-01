@@ -178,7 +178,7 @@ jobs:
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libgtk-3-dev \
             libayatana-appindicator3-dev librsvg2-dev \
-            libssl-dev pkg-config
+            libssl-dev pkg-config xvfb
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -199,6 +199,37 @@ jobs:
 
       - name: Build (debug, no bundle)
         run: npm run tauri -- build --debug --no-bundle
+
+      # COMPILING IS NOT STARTING. Nothing else in this workflow executes the
+      # binary — the other build jobs stop at `cargo build` — so an app that
+      # compiles perfectly and then dies during setup() was invisible here.
+      #
+      # Not hypothetical: registering tauri-plugin-dialog made Tauri parse a
+      # `"dialog": {}` config block the plugin cannot deserialize (its config
+      # type is unit), and the app failed at launch on every platform while all
+      # three build smokes stayed green.
+      #
+      # Cheap and webdriver-free: start it, wait, require it to still be alive.
+      # `timeout` exits 124 when it had to kill a LIVING process; any other exit
+      # code means the app quit on its own, which is the failure.
+      - name: Launch smoke (Linux) — the app must START, not just compile
+        if: runner.os == 'Linux'
+        env:
+          WEBKIT_DISABLE_COMPOSITING_MODE: 1
+          WEBKIT_DISABLE_DMABUF_RENDERER: 1
+        run: |
+          set +e
+          timeout 20 xvfb-run --auto-servernum ./target/debug/autodev > app-launch.log 2>&1
+          code=$?
+          set -e
+          if [ "$code" -eq 124 ]; then
+            echo "OK - the application was still running after 20s"
+          else
+            echo "::error::The application exited on its own with code $code - it does not start."
+            echo "----- application output -----"
+            cat app-launch.log
+            exit 1
+          fi
 
   # ── End-to-end smoke against the built binary ─────────────────────────────
   #
