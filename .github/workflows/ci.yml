@@ -218,10 +218,12 @@ jobs:
           WEBKIT_DISABLE_COMPOSITING_MODE: 1
           WEBKIT_DISABLE_DMABUF_RENDERER: 1
         run: |
-          set +e
-          timeout 20 xvfb-run --auto-servernum ./target/debug/autodev > app-launch.log 2>&1
-          code=$?
-          set -e
+          # `|| code=$?` captures the exit status WITHOUT disabling errexit.
+          # The first version used `set +e`, which this workflow's own gate
+          # correctly flags as a way to neutralise a failing step — the fix is
+          # to not need the exception, not to exempt it.
+          code=0
+          timeout 20 xvfb-run --auto-servernum ./target/debug/autodev > app-launch.log 2>&1 || code=$?
           if [ "$code" -eq 124 ]; then
             echo "OK - the application was still running after 20s"
           else
