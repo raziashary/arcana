@@ -2,9 +2,13 @@
 // crate root.
 //
 // This exists because of 918 lines that were never compiled. `graph_tools.rs`
-// (840 LOC, 22 tool structs) and `graph_prompts.rs` (78 LOC) have no `mod`
-// declaration anywhere, so `cargo build` never saw them — and neither did
-// clippy, or any test. `db/checkpoints.rs` is in the same state.
+// (840 LOC, 27 tool structs — the plan said 22) and `graph_prompts.rs` (78 LOC)
+// had no `mod` declaration anywhere, so `cargo build` never saw them — and
+// neither did clippy, or any test. `db/checkpoints.rs` was in the same state.
+//
+// ✅ RESOLVED IN P1. Both graph modules are declared and compile; the six
+// E0609s they surfaced are fixed. `db/checkpoints.rs` was deleted rather than
+// declared. The exception list below is now EMPTY.
 //
 // ⚠ CORRECTED 2026-09-01. This comment used to end "...which is why undo does
 // not exist in the shipped binary". That is FALSE, and it contradicted this
@@ -34,29 +38,23 @@ use std::path::{Path, PathBuf};
 /// Files known to be unreachable, each with the reason and the phase that fixes
 /// it. **This list may only shrink.** Adding to it requires a deliberate edit
 /// and a reviewer asking why a new file cannot be reached.
-const KNOWN_UNREACHABLE: &[(&str, &str)] = &[
-    (
-        "agent/builtin_tools/graph_tools.rs",
-        "840 LOC, 22 tool structs. Does not currently compile: `:272` treats an \
-         Option<GraphNode> as a GraphNode and `:696` reads a non-existent \
-         `confidence_tier`. Declaring it also would not restore the capability — \
-         the structs do not implement `Tool` and nothing registers them. Repaired \
-         and wired in P3 (BUG-GRAPH).",
-    ),
-    (
-        "agent/builtin_tools/graph_prompts.rs",
-        "78 LOC. Compiles cleanly; withheld only so it lands with graph_tools in \
-         P3 rather than shipping prompts for tools that do not exist.",
-    ),
-    (
-        "db/checkpoints.rs",
-        "Duplicates the live, shipped `git/checkpoint.rs` (declared at \
-         `git/mod.rs:31`, wired to five Tauri commands). Declaring it would stand \
-         up a SECOND checkpoint implementation against a second database \
-         (~/.autodev/checkpoints.db, which no compiled code opens). Needs an \
-         owner decision on which implementation survives — P1.",
-    ),
-];
+/// Files known to be unreachable, each with the reason and the phase that fixes
+/// it. **This list may only shrink.** Adding to it requires a deliberate edit
+/// and a reviewer asking why a new file cannot be reached.
+///
+/// **It is empty, and that is the goal state.** P1 resolved all three entries:
+/// `graph_tools.rs` and `graph_prompts.rs` are declared and compiling (P1-01,
+/// P1-03), and `db/checkpoints.rs` was deleted rather than declared, because
+/// its justification — "undo does not exist" — was false and declaring it would
+/// have created the second checkpoint store P1-16 then had to merge
+/// (ADR-LOG-RESTRUCT-0012).
+///
+/// ⚠ **Compiling is not wiring.** The 27 structs in `graph_tools.rs` still do
+/// not implement `Tool` and nothing registers them, so the agent has no graph
+/// tools. This gate proves the code is *built*, never that a capability
+/// *exists* — that is P3 (BUG-GRAPH). A green gate here must not be read as a
+/// working feature.
+const KNOWN_UNREACHABLE: &[(&str, &str)] = &[];
 
 /// Walk `src/`, returning every `.rs` file relative to it.
 fn all_rust_files(src: &Path) -> Vec<PathBuf> {

@@ -10,6 +10,8 @@ pub mod create_task;
 pub mod edit_file;
 pub mod get_task_tool;
 pub mod glob;
+pub mod graph_prompts;
+pub mod graph_tools;
 pub mod grep;
 pub mod list_directory;
 pub mod list_tasks_tool;
