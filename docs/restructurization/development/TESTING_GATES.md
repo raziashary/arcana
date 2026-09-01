@@ -58,20 +58,40 @@
 **Exit gate (Part 6):** an unsigned/unverified update **cannot** install; no command returns a key; a failing test fails CI.
 
 - [ ] **TG0-01** `[security]` — An update whose signature is **missing** is refused; one whose signature is **bad** is refused; one whose signature is **good and chains to the pinned production trust root** installs. Absence of a signature is a failure path, never a skip path — the empty-`sig_url` branch must not exist in the binary. Refusal is asserted by observing the installer never executes, not by a return code alone.
-      Source: spec `09 §6 G-UPDATE-REFUSE` · Catches: `IN-01…IN-05`, `verify.rs:90` · Proves: **INV-11** · Evidence: _pending_
+      Source: spec `09 §6 G-UPDATE-REFUSE` · Catches: `IN-01…IN-05`, `verify.rs:90` · Proves: **INV-11**
+      **Status 2026-09-01: PARTIAL — not green.**
+      ✅ Missing signature refused · bad signature refused · plaintext signature URL refused · empty checksum refused. `UNIT-PROVEN`: `updater::verify::tests` (8 tests), notably `verify_update_refuses_an_absent_signature_url` and `signature_accepts_the_matching_key_and_refuses_another`.
+      ✅ The empty-`sig_url` skip branch no longer exists in the binary — `verify_update` bails on an absent signature URL.
+      ❌ *"good signature chaining to the pinned **production** trust root installs"* is **unproven**: no production keypair exists yet. Generating it and setting the `AUTODEV_UPDATE_PRIVKEY`/`AUTODEV_UPDATE_PUBKEY` secrets is Razi's action (`docs/updater-signing.md`, `ADR-LOG-RESTRUCT-0003`).
+      ❌ *"refusal asserted by observing the installer never executes"* is unproven — the tests assert on return values, not on process execution.
 
-- [ ] **TG0-02** `[governance]` — Static check over `.github/workflows/**`: no `continue-on-error`, no `if: push && ref == main` guard, and no `|| true` on any correctness job. The job list must contain every row of spec `10 §6`'s target column — `cargo test` (both crates), `cargo fmt --check`, `tsc --noEmit`, ESLint, frontend unit tests, and three-OS build smokes **on PR**. A row present but permitted to fail is a failure of this gate, as is a row absent.
-      Source: spec `09 §6 G-CI-BLOCKING` + spec `10 §6` · Catches: `G0 §2` — today only clippy and tsc can fail CI · Proves: **INV-4** · Evidence: _pending_
+- [x] **TG0-02** `[governance]` — Static check over `.github/workflows/**`: no `continue-on-error`, no `if: push && ref == main` guard, and no `|| true` on any correctness job. The job list must contain every row of spec `10 §6`'s target column — `cargo test` (both crates), `cargo fmt --check`, `tsc --noEmit`, ESLint, frontend unit tests, and three-OS build smokes **on PR**. A row present but permitted to fail is a failure of this gate, as is a row absent.
+      Source: spec `09 §6 G-CI-BLOCKING` + spec `10 §6` · Catches: `G0 §2` — today only clippy and tsc can fail CI · Proves: **INV-4**
+      **Status 2026-09-01: GREEN.** `GATE-PROVEN` — `src-tauri/src/ci_gate.rs`, three tests reading `.github/workflows/**`: no `continue-on-error` and no `|| true`; no job gated to pushes on `main`; every required check present (`cargo fmt`, `cargo clippy`, `cargo test`, `npm run typecheck`, `npm run lint`, `npm test`), all three OSes built, and `npm run lint` asserted NOT to be an alias for the typecheck.
+      Corroborated by `S0-05`: a deliberately failing Rust test exits 101 and a failing Vitest test exits 1; with `continue-on-error` gone, both fail the job.
 
 - [ ] **TG0-03** `[security]` — **Static:** no Tauri command, event payload, or IPC return type carries key material — `get_provider_key`, `get_github_pat` and every successor return a presence/last-4 descriptor, never a secret; and the CSP `connect-src` allow-list contains no provider origin and no `api.github.com` reachable from the renderer. **Runtime:** a key entered in the UI travels inbound only and cannot be read back out by any route.
-      Source: spec `02 §11 G-KEY-ASYM` · Catches: `IN-47` — raw secrets returned to the renderer, plus `connect-src api.github.com` as an allowed exfiltration path · Proves: **INV-2** · Evidence: _pending_
+      Source: spec `02 §11 G-KEY-ASYM` · Catches: `IN-47` — raw secrets returned to the renderer, plus `connect-src api.github.com` as an allowed exfiltration path · Proves: **INV-2**
+      **Status 2026-09-01: PARTIAL — static half green, runtime half unproven.**
+      ✅ Static, key material: `GATE-PROVEN` — `vault_commands::tests::no_command_returns_key_material`. `get_provider_key`/`get_github_pat` deleted; the vault command set is closed and no command that reads the vault returns a String-bearing type.
+      ✅ Static, CSP: `GATE-PROVEN` — `ci_gate::tests::tg0_03_csp_allows_no_external_origin_from_the_renderer`. This gate was **failing for real**: `connect-src` allowed `https://api.github.com` and `https://releases.airs.dev`. Both removed; nothing in `src/` called either.
+      ❌ Runtime half — *"a key entered in the UI travels inbound only and cannot be read back out by any route"* — is unproven. There is no test that drives the UI. Needs the e2e harness (`TG0-05`) to execute.
       → the *"a saved key validates against the provider before storage"* clause is **owned by P2** (it needs the provider layer). The static half must be green at P0.
 
 - [ ] **TG0-04** `[security]` — **NEW (uncovered invariant INV-3).** No `.env`, no `.git` tree, no `dump.rdb`, no private key, and no string matching the credential-scan ruleset appears in (a) any bundled resource directory, (b) any produced installer or `.app`/`.deb`/`.exe` payload, or (c) the committed tree. The scan runs on every PR **over the built artifact**, not the source tree — gitignore does not protect a built artifact.
-      Source: **NEW** — INV-3's only spec gate is `09 §6 G-BUNDLE`, which cannot be green before P9, leaving INV-3 ungated for nine phases · Catches: `G0 §3.1` — a 225 MB sidecar bundled with its `.env` and `.git`; the recurrence INV-3 exists to prevent · Proves: **INV-3** · Evidence: _pending_
+      Source: **NEW** — INV-3's only spec gate is `09 §6 G-BUNDLE`, which cannot be green before P9, leaving INV-3 ungated for nine phases · Catches: `G0 §3.1` — a 225 MB sidecar bundled with its `.env` and `.git`; the recurrence INV-3 exists to prevent · Proves: **INV-3**
+      **Status 2026-09-01: PARTIAL — clause (c) green, clauses (a) and (b) not implemented.**
+      ✅ (c) committed tree: `GATE-PROVEN` — `ci_gate::tests::tg0_04_no_secret_or_stray_artifact_is_committed` asserts `.env` and `dump.rdb` are not **tracked** by git and are gitignored. `src-tauri/dump.rdb` (175 KB) deleted; `*.rdb` gitignored.
+      *The first draft of this test asserted `.env` must not EXIST and failed correctly — a developer `.env` holding provider keys is expected in a working tree. The invariant is "never committed", so it now asks git whether the file is tracked.*
+      ❌ (a) bundled resource directory and (b) built installer payload: **not implemented.** Both need a produced artifact, and the scan must run over that artifact rather than the source tree. `src-tauri/resources/` still holds the 225 MB sidecar copy, untracked.
 
 - [ ] **TG0-05** `[portability]` — **NEW (uncovered risks R-4, R-10).** CI runs Windows, Linux **and macOS** jobs, on pull requests, all blocking; and the end-to-end harness (WebDriver/Playwright against the built Tauri app) exists and executes at least one assertion on each. This gate asserts that the lanes exist and can fail; what runs inside them grows through the programme and is finally sealed by `TG9-01`.
-      Source: **NEW** — `00 §9.2 R-4`'s mitigation ("macOS enters CI in P0, not P9") and review fix 10 ("harness and macOS CI moved into P0") are mandates that no spec turned into a gate · Catches: "there is no macOS job at all" (`09 §5`); P4's exit gate naming three OSes with no lane to run them in · Covers: **R-4**, **R-10** · Evidence: _pending_
+      Source: **NEW** — `00 §9.2 R-4`'s mitigation ("macOS enters CI in P0, not P9") and review fix 10 ("harness and macOS CI moved into P0") are mandates that no spec turned into a gate · Catches: "there is no macOS job at all" (`09 §5`); P4's exit gate naming three OSes with no lane to run them in · Covers: **R-4**, **R-10**
+      **Status 2026-09-01: PARTIAL — the lanes exist and can fail; the harness has not executed.**
+      ✅ CI runs Windows, Linux **and** macOS (`macos-14`) build smokes, on pull requests, all blocking — a `build-smoke` matrix with `fail-fast: false`. `GATE-PROVEN` by `ci_gate::tests::tg0_02_every_required_check_is_present_and_distinct`.
+      ✅ Windows leg of `S0-01` is `SMOKE-PROVEN` locally: the app builds in 2m24s and starts (logging initialises, retention runs).
+      ❌ The e2e harness exists (`e2e/wdio.conf.ts`, one scenario) and is wired into CI on Linux, but **has never executed an assertion**. It cannot run on the Windows dev machine: `msedgedriver` is not on PATH, which is the documented prerequisite, and the config now fails naming it. Its first real run is the Linux CI job.
+      ❌ **macOS can never run this harness**: `tauri-driver` has no WKWebView backend. macOS is covered by the build smoke only. Recorded here rather than hidden behind a skipped test that would report green.
 
 ---
 

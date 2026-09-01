@@ -75,6 +75,12 @@ The only legitimate stops are: the phase is complete · a §0.8 destructive oper
 
 ⚠ **Never let two writers touch the same files.** Partition write work by module boundary; integrate in the main session.
 
+⚠ **Every dispatch prompt MUST carry the incremental-write clause.** Verbatim:
+
+> *Create your report file FIRST, before any investigation, and append to it as you go. Do not hold findings in memory to write at the end — if you are interrupted, everything unwritten is lost.*
+
+This is not a style preference. A rate limit destroyed four reports mid-flight during planning; the lesson was recorded in §0.16 and then **not applied**, and both P0 post-phase auditors were lost the same way with nothing on disk (`L-C8`, `L-10`). The clause lives here, in the dispatch rule, because a lesson only takes effect where it is enforced.
+
 ## §0.2j — On a blocker: **search the web first**, then ask
 
 **Order:** (1) the codebase and the grounding reports · (2) **the web** — provider docs, crate semantics, error strings, platform behaviour · (3) `AskUserQuestion` (§0.2d).
@@ -191,6 +197,9 @@ Required by §0.2n. **Seeded from the planning phase**, because that phase produ
 | **L-C3** | **A source's conclusion was adopted without checking its load-bearing detail** | **3** | `port_status.rs` "should be KEPT" propagated into two documents; one import line disproved it · `G4b §A.14`'s two-part verdict adopted by half — the vault landed, the **redaction was dropped** · **P8 was written as "a `git rm` and a `.gitmodules` edit" from the presence of `.gitmodules` alone — the index has zero gitlinks, so `git rm` would have failed on first contact** (§1.1a) |
 | **L-C4** | **A local change was made without re-checking the dependencies I had myself documented** | **1** | Moving the `/mcp` deletion to P0 broke the ACP identity chain described four sections earlier in the same document |
 | **L-C5** | **An owner's answer was reinterpreted rather than escalated** | **1** | ADR-02-02's option (B) was silently narrowed to "diagnoses only" instead of flagging that a literal reading re-creates BUG-COMPILE |
+| **L-C6** | **A check was written from the CLAIM rather than from the INVARIANT it protects** | **3** | `TG0-04` first asserted `.env` must not **exist**, and failed correctly — a developer `.env` is expected in a working tree; the invariant is "never committed" · the vault gate first encoded "reads the vault ⇒ returns no `String`", which flags `send_message` (reads a key, returns a session id) and `test_provider_connection` (returns a status) — both correct · the `safe_filename` test asserted a fallback name for `..\..\evil.exe`, but WHATWG normalisation resolves it to the harmless `evil.exe` **(P0)** |
+| **L-C7** | **A source-scanning assertion matched its own source** | **1** | The vault gate's banned-name list contains the banned names as string literals, so `include_str!` on its own file found them and the test failed on itself — the exact trap `V3` had warned about in `graph/extract.rs:711`, where `"#[test]"` as a literal makes grep-based counters overcount **(P0)** |
+| **L-C8** | **A lesson already recorded in this register was not applied to the next opportunity** | **1** | §0.16's own "make subagents write incrementally — a rate limit destroyed four reports mid-flight" was written during planning, then **both P0 post-phase auditors were dispatched without it** and both were destroyed by a rate limit with nothing on disk **(P0)** |
 
 ## The lessons
 
@@ -203,6 +212,14 @@ Required by §0.2n. **Seeded from the planning phase**, because that phase produ
 **L-4 · Generalising from one provider is a defect, not a simplification.** The cache-accounting formula was correct for Anthropic and wrong for three others, because their usage fields mean different things. → **Where four implementations exist, a claim about "the API" is four claims** until verified as one.
 
 **L-5 · Reinterpreting an owner's answer is worse than asking again.** Narrowing ADR-02-02 to something defensible produced a spec that read well and did not say what Razi had said. → **When an answer conflicts with a rule, that is a conflict to surface (§0.13), never a wording to smooth.** This is now §0.2c.
+
+**L-7 · Write the check against the invariant, not against the sentence that described it.** Three P0 gates were wrong on their first run, each for the same reason: I encoded the wording of the task rather than the property it protects. `.env` must not be **committed**, not must not **exist**. The vault rule is "the vault's IPC surface is closed", not "anything touching the vault returns no string" — the broad form flagged two correct commands, and *a gate that cries wolf gets switched off*. → **Before writing an assertion, say out loud what would have to be true for the system to be safe, and assert that.** If the check fires on correct code, the check is wrong, not the code.
+
+**L-8 · A test that reads source files must exclude its own.** The vault gate listed the forbidden function names as literals and then scanned its own file for them. → **Truncate at `#[cfg(test)]`, or build the needle at runtime.** `V3` had flagged this exact shape hours earlier in someone else's code and I reproduced it immediately afterwards, which is the strongest argument that reading a lesson is not the same as applying it.
+
+**L-9 · Verify a library's behaviour before asserting what it does.** Two `safe_filename` tests failed because I assumed `reqwest::Url` handed back raw path segments. It applies WHATWG normalisation: `..\..\evil.exe` collapses to `evil.exe` and the query string is gone before the allow-list ever runs. The code was right and my expectation was wrong. → **When a test disagrees with the code, the test is the more likely defect** — and the resulting test is better, because it now asserts the invariant (never escapes the directory) *and* documents the normalisation that makes it hold.
+
+**L-10 · Reading this register is not applying it (L-C8).** The planning phase recorded, in this very file, that subagents must write incrementally because a rate limit had already destroyed four reports. I then dispatched both P0 auditors with no incremental-write instruction and lost both to a rate limit. → **A lesson only takes effect where it is enforced.** The dispatch template in §0.2i now carries the incremental-write clause, so it cannot be forgotten by whoever writes the next prompt — including me.
 
 **L-6 · Verify a subagent's claim before it becomes a row.** A report said the toast system did not exist. It does — the store and renderer are correct and only two producers are broken. → **The correction changed the fix from "build a notification system" to "fix two imports".** A finding taken at face value would have sized a task wrongly by an order of magnitude. This is now §0.2a's second warning.
 
@@ -402,20 +419,20 @@ src/                                [P6 anchor, P7 experience]
 > Where a line below disagrees with that file, **that file wins** until this section is regenerated at P0 closeout. Decisions are logged as `ADR-LOG-RESTRUCT-0001`…`0006`.
 
 ### P0-A · The updater trust root
-- [ ] **P0-01** Replace `EMBEDDED_PUBLIC_KEY` (the literal `undefined-public-key-…-placeholder`, 53 bytes) with a real Ed25519 public key; private half in CI secrets only. → `UNIT-PROVEN`
-- [ ] **P0-02** `verify.rs:90` — an **empty signature URL is a hard failure**, never a skip. → `UNIT-PROVEN`
-- [ ] **P0-03** `verify.rs:18` — an empty checksum is a hard failure. → `UNIT-PROVEN`
-- [ ] **P0-04** `updater_commands.rs:111` — remove `.unwrap_or_default()`; a failed checksum fetch **aborts the update**. → `UNIT-PROVEN`
-- [ ] **P0-05** Re-verify at install time; do not trust an in-memory `stage: Ready`. → `UNIT-PROVEN`
-- [ ] **P0-06** Enforce HTTPS on `AUTODEV_UPDATE_URL` and every asset URL. → `UNIT-PROVEN`
-- [ ] **P0-07** Sanitise `filename_from_url` — reject `..`, `\`, and Windows-illegal characters. → `UNIT-PROVEN`
-- [ ] **P0-08** Delete the delta-patch path (`patch.rs`) entirely; full-installer updates only. → `CODE-PRESENT`
+- [x] **P0-01** Replace `EMBEDDED_PUBLIC_KEY` (the literal `undefined-public-key-…-placeholder`, 53 bytes) with a real Ed25519 public key; private half in CI secrets only. → `UNIT-PROVEN`
+- [x] **P0-02** `verify.rs:90` — an **empty signature URL is a hard failure**, never a skip. → `UNIT-PROVEN`
+- [x] **P0-03** `verify.rs:18` — an empty checksum is a hard failure. → `UNIT-PROVEN`
+- [x] **P0-04** `updater_commands.rs:111` — remove `.unwrap_or_default()`; a failed checksum fetch **aborts the update**. → `UNIT-PROVEN`
+- [x] **P0-05** Re-verify at install time; do not trust an in-memory `stage: Ready`. → `UNIT-PROVEN`
+- [x] **P0-06** Enforce HTTPS on `AUTODEV_UPDATE_URL` and every asset URL. → `UNIT-PROVEN`
+- [x] **P0-07** Sanitise `filename_from_url` — reject `..`, `\`, and Windows-illegal characters. → `UNIT-PROVEN`
+- [x] **P0-08** Delete the delta-patch path (`patch.rs`) entirely; full-installer updates only. → `CODE-PRESENT`
 
 ### P0-B · The vault becomes asymmetric
-- [ ] **P0-09** Delete `get_provider_key` and `get_github_pat`; **no command returns key material**. → `GATE-PROVEN`
-- [ ] **P0-10** Add `set_provider_key` (inbound) returning only `{ok, masked_last4}`. → `UNIT-PROVEN`
-- [ ] **P0-11** Add vault `enumerate` so orphaned keys are findable. → `UNIT-PROVEN`
-- [ ] **P0-12** Remove `airsctl`'s `--api-key` flag and its `ANTHROPIC_API_KEY` env fallback. → `CODE-PRESENT`
+- [x] **P0-09** Delete `get_provider_key` and `get_github_pat`; **no command returns key material**. → `GATE-PROVEN`
+- [x] **P0-10** Add `set_provider_key` (inbound) returning only `{ok, masked_last4}`. → `UNIT-PROVEN`
+- [x] **P0-11** Add vault `enumerate` so orphaned keys are findable. → `UNIT-PROVEN`
+- [x] **P0-12** Remove `airsctl`'s `--api-key` flag and its `ANTHROPIC_API_KEY` env fallback. → `CODE-PRESENT`
 
 ### P0-C · Delete the unauthenticated `/mcp` server *(moved from P8 — G-15)*
 
@@ -433,34 +450,36 @@ src/                                [P6 anchor, P7 experience]
 >
 > **▶ RAZI RULED, 2026-08-31: the deletion stays in P0.** The alternative (secure in P0, delete in P8) is rejected. Sidecar-hosted fleet workers therefore have no tool access from P0 until in-process workers land in P4, and that is an **accepted, stated consequence** — not a regression to be investigated when someone hits it.
 
-- [ ] **P0-13** Delete `mcp_server/{server,tool_adapter,port_status}.rs` and the `main.rs` wiring (~705 LOC). → `CODE-PRESENT`
-- [ ] **P0-13a** **Pulled forward from `P3-13`.** Populate `ToolContext` truthfully at all three in-house construction sites (`tool_executor.rs:89,252,316`) — `agent_role` is **not** `Option`, `depth` is the real spawn depth. Must land **in the same commit as P0-13**, so ACP identity never depends on the adapter being deleted. *(One fix, three capabilities: it also restores the subagent recursion guard and the `qc_review` build-evidence gate.)* → `GATE-PROVEN`
-- [ ] **P0-14** **Move** `health_monitor.rs` out of the sidecar-named tree into `mcp/health.rs`; same for `components/sidecar/McpHealthPanel.tsx` and the `sidecarStore.ts` MCP slice. *(Four of seven survivors live inside sidecar-named files — they must be relocated **by address** or sidecar code survives P8 by filename.)* → `CODE-PRESENT`
-- [ ] **P0-15** Delete the false UI claim at `Settings.tsx:653` that AutoDev connects to the GitHub MCP server. → `CODE-PRESENT`
-- [ ] **P0-16** Drop `rmcp` and `axum` from `Cargo.toml` if nothing else consumes them. → `CODE-PRESENT`
+- [x] **P0-13** Delete `mcp_server/{server,tool_adapter,port_status}.rs` and the `main.rs` wiring (~705 LOC). → `CODE-PRESENT`
+- [x] **P0-13a** **Pulled forward from `P3-13`.** Populate `ToolContext` truthfully at all three in-house construction sites (`tool_executor.rs:89,252,316`) — `agent_role` is **not** `Option`, `depth` is the real spawn depth. Must land **in the same commit as P0-13**, so ACP identity never depends on the adapter being deleted. *(One fix, three capabilities: it also restores the subagent recursion guard and the `qc_review` build-evidence gate.)* → `GATE-PROVEN`
+- [x] **P0-14** **Move** `health_monitor.rs` out of the sidecar-named tree into `mcp/health.rs`; same for `components/sidecar/McpHealthPanel.tsx` and the `sidecarStore.ts` MCP slice. *(Four of seven survivors live inside sidecar-named files — they must be relocated **by address** or sidecar code survives P8 by filename.)* → `CODE-PRESENT`
+- [x] **P0-15** Delete the false UI claim at `Settings.tsx:653` that AutoDev connects to the GitHub MCP server. → `CODE-PRESENT`
+- [x] **P0-16** Drop `rmcp` and `axum` from `Cargo.toml` if nothing else consumes them. → `CODE-PRESENT`
 
 ### P0-D · Gates that can fail
-- [ ] **P0-17** Remove **every** `continue-on-error` from correctness jobs in `ci.yml` (Rust tests ×2, `cargo fmt` ×2). → `GATE-PROVEN`
-- [ ] **P0-18** Install ESLint and make `npm run lint` actually lint; CI's "ESLint" step currently runs `tsc` a second time. → `GATE-PROVEN`
-- [ ] **P0-19** Install Vitest; add a `test` script; one real test so the harness is proven. → `UNIT-PROVEN`
-- [ ] **P0-20** Add the **macOS build job**; run all three platform builds **on pull requests**, not only pushes to `main`. → `PLATFORM-TRIPLE`
+- [x] **P0-17** Remove **every** `continue-on-error` from correctness jobs in `ci.yml` (Rust tests ×2, `cargo fmt` ×2). → `GATE-PROVEN`
+- [x] **P0-18** Install ESLint and make `npm run lint` actually lint; CI's "ESLint" step currently runs `tsc` a second time. → `GATE-PROVEN`
+- [x] **P0-19** Install Vitest; add a `test` script; one real test so the harness is proven. → `UNIT-PROVEN`
+- [x] **P0-20** Add the **macOS build job**; run all three platform builds **on pull requests**, not only pushes to `main`. → `PLATFORM-TRIPLE`
 - [ ] **P0-21** Scaffold the end-to-end harness (WebDriver/Playwright against the built app) with one trivial passing scenario. → `SMOKE-PROVEN`
-- [ ] **P0-22** Add the reachability guard test: **every `.rs` under `src/` is reachable from the crate root**. Expect it to fail immediately on `graph_tools.rs`, `graph_prompts.rs`, `db/checkpoints.rs`. → `GATE-PROVEN`
+      ⚠ **PARTIAL.** Harness written (`e2e/wdio.conf.ts`, `e2e/specs/app-launch.spec.ts`, `e2e/README.md`), `npm run test:e2e` wired, and a Linux CI job added. It has **never executed an assertion**: `msedgedriver` is not on PATH on the Windows dev machine, which is the documented prerequisite, and `tauri-driver` has no WKWebView backend so macOS can never run it at all. `CODE-PRESENT`, not `SMOKE-PROVEN`.
+- [x] **P0-22** Add the reachability guard test: **every `.rs` under `src/` is reachable from the crate root**. Expect it to fail immediately on `graph_tools.rs`, `graph_prompts.rs`, `db/checkpoints.rs`. → `GATE-PROVEN`
 
 ### P0-E · Platform baseline and hygiene
-- [ ] **P0-23** Create `autodev-core/platform/command.rs` — intent (`Build`/`Test`/`Lint`/`Run`) → platform-correct **argv**, with Windows `.cmd`/`.bat` shim resolution. → `UNIT-PROVEN`, `PLATFORM-TRIPLE`
-- [ ] **P0-24** Make `--use-angle=d3d11` Windows-conditional in `tauri.conf.json`. → `CODE-PRESENT`
-- [ ] **P0-25** Set per-platform bundle targets (currently `["nsis"]` only). → `PLATFORM-TRIPLE`
-- [ ] **P0-26** Remove the dead `dialog`/`fs` plugin blocks from `tauri.conf.json`. → `CODE-PRESENT`
-- [ ] **P0-27** Delete `src-tauri/dump.rdb` (175 KB committed Redis snapshot), the Memurai starter, and both Redis setup docs. → `CODE-PRESENT`
+- [x] **P0-23** Create `autodev-core/platform/command.rs` — intent (`Build`/`Test`/`Lint`/`Run`) → platform-correct **argv**, with Windows `.cmd`/`.bat` shim resolution. → `UNIT-PROVEN`, `PLATFORM-TRIPLE`
+- [x] **P0-24** Make `--use-angle=d3d11` Windows-conditional in `tauri.conf.json`. → `CODE-PRESENT`
+- [x] **P0-25** Set per-platform bundle targets (currently `["nsis"]` only). → `PLATFORM-TRIPLE`
+- [ ] ~~**P0-26** Remove the dead `dialog`/`fs` plugin blocks from `tauri.conf.json`.~~ → **REVERSED, superseded by `P0-31`.**
+      The blocks were not dead config — they were the only evidence of a live runtime break. `Logs.tsx` calls `save()` and `writeTextFile()` at four sites; the npm packages are declared so it typechecks and CI is green, but Rust had neither plugin, registered only `tauri_plugin_shell`, and granted no `dialog:`/`fs:` capability. The Logs export failed on every click, into `console.error`. Deleting the config would have erased the evidence and left the feature broken.
+- [x] **P0-27** Delete `src-tauri/dump.rdb` (175 KB committed Redis snapshot), the Memurai starter, and both Redis setup docs. → `CODE-PRESENT`
 
 ### Smoke — S0
-- [ ] **S0-01** App launches on Windows, Linux and macOS from a clean build.
-- [ ] **S0-02** An update with a **missing** signature is refused; with a valid one, accepted.
-- [ ] **S0-03** No Tauri command returns key material (static scan).
-- [ ] **S0-04** `curl -X POST localhost:8767/mcp` **connection refused**.
-- [ ] **S0-05** A deliberately failing test **fails CI**.
-- [ ] **S0-06** `ToolContext` carries a real `agent_role` and `depth` at all three construction sites — asserted, not inspected. *(Closes the F-3 hazard: without this the `/mcp` deletion silently kills worker messaging.)*
+- [x] **S0-01** App launches on Windows, Linux and macOS from a clean build.
+- [x] **S0-02** An update with a **missing** signature is refused; with a valid one, accepted.
+- [x] **S0-03** No Tauri command returns key material (static scan).
+- [x] **S0-04** `curl -X POST localhost:8767/mcp` **connection refused**.
+- [x] **S0-05** A deliberately failing test **fails CI**.
+- [x] **S0-06** `ToolContext` carries a real `agent_role` and `depth` at all three construction sites — asserted, not inspected. *(Closes the F-3 hazard: without this the `/mcp` deletion silently kills worker messaging.)*
 
 **Exit.** S0 green → `TG-P0` green → matrix updated → progress row → no-stale sweep → commit.
 
@@ -812,6 +831,7 @@ Defaults are proposed above and adopted unless Razi says otherwise. The rest fol
 
 | Date | Rev | Change |
 |---|---|---|
+| 2026-09-01 | 1.4 | **P0 built and closed out — 8 commits, `5fca2bb`…`4b17c6f`.** 26 of 28 original tasks done, plus `P0-13b` and six added tasks (`P0-28`…`P0-33`). **`P0-26` was REVERSED** — deleting the `dialog`/`fs` plugin config would have erased the only evidence of a live runtime break (the Logs export fails on every click); superseded by `P0-31`, which makes it work. **`P0-21` did not reach its evidence class**: the e2e harness exists and is wired into CI but has never executed an assertion (`msedgedriver` absent locally; `tauri-driver` has no WKWebView backend, so macOS can never run it). Readiness **0% → 2.7%**: Build ✅, Smoke and Gates ☐ under the no-partial-credit rule. Overlay: SO-4 and SO-11 → GREEN, SO-2 and SO-12 → AMBER; **SO-6 stays RED deliberately** — `platform/command.rs` is proven but has no caller, and a guard nothing calls is not a guard. Eight runtime ADRs logged (`0001`…`0008`), three of them `razi-ruled` or `flagged-and-proposed`. §0.16 gained **L-C6/L-C7/L-C8** and lessons **L-7…L-10**, and §0.2i now carries the incremental-write dispatch clause that L-C8 exists because I forgot. |
 | 2026-08-31 | 1.3 | **Razi's development rules from a sibling audit adapted into §0.** Added: **§0.2a** two mandatory post-phase auditors (work + area), with the area auditor's brief tuned to this codebase's measured defect profile — `let _ =`, dead parameters, guards that cannot fire · **§0.2b** a phase cannot close over an open finding · **§0.2c** every finding runs through Razi · **§0.2d** never stop midway, ask in-flight via `AskUserQuestion` · **§0.2e** every task names its proof · **§0.2i** two subagents is the floor · **§0.2j** search the web before escalating; escalate decisions, not facts · **§0.2m** adversarially verify each phase **before** building it · **§0.2n** every phase writes its learnings · **§0.2L-1…5** method rules. **§0.16 learnings register created and seeded from the planning phase** — five recurring classes with running counts, six lessons, and the method that worked. Two adaptations rather than literal adoptions, both stated: §0.2e allows gates to be **shared** across tasks (a 1:1 rule would manufacture coverage — the eight P0-A updater tasks prove one thing); and every example was **replaced with this repo's own evidence**, including the six errors this plan's own pre-GO review found in it. |
 | 2026-08-31 | 1.2 | **The three remaining open items closed, none of which needed an owner decision.** **R-8** — its two operational clauses become ordered tasks rather than prose: `P4-25` is explicitly blocked on `P4-07`, and new task `P4-24a` decides the fate of existing `routing_history` under §0.8 backup discipline. The gate harvest was right that a sequencing constraint is a task-dependency property, not a runtime assertion, so it is deliberately **not** a gate. **R-13** — the **operational cadence register is written (§14.5)**: thirteen mechanisms, each answering trigger · cadence · cost · failure behaviour · phase, including the retry policy that `ErrorClass::Retryable` had no reader for (GAP-12). Three values are flagged as preference rather than constraint. **R-1** — confirmed to correctly have no gate; its mitigation is outcome-gated slices, and no test can assert focus. **Razi ruled the `/mcp` deletion stays in P0**, with the P0→P4 fleet tool-access gap accepted and stated. |
 | 2026-08-31 | 1.1 | **`TESTING_GATES.md` complete — 115 gates — and its harvest raised a Rule-4 stop against this plan.** Moving the `/mcp` deletion to P0 (G-15) broke the ACP identity chain this same plan documents: `ToolContext.agent_role` is set in exactly one place, the adapter P0 deletes, so a decided-preserved capability would have been **silently dead from P0 through P3** with no gate to notice. `P3-13` is **pulled forward to `P0-13a`** and must ship in the same commit as `P0-13`; new smoke `S0-06`; `P3-13` struck in place rather than renumbered. A second, larger consequence of the same move is now **stated rather than discovered**: deleting the MCP server while the sidecar still runs leaves sidecar-hosted fleet workers with **no tool access from P0 until P4** — accepted with reasons, and the alternative (secure in P0, delete in P8) flagged for Razi. Also folded: 8 NEW gates covering M-40–M-43 and G-01/04/06/07/08 were added back into the specs' own gate tables, which had not been regenerated since rev 0.9 — **the same class of miss the review caught with Part 1B**. |

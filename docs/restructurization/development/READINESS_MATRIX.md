@@ -6,7 +6,7 @@
 |---|---|
 | **Parents** | `MASTER_DEVELOPMENT_PLAN.md` · `TESTING_GATES.md` · `../vision/00-…-MASTER-PLAN.md` |
 | **Rev** | 1.0 — 2026-08-31 |
-| **Overall readiness** | **0%** — awaiting GO, no phase started |
+| **Overall readiness** | **2.7%** — P0 built and committed; smoke and gates not fully green. Cap active. |
 
 ---
 
@@ -43,10 +43,10 @@ Cross-cutting invariants, scored **independently of the phase areas**.
 
 | Dial | Status | Why |
 |---|---|---|
-| **Overall readiness** | 🔴 **0%** | Awaiting GO. No phase started. |
-| Security posture | 🔴 RED | Unverified updater · unauthenticated `/mcp` RCE · keys readable from the webview. All three close in P0. |
-| Gate honesty | 🔴 RED | Only `cargo clippy` and `tsc` can fail today. Closes in P0. |
-| Cross-platform | 🔴 RED | Windows-only bundling, no macOS CI, and no fleet task can complete on Windows. P0 + P4. |
+| **Overall readiness** | 🔴 **2.7%** | P0 code is complete and committed (8 commits). Build ✅. Smoke and Gates NOT ✅ — no partial credit. |
+| Security posture | 🟡 AMBER | All three P0 holes closed: the updater refuses anything unverified, the `/mcp` RCE is deleted, and no command returns key material. Still AMBER because the updater has no production key yet (so it refuses *everything*), the runtime key-path is untested, and `.env` is still read at startup. |
+| Gate honesty | 🟢 GREEN | Every `continue-on-error` gone; `cargo test --all-targets`, `cargo fmt`, ESLint and Vitest all blocking. Proven by `TG0-02` and by `S0-05` — a deliberately failing test exits non-zero in both languages. |
+| Cross-platform | 🔴 RED | macOS is now in CI and all three build smokes run on PRs. Still RED: `platform/command.rs` exists but **nothing calls it** — `bash.rs` still rewrites pipes into PowerShell, so no fleet task can complete on Windows. Wiring is P4. |
 | Agent correctness | 🔴 RED | No caching, unbounded context, no permission gate in force. P2 + P3. |
 | Product capability | 🔴 RED | Agent output lands where the user never looks; no run step exists. P4. |
 | Data integrity | 🔴 RED | One real migration ladder and its head is a broken statement; no backup path anywhere. P1. |
@@ -58,7 +58,7 @@ Cross-cutting invariants, scored **independently of the phase areas**.
 
 | # | Area (phase) | Weight | Build | Smoke | Gates | Area % | Weighted |
 |---|---|---|---|---|---|---|---|
-| A0 | **P0 · Stop the bleeding** | 8 | ☐ | ☐ | ☐ | 0% | 0.0 |
+| A0 | **P0 · Stop the bleeding** | 8 | ✅ | ☐ | ☐ | 33% | 2.7 |
 | A1 | **P1 · Structural** | 8 | ☐ | ☐ | ☐ | 0% | 0.0 |
 | A2 | **P2 · Providers** | 14 | ☐ | ☐ | ☐ | 0% | 0.0 |
 | A3 | **P3 · Runtime + memory** | 18 | ☐ | ☐ | ☐ | 0% | 0.0 |
@@ -68,7 +68,7 @@ Cross-cutting invariants, scored **independently of the phase areas**.
 | A7 | **P7 · Experience** | 8 | ☐ | ☐ | ☐ | 0% | 0.0 |
 | A8 | **P8 · Submodule deletion** | 4 | ☐ | ☐ | ☐ | 0% | 0.0 |
 | A9 | **P9 · Delivery** | 4 | ☐ | ☐ | ☐ | 0% | 0.0 |
-| | **Total** | **100** | | | | | **0.0** |
+| | **Total** | **100** | | | | | **2.7** |
 
 **Why P4 carries the most weight.** It is the only phase whose completion means AutoDev does what it claims: a task runs end to end on three operating systems and produces a build-verified, reversible artifact the user can run. Everything before it is a precondition; everything after it is polish, cleanup or distribution.
 
@@ -78,18 +78,18 @@ Cross-cutting invariants, scored **independently of the phase areas**.
 
 | # | Invariant | Proving gates | Status | Note |
 |---|---|---|---|---|
-| **SO-1** | **INV-1** — no agent work in a foreign runtime or language | `G-NOSIDECAR`, P8 entry gate | 🔴 RED | The sidecar runs today |
-| **SO-2** | **INV-2** — no key crosses the IPC boundary outbound | `G-KEY-ASYM` | 🔴 RED | Two commands return raw secrets |
+| **SO-1** | **INV-1** — no agent work in a foreign runtime or language | `G-NOSIDECAR`, P8 entry gate | 🔴 RED | Subagents moved in-process onto a nested `AgentEngine` and Mode 2 is inert, so no *agent turn* runs in Python. Still RED: `main.rs` continues to spawn `memory-mcp-server` and `core-orchestrator`, and `src-tauri/resources/` still carries the 225 MB Python tree. P8. |
+| **SO-2** | **INV-2** — no key crosses the IPC boundary outbound | `G-KEY-ASYM` | 🟡 AMBER | `get_provider_key`/`get_github_pat` deleted; the vault command set is closed and gate-proven (`TG0-03` static half). AMBER not GREEN: the runtime half — a key entered in the UI cannot be read back by *any* route — has no test, and needs the e2e harness to execute. |
 | **SO-3** | **INV-3** — no shipped artifact contains a credential | `G-BUNDLE` | 🔴 RED | 225 MB Python tree is a declared bundle resource |
-| **SO-4** | **INV-4** — a gate that cannot fail is not a gate | `G-CI-BLOCKING` | 🔴 RED | Tests and fmt are `continue-on-error` |
+| **SO-4** | **INV-4** — a gate that cannot fail is not a gate | `G-CI-BLOCKING` | 🟢 GREEN | All four `continue-on-error` flags removed; `cargo test` runs `--all-targets` (it ran `--lib`, silently skipping `tests/`). `TG0-02` asserts this over the workflow files; `S0-05` proves a failing test exits non-zero in both languages. |
 | **SO-5** | **INV-5** — no artifact written against process CWD | `G-DELIVER` | 🔴 RED | Live artifacts observed in `~/.autodev/agents/` |
-| **SO-6** | **INV-6** — platform-neutral agent commands | `G-NO-POSIX`, `G-CMD-INTENT` | 🔴 RED | No Windows task can reach QC |
+| **SO-6** | **INV-6** — platform-neutral agent commands | `G-NO-POSIX`, `G-CMD-INTENT` | 🔴 RED | `platform/command.rs` now exists and is unit-proven (10 tests, including the Windows `.cmd` shim). It changes nothing yet: **no caller uses it** — `bash.rs` still rewrites pipes into PowerShell under `cmd /C`. A guard nothing calls is not a guard. Wiring is P4-11. |
 | **SO-7** | **INV-7** — measurements are provider-reported, not estimated | `G-USAGE`, `G-PRICE` | 🔴 RED | Streaming input tokens are 0 on three providers |
 | **SO-8** | **INV-8** — a writer must have a proven reader | `G-MEM-READ`, `G-GRAPH-SCOPE`, reader-exists family | 🔴 RED | Graph, `ModelConfigsDb`, budget config, `api_failures` all unread |
 | **SO-9** | **INV-9** — every blocking wait has a timeout and a cancel path | `G-CANCEL`, `G-SUBPROC-TIMEOUT` | 🔴 RED | Permission oneshot has no timeout; `validate.rs` has zero |
 | **SO-10** | **INV-10** — one definition per schema | `G-OWNER` | 🔴 RED | `src-shared` mirrors four tables; `plans.db` has two designs |
-| **SO-11** | **INV-11** — the updater installs nothing unverified | `G-UPDATE-REFUSE` | 🔴 RED | Absence of a signature is currently a pass |
-| **SO-12** | **INV-12** — BYOK credential provenance | `G-KEY-NOENV` | 🔴 RED | `airsctl` accepts a key as a CLI flag |
+| **SO-11** | **INV-11** — the updater installs nothing unverified | `G-UPDATE-REFUSE` | 🟢 GREEN | All three bypasses closed and unit-proven: empty checksum, empty `sig_url`, and `.unwrap_or_default()` on a failed checksum fetch. Verification also repeats at install time, closing the TOCTOU. **Note:** with no production key yet the updater refuses *every* update — correct for this invariant, but `TG0-01`'s accept-path stays unproven until Razi generates the keypair. |
+| **SO-12** | **INV-12** — BYOK credential provenance | `G-KEY-NOENV` | 🟡 AMBER | `airsctl --api-key` and its `ANTHROPIC_API_KEY` fallback removed; the updater's runtime `AUTODEV_UPDATE_PUBKEY` override removed in favour of a compile-time key. AMBER because `main.rs` still loads `.env` via dotenvy walking **up** from the working directory — a credential channel that remains open by design for development. |
 | **SO-13** | *(new, G-01)* **Fault isolation** — one panic cannot kill the app | `G-PANIC-CONTAINED` | 🔴 RED | `panic = "abort"` + in-process agents |
 | **SO-14** | *(new, G-04)* **Spend has a ceiling that stops** | `G-SPEND-CAP` | 🔴 RED | No ceiling, no kill switch; per-task budget inert |
 | **SO-15** | *(new, G-07)* **Secrets never enter durable memory** | `G-REDACT`, `G-MEM-GATEWAY` | 🔴 RED | Redaction was dropped from the plan; restored as M-40 |
@@ -124,12 +124,13 @@ Every mechanic reaches a phase and a scored area. **A mechanic with no phase is 
 
 ```
 overall = Σ (weight_i × area_pct_i)  for i in A0..A9
-        = 0.0   at rev 1.0
+        = 8 × 0.33  (A0: Build ✅, Smoke ☐, Gates ☐)
+        = 2.7   at rev 1.1
 
 safety_cap = 50% if any overlay row is RED
-           = ACTIVE  (16 of 16 RED)
+           = ACTIVE  (12 of 16 RED; SO-4 and SO-11 GREEN, SO-2 and SO-12 AMBER)
 
-reported = min(overall, safety_cap) = 0%
+reported = min(overall, safety_cap) = 2.7%
 ```
 
 ---
@@ -141,3 +142,4 @@ reported = min(overall, safety_cap) = 0%
 | Date | Rev | Overall | Cap | Change |
 |---|---|---|---|---|
 | 2026-08-31 | 1.0 | **0%** | Active (16/16 RED) | Created. Ten scored areas weighted to 100, P4 heaviest as the headline capability. Sixteen safety-overlay rows — the twelve invariants plus four raised by the adversarial review (fault isolation, spend ceiling, secrets-in-memory, reversibility). All 43 mechanics mapped to a phase and an area. No phase started; awaiting GO. |
+| 2026-09-01 | 1.1 | **2.7%** | Active (12/16 RED) | **P0 closed out.** Eight commits. Build ✅; Smoke and Gates NOT ✅ — no partial credit, and both have named unproven clauses. Smoke: `S0-02…S0-06` proven, `S0-01` proven on Windows only (Linux/macOS need a CI run). Gates: `TG0-02` GREEN; `TG0-01`/`03`/`04`/`05` PARTIAL, each with the missing clause recorded. Four overlay rows moved: SO-4 and SO-11 to GREEN, SO-2 and SO-12 to AMBER. SO-6 stays RED deliberately — `platform/command.rs` is proven but has no caller, and a guard nothing calls is AMBER at best. Cap remains active. |

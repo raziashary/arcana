@@ -121,23 +121,23 @@ the bug; fix both.
 
 ## B · New tasks
 
-- [ ] **P0-28** `download_checksum` / `download_signature` never check HTTP status
+- [x] **P0-28** `download_checksum` / `download_signature` never check HTTP status
   (`download.rs:155,168`) — a 404 body becomes the "checksum". → status-check both.
   → `UNIT-PROVEN`
-- [ ] **P0-29** `platform_key_from_filename` does not match what CI actually builds:
+- [x] **P0-29** `platform_key_from_filename` does not match what CI actually builds:
   `build-msi.ps1:221` emits `autodev_<v>_x64_en-US.exe` while the matcher wants
   `_x64.msi` / `_x64-setup.exe`, and Linux emits `_x86_64.deb` against a matcher wanting
   `_amd64.deb`. **Windows and Linux resolve to no asset at all**, so no end-to-end update
   smoke is possible until this is fixed. → `SMOKE-PROVEN`
-- [ ] **P0-30** `ci.yml:72` runs `cargo test --lib`, so anything in `src-tauri/tests/`
+- [x] **P0-30** `ci.yml:72` runs `cargo test --lib`, so anything in `src-tauri/tests/`
   **never runs while reporting green** — every later phase's integration gate would be
   invisible. → `cargo test --all-targets`. → `GATE-PROVEN`
-- [ ] **P0-31** Register `tauri-plugin-dialog` and `tauri-plugin-fs` and grant their
+- [x] **P0-31** Register `tauri-plugin-dialog` and `tauri-plugin-fs` and grant their
   capabilities, so the Logs export in `Logs.tsx` actually works (supersedes the deletion
   in `P0-26`). → `SMOKE-PROVEN`
-- [ ] **P0-32** Fix the `sidecar/mod.rs:417-423` Redis contradiction alongside `P0-27`.
+- [x] **P0-32** Fix the `sidecar/mod.rs:417-423` Redis contradiction alongside `P0-27`.
   → `CODE-PRESENT`
-- [ ] **P0-33** `check.rs:73-77` builds a *list* endpoint for beta/nightly whose
+- [x] **P0-33** `check.rs:73-77` builds a *list* endpoint for beta/nightly whose
   `tag_name` is null, so those channels **can never return an update**. → `UNIT-PROVEN`
 
 ---
@@ -162,3 +162,24 @@ today; `src-cli` and `src-shared` have none, so unblocking `ci.yml:138` is free.
   counters overcount by one.
 - Both Rust CI cache keys point outside the workspace `target/`.
 - `VaultEntry` (`keychain.rs:10`) has zero constructors and zero consumers.
+
+---
+
+## E · Outcome, recorded 2026-09-01
+
+All six added tasks (`P0-28`…`P0-33`) are complete, as is `P0-13b` (the native
+subagent runner, Razi-ruled). `P0-26` stayed reversed and was superseded by
+`P0-31`. `P0-21` is the one item that did not reach its named evidence class —
+the e2e harness exists and is wired into CI but has never executed an
+assertion, because `msedgedriver` is absent on the Windows dev machine.
+
+Two of the five P0 gates that this file's corrections fed into are worth
+restating, because they are the ones a reader will assume are green and are
+not:
+
+- **`TG0-01`** — the *refuse* half is unit-proven; the *accept* half cannot be
+  proven until Razi generates the signing keypair. Until then the updater
+  refuses every update, which is correct for INV-11 and still means updates do
+  not work.
+- **`TG0-05`** — the three-OS CI lanes exist, run on PRs and can fail; the
+  end-to-end harness inside them has not run.
