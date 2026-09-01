@@ -1,5 +1,28 @@
 # AutoDev IT Operations Runbook
 
+> ## ⚠ SUPERSEDED IN PART — read this first
+>
+> This document predates the restructure and describes architecture that **no
+> longer exists**. Phase P0 (2026-09-01) removed, among other things:
+>
+> - the **in-process MCP server** on `127.0.0.1:8767` and the whole `mcp_server/`
+>   module — it was an unauthenticated local endpoint exposing `bash`,
+>   `write_file` and `spawn_subagent` to any process on the machine;
+> - the **`rmcp` MCP client** — the crate is gone from the workspace. AutoDev
+>   registers and health-checks external MCP servers; it calls none of them;
+> - the **`__agent_role` / `__depth` MCP meta-arguments** — agent identity and
+>   nesting depth are threaded in Rust now and cannot be supplied by a model;
+> - the **sidecar subagent bridge** (`subagent/bridge.rs`) — subagents run
+>   in-process on a nested `AgentEngine`;
+> - **delta updates** (`updater/patch.rs`), the vault's `get_*` commands, and the
+>   Redis/Memurai auto-start.
+>
+> Where this document and the code disagree, the code is right. The governing
+> plan is `docs/restructurization/` — the master vision suite and the
+> development anchor set.
+
+
+
 **Version:** Phase 5.3 — Platform Installers & Auto-Updater  
 **Audience:** IT administrators, DevOps, enterprise deployment teams  
 **Last updated:** 2026-05
@@ -572,24 +595,27 @@ AutoDev makes outbound HTTPS connections to:
 | `api.anthropic.com` | 443 | Anthropic Claude API |
 | `api.openai.com` | 443 | OpenAI API |
 | `generativelanguage.googleapis.com` | 443 | Google Gemini API |
-| `api.github.com` | 443 | GitHub MCP integration, update checks |
+| `api.github.com` | 443 | Update checks (the renderer can no longer reach it; requests are made by the Rust process) |
 | `releases.airs.dev` | 443 | AutoDev update manifest + binaries |
-| `127.0.0.1:8767` | — | Internal MCP server (localhost only) |
 | `127.0.0.1:8000` | — | memory-mcp-server (localhost only) |
 | `127.0.0.1:4000` | — | core-orchestrator (localhost only) |
 
 **Minimum required for basic functionality:**
 - One of the LLM provider endpoints above
 
-**Firewall rule (Windows — deployed automatically by MSI):**
-```
-Name: AutoDev MCP Server
-Direction: Inbound
-Protocol: TCP
-LocalPort: 8767
-Scope: LocalSubnet
-Action: Allow
-```
+**Firewall rule: none required.**
+
+AutoDev listens on no port. All of its network traffic is outbound.
+
+> Earlier builds installed an inbound Windows Firewall rule for
+> `AutoDev MCP Server` on TCP 8767 with `Scope: LocalSubnet` — despite being
+> described as localhost-only, that scope admitted the local network. The
+> server it served was removed in P0 and the MSI no longer creates the rule.
+> **An existing deployment may still carry it.** To remove it:
+>
+> ```powershell
+> Remove-NetFirewallRule -DisplayName "AutoDev MCP Server"
+> ```
 
 ---
 

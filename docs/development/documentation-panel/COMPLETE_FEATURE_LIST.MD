@@ -1,5 +1,28 @@
 # AutoDev — Complete Feature List
 
+> ## ⚠ SUPERSEDED IN PART — read this first
+>
+> This document predates the restructure and describes architecture that **no
+> longer exists**. Phase P0 (2026-09-01) removed, among other things:
+>
+> - the **in-process MCP server** on `127.0.0.1:8767` and the whole `mcp_server/`
+>   module — it was an unauthenticated local endpoint exposing `bash`,
+>   `write_file` and `spawn_subagent` to any process on the machine;
+> - the **`rmcp` MCP client** — the crate is gone from the workspace. AutoDev
+>   registers and health-checks external MCP servers; it calls none of them;
+> - the **`__agent_role` / `__depth` MCP meta-arguments** — agent identity and
+>   nesting depth are threaded in Rust now and cannot be supplied by a model;
+> - the **sidecar subagent bridge** (`subagent/bridge.rs`) — subagents run
+>   in-process on a nested `AgentEngine`;
+> - **delta updates** (`updater/patch.rs`), the vault's `get_*` commands, and the
+>   Redis/Memurai auto-start.
+>
+> Where this document and the code disagree, the code is right. The governing
+> plan is `docs/restructurization/` — the master vision suite and the
+> development anchor set.
+
+
+
 > **What this document is** — A complete catalog of every feature in AutoDev, written so a developer, a manager, or a designer can all read it and understand what the product does. Each feature is described in plain language; where a technical term genuinely matters, it is introduced and explained.
 >
 > **Source** — Derived from the AutoDev master plan, the development plan, and the project README. This is the documentation pass; a later pass will verify each item against the actual codebase.

@@ -1,5 +1,28 @@
 # AutoDev — Master Development Plan
 
+> ## ⚠ SUPERSEDED IN PART — read this first
+>
+> This document predates the restructure and describes architecture that **no
+> longer exists**. Phase P0 (2026-09-01) removed, among other things:
+>
+> - the **in-process MCP server** on `127.0.0.1:8767` and the whole `mcp_server/`
+>   module — it was an unauthenticated local endpoint exposing `bash`,
+>   `write_file` and `spawn_subagent` to any process on the machine;
+> - the **`rmcp` MCP client** — the crate is gone from the workspace. AutoDev
+>   registers and health-checks external MCP servers; it calls none of them;
+> - the **`__agent_role` / `__depth` MCP meta-arguments** — agent identity and
+>   nesting depth are threaded in Rust now and cannot be supplied by a model;
+> - the **sidecar subagent bridge** (`subagent/bridge.rs`) — subagents run
+>   in-process on a nested `AgentEngine`;
+> - **delta updates** (`updater/patch.rs`), the vault's `get_*` commands, and the
+>   Redis/Memurai auto-start.
+>
+> Where this document and the code disagree, the code is right. The governing
+> plan is `docs/restructurization/` — the master vision suite and the
+> development anchor set.
+
+
+
 > **Living Document** — Updated as phases complete. Code is the source of truth; this document guides planning and architecture decisions.
 >
 > **Parent Document**: [autodev-master-plan.md](../autodev-vision/autodev-master-plan.md)
@@ -6681,8 +6704,9 @@ Phase 5 Cross-Sub-Phase Integration:
     - `GetLockedNodesTool` — `name: "get_locked_nodes"` — `SELECT * FROM nodes WHERE worker_locked = 1`; returns locked nodes with their `worktree` attribute
     - `BuildGraphTool` — `name: "build_graph"`, input: `{ repo_path: String }` — triggers full graph rebuild (detect → extract → build → cluster → analyze → report); returns `BuildStats` JSON
 
-- [x] **Register all graph tools in `src-tauri/src/agent/builtin_tools/mod.rs`** (COMPLETE):
-  - Add `pub mod graph_tools;`
+- [ ] ⚠ **FALSE COMPLETION — corrected 2026-09-01.** ~~**Register all graph tools in `src-tauri/src/agent/builtin_tools/mod.rs`** (COMPLETE)~~
+  - ~~Add `pub mod graph_tools;`~~ — **this never happened.** There is no `mod graph_tools;` anywhere in the crate, so `graph_tools.rs` (840 LOC, 22 tool structs) has never been compiled: not by `cargo build`, not by `clippy`, not by any test. `graph_prompts.rs` (78 LOC) is in the same state. The file also does not currently compile — `:272` treats an `Option<GraphNode>` as a `GraphNode` and `:696` reads a field that does not exist — and the 22 structs do not implement `Tool`, so declaring the module would not restore the capability either.
+  - This checkbox is why the reachability gate exists (`src-tauri/src/reachability_gate.rs`): nothing could tell the difference between a module that ships and a file that merely exists, so this plan and the binary disagreed for as long as anyone cared to look. The repair is tracked as P3 (BUG-GRAPH).
   - In `ToolRegistry::new()`: register all tools from `graph_tools.rs` alongside existing tools
   - Graph tools only registered when `graph_enabled: true` in app config (checked at startup)
   - All 22 tools implemented with full execute() methods

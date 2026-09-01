@@ -22,7 +22,7 @@ AutoDev is a downloadable desktop application that combines the best capabilitie
 - 🧠 **Advanced memory system:** 3-tier architecture (episodic/semantic/procedural) with context scoring, compression, staleness tracking
 - 🎯 **Agent orchestration:** 21 finite state machines governing lifecycle + A2A protocol
 - 📝 **AUTODEV.md system:** SQLite-backed instruction system, editable from UI, no manual file editing required
-- 🔌 **MCP native:** Connect to GitHub, Slack, Adobe, and custom MCP servers via rmcp crate, plus an in-app MCP server exposing canonical Rust tools to the fleet
+- 🔌 **MCP servers:** External MCP servers can be registered and are health-checked in Settings. AutoDev does not yet call them, and it does not host one — the in-app MCP server was removed because it was an unauthenticated local endpoint exposing `bash`, `write_file` and `spawn_subagent`.
 - 🛠️ **Skills & Recipes:** Reusable YAML workflows with cron scheduling for fleet orchestration
 - 🚀 **Single installer:** No Python, Redis, or Docker setup required for end users
 - 🎭 **Dual-mode execution:** PA mode (Rust-native for speed) + Worker mode (orchestrated via core-orchestrator with real-time SSE streaming back into the UI)
@@ -100,7 +100,7 @@ User → Tauri (Rust) → Direct LLM API (Anthropic/OpenAI/etc.)
                     ↓
               Built-in tools (read_file, write_file, bash, git2-rs)
                     ↓
-              MCP clients (GitHub MCP, Slack MCP) via rmcp crate
+              External MCP servers — registered and health-checked, not yet called
                     ↓
               Response → UI
 ```
@@ -201,7 +201,7 @@ Within **Mode 1: PA**, the ChatHeader provides a dropdown to switch between thre
 | **Styling** | Tailwind CSS 3 | AIRS design system (industrial-minimal: #0A0A0A background, #00FF88 accent) |
 | **Backend** | Rust (Tauri commands) | Code editing tools, file I/O, command execution |
 | **Provider Layer** | Anthropic, OpenAI, Gemini, Ollama, Azure | Multi-provider LLM abstraction |
-| **MCP Client** | rmcp crate | Native Rust MCP client integration |
+| **MCP health** | reqwest | Liveness probes for external MCP servers (no client yet) |
 | **Git Integration** | git2-rs (libgit2) | Structured git operations, worktrees |
 | **Orchestrator** | Python 3.13 + FastAPI + litellm | Agent lifecycle, FSMs, A2A protocol |
 | **Memory** | Python 3.13 + mem0 | Context storage, scoring, synopsis evolution |
@@ -328,9 +328,7 @@ autodev/
 │       │   └── streaming.rs         # Unified streaming response parser
 │       ├── mcp/                     # MCP client (PA mode)
 │       │   ├── mod.rs
-│       │   ├── client.rs            # MCP client via rmcp crate
-│       │   ├── config.rs            # MCP server configuration
-│       │   └── types.rs             # MCP protocol types
+│       │   └── health.rs            # Liveness probes for external MCP servers
 │       ├── vault/                   # OS keychain integration
 │       │   ├── mod.rs
 │       │   └── keychain.rs          # Store/retrieve API keys securely
@@ -676,7 +674,7 @@ The Supervisor authors `INTERFACE.md` via the `write_interface_spec` tool, captu
 - Headless `-p` mode for CLI automation (airsctl)
 - Subagents + Agent Teams (Phase 4)
 - Skills, Hooks, Plugins (Phase 3)
-- MCP client integration via rmcp crate
+- An MCP client, so external MCP servers can actually be called (today they are only registered and health-checked)
 - Git worktree primitive exposed via git2-rs (per-task auto-wiring deferred — capability available to recipes that opt in)
 - Context compaction when approaching token limit
 - Plan mode for complex multi-step tasks
@@ -735,7 +733,7 @@ The Supervisor authors `INTERFACE.md` via the `write_interface_spec` tool, captu
 - **Workspace Folder:** Native OS folder picker, @-mention path resolution
 - **Git Panel:** Full git integration with Changes, History, Branches, Stash, Undo tabs
 - **File Checkpointing:** Auto-checkpoint before writes, undo/redo support, file history
-- **Sidecar Management:** Auto-start Python sidecars, health checks, log routing, standalone-binary fallback for Redis/Memurai
+- **Sidecar Management:** Start Python sidecars, health checks, log routing. AutoDev does **not** start Redis — it probes for one and runs without it (the warm memory tier is simply disabled).
 - **Browser-Test Skill:** Playwright-driven visual regression and E2E checks invoked by the QC agent on frontend PRs
 
 ---
@@ -898,7 +896,7 @@ Proprietary - AIRS Foundry © 2026
 ## FAQ
 
 **Q: Do I need Docker?**  
-A: No. Redis runs as a standalone binary sidecar. No Docker required for development or production.
+A: No. Redis is optional and externally managed — AutoDev probes for one and runs without it. No Docker required for development or production.
 
 **Q: Can I use different LLM providers?**  
 A: Yes. AutoDev supports Anthropic, OpenAI, Gemini, Ollama, Azure OpenAI, and Google Bedrock via the provider abstraction layer.

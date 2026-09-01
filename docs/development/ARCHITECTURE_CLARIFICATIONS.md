@@ -1,5 +1,28 @@
 # Architecture Clarifications — Dual-Mode Design
 
+> ## ⚠ SUPERSEDED IN PART — read this first
+>
+> This document predates the restructure and describes architecture that **no
+> longer exists**. Phase P0 (2026-09-01) removed, among other things:
+>
+> - the **in-process MCP server** on `127.0.0.1:8767` and the whole `mcp_server/`
+>   module — it was an unauthenticated local endpoint exposing `bash`,
+>   `write_file` and `spawn_subagent` to any process on the machine;
+> - the **`rmcp` MCP client** — the crate is gone from the workspace. AutoDev
+>   registers and health-checks external MCP servers; it calls none of them;
+> - the **`__agent_role` / `__depth` MCP meta-arguments** — agent identity and
+>   nesting depth are threaded in Rust now and cannot be supplied by a model;
+> - the **sidecar subagent bridge** (`subagent/bridge.rs`) — subagents run
+>   in-process on a nested `AgentEngine`;
+> - **delta updates** (`updater/patch.rs`), the vault's `get_*` commands, and the
+>   Redis/Memurai auto-start.
+>
+> Where this document and the code disagree, the code is right. The governing
+> plan is `docs/restructurization/` — the master vision suite and the
+> development anchor set.
+
+
+
 > **Created**: April 8, 2026  
 > **Purpose**: Address questions about apparent code duplication between Rust implementation and core-orchestrator submodule
 
