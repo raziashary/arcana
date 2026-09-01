@@ -25,6 +25,17 @@ four crate cycles, then move `agent/` as well. Recorded as `ADR-LOG-RESTRUCT-001
 ## B · Corrections that change what gets built
 
 ### `P1-11` — **IMPOSSIBLE AS WRITTEN.** The repair must be a new `migration_v6`
+
+> ⚠ **PARTIALLY RETRACTED 2026-09-01 — `ADR-LOG-RESTRUCT-0017`.** The claim below
+> that v5 *"failed to add"* the columns is **false**: `CREATE_NODES` and
+> `CREATE_EDGES` already declare all six, so every database has had them since
+> v1, and the live graph store carries them at `user_version = 5`. The v5
+> mechanism described below — invalid SQL, six swallowed results, a stamped and
+> committed version, a logged success — is **correct and stands**. What was
+> wrong was inferring a missing schema from a failing migration without reading
+> the schema. `migration_v6` still ships, but as a **defensive** step for
+> databases built before those columns entered `CREATE_NODES`, not as a repair
+> of a loss that happened.
 Editing `migration_v5` in place changes nothing. Every existing graph DB is already
 stamped `user_version = 5`, and `graph/migrations.rs:37` gates on `if current < 5`, so
 the corrected code is never invoked.

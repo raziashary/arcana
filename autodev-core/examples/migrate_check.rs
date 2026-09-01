@@ -90,6 +90,40 @@ fn main() {
         }
     }
 
+    // Per-repo graph stores live under `graphs/` and run their own ladder,
+    // which reaches v6 (P1-11). They are discovered rather than named, because
+    // there is one per repository the user has analysed.
+    let graphs_dir = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .map(|h| std::path::PathBuf::from(h).join(".autodev").join("graphs"))
+        .unwrap_or_default();
+    if let Ok(entries) = std::fs::read_dir(&graphs_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("db") {
+                continue;
+            }
+            let label = format!("graphs/{}", path.file_name().unwrap().to_string_lossy());
+            match autodev_core::graph::store::GraphStore::open(&path) {
+                Ok(store) => match store.schema_version() {
+                    Ok(n) if n >= 6 => rows.push((label, format!("v{n}"))),
+                    Ok(n) => {
+                        failures.push(format!("{label}: still at v{n}, expected v6"));
+                        rows.push((label, format!("v{n}  BEHIND")));
+                    }
+                    Err(e) => {
+                        failures.push(format!("{label}: {e}"));
+                        rows.push((label, format!("ERROR {e}")));
+                    }
+                },
+                Err(e) => {
+                    failures.push(format!("{label}: {e}"));
+                    rows.push((label, format!("OPEN FAILED {e}")));
+                }
+            }
+        }
+    }
+
     for (name, state) in &rows {
         println!("  {name:<18} {state}");
     }

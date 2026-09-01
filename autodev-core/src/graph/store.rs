@@ -63,6 +63,16 @@ pub struct GraphStore {
 }
 
 impl GraphStore {
+    /// This store's schema version, as recorded by the graph migration ladder.
+    ///
+    /// Exposed so a migration can be verified through the same handle the
+    /// application uses, rather than by reading the file separately — see
+    /// `examples/migrate_check.rs`.
+    pub fn schema_version(&self) -> Result<u32> {
+        let conn = Connection::open(&self.db_path)?;
+        super::migrations::get_schema_version(&conn)
+    }
+
     pub fn open(db_path: &Path) -> Result<Self> {
         tracing::debug!("[GraphStore::open] Opening database at: {:?}", db_path);
 

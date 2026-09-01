@@ -476,6 +476,39 @@ Evidence — `LIVE-DB-PROVEN`:
 
 **Links.** `ADR-LOG-RESTRUCT-0015` · `P1-CORRECTIONS.md` §B (`P1-09`) · MDP `§7 P1-09` · `P1-15` (`app_settings`, whose single owner `db/app_settings.rs` was created in `P1-B`)
 
+## ADR-LOG-RESTRUCT-0017 — Retraction: graph v5 did not lose any columns; `migration_v6` is defensive, not corrective
+
+**Status.** DECIDED · **partially supersedes `ADR-LOG-RESTRUCT-0013`**
+**Author.** Claude · **Tier.** `decided-independently` (a retraction of my own finding, per §0's retraction discipline)
+
+**What is retracted.** `ADR-LOG-RESTRUCT-0013` and `P1-CORRECTIONS.md §B` state that graph `migration_v5` **failed to add** `agent_author`, `task_id`, `worker_locked` and `worktree`, and that `P1-11` must write a `v6` to *repair* that loss. The premise is **false**. No column was ever missing.
+
+**What is true, and stands.** The mechanism described in `0013` is real and unchanged: v5's six statements use `ALTER TABLE … ADD COLUMN IF NOT EXISTS`, which **is not valid SQLite**; all six were wrapped in `let _ = …`; the migration therefore stamped `user_version = 5`, committed, and logged *"✅ migration_v5 complete"* over six failures. That is exactly the inert-but-green class this programme exists to remove, and it is still a defect.
+
+**What was wrong.** The six statements were also **redundant**. `graph/schema.rs`'s `CREATE_NODES` already declares `agent_author`, `task_id`, `worker_locked` and `worktree` (lines 57–60); `CREATE_EDGES` declares `agent_author` and `task_id` (78–79); and `ALL_INDEXES` already contains `idx_nodes_task` and `idx_nodes_author`. Every database created by `migration_v1` has had all six columns from the start.
+
+**The mechanism of my error.** I reasoned from the migration file alone: invalid SQL plus a discarded result implies the columns are absent. That inference is sound in isolation and I did not check it against anything. Two pieces of evidence were available and unused:
+
+1. **The live database.** `~/.autodev/graphs/d0ef18f6ad8b.db` carries all six columns and both indexes at `user_version = 5`.
+2. **The file's own code, four lines below the failures.** v5's two `CREATE INDEX … ON nodes(agent_author)` / `ON nodes(task_id)` statements use `?`, not `let _ =`. Had the columns been absent, **those** would have failed and propagated — the migration would have errored rather than logging success. Its own success was evidence against my reading, in the same function.
+
+This is `§0.16 L-C2` (*read past the signature*) in a new place: I read a migration's statements and inferred a schema, instead of reading the schema. The rule earned again: **a claim about state is verified against the state.**
+
+**What `migration_v6` therefore is.** Defensive, not corrective. On every database that exists today it is a no-op that advances the version — verified. It exists for a database created by a build whose `CREATE_NODES` predated those columns and which was then "migrated" by the broken v5: for that database the columns *are* genuinely absent, and nothing else would ever add them, because `CREATE TABLE IF NOT EXISTS` does not alter an existing table. Since such a database cannot be ruled out on someone else's machine, v6 ships.
+
+Unlike v5, v6 checks `PRAGMA table_info` before each `ALTER` (via `db::migrate::ensure_columns`) and propagates failure instead of discarding it. v5's six dead statements are **deleted** rather than repaired, with the reason recorded in place.
+
+**When.** 2026-09-01 · P1 · group `P1-C`, task `P1-11`
+
+**Where.** `autodev-core/src/graph/migrations.rs` · `autodev-core/src/graph/schema.rs` (the evidence) · `autodev-core/src/graph/store.rs` (`schema_version`)
+
+**How.** Evidence — `LIVE-DB-PROVEN` + `UNIT-PROVEN`:
+- Backed up first to `~/autodev-backups/p1-11-preflight` (`integrity_check = ok`).
+- Four tests, including one that builds a `nodes`/`edges` pair **without** the columns, stamps `user_version = 5`, asserts the fixture really lacks them, and then requires v6 to add all six while preserving an existing row — the database v6 exists for. A second test rewinds a complete schema to v5 and asserts v6 advances it **without changing a single column**, which is what would fail with *duplicate column name* had v6 been written the naive way.
+- Live: proven on a copy first, then applied — `5 → 6`, `integrity_check = ok`, column list and row counts **identical** to the backup.
+
+**Links.** `ADR-LOG-RESTRUCT-0013` (superseded in part) · `P1-CORRECTIONS.md §B` (corrected) · `§0.16 L-C2` · MDP `§7 P1-11`
+
 # §5 · Standing entries carried from planning
 
 Not build-time decisions — but recorded here because a future session will otherwise rediscover them the hard way. Each is already ratified in vision Part 8; these are the **operational consequences** that bite during implementation.
