@@ -105,12 +105,16 @@ impl ToolExecutor {
             agent_role: self.identity.role.clone(),
         };
 
-        // Emit tool start event for UI
+        // Emit tool start event for UI.
+        //
+        // Redacted: tool arguments routinely carry credentials — a token passed
+        // to an HTTP call, a password in a connection string — and this payload
+        // reaches the renderer and every log that records it (M-40).
         emit_tool_start(ToolStartPayload {
             session_id: self.session_id.clone(),
             call_id: call_id.clone(),
             tool_name: tool.name().to_string(),
-            input: input.clone(),
+            input: crate::security::redaction::redact_args(&input),
         });
 
         // Permission check
@@ -195,11 +199,30 @@ impl ToolExecutor {
         };
         HookRegistry::fire(&post_hook_type, &post_ctx).await;
 
+        // ── Redaction boundary (M-40, P1-21) ────────────────────────────
+        //
+        // Every tool result in the application passes through here, which is
+        // why the redaction happens at this one point rather than in each of
+        // the twenty-odd tools. A `read_file` on a `.env`, a `bash` that echoes
+        // an environment, a `grep` that matches a credential — all of them
+        // arrive here, and from here the content goes three places at once:
+        // into the conversation the model sees, into the messages table, and
+        // into the UI event.
+        //
+        // `G4:486` recorded unredacted tool arguments landing in procedural
+        // memory verbatim. Memory is persistent, so "verbatim" means forever.
+        //
+        // Applied to the result *after* the tool has run: the tool needs the
+        // real content to do its work, and what is redacted is what escapes.
+        let mut result = result;
+        result.output = crate::security::redaction::redact_text(&result.output);
+        let redacted_input = crate::security::redaction::redact_args(&input);
+
         // Persist tool message to database
         self.save_tool_message(
             &call_id,
             tool.name(),
-            input,
+            redacted_input,
             &result.output,
             result.is_error,
         );

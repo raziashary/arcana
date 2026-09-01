@@ -124,6 +124,10 @@ impl ProceduralStore {
 
     /// Write (create or overwrite) a topic file and upsert its SQLite mirror.
     pub fn save_topic(topic: &str, title: &str, content: &str, tags: &[String]) -> Result<()> {
+        // Redaction boundary (M-40, P1-21). Memory is persistent, so a secret
+        // written here is kept forever.
+        let content = &crate::security::redaction::redact_text(content);
+
         let path = topic_path(topic)?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;

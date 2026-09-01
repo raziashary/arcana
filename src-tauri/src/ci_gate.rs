@@ -757,4 +757,84 @@ let x = 1;
             "a comment is not a call"
         );
     }
+
+    // ── TG-P1-06 · redaction reaches every boundary ──────────────────────
+
+    /// Every place content leaves the process or enters durable storage must
+    /// redact (M-40, `P1-21`).
+    ///
+    /// This is the *coarse* half of the check and it is honest about that: it
+    /// asserts the boundary file references `security::redaction`, which a
+    /// caller could satisfy while discarding the result. The real proof is
+    /// behavioural — `autodev-core/tests/redaction_boundaries.rs` writes a
+    /// secret through each store and then reads the database back with plain
+    /// SQL to show it is not there.
+    ///
+    /// What this gate adds that the behavioural tests cannot: it fails when a
+    /// **new** boundary is added to the list without redaction, and it fails
+    /// when an existing one quietly drops it.
+    #[test]
+    fn tg_p1_06_every_redaction_boundary_calls_the_redactor() {
+        // Each entry is a boundary named by `P1-21`: prompts, memory writes,
+        // logs, analytics, egress.
+        const BOUNDARIES: &[(&str, &str)] = &[
+            (
+                "agent/tool_executor.rs",
+                "every tool result on its way into the conversation, the messages table and the UI",
+            ),
+            (
+                "memory/episodic.rs",
+                "conversation memory, which is permanent",
+            ),
+            ("memory/semantic.rs", "extracted facts"),
+            ("memory/procedural.rs", "skills written to disk"),
+        ];
+
+        let src = repo_root().join("autodev-core/src");
+        let mut missing = Vec::new();
+        for (rel, why) in BOUNDARIES {
+            let path = src.join(rel);
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                missing.push(format!("{rel}: file not found — has the boundary moved?"));
+                continue;
+            };
+            let production = text.split("#[cfg(test)]").next().unwrap_or("");
+            if !production.contains("security::redaction") {
+                missing.push(format!("{rel} ({why})"));
+            }
+        }
+
+        assert!(
+            missing.is_empty(),
+            "these boundaries do not redact, so content passes through them verbatim: {}",
+            missing.join(" | ")
+        );
+    }
+
+    /// The ported key list must not quietly shrink.
+    ///
+    /// `G4b §A.14` called `SENSITIVE_KEYS` "the spec". Losing an entry silently
+    /// widens what escapes, and nothing else would notice.
+    #[test]
+    fn tg_p1_06_the_sensitive_key_list_is_intact() {
+        let path = repo_root().join("autodev-core/src/security/redaction.rs");
+        let text = std::fs::read_to_string(&path).expect("redaction.rs");
+        let production = text.split("#[cfg(test)]").next().unwrap_or("");
+
+        // The four the Python source treats as load-bearing, plus the two the
+        // plan's count omitted.
+        for key in [
+            "api_key",
+            "password",
+            "authorization",
+            "private_key",
+            "credential",
+            "credentials",
+        ] {
+            assert!(
+                production.contains(&format!("{key:?}")),
+                "SENSITIVE_KEYS no longer contains {key}"
+            );
+        }
+    }
 }

@@ -6,7 +6,7 @@
 |---|---|
 | **Parents** | `MASTER_DEVELOPMENT_PLAN.md` · `TESTING_GATES.md` · `../vision/00-…-MASTER-PLAN.md` |
 | **Rev** | 1.0 — 2026-08-31 |
-| **Overall readiness** | **2.7%** — P0 built and committed; smoke and gates not fully green. Cap active. |
+| **Overall readiness** | **8.0%** — P0 + P1 built and committed; P1 smoke green, P1 gates one clause short. Cap active. |
 
 ---
 
@@ -43,13 +43,13 @@ Cross-cutting invariants, scored **independently of the phase areas**.
 
 | Dial | Status | Why |
 |---|---|---|
-| **Overall readiness** | 🔴 **2.7%** | P0 code is complete and committed (8 commits). Build ✅. Smoke and Gates NOT ✅ — no partial credit. |
+| **Overall readiness** | 🔴 **8.0%** | P0 and P1 complete and committed. P1: Build ✅, Smoke ✅ (`S1-01…03` proven, `S1-04` end to end). Gates ☐ — `TG1-01`'s registration clause is unmet and is not claimed. No partial credit. |
 | Security posture | 🟡 AMBER | All three P0 holes closed: the updater refuses anything unverified, the `/mcp` RCE is deleted, and no command returns key material. Still AMBER because the updater has no production key yet (so it refuses *everything*), the runtime key-path is untested, and `.env` is still read at startup. |
 | Gate honesty | 🟢 GREEN | Every `continue-on-error` gone; all checks blocking. **CI is now green end to end** (run `33467890406`) — the first passing run in this repo's recent history; the three before P0 all failed on a build that was structurally incapable of passing. |
 | Cross-platform | 🔴 RED | All three build smokes now pass on PRs, and the app is verified to **start** on Windows and Linux (macOS builds but is never launched). Still RED: `platform/command.rs` exists but **nothing calls it** — `bash.rs` still rewrites pipes into PowerShell, so no fleet task can complete on Windows. Wiring is P4. |
 | Agent correctness | 🔴 RED | No caching, unbounded context, no permission gate in force. P2 + P3. |
 | Product capability | 🔴 RED | Agent output lands where the user never looks; no run step exists. P4. |
-| Data integrity | 🔴 RED | One real migration ladder and its head is a broken statement; no backup path anywhere. P1. |
+| Data integrity | 🟡 AMBER | **P1 closed the structural half.** All 10 databases carry a `user_version` ladder (was 1); the ladder refuses a database from a newer build, applies each rung and its stamp in one transaction, and **backs up automatically before any destructive rung**. `LIVE-DB-PROVEN` on the real data root: zero row-count changes across 720 rows. AMBER not GREEN — nothing yet restores *from* a backup automatically, and `M-43` (a failed checkpoint still lets the write proceed) is open. |
 | Fault tolerance | 🔴 RED | `panic = "abort"` + in-process agents: one panic kills everything. P3. |
 
 ---
@@ -59,7 +59,7 @@ Cross-cutting invariants, scored **independently of the phase areas**.
 | # | Area (phase) | Weight | Build | Smoke | Gates | Area % | Weighted |
 |---|---|---|---|---|---|---|---|
 | A0 | **P0 · Stop the bleeding** | 8 | ✅ | ☐ | ☐ | 33% | 2.7 |
-| A1 | **P1 · Structural** | 8 | ☐ | ☐ | ☐ | 0% | 0.0 |
+| A1 | **P1 · Structural** | 8 | ✅ | ✅ | ☐ | 67% | 5.3 |
 | A2 | **P2 · Providers** | 14 | ☐ | ☐ | ☐ | 0% | 0.0 |
 | A3 | **P3 · Runtime + memory** | 18 | ☐ | ☐ | ☐ | 0% | 0.0 |
 | A4 | **P4 · The Fleet** ← headline | **20** | ☐ | ☐ | ☐ | 0% | 0.0 |
@@ -68,7 +68,7 @@ Cross-cutting invariants, scored **independently of the phase areas**.
 | A7 | **P7 · Experience** | 8 | ☐ | ☐ | ☐ | 0% | 0.0 |
 | A8 | **P8 · Submodule deletion** | 4 | ☐ | ☐ | ☐ | 0% | 0.0 |
 | A9 | **P9 · Delivery** | 4 | ☐ | ☐ | ☐ | 0% | 0.0 |
-| | **Total** | **100** | | | | | **2.7** |
+| | **Total** | **100** | | | | | **8.0** |
 
 **Why P4 carries the most weight.** It is the only phase whose completion means AutoDev does what it claims: a task runs end to end on three operating systems and produces a build-verified, reversible artifact the user can run. Everything before it is a precondition; everything after it is polish, cleanup or distribution.
 
@@ -78,24 +78,24 @@ Cross-cutting invariants, scored **independently of the phase areas**.
 
 | # | Invariant | Proving gates | Status | Note |
 |---|---|---|---|---|
-| **SO-1** | **INV-1** — no agent work in a foreign runtime or language | `G-NOSIDECAR`, P8 entry gate | 🔴 RED | Subagents moved in-process onto a nested `AgentEngine` and Mode 2 is inert, so no *agent turn* runs in Python. Still RED: `main.rs` continues to spawn `memory-mcp-server` and `core-orchestrator`, and `src-tauri/resources/` still carries the 225 MB Python tree. P8. |
+| **SO-1** | **INV-1** — no agent work in a foreign runtime or language | `G-NOSIDECAR`, P8 entry gate | 🔴 RED | Subagents moved in-process onto a nested `AgentEngine` and Mode 2 is inert, so no *agent turn* runs in Python. **P1 added the structural half:** `autodev-core` holds the runtime, both binaries link it, and `cargo tree` reports **0** Tauri/GTK/webkit edges for core and `airsctl` against 28 for the desktop crate. `src-cli/tests/core_runtime.rs` constructs an `AgentEngine` in a process with no UI framework — a file that could not have compiled before. INV-1 restated as runtime-and-language-scoped (`P1-08`). Still RED: `main.rs` continues to spawn `memory-mcp-server` and `core-orchestrator`. P8. |
 | **SO-2** | **INV-2** — no key crosses the IPC boundary outbound | `G-KEY-ASYM` | 🟡 AMBER | `get_provider_key`/`get_github_pat` deleted; the vault command set is closed and gate-proven (`TG0-03` static half). AMBER not GREEN: the runtime half — a key entered in the UI cannot be read back by *any* route — has no test, and needs the e2e harness to execute. |
-| **SO-3** | **INV-3** — no shipped artifact contains a credential | `G-BUNDLE` | 🔴 RED | 225 MB Python tree is a declared bundle resource |
+| **SO-3** | **INV-3** — no shipped artifact contains a credential | `G-BUNDLE` | 🟡 AMBER | ⚠ **Note was stale and is corrected.** The 225 MB Python tree is **no longer a declared bundle resource** — `bundle.resources` is `[]`, fixed in P0, and a gate asserts every declared bundle path exists **and is git-tracked**. Zero files under `resources/` are tracked. AMBER not GREEN: proving a *built installer* carries no credential needs P9's packaging gate, and the tree still exists on disk locally — its deletion is P8. |
 | **SO-4** | **INV-4** — a gate that cannot fail is not a gate | `G-CI-BLOCKING` | 🟢 GREEN | All four `continue-on-error` flags removed; `cargo test` runs `--all-targets` (it ran `--lib`, silently skipping `tests/`). `TG0-02` asserts this over the workflow files; `S0-05` proves a failing test exits non-zero in both languages. |
 | **SO-5** | **INV-5** — no artifact written against process CWD | `G-DELIVER` | 🔴 RED | Live artifacts observed in `~/.autodev/agents/` |
 | **SO-6** | **INV-6** — platform-neutral agent commands | `G-NO-POSIX`, `G-CMD-INTENT` | 🔴 RED | `platform/command.rs` now exists and is unit-proven (10 tests, including the Windows `.cmd` shim). It changes nothing yet: **no caller uses it** — `bash.rs` still rewrites pipes into PowerShell under `cmd /C`. A guard nothing calls is not a guard. Wiring is P4-11. |
 | **SO-7** | **INV-7** — measurements are provider-reported, not estimated | `G-USAGE`, `G-PRICE` | 🔴 RED | Streaming input tokens are 0 on three providers |
 | **SO-8** | **INV-8** — a writer must have a proven reader | `G-MEM-READ`, `G-GRAPH-SCOPE`, reader-exists family | 🔴 RED | Graph, `ModelConfigsDb`, budget config, `api_failures` all unread |
 | **SO-9** | **INV-9** — every blocking wait has a timeout and a cancel path | `G-CANCEL`, `G-SUBPROC-TIMEOUT` | 🔴 RED | Permission oneshot has no timeout; `validate.rs` has zero |
-| **SO-10** | **INV-10** — one definition per schema | `G-OWNER` | 🔴 RED | `src-shared` mirrors four tables; `plans.db` has two designs |
+| **SO-10** | **INV-10** — one definition per schema | `G-OWNER` | 🟢 GREEN | `src-shared`'s mirrors of `tasks`, `workers` and `plans` are **deleted** (22/19/23 write statements between them); `airsctl` uses `autodev_core::db`. `app_settings`' three creators route through `db/config_db.rs`, which owns the file because `user_version` belongs to the file, not a table. `TG-P1-04` asserts exactly one creator per table and was falsified by planting a second. `plans.db`'s two incompatible designs carried **no data risk** — the file had never existed on disk. |
 | **SO-11** | **INV-11** — the updater installs nothing unverified | `G-UPDATE-REFUSE` | 🟢 GREEN | All three bypasses closed and unit-proven: empty checksum, empty `sig_url`, and `.unwrap_or_default()` on a failed checksum fetch. Verification also repeats at install time, closing the TOCTOU. **Note:** with no production key yet the updater refuses *every* update — correct for this invariant, but `TG0-01`'s accept-path stays unproven until Razi generates the keypair. |
 | **SO-12** | **INV-12** — BYOK credential provenance | `G-KEY-NOENV` | 🟡 AMBER | `airsctl --api-key` and its `ANTHROPIC_API_KEY` fallback removed; the updater's runtime `AUTODEV_UPDATE_PUBKEY` override removed in favour of a compile-time key. AMBER because `main.rs` still loads `.env` via dotenvy walking **up** from the working directory — a credential channel that remains open by design for development. |
 | **SO-13** | *(new, G-01)* **Fault isolation** — one panic cannot kill the app | `G-PANIC-CONTAINED` | 🔴 RED | `panic = "abort"` + in-process agents |
 | **SO-14** | *(new, G-04)* **Spend has a ceiling that stops** | `G-SPEND-CAP` | 🔴 RED | No ceiling, no kill switch; per-task budget inert |
-| **SO-15** | *(new, G-07)* **Secrets never enter durable memory** | `G-REDACT`, `G-MEM-GATEWAY` | 🔴 RED | Redaction was dropped from the plan; restored as M-40 |
-| **SO-16** | *(new, G-08)* **Agent writes are reversible** | `G-CHECKPOINT-BLOCKS` | 🔴 RED | `db/checkpoints.rs` is not compiled into the binary |
+| **SO-15** | *(new, G-07)* **Secrets never enter durable memory** | `G-REDACT`, `G-MEM-GATEWAY` | 🟡 AMBER | **Both** Python redactors ported (`SENSITIVE_KEYS` is 22, not the 20 the plan said) and wired at the tool-result funnel and all four memory writes. Proven by behaviour: a secret written through each store is absent when the database is read back with plain SQL, with a control proving the store keeps ordinary content. `S1-04` proves it end to end through the real `read_file` tool. AMBER not GREEN for two stated reasons: a **bare high-entropy token in prose** — no assignment context, no recognisable shape — is not caught, deliberately, because catching it means destroying every commit SHA; and `G-MEM-GATEWAY` (what memory decides to store at all) is P3. |
+| **SO-16** | *(new, G-08)* **Agent writes are reversible** | `G-CHECKPOINT-BLOCKS` | 🔴 RED | ⚠ **Note was false and is corrected (`ADR-LOG-RESTRUCT-0010`).** Undo **does** ship — `git/checkpoint.rs`, five registered commands, called from `gitStore.ts`, with a snapshot taken before every agent write. `db/checkpoints.rs` was **deleted**, not declared (`ADR-0012`). Still RED for the real reason: `auto_checkpoint_before_write` returns `()` and logs a failure at `debug!` only, so a failed checkpoint is invisible **and the overwrite proceeds anyway** (`M-43`, P4/P9). |
 
-**16 of 16 RED.** The 50% cap is therefore active and will remain so until every row clears. That is the correct reading of this codebase today, not pessimism: each row cites a specific, verified defect.
+**9 of 16 RED** — SO-4, SO-10 and SO-11 GREEN; SO-2, SO-3, SO-12 and SO-15 AMBER. The 50% cap remains active and will until every row clears. Two notes in this table were **wrong** rather than merely out of date and are corrected above (SO-3's bundle resource, SO-16's checkpoint claim); finding that is what the no-stale sweep is for.
 
 ---
 
@@ -125,12 +125,14 @@ Every mechanic reaches a phase and a scored area. **A mechanic with no phase is 
 ```
 overall = Σ (weight_i × area_pct_i)  for i in A0..A9
         = 8 × 0.33  (A0: Build ✅, Smoke ☐, Gates ☐)
-        = 2.7   at rev 1.1
+        + 8 × 0.67  (A1: Build ✅, Smoke ✅, Gates ☐)
+        = 2.7 + 5.3
+        = 8.0   at rev 1.4
 
 safety_cap = 50% if any overlay row is RED
-           = ACTIVE  (12 of 16 RED; SO-4 and SO-11 GREEN, SO-2 and SO-12 AMBER)
+           = ACTIVE  (9 of 16 RED; SO-4, SO-10, SO-11 GREEN; SO-2, SO-3, SO-12, SO-15 AMBER)
 
-reported = min(overall, safety_cap) = 2.7%
+reported = min(overall, safety_cap) = 8.0%
 ```
 
 ---
@@ -145,3 +147,4 @@ reported = min(overall, safety_cap) = 2.7%
 | 2026-09-01 | 1.1 | **2.7%** | Active (12/16 RED) | **P0 closed out.** Eight commits. Build ✅; Smoke and Gates NOT ✅ — no partial credit, and both have named unproven clauses. Smoke: `S0-02…S0-06` proven, `S0-01` proven on Windows only (Linux/macOS need a CI run). Gates: `TG0-02` GREEN; `TG0-01`/`03`/`04`/`05` PARTIAL, each with the missing clause recorded. Four overlay rows moved: SO-4 and SO-11 to GREEN, SO-2 and SO-12 to AMBER. SO-6 stays RED deliberately — `platform/command.rs` is proven but has no caller, and a guard nothing calls is AMBER at best. Cap remains active. |
 | 2026-09-01 | 1.2 | **2.7%** | Active (12/16 RED) | **Post-phase audit applied.** The two mandatory §0.2a auditors returned 27 code findings and 41 stale-doc rows; 14 code findings are fixed, the rest triaged in `_verify/P0-AUDIT-TRIAGE.md` with an owning phase. **Four were regressions P0 itself introduced** — the fleet was silently dead on any machine without Python (`F-10`), subagent depth was incremented twice (`F-21`), the shipped supervisor's `request_review` was broken (`F-22`), and QC annotations were re-attributed to "user" (`F-04`). Score unchanged at 2.7%: Build stays ✅, and Smoke/Gates were already ☐. Two overlay rows would have been wrong without the audit — SO-4's gates tested one spelling of each defect (`F-18`), and the identity assertion behind SO-2 had become type-impossible (`F-09`); both are now falsifiable, proven by re-breaking. |
 | 2026-09-01 | 1.3 | **2.7%** | Active (12/16 RED) | **First green CI run in the repo's recent history** (`33467890406`, all 7 jobs). Getting there found a startup crash P0 itself introduced: registering `tauri-plugin-dialog` made Tauri parse a `"dialog": {}` block it cannot deserialize, and **the application did not start on any platform**. Nothing else in CI could see it — the three build smokes stop at `cargo build` — so it surfaced only through the e2e job, which I had argued for deleting. Added a `xvfb` launch smoke to the Linux build so that class cannot hide behind a webdriver again. **Score deliberately unchanged at 2.7%:** Build ✅ stands, but Smoke stays ☐ because `S0-01` is 2 of 3 (macOS is never launched) and Gates stays ☐ because 2 of 5 are green — the no-partial-credit rule is doing its job, and relaxing it to reflect "real progress" is exactly the dishonesty this matrix exists to prevent. `S0-01` was un-ticked: it had been recorded green from `head -5` of a launch that crashed immediately after. New learnings `L-C9` (a verification whose shape cannot express failure, ×3) and `L-C10` (a failing check read as worthless). |
+| 2026-09-01 | 1.4 | **8.0%** | Active (9/16 RED) | **P1 closed out.** Eleven commits. `autodev-core` exists and both binaries link it — `cargo tree` reports **0** Tauri/GTK/webkit edges for core and `airsctl` against **28** for the desktop crate, and `src-cli/tests/core_runtime.rs` constructs an `AgentEngine` in a process with no UI framework, a file that could not have compiled before this phase. All **10** databases carry a `user_version` ladder (was 1), `LIVE-DB-PROVEN` with **zero** row-count changes across 720 rows. Redaction (`M-40`), dropped from the plan entirely, is ported and wired, proven end to end by `S1-04`. **A1 scores 67%, not 100%:** Build ✅ and Smoke ✅, but Gates ☐ because `TG1-01`'s registration clause — the 27 graph-tool structs still implement no `Tool` and nothing registers them — is unmet, and no-partial-credit means that is a ☐. Compiling is not wiring, and this is the phase that keeps saying so. Three overlay rows moved (SO-10 → GREEN, SO-3 and SO-15 → AMBER) and **two were found to be wrong rather than stale**: SO-3 described a bundle resource P0 had already emptied, and SO-16 repeated the false "undo does not ship" claim retracted in `ADR-0010`. Four new learnings, three of them one shape: **`L-C11`** — a claim about state inferred from code instead of checked against the state, ×3 (the graph columns were never missing; `rusqlite` already set `busy_timeout`; chrono accepts the space separator and rejects the missing offset). **`L-C12`** — the backup helper had zero callers while I took the phase's backups by hand. **`L-C13`** — a fresh-database branch that no live-data check could reach, which shipped in the P1-10 commit and was caught by an unrelated test. **`L-C14`** — a redaction assertion that checked something had changed rather than that the secret was gone, and a bearer token walked straight through it. |

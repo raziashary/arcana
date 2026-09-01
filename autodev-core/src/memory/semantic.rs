@@ -36,6 +36,10 @@ impl SemanticStore {
         working_dir: Option<&str>,
         tags: &[String],
     ) -> Result<String> {
+        // Redaction boundary (M-40, P1-21). Memory is persistent, so a secret
+        // written here is kept forever.
+        let fact_text = &crate::security::redaction::redact_text(fact_text);
+
         let db = MemoryDb::open()?;
         let now = Utc::now().to_rfc3339();
         let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".into());

@@ -171,7 +171,7 @@ Real progress from real events; cancellation wherever the backend supports it; e
 
 The sharpest tell: **Delete checkpoint is unconfirmed while the reversible Restore beside it is confirmed.** Three confirmation idioms coexist, and a 3-second auto-revert guards "Clear all tasks" — the least destructive of the set.
 
-**The rule: confirmation is proportional to blast radius, in one idiom.** Undo where feasible — noting `db/checkpoints.rs` is **not compiled**, so undo does not currently exist at all (spec `05 §1.1`).
+**The rule: confirmation is proportional to blast radius, in one idiom.** Undo where feasible — noting — ⚠ **corrected 2026-09-01 (`ADR-LOG-RESTRUCT-0010`)**: undo ships via `git/checkpoint.rs`; `db/checkpoints.rs` was deleted in P1, and the real defect is that a *failed* checkpoint is logged at `debug!` while the write proceeds (`M-43`) — that `db/checkpoints.rs` is **not compiled**, so undo does not currently exist at all (spec `05 §1.1`).
 
 ### 7.6 Coherence (M-39)
 

@@ -208,7 +208,7 @@ Steps 4, 5, 6 and 9 are precisely where the product fails today.
 
 | **M-41** | ⚠ **ADDED by the review (G-01).** `panic = "abort"` + in-process workers ⇒ **one panic kills the app and every session**. The sidecar was also a fault boundary, and INV-1 removed it without replacing what it did | Release profile → `panic = "unwind"`; every agent turn and subagent runs inside `catch_unwind`; a panicking worker fails **that turn**, reports it, and the app survives | DET | panic → contained turn failure | `Cargo.toml`, `agent/engine.rs`, `subagent/` | G-01 | 01 |
 | **M-42** | ⚠ **ADDED by the review (G-04).** Nothing stops spending: per-task budget inert, no daily ceiling, no off switch; a broadcast fires one LLM tick per worker with no cap. Under BYOK the runaway bill is the user's | A user-set **daily ceiling enforced in the provider layer** — the one place every call passes — plus a **visible global kill switch**. Exceeding the cap pauses the fleet and surfaces it | DET | spend → enforced ceiling | `provider/`, `budget/`, `src/` | G-04 | 02 |
-| **M-43** | ⚠ **ADDED by the review (G-08).** Undo does not exist — `db/checkpoints.rs` is not compiled — and `auto_checkpoint_before_write` returns `()`, so a failed checkpoint is invisible and the write proceeds | Compile the checkpoint module; a **failed checkpoint blocks the write**; every agent write stays inside the resolved workspace; **and** each task gets its own worker branch for coarse rollback. The two must never disagree about current state | DET | agent write → reversible agent write | `db/checkpoints.rs`, `git/`, `agent/builtin_tools/` | G-08 | 04, 09 |
+| **M-43** | ⚠ **ADDED by the review (G-08).** ⚠ **First clause RETRACTED 2026-09-01 (`ADR-LOG-RESTRUCT-0010`): undo DOES exist** — `git/checkpoint.rs` ships, with five registered commands, a frontend caller, and a snapshot before every agent write; `db/checkpoints.rs` was **deleted** in P1, not declared (`ADR-0012`). The second clause stands and is the real mechanic: `auto_checkpoint_before_write` returns `()`, logs at `debug!`, and the write proceeds regardless. *Original wording, first clause struck:* ~~Undo does not exist — `db/checkpoints.rs` is not compiled~~ — and `auto_checkpoint_before_write` returns `()`, so a failed checkpoint is invisible and the write proceeds | Compile the checkpoint module; a **failed checkpoint blocks the write**; every agent write stays inside the resolved workspace; **and** each task gets its own worker branch for coarse rollback. The two must never disagree about current state | DET | agent write → reversible agent write | `db/checkpoints.rs`, `git/`, `agent/builtin_tools/` | G-08 | 04, 09 |
 
 > **This raises the ported-capability count from nine to ten**, and adds a P8 gate: the deletion phase cannot complete while a capability grounding marked PORT remains unported. That is the check which would have caught this without a review.
 
@@ -462,7 +462,7 @@ At the depth needed to decide the ADRs. Exhaustive treatment moves to specs `01�
 
 | # | File | Owner | Tables |
 |---|---|---|---|
-| 1 | **`~/.airs/autodev.db`** | `session/storage.rs:293` | `sessions`, `messages` |
+| 1 | **`~/.autodev/autodev.db`** *(was `~/.airs/autodev.db` until P1-14; the file is copied across on first start, the original left in place)* | `session/storage.rs` | `sessions`, `messages` |
 | 2 | `~/.autodev/tasks.db` | `db/tasks.rs:287` | `tasks`, `worker_requests`, `worker_messages`, `routing_history` |
 | 3 | `~/.autodev/config.db` | **six modules** | `autodev_instructions`, `model_configs`, `hooks`, `hook_logs`, `app_settings`, `checkpoints` |
 | 4 | `~/.autodev/workers.db` | `db/workers.rs:111` | `workers` (+ 7 seeded fleet workers) |
@@ -487,6 +487,8 @@ At the depth needed to decide the ADRs. Exhaustive treatment moves to specs `01�
 | **R7** | **Timestamp format is inconsistent** — SQLite `datetime('now')` written, RFC 3339 parsed, at three known sites, disabling the orphan TTL and the QC-age alert (`GI-01`, `F-45/F-45b`) | One format, one helper, everywhere (M-16) |
 
 ## 4.3 Migration discipline
+
+> ⚠ **Superseded by P1-10 (2026-09-01).** All **10** databases now carry a `PRAGMA user_version` ladder, applied by `db/migrate.rs`, which runs each rung and its stamp in one transaction, refuses a database from a newer build, and backs up automatically before any destructive rung. `LIVE-DB-PROVEN` on the real data root with zero row-count changes. The paragraph below records the state that motivated the work.
 
 **Today: there is essentially none.** Only `graph/` has a real ladder (`PRAGMA user_version`, 5 migrations, head **v5**). Every other database uses idempotent `CREATE TABLE IF NOT EXISTS` on each open — **no schema-version table, no down-migration, and no backup path anywhere in the crate**. `updater/persistence.rs` creates a restore point for `config.db` and `analytics.db` only, and only during an update.
 

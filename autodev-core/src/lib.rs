@@ -33,6 +33,7 @@ pub mod plugin;
 pub mod provider;
 pub mod recipes;
 pub mod routing;
+pub mod security;
 pub mod session;
 pub mod state;
 pub mod subagent;

@@ -26,6 +26,8 @@ Eleven SQLite databases, ~30 tables, and **one real migration ladder among them*
 
 **11 databases** (`G1 §E.1`, `CODE-PRESENT`). Reproduced in `00 §Part 4.1`; not repeated here.
 
+> ⚠ **Superseded by P1 (2026-09-01).** Every database now carries a ladder (`P1-10`), the graph head is repaired and advanced to v6 (`P1-11`), the three data roots are one (`P1-14`), `src-shared`'s schema mirrors are deleted (`P1-09`), and a backup helper is wired into every destructive path (`P1-19`). What follows records the state that motivated those tasks.
+
 **The migration head is meaningful in exactly one:** `graph/` has `PRAGMA user_version` with 5 migrations, head **v5**. Every other database runs idempotent `CREATE TABLE IF NOT EXISTS` on each open. There is **no schema-version table, no down-migration, and no backup path anywhere in the crate** — `updater/persistence.rs` creates a restore point for `config.db` and `analytics.db` only, and only during an update.
 
 And the one ladder that exists is **broken at its head**: migration v5 uses `ADD COLUMN IF NOT EXISTS`, which SQLite does not support. The error is swallowed and the migration can never retry (`G3d F-31`).
@@ -36,7 +38,7 @@ And the one ladder that exists is **broken at its head**: migration v5 uses `ADD
 
 Detailed in `00 §Part 4.2` (R1–R7). The two with the widest blast radius:
 
-**R1 — three data roots.** Sessions live in `~/.airs/autodev.db`; plugins and the fleet secret live under `~/.airs/`; **everything else** lives under `~/.autodev/`. The old master plan already contradicted itself on two roots (`§8` vs `§4.1`); the code has three. A user backing up "their AutoDev data" loses whichever they miss. → **ADR-01-09**, with a one-time migration.
+**R1 — three data roots.** *(Resolved by `P1-14`: the session store is now `~/.autodev/autodev.db`, copied across on first start with the original left in place; `~/.airs/plugins/` and `~/.airs/fleet_secret` were code-only paths that never existed on disk.)* Sessions lived in `~/.airs/autodev.db`; plugins and the fleet secret live under `~/.airs/`; **everything else** lives under `~/.autodev/`. The old master plan already contradicted itself on two roots (`§8` vs `§4.1`); the code has three. A user backing up "their AutoDev data" loses whichever they miss. → **ADR-01-09**, with a one-time migration.
 
 **R5 — the hand-mirrored schema.** `src-shared/src/db/tasks.rs` states in its own header that it "mirrors the schema in `src-tauri/src/db/tasks.rs`", and it has **already drifted**: it lacks `rejection_reason`, `retry_count`, `claimed_by_pid`, `claim_host` and one index. Severity is contained — the Tauri side carries additive `ALTER TABLE` migrations that repair a table `airsctl` created — but `airsctl`'s `Task` struct **structurally cannot represent why QC rejected a task or how many times it has been retried**. → **ADR-01-03**, INV-10.
 
@@ -96,7 +98,7 @@ Unbounded, with no pruning and no `VACUUM` anywhere: `token_usage`, `system_even
 
 **One owner per table** (INV-10). Two violations to resolve:
 - **`app_settings` has three independent creators** — `commands/workspace_commands.rs:23`, `commands/github_mcp_commands.rs:30`, `ide/workspace.rs:35`, each with its own `CREATE TABLE IF NOT EXISTS`.
-- **Two checkpoint systems** — `checkpoints` in `config.db` (`git/checkpoint.rs`) and `file_checkpoints` in `checkpoints.db` (`db/checkpoints.rs`, **not compiled**). Pick one; the uncompiled one is why undo does not exist.
+- **Two checkpoint systems** *(resolved by `P1-16`: `db/checkpoints.rs` was **deleted**, never having been compiled, so no second store was ever created — zero references to `checkpoints.db` remain and none exists on disk; `git/checkpoint.rs` is the sole owner)* — `checkpoints` in `config.db` (`git/checkpoint.rs`) and `file_checkpoints` in `checkpoints.db` (`db/checkpoints.rs`, **not compiled**). Pick one; the uncompiled one is why undo does not exist.
 
 Also delete or create `hourly_costs` — `analytics/queries.rs:29` queries a table `migrate()` never creates and masks the failure as `-1`, in the one diagnostic written to answer "is the dashboard hitting the right database" (`IN-54`).
 

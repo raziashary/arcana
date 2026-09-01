@@ -24,6 +24,15 @@ impl EpisodicStore {
         working_dir: Option<&str>,
         metadata: Option<serde_json::Value>,
     ) -> Result<String> {
+        // Redaction boundary (M-40, P1-21). Memory is persistent, so a secret
+        // written here is a secret kept forever — `G4:486` recorded exactly
+        // that happening with tool arguments. Redacted on the way in rather
+        // than on the way out, because a store that never held the secret
+        // cannot leak it through a path nobody thought of.
+        let content = &crate::security::redaction::redact_text(content);
+        let metadata = metadata.map(|m| crate::security::redaction::redact_json(&m));
+        let metadata = metadata.as_ref();
+
         let db = MemoryDb::open()?;
         let id = Uuid::new_v4().to_string();
         let turn = next_turn_index(&db, session_id)?;
@@ -62,6 +71,19 @@ impl EpisodicStore {
         working_dir: Option<&str>,
         metadata: Option<serde_json::Value>,
     ) -> Result<String> {
+        // Redaction boundary (M-40, P1-21). `tool_calls` is the field
+        // `G4:486` recorded landing in memory verbatim; `thinking` is model
+        // reasoning that can quote a secret it just read.
+        let content = &crate::security::redaction::redact_text(content);
+        // `thinking` gets the stricter rule, including the long-token
+        // heuristic. It is model reasoning, not source code — losing a hash
+        // from it costs far less than keeping a key in it, and unlike
+        // `content` it is never the code the agent hands back to the user.
+        let thinking = thinking.map(crate::security::redaction::redact_value_text);
+        let thinking = thinking.as_deref();
+        let tool_calls = tool_calls.map(|v| crate::security::redaction::redact_json(&v));
+        let metadata = metadata.map(|m| crate::security::redaction::redact_json(&m));
+
         let db = MemoryDb::open()?;
         let id = Uuid::new_v4().to_string();
         let turn = current_turn_index(&db, session_id);
@@ -100,6 +122,10 @@ impl EpisodicStore {
         summary_text: &str,
         working_dir: Option<&str>,
     ) -> Result<String> {
+        // Redaction boundary (M-40, P1-21). Memory is persistent, so a secret
+        // written here is kept forever.
+        let summary_text = &crate::security::redaction::redact_text(summary_text);
+
         let db = MemoryDb::open()?;
         let id = Uuid::new_v4().to_string();
         let turn = current_turn_index(&db, session_id);
