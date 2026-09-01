@@ -112,7 +112,7 @@ impl Tool for RequestSupervisorActionTool {
             // The caller's role is always a real slug now, so a request can no
             // longer be recorded against "unknown".
             tracing::warn!(
-                "[request_supervisor_action] no assigned_worker on the task;                  attributing the request to the caller '{}'",
+                "[request_supervisor_action] no assigned_worker on the task; attributing the request to the caller '{}'",
                 ctx.agent_role
             );
             ctx.agent_role.clone()

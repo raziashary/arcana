@@ -330,7 +330,7 @@ mod tests {
     fn the_fts_table_is_external_content_so_dropping_it_loses_nothing() {
         assert!(
             super::super::schema::CREATE_NODES_FTS.contains("content='nodes'"),
-            "nodes_fts is no longer external-content: dropping it now loses data,              and migration_v4 must take a backup first"
+            "nodes_fts is no longer external-content: dropping it now loses data, and migration_v4 must take a backup first"
         );
 
         let mut conn = Connection::open_in_memory().expect("mem");

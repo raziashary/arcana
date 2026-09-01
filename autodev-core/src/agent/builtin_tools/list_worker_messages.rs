@@ -63,7 +63,7 @@ impl Tool for ListWorkerMessagesTool {
         let to_slug = ctx.agent_role.trim().to_string();
         if to_slug.is_empty() {
             return ToolResult::error(
-                "list_worker_messages refused: the calling agent has no role.                  Every reader must identify themselves."
+                "list_worker_messages refused: the calling agent has no role. Every reader must identify themselves."
             );
         }
 

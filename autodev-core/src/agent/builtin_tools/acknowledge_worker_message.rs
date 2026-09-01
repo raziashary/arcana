@@ -55,7 +55,7 @@ impl Tool for AcknowledgeWorkerMessageTool {
         let caller = ctx.agent_role.trim().to_string();
         if caller.is_empty() {
             return ToolResult::error(
-                "acknowledge_worker_message refused: the calling agent has no                  role. Every ack must identify the caller."
+                "acknowledge_worker_message refused: the calling agent has no role. Every ack must identify the caller."
             );
         }
 

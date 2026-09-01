@@ -141,7 +141,7 @@ impl Tool for SendWorkerMessageTool {
         let from = ctx.agent_role.trim().to_string();
         if from.is_empty() {
             return ToolResult::error(
-                "send_worker_message refused: the calling agent has no role, so                  the message would have no identifiable sender."
+                "send_worker_message refused: the calling agent has no role, so the message would have no identifiable sender."
             );
         }
 

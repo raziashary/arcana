@@ -440,7 +440,7 @@ mod tests {
         assert_eq!(
             db.reap_abandoned().expect("reap"),
             0,
-            "a live process on this host was marked abandoned — this is exactly              what happened when airsctl ran while the app was open"
+            "a live process on this host was marked abandoned — this is exactly what happened when airsctl ran while the app was open"
         );
         assert!(db.get("the-app").expect("get").expect("there").is_open());
 

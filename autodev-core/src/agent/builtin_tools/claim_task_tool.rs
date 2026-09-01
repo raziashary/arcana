@@ -93,7 +93,7 @@ impl Tool for ClaimTaskTool {
                 // "unknown" whenever the MCP bridge dropped __agent_role,
                 // which then broke orphan detection.
                 tracing::warn!(
-                    "[claim_task] task #{task_id} has no assigned_worker;                      attributing the claim to the caller '{}'",
+                    "[claim_task] task #{task_id} has no assigned_worker; attributing the claim to the caller '{}'",
                     ctx.agent_role
                 );
                 ctx.agent_role.clone()

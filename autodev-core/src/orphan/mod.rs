@@ -196,7 +196,7 @@ fn check_task(task: &Task) -> Option<String> {
         Ok(h) => h,
         Err(e) => {
             tracing::warn!(
-                "[orphan] task {} has an unreadable updated_at ({:?}): {e}.                  Cannot apply the TTL fallback to it.",
+                "[orphan] task {} has an unreadable updated_at ({:?}): {e}. Cannot apply the TTL fallback to it.",
                 task.id,
                 task.updated_at
             );
