@@ -263,6 +263,17 @@ impl SubagentManager {
                     entry.last_event = Some(short_label(&evt));
                     if let SubagentEvent::Status { status, .. } = &evt {
                         entry.handle.status = *status;
+                        // Stamp the terminal time HERE as well as in
+                        // `finalise()`. `prune_terminal` only evicts entries
+                        // with `terminated_at` set, and `finalise` runs only
+                        // from `await_result` — so a subagent that completed
+                        // but was never awaited stayed in the registry forever
+                        // and, because `_permit` is a drop-guard held by the
+                        // entry, never released its pool slot. Found by the P0
+                        // post-phase audit (F-02).
+                        if status.is_terminal() && entry.terminated_at.is_none() {
+                            entry.terminated_at = Some(Instant::now());
+                        }
                     }
                 }
             }
@@ -349,10 +360,53 @@ fn short_label(evt: &SubagentEvent) -> String {
     }
 }
 
+/// Truncate to at most `max` CHARACTERS.
+///
+/// This sliced bytes (`&s[..max]`), which panics when byte `max` is not a UTF-8
+/// char boundary — and it is reached from `short_label` inside the detached
+/// `pump_events` task, where a panic kills the pump silently and every later
+/// subagent event is lost. A provider error message containing any non-ASCII
+/// character was enough. Found by the P0 post-phase audit (F-03).
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    if s.chars().count() <= max {
         s.to_string()
     } else {
-        format!("{}…", &s[..max])
+        let head: String = s.chars().take(max).collect();
+        format!("{head}…")
+    }
+}
+
+#[cfg(test)]
+mod truncate_tests {
+    use super::truncate;
+
+    #[test]
+    fn short_strings_are_returned_whole() {
+        assert_eq!(truncate("hello", 60), "hello");
+    }
+
+    #[test]
+    fn multibyte_input_does_not_panic_at_the_cut() {
+        // Every one of these used to panic: the byte at the cut index is in
+        // the middle of a multi-byte character.
+        // Each of these must be LONGER than the 60-char cut, or nothing is
+        // truncated and the test asserts nothing.
+        for input in ["é".repeat(80), "日本語テキスト".repeat(20), "🔥".repeat(80)] {
+            assert!(input.chars().count() > 60, "test input must exceed the cut");
+            let out = truncate(&input, 60);
+            assert!(
+                out.chars().count() <= 61,
+                "got {} chars",
+                out.chars().count()
+            );
+            assert!(out.ends_with('…'));
+        }
+    }
+
+    #[test]
+    fn truncation_counts_characters_not_bytes() {
+        // 10 two-byte chars is 20 bytes; a byte-based check would not truncate.
+        let out = truncate(&"é".repeat(10), 5);
+        assert_eq!(out.chars().count(), 6, "5 chars plus the ellipsis");
     }
 }

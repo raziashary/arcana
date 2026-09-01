@@ -1,10 +1,10 @@
+pub mod analytics;
+pub mod plans;
 pub mod tasks;
 pub mod workers;
-pub mod plans;
-pub mod analytics;
 
-use std::path::PathBuf;
 use crate::errors::{Result, SharedError};
+use std::path::PathBuf;
 
 /// Returns `~/.autodev/`, creating it if needed.
 pub fn autodev_dir() -> Result<PathBuf> {

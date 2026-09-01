@@ -107,7 +107,17 @@ export function AgentLiveCard({ agentId }: Props) {
 
   function openInLogs(e: React.MouseEvent) {
     e.stopPropagation()
-    invoke('navigate_to_logs', { filterAgent: agentId }).catch(() => {})
+    // `navigate_to_logs` is not a registered command — this click has always
+    // done nothing, and the empty `.catch` hid that. Tab navigation is a
+    // frontend concern and gets a real implementation with the UI work in P6;
+    // until then the failure is at least visible rather than silent.
+    // Found by the P0 post-phase audit (F-16).
+    invoke('navigate_to_logs', { filterAgent: agentId }).catch((err) => {
+      console.error(
+        '[AgentLiveCard] "Open in Logs" is not wired up yet (no navigate_to_logs command):',
+        err,
+      )
+    })
   }
 
   // Doc 06 Phase 3 — clicking the QC count chip scrolls + pulses the

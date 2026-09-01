@@ -1,32 +1,32 @@
 // Plans database — mirrors the schema in src-tauri/src/db/plans.rs.
 
-use rusqlite::{Connection, OptionalExtension, params};
-use serde::{Deserialize, Serialize};
-use crate::errors::{Result, SharedError};
 use super::autodev_dir;
+use crate::errors::{Result, SharedError};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Plan {
-    pub id:          i64,
-    pub title:       String,
+    pub id: i64,
+    pub title: String,
     pub description: Option<String>,
-    pub status:      String,
-    pub scope:       String,
-    pub created_by:  String,
-    pub created_at:  String,
-    pub updated_at:  String,
+    pub status: String,
+    pub scope: String,
+    pub created_by: String,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanStep {
-    pub id:          i64,
-    pub plan_id:     i64,
-    pub title:       String,
+    pub id: i64,
+    pub plan_id: i64,
+    pub title: String,
     pub description: Option<String>,
-    pub status:      String,
+    pub status: String,
     pub order_index: i32,
-    pub created_at:  String,
-    pub updated_at:  String,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 pub struct PlansDb {
@@ -66,18 +66,25 @@ impl PlansDb {
                  updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
              );
              CREATE INDEX IF NOT EXISTS idx_plans_status       ON plans(status);
-             CREATE INDEX IF NOT EXISTS idx_plan_steps_plan_id ON plan_steps(plan_id);"
+             CREATE INDEX IF NOT EXISTS idx_plan_steps_plan_id ON plan_steps(plan_id);",
         )?;
         Ok(())
     }
 
-    pub fn create(&self, title: &str, description: Option<&str>, scope: Option<&str>, created_by: &str) -> Result<Plan> {
+    pub fn create(
+        &self,
+        title: &str,
+        description: Option<&str>,
+        scope: Option<&str>,
+        created_by: &str,
+    ) -> Result<Plan> {
         self.conn.execute(
             "INSERT INTO plans (title, description, scope, created_by) VALUES (?1, ?2, ?3, ?4)",
             params![title, description, scope.unwrap_or("personal"), created_by],
         )?;
         let id = self.conn.last_insert_rowid();
-        self.get(id)?.ok_or_else(|| SharedError::Other("Plan not found after insert".into()))
+        self.get(id)?
+            .ok_or_else(|| SharedError::Other("Plan not found after insert".into()))
     }
 
     pub fn get(&self, id: i64) -> Result<Option<Plan>> {
@@ -97,8 +104,12 @@ impl PlansDb {
             )?,
         };
         let plans = match status_filter {
-            Some(s) => stmt.query_map(params![s], row_to_plan)?.collect::<std::result::Result<Vec<_>, _>>()?,
-            None    => stmt.query_map([], row_to_plan)?.collect::<std::result::Result<Vec<_>, _>>()?,
+            Some(s) => stmt
+                .query_map(params![s], row_to_plan)?
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+            None => stmt
+                .query_map([], row_to_plan)?
+                .collect::<std::result::Result<Vec<_>, _>>()?,
         };
         Ok(plans)
     }
@@ -109,14 +120,22 @@ impl PlansDb {
             params![id],
         )?;
         if rows == 0 {
-            return Err(SharedError::Other(format!("Plan {id} is not in 'draft' status or does not exist")));
+            return Err(SharedError::Other(format!(
+                "Plan {id} is not in 'draft' status or does not exist"
+            )));
         }
         Ok(())
     }
 
-    pub fn add_step(&self, plan_id: i64, title: &str, description: Option<&str>) -> Result<PlanStep> {
+    pub fn add_step(
+        &self,
+        plan_id: i64,
+        title: &str,
+        description: Option<&str>,
+    ) -> Result<PlanStep> {
         // Get next order index
-        let max_order: i32 = self.conn
+        let max_order: i32 = self
+            .conn
             .query_row(
                 "SELECT COALESCE(MAX(order_index), -1) FROM plan_steps WHERE plan_id=?1",
                 params![plan_id],
@@ -129,7 +148,8 @@ impl PlansDb {
             params![plan_id, title, description, max_order + 1],
         )?;
         let id = self.conn.last_insert_rowid();
-        self.get_step(id)?.ok_or_else(|| SharedError::Other("Step not found after insert".into()))
+        self.get_step(id)?
+            .ok_or_else(|| SharedError::Other("Step not found after insert".into()))
     }
 
     pub fn get_step(&self, id: i64) -> Result<Option<PlanStep>> {
@@ -143,7 +163,9 @@ impl PlansDb {
         let mut stmt = self.conn.prepare(
             "SELECT id,plan_id,title,description,status,order_index,created_at,updated_at FROM plan_steps WHERE plan_id=?1 ORDER BY order_index ASC"
         )?;
-        let steps = stmt.query_map(params![plan_id], row_to_step)?.collect::<std::result::Result<Vec<_>, _>>()?;
+        let steps = stmt
+            .query_map(params![plan_id], row_to_step)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(steps)
     }
 
@@ -161,26 +183,26 @@ impl PlansDb {
 
 fn row_to_plan(row: &rusqlite::Row<'_>) -> rusqlite::Result<Plan> {
     Ok(Plan {
-        id:          row.get(0)?,
-        title:       row.get(1)?,
+        id: row.get(0)?,
+        title: row.get(1)?,
         description: row.get(2)?,
-        status:      row.get(3)?,
-        scope:       row.get(4)?,
-        created_by:  row.get(5)?,
-        created_at:  row.get(6)?,
-        updated_at:  row.get(7)?,
+        status: row.get(3)?,
+        scope: row.get(4)?,
+        created_by: row.get(5)?,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
     })
 }
 
 fn row_to_step(row: &rusqlite::Row<'_>) -> rusqlite::Result<PlanStep> {
     Ok(PlanStep {
-        id:          row.get(0)?,
-        plan_id:     row.get(1)?,
-        title:       row.get(2)?,
+        id: row.get(0)?,
+        plan_id: row.get(1)?,
+        title: row.get(2)?,
         description: row.get(3)?,
-        status:      row.get(4)?,
+        status: row.get(4)?,
         order_index: row.get(5)?,
-        created_at:  row.get(6)?,
-        updated_at:  row.get(7)?,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
     })
 }

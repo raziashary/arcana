@@ -1,30 +1,30 @@
 // Workers database — mirrors the schema in src-tauri/src/db/workers.rs.
 
-use rusqlite::{Connection, OptionalExtension, params};
-use serde::{Deserialize, Serialize};
-use crate::errors::{Result, SharedError};
 use super::autodev_dir;
+use crate::errors::{Result, SharedError};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Worker {
-    pub id:          i64,
-    pub slug:        String,
-    pub name:        String,
+    pub id: i64,
+    pub slug: String,
+    pub name: String,
     pub worker_type: String,
-    pub status:      String,
-    pub model:       String,
-    pub last_seen:   Option<String>,
-    pub created_at:  String,
-    pub updated_at:  String,
+    pub status: String,
+    pub model: String,
+    pub last_seen: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
     pub description: Option<String>,
-    pub notes:       Option<String>,
+    pub notes: Option<String>,
 }
 
 pub struct CreateWorkerInput {
-    pub slug:        String,
-    pub name:        String,
+    pub slug: String,
+    pub name: String,
     pub worker_type: String,
-    pub model:       Option<String>,
+    pub model: Option<String>,
     pub description: Option<String>,
 }
 
@@ -58,7 +58,7 @@ impl WorkersDb {
                  notes       TEXT
              );
              CREATE INDEX IF NOT EXISTS idx_workers_slug   ON workers(slug);
-             CREATE INDEX IF NOT EXISTS idx_workers_status ON workers(status);"
+             CREATE INDEX IF NOT EXISTS idx_workers_status ON workers(status);",
         )?;
         Ok(())
     }
@@ -76,7 +76,8 @@ impl WorkersDb {
             ],
         )?;
         let id = self.conn.last_insert_rowid();
-        self.get(id)?.ok_or_else(|| SharedError::Other("Worker not found after insert".into()))
+        self.get(id)?
+            .ok_or_else(|| SharedError::Other("Worker not found after insert".into()))
     }
 
     pub fn get(&self, id: i64) -> Result<Option<Worker>> {
@@ -95,7 +96,11 @@ impl WorkersDb {
         Ok(stmt.query_row(params![slug], row_to_worker).optional()?)
     }
 
-    pub fn list(&self, type_filter: Option<&str>, status_filter: Option<&str>) -> Result<Vec<Worker>> {
+    pub fn list(
+        &self,
+        type_filter: Option<&str>,
+        status_filter: Option<&str>,
+    ) -> Result<Vec<Worker>> {
         let sql = match (type_filter, status_filter) {
             (Some(_), Some(_)) =>
                 "SELECT id,slug,name,worker_type,status,model,last_seen,created_at,updated_at,description,notes FROM workers WHERE worker_type=?1 AND status=?2 AND status!='deleted' ORDER BY name ASC",
@@ -108,10 +113,18 @@ impl WorkersDb {
         };
         let mut stmt = self.conn.prepare(sql)?;
         let workers = match (type_filter, status_filter) {
-            (Some(t), Some(s)) => stmt.query_map(params![t, s], row_to_worker)?.collect::<std::result::Result<Vec<_>, _>>()?,
-            (Some(t), None)    => stmt.query_map(params![t], row_to_worker)?.collect::<std::result::Result<Vec<_>, _>>()?,
-            (None, Some(s))    => stmt.query_map(params![s], row_to_worker)?.collect::<std::result::Result<Vec<_>, _>>()?,
-            (None, None)       => stmt.query_map([], row_to_worker)?.collect::<std::result::Result<Vec<_>, _>>()?,
+            (Some(t), Some(s)) => stmt
+                .query_map(params![t, s], row_to_worker)?
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+            (Some(t), None) => stmt
+                .query_map(params![t], row_to_worker)?
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+            (None, Some(s)) => stmt
+                .query_map(params![s], row_to_worker)?
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+            (None, None) => stmt
+                .query_map([], row_to_worker)?
+                .collect::<std::result::Result<Vec<_>, _>>()?,
         };
         Ok(workers)
     }
@@ -151,16 +164,16 @@ impl WorkersDb {
 
 fn row_to_worker(row: &rusqlite::Row<'_>) -> rusqlite::Result<Worker> {
     Ok(Worker {
-        id:          row.get(0)?,
-        slug:        row.get(1)?,
-        name:        row.get(2)?,
+        id: row.get(0)?,
+        slug: row.get(1)?,
+        name: row.get(2)?,
         worker_type: row.get(3)?,
-        status:      row.get(4)?,
-        model:       row.get(5)?,
-        last_seen:   row.get(6)?,
-        created_at:  row.get(7)?,
-        updated_at:  row.get(8)?,
+        status: row.get(4)?,
+        model: row.get(5)?,
+        last_seen: row.get(6)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
         description: row.get(9)?,
-        notes:       row.get(10)?,
+        notes: row.get(10)?,
     })
 }

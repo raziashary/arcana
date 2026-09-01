@@ -186,13 +186,14 @@ async fn run_inner(
         },
     );
 
-    // The child's identity is derived from the parent's, so its depth is one
-    // greater by construction rather than by the model's say-so.
-    let identity = AgentIdentity {
-        role: config.parent_slug.clone(),
-        depth: config.depth,
-    }
-    .child(subagent_id.to_string());
+    // `config.depth` is ALREADY this subagent's depth: every spawn tool sets
+    // `depth: ctx.depth + 1` when building the config. Calling `.child()` here
+    // as well incremented it a second time, so a subagent of a depth-0 agent
+    // ran at depth 2 — the pool guard and SubagentSummary saw the right number
+    // while the agent itself saw another, and MAX_NESTING_DEPTH fired after
+    // roughly half the intended generations. Found by the P0 post-phase audit
+    // (F-21), in the commit that claimed depth was now unforgeable.
+    let identity = identity_for(subagent_id, config);
 
     // Autonomous: a subagent has no user to prompt for permission, and a
     // blocked prompt would hang until the timeout.
@@ -293,4 +294,70 @@ fn emit(tx: &mpsc::UnboundedSender<SubagentEvent>, event: SubagentEvent) {
     // A closed receiver means the manager stopped listening; the run itself is
     // still valid, so this is not an error.
     let _ = tx.send(event);
+}
+
+/// The identity a subagent runs under.
+///
+/// `config.depth` is ALREADY the child's depth — every spawn tool sets
+/// `depth: ctx.depth + 1` when it builds the config — so this must NOT
+/// increment again. Split out purely so that invariant is testable.
+fn identity_for(subagent_id: &str, config: &SubagentConfig) -> AgentIdentity {
+    AgentIdentity {
+        role: subagent_id.to_string(),
+        depth: config.depth,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_at_depth(depth: u32) -> SubagentConfig {
+        SubagentConfig {
+            parent_slug: "worker-backend".into(),
+            parent_session_id: "sess-1".into(),
+            system_prompt: String::new(),
+            tools: Vec::new(),
+            model: String::new(),
+            working_dir: String::new(),
+            max_turns: 0,
+            timeout_secs: 0,
+            depth,
+        }
+    }
+
+    /// Regression for the P0 post-phase audit finding F-21.
+    ///
+    /// The spawn tools already set `depth: ctx.depth + 1`. This used to build
+    /// an identity at that depth and then call `.child()`, incrementing a
+    /// second time — so a subagent of a depth-0 agent ran at depth 2. The pool
+    /// guard and `SubagentSummary` saw the correct number while the agent
+    /// itself saw another, and `MAX_NESTING_DEPTH` fired after roughly half the
+    /// intended generations.
+    #[test]
+    fn a_subagent_runs_at_exactly_the_depth_its_config_names() {
+        for depth in [0, 1, 2, 3] {
+            let identity = identity_for("subagent-worker-backend-1", &config_at_depth(depth));
+            assert_eq!(
+                identity.depth, depth,
+                "config.depth is already the child's depth; it must not be incremented again"
+            );
+        }
+    }
+
+    #[test]
+    fn the_subagents_role_is_its_own_id_not_its_parents() {
+        let identity = identity_for("subagent-worker-backend-1", &config_at_depth(1));
+        assert_eq!(identity.role, "subagent-worker-backend-1");
+        assert_ne!(identity.role, "worker-backend");
+    }
+
+    /// The end-to-end shape the guard depends on: a parent at depth N spawns a
+    /// config at N+1, and the child runs at exactly N+1.
+    #[test]
+    fn one_generation_is_exactly_one_level() {
+        let parent = AgentIdentity::worker("worker-backend");
+        let config = config_at_depth(parent.depth + 1);
+        assert_eq!(identity_for("subagent-x", &config).depth, parent.depth + 1);
+    }
 }

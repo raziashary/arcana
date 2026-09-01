@@ -67,7 +67,7 @@ export default function McpToolBrowser() {
         <div className="font-mono text-xs" style={{ color: 'var(--text-2)' }}>
           Built-in tools available to AutoDev agents{' '}
           <span style={{ color: 'var(--text-3)' }}>
-            ({tools.length} total, streamed on <span style={{ color: 'var(--text-2)' }}>:8767/mcp</span>)
+            ({tools.length} total, called in-process)
           </span>
         </div>
         <button

@@ -1,9 +1,9 @@
 // ~/.airs/config.toml — airsctl configuration file types and I/O.
 
+use crate::errors::{Result, SharedError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use crate::errors::{Result, SharedError};
 
 /// Resolved path to `~/.airs/config.toml`.
 pub fn config_path() -> Result<PathBuf> {
@@ -18,45 +18,45 @@ pub fn config_path() -> Result<PathBuf> {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CoreConfig {
     /// Default working directory for agent operations.
-    pub working_dir:          Option<String>,
+    pub working_dir: Option<String>,
     /// Default LLM provider name.
-    pub default_provider:     Option<String>,
+    pub default_provider: Option<String>,
     /// Whether to auto-start sidecars on CLI commands that need them.
-    pub auto_start_sidecars:  Option<bool>,
+    pub auto_start_sidecars: Option<bool>,
     /// Core-orchestrator base URL (default: http://127.0.0.1:4000).
-    pub orchestrator_url:     Option<String>,
+    pub orchestrator_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProviderConfig {
-    pub api_key:   Option<String>,
-    pub model:     Option<String>,
-    pub base_url:  Option<String>,
-    pub enabled:   Option<bool>,
+    pub api_key: Option<String>,
+    pub model: Option<String>,
+    pub base_url: Option<String>,
+    pub enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CliConfig {
-    pub output_format:   Option<String>,  // "table" | "json" | "plain"
-    pub interactive:     Option<bool>,
-    pub history_size:    Option<u32>,
-    pub color:           Option<bool>,
+    pub output_format: Option<String>, // "table" | "json" | "plain"
+    pub interactive: Option<bool>,
+    pub history_size: Option<u32>,
+    pub color: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WorkerConfig {
-    pub worker_id:           Option<String>,
-    pub worker_type:         Option<String>,
-    pub heartbeat_interval:  Option<u32>,
+    pub worker_id: Option<String>,
+    pub worker_type: Option<String>,
+    pub heartbeat_interval: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CliConfigFile {
-    pub core:      Option<CoreConfig>,
+    pub core: Option<CoreConfig>,
     #[serde(default)]
     pub providers: HashMap<String, ProviderConfig>,
-    pub cli:       Option<CliConfig>,
-    pub worker:    Option<WorkerConfig>,
+    pub cli: Option<CliConfig>,
+    pub worker: Option<WorkerConfig>,
 }
 
 impl CliConfigFile {
@@ -83,19 +83,19 @@ impl CliConfigFile {
     pub fn init_default() -> Result<Self> {
         let mut cfg = Self::default();
         cfg.core = Some(CoreConfig {
-            working_dir:         None,
-            default_provider:    Some("anthropic".into()),
+            working_dir: None,
+            default_provider: Some("anthropic".into()),
             auto_start_sidecars: Some(true),
-            orchestrator_url:    Some("http://127.0.0.1:4000".into()),
+            orchestrator_url: Some("http://127.0.0.1:4000".into()),
         });
         let mut anthropic = ProviderConfig::default();
         anthropic.model = Some("claude-haiku-4-5".into());
         cfg.providers.insert("anthropic".into(), anthropic);
         cfg.cli = Some(CliConfig {
             output_format: Some("table".into()),
-            interactive:   Some(true),
-            history_size:  Some(1000),
-            color:         Some(true),
+            interactive: Some(true),
+            history_size: Some(1000),
+            color: Some(true),
         });
         cfg.save()?;
         Ok(cfg)
@@ -108,10 +108,10 @@ impl CliConfigFile {
             ["core", field] => {
                 let core = self.core.as_ref()?;
                 match *field {
-                    "working_dir"         => core.working_dir.clone(),
-                    "default_provider"    => core.default_provider.clone(),
+                    "working_dir" => core.working_dir.clone(),
+                    "default_provider" => core.default_provider.clone(),
                     "auto_start_sidecars" => core.auto_start_sidecars.map(|v| v.to_string()),
-                    "orchestrator_url"    => core.orchestrator_url.clone(),
+                    "orchestrator_url" => core.orchestrator_url.clone(),
                     _ => None,
                 }
             }
@@ -119,17 +119,17 @@ impl CliConfigFile {
                 let cli = self.cli.as_ref()?;
                 match *field {
                     "output_format" => cli.output_format.clone(),
-                    "interactive"   => cli.interactive.map(|v| v.to_string()),
-                    "history_size"  => cli.history_size.map(|v| v.to_string()),
-                    "color"         => cli.color.map(|v| v.to_string()),
+                    "interactive" => cli.interactive.map(|v| v.to_string()),
+                    "history_size" => cli.history_size.map(|v| v.to_string()),
+                    "color" => cli.color.map(|v| v.to_string()),
                     _ => None,
                 }
             }
             ["worker", field] => {
                 let w = self.worker.as_ref()?;
                 match *field {
-                    "worker_id"          => w.worker_id.clone(),
-                    "worker_type"        => w.worker_type.clone(),
+                    "worker_id" => w.worker_id.clone(),
+                    "worker_type" => w.worker_type.clone(),
                     "heartbeat_interval" => w.heartbeat_interval.map(|v| v.to_string()),
                     _ => None,
                 }
@@ -139,10 +139,10 @@ impl CliConfigFile {
                 if parts2.len() == 2 {
                     let provider = self.providers.get(parts2[0])?;
                     match parts2[1] {
-                        "api_key"  => provider.api_key.clone(),
-                        "model"    => provider.model.clone(),
+                        "api_key" => provider.api_key.clone(),
+                        "model" => provider.model.clone(),
                         "base_url" => provider.base_url.clone(),
-                        "enabled"  => provider.enabled.map(|v| v.to_string()),
+                        "enabled" => provider.enabled.map(|v| v.to_string()),
                         _ => None,
                     }
                 } else {
@@ -160,10 +160,12 @@ impl CliConfigFile {
             ["core", field] => {
                 let core = self.core.get_or_insert_with(Default::default);
                 match *field {
-                    "working_dir"         => core.working_dir = Some(value.into()),
-                    "default_provider"    => core.default_provider = Some(value.into()),
-                    "auto_start_sidecars" => core.auto_start_sidecars = Some(value.parse().unwrap_or(false)),
-                    "orchestrator_url"    => core.orchestrator_url = Some(value.into()),
+                    "working_dir" => core.working_dir = Some(value.into()),
+                    "default_provider" => core.default_provider = Some(value.into()),
+                    "auto_start_sidecars" => {
+                        core.auto_start_sidecars = Some(value.parse().unwrap_or(false))
+                    }
+                    "orchestrator_url" => core.orchestrator_url = Some(value.into()),
                     k => return Err(SharedError::Other(format!("Unknown key: core.{k}"))),
                 }
             }
@@ -171,18 +173,20 @@ impl CliConfigFile {
                 let cli = self.cli.get_or_insert_with(Default::default);
                 match *field {
                     "output_format" => cli.output_format = Some(value.into()),
-                    "interactive"   => cli.interactive = Some(value.parse().unwrap_or(true)),
-                    "history_size"  => cli.history_size = Some(value.parse().unwrap_or(1000)),
-                    "color"         => cli.color = Some(value.parse().unwrap_or(true)),
+                    "interactive" => cli.interactive = Some(value.parse().unwrap_or(true)),
+                    "history_size" => cli.history_size = Some(value.parse().unwrap_or(1000)),
+                    "color" => cli.color = Some(value.parse().unwrap_or(true)),
                     k => return Err(SharedError::Other(format!("Unknown key: cli.{k}"))),
                 }
             }
             ["worker", field] => {
                 let w = self.worker.get_or_insert_with(Default::default);
                 match *field {
-                    "worker_id"          => w.worker_id = Some(value.into()),
-                    "worker_type"        => w.worker_type = Some(value.into()),
-                    "heartbeat_interval" => w.heartbeat_interval = Some(value.parse().unwrap_or(300)),
+                    "worker_id" => w.worker_id = Some(value.into()),
+                    "worker_type" => w.worker_type = Some(value.into()),
+                    "heartbeat_interval" => {
+                        w.heartbeat_interval = Some(value.parse().unwrap_or(300))
+                    }
                     k => return Err(SharedError::Other(format!("Unknown key: worker.{k}"))),
                 }
             }
@@ -195,39 +199,69 @@ impl CliConfigFile {
     pub fn list_all(&self) -> Vec<(String, String)> {
         let mut pairs = vec![];
         if let Some(c) = &self.core {
-            if let Some(v) = &c.working_dir         { pairs.push(("core.working_dir".into(), v.clone())); }
-            if let Some(v) = &c.default_provider     { pairs.push(("core.default_provider".into(), v.clone())); }
-            if let Some(v) = c.auto_start_sidecars   { pairs.push(("core.auto_start_sidecars".into(), v.to_string())); }
-            if let Some(v) = &c.orchestrator_url     { pairs.push(("core.orchestrator_url".into(), v.clone())); }
+            if let Some(v) = &c.working_dir {
+                pairs.push(("core.working_dir".into(), v.clone()));
+            }
+            if let Some(v) = &c.default_provider {
+                pairs.push(("core.default_provider".into(), v.clone()));
+            }
+            if let Some(v) = c.auto_start_sidecars {
+                pairs.push(("core.auto_start_sidecars".into(), v.to_string()));
+            }
+            if let Some(v) = &c.orchestrator_url {
+                pairs.push(("core.orchestrator_url".into(), v.clone()));
+            }
         }
         if let Some(c) = &self.cli {
-            if let Some(v) = &c.output_format { pairs.push(("cli.output_format".into(), v.clone())); }
-            if let Some(v) = c.interactive    { pairs.push(("cli.interactive".into(), v.to_string())); }
-            if let Some(v) = c.history_size   { pairs.push(("cli.history_size".into(), v.to_string())); }
-            if let Some(v) = c.color          { pairs.push(("cli.color".into(), v.to_string())); }
+            if let Some(v) = &c.output_format {
+                pairs.push(("cli.output_format".into(), v.clone()));
+            }
+            if let Some(v) = c.interactive {
+                pairs.push(("cli.interactive".into(), v.to_string()));
+            }
+            if let Some(v) = c.history_size {
+                pairs.push(("cli.history_size".into(), v.to_string()));
+            }
+            if let Some(v) = c.color {
+                pairs.push(("cli.color".into(), v.to_string()));
+            }
         }
         if let Some(w) = &self.worker {
-            if let Some(v) = &w.worker_id          { pairs.push(("worker.worker_id".into(), v.clone())); }
-            if let Some(v) = &w.worker_type         { pairs.push(("worker.worker_type".into(), v.clone())); }
-            if let Some(v) = w.heartbeat_interval   { pairs.push(("worker.heartbeat_interval".into(), v.to_string())); }
+            if let Some(v) = &w.worker_id {
+                pairs.push(("worker.worker_id".into(), v.clone()));
+            }
+            if let Some(v) = &w.worker_type {
+                pairs.push(("worker.worker_type".into(), v.clone()));
+            }
+            if let Some(v) = w.heartbeat_interval {
+                pairs.push(("worker.heartbeat_interval".into(), v.to_string()));
+            }
         }
         for (name, p) in &self.providers {
-            if let Some(v) = &p.model    { pairs.push((format!("providers.{name}.model"), v.clone())); }
-            if let Some(v) = &p.base_url { pairs.push((format!("providers.{name}.base_url"), v.clone())); }
-            if let Some(v) = p.enabled   { pairs.push((format!("providers.{name}.enabled"), v.to_string())); }
+            if let Some(v) = &p.model {
+                pairs.push((format!("providers.{name}.model"), v.clone()));
+            }
+            if let Some(v) = &p.base_url {
+                pairs.push((format!("providers.{name}.base_url"), v.clone()));
+            }
+            if let Some(v) = p.enabled {
+                pairs.push((format!("providers.{name}.enabled"), v.to_string()));
+            }
             // never emit api_key — security
         }
         pairs
     }
 
     pub fn orchestrator_url(&self) -> String {
-        self.core.as_ref()
+        self.core
+            .as_ref()
             .and_then(|c| c.orchestrator_url.clone())
             .unwrap_or_else(|| "http://127.0.0.1:4000".into())
     }
 
     pub fn output_format(&self) -> String {
-        self.cli.as_ref()
+        self.cli
+            .as_ref()
             .and_then(|c| c.output_format.clone())
             .unwrap_or_else(|| "table".into())
     }

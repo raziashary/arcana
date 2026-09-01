@@ -124,9 +124,12 @@ mod tests {
         let source = std::fs::read_to_string(&ci).expect("read ci.yml");
 
         for required in [
-            "cargo fmt",
-            "cargo clippy",
-            "cargo test",
+            // Workspace-wide forms specifically. The workspace has three
+            // members and these jobs used to check one, leaving `src-shared`
+            // unformatted and unlinted by any job (P0 audit F-15).
+            "cargo fmt --all",
+            "cargo clippy --workspace",
+            "cargo test --workspace",
             "npm run typecheck",
             "npm run lint",
             "npm test",

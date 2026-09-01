@@ -99,14 +99,16 @@ impl RecipeRunner {
         // Once the latch trips, all subsequent ticks proceed with the
         // normal grace-window health logic — so a single transient orch
         // blip mid-session never blocks dispatch.
-        if !self.orch_client.has_ever_been_healthy() {
-            debug!(
-                "[RecipeRunner] holding tick for '{}' — orch not yet confirmed healthy (fleet-ready latch closed)",
-                worker_slug
-            );
-            self.set_worker_status(worker_slug, "idle");
-            return Ok(());
-        }
+        // REMOVED IN P0. This latch held every tick until core-orchestrator had
+        // answered a health probe at least once. Its purpose was to stop a cold
+        // start burning `ensure_agent failed: service-login` warnings — a Mode 2
+        // concern only.
+        //
+        // With Mode 2 inert (ADR-LOG-RESTRUCT-0008), keeping it meant that on a
+        // machine with no Python the orchestrator never became healthy, the
+        // latch never opened, and EVERY worker tick returned early reporting
+        // "idle". The fleet was silently dead, which is the opposite of what the
+        // comment below it claimed. Found by the P0 post-phase audit (F-10).
 
         // ── Mode 2 health check (needed for dispatch routing decision) ──────────
         // We check orchestrator health early because it determines whether we

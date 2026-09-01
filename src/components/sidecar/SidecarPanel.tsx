@@ -246,10 +246,6 @@ export default function SidecarPanel() {
         </div>
       )}
 
-      {/* In-process MCP server port conflict banner. Only renders when the
-          preferred port (8767) couldn't be bound and we fell back to an
-          alternate. Shows the holding PID + ghost-socket flag so the user
-          can clear it (taskkill / tcpvcon -k / reboot) instead of guessing. */}
 
       {/* Sidecar crash banners — render once per service whose status begins
           with `error:`. Pulls the captured stderr tail from the Rust backend

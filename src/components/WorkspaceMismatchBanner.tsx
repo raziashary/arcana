@@ -16,7 +16,7 @@
 
 import { useEffect, useState } from 'react'
 import { listen } from '@tauri-apps/api/event'
-import { invoke } from '@tauri-apps/api/core'
+import { useWorkspaceStore } from '../stores/workspaceStore'
 
 interface StrayFile {
   absolute_path:    string
@@ -79,12 +79,12 @@ export function WorkspaceMismatchBanner() {
       </div>
       <button
         onClick={() => {
-          // Reuse the existing workspace-selection flow if it exists.
-          // Fall back to copying the path to clipboard so the user can fix
-          // it manually from Settings.
-          invoke('open_workspace_picker').catch(() => {
-            navigator.clipboard.writeText(mismatch.configured_workspace).catch(() => {})
-          })
+          // `open_workspace_picker` never existed as a command, so this
+          // always fell through to the clipboard and the button appeared to
+          // do nothing. The real flow is the workspace store's
+          // `pickWorkspaceDir`, which calls `pick_workspace_dir`.
+          // Found by the P0 post-phase audit (F-16).
+          void useWorkspaceStore.getState().pickWorkspaceDir()
         }}
         style={{
           background:   'var(--bg-card)',

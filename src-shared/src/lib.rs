@@ -1,5 +1,5 @@
-pub mod errors;
-pub mod db;
 pub mod config;
+pub mod db;
+pub mod errors;
 
-pub use errors::{SharedError, Result};
+pub use errors::{Result, SharedError};

@@ -138,13 +138,22 @@ impl Tool for UpdateTaskStatusTool {
         //     always present, so it applies to every caller except QC
         //     reviewers (ADR-LOG-RESTRUCT-0007).
         if status == "qc_review" {
-            // Skip the gate for QC reviewers — they never run a build, they
-            // just review someone else's. The qc-reviewer-* slugs all start
-            // with a stable prefix; match on that.
-            let role = ctx.agent_role.as_str();
-            let is_qc_reviewer =
-                role.starts_with("qc-") || role.starts_with("subagent-qc-dispatcher");
-            if !is_qc_reviewer {
+            // Skip the gate for callers who promote someone ELSE's work and
+            // never run a build themselves:
+            //   • QC reviewers (`qc-*`, `subagent-qc-dispatcher*`) — they review
+            //     a build someone else ran.
+            //   • the supervisor — `recipes/defaults.rs` `request_review` has it
+            //     call `update_task_status(id, 'qc_review')` on a worker's
+            //     behalf after that worker asked for review.
+            //
+            // The supervisor exemption was missed when this gate was widened in
+            // P0: identity became always-present, so the gate started applying
+            // to every caller, and `request_review` began failing every time.
+            // Found by the P0 post-phase audit (F-22).
+            //
+            // The gate's purpose is intact: it stops a WORKER claiming
+            // qc_review for work it never built.
+            if !promotes_on_behalf_of_others(ctx.agent_role.as_str()) {
                 match super::build_evidence::most_recent_build(&ctx.session_id) {
                     None => {
                         return ToolResult::error(
@@ -301,5 +310,54 @@ impl Tool for UpdateTaskStatusTool {
             })
             .to_string(),
         )
+    }
+}
+
+/// Roles that may move a task to `qc_review` without build evidence of their
+/// own, because they promote work someone else built.
+pub(crate) fn promotes_on_behalf_of_others(role: &str) -> bool {
+    role.starts_with("qc-") || role.starts_with("subagent-qc-dispatcher") || role == "supervisor"
+}
+
+#[cfg(test)]
+mod qc_gate_tests {
+    use super::promotes_on_behalf_of_others;
+
+    /// Regression for the P0 post-phase audit finding F-22.
+    ///
+    /// Widening the build-evidence gate to every caller (identity became
+    /// always-present, so `agent_role.is_some()` stopped being a filter) broke
+    /// the shipped supervisor recipe: `recipes/defaults.rs` `request_review`
+    /// calls `update_task_status(id, 'qc_review')` on a worker's behalf, and
+    /// the supervisor never runs a build, so the transition failed every time.
+    #[test]
+    fn the_supervisor_may_promote_work_it_did_not_build() {
+        assert!(promotes_on_behalf_of_others("supervisor"));
+    }
+
+    #[test]
+    fn qc_reviewers_are_exempt() {
+        assert!(promotes_on_behalf_of_others("qc-agent"));
+        assert!(promotes_on_behalf_of_others("qc-reviewer-3"));
+        assert!(promotes_on_behalf_of_others("subagent-qc-dispatcher-1"));
+    }
+
+    /// The gate's whole purpose: a worker must not claim qc_review for work it
+    /// never built. If this ever passes, the exemption has swallowed the rule.
+    #[test]
+    fn workers_are_not_exempt() {
+        for role in [
+            "worker-backend",
+            "worker-frontend",
+            "worker-platform",
+            "worker-cleanup",
+            "fleet-smoke",
+            "",
+        ] {
+            assert!(
+                !promotes_on_behalf_of_others(role),
+                "{role} must still need build evidence to reach qc_review"
+            );
+        }
     }
 }
