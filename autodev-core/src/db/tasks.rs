@@ -714,7 +714,30 @@ impl TasksDb {
     /// activity. We therefore drain `worker_requests` first, then `tasks`,
     /// then reset both auto-increment sequences atomically so the next
     /// `INSERT` starts from id 1 again.
+    /// GAP-11 / §0.8: this is the one wholesale delete in the task store — every
+    /// task and every worker request, with the id sequences reset — so it takes
+    /// a backup first. A failure to back up **stops the clear**: emptying the
+    /// board on the belief that a snapshot exists is precisely the outcome this
+    /// guards against.
+    ///
+    /// Row-level deletes deliberately do not do this. Copying the database
+    /// before deleting one task would make the board unusable, and a single row
+    /// is not the loss this rule is about.
     pub fn clear_all(&self) -> Result<()> {
+        if let Some(path) = self
+            .conn
+            .path()
+            .filter(|p| !p.is_empty())
+            .map(std::path::PathBuf::from)
+        {
+            let backup = crate::db::backup::backup_before(&path, "clear-board").map_err(|e| {
+                AutoDevError::Agent(format!(
+                    "refusing to clear the task board because no backup could be taken: {e}"
+                ))
+            })?;
+            tracing::info!("[tasks] {}", backup.describe());
+        }
+
         self.conn.execute_batch(
             "BEGIN;
              DELETE FROM worker_requests;
@@ -1793,6 +1816,65 @@ mod tests {
     /// lacks the twenty columns added later — so new installs came up without
     /// `claimed_by_pid` and seventeen others, while every existing database
     /// looked perfectly fine. No live-data check could have found it.
+    /// The wholesale delete must leave a recoverable copy behind. Without this,
+    /// "Clear Board" is an unrecoverable action reachable from a single click.
+    #[test]
+    fn clearing_the_board_backs_up_first_and_the_backup_holds_the_tasks() {
+        let dir = std::env::temp_dir().join("autodev-clearboard-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("tasks.db");
+
+        let db = TasksDb::open_at(&path).expect("open");
+        db.create(CreateTaskInput {
+            title: "about to be cleared".into(),
+            description: None,
+            priority: "p2".into(),
+            task_type: "chore".into(),
+            acceptance_criteria: String::new(),
+            created_by: Some("test".into()),
+        })
+        .expect("create");
+
+        let prev = std::env::var("USERPROFILE").ok();
+        let prev_home = std::env::var("HOME").ok();
+        std::env::set_var("USERPROFILE", &dir);
+        std::env::set_var("HOME", &dir);
+        let cleared = db.clear_all();
+        match prev {
+            Some(v) => std::env::set_var("USERPROFILE", v),
+            None => std::env::remove_var("USERPROFILE"),
+        }
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        cleared.expect("clear_all");
+
+        assert!(
+            db.list(None).expect("list").is_empty(),
+            "the board is cleared"
+        );
+
+        let backups = dir.join(".autodev").join("backups");
+        let found: Vec<_> = std::fs::read_dir(&backups)
+            .expect("a backup directory must exist")
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        assert_eq!(found.len(), 1, "expected one backup, got {found:?}");
+
+        let restored = Connection::open(&found[0]).expect("open backup");
+        let title: String = restored
+            .query_row("SELECT title FROM tasks", [], |r| r.get(0))
+            .expect("the backup must still contain the cleared task");
+        assert_eq!(title, "about to be cleared");
+
+        drop(restored);
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_fresh_database_has_every_column_an_existing_one_has() {
         let dir = std::env::temp_dir().join("autodev-tasks-schema-test");

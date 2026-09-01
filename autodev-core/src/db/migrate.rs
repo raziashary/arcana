@@ -47,6 +47,28 @@ pub fn user_version(conn: &Connection) -> Result<i32> {
         .map_err(|e| AutoDevError::Agent(format!("reading user_version: {e}")))
 }
 
+/// Whether a migration's SQL can destroy data.
+///
+/// `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX` cannot; `DROP`, `DELETE` and
+/// a column or table rename can. This decides whether `run_ladder` takes a
+/// backup before applying a rung, so that the safety net is automatic rather
+/// than something each future migration's author has to remember.
+fn is_destructive(sql: &str) -> bool {
+    let lower = sql.to_ascii_lowercase();
+    [
+        "drop table",
+        "drop index",
+        "drop view",
+        "drop trigger",
+        "delete from",
+        "rename to",
+        "rename column",
+        "truncate",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
 /// Apply every migration in `ladder` whose version is above the database's
 /// current `user_version`, in order, and return the version reached.
 ///
@@ -72,6 +94,36 @@ pub fn run_ladder(conn: &Connection, db_name: &str, ladder: &[Migration]) -> Res
     }
 
     for m in ladder.iter().filter(|m| m.version > current) {
+        // GAP-11 / §0.8: a migration that can destroy data is backed up first,
+        // automatically. A baseline rung is `CREATE … IF NOT EXISTS` only and
+        // is skipped, so the ordinary first-run path does not copy every
+        // database on every start.
+        //
+        // A backup that cannot be taken **stops the migration**. Proceeding
+        // with a destructive change on the belief that a backup happened is the
+        // exact failure this is here to prevent.
+        if is_destructive(m.sql) {
+            // An in-memory database reports `Some("")` rather than `None`, and
+            // is never user data — there is nothing to back up and nothing to
+            // lose, so it proceeds.
+            if let Some(path) = conn
+                .path()
+                .filter(|p| !p.is_empty())
+                .map(std::path::PathBuf::from)
+            {
+                let reason = format!("{db_name}-v{}-{}", m.version, m.name);
+                match crate::db::backup::backup_before(&path, &reason) {
+                    Ok(b) => tracing::info!("[migrate] {}", b.describe()),
+                    Err(e) => {
+                        return Err(AutoDevError::Agent(format!(
+                            "{db_name}: refusing to apply destructive migration v{} ({})                              because no backup could be taken: {e}",
+                            m.version, m.name
+                        )))
+                    }
+                }
+            }
+        }
+
         conn.execute_batch("BEGIN")
             .map_err(|e| AutoDevError::Agent(format!("{db_name} v{}: begin: {e}", m.version)))?;
 
@@ -256,6 +308,120 @@ mod tests {
         )
         .expect("a fresh database has no table yet");
         assert!(added.is_empty());
+    }
+
+    #[test]
+    fn destructive_sql_is_recognised_and_creation_is_not() {
+        assert!(is_destructive("DROP TABLE nodes_fts;"));
+        assert!(is_destructive("delete from tasks where id = 1"));
+        assert!(is_destructive("ALTER TABLE t RENAME TO u"));
+        assert!(is_destructive("ALTER TABLE t RENAME COLUMN a TO b"));
+
+        // The shape every baseline rung has. If this were flagged, the first
+        // run of a fresh install would copy every database it just created.
+        assert!(!is_destructive(
+            "CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY);
+             CREATE INDEX IF NOT EXISTS i ON t(id);"
+        ));
+        assert!(!is_destructive("ALTER TABLE t ADD COLUMN b TEXT;"));
+    }
+
+    /// A destructive rung must not run when its backup cannot be taken.
+    ///
+    /// Proven with an in-memory database, which has no path — so
+    /// `backup_before` cannot be reached and the guard's *other* branch is
+    /// exercised in `a_destructive_migration_backs_up_first`.
+    #[test]
+    fn a_destructive_rung_on_a_pathless_database_still_applies() {
+        // In-memory databases cannot be backed up and are never user data.
+        // The guard must not deadlock the ladder for them.
+        let c = mem();
+        const D: &[Migration] = &[
+            Migration {
+                version: 1,
+                name: "make",
+                sql: "CREATE TABLE t (id INTEGER PRIMARY KEY);",
+            },
+            Migration {
+                version: 2,
+                name: "drop-it",
+                sql: "DROP TABLE t;",
+            },
+        ];
+        assert_eq!(run_ladder(&c, "mem.db", D).expect("ladder"), 2);
+    }
+
+    /// A destructive rung against a real file takes a backup before running,
+    /// and the backup contains the data the migration is about to remove.
+    #[test]
+    fn a_destructive_migration_backs_up_first() {
+        let dir = std::env::temp_dir().join("autodev-migrate-backup-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let db_path = dir.join("victim.db");
+
+        let c = Connection::open(&db_path).expect("open");
+        c.execute_batch(
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT);
+             INSERT INTO t (v) VALUES ('precious');
+             PRAGMA user_version = 1;",
+        )
+        .expect("seed");
+
+        // Point the backup root at the sandbox so the test never writes to
+        // the user's real ~/.autodev/backups.
+        let prev = std::env::var("USERPROFILE").ok();
+        let prev_home = std::env::var("HOME").ok();
+        std::env::set_var("USERPROFILE", &dir);
+        std::env::set_var("HOME", &dir);
+
+        const D: &[Migration] = &[
+            Migration {
+                version: 1,
+                name: "baseline",
+                sql: "CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY, v TEXT);",
+            },
+            Migration {
+                version: 2,
+                name: "destroy",
+                sql: "DELETE FROM t;",
+            },
+        ];
+        let reached = run_ladder(&c, "victim.db", D).expect("ladder");
+
+        match prev {
+            Some(v) => std::env::set_var("USERPROFILE", v),
+            None => std::env::remove_var("USERPROFILE"),
+        }
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        assert_eq!(reached, 2);
+        let left: i64 = c
+            .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 0, "the migration did run");
+
+        // The row it removed must be recoverable.
+        let backups = dir.join(".autodev").join("backups");
+        let found: Vec<_> = std::fs::read_dir(&backups)
+            .expect("backup directory must exist")
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        assert_eq!(found.len(), 1, "expected exactly one backup, got {found:?}");
+
+        let restored = Connection::open(&found[0]).expect("open backup");
+        let saved: String = restored
+            .query_row("SELECT v FROM t", [], |r| r.get(0))
+            .expect("the backup must contain the row the migration deleted");
+        assert_eq!(saved, "precious");
+
+        drop(restored);
+        drop(c);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

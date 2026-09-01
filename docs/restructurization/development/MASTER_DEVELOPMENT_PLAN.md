@@ -591,7 +591,13 @@ src/                                [P6 anchor, P7 experience]
       **Live from day one rather than a table waiting for a consumer:** both binaries record their own run. Proven against the real ledger with three `airsctl` invocations — two succeeded and were recorded `ok`, one failed and was recorded **`failed`**, which is what shows the outcome is measured rather than hardcoded. All three closed; none left open.
       A crash would otherwise leave a run open forever, and an open run reads as *"still running"* — so `reap_abandoned` runs at startup and closes rows belonging to a pid/host that is not this process, marking them `abandoned` rather than deleting them. `finish` on an unknown or already-closed run is an **error**: a ledger that quietly accepts a mismatched close is not an audit trail.
       ⚠ **Scope stated honestly: nothing is stamped yet.** No other table carries a `run_id` column. What is proven is that runs are recorded and readable; attributing later acts to them belongs to the phases owning those tables. This module existing is not evidence that anything is attributed.
-- [ ] **P1-19** Add a **backup helper** and wire it into every destructive path (GAP-11). → `UNIT-PROVEN`
+- [x] **P1-19** Add a **backup helper** and wire it into every destructive path (GAP-11). → `UNIT-PROVEN`
+      The helper (`db/backup.rs`, `VACUUM INTO`, integrity-checked, refuses to overwrite) landed **first** in this phase, per the revised order — everything destructive depends on it.
+      ⚠ **The wiring half was still undone until now, and it was worth checking:** the helper had **zero callers**. A backup helper nothing calls is the same shape of defect as a gate that cannot fail.
+      Wired to the two genuinely wholesale operations, deliberately not to row-level deletes — copying the database before deleting one task would make the board unusable, and a single row is not the loss this rule is about:
+        · **`run_ladder`** backs up automatically before any rung whose SQL contains `DROP` / `DELETE FROM` / `RENAME` / `TRUNCATE`. Baseline rungs are `CREATE … IF NOT EXISTS` only and are skipped, so a fresh install does not copy every database it just created. Future destructive migrations get the net without their author remembering.
+        · **`TasksDb::clear_all`** — the "Clear Board" action, which deletes every task and worker request and resets the id sequences.
+      In both, a failed backup **stops the operation**. Proven by tests that read the backup back and assert it contains the row the operation then removed — not merely that a file appeared. In-memory databases report `Some("")` rather than `None` from `path()` and are exempt; a test covers that, having first failed on it.
 
 ### P1-D · Redaction — the dropped port (M-40)
 - [ ] **P1-20** Port `redact_dict` + the 20-entry `SENSITIVE_KEYS` set into `autodev-core/security/`. → `UNIT-PROVEN`
