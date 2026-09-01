@@ -800,6 +800,72 @@ detail* — caught before the build rather than by an auditor after it.
 - [ ] **P2-33** **The vault has no `enumerate`** — keys for removed providers linger in the OS keychain with no way to find them (`G3c IN-49`). → `UNIT-PROVEN`
       ⚠ Partially closed already: `PROBED_PROVIDERS` in `vault_commands.rs` was widened on 2026-09-01 so retired ids stay probed. Verify whether that satisfies the invariant or only the symptom, and close the remainder.
 
+### P2-F · Adapter conformance — from the pre-build audit
+
+**Added 2026-09-02, razi-ruled: *"everything the audits found"*.** Three read-only refutation
+agents (`§0.2m`) returned ~30 defects beyond the written tasks. All are absorbed here rather
+than deferred. Sources: `_verify/P2-REFUTE-{caching,cost,byok-adapters}.md`.
+
+- [ ] **P2-34** **Google's streaming tool calls carry no arguments.** `google.rs:341` computes `_args` and drops them, and **no `ToolInputDelta` is ever emitted**, so the engine assembles from an empty accumulator and substitutes `{}`. 🔴 **Every Gemini tool call runs with empty input — not only parallel ones — and Gemini is the primary provider.** → `GATE-PROVEN`
+- [ ] **P2-35** Google streaming returns on the **first** matching part (`google.rs:326-350`), so parallel `functionCall` parts are dropped. → `GATE-PROVEN`
+- [ ] **P2-36** `google.rs:347` hardcodes `block_index: 0` (two calls collide in `index_to_id`) and `:345` builds `id: format!("gemini-{}", name)` (collides when one tool is called twice). → `UNIT-PROVEN`
+- [ ] **P2-37** `google.rs:93` sends a **tool-use id** where `functionResponse.name` expects a tool **name** — the round trip sends `"gemini-read_file"` for `"read_file"`. → `UNIT-PROVEN`
+- [ ] **P2-38** **Tool errors are invisible on OpenAI and Google** — `openai.rs:97-101` and `google.rs:87-91` destructure `is_error: _`. A failed tool is indistinguishable from a successful one on two of three providers; Anthropic passes it (`anthropic.rs:112`). → `GATE-PROVEN`
+- [ ] **P2-39** `openai.rs:94-109` **drops text that shares a message with tool results** — the `else` producing the text block is skipped entirely. → `UNIT-PROVEN`
+- [ ] **P2-40** **Unrecognised roles vanish on OpenAI** (`openai.rs:85-163`, no `else`) while Google coerces them to `"user"` (`google.rs:70-74`). Two adapters, two silent and different behaviours. → `UNIT-PROVEN`
+- [ ] **P2-41** `openai.rs:389` compares `finish_reason != "null"` against the four-character **string**; JSON `null` yields `None` from `as_str()` and never reaches the line. An inert comparison. → `UNIT-PROVEN`
+- [ ] **P2-42** **`stream_options: {include_usage: true}` is sent nowhere**, so `openai.rs:391`'s usage guard can never fire — and separately `openai.rs:342-344` discards the usage frame on empty `choices`. **Two edits, not one.** → `UNIT-PROVEN`
+- [ ] **P2-43** **`message_start` is unhandled** (`streaming.rs:85-86` falls through `_ => Ok(None)`) — the frame carrying Anthropic's `input_tokens` **and** `cache_read_input_tokens`. `P2-12`'s instrument does not exist without it. → `UNIT-PROVEN`
+- [ ] **P2-44** Google's usage handler (`google.rs:353-366`) is unreachable — blocked by `:321-324` (no `parts` → `None`) and `:326-332` (first text part returns). → `UNIT-PROVEN`
+- [ ] **P2-45** `maxOutputTokens` is sent nowhere; `max_tokens` is read only at `anthropic.rs:134`. Extends `P2-08` with the measured shape. → `UNIT-PROVEN`
+- [ ] **P2-46** `stop_reason` is **written by four sites and read by none** — `engine.rs:474-481` discards it with `..`, so a `max_tokens` truncation and a clean `end_turn` are the same code path. *(There is no `StopReason` enum; the plan named a type that does not exist.)* → `GATE-PROVEN`
+
+### P2-G · Cost and analytics integrity
+
+- [ ] **P2-47** `engine.rs:237` `let _ = db.update_task_budget_usage(...)` — the only persistence of running budget consumption, silently discarded, in a function that logs loudly for every other DB failure. → `UNIT-PROVEN`
+- [ ] **P2-48** 🔴 **Wire `with_task_budget`.** Zero callers, so `engine.rs:164-180`, `escalate_budget_exceeded`, `TaskBudget::default_worker` and `BudgetExceededReason` are all unreachable — **~100 lines of enforcement with no entry point.** `P2-21` cannot precede this. → `GATE-PROVEN`
+- [ ] **P2-49** `emit_cost_update` has **one** caller (`runner.rs:481`, Mode 2). The Mode 1 agent path emits `emit_agent_done`, so **Mode 1 spend is invisible to the only budget warning that exists**. → `GATE-PROVEN`
+- [ ] **P2-50** `dailyBudget` is unsettable — `dashboardStore.ts:173` and `CostMeter.tsx:20` hardcode 50, and `setDailyBudget` has no caller. → `UNIT-PROVEN`
+- [ ] **P2-51** 🔴 **Unreachable price arm** — `tracker.rs:58-59` tests `contains("gpt-4o")` before `contains("gpt-4o-mini")`. Latent today, but **`gpt-5.4` and `gpt-5.4-mini` are both offered**: the trap is armed. Ordering must be longest-prefix-first, gated. → `GATE-PROVEN`
+- [ ] **P2-52** `.unwrap_or(0)` guards all eight usage extractions. A provider schema change degrades to "this call was free" with no log line — and with `P2-48` unfixed, to unbounded silent spend. → `UNIT-PROVEN`
+- [ ] **P2-53** Provider inference by substring is duplicated (`engine.rs:379-387`, `runner.rs:441-452`) and `o4-mini` matches none, filing under `"unknown"` and corrupting `aggregator.rs:62-64`. One shared helper. → `UNIT-PROVEN`
+- [ ] **P2-54** `runner.rs:516-517` passes `1, 0` as literals, so `collector.rs:130-134` always computes `success_rate = 100.0` from that path. → `UNIT-PROVEN`
+- [ ] **P2-55** `analytics/aggregator.rs:20-23` — the hourly rollup is a stub returning `Ok(())` on a schedule. Logs no error, looks healthy, produces nothing. → `UNIT-PROVEN`
+- [ ] **P2-56** Gemini **thinking tokens are never counted** — `google.rs:357` reads only `candidatesTokenCount`; `thoughtsTokenCount` is never read and `thinking_tokens` is hard-passed `None` although `collector.rs:27` accepts it. → `UNIT-PROVEN`
+- [ ] **P2-57** `engine.rs:188` hardcodes `let model_context = 200_000u32;`, **ignoring `ModelInfo::context_window`** — so Gemini's 1M window compacts at 20%. → `UNIT-PROVEN`
+- [ ] **P2-58** `engine.rs:422` `_model: &str` is a dead parameter passed live at `:223`; per-model streaming cannot be implemented without a signature change. → `CODE-PRESENT`
+
+### P2-H · Caching prerequisites — ordering and prompt structure
+
+**These are correctness bugs on the wire that also make caching unmeasurable.** They precede
+`P2-B`: a messages-level invalidator looks exactly like *"caching doesn't work"* while the
+prefix is perfectly stable — the hardest possible bug to attribute.
+
+- [ ] **P2-59** 🔴 **`engine.rs:490` iterates a `HashMap`**, so with two or more parallel tool calls the block order written into `history` is arbitrary **and differs between processes** — then replayed on every later turn. `block_index` is already carried on `ToolUseStart` (`types.rs:92-96`); use it and an ordered container. → `GATE-PROVEN`
+- [ ] **P2-60** `engine.rs:487` pushes `text_buffer` unconditionally **first**, inverting any text the model emitted after a tool call. → `UNIT-PROVEN`
+- [ ] **P2-61** `engine.rs:320-340` emits unknown-tool errors before batch results, so the result order does not parallel the call order. → `UNIT-PROVEN`
+- [ ] **P2-62** **Delete the dead divergent builder** `context.rs:37 build_system_prompt` — zero callers, reads AUTODEV.md only, never queries `AutodevInstructionsDb`, never injects memory. It would emit a *different* prefix, and it is a trap for whoever wires the cache. → `CODE-PRESENT`
+- [ ] **P2-63** `anthropic.rs` sends `system` as a **bare string**, so there is no block to hang a breakpoint on. Converting to a content-block array is a prerequisite for `Explicit` caching, not part of it. → `UNIT-PROVEN`
+- [ ] **P2-64** **Hoist per-run identifiers out of cached prompts.** `spawn_subagent.rs:118` puts `working_dir` at **offset 0**; `defaults.rs:1573-1600` stamps `#{task_id}` five times into the QC reviewer prompt. With six concurrent reviewers over a multi-KB otherwise-identical protocol, every prefix is single-use and each cache write is pure 1.25× overhead — **naive caching would *increase* cost here.** → `BENCH-PROVEN`
+- [ ] **P2-65** **Measure the prefix against the minimum before building the cache.** `POST /v1/messages/count_tokens` per `PAMode` × model. `DELEGATE_SYSTEM_PROMPT` is ~461 tokens with four tools, against a 4,096 minimum on two of three shipped models — **caching there is a design-time certainty of failure, not a runtime edge case.** → `BENCH-PROVEN`
+- [ ] **P2-66** Compaction (`compaction.rs:154-163`) forces a full messages-level cache rewrite plus an extra uncacheable `complete()` call, with no accounting, against a chosen `0.80` constant. → `BENCH-PROVEN`
+
+### P2-I · Adapter test infrastructure
+
+**Razi-ruled 2026-09-02: fixtures in CI, plus a live smoke behind a flag.** Measured: **1,733
+lines of adapter code with zero `#[test]` of any kind** — `anthropic.rs`, `openai.rs`,
+`google.rs`, `ollama.rs`. Every defect in `P2-F` survived because nothing could catch it.
+
+- [ ] **P2-67** A fixture corpus of **real captured payloads** per provider — unary and SSE, including tool calls, parallel tool calls, truncation, and each error class. → `DOC-GATE`
+- [ ] **P2-68** Adapter tests parse the fixtures and assert the six-field `Usage`, tool arguments surviving byte-identically, `stop_reason` mapping, and error classification. **Runs in CI with no credentials** — `§0.5`: a gate skipped in CI is not green. → `GATE-PROVEN`
+- [ ] **P2-69** A **live** smoke behind a cargo feature, reading the dev `.env`, **never linked into the app** (`P2-28`). Catches vendor wire drift that fixtures freeze and hide. Credentials are set **per-command, never session-wide** (`§0.8`). → `SMOKE-PROVEN`
+- [ ] **P2-70** `vault_commands.rs:38` decrypts a secret into process memory on every `list_providers` purely to compute a boolean, then drops it unzeroized. Use a presence probe. → `UNIT-PROVEN`
+- [ ] **P2-71** The credential store in use is **never disclosed** — `VaultEntryStatus` carries no backend identity, while `docsMore.ts:160` claims behaviour the code does not implement. → `UNIT-PROVEN`
+- [ ] **P2-72** `Settings.tsx:1082-1092` **promotes an unvalidated key to active** and clears the prior test result. Validation belongs on the save path (`P2-23`). → `SMOKE-PROVEN`
+- [ ] **P2-73** Remove the **unused** `ollama-rs` from `src-tauri/Cargo.toml:89` — `ollama_rs::` is imported by one file, reached through the `autodev_core` re-export. Removable today with no code change. → `CODE-PRESENT`
+- [ ] **P2-74** ⚠ **`P2-11`'s framing is wrong and its numbers are wrong.** Measured: **537** LOC (not 506), **31** Rust references across **10** files (not "10 sites in 8 files"), `ollama-rs` in **two** manifests. And it is **not dead weight** — `settings_commands.rs:28-33` enumerates it as a live provider, `Settings.tsx:67-68` renders it, and **five** provider-construction switches route to it. Deletion is a **user-visible feature removal**, which Razi has ruled, but it is not a cleanup. → `CODE-PRESENT`
+- [ ] **P2-75** The tree contradicts itself about Ollama: `PROBED_PROVIDERS` marks it retired and `is_supported_provider` excludes it (so a stored key reports `orphaned`), while `settings_commands.rs:32` presents it as live on the same screen. **Half of this contradiction was introduced 2026-09-01 and must not outlive `P2-11`.** → `GATE-PROVEN`
+
 ### Smoke — S2
 - [ ] **S2-01** A turn completes on each of the three providers.
 - [ ] **S2-02** A 5-turn session shows non-zero `cached_read` from turn 2.
@@ -808,6 +874,11 @@ detail* — caught before the build rather than by an auditor after it.
 - [ ] **S2-05** Exceeding the daily cap pauses the fleet with a visible message.
 - [ ] **S2-06** The daily counter **survives a restart**: spend, restart the app, and the cap still knows what was already spent.
 - [ ] **S2-07** `airsctl` refuses to run a turn from an environment variable with the keychain empty.
+- [ ] **S2-08** A Gemini turn that calls a tool passes **real arguments** to it, and two parallel calls both execute.
+- [ ] **S2-09** A turn truncated by `max_tokens` is reported as truncated, on all three providers.
+- [ ] **S2-10** A failing tool is reported as failed on all three providers.
+- [ ] **S2-11** Two parallel tool calls appear in the transcript in the order the model emitted them, **twice in a row in separate processes**.
+- [ ] **S2-12** A task with a $0.50 budget stops at $0.50.
 
 **Exit.** S2 → `TG-P2` → matrix → progress → no-stale → commit.
 

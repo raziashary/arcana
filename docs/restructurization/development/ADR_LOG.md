@@ -762,6 +762,44 @@ cap spending.
 
 **Links.** spec `02 §2`, `§4.2`, `§5`, `§7`, `§11` · `_verify/P2-REFUTE-*.md` · `L-C3` · `L-4` · `INV-12`
 
+## ADR-LOG-RESTRUCT-0026 — P2 absorbs every audit finding; adapters get fixtures in CI and a live smoke behind a flag
+
+**Status.** DECIDED
+**Author.** Claude · **Tier.** `razi-ruled`
+
+**What.**
+
+1. **All ~30 pre-build audit findings enter P2**, not a deferral register. `P2-34`—`P2-75` in four new groups: **F** adapter conformance, **G** cost and analytics integrity, **H** caching prerequisites, **I** test infrastructure. P2 goes from 32 tasks to **74**, and from ~11 h to an honest **~20 h+**.
+2. **Adapters are proven by fixtures in CI plus a live smoke behind a cargo feature** (`P2-67`—`P2-69`).
+
+**Why.**
+
+Razi, asked directly: *"everything the audits found"* and *"fixtures + a live smoke behind a flag."*
+
+**On (1).** Three read-only refutation agents (§0.2m) returned findings the written tasks did not cover, and three of them **invalidated tasks as written** rather than merely adding work:
+
+- **`with_task_budget` has zero callers.** `engine.rs:164-180`, `escalate_budget_exceeded`, `TaskBudget::default_worker` and `BudgetExceededReason` are unreachable — ~100 lines of enforcement with no entry point. **There is no enforced spend limit at any scope.** `P2-21` could have been built, tested and demonstrated green while capping nothing.
+- **The byte-stability premise is refuted.** All four causes the plan names — timestamps, paths, counts, HashMap order — are **absent** from the system prompt. `to_definitions()` already sorts (`tool_registry.rs:43`) and `serde_json` is already a `BTreeMap`. Within a `run()` the prefix is byte-identical **by construction**. `TG2-06` as written would have **passed on day one and proved nothing** — the programme's own inert-but-green failure.
+- **"Handle `message_start`" fixes zero of three providers.** OpenAI never *asks* for usage (`stream_options` absent tree-wide) and separately discards the usage frame on empty `choices`; Google's handler is blocked by two earlier returns.
+
+And one that decides the phase's own success: **every Gemini tool call executes with empty input** (`google.rs:341` discards `_args`, no `ToolInputDelta` is ever emitted). Gemini is the **primary** provider for R1.
+
+**Absorbing rather than deferring is the more expensive choice and the right one here.** These are not adjacent defects; they are the provider and cost layers P2 exists to make correct. A deferral register for *"the price table is wrong for 9 of 12 models"* would mean closing a phase whose headline is *"cost is honest"* over a known-fabricated price.
+
+**On (2).** Measured: **1,733 lines of adapter code with zero `#[test]` of any kind.** Every defect in `P2-F` survived because nothing could catch it. Fixtures run in CI with no credentials — §0.5: *a gate skipped in CI is not green* — and the live smoke catches vendor wire drift that fixtures freeze and hide. Credentials are set **per-command, never session-wide** (§0.8).
+
+**A correction to my own recent work, recorded rather than quietly fixed.** `P2-11` called Ollama removal *"clean"* and *"dead weight"*. Measured: **537** LOC not 506, **31** Rust references across **10** files not *"10 sites in 8 files"*, and `ollama-rs` in **two** manifests. It is a **live, user-facing provider** — enumerated at `settings_commands.rs:28-33`, rendered by `Settings.tsx:67-68`, reached by five dispatch switches. Deletion is a user-visible feature removal, which Razi has ruled, but it is not a cleanup. And the tree now **contradicts itself**: `PROBED_PROVIDERS` marks Ollama retired while `settings_commands.rs` presents it as live — half of that introduced by me on 2026-09-01 (`P2-75`).
+
+**When.** 2026-09-02 · P2 · after §0.2m, before the feature build
+
+**Where.** `MASTER_DEVELOPMENT_PLAN.md` §8 groups F—I · `_verify/P2-REFUTE-{caching,cost,byok-adapters}.md`
+
+**How.** Each task carries the measured `path:line` from the report that found it, quoted verbatim per §0.2L-1. `P2-H` is ordered **before** `P2-B` deliberately: a messages-level invalidator looks exactly like *"caching doesn't work"* while the prefix is perfectly stable, which is the hardest possible bug to attribute.
+
+⚠ **The dispatch itself had a defect, recorded not hidden.** All three agents carried §0.2i's incremental-write clause and were dispatched as **read-only** agent types with no write tool, so none could write its report. The reports survived only because they fitted in their completion notifications. That is `L-C8` — a recorded lesson not applied — and the rule it yields is that an agent required to write a file must be given a tool that can write one.
+
+**Links.** `ADR-LOG-RESTRUCT-0025` · `_verify/P2-REFUTE-*.md` · `L-C8` · `L-C9` · `L-C12`
+
 # §5 · Standing entries carried from planning
 
 Not build-time decisions — but recorded here because a future session will otherwise rediscover them the hard way. Each is already ratified in vision Part 8; these are the **operational consequences** that bite during implementation.
