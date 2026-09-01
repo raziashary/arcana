@@ -182,6 +182,29 @@ This is not a style preference. A rate limit destroyed four reports mid-flight d
 
 ---
 
+## §0.17 · Public-facing documents are refreshed at every phase closeout
+
+`docs/restructurization/public-facing/` holds documents written for readers **outside** the
+build — a supervisor, a partner team. They are condensed from the vision plan and this one.
+
+**Standing rule, razi-ruled 2026-09-01** (*"publish and keep it updated each phase"*): the
+per-phase closeout in `§0.5` gains one step. After the no-stale sweep across the internal
+documents, every document in `public-facing/` is re-checked against what actually changed and
+**its published page is redeployed**.
+
+Two reasons this is a rule and not a habit:
+
+1. **A public document that overstates progress is worse than no document**, because its
+   readers cannot check it against the code. Every internal claim here is falsifiable by
+   someone with the repository; nothing in a supervisor's copy is.
+2. **The markdown file in the repository is the source of truth**, and the published page is
+   rendered from it. Updating the page without updating the file inverts that and makes the
+   repository the stale copy.
+
+The brief's own numbers — readiness, task counts, hours remaining, the handover estimate —
+are exactly the figures a phase closeout changes, so a closeout that skips this step ships a
+document that was accurate an hour earlier.
+
 # §0.16 · Learnings register
 
 Required by §0.2n. **Seeded from the planning phase**, because that phase produced real defects of mine and the next phase should read them before it starts. The lesson comes first; the instance second.

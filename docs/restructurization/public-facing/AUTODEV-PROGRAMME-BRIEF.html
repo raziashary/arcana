@@ -1,0 +1,494 @@
+<title>AutoDev Programme Brief</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+  /* Light palette — complete, on bare :root. */
+  :root {
+    --ground:   #F6F7F9;
+    --surface:  #FFFFFF;
+    --raised:   #EDF0F3;
+    --ink:      #171B21;
+    --ink-soft: #3D4652;
+    --muted:    #5C6673;
+    --faint:    #8A94A2;
+    --line:     #DDE2E8;
+    --line-firm:#C3CBD4;
+    --accent:   #175666;
+    --accent-soft: #E4EFF2;
+    --done:     #2C6A4B;
+    --now:      #97590A;
+    --queued:   #6E7885;
+    --shadow:   0 1px 2px rgba(23,27,33,.05), 0 8px 24px -12px rgba(23,27,33,.12);
+  }
+  /* System-dark (no stamp) — tokens only, so an explicit light choice still wins. */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:   #0F1216;
+      --surface:  #171B21;
+      --raised:   #1E242C;
+      --ink:      #E2E7ED;
+      --ink-soft: #B9C2CD;
+      --muted:    #929CA9;
+      --faint:    #6B7684;
+      --line:     #262D36;
+      --line-firm:#39424D;
+      --accent:   #5FADC0;
+      --accent-soft: #16303A;
+      --done:     #6BBF92;
+      --now:      #D9A249;
+      --queued:   #7C8794;
+      --shadow:   0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+    }
+  }
+  /* Explicit dark choice — tokens only. */
+  :root[data-theme="dark"] {
+    --ground:   #0F1216;
+    --surface:  #171B21;
+    --raised:   #1E242C;
+    --ink:      #E2E7ED;
+    --ink-soft: #B9C2CD;
+    --muted:    #929CA9;
+    --faint:    #6B7684;
+    --line:     #262D36;
+    --line-firm:#39424D;
+    --accent:   #5FADC0;
+    --accent-soft: #16303A;
+    --done:     #6BBF92;
+    --now:      #D9A249;
+    --queued:   #7C8794;
+    --shadow:   0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+    font-size: 17px;
+    line-height: 1.65;
+    margin: 0;
+    padding: 0 24px 96px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  .col  { max-width: 68ch; }
+
+  /* ── Masthead ─────────────────────────────────────────────── */
+  header.masthead {
+    padding: 64px 0 32px;
+    border-bottom: 2px solid var(--ink);
+  }
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 14px;
+  }
+  h1 {
+    font-family: Archivo, "Helvetica Neue", Arial, sans-serif;
+    font-weight: 700;
+    font-size: clamp(2.1rem, 5.2vw, 3.1rem);
+    line-height: 1.05;
+    letter-spacing: -.022em;
+    text-wrap: balance;
+    margin: 0 0 16px;
+  }
+  .standfirst {
+    font-size: 1.16rem;
+    color: var(--ink-soft);
+    max-width: 60ch;
+    margin: 0;
+  }
+
+  /* ── Status strip ─────────────────────────────────────────── */
+  .strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    overflow: hidden;
+    margin: 32px 0 0;
+  }
+  .stat { background: var(--surface); padding: 16px 18px; }
+  .stat dt {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 10px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin: 0 0 6px;
+  }
+  .stat dd {
+    margin: 0;
+    font-family: Archivo, sans-serif;
+    font-weight: 600;
+    font-size: 1.5rem;
+    letter-spacing: -.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat dd small {
+    display: block;
+    font-family: "Source Serif 4", serif;
+    font-weight: 400;
+    font-size: .8rem;
+    color: var(--muted);
+    letter-spacing: 0;
+    margin-top: 2px;
+  }
+
+  /* ── Sections ─────────────────────────────────────────────── */
+  section { padding-top: 56px; }
+  h2 {
+    font-family: Archivo, sans-serif;
+    font-weight: 600;
+    font-size: 1.55rem;
+    letter-spacing: -.015em;
+    line-height: 1.2;
+    text-wrap: balance;
+    margin: 0 0 6px;
+    display: flex;
+    gap: 14px;
+    align-items: baseline;
+  }
+  h2 .num {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: .78rem;
+    font-weight: 500;
+    color: var(--accent);
+    letter-spacing: .06em;
+    flex: none;
+  }
+  h3 {
+    font-family: Archivo, sans-serif;
+    font-weight: 600;
+    font-size: 1.05rem;
+    letter-spacing: -.005em;
+    margin: 34px 0 8px;
+  }
+  p { margin: 0 0 16px; }
+  .lede { font-size: 1.06rem; color: var(--ink-soft); }
+  strong { font-weight: 600; }
+  em { font-style: italic; color: var(--ink-soft); }
+
+  code, .mono {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: .87em;
+    background: var(--raised);
+    padding: .1em .38em;
+    border-radius: 2px;
+    color: var(--ink-soft);
+  }
+
+  /* ── Tables ───────────────────────────────────────────────── */
+  .scroller { overflow-x: auto; margin: 22px 0 8px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: "Source Serif 4", serif;
+    font-size: .95rem;
+    min-width: 520px;
+  }
+  th {
+    font-family: Archivo, sans-serif;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    text-align: left;
+    padding: 0 14px 8px 0;
+    border-bottom: 1px solid var(--line-firm);
+    white-space: nowrap;
+  }
+  td {
+    padding: 11px 14px 11px 0;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; padding-right: 0; white-space: nowrap; }
+  td.phase {
+    font-family: Archivo, sans-serif;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  td.phase .code {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: .8rem;
+    color: var(--accent);
+    display: block;
+    font-weight: 500;
+  }
+
+  /* Status encoded as form, not only as a word. */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 2px;
+    border: 1px solid currentColor;
+    white-space: nowrap;
+  }
+  .chip.done   { color: var(--done); }
+  .chip.now    { color: var(--now); }
+  .chip.queued { color: var(--queued); }
+
+  tr.is-done td { color: var(--muted); }
+  tr.is-now td { background: var(--accent-soft); }
+  tr.handover td {
+    background: var(--ink);
+    color: var(--ground);
+    font-family: Archivo, sans-serif;
+    font-weight: 600;
+    font-size: .9rem;
+    letter-spacing: .01em;
+  }
+
+  /* ── Callout ──────────────────────────────────────────────── */
+  .note {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 3px 3px 0;
+    padding: 20px 24px;
+    margin: 26px 0;
+    box-shadow: var(--shadow);
+  }
+  .note h4 {
+    font-family: Archivo, sans-serif;
+    font-size: .95rem;
+    font-weight: 600;
+    margin: 0 0 8px;
+  }
+  .note p:last-child { margin-bottom: 0; }
+
+  ul.findings { list-style: none; padding: 0; margin: 20px 0; }
+  ul.findings li {
+    padding: 13px 0 13px 26px;
+    border-bottom: 1px solid var(--line);
+    position: relative;
+  }
+  ul.findings li:last-child { border-bottom: none; }
+  ul.findings li::before {
+    content: "";
+    position: absolute;
+    left: 4px;
+    top: 22px;
+    width: 7px;
+    height: 7px;
+    background: var(--accent);
+    border-radius: 50%;
+  }
+  ul.findings .what {
+    font-family: Archivo, sans-serif;
+    font-weight: 600;
+    font-size: .97rem;
+    display: block;
+  }
+  ul.findings .so {
+    color: var(--muted);
+    font-size: .93rem;
+  }
+
+  footer {
+    margin-top: 72px;
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+    color: var(--faint);
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    letter-spacing: .04em;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 24px;
+  }
+
+  a { color: var(--accent); text-underline-offset: 2px; }
+  a:focus-visible, .stat:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+  @media (max-width: 620px) {
+    body { font-size: 16px; padding: 0 18px 64px; }
+    header.masthead { padding-top: 40px; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <p class="eyebrow">AIRS Foundry · Programme Brief · 1 September 2026</p>
+    <h1>AutoDev</h1>
+    <p class="standfirst">A desktop application in which a team of AI agents handles a programming task end to end. This is a condensed view of the restructure, for readers who are not in the code daily.</p>
+
+    <dl class="strip">
+      <div class="stat"><dt>Readiness</dt><dd>8.0%<small>Two phases closed</small></dd></div>
+      <div class="stat"><dt>Open tasks</dt><dd>292<small>All written out</small></dd></div>
+      <div class="stat"><dt>To handover</dt><dd>~37h<small>AutoDesign can start</small></dd></div>
+      <div class="stat"><dt>Rollout 1</dt><dd>~92h<small>208 tasks</small></dd></div>
+      <div class="stat"><dt>Rollout 2</dt><dd>~35h<small>83 tasks</small></dd></div>
+    </dl>
+  </header>
+
+  <section class="col">
+    <h2><span class="num">01</span> Why restructure</h2>
+    <p class="lede">The programme opened with an audit of the shipped code rather than an aspiration. Each finding below was located in the codebase, and each is now closed or scheduled with a test that fails when it regresses.</p>
+
+    <ul class="findings">
+      <li><span class="what">918 lines of agent code were never compiled</span><span class="so">Present on disk, absent from the module graph — a capability the product advertised did not exist in the binary.</span></li>
+      <li><span class="what">The <code>/mcp</code> endpoint accepted unauthenticated remote execution</span><span class="so">Remote code execution on the user's machine.</span></li>
+      <li><span class="what">The updater installed unverified payloads</span><span class="so">Any tampered update would install.</span></li>
+      <li><span class="what">Commands returned raw API keys to the renderer</span><span class="so">The user's credentials were reachable from the web layer.</span></li>
+      <li><span class="what">CI could not fail</span><span class="so">Every check carried <code>continue-on-error</code>, so a green build meant nothing.</span></li>
+      <li><span class="what">Ten databases had no migration ladder</span><span class="so">A schema change could silently destroy user data.</span></li>
+      <li><span class="what">Secret redaction did not exist in the Rust tree</span><span class="so">Credentials could reach prompts, logs and permanent memory.</span></li>
+    </ul>
+  </section>
+
+  <section class="col">
+    <h2><span class="num">02</span> Two rollouts</h2>
+    <p>AutoDev ships <strong>twice</strong>, and the first shipment is not the standalone application.</p>
+
+    <h3>Rollout 1 — the backend for AutoDesign</h3>
+    <p><strong>AutoDesign</strong> is a sister product: a design tool. A design converts to HTML and CSS — which is code, and code is AutoDev's domain. So in Rollout 1, AutoDesign is the front end and <strong>AutoDev is the engine behind it</strong>. AutoDesign supplies the interface, the file, the user and the approval step; AutoDev supplies the capability.</p>
+    <p>Four things are delivered: <strong>ingestion</strong>, turning a PSD or PDF into a structured, editable representation faithful to the original pixel by pixel; <strong>fidelity</strong>, tooling that measures that faithfulness and refines what falls short; <strong>export</strong>, back out to a webpage, PDF or PSD; and <strong>adaptation and changes</strong> — reformatting a design to another size, rebranding it, or changing its content.</p>
+    <p>Rollout 1 also requires the parts of AutoDev that make those work at all: three conforming model providers with honest cost accounting and a real spend ceiling, a runtime where one failing tool cannot take down the application, working memory, and a fleet.</p>
+
+    <h3>Rollout 2 — the application</h3>
+    <p>AutoDev standing on its own: its own interface, a compiled code graph for context, a first-run experience, and signed installers for Windows, Linux and macOS.</p>
+
+    <div class="note">
+      <h4>Rollout 1 is not Rollout 2 with pieces missing</h4>
+      <p>It is a complete product with a different consumer. That distinction is what allows interface work to sit in Rollout 2 without crippling Rollout 1.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="col">
+      <h2><span class="num">03</span> The plan</h2>
+      <p class="lede">Fifteen phases. Every one has an explicit slot — nothing is parked. Estimates are calibrated on measured throughput, and they include the cost of auditing the work rather than assuming it is right.</p>
+      <h3>Rollout 1 — backend ready, wire it to AutoDesign</h3>
+    </div>
+
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr><th>Phase</th><th>Delivers</th><th class="n">Tasks</th><th class="n">Est.</th><th>State</th></tr>
+        </thead>
+        <tbody>
+          <tr class="is-done"><td class="phase">Stop the bleeding<span class="code">P0</span></td><td>Security holes closed; CI can fail</td><td class="n">12</td><td class="n">—</td><td><span class="chip done">Done</span></td></tr>
+          <tr class="is-done"><td class="phase">Structural<span class="code">P1</span></td><td>Everything shipped is compiled; one owner per database; redaction live</td><td class="n">22</td><td class="n">—</td><td><span class="chip done">Done</span></td></tr>
+          <tr class="is-now"><td class="phase">Providers<span class="code">P2</span></td><td>Three providers conform; Gemini primary; cost honest; spend capped</td><td class="n">27</td><td class="n">~11h</td><td><span class="chip now">Next</span></td></tr>
+          <tr><td class="phase">Runtime<span class="code">P3 A–E</span></td><td>One tool path with a real permission gate; a panic cannot kill the app</td><td class="n">28</td><td class="n">~12h</td><td><span class="chip queued">Queued</span></td></tr>
+          <tr><td class="phase">Memory<span class="code">P3-F</span></td><td>Memory that works and is provably read</td><td class="n">15</td><td class="n">~7.5h</td><td><span class="chip queued">Queued</span></td></tr>
+          <tr><td class="phase">Sidecar removal<span class="code">P8</span></td><td>The retired Python subsystem deleted entirely</td><td class="n">24</td><td class="n">~6h</td><td><span class="chip queued">Queued</span></td></tr>
+          <tr class="handover"><td colspan="5">↓ &nbsp;HANDOVER — the AutoDesign team can begin wiring, ~37 hours in</td></tr>
+          <tr><td class="phase">Ingestion<span class="code">PD1</span></td><td>PSD and PDF become one representation</td><td class="n">14</td><td class="n">~6h</td><td><span class="chip queued">Queued</span></td></tr>
+          <tr><td class="phase">Fidelity<span class="code">PD2</span></td><td>Faithfulness measured, and refined where it falls short</td><td class="n">14</td><td class="n">~7.5h</td><td><span class="chip queued">Queued</span></td></tr>
+          <tr><td class="phase">Export<span class="code">PD3</span></td><td>Webpage · PDF · PSD</td><td class="n">15</td><td class="n">~7h</td><td><span class="chip queued">Queued</span></td></tr>
+          <tr><td class="phase">Adaptation<span class="code">PD4</span></td><td>Reformat a design to any target size</td><td class="n">13</td><td class="n">~7h</td><td><span class="chip queued">Queued</span></td></tr>
+          <tr><td class="phase">Changes<span class="code">PD5</span></td><td>Text, image, position, colour, shape</td><td class="n">13</td><td class="n">~5.5h</td><td><span class="chip queued">Queued</span></td></tr>
+          <tr><td class="phase">Brand guideline<span class="code">PD6</span></td><td>Ingest a brand guide and apply it</td><td class="n">9</td><td class="n">~3.5h</td><td><span class="chip queued">Queued</span></td></tr>
+          <tr><td class="phase">Fleet<span class="code">P4</span></td><td>A task runs end to end and lands a verified artifact</td><td class="n">30</td><td class="n">~12.5h</td><td><span class="chip queued">Queued</span></td></tr>
+          <tr><td class="phase">Contract<span class="code">PD0</span></td><td>The integration surface, published early and in parallel</td><td class="n">6</td><td class="n">~2h</td><td><span class="chip queued">Queued</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="col"><h3>Rollout 2 — the application is ready for usage</h3></div>
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr><th>Phase</th><th>Delivers</th><th class="n">Tasks</th><th class="n">Est.</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="phase">Graph<span class="code">P5</span></td><td>A compiled code graph, read for context</td><td class="n">21</td><td class="n">~9h</td></tr>
+          <tr><td class="phase">UI<span class="code">P6</span></td><td>AutoDev's own interface</td><td class="n">28</td><td class="n">~10h</td></tr>
+          <tr><td class="phase">Experience<span class="code">P7</span></td><td>A new user reaches a working turn without documentation</td><td class="n">18</td><td class="n">~5.5h</td></tr>
+          <tr><td class="phase">Delivery<span class="code">P9</span></td><td>Signed installers, three platforms</td><td class="n">16</td><td class="n">~7h</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="col">
+      <div class="note">
+        <h4>What the AutoDesign team receives at handover</h4>
+        <p>A codebase with the retired subsystem <strong>fully removed</strong>, so there is no dead dependency to inherit. A <strong>published integration contract</strong>, written to AutoDesign's own versioned format. And a running AutoDev that <strong>answers that contract with working stubs</strong>, so the integration can be built and tested on day one rather than waited for.</p>
+        <p>The contract's schema can be shared immediately — it depends only on the four operations, which are already decided.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="col">
+    <h2><span class="num">04</span> Where we are</h2>
+    <p>P0 and P1 are complete, both closed with a mandatory independent audit. Delivered so far: the security holes closed and gated; an <code>autodev-core</code> crate extracted with zero dependency on the UI framework, letting the desktop app and the command-line tool share one implementation; migration ladders on all ten databases, applied to live data with zero rows lost; secret redaction on the production path; and the first of the design work — the intermediate representation that everything in Rollout 1 is built on.</p>
+    <p>P1 built 22 tasks in 2 hours 50 minutes; its audit and the resulting fixes took a further 3 hours 30 minutes. The estimates above carry that audit cost rather than omitting it.</p>
+  </section>
+
+  <section class="col">
+    <h2><span class="num">05</span> How the work is governed</h2>
+    <p class="lede">The discipline is the reason the estimates are worth anything.</p>
+
+    <h3>Evidence classes</h3>
+    <p>No task is complete without a named proof recorded against it — unit-proven, live-database-proven, smoke-proven, gate-proven, benchmark-proven. <em>"It should work"</em> is not a status.</p>
+
+    <h3>Falsification</h3>
+    <p>A test that has never been seen to fail is not trusted. A violation is deliberately introduced, the check is confirmed to catch it, and the violation is removed.</p>
+
+    <h3>Mandatory post-phase audit</h3>
+    <p>Every phase ends with independent auditors reviewing the work against the evidence. This is not a formality.</p>
+
+    <div class="note">
+      <h4>What P1's audit found</h4>
+      <p>It returned <strong>116 findings</strong> and established that the phase's headline claim was false: secret redaction had been wired to a function that nothing in production called, so it protected nothing while two separate proofs reported green. It was found, fixed, re-proven, and recorded — including <em>why</em> both proofs had been able to pass over unprotected code.</p>
+    </div>
+
+    <h3>A learnings register, with running counts</h3>
+    <p>Recurring mistakes are tracked by class and counted, on the principle that a repeat is worse than a novel error. Every architectural decision is logged as it is made — what, why, when, where and how — including retractions when a previous finding proves wrong.</p>
+  </section>
+
+  <section>
+    <div class="col"><h2><span class="num">06</span> Risks</h2></div>
+    <div class="scroller">
+      <table>
+        <thead><tr><th>Risk</th><th>Standing</th></tr></thead>
+        <tbody>
+          <tr><td class="phase">Signing certificates</td><td>Apple and Windows certificates gate the final phase and no engineering shortens the wait. Procurement should begin at Rollout 1 close, not at Rollout 2.</td></tr>
+          <tr><td class="phase">Conversion accuracy</td><td>The existing algorithm is not pixel-accurate. Known and scheduled — <span class="mono">PD2</span> exists specifically to measure and close it, rather than to assume it.</td></tr>
+          <tr><td class="phase">A second team</td><td>The integration depends on AutoDesign. Mitigated by publishing the contract early and backing it with working stubs, so both sides build in parallel against one agreed surface.</td></tr>
+          <tr><td class="phase">Unobtainable fonts</td><td>Reported rather than silently substituted. A conversion that quietly loses a designer's typeface and still reports success is treated as a defect.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="col">
+    <h2><span class="num">07</span> In one paragraph</h2>
+    <p class="lede">AutoDev is being rebuilt to a standard where every claim is backed by a test that can fail. Two security-critical phases are complete and independently audited. The next milestone is a working backend that turns designs into faithful, editable, adaptable code — handed to the AutoDesign team roughly 37 working hours from now, with a published contract and live stubs so they can build in parallel. Full capability follows at roughly 92 hours, and the standalone application at roughly 127.</p>
+  </section>
+
+  <footer>
+    <span>AIRS Foundry</span>
+    <span>Owner: Razi Ashary, Programming Lead</span>
+    <span>Condenses the master vision plan and the master development plan</span>
+  </footer>
+
+</div>
