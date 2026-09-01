@@ -40,10 +40,17 @@ export const config: WebdriverIO.Config = {
 
   capabilities: [
     {
-      // tauri-driver proxies to the platform's native webview driver.
+      maxInstances: 1,
+      // tauri-driver proxies to the platform's native webview driver, forwarding
+      // everything except `tauri:options` to it.
+      //
+      // Deliberately NO `browserName`. It was set to 'wry', which tauri-driver
+      // passes straight through to WebKitWebDriver, and WebKitWebDriver rejects
+      // an unknown browserName with "Failed to match capabilities" — which is
+      // exactly how this failed on its first CI run. tauri-driver's own examples
+      // set only `tauri:options`.
       // @ts-expect-error — tauri:options is a tauri-driver extension, not in the W3C types
       'tauri:options': { application },
-      browserName: 'wry',
     },
   ],
 
