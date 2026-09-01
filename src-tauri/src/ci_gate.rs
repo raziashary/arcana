@@ -867,6 +867,105 @@ let x = 1;
         assert_eq!(unwrapped_sites("// we used to tool.execute(input) here"), 0);
     }
 
+    // ── TG-P2-01 · a credential never enters a URL, and both log sinks redact ──
+
+    /// No provider may put an API key in a request URL.
+    ///
+    /// **Found live in P2's pre-build audit.** `google.rs` authenticated with
+    /// `?key={}`, and `reqwest`'s `Error` Display includes the request URL. That
+    /// string was logged *and* returned as `ProviderStatus::Error`, which
+    /// crosses the Tauri IPC boundary and is rendered in Settings. Redaction did
+    /// not save it: `SENSITIVE_KEYS` carries `api_key`/`apikey`/`api-key` but
+    /// not bare `key`, so `?key=AIza…` matched nothing.
+    ///
+    /// A URL is the wrong place for a secret independently of redaction — it
+    /// reaches proxy logs, browser history and any HTTP debug capture. Anthropic
+    /// (`x-api-key`) and OpenAI (`Authorization`) already used headers; Google
+    /// now uses `x-goog-api-key`.
+    #[test]
+    fn tg_p2_01_no_provider_puts_a_key_in_a_url() {
+        let dir = repo_root().join("autodev-core/src/provider");
+        let mut offenders = Vec::new();
+
+        for entry in std::fs::read_dir(&dir).expect("provider dir") {
+            let path = entry.expect("entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("read");
+            let production = text.split("#[cfg(test)]").next().unwrap_or("");
+            for (i, raw) in production.lines().enumerate() {
+                let line = raw.trim();
+                if line.starts_with("//") || line.starts_with('*') {
+                    continue;
+                }
+                let code = line.split("//").next().unwrap_or("");
+                // Query-string syntax is the unambiguous needle: `?key=` or
+                // `&key=`.
+                //
+                // The first version of this check required a URL marker
+                // (`http`/`_BASE`) on the SAME line as `key=`. `format!` puts
+                // the template on one line and the arguments on the next, so it
+                // could never match the real defect. It passed against a planted
+                // regression -- L-C9, a check whose shape cannot express failure
+                // -- and only falsification caught it.
+                let has_key_param = code.contains("?key=")
+                    || code.contains("&key=")
+                    || code.contains("?api_key=")
+                    || code.contains("&api_key=");
+                if has_key_param {
+                    offenders.push(format!(
+                        "{}:{}: {}",
+                        path.file_name().unwrap().to_string_lossy(),
+                        i + 1,
+                        line
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "an API key is being placed in a request URL, where it reaches proxy \
+             logs, transport error strings, and any HTTP capture. Use a header: {}",
+            offenders.join(" | ")
+        );
+    }
+
+    /// Both logging sinks redact, not just the file.
+    ///
+    /// P1 wrapped the file appender and left the console layer raw, while its
+    /// own comment claimed every line was covered "regardless of which
+    /// subsystem emitted it". Anything on stderr went out in the clear for a
+    /// whole phase. This asserts the shape rather than the claim.
+    #[test]
+    fn tg_p2_01_both_log_sinks_are_redacted() {
+        let text = std::fs::read_to_string(repo_root().join("src-tauri/src/logging.rs"))
+            .expect("logging.rs");
+        let production = text.split("#[cfg(test)]").next().unwrap_or("");
+
+        let console_wrapped = production.contains("RedactingMakeWriter(std::io::stderr)");
+        assert!(
+            console_wrapped,
+            "the console layer must write through the redactor; it was raw until \
+             2026-09-02 and leaked a Google API key to stderr"
+        );
+
+        let file_wrapped = production.contains("RedactingWriter {");
+        assert!(file_wrapped, "the file appender must write through the redactor");
+
+        // Neither sink may be constructed without going through one of the two
+        // wrappers. `fmt::layer()` with a bare writer is the regression shape.
+        let bare_stderr = production
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .any(|l| l.contains(".with_writer(std::io::stderr"));
+        assert!(
+            !bare_stderr,
+            "a log layer writes to stderr without redaction"
+        );
+    }
+
     /// Raw tool arguments may reach exactly ONE place: the permission dialog.
     ///
     /// The gate above guards the *result* side. This guards the *input* side,

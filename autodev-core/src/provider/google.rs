@@ -175,14 +175,16 @@ impl Provider for GoogleProvider {
         let body = self.build_body(&request);
         debug!("Google complete: model={}", request.model);
 
+        // ⚠ The key goes in a HEADER, never the URL. See `auth_header`.
         let url = format!(
-            "{}/v1beta/models/{}:generateContent?key={}",
-            GOOGLE_API_BASE, request.model, self.api_key
+            "{}/v1beta/models/{}:generateContent",
+            GOOGLE_API_BASE, request.model
         );
 
         let resp = self
             .client
             .post(&url)
+            .header("x-goog-api-key", &self.api_key)
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
@@ -202,14 +204,16 @@ impl Provider for GoogleProvider {
         let body = self.build_body(&request);
         debug!("Google stream: model={}", request.model);
 
+        // ⚠ The key goes in a HEADER, never the URL. See `auth_header`.
         let url = format!(
-            "{}/v1beta/models/{}:streamGenerateContent?alt=sse&key={}",
-            GOOGLE_API_BASE, request.model, self.api_key
+            "{}/v1beta/models/{}:streamGenerateContent?alt=sse",
+            GOOGLE_API_BASE, request.model
         );
 
         let resp = self
             .client
             .post(&url)
+            .header("x-goog-api-key", &self.api_key)
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
@@ -256,9 +260,10 @@ impl Provider for GoogleProvider {
 
     async fn test_connection(&self) -> Result<ProviderStatus> {
         // Use a minimal generateContent call to test
+        // ⚠ The key goes in a HEADER, never the URL. See `auth_header`.
         let url = format!(
-            "{}/v1beta/models/gemini-2.5-flash:generateContent?key={}",
-            GOOGLE_API_BASE, self.api_key
+            "{}/v1beta/models/gemini-2.5-flash:generateContent",
+            GOOGLE_API_BASE
         );
 
         let test_body = json!({
@@ -271,6 +276,7 @@ impl Provider for GoogleProvider {
         let resp = self
             .client
             .post(&url)
+            .header("x-goog-api-key", &self.api_key)
             .header("Content-Type", "application/json")
             .json(&test_body)
             .send()
@@ -284,8 +290,15 @@ impl Provider for GoogleProvider {
                 Ok(ProviderStatus::Error(format!("HTTP {code}")))
             }
             Err(e) => {
-                error!("Google connection test failed: {e}");
-                Ok(ProviderStatus::Error(e.to_string()))
+                // Redacted before it is logged OR returned. `reqwest`'s Error
+                // Display includes the request URL, and this value crosses the
+                // Tauri IPC boundary into the renderer (`Settings.tsx`). Even
+                // with the key now in a header rather than the URL, an error
+                // string that reaches the UI is not a place to trust a
+                // transport library's formatting.
+                let safe = crate::security::redaction::redact_text(&e.to_string());
+                error!("Google connection test failed: {safe}");
+                Ok(ProviderStatus::Error(safe))
             }
         }
     }

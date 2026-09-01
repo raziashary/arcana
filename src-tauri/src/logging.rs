@@ -49,17 +49,49 @@ impl<W: Write> Write for RedactingWriter<W> {
         self.inner.flush()
     }
 }
+/// Wraps any `MakeWriter` so every line it produces is redacted.
+///
+/// `tracing` needs a *factory*, not a writer — it makes a fresh writer per
+/// event. Without this adapter the file half could be wrapped (it owns a single
+/// appender) and the console half could not, which is exactly how stderr stayed
+/// in the clear while a comment claimed otherwise.
+struct RedactingMakeWriter<M>(M);
+
+impl<'a, M: tracing_subscriber::fmt::MakeWriter<'a>> tracing_subscriber::fmt::MakeWriter<'a>
+    for RedactingMakeWriter<M>
+{
+    type Writer = RedactingWriter<M::Writer>;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        RedactingWriter {
+            inner: self.0.make_writer(),
+        }
+    }
+}
+
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 pub fn init() -> Option<WorkerGuard> {
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("autodev_lib=debug,info"));
 
-    // Console layer — human-readable, compact
+    // Console layer — human-readable, compact, and REDACTED.
+    //
+    // ⚠ This was unredacted until 2026-09-02, and P1's own comment on the file
+    // appender below claimed every log line was covered "regardless of which
+    // subsystem emitted it". That was false: only the file half was wrapped, so
+    // anything on stderr went out in the clear. P2's pre-build audit found a
+    // live instance — `google.rs` logged a transport error whose text contained
+    // the request URL, and the Google API key was in that URL.
+    //
+    // Same defect shape as `A-08a`: one side of a boundary fixed, the other
+    // left open, with a comment asserting both were done.
     let console_layer = fmt::layer()
+        .with_writer(RedactingMakeWriter(std::io::stderr))
         .with_target(true)
         .with_thread_ids(false)
         .with_file(false)
+        .with_ansi(false)
         .compact();
 
     // Resolve log directory.
@@ -103,9 +135,9 @@ pub fn init() -> Option<WorkerGuard> {
                     eprintln!("[AutoDev] Log appender builder failed ({e}), falling back to default rotation");
                     tracing_appender::rolling::daily(&dir, "autodev")
                 });
-            // Redaction boundary (M-40, P1-21). Wrapping the appender means
-            // every log line is redacted regardless of which subsystem emitted
-            // it — see `RedactingWriter`.
+            // Redaction boundary (M-40, P1-21) for the FILE half. The console
+            // half is wrapped separately above — both are needed, and saying so
+            // in one place while doing it in the other is how the gap survived.
             let (non_blocking, guard) = tracing_appender::non_blocking(RedactingWriter {
                 inner: file_appender,
             });
