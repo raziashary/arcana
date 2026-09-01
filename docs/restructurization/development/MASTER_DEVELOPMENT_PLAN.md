@@ -1143,6 +1143,27 @@ and pixel layers from nothing. **Construction reversed is mutation.**
 **Why it follows PD5.** A rebrand is a batch of changes driven by a document. Building it
 before the change primitives would mean building those primitives twice.
 
+**Grounding (researched 2026-09-01, razi-ruled: *"search the web for an example brand guide and we use it, i dont have one right now"*).**
+
+Real published guides were surveyed to derive the schema rather than inventing one. The
+[openSUSE brand guidelines](https://opensuse.github.io/branding-guidelines/) were readable end
+to end and are the **reference fixture**; NASA, Uber, Slack, Netflix and Oatly were surveyed for
+the field set. What a guide actually specifies:
+
+| Section | Fields a machine-readable guide must carry |
+|---|---|
+| **Colour** | named entries, each in several spaces — `hex` and `rgb` (digital), `cmyk`, `pantone_coated`/`pantone_uncoated` (print), `grayscale_percent` (mono). Roles: primary, secondary, accent — **plus tints**, which openSUSE carries four of per colour |
+| **Typography** | `family` · `weight` (Light/Regular/SemiBold/Bold) · **`role`** — titles, taglines, body. The role is the load-bearing field: a rebrand maps *roles*, not font names, or a display face lands in body copy |
+| **Logo** | variants (horizontal, stacked, mark-only), clear space, minimum size, permitted backgrounds |
+| **Misuse** | explicit do-not rules — the half that makes a guide checkable rather than decorative |
+
+⚠ **Two findings that shape the format.** First, real guides are **incomplete**: openSUSE's
+own document specifies no logo variants, no minimum sizes and no clear-space rules, and gives
+colours only as an image. A format that requires every field will reject most real guides, so
+**every field is optional and absence is reported, never inferred** (`PD6-08`). Second, guides
+ship as **PDFs** — so `PD1`'s PDF ingestion is the natural intake path, and the two capabilities
+compose rather than duplicating each other.
+
 - [ ] **PD6-01** **The brand-guide format** — a real input, not a prompt string. AutoDesign's premise is that findings *"cite the brand guide they came from"*, which free text cannot support. → `DOC-GATE`
 - [ ] **PD6-02** Ingest a guide into a typed value. → `UNIT-PROVEN`
 - [ ] **PD6-03** Palette mapping: source colours → brand colours, including near-matches. → `UNIT-PROVEN`

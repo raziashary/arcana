@@ -13,6 +13,7 @@ import {
   workerStatusLabel,
   WORKER_TYPE_LABELS,
 } from '../../stores/workerStore'
+import { ALL_KNOWN_MODELS, MODEL_GROUPS } from '../../data/models'
 
 // Toast notification state
 type ToastType = 'success' | 'warning' | 'error'
@@ -21,100 +22,6 @@ interface Toast {
   message: string
   type: ToastType
 }
-
-// ─── Available models ────────────────────────────────────────────────────────
-// Registry keys from core-orchestrator/src/llm/providers/model_registry.py
-// Grouped by provider for the <optgroup> selector.
-
-const MODEL_GROUPS: Array<{ label: string; models: string[] }> = [
-  {
-    label: 'Anthropic Claude',
-    models: [
-      'claude-4-5-haiku',
-      'claude-4-5-haiku-thinking',
-      'claude-sonnet-4-5',
-      'claude-sonnet-4-5-thinking',
-      'claude-4-1-opus',
-      'claude-4-1-opus-thinking',
-      'claude-4-opus',
-      'claude-4-opus-thinking',
-      'claude-4-sonnet',
-      'claude-4-sonnet-thinking',
-    ],
-  },
-  {
-    label: 'OpenAI GPT',
-    models: [
-      'gpt-5',
-      'gpt-5-mini',
-      'gpt-4.1',
-      'gpt-4.1-mini',
-      'gpt-4.1-nano',
-      'gpt-4o',
-      'gpt-4o-mini',
-      'o3',
-      'o4-mini',
-    ],
-  },
-  {
-    label: 'Google Gemini',
-    models: [
-      'gemini-3-pro',
-      'gemini-3-pro-thinking',
-      'gemini-3-flash',
-      'gemini-3-flash-thinking',
-      'gemini-2.5-pro',
-      'gemini-2.5-flash',
-    ],
-  },
-  {
-    label: 'DeepSeek',
-    models: [
-      'deepseek-v4-flash',
-      'deepseek-v4-pro',
-    ],
-  },
-  {
-    label: 'Moonshot / Kimi',
-    models: [
-      'kimi-k2',
-      'kimi-k2.5',
-      'kimi-k2-thinking',
-    ],
-  },
-  {
-    label: 'Groq (Llama)',
-    models: [
-      'llama-3.3-70b',
-      'llama-3.1-8b',
-    ],
-  },
-  {
-    label: 'SEA-LION (AI Singapore)',
-    models: [
-      'sea-lion-llama-3.5-70b-Reasoning',
-      'sea-lion-llama-3-70b',
-      'sea-lion-gemma-4-27b',
-    ],
-  },
-  {
-    label: 'Dashscope / Qwen',
-    models: [
-      'qwen3-max',
-    ],
-  },
-  {
-    label: 'NVIDIA NIM',
-    models: [
-      'kimi-k2.5-nvidia',
-      'qwen-3.5-nvidia',
-      'deepseek-v3.2-nvidia',
-    ],
-  },
-]
-
-// Flat set for membership checks
-const ALL_KNOWN_MODELS = new Set(MODEL_GROUPS.flatMap(g => g.models))
 
 // ─── Status Dot ───────────────────────────────────────────────────────────────
 

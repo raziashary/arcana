@@ -4,22 +4,8 @@
 
 import { useState } from 'react'
 import { useWorkerStore, CreateWorkerInput, WORKER_TYPE_LABELS } from '../../stores/workerStore'
+import { ALL_KNOWN_MODELS, DEFAULT_MODEL } from '../../data/models'
 
-// ─── Available Models ─────────────────────────────────────────────────────────
-
-const MODEL_OPTIONS = [
-  'claude-opus-4-5',
-  'claude-sonnet-4-5',
-  'claude-haiku-4-5',
-  'claude-opus-4-0',
-  'claude-sonnet-4-0',
-  'gpt-4o',
-  'gpt-4o-mini',
-  'gemini-2.0-flash',
-  'gemini-2.0-pro',
-  'deepseek-v4-flash',
-  'deepseek-v4-pro',
-]
 
 const WORKER_TYPES = Object.keys(WORKER_TYPE_LABELS).filter(t => t !== 'supervisor' && t !== 'qc')
 
@@ -35,7 +21,7 @@ export default function WorkerCreateModal({ onClose, onCreated }: WorkerCreateMo
 
   const [name,            setName]            = useState('')
   const [workerType,      setWorkerType]      = useState('backend')
-  const [model,           setModel]           = useState('claude-sonnet-4-5')
+  const [model,           setModel]           = useState(DEFAULT_MODEL)
   const [repoInput,       setRepoInput]       = useState('')
   const [repos,           setRepos]           = useState<string[]>([])
   const [pollInterval,    setPollInterval]    = useState(120)
@@ -119,7 +105,7 @@ export default function WorkerCreateModal({ onClose, onCreated }: WorkerCreateMo
 
           <Field label="Model">
             <select value={model} onChange={e => setModel(e.target.value)} title="Model" style={inputStyle}>
-              {MODEL_OPTIONS.map(m => (
+              {[...ALL_KNOWN_MODELS].map(m => (
                 <option key={m} value={m}>{m}</option>
               ))}
             </select>

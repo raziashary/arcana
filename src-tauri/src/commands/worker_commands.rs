@@ -291,7 +291,13 @@ fn write_yaml_model(agents_dir: &Path, slug: &str, model: &str) -> Result<()> {
     let content = std::fs::read_to_string(&yaml_path)
         .map_err(|e| AutoDevError::Agent(format!("read YAML for '{slug}': {e}")))?;
 
-    let provider = model_to_provider(model);
+    let provider = model_to_provider(model).ok_or_else(|| {
+        AutoDevError::Agent(format!(
+            "Unknown model '{model}' — no supported provider serves it. \
+             AutoDev supports Anthropic, OpenAI and Google; see src/data/models.ts \
+             for the models on offer."
+        ))
+    })?;
     let mut result: Vec<String> = Vec::with_capacity(content.lines().count() + 2);
     let mut in_llm_block = false;
     let mut model_written = false;
@@ -335,41 +341,59 @@ fn write_yaml_model(agents_dir: &Path, slug: &str, model: &str) -> Result<()> {
     Ok(())
 }
 
-/// Derive the LiteLLM provider name from a model registry key.
-/// Keys must match the entries in core-orchestrator/src/llm/providers/model_registry.py.
-fn model_to_provider(model: &str) -> &str {
-    // NVIDIA NIM managed models all use the `-nvidia` suffix.
-    // Check this first to prevent the deepseek/kimi prefix rules from claiming them.
-    if model.ends_with("-nvidia") {
-        return "nvidia";
+/// Which provider serves this model.
+///
+/// Mirrors `providerForModel` in `src/data/models.ts`. The two must agree: the
+/// UI offers a model, this decides where the request and the user's key go, and
+/// a disagreement sends a credential to a vendor the user never chose.
+///
+/// ⚠ **Returns `None` for an unknown model rather than guessing.** This used to
+/// end in `_ => "openai"`, so a typo, a retired id, or a model from a provider
+/// we dropped was silently routed to OpenAI — which then failed with an
+/// authentication or unknown-model error that pointed nowhere near the cause.
+///
+/// The old prefix table also routed `llama`/`gpt-oss` to Groq, `qwen` to
+/// Dashscope and anything `-nvidia` to NVIDIA. None of those are supported
+/// providers: `is_supported_provider` accepts only these three, so no key can
+/// be stored for them and the route could never have completed.
+fn model_to_provider(model: &str) -> Option<&'static str> {
+    if model.starts_with("claude") {
+        Some("anthropic")
+    } else if model.starts_with("gpt-") || model.starts_with("o1-") || model.starts_with("o3") {
+        Some("openai")
+    } else if model.starts_with("gemini") {
+        Some("google")
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod model_provider_tests {
+    use super::model_to_provider;
+
+    #[test]
+    fn the_three_supported_providers_are_routed() {
+        assert_eq!(model_to_provider("claude-opus-5"), Some("anthropic"));
+        assert_eq!(model_to_provider("claude-haiku-4-5"), Some("anthropic"));
+        assert_eq!(model_to_provider("gpt-5.5"), Some("openai"));
+        assert_eq!(model_to_provider("gpt-5.3-codex"), Some("openai"));
+        assert_eq!(model_to_provider("gemini-3.5-flash"), Some("google"));
+        assert_eq!(model_to_provider("gemini-3.5-pro"), Some("google"));
     }
 
-    // Standard prefix-based routing
-    if model.starts_with("claude") {
-        "anthropic"
-    } else if model.starts_with("gpt-5")
-        || model.starts_with("gpt-4")
-        || model.starts_with("gpt-3")
-        || model.starts_with("o1-")
-        || model.starts_with("o3")
-        || model.starts_with("o4-")
-    {
-        "openai"
-    } else if model.starts_with("gemini") {
-        "google"
-    } else if model.starts_with("deepseek") {
-        "deepseek"
-    } else if model.starts_with("kimi") {
-        "moonshot"
-    } else if model.starts_with("sea-lion") {
-        "sealion"
-    // Groq-hosted: Llama models, gpt-oss, and the groq-specific qwen variant
-    } else if model.starts_with("llama") || model.starts_with("gpt-oss") || model == "qwen3-32b" {
-        "groq"
-    // Alibaba Dashscope Qwen (qwen3-max, qwen-*)
-    } else if model.starts_with("qwen") {
-        "dashscope"
-    } else {
-        "openai"
+    #[test]
+    fn a_dropped_provider_is_refused_not_rerouted() {
+        // Each of these used to resolve to a provider no key can be stored
+        // for -- or, worse, silently to OpenAI.
+        for model in ["grok-3-mini-beta", "llama-3.3-70b", "qwen3-max", "kimi-k2.5-nvidia"] {
+            assert_eq!(model_to_provider(model), None, "{model} must not route");
+        }
+    }
+
+    #[test]
+    fn an_unknown_model_is_refused_rather_than_guessed() {
+        assert_eq!(model_to_provider("totally-made-up"), None);
+        assert_eq!(model_to_provider(""), None);
     }
 }
