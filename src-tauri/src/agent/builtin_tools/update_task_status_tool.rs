@@ -157,21 +157,32 @@ impl Tool for UpdateTaskStatusTool {
                 match super::build_evidence::most_recent_build(&ctx.session_id) {
                     None => {
                         return ToolResult::error(
-                            "Cannot move task to qc_review without recorded build evidence. \
-                         Run your recipe's Build Validation step in the SAME tick as this \
-                         status update — e.g. `bash('npm run build 2>&1 | tee build.log; \
-                         echo \"EXIT:$?\"')` for Node, `bash('cargo test 2>&1 | tee \
-                         build.log; echo \"EXIT:$?\"')` for Rust, or `bash('uv run pytest \
-                         2>&1 | tee build.log; echo \"EXIT:$?\"')` for Python. The \
-                         supervisor / qc-dispatcher requires proof the artifact builds \
-                         before any review can begin.",
+                            "Cannot move task to qc_review without recorded build \
+                             evidence. Run your build in the SAME tick as this status \
+                             update, as a PLAIN command so the exit status is the \
+                             build's own: bash('npm run build') for Node, \
+                             bash('cargo test --all-targets') for Rust, bash('uv run \
+                             pytest') for Python. Do NOT pipe into tee or append \
+                             `; echo EXIT:$?` — a shell reports the LAST element's \
+                             status, so the build's own result is discarded and cannot \
+                             serve as evidence.",
                         )
+                    }
+                    Some(ev) if !ev.exit_code_attributable => {
+                        return ToolResult::error(&format!(
+                            "Cannot move task to qc_review — the most recent build ran \
+                             as a pipeline or command sequence, so its exit status ({}) \
+                             belongs to the last element, not to the build. Re-run the \
+                             build as a plain command. Recorded: '{}'.",
+                            ev.exit_code, ev.command,
+                        ))
                     }
                     Some(ev) if ev.exit_code != 0 => {
                         return ToolResult::error(&format!(
-                            "Cannot move task to qc_review — the most recent build invocation \
-                         exited with code {}. Transition to status='build_failed' instead \
-                         (the worker recipe's failure branch). Most recent build: '{}'.",
+                            "Cannot move task to qc_review — the most recent build \
+                             invocation exited with code {}. Transition to \
+                             status='build_failed' instead (the worker recipe's failure \
+                             branch). Most recent build: '{}'.",
                             ev.exit_code, ev.command,
                         ))
                     }

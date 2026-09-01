@@ -129,8 +129,10 @@ pub fn register_for_mcp_worker(registry: &mut ToolRegistry) {
     ));
     // Subagent tools — workers document Subagent Protocols in their recipes.
     // Pool hard caps + depth guard enforce safety; recipes provide cost-advisory guidance.
-    // NOTE: subagent MCP callers must pass __depth on every call so the depth guard
-    // in SpawnSubagentTool reflects actual nesting (tool_adapter.rs reads __depth).
+    // Depth is threaded in Rust from the spawn tree (`AgentIdentity`), so the
+    // guard in SpawnSubagentTool cannot be defeated by a caller. It used to
+    // depend on the model sending a `__depth` meta-argument that the (now
+    // deleted) MCP tool_adapter read back.
     registry.register(Arc::new(spawn_subagent::SpawnSubagentTool));
     registry.register(Arc::new(
         spawn_parallel_subagents::SpawnParallelSubagentsTool,

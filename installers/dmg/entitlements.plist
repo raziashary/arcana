@@ -23,9 +23,11 @@
     <key>com.apple.security.network.client</key>
     <true/>
 
-    <!-- Network: server for MCP server on localhost:8767 -->
-    <key>com.apple.security.network.server</key>
-    <true/>
+    <!-- com.apple.security.network.server was REMOVED. It granted AutoDev the
+         right to LISTEN for incoming connections, and existed solely for the
+         in-process MCP server on :8767 that was deleted in P0. AutoDev now makes
+         only outbound requests (provider APIs, update checks, external MCP
+         health probes), which network.client above already covers. -->
 
     <!-- File access: read/write user-selected files (IDE file browser) -->
     <key>com.apple.security.files.user-selected.read-write</key>

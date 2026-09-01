@@ -41,8 +41,8 @@ export const A_SECTIONS: DocSection[] = [
         ['State Management', 'Zustand', 'Global state (sessions, config, agent status)'],
         ['Styling', 'Tailwind CSS 3', 'AIRS design system (industrial-minimal, #00FF88 accent)'],
         ['Backend', 'Rust (Tauri commands)', 'Code editing tools, file I/O, command execution'],
-        ['Provider Layer', 'Anthropic, OpenAI, Gemini, Ollama, Azure', 'Multi-provider LLM abstraction'],
-        ['MCP Client', 'rmcp crate', 'Native Rust MCP client integration'],
+        ['Provider Layer', 'Anthropic, OpenAI, Gemini, Grok', 'Multi-provider LLM abstraction'],
+        ['MCP Health', 'reqwest', 'Liveness probes for user-configured external MCP servers'],
         ['Git Integration', 'git2-rs (libgit2)', 'Structured git operations, worktrees'],
         ['Orchestrator', 'Python 3.13 + FastAPI + litellm', 'Agent lifecycle, FSMs, A2A protocol'],
         ['Memory', 'Python 3.13 + mem0', 'Context storage, scoring, synopsis evolution'],
@@ -94,7 +94,7 @@ export const A_SECTIONS: DocSection[] = [
                     ↓
               Built-in tools (read_file, write_file, bash, git2-rs)
                     ↓
-              MCP clients (GitHub MCP, Slack MCP) via rmcp crate
+              External MCP servers — configured and health-checked, not yet called
                     ↓
               Response → UI` },
       { t: 'h3', text: 'Why NOT delegate to core-orchestrator for PA:' },

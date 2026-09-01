@@ -30,8 +30,32 @@ pub struct BuildEvidence {
     pub session_id: String,
     pub command: String,
     pub exit_code: i32,
+    /// Whether `exit_code` is actually the BUILD's status.
+    ///
+    /// False for a pipeline or command sequence: a shell reports the exit
+    /// status of the LAST element, so `npm run build 2>&1 | tee build.log;
+    /// echo "EXIT:$?"` exits 0 because `echo` did — whatever the build did.
+    /// That form was recommended by this gate's own error message, so a failed
+    /// build was recorded as exit 0 and certified as passing. P0 made this gate
+    /// mandatory, which turned a dormant hole into an active one. Found by the
+    /// P0 post-phase audit (F-23).
+    pub exit_code_attributable: bool,
     pub recorded_at: Instant,
     pub kind: BuildEvidenceKind,
+}
+
+/// Whether a shell command's exit status belongs to the command we classified.
+///
+/// Conservative: any pipeline or sequencing operator makes the status belong to
+/// something else. Quoting is not parsed — a false "unattributable" costs the
+/// agent one plain re-run, while a false "attributable" certifies an unbuilt
+/// artifact.
+pub fn exit_code_is_attributable(command: &str) -> bool {
+    !command.contains('|')
+        && !command.contains(';')
+        && !command.contains("&&")
+        && !command.contains("||")
+        && !command.contains('\n')
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,6 +172,7 @@ pub fn record(session_id: &str, command: &str, exit_code: i32) {
         session_id: session_id.to_string(),
         command: command.chars().take(200).collect(),
         exit_code,
+        exit_code_attributable: exit_code_is_attributable(command),
         recorded_at: Instant::now(),
         kind,
     };
@@ -241,5 +266,51 @@ mod tests {
         let sid = "test-skip-session";
         record(sid, "ls -la", 0);
         assert!(most_recent_build(sid).is_none());
+    }
+}
+
+#[cfg(test)]
+mod attribution_tests {
+    use super::exit_code_is_attributable;
+
+    /// Regression for the P0 post-phase audit finding F-23.
+    ///
+    /// This is the exact form the gate's own error message used to recommend.
+    /// Its exit status is `echo`'s, which is always 0 — so a FAILED build was
+    /// recorded as a pass, and P0 made that gate mandatory.
+    #[test]
+    fn the_recommended_pipeline_form_is_not_attributable() {
+        assert!(!exit_code_is_attributable(
+            "npm run build 2>&1 | tee build.log; echo \"EXIT:$?\""
+        ));
+    }
+
+    #[test]
+    fn pipelines_and_sequences_are_not_attributable() {
+        for command in [
+            "cargo build | tee out.log",
+            "npm run build; echo done",
+            "npm run build && npm test",
+            "cargo test || true",
+            "npm run build
+cargo build",
+        ] {
+            assert!(
+                !exit_code_is_attributable(command),
+                "{command} reports someone else's exit status"
+            );
+        }
+    }
+
+    #[test]
+    fn a_plain_command_is_attributable() {
+        for command in [
+            "npm run build",
+            "cargo test --all-targets",
+            "go build ./...",
+            "npm run build 2>&1",
+        ] {
+            assert!(exit_code_is_attributable(command), "{command} should count");
+        }
     }
 }

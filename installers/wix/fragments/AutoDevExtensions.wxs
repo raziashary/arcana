@@ -5,7 +5,7 @@
 
   This fragment adds:
     1. A custom install condition that requires Windows 10 1809+ (build 17763)
-    2. A firewall exception for AutoDev (localhost MCP server on port 8767)
+    2. (removed — the firewall exception for the deleted MCP server)
     3. Start Menu shortcut with proper icon + App User Model ID
     4. Registry entries for the .autodev file association
     5. Environment variable %AUTODEV_HOME% pointing to the install dir
@@ -14,8 +14,7 @@
   WiX v4 syntax — use `wix.exe build` or Tauri's bundled WiX runner.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
-     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util"
-     xmlns:fw="http://wixtoolset.org/schemas/v4/wxs/firewall">
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
   <Fragment>
 
@@ -66,20 +65,13 @@
 
     </ComponentGroup>
 
-    <!-- ─── Firewall exception (Windows Firewall) ─────────────────────────── -->
-    <ComponentGroup Id="AutoDevFirewall" Directory="INSTALLDIR">
-      <Component Id="FirewallException" Guid="D4E5F6A7-B8C9-0123-DEF0-234567890123">
-        <fw:FirewallException
-          Id="AutoDevMcpServer"
-          Name="AutoDev MCP Server"
-          Description="Allows AutoDev MCP server to communicate on localhost (port 8767)"
-          Port="8767"
-          Protocol="tcp"
-          Profile="all"
-          Scope="localSubnet"
-          IgnoreFailure="yes" />
-      </Component>
-    </ComponentGroup>
+    <!-- The Windows Firewall exception that used to live here has been REMOVED.
+         It opened TCP 8767 with Profile="all" and Scope="localSubnet" — not even
+         localhost-only — for AutoDev's in-process MCP server. That server was
+         deleted in P0 (it was an unauthenticated local endpoint exposing bash,
+         write_file and spawn_subagent), so every install was punching a hole in
+         the firewall for a service that no longer exists. AutoDev listens on no
+         port; all of its network traffic is outbound. -->
 
   </Fragment>
 

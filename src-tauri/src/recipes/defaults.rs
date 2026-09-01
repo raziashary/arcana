@@ -475,12 +475,12 @@ Detect the project manifest IN THIS ORDER:
 Always run the validate command with the structured EXIT echo so the
 supervisor / qc-dispatcher can prove the build was actually executed:
 ```
-bash('<validate-cmd> 2>&1 | tee build.log; echo "EXIT:$?"')
+bash('<validate-cmd>')
 ```
 Examples:
-- bash('npm run build 2>&1 | tee build.log; echo "EXIT:$?"')
-- bash('uv run pytest 2>&1 | tee build.log; echo "EXIT:$?"')
-- bash('cargo test 2>&1 | tee build.log; echo "EXIT:$?"')
+- bash('npm run build')
+- bash('uv run pytest')
+- bash('cargo test --all-targets')
 
 The literal `EXIT:N` line must appear in the bash tool's output in the
 SAME tick as the `update_task_status(id, 'qc_review', ...)` call. Calling
@@ -615,7 +615,7 @@ Spawn ONLY when the task requires:
 NEVER spawn for: single-file edits, tasks already in progress, pure code generation
 where the target file is already known.
 When spawning: pass a precise system_prompt and task_description. Wait for result.
-Always include __depth in every tool call (injected in your [AUTODEV WORKSPACE] header)."#,
+Your nesting depth is tracked by AutoDev itself — you do not pass it."#,
             universal_env_bootstrap()
         ),
     }
@@ -702,7 +702,7 @@ build-command bash invocation has appeared in the recent tool history
 2. Install if node_modules/ is absent: npm install (or pnpm / yarn).
 3. Build with EXIT capture (Doc 09 T2.2 — the exact format the supervisor
    recipe inspects):
-     bash('npm run build 2>&1 | tee build.log; echo "EXIT:$?"')
+     bash('npm run build')
    Echo the EXIT line back to the dispatcher in the SAME turn as the
    `update_task_status(id, 'qc_review', ...)` call. Do NOT call
    update_task_status before you have the EXIT line.
@@ -835,7 +835,7 @@ Planning:   planner — YAML DSL for multi-step plans. Key actions for workers:
 ## Subagent Protocol (use sparingly)
 Spawn ONLY when: >3 files to read before writing, cross-domain work, or parallel verification.
 NEVER for: single-component edits, tasks already in progress, known target files.
-Always include __depth in every tool call (injected in your [AUTODEV WORKSPACE] header)."#,
+Your nesting depth is tracked by AutoDev itself — you do not pass it."#,
             universal_env_bootstrap()
         ),
     }
@@ -949,7 +949,7 @@ Planning:   planner — claimItem · createSubplan · updateStep · submitForQC 
 ## Subagent Protocol
 Spawn ONLY when: multi-file infra audit across >3 files, or parallel validation.
 NEVER for: single-file config edits.
-Always include __depth in every tool call (injected in your [AUTODEV WORKSPACE] header)."#,
+Your nesting depth is tracked by AutoDev itself — you do not pass it."#,
             universal_env_bootstrap()
         ),
     }
@@ -1124,7 +1124,7 @@ Planning:   planner — claimItem · createSubplan · updateStep · submitForQC 
 ## Subagent Protocol
 Spawn ONLY when: >3 files to read before writing, or parallel roundtrip testing of multiple tools.
 NEVER for: single-tool additions with a clear target file.
-Always include __depth in every tool call (injected in your [AUTODEV WORKSPACE] header)."#,
+Your nesting depth is tracked by AutoDev itself — you do not pass it."#,
             universal_env_bootstrap()
         ),
     }
@@ -1289,7 +1289,7 @@ Planning:   planner — claimItem · updateStep · submitForQC · getPlan
 ## Subagent Protocol
 Spawn ONLY when: scanning >3 large files for dead code simultaneously (parallel grep).
 NEVER for: single-file lint fixes or import removal.
-Always include __depth in every tool call (injected in your [AUTODEV WORKSPACE] header)."#,
+Your nesting depth is tracked by AutoDev itself — you do not pass it."#,
             universal_env_bootstrap()
         ),
     }
@@ -1946,7 +1946,7 @@ If any EXIT line is non-zero, mark the epic build_failed with the
 captured install.log content.
 
 ### Step 3 — Build (when there is a build step)
-For Node ecosystems: bash('npm run build 2>&1 | tee build.log; echo "EXIT:$?"').
+For Node ecosystems: bash('npm run build').
 If EXIT != 0, mark the epic build_failed and STOP. Same for any other
 ecosystem that has an explicit build step.
 

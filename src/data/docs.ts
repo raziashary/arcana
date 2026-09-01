@@ -52,7 +52,7 @@ export const SECTIONS: DocSection[] = [
         ['Memory system', '3-tier episodic/semantic/procedural with context scoring', 'live'],
         ['Agent orchestration', '21 FSMs + A2A protocol via core-orchestrator', 'live'],
         ['AUTODEV.md system', 'SQLite-backed, editable from UI', 'live'],
-        ['MCP native', 'rmcp crate — GitHub, Slack, custom MCP servers', 'beta'],
+        ['MCP servers', 'External servers can be registered and health-checked', 'planned'],
         ['Skills & Recipes', 'Reusable YAML workflows with cron scheduling', 'live'],
         ['Cost tracking', 'Real-time token spend per session per agent', 'live'],
         ['Git integration', 'git2-rs with worktree isolation per task', 'live'],
@@ -68,7 +68,7 @@ styling        = "Tailwind CSS 3"
 orchestrator  = "Python 3.13 + FastAPI + litellm"
 memory        = "Python 3.13 + mem0"
 cache         = "Redis 7+ (standalone binary)"
-mcp_client    = "rmcp crate (Rust-native)"
+mcp_client    = "none yet — external servers are health-checked only"
 git           = "git2-rs (libgit2)"` },
     ],
   },
@@ -90,7 +90,7 @@ git           = "git2-rs (libgit2)"` },
                 ↓
           Built-in tools (read_file, write_file, bash, git2-rs)
                 ↓
-          MCP clients (GitHub MCP, Slack MCP) via rmcp crate
+          External MCP servers — registered and health-checked, not yet called
                 ↓
           Response → UI` },
       { t: 'h2', text: 'Worker Mode Path' },
@@ -106,7 +106,7 @@ git           = "git2-rs (libgit2)"` },
       { t: 'h2', text: 'Module Map' },
       { t: 'table', headers: ['Layer', 'Module', 'Purpose'], rows: [
         ['Rust', 'agent/', 'Tool execution loop, engine, context building'],
-        ['Rust', 'mcp/', 'MCP client via rmcp, tool discovery'],
+        ['Rust', 'mcp/', 'Liveness probes for external MCP servers'],
         ['Rust', 'recipes/', 'YAML parser, cron scheduler, recipe runner'],
         ['Rust', 'git/', 'git2-rs bindings, checkpoint system'],
         ['Rust', 'graph/', 'Code knowledge graph, tree-sitter extraction'],
