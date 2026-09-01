@@ -91,3 +91,10 @@ dump.rdb
 src-tauri/Cargo.lock
 src-cli/Cargo.lock
 src-shared/Cargo.lock
+
+# The retired Python sidecar / submodule, kept on disk as the reference source
+# for capabilities still marked PORT. It is a live git repo with its own history
+# and its own uncommitted changes, and its removal is P8's job, gated by TG8-02
+# ("the deletion phase cannot complete while any PORT capability is unported").
+# Ignored here so 28k untracked files cannot be swept into a commit meanwhile.
+submodules/
