@@ -22,7 +22,12 @@ build_venv/
 # Rust
 target/
 **/*.rs.bk
-Cargo.lock
+# Cargo.lock IS committed — see below. Left here as a marker so nobody
+# re-adds the ignore:
+#   AutoDev is an application, not a library. Without a committed lockfile CI
+#   resolves dependencies fresh on every run ("Locking 766 packages to latest
+#   compatible versions"), so a build is not reproducible and an upstream
+#   release can turn CI red with no change on our side.
 
 # Node/NPM
 node_modules/
@@ -79,3 +84,10 @@ dump.rdb
 # The DER intermediate the keygen runbook produces. Public half only, so not
 # a leak — but it is a stray build artifact, not source.
 *.der
+
+# Stale per-member lockfiles. src-tauri and src-cli are members of the ROOT
+# workspace, so cargo only ever reads /Cargo.lock; a lockfile inside a member
+# is a leftover from when they were separate workspaces and is misleading.
+src-tauri/Cargo.lock
+src-cli/Cargo.lock
+src-shared/Cargo.lock

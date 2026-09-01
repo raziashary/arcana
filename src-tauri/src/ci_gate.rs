@@ -261,6 +261,58 @@ mod tests {
         }
     }
 
+    /// A declared bundle resource must actually be IN the repository.
+    ///
+    /// `bundle.resources` listed `resources/sidecars` — 225 MB of Python that
+    /// exists only on a developer machine and is untracked. Every clean
+    /// checkout therefore failed `tauri_build::build()` with
+    /// `resource path 'resources/sidecars' doesn't exist`, so CI was
+    /// structurally incapable of passing and had been red on `main` for months.
+    ///
+    /// A gate that can never pass carries exactly as little signal as one that
+    /// can never fail, and it is worse in one way: it trains everyone to ignore
+    /// red. Found by actually running CI after the P0 gate work.
+    #[test]
+    fn every_declared_bundle_resource_exists_and_is_tracked() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let conf = std::fs::read_to_string(manifest.join("tauri.conf.json"))
+            .expect("read tauri.conf.json");
+        let parsed: serde_json::Value = serde_json::from_str(&conf).expect("parse tauri.conf.json");
+
+        let mut declared: Vec<String> = Vec::new();
+        for key in ["resources", "externalBin"] {
+            match &parsed["bundle"][key] {
+                serde_json::Value::Array(items) => {
+                    declared.extend(items.iter().filter_map(|v| v.as_str().map(str::to_owned)));
+                }
+                serde_json::Value::Object(map) => {
+                    declared.extend(map.keys().cloned());
+                }
+                _ => {}
+            }
+        }
+
+        for rel in declared {
+            let path = manifest.join(&rel);
+            assert!(
+                path.exists(),
+                "tauri.conf.json declares bundle path `{rel}`, which does not exist.                  The build fails on any machine without it."
+            );
+
+            // Existing locally is not enough — CI checks out the repository.
+            let tracked = std::process::Command::new("git")
+                .args(["ls-files", "--error-unmatch", &rel])
+                .current_dir(manifest)
+                .output();
+            if let Ok(out) = tracked {
+                assert!(
+                    out.status.success(),
+                    "tauri.conf.json declares bundle path `{rel}`, which exists here but                      is NOT tracked by git. A clean checkout cannot build: this is exactly                      how `resources/sidecars` kept CI red."
+                );
+            }
+        }
+    }
+
     /// TG0-04 `[security]`, committed-tree half — no secret or stray artifact
     /// in the repository.
     ///
