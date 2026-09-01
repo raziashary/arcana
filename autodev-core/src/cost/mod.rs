@@ -1,3 +1,4 @@
+pub mod pricing;
 // Cost tracking module.
 // Calculates and records token usage and USD cost per message.
 
