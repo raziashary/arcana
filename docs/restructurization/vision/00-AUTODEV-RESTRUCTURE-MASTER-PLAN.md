@@ -42,6 +42,39 @@ Handed over by Razi on 2026-08-31, verbatim in intent:
 | 12 | The worker-side capabilities — escalation, dynamic routing, worker↔worker chat and more — **are good and stay**; sweep them | New **M-31…M-34**, new **ADR-02-06**, grounding workstream `G9` |
 | 13 | Sweep **every tool** handed to workers and to the PA in dev mode | Grounding workstream `G10` — 44 tool modules, per-consumer registration matrix |
 
+**Amended by Razi, 2026-09-01 (third pass) — the two endings.**
+
+This pass changes the *shape of the programme*, not merely its content. AutoDev now
+ships in **two rollouts**, and the first one is not the standalone application.
+
+> **Ending 1.** *"Wired to AutoDesign and can ingest a PDF, convert it to HTML + CSS,
+> possibly TypeScript and React, then do changes and adaptation on that."*
+>
+> **Ending 2.** *"Able to run as a standalone programming application as well."*
+>
+> *"The first one need to come first, the second one is the second rollout."*
+
+| # | Direction | Effect on this plan |
+|---|---|---|
+| 14 | **Two rollouts, in order.** R1 = *"the backend is ready, wire it to AutoDesign."* R2 = *"the entire application is ready for usage."* | The build sequence is re-cut around the two endings. Nothing is "deferred"; every phase gets a real slot in one rollout or the other |
+| 15 | **Ingestion is pixel-by-pixel, and the existing algorithm is not good enough.** *"Visually it looks okay but in reality pixel by pixel wise is not, so we need a tool here that can detect that and do refinements"* | A **fidelity** phase is created with its own detection tooling. Per-pixel diff, SSIM and per-layer maximum deviation — Razi confirmed "everything you just said" |
+| 16 | **PDF ingestion as well**, not PSD alone — *"we already have the algorithm in psdconversions, so why not?"* | Ingestion covers PDF→PSD, PDF→HTML and PSD→HTML. The v4.7 four-phase operator-list pipeline is the source |
+| 17 | **Semantic components where HTML and CSS run out** — *"fills in where HTML and CSS cannot handle it with the code limitations"* | Bounded, not open-ended: the converter's own fidelity table already enumerates what CSS **cannot** express. TypeScript/React is the escape hatch for exactly those rows |
+| 18 | **Export is a first-class capability** — webpage, PDF, and back to PSD | New phase. The PSD writer already exists in the source pipeline (`writePsd`, shape layers with `vectorMask`/`vectorFill`, type layers) |
+| 19 | **Adaptation is a deterministic TOOL; the fleet is only its executor** — *"the parameter it accepts is the target size and ratio, and the entire tool does the calculation and stuff and the LLM/AutoDev fleet here is only the executor of that tool"* | This is a **doctrine ruling**, not a feature note. Adaptation geometry is code, not model reasoning. It lands under PART 2's deterministic/organ split on the **deterministic** side |
+| 20 | **Changes: there is no prior algorithm** — *"if we can build it from scratch then we can tune and reverse engineer it as well to build for changes"* | Grounded and confirmed: the pipeline **constructs** PSDs from nothing (Bezier `vectorMask` + `vectorFill` shape layers, editable type layers, pixel layers). Construction reversed is mutation |
+| 21 | **Memory is not optional for R1** — *"the agent needs proper guidance and memory as well, so memory is a no brainer to be done"* | `P3-F` returns to the critical path. It had been deferred; that deferral is withdrawn |
+| 22 | **Gemini is the primary provider** — `gemini-3.5-flash` and the other 3.5 flagship models. OpenAI and Anthropic still ship in R1 | Reverses the earlier "Anthropic first" narrowing. **Grok/xAI is removed from the set entirely** (direction 22a below) |
+| 22a | **Providers are Anthropic, OpenAI, Google — three, not four** — *"provider only remove grok, leave openai anthropic and google"* | Supersedes answer **#3** in the first table above. `P2-07` struck; `GAP-02` closed as WONTFIX |
+| 23 | **The sidecar dies before handover** — *"we dont want them to have an unused sidecar on the backend"* | `P8` moves **into R1, before the handover point**. Feasible: `OrchestratorProbe` already has a null implementation (`NoOrchestrator`) from P1, and `skip_sidecars` already exists. Its one real dependency is `P3-F` memory, which replaces `memory-mcp-server` |
+| 24 | **AutoDesign's Forge is not our concern** — *"do not worry on AutoDesign forge, thats on their side"* | Removed from this plan's risk surface. AutoDev's `submodules/core-orchestrator` is a **different instance** from AutoDesign's, and deleting ours does not touch theirs |
+| 25 | **Write the unwritten phases now** — *"for the phases that has no tasks, write them down now, explore it properly now rather than later"* | Overrides the MDP `§11` position that late task lists avoid staleness. Full breakdowns for P5–P9 are authored up front; `§0.12` re-reading at phase start remains the staleness guard |
+
+**The consequence for PART 6 (Build sequence).** The old single-track P0→P9 ordering is
+replaced by a two-rollout sequence. See the MDP `§5` phase table for the authoritative
+ordering; this document states *why* the shape changed, the MDP states *what runs when*.
+
+
 ## How to read this document
 
 - **Part 1** is the thesis, the invariants, and the reconciliation against the old master plan. Read it first; everything else assumes it.

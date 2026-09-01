@@ -292,7 +292,7 @@ Razi flagged this, and it is verified rather than assumed (§0.0). **The two sub
 | # | Gap | Evidence |
 |---|---|---|
 | GAP-01 | Any MCP **client** — `rmcp` is compiled server-features-only and cannot dial out | `G12` |
-| GAP-02 | Any **xAI/Grok** provider | `G2b P-28` |
+| GAP-02 | ~~Any **xAI/Grok** provider~~ | `G2b P-28` — **CLOSED-AS-WONTFIX 2026-09-01** (razi-ruled): the provider set is Anthropic, OpenAI, Google. A gap only matters against an intended capability, and xAI is no longer one. |
 | GAP-03 | Any **prompt caching** on any provider | `G2a T1` |
 | GAP-04 | Any **embeddings or vector search** — zero hits repo-wide | `G1 §C.4 P3` |
 | GAP-05 | Any **frontend test framework** — no vitest, jest, playwright, no `test` script | `G0 §2` |
@@ -341,7 +341,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }   // src-tauri/Cargo.tom
 keyring = "2"                        // src-tauri/Cargo.toml:44
 // Linux needs D-Bus Secret Service; ABSENT in CI (ci.yml:64) → encrypted-file fallback (G-06)
 
-// HTTP — the only client, used for all four providers
+// HTTP — the only client, used for all three providers
 reqwest = { version = "0.12", features = ["json", "stream"] }
 
 // Git, graph, watchers
@@ -378,7 +378,7 @@ git2 = "0.19"; tree-sitter = "0.22"; petgraph = "0.6"; ignore; notify = "6"
 ```
 autodev-core/                       [P1]  ← new crate, extracted
   agent/{engine,context,compaction,tool_executor,permission}.rs   [P1 move, P3 rework]
-  provider/{traits,anthropic,openai,google,xai,streaming}.rs      [P1 move, P2 rework]
+  provider/{traits,anthropic,openai,google,streaming}.rs          [P1 move, P2 rework]
   memory/{db,episodic,semantic,procedural,gateway,recall,embed}.rs[P1 move, P3 rework]
   events.rs                         [P1]  ← EventSink trait: the host boundary
   db/ · graph/ · git/ · recipes/ · hooks/ · subagent/ · routing/     [P1 move]
@@ -412,31 +412,105 @@ src/                                [P6 anchor, P7 experience]
 
 # §5 · Phase table and sequencing rationale
 
-| # | Phase | Headline outcome | Depends on |
+## §5.0 · Two rollouts (Razi, 2026-09-01)
+
+AutoDev ships **twice**, and the first shipment is not the standalone application.
+
+| | Rollout | The sentence that defines it | Audience |
 |---|---|---|---|
-| **P0** | Stop the bleeding | No unverified update can install · no command returns a key · the unauthenticated `/mcp` RCE is gone · **gates can fail** · all three platforms build on PR | — |
-| **P1** | Structural | Everything shipped is in the binary · one schema owner · `autodev-core` exists · redaction restored | P0 |
-| **P2** | Providers | Four providers conform · caching measurably works · cost is honest · **spend has a ceiling** | P1 |
-| **P3** | Runtime + **design ingestion** | Context is bounded · one tool path with a real gate · a panic cannot kill the app · **a PSD becomes an adaptable IR, and reformat / rebrand / content-swap run on it** | P2 |
-| **P4** | Fleet | A task runs end to end on three OSes and lands a **build-verified, reversible** artifact the user can run | P3 |
-| **P5** | Graph | The graph is compiled, correct across updates, and **read** for context scoping | P3 |
-| **P6** | UI | The anchor is implemented · no event is lost on a tab switch · every setting persists · every surface reachable | P2 |
-| **P7** | Experience | **A new user reaches a working agent turn without documentation** | P6 |
-| **P8** | Submodule deletion | Not one line of sidecar code survives, by content **or by address** | P4 |
-| **P9** | Delivery | Signed, verified installers for Windows, Linux and macOS | P8 |
+| **R1** | **Backend for AutoDesign** | *"The backend is ready, wire it to AutoDesign."* | the AutoDesign team |
+| **R2** | **The application** | *"The entire application is ready for usage."* | end users |
 
-## Sequencing rationale
+R1 is not a subset of R2 with pieces missing — it is a **complete product with a
+different consumer**. AutoDesign supplies the UI, the file, the user and the
+Apply/Reject review surface; AutoDev supplies ingestion, fidelity, export, adaptation
+and changes, driven by a fleet with real memory. R2 then adds the parts that only
+matter when a human drives AutoDev directly: the UI, the graph, first-run experience
+and signed installers.
 
-- **P0 is security and gate-honesty first.** An unauthenticated local RCE (`/mcp`) and an updater that installs unverified binaries do not wait eight slices — ADR-03-02's own words are *"delete it first now"*. And until gates can fail, nothing later can be *proven*.
-- **macOS CI and the end-to-end harness land in P0, not P9.** R-4 identifies "macOS verified last" as release-blocking, and P4's exit gate needs the harness to exist. *(This corrects an ordering the review caught — spec `10` had put both in P9.)*
-- **All migrations land in the earliest persistence phase as one linear unit** (P1), so no later phase renumbers. The `graph/` v5 repair is part of that unit.
-- **`autodev-core` is extracted in P1, before the runtime work in P3**, so the rework lands in its final home rather than being moved afterwards. *(The review found no slice scheduled this at all.)*
-- **The run/audit ledger is built early** (P1) so every later act can stamp a run id.
-- **P6 depends only on P2**, not P3 — the UI needs providers and settings, not the fleet — so it can proceed in parallel.
-- **P8 cannot start before P4 finishes.** The sidecar is the reference oracle while porting, and `subagent/bridge.rs`'s SSE parsers are shared with `sidecar/client.rs`.
-- **The capstone is last.** P9's product proof is the headline acceptance test.
+**Nothing is deferred.** Every phase below has a slot. Where a phase was previously
+marked "deferred", it has been re-seated, not dropped.
 
----
+## §5.1 · The R1 ordering, and why each phase sits where it does
+
+| # | Phase | Why here | Tasks |
+|---|---|---|---|
+| ✅ | **P0** Stop the bleeding | done | 12 |
+| ✅ | **P1** Structural | done | 22 |
+| 1 | **P2** Providers | Everything downstream makes model calls. **Gemini primary** (`gemini-3.5-flash` + 3.5 flagship); OpenAI and Anthropic follow in the same phase | 27 |
+| 2 | **P3 A–E** Runtime | The loop that will execute every design tool: fault isolation, one tool path, bounded context. Conversion holds a full layer bitmap set for 25–35 s, so `panic = "abort"` must die **before** the design phases, not after | 29 |
+| 3 | **P3-F** Memory | *"the agent needs proper guidance and memory as well, so memory is a no brainer."* Placed before the design phases deliberately: memory changes context assembly, and every design tool built earlier would need re-testing against the change | 15 |
+| 4 | **P8** Sidecar deletion | **Moved into R1, before handover** — *"we dont want them to have an unused sidecar on the backend."* Now feasible: `OrchestratorProbe` already has a null implementation (`NoOrchestrator`) from P1, `skip_sidecars` already exists, and `P3-F` replaces `memory-mcp-server`, which was the last live dependency | 24 |
+| — | 🤝 **HANDOVER** | The AutoDesign team receives a codebase with **no sidecar in it** and a published contract. See `§5.3` | — |
+| 5 | **PD1** Ingestion | PSD **and** PDF → the IR. The v4.7 operator-list pipeline is the source | 18 |
+| 6 | **PD2** Fidelity | *"visually it looks okay but in reality pixel by pixel wise is not."* Ingestion is not done until something can **prove** it, so this follows PD1 immediately | 14 |
+| 7 | **PD3** Export | webpage · PDF · back to PSD. Needs a fidelity measure to know an export is faithful, so it follows PD2 | 15 |
+| 8 | **PD4** Adaptation | Deterministic geometry tool. Needs export to see its result and fidelity to grade it | 13 |
+| 9 | **PD5** Changes | Reverses the PSD **construction** the source pipeline already performs. Needs PD3's writer | 13 |
+| 10 | **PD6** Brand guideline | Consumes PD5's change primitives — a rebrand *is* a batch of changes driven by a guide | 9 |
+| 11 | **P4** Fleet | *"including the fleet."* Last in R1 because a fleet multiplies whatever the tools already do; multiplying unproven tools only multiplies the debugging | 30 |
+| 12 | **R1 close** | Integration, post-phase audit (`§0.2a`), contract v1 | — |
+
+## §5.2 · The R2 ordering
+
+| # | Phase | Why here | Tasks |
+|---|---|---|---|
+| 13 | **P5** Graph | The first thing the *standalone* product needs and the design path never did: context scoping over a real codebase | 21 |
+| 14 | **P6** UI | In R1 AutoDesign **was** the UI. Here AutoDev grows its own | 28 |
+| 15 | **P7** Experience | Only meaningful once there is a UI to have an experience in | 18 |
+| 16 | **P9** Delivery | Signing, installers, the capstone. **Certificate procurement has lead time — start it at R1 close, not here** | 16 |
+
+## §5.3 · The handover point, stated precisely
+
+**When:** after **P8**, before **PD1**.
+
+**Why not earlier:** Razi's ruling — the AutoDesign team must not inherit a backend
+carrying 3,867 lines of dead sidecar, 17 dead commands and a 225 MB bundle resource.
+
+**Why not later:** everything after P8 is capability the contract already describes.
+Making them wait for PD1–PD6 would idle them for the largest stretch of the programme.
+
+**What they receive:**
+
+1. A codebase with **no sidecar** — verified by content *and* by address (`P8-21`).
+2. The **capability contract** (`PD0`), written to AutoDesign's own versioned shape.
+3. A running AutoDev that answers the contract with **stubs** — every operation
+   returns a valid, correctly-shaped response before it does the real work.
+
+Point 3 is what makes the parallelism honest. A contract nobody has exercised is a
+document; a contract with a live stub behind it is an integration they can build and
+test against on day one. `PD0` is therefore scheduled **early and separately** — its
+schema half can be written and shared at any time, because it depends only on the
+operation set, which is already decided.
+
+## §5.4 · Standing sequencing rules (unchanged)
+
+Land **all migrations in the earliest persistence phase as one linear unit** — no
+later phase renumbers. Build the **run/audit ledger early** so every later act can
+stamp its run id. Sequence a phase after its data producer. Put the capstone last.
+
+## §5.5 · The full phase table
+
+| Phase | Rollout | Headline outcome | Depends on |
+|---|---|---|---|
+| **P0** | — | No unverified update installs · no command returns a key · the `/mcp` RCE is gone · gates can fail | — |
+| **P1** | — | Everything shipped is in the binary · one schema owner · `autodev-core` exists · redaction restored | P0 |
+| **P2** | R1 | Three providers conform · caching measurably works · cost is honest · **spend has a ceiling** | P1 |
+| **P3 A–E** | R1 | Context is bounded · one tool path with a real gate · subagents in-process · a panic cannot kill the app | P2 |
+| **P3-F** | R1 | Memory works and is **proven read** | P3 A–E |
+| **P8** | R1 | Not one line of sidecar code survives, by content **or** by address | P3-F |
+| **PD0** | R1 | The capability contract is published and answered by a live stub | P2 |
+| **PD1** | R1 | A PSD **or** PDF becomes an IR that describes the design exactly | P8 |
+| **PD2** | R1 | Fidelity is **measured**, not asserted — and refined until it passes | PD1 |
+| **PD3** | R1 | The IR exports to webpage, PDF and PSD | PD2 |
+| **PD4** | R1 | A design is reformatted to any target size by a **deterministic tool** | PD3 |
+| **PD5** | R1 | Text, image, position, colour and shape can be changed and written back | PD3 |
+| **PD6** | R1 | A brand guide is ingested and applied as a batch of changes | PD5 |
+| **P4** | R1 | A task runs end to end and lands a build-verified, reversible artifact | PD6 |
+| **P5** | R2 | The graph is compiled, correct across updates, and **read** for context scoping | P4 |
+| **P6** | R2 | The anchor is implemented · no event is lost · every setting persists | P5 |
+| **P7** | R2 | A new user reaches a working agent turn without documentation | P6 |
+| **P9** | R2 | Signed, verified installers for Windows, Linux and macOS | P7 |
 
 # §6 · Phase P0 — Stop the bleeding
 
@@ -649,15 +723,15 @@ src/                                [P6 anchor, P7 experience]
 
 ### P2-A · The trait
 - [ ] **P2-01** `ModelProvider` trait v2 with `Item::Opaque` and six-field `Usage` **from day one** (retrofitting means touching every adapter twice). → `UNIT-PROVEN`
-- [ ] **P2-02** `CachePolicy` with four variants — Anthropic explicit, xAI automatic, others differ. → `UNIT-PROVEN`
+- [ ] **P2-02** `CachePolicy` with three variants — Anthropic explicit, OpenAI automatic, Google differs. *(Was four; xAI struck with `P2-07`.)* → `UNIT-PROVEN`
 - [ ] **P2-03** `capabilities()` keyed by **model**, not provider. → `UNIT-PROVEN`
 - [ ] **P2-04** Anthropic adapter. → `GATE-PROVEN`
 - [ ] **P2-05** OpenAI adapter (`async-openai` tactically). → `GATE-PROVEN`
 - [ ] **P2-06** Google adapter — **fix the discarded tool arguments** (`google.rs:313` `let _args = ...`). → `GATE-PROVEN`
-- [ ] **P2-07** **xAI/Grok adapter — new** (GAP-02); OpenAI-wire-compatible with a base-URL override. → `GATE-PROVEN`
+- [x] ~~**P2-07** xAI/Grok adapter — new (GAP-02); OpenAI-wire-compatible with a base-URL override.~~ → **STRUCK 2026-09-01, razi-ruled:** *"provider only remove grok, leave openai anthropic and google."* The adapter was never built, so nothing is deleted from the tree. What existed were references — a supported-provider entry, a model→provider mapping, a model-picker group and a docs line — all now removed. `xai` and `grok` remain in `PROBED_PROVIDERS` **deliberately**: a user who already stored an xAI key must still be able to find and delete it, and dropping the id would hide that secret in their keychain rather than retire it.
 - [ ] **P2-08** Honour `max_tokens` on OpenAI and Google (silently dropped today). → `UNIT-PROVEN`
-- [ ] **P2-09** Parallel tool calls on all four; Anthropic needs **all** results in one user message. → `GATE-PROVEN`
-- [ ] **P2-10** `StopReason::MaxTokens` distinguishable on all four. → `GATE-PROVEN`
+- [ ] **P2-09** Parallel tool calls on all three; Anthropic needs **all** results in one user message. → `GATE-PROVEN`
+- [ ] **P2-10** `StopReason::MaxTokens` distinguishable on all three. → `GATE-PROVEN`
 - [ ] **P2-11** Delete `ollama.rs` (506 LOC), 10 sites in 8 files, drop `ollama-rs`, and the 8 frontend doc references. → `CODE-PRESENT`
 
 ### P2-B · Caching — alarm before cache
@@ -665,13 +739,13 @@ src/                                [P6 anchor, P7 experience]
 - [ ] **P2-13** One prefix builder, ordered maps (`BTreeMap`/`preserve_order`) — Anthropic needs a 100% byte match. → `UNIT-PROVEN`
 - [ ] **P2-14** Remove volatile content from the system prompt (it is not byte-stable today). → `UNIT-PROVEN`
 - [ ] **P2-15** Per-model cache minimums in `capabilities()`; warn when the prefix falls short (**no provider errors below the minimum**). → `UNIT-PROVEN`
-- [ ] **P2-16** Wire caching on all four. → `BENCH-PROVEN`
+- [ ] **P2-16** Wire caching on all three. → `BENCH-PROVEN`
 
 ### P2-C · Cost and spend
 - [ ] **P2-17** Handle `message_start` in streaming — **input tokens are 0 for all three cloud providers today**. → `UNIT-PROVEN`
 - [ ] **P2-18** Per-model price table with **no silent fallback** — an unknown model is an explicit error. *(The `_ => (1.0, 3.0)` fallback catches 7 of 11 models.)* → `UNIT-PROVEN`
 - [ ] **P2-19** Provider-neutral usage normalisation — **Anthropic excludes cached tokens from `input`; OpenAI and Gemini include them.** → `UNIT-PROVEN`
-- [ ] **P2-20** Handle the 200k price cliffs (Google Pro, all xAI models). → `UNIT-PROVEN`
+- [ ] **P2-20** Handle the 200k price cliff (Google Pro). *(The xAI half went with `P2-07`.)* → `UNIT-PROVEN`
 - [ ] **P2-21** **M-42 — daily spend ceiling in the provider layer**, the one place every call passes. → `GATE-PROVEN`
 - [ ] **P2-22** **M-42 — global kill switch**; exceeding the cap **pauses the fleet and surfaces it**. → `SMOKE-PROVEN`
 
@@ -684,7 +758,7 @@ src/                                [P6 anchor, P7 experience]
 - [ ] **P2-28** Create the dev `.env` + integration-test harness that reads it. **The harness is never linked into the app.** → `UNIT-PROVEN`
 
 ### Smoke — S2
-- [ ] **S2-01** A turn completes on each of the four providers.
+- [ ] **S2-01** A turn completes on each of the three providers.
 - [ ] **S2-02** A 5-turn session shows non-zero `cached_read` from turn 2.
 - [ ] **S2-03** Session cost matches the provider's own reported usage.
 - [ ] **S2-04** With the keychain empty and every provider env var set, the app **refuses to run a turn**.
@@ -692,7 +766,7 @@ src/                                [P6 anchor, P7 experience]
 
 **Exit.** S2 → `TG-P2` → matrix → progress → no-stale → commit.
 
-**Narrative success criterion.** *A newcomer can enter a key for any of the four providers, watch it validate, send five messages, and see in the cost panel that turns 2–5 cost a fraction of turn 1 — the first observable proof that caching works. And they can set a daily cap and watch it actually stop.*
+**Narrative success criterion.** *A newcomer can enter a key for any of the three providers, watch it validate, send five messages, and see in the cost panel that turns 2–5 cost a fraction of turn 1 — the first observable proof that caching works. And they can set a daily cap and watch it actually stop.*
 
 ---
 
@@ -758,44 +832,34 @@ src/                                [P6 anchor, P7 experience]
 - [ ] **P3-43** Fix the seven inherited defects rather than porting them (query-independent semantic recall · query-ignoring cache key · always-throwing HITL writer · unfiltered procedural recall · unscoped episodic recall · inert negative cache · uninvalidated semantic cache). → `UNIT-PROVEN`
 - [ ] **P3-44** Memory is **provably read** — a recalled memory appears in the outbound prompt bytes (INV-8). → `GATE-PROVEN`
 
-### P3-G · Design ingestion and adaptation — the AutoDesign endgame
+### P3-G · Design ingestion — ~~a sub-section~~ → **PROMOTED to phases PD0–PD6**
 
-**Added 2026-09-01** on Razi's direction: *"the ending is wiring AutoDev to AutoDesign."*
-Sized in `_verify/AUTODESIGN-INTEGRATION-RESEARCH.md`; the conversion half is already
-`SPIKE-PROVEN` against two real PSDs. IDs continue from P3-44 and are never renumbered (§1).
+⚠ **Superseded 2026-09-01, razi-ruled.** This was written as a ten-task sub-section of P3.
+Razi's third pass expanded the scope well past what a sub-section can hold — pixel-level
+fidelity detection with its own refinement tooling, PDF ingestion alongside PSD, export to
+three formats including back to PSD, adaptation as a **deterministic tool**, a change
+system reverse-engineered from the source pipeline's PSD construction, and brand-guide
+ingestion. That is **88 tasks across seven phases**, not a lettered group.
 
-**The one architectural commitment.** The converter's output is 17–25 MB of embedded base64
-and **cannot enter a model's context**. The layer array is the intermediate representation —
-`psdtohtml_architecture.md`: *"Everything downstream — PSD, HTML, SVG, React, Flutter — is
-just a different serialization of that same structured data."* **The agent adapts the IR;
-HTML is one output serializer.** Inverting this makes the feature impossible, so `P3-46`
-precedes every adaptation task rather than following them.
+The work moved to **`§10.5`, phases PD0–PD6**. Task IDs are **not** renumbered (`§1`):
 
-- [ ] **P3-45** Vendor `ag-psd@30.1.0` and the PSD→HTML core into the renderer. **No CDN script survives** — the CSP is `script-src 'self' blob:`, which blocks all four today. Google Fonts is already permitted (`style-src`/`font-src`) and stays. → `GATE-PROVEN`
-- [ ] **P3-46** **The layer IR** — a second serializer emitting structured JSON from the same walk that emits HTML: bounds, fonts, sizes, colors, tracking, `styleRuns`, blend modes, opacity, group nesting. The agent-facing format. → `UNIT-PROVEN`
-- [ ] **P3-47** Translate PSD's `U+0003` point-text separator to a line break. It renders as a visible glyph box today (*"Minggu␃30 Des"*), observed in both spike orientations. → `UNIT-PROVEN`
-- [ ] **P3-48** An unresolvable font is **reported**, never silently substituted. `Gimbal Extended` and `Bruce Forever` fall back to `sans-serif` today with no warning, losing the design's display typography while appearing to succeed. **The silence is the defect, not the fallback.** → `GATE-PROVEN`
-- [ ] **P3-49** Conversion is a registered agent tool with **bounded** output (`P3-29`), returning the IR and an artifact handle — never the 17 MB document. → `GATE-PROVEN`
-- [ ] **P3-50** **Adaptation A — reformat across aspect ratios.** Reposition and rescale layers onto a new canvas with per-layer anchor/safe-area rules. Layout reasoning, not substitution; the hardest of the three. → `SMOKE-PROVEN`
-- [ ] **P3-51** **Adaptation B — rebrand and content swap.** Palette, logo and type substitution plus text replacement that **preserves `styleRuns`** (per-character styling is real in these files — the spike found a three-run layer). → `SMOKE-PROVEN`
-- [ ] **P3-52** **Brand-guide input** — a real input format for *what to rebrand to*, not a prompt string. AutoDesign's premise is that findings *"cite the brand guide they came from"*, which a free-text instruction cannot satisfy. → `UNIT-PROVEN`
-- [ ] **P3-53** **Publish the capability contract** AutoDev exposes, written to AutoDesign's existing versioned shape (`@airs/auto-design-capability-contracts`). **AutoDesign is owned elsewhere (Razi, 2026-09-01)**, so this seam is a deliverable, not a byproduct — without it the two halves have nothing to build against. AutoDev does **not** implement `source.psd.reference` or `integration.invoke`; those are AutoDesign's G3B and G6. → `DOC-GATE` · `UNIT-PROVEN`
-- [ ] **P3-54** Conversion runs **inside** fault isolation (`P3-01`…`P3-04`). 25–35 s of canvas work over 30–45 MB holding a full layer bitmap set is where an OOM or panic actually happens, and `panic = "abort"` today takes the whole app with it. → `SMOKE-PROVEN`
+| Old | New | State |
+|---|---|---|
+| `P3-45` vendor `ag-psd`, no CDN | `PD1-01` | ✅ **done** — pinned `30.1.0`, bundled by Vite |
+| `P3-46` the layer IR | `PD1-02` | ✅ **done** — `src/design/ir.ts`, `assertNoPixels` |
+| `P3-47` `U+0003` → line break | `PD1-03` | ✅ **done** — falsified |
+| `P3-48` report unresolved fonts | `PD1-04` | ✅ **done** — `resolveFont` returns three states |
+| `P3-49` conversion as an agent tool | `PD1-18` · `PD4-11` · `PD5-13` | struck here |
+| `P3-50` reformat across aspect ratios | **`PD4`** (13 tasks) | struck here |
+| `P3-51` rebrand + content swap | **`PD5`** + **`PD6`** (22 tasks) | struck here |
+| `P3-52` brand-guide input | **`PD6-01`**…`PD6-02` | struck here |
+| `P3-53` publish the capability contract | **`PD0`** (6 tasks) | struck here |
+| `P3-54` conversion under fault isolation | `PD1` exit condition; `P3-A` is now an **ordering** dependency | struck here |
 
-**Deferred to fund this**, each with an owner, recorded so nothing is dropped silently:
+The four completed tasks stay ticked — the work exists, is tested and is pushed. They are
+carried into `PD1-A` with their evidence rather than re-proven.
 
-| Deferred | Tasks | Owner | Why safe |
-|---|---|---|---|
-| **P3-F Memory** | `P3-30`…`P3-43` (14) | P3 later / P6 | sqlite-vec, ONNX vendoring, fastembed, reranker, gateway. Design→code needs none of it. `P3-44` stays as an FTS5-only stub so recall is never empty. The single largest saving in the plan. |
-| **P5 Graph** | whole phase | after the design path | graph-scoped context optimises code navigation; not a design→code dependency |
-| **Three adapters** | `P2-05`, `P2-06`, `P2-07` | P2 continued | one conforming provider proves the loop. A **sequencing** deferral — adapters are cheaper built together. |
-| **P3-D Subagents** | `P3-22`…`P3-24` | P3 continued | one conversion is one job; fan-out is not on the path |
-| **P2 polish** | `P2-20`, `P2-24`, `P2-26`, `P2-27` | P2 continued | none blocks a working turn on Windows |
-| **P4 Fleet** | whole phase | unchanged | AutoDev standalone still needs it; the wired mode would inherit AutoDesign's Apply/Reject surface |
-
-⚠ **P2 narrows rather than shrinks.** Its remit becomes *what P3-G needs*: `P2-01`…`P2-04`
-and `P2-17` (Anthropic conforming), `P2-18`/`P2-21`/`P2-22` (honest cost, real ceiling). The
-other twenty tasks are sequenced after the design path, not cancelled.
+**Smokes `S3-06`…`S3-10` likewise move** to `SD1`…`SD6` beside the phases that own them.
 
 ### Smoke — S3
 - [ ] **S3-01** A 30-turn session's input tokens do **not** grow linearly with turn count.
@@ -803,11 +867,8 @@ other twenty tasks are sequenced after the design path, not cancelled.
 - [ ] **S3-03** A subagent spawns, streams, and returns with the sidecar **not running**.
 - [ ] **S3-04** Two different questions in one session produce **different** recall sets.
 - [ ] **S3-05** With the embedding model deleted, recall still returns results and reports itself degraded.
-- [ ] **S3-06** A real PSD converts inside AutoDev with **no network fetch** — vendored libraries only — and the render matches the source design.
-- [ ] **S3-07** The IR round-trips: PSD → IR → HTML yields the same layer count and the same bounds as PSD → HTML directly. *(If these disagree, one of the two serializers is lying about the design.)*
-- [ ] **S3-08** A 1080×1080 design is reformatted to 1080×1920 and **every visible layer lands inside the canvas** — no layer silently off-screen.
-- [ ] **S3-09** A rebrand swaps palette and logo, and a content swap replaces text **without losing per-character styling** on a multi-`styleRun` layer.
-- [ ] **S3-10** A design using a font with no resolvable source **reports it**; the run does not present a substituted render as faithful.
+
+*(`S3-06`…`S3-10` moved to `SD1`…`SD6` with the design phases — see `§10.5`.)*
 
 **Exit.** S3 → `TG-P3` → matrix → progress → no-stale → commit.
 
@@ -878,29 +939,497 @@ other twenty tasks are sequenced after the design path, not cancelled.
 
 ---
 
-# §11 · Phases P5–P9 — summary
+# §10.5 · Rollout 1 · The design phases (PD0–PD6)
 
-Full task breakdowns are written at the start of each phase (§0.12 requires re-reading the specs at that point, and writing 400 atomic tasks now would guarantee staleness). Each carries the same structure: lettered groups, stable IDs, smoke checklist, exit line, narrative criterion.
+**Added 2026-09-01** on Razi's third-pass direction. These phases are what makes AutoDev
+the executor behind AutoDesign. They are grounded in `C:\AIRS Foundry\apps\psdconversions`
+— its `index.html` (3,202 lines, v4.7/v5.0) and its four architecture documents — and in
+the P1 spike, which converted two real ad PSDs end to end and verified them visually.
 
-| Phase | Groups | Headline tasks | Spec |
-|---|---|---|---|
-| **P5 Graph** | A canonical path · B non-destructive upsert · C incremental correctness · D graph-scoped context | One normalized DB path (four spellings → four DBs today) · stop `INSERT OR REPLACE` + cascade deleting edges graph-wide · re-cluster on incremental update · **feed context selection** (M-18) | `05` |
-| **P6 UI** | A anchor · B event lifetime · C contract · D settings · E Graph City · F reachability | 7px/fonts/tokens/light-only · session-lifetime subscription above the tab boundary · reconcile 2 missing + 47 dead commands + 10 dead listeners + 3 dead events · persist every setting · **self-host the font** (the CSP block is why the city hangs) · route or delete ~3,700 orphaned LOC | `07` |
-| **P7 Experience** | A first-run · B errors · C progress · D destructive · E coherence | The BYOK flow · **fix the two toast producers** (a two-call-site import fix, not a system to build) · honest progress + cancellation · confirm the 10 unconfirmed destructive actions · one vocabulary | `07 §7` |
-| **P8 Deletion** | A verify entry gate · B excise Rust · C **filesystem + config removal** · D relocate · E prune deps | **Entry gate: all ten ported capabilities pass with the sidecar *absent*, not merely stopped** · remove `sidecar/` (3,161 LOC) + 29 commands + `resources/sidecars` (225 MB) · **see §1.1a — this is not a `git submodule` operation** · verify **no sidecar code survives by content or by address** | `09 §4` |
+**The one architectural commitment, stated once and inherited by every phase below.**
+The converter's HTML output measured **17.41 MB** (1080×1080) and **25.27 MB** (1080×1920),
+because every layer is an embedded base64 PNG. That cannot enter a model's context. The
+source's own architecture document already ruled on it:
 
-### P8-C · Submodule removal — the correct procedure for the state we are actually in
+> *"the in-memory layer array is the universal intermediate representation … Everything
+> downstream — PSD, HTML, SVG, React, Flutter — is just a different serialization of that
+> same structured data."*
 
-Grounded in §1.1a. **The standard `git submodule deinit` → `git rm` sequence will fail here**, because there are no gitlinks in the index or in history to operate on.
+So: **the IR is the working format; every output is a serializer; every tool is an IR
+mutation.** Ingestion produces it, fidelity grades it, export serializes it, adaptation and
+changes mutate it.
 
-1. **Back up first** (§0.8). `submodules/` is 225 MB of untracked working tree with no remote copy of any local modification.
-2. Delete both stanzas from **`.gitmodules`** — this is the only *tracked* artifact, so it is a normal file edit and a normal commit.
-3. Delete **`.git/modules/submodules/`** — both object stores. ⚠️ **Skipping this is the "survives by address" failure**: the working tree goes and the repository still carries the sidecar's git objects.
-4. Delete the **`submodules/`** working tree.
-5. Delete **`src-tauri/resources/sidecars/`** and its `tauri.conf.json` `resources` entry — the 225 MB bundle resource.
-6. **No history rewrite.** Verified: the content was never committed to this repository.
-7. Assert the exit condition: no `.py` in the tree, no `.py` in any built installer, and `git ls-files | grep -i sidecar` returns nothing.
-| **P9 Delivery** | A signing · B installers · C updater · D capstone | Apple + Windows certificates (**procurement lead time — start at GO**) · working install on all three · the headline acceptance test | `09` |
+---
+
+## §10.5.0 · PD0 · The capability contract
+
+**Goal.** The AutoDesign team can build against a real, versioned, exercised surface.
+**Depends on.** P2. **Runs early and in parallel** — its schema half depends only on the
+operation set, which is decided.
+
+- [ ] **PD0-01** The operation set is **named and frozen for v0**: `ingest` · `export` · `adapt` · `change`. Four verbs, because those are the four things Razi specified and a fifth invented now is a fifth to version forever. → `DOC-GATE`
+- [ ] **PD0-02** The **IR schema is the wire payload**, published as a versioned type. Not the HTML, not the PSD bytes — see the commitment above. → `UNIT-PROVEN`
+- [ ] **PD0-03** Job semantics mirror AutoDesign's existing `CapabilityJobService`: async, terminal statuses, operation events. Conversion runs 25–35 s on a 30–45 MB input, so a synchronous contract would be wrong on the first real file. → `UNIT-PROVEN`
+- [ ] **PD0-04** An **error taxonomy** distinguishing *refused* (bad input), *failed* (we broke), and *degraded* (succeeded with loss — an unresolvable font, a rasterized blend mode). Degraded is the one that matters: it is the case the old converter reported as success. → `UNIT-PROVEN`
+- [ ] **PD0-05** **Asset transfer**: how bitmaps move between the two processes, and who owns their lifetime. → `UNIT-PROVEN`
+- [ ] **PD0-06** A **live stub** answers every operation with a valid, correctly-shaped response before any real work exists. A contract nobody has exercised is a document; a stub makes it an integration. → `SMOKE-PROVEN`
+
+**Smoke — SD0**
+- [ ] **SD0-01** A caller invokes all four operations against the stub and receives well-formed, schema-valid responses.
+
+---
+
+## §10.5.1 · PD1 · Ingestion — PSD **and** PDF
+
+**Goal.** Either source becomes one IR that describes the design exactly.
+**Depends on.** P8 (handover-clean tree). **Source.** `psdconversions` v4.7 pipeline.
+
+### PD1-A · The PSD path *(four tasks already complete, carried from P3-G)*
+- [x] **PD1-01** `ag-psd` pinned at exactly `30.1.0` and bundled locally; **no CDN script survives** the renderer CSP (`script-src 'self' blob:`). *(was `P3-45`)* → `GATE-PROVEN`
+- [x] **PD1-02** The layer IR: bounds, fonts, colours, tracking, `styleRuns`, blend modes, opacity, group nesting — with **no pixels**, enforced by `assertNoPixels`. *(was `P3-46`)* → `UNIT-PROVEN`
+- [x] **PD1-03** PSD's `U+0003` point-text separator becomes a line break. *(was `P3-47`)* → `UNIT-PROVEN`
+- [x] **PD1-04** An unresolvable font is **reported**, never silently substituted. *(was `P3-48`)* → `UNIT-PROVEN`
+- [ ] **PD1-05** **Shape layers keep their geometry.** `vectorMask` Bezier knots enter the IR as path data, not as a rasterized preview — rasterizing here forfeits SVG export (`PD3-09`) and shape edits (`PD5-06`) permanently. → `UNIT-PROVEN`
+- [ ] **PD1-06** **Layer effects are recorded even when CSS cannot express them** — drop shadow, inner shadow, stroke, outer glow, gradient overlay, bevel. The IR records what the design *has*; the serializer decides what it can *render*. Collapsing that distinction at ingestion is unrecoverable. → `UNIT-PROVEN`
+- [ ] **PD1-07** Clipping masks and clip paths enter the IR, including circular image clips. → `UNIT-PROVEN`
+- [ ] **PD1-08** Smart objects and adjustment layers are recorded with a **`rasterize-required`** marker rather than dropped. → `UNIT-PROVEN`
+
+### PD1-B · The PDF path *(ported from the v4.7 four-phase pipeline)*
+- [ ] **PD1-09** **Phase 1** — operator-list segmentation (`segmentOperatorList`, `flushSubGroup`): walk the raw drawing commands and emit sub-groups. The pipeline is built on the operator list rather than text/image extraction, and that choice is what makes native shape layers possible at all. → `UNIT-PROVEN`
+- [ ] **PD1-10** **Per-draw-op CTM tracking.** `pixelCoord = viewportTransform × pageTransform × elementTransform × localCoord`. Every draw op carries its own `ctmAtDraw`. → `UNIT-PROVEN`
+- [ ] **PD1-11** **Phase 2** — group classification and bounds (`classifyAllGroups`, `computeGroupBounds`), with clip-companion and spatial-overlap merging. → `UNIT-PROVEN`
+- [ ] **PD1-12** **Phase 3A** — shape-layer creation (`shouldUseShapeLayer`, `pdfPathToPsdVectorMask`, `createShapeLayer`). Knots in `[x,y]` order per the v4.5 correction; rectangular clips are **never** used as a `vectorMask` (they are content-area bounds, not shapes). → `UNIT-PROVEN`
+- [ ] **PD1-13** **Phase 3B** — rasterization fallback (`rasterizeForPreview`, `rasterizeVectorGroup`) for mixed content and non-solid fills. → `UNIT-PROVEN`
+- [ ] **PD1-14** **Phase 4** — text assembly with the **ten merge guards** (`mergeBlocks`): word coalescing and paragraph merge without crossing columns. → `UNIT-PROVEN`
+- [ ] **PD1-15** Image extraction via the CTM-tracked operator walk (`extractPageImages`). → `UNIT-PROVEN`
+- [ ] **PD1-16** **Position-correlated text colour** — colours matched to text by spatial proximity in the operator stream, not by index. The v4.5 change exists because index-based matching silently mis-coloured text. → `UNIT-PROVEN`
+
+### PD1-C · Shared
+- [ ] **PD1-17** **The seven guards are ported with their reasons**: canvas cap at 15,000 px, PSD limit at 30,000 px, CMYK detection (output is RGB — say so), image dedup under 5 px, full-page image skip above 90%, tiny image skip under 30 px, shape-layer fallback on mixed content. → `GATE-PROVEN`
+- [ ] **PD1-18** **One schema from either source.** A PSD-derived IR and a PDF-derived IR are the same type, and every downstream phase is written once. → `GATE-PROVEN`
+
+**Smoke — SD1**
+- [ ] **SD1-01** A real PSD converts inside AutoDev with **no network fetch** and the render matches the source.
+- [ ] **SD1-02** A real PDF converts to the same IR type, and to a PSD Photoshop opens without repair.
+- [ ] **SD1-03** A design with Bezier shapes keeps them as paths — the IR contains knots, not a bitmap.
+- [ ] **SD1-04** A CMYK PDF is detected and the RGB conversion is **reported**, not silent.
+
+---
+
+## §10.5.2 · PD2 · Fidelity — measured, not asserted
+
+**Goal.** *"Visually it looks okay but in reality pixel by pixel wise is not, so we need a
+tool here that can detect that and do refinements."* **Depends on.** PD1.
+
+**Why this is its own phase.** Ingestion is not finished when it looks right; it is finished
+when something can **prove** it is right and **say where** it is not. The P1 spike is the
+cautionary case: the render looked correct, and only a per-value trace revealed a control
+character rendering as a glyph box and two fonts silently replaced.
+
+- [ ] **PD2-01** **Composite renderer** — the IR rasterized at native resolution, deterministically. → `UNIT-PROVEN`
+- [ ] **PD2-02** **Reference raster** — the source's own composite (PSD flattened image, or PDF page render at matched DPI). → `UNIT-PROVEN`
+- [ ] **PD2-03** **Per-pixel difference**, reported as a percentage of pixels outside tolerance and as a maximum channel deviation. → `UNIT-PROVEN`
+- [ ] **PD2-04** **SSIM** over the whole canvas, because a small number of badly wrong pixels and a large number of slightly wrong ones are different defects and per-pixel alone cannot tell them apart. → `UNIT-PROVEN`
+- [ ] **PD2-05** **Per-layer maximum deviation** — the metric that localises. A whole-canvas score says the conversion is 97% right; this says *which layer* owns the other 3%. → `UNIT-PROVEN`
+- [ ] **PD2-06** **Thresholds are declared numbers**, per metric and per layer kind, committed to the repository. A threshold argued at review time is not a gate. → `DOC-GATE`
+- [ ] **PD2-07** **Text carries its own tolerance.** Browser and Photoshop rasterisers differ on anti-aliasing and sub-pixel kerning by design; holding text to the shape threshold would fail every correct conversion, and a gate that fires on correct output gets switched off. → `UNIT-PROVEN`
+- [ ] **PD2-08** The report **names the worst layers in order**, with their metric and their kind. → `UNIT-PROVEN`
+- [ ] **PD2-09** **Cause localisation** — a failing layer is attributed to a candidate cause: font substitution, blend-mode fallback, effect rasterisation, transform error, colour-space shift. → `UNIT-PROVEN`
+- [ ] **PD2-10** **Refinement proposes and applies a correction**, then re-measures. → `SMOKE-PROVEN`
+- [ ] **PD2-11** **The refinement loop terminates** — bounded iterations, and it stops when a round fails to improve. An unbounded "keep fixing" loop on a 25 s conversion is an unbounded cost. → `GATE-PROVEN`
+- [ ] **PD2-12** A **regression corpus** of real designs — the `gamead` family (1080×1080, 1080×1920, 1920×1080), plus a text-heavy, an effect-heavy and a vector-heavy case. → `DOC-GATE`
+- [ ] **PD2-13** **The gate fails on a planted regression.** Falsification is the acceptance criterion for this phase, not an extra. → `GATE-PROVEN`
+- [ ] **PD2-14** **Fidelity travels with the result.** Every ingest and every export returns its score; a caller can refuse a degraded conversion. Measuring fidelity and then not returning it repeats `L-C12` — built, proven, wired to nothing. → `GATE-PROVEN`
+
+**Smoke — SD2**
+- [ ] **SD2-01** Every design in the corpus converts and scores above its declared thresholds.
+- [ ] **SD2-02** A deliberately broken conversion (font forced to fallback) is **caught**, and the report names the affected layers.
+- [ ] **SD2-03** The refinement loop improves a failing case and terminates.
+
+---
+
+## §10.5.3 · PD3 · Export — webpage, PDF, PSD
+
+**Goal.** The IR becomes any of the three outputs. **Depends on.** PD2.
+
+- [ ] **PD3-01** **IR → standalone HTML**, at parity with the source converter. → `SMOKE-PROVEN`
+- [ ] **PD3-02** Assets resolve from the store at serialization time; the IR still carries none. → `GATE-PROVEN`
+- [ ] **PD3-03** Google Fonts are linked **only** for families that resolve; nothing else is requested. → `UNIT-PROVEN`
+- [ ] **PD3-04** Unresolved fonts appear in the **export result**, not only in a log. → `GATE-PROVEN`
+- [ ] **PD3-05** **IR → TypeScript/React components.** → `SMOKE-PROVEN`
+- [ ] **PD3-06** **The semantic escape hatch is bounded by evidence, not taste.** Razi: *"semantic components that fills in where HTML and CSS cannot handle it with the code limitations."* The eligible set is exactly the source's own **⚠ Approximate** and **❌ Not Supported** rows — Dissolve, Subtract, Divide, Hard Mix, bevel/emboss/satin, pattern overlays, adjustment layers. A component is written **only** for a row on that list. → `DOC-GATE` · `GATE-PROVEN`
+- [ ] **PD3-07** The **16 CSS-native blend modes** map 1:1; the four with no equivalent rasterize, and say so. → `UNIT-PROVEN`
+- [ ] **PD3-08** Layer effects → CSS where expressible (`filter: drop-shadow`, `box-shadow`, `box-shadow: inset`, gradients); rasterize otherwise, and record which. → `UNIT-PROVEN`
+- [ ] **PD3-09** Bezier shapes export as SVG `<path>`, not as bitmaps. → `UNIT-PROVEN`
+- [ ] **PD3-10** Clip paths export as SVG `<clipPath>`. → `UNIT-PROVEN`
+- [ ] **PD3-11** **IR → PDF.** → `SMOKE-PROVEN`
+- [ ] **PD3-12** **IR → PSD** via `writePsd` — shape layers with `vectorMask`/`vectorFill`, editable type layers, pixel layers. This is the construction path the source pipeline already performs; `PD5` reverses it. → `SMOKE-PROVEN`
+- [ ] **PD3-13** **Round-trip.** PSD → IR → PSD preserves layer count, bounds, text content and style runs. The strongest single check that the IR lost nothing. → `GATE-PROVEN`
+- [ ] **PD3-14** Every export is **graded by PD2** before it is returned. → `GATE-PROVEN`
+- [ ] **PD3-15** Export size is bounded and reported; a 25 MB result is a fact the caller learns before receiving it. → `UNIT-PROVEN`
+
+**Smoke — SD3**
+- [ ] **SD3-01** One IR exports to all three formats and each scores above threshold.
+- [ ] **SD3-02** A PSD survives the round trip with its text still editable in Photoshop.
+- [ ] **SD3-03** A design using an unsupported blend mode exports correctly **and** reports the rasterisation.
+
+---
+
+## §10.5.4 · PD4 · Adaptation — a deterministic tool
+
+**Goal.** Reformat a design to a target size and ratio. **Depends on.** PD3.
+
+**Doctrine ruling (Razi).** *"The entire tool does the calculation and stuff and the
+LLM/AutoDev fleet here is only the executor of that tool."* Adaptation geometry is
+**code**. The fleet chooses *when* to adapt and to *what*; it never computes the layout.
+This sits on the deterministic side of the master plan's PART 2 split.
+
+- [ ] **PD4-01** Tool signature: target width, target height, and a ratio policy (`contain` · `cover` · `stretch-safe`). → `UNIT-PROVEN`
+- [ ] **PD4-02** **No model call inside the tool.** Enforced as a gate, not a convention. → `GATE-PROVEN`
+- [ ] **PD4-03** **Per-layer anchor model** — each layer resolves to an anchor (corner, edge, centre) derived from its position and its group. → `UNIT-PROVEN`
+- [ ] **PD4-04** **Safe areas** — margins that content must not cross in the target format. → `UNIT-PROVEN`
+- [ ] **PD4-05** Scale computation per layer kind: images cover, shapes scale, text rescales by its own rule. → `UNIT-PROVEN`
+- [ ] **PD4-06** Reposition computation honouring anchors and safe areas. → `UNIT-PROVEN`
+- [ ] **PD4-07** **Text reflow.** A headline that fits 1920 wide does not fit 1080 wide; the tool adjusts size or wraps, and reports which. → `UNIT-PROVEN`
+- [ ] **PD4-08** Hero/background fill strategy when the aspect ratio changes — extend, re-crop by focal point, or letterbox, stated per layer. → `UNIT-PROVEN`
+- [ ] **PD4-09** **No layer silently leaves the canvas.** Anything that cannot be placed is reported. Silent loss is the failure mode this phase is most exposed to: it looks like a clean adaptation. → `GATE-PROVEN`
+- [ ] **PD4-10** Group-relative transforms survive — children move with their parent. → `UNIT-PROVEN`
+- [ ] **PD4-11** The fleet invokes it as a **tool** and cannot reimplement its geometry. → `GATE-PROVEN`
+- [ ] **PD4-12** Every adaptation is graded by PD2 against the source. → `GATE-PROVEN`
+- [ ] **PD4-13** Presets for the formats actually in use: 1080×1080, 1080×1920, 1920×1080. → `UNIT-PROVEN`
+
+**Smoke — SD4**
+- [ ] **SD4-01** 1080×1080 → 1080×1920: every visible layer lands inside the canvas.
+- [ ] **SD4-02** 1920×1080 → 1080×1080: text reflows and the reflow is reported.
+- [ ] **SD4-03** The same input and target produce byte-identical output twice (determinism).
+
+---
+
+## §10.5.5 · PD5 · Changes
+
+**Goal.** Change what a design contains. **Depends on.** PD3.
+
+**Grounding (Razi).** *"There is none … the psdconversion repo has defined a way to create
+PSD from scratch and HTML CSS design from a PSD, if we can build it from scratch then we
+can tune and reverse engineer it as well to build for changes."* Confirmed in the source:
+the pipeline constructs shape layers (`vectorMask` + `vectorFill`), editable type layers
+and pixel layers from nothing. **Construction reversed is mutation.**
+
+- [ ] **PD5-01** The change primitives: text · image · position · size · colour · shape geometry · visibility. → `UNIT-PROVEN`
+- [ ] **PD5-02** **A text change preserves `styleRuns`.** The spike found a layer whose three runs alternate white and yellow; a naive replacement flattens it to one colour and nothing reports the loss. → `GATE-PROVEN`
+- [ ] **PD5-03** An image change preserves fit and crop intent. → `UNIT-PROVEN`
+- [ ] **PD5-04** Position and size changes, respecting group transforms. → `UNIT-PROVEN`
+- [ ] **PD5-05** Colour changes across fill, stroke and gradient stops. → `UNIT-PROVEN`
+- [ ] **PD5-06** Shape geometry changes on Bezier knots — available only because `PD1-05` refused to rasterize. → `UNIT-PROVEN`
+- [ ] **PD5-07** Every change is an **IR mutation and is reversible**; the inverse is computed, not remembered. → `UNIT-PROVEN`
+- [ ] **PD5-08** A **change set** is a value, applied atomically — all or none. Half-applied is worse than refused. → `UNIT-PROVEN`
+- [ ] **PD5-09** Changes write back to **PSD** through the construction path. → `SMOKE-PROVEN`
+- [ ] **PD5-10** Changes write back to HTML and PDF. → `SMOKE-PROVEN`
+- [ ] **PD5-11** **A change never silently drops a layer property.** Anything the mutation cannot carry is reported. → `GATE-PROVEN`
+- [ ] **PD5-12** Changed output is graded by PD2 — a change must not degrade untouched layers. → `GATE-PROVEN`
+- [ ] **PD5-13** The fleet invokes changes as tools. → `GATE-PROVEN`
+
+**Smoke — SD5**
+- [ ] **SD5-01** Text is replaced on a multi-run layer and every run's colour survives.
+- [ ] **SD5-02** A change is applied, written to PSD, reopened, and the change is present.
+- [ ] **SD5-03** A change set that cannot fully apply is refused whole, leaving the IR untouched.
+
+---
+
+## §10.5.6 · PD6 · Brand guideline
+
+**Goal.** Ingest a brand guide and apply it. **Depends on.** PD5.
+
+**Why it follows PD5.** A rebrand is a batch of changes driven by a document. Building it
+before the change primitives would mean building those primitives twice.
+
+- [ ] **PD6-01** **The brand-guide format** — a real input, not a prompt string. AutoDesign's premise is that findings *"cite the brand guide they came from"*, which free text cannot support. → `DOC-GATE`
+- [ ] **PD6-02** Ingest a guide into a typed value. → `UNIT-PROVEN`
+- [ ] **PD6-03** Palette mapping: source colours → brand colours, including near-matches. → `UNIT-PROVEN`
+- [ ] **PD6-04** Type mapping: source families → brand families, reusing `PD1-04`'s resolution reporting. → `UNIT-PROVEN`
+- [ ] **PD6-05** Logo and asset substitution. → `UNIT-PROVEN`
+- [ ] **PD6-06** A rebrand **compiles to a `PD5` change set** and is applied by the same path. → `GATE-PROVEN`
+- [ ] **PD6-07** **Every applied rule cites the guide rule it came from.** This is the whole reason AutoDesign wants a guide rather than an instruction. → `GATE-PROVEN`
+- [ ] **PD6-08** An unmappable rule is **reported, never guessed**. A plausible invented colour is worse than a refusal, because it ships. → `GATE-PROVEN`
+- [ ] **PD6-09** Rebranded output is graded by PD2. → `GATE-PROVEN`
+
+**Smoke — SD6**
+- [ ] **SD6-01** A guide is ingested and a design is rebranded; every change cites its rule.
+- [ ] **SD6-02** A guide with a rule the design cannot satisfy reports it rather than approximating.
+
+---
+
+# §11 · Phases P5–P9 — full task breakdowns
+
+**Authored 2026-09-01** on Razi's direction: *"for the phases that has no tasks, write
+them down now, so explore it properly now rather than later."*
+
+⚠ **This overrides the position previously stated here** — that late task lists avoid
+staleness. That reasoning was not wrong, and the guard it protected still stands: `§0.12`
+requires re-reading the specs at the start of every phase, and any task below that the
+code has since falsified is corrected then. What changed is the cost of *not* having the
+map: two rollouts cannot be sequenced against phases whose contents nobody has written.
+
+**P8 has moved.** It is now an **R1** phase, running before the AutoDesign handover, and
+its numbers below are **measured, not estimated** (`wc -l`, `grep -c` against the tree on
+2026-09-01).
+
+---
+
+## §11.1 · P8 · Sidecar deletion — R1, before handover
+
+**Goal.** Not one line of sidecar code survives, by content **or** by address.
+**Depends on.** `P3-F` — native memory replaces `memory-mcp-server`, the last live
+dependency. **Spec.** `09 §4`.
+
+**Measured footprint.**
+
+| | Count |
+|---|---|
+| `src-tauri/src/sidecar/` | `client.rs` 1,604 · `mod.rs` 1,270 · `sse.rs` 201 · `startup_progress.rs` 222 |
+| `src-tauri/src/commands/sidecar_commands.rs` | 570 LOC, **17** `#[tauri::command]` |
+| **Total Rust** | **3,867 LOC** |
+| `src-tauri/resources/sidecars/` | **225 MB** (`core-orchestrator`, `memory-mcp-server`) |
+| `.gitmodules` | **2** stanzas |
+| Files referencing "sidecar" | **14** |
+
+**Why this is now cheap.** `P1` already built the seam: `autodev-core` declares
+`OrchestratorProbe` and ships **`NoOrchestrator`**, a null implementation. The desktop's
+`OrchestratorClient` implements the same trait. So the excision is a **seam swap**, not a
+port. `runtime_config.skip_sidecars` already exists, which means the app has a tested path
+that never starts them.
+
+### P8-A · Verify the entry gate
+- [ ] **P8-01** `TG8-02` runs: every capability grounding marked **PORT** has a named, tested destination in the Rust tree. → `GATE-PROVEN`
+- [ ] **P8-02** The app starts, completes a turn, and runs a design conversion with `skip_sidecars = true` — **absent, not merely stopped**. → `SMOKE-PROVEN`
+- [ ] **P8-03** Native memory (`P3-F`) serves every read that `memory-mcp-server` served. → `GATE-PROVEN`
+
+### P8-B · Excise the Rust
+- [ ] **P8-04** `main.rs` binds `NoOrchestrator` in place of `OrchestratorClient`. → `CODE-PRESENT`
+- [ ] **P8-05** Delete `src-tauri/src/sidecar/` — all four modules, 3,297 LOC. → `CODE-PRESENT`
+- [ ] **P8-06** Delete `sidecar_commands.rs` and **all 17** commands. → `CODE-PRESENT`
+- [ ] **P8-07** Remove the 17 command registrations from `lib.rs`'s invoke handler; **a registration surviving its command is a compile error, which is the point** — the handler is the one place that cannot silently keep a corpse. → `CODE-PRESENT`
+- [ ] **P8-08** Remove `SidecarManager`, the watchdog and the startup-progress FSM from `main.rs` (42 references). → `CODE-PRESENT`
+- [ ] **P8-09** Remove sidecar branches from `startup_commands.rs`, `worker_commands.rs`, `budget_commands.rs`, `runtime_config.rs`, `updater/{check,download}.rs`, `mcp/mod.rs`, `logging.rs`. → `CODE-PRESENT`
+- [ ] **P8-10** Remove the sidecar events from `autodev-core/src/events.rs` — **and their frontend listeners in the same commit**, or the UI subscribes to an event nothing will ever emit. → `CODE-PRESENT`
+- [ ] **P8-11** Remove `skip_sidecars` from `RuntimeConfig`, migrating existing `runtime_config.json` files rather than failing to parse them. → `LIVE-DB-PROVEN`
+- [ ] **P8-12** Remove sidecar handling from `src-cli/src/commands/system.rs`. → `CODE-PRESENT`
+
+### P8-C · Filesystem and config removal — the correct procedure for the state we are in
+
+Grounded in `§1.1a`. **The standard `git submodule deinit` → `git rm` sequence will fail
+here**, because there are no gitlinks in the index or in history to operate on.
+
+- [ ] **P8-13** **Back up first** (`§0.8`). `submodules/` is 225 MB of untracked working tree with **no remote copy of any local modification** — and it has local modifications (`.port_allocations.json` is dirty). → `CODE-PRESENT`
+- [ ] **P8-14** Delete both stanzas from **`.gitmodules`** — the only *tracked* artifact, so a normal file edit and a normal commit. → `CODE-PRESENT`
+- [ ] **P8-15** Delete **`.git/modules/submodules/`** — both object stores. ⚠ **Skipping this is the "survives by address" failure**: the working tree goes and the repository still carries the sidecar's git objects. → `CODE-PRESENT`
+- [ ] **P8-16** Delete the **`submodules/`** working tree. → `CODE-PRESENT`
+- [ ] **P8-17** Delete **`src-tauri/resources/sidecars/`** (225 MB) and its `tauri.conf.json` `resources` entry. → `CODE-PRESENT`
+- [ ] **P8-18** Remove the `submodules/` line from `.gitignore` — an ignore rule for a path that cannot exist is a claim the reader must disprove. → `CODE-PRESENT`
+- [ ] **P8-19** **No history rewrite.** Verified: this content was never committed to this repository, so there is nothing in history to excise and no force-push to justify. → `DOC-GATE`
+
+### P8-D · Prune and prove
+- [ ] **P8-20** Drop now-unused dependencies (SSE/HTTP client paths kept only for the sidecar) from `Cargo.toml`. → `CODE-PRESENT`
+- [ ] **P8-21** **The exit assertion**: no `.py` in the tree · no `.py` in any built installer · `git ls-files | grep -i sidecar` returns nothing · `.git/modules` is gone · the binary contains no sidecar path string. → `GATE-PROVEN`
+- [ ] **P8-22** Installer size drops by ~225 MB — **measured before and after**, because "it should be smaller" is not a measurement. → `BENCH-PROVEN`
+- [ ] **P8-23** The full suite and every smoke pass with the sidecar gone. → `GATE-PROVEN`
+- [ ] **P8-24** `TG2-14`'s sibling for the sidecar: no reference survives in Rust source, `Cargo.toml`, shipped docs, or the frontend. → `GATE-PROVEN`
+
+**Smoke — S8**
+- [ ] **S8-01** A clean checkout builds with no submodule initialisation step.
+- [ ] **S8-02** The app starts, completes an agent turn and runs a design conversion — no Python process is spawned, verified by process listing.
+- [ ] **S8-03** The built installer contains no `.py` file and is ~225 MB smaller.
+- [ ] **S8-04** Memory recall works end to end with `memory-mcp-server` absent from disk.
+
+**Exit.** S8 → `TG-P8` → matrix → progress → no-stale → commit.
+
+**Narrative success criterion.** *A newcomer clones the repository, runs one build command,
+and gets a working AutoDev. Nothing asks them to initialise a submodule, no Python
+interpreter is required, and searching the tree for "sidecar" returns only history.*
+
+---
+
+## §11.2 · P5 · Graph — R2
+
+**Goal.** The graph is compiled, correct across updates, and **read** for context scoping.
+**Depends on.** P4. **Spec.** `05`.
+
+⚠ **Entry condition inherited from P1.** `graph_tools.rs` holds **27 structs, none of which
+implement `Tool`, and nothing registers them** — `TG1-01`'s registration clause is
+unsatisfied and was recorded as such rather than glossed. P5 is where that is closed.
+
+### P5-A · One canonical path
+- [ ] **P5-01** One normalized graph database path. **Four spellings produce four databases today.** → `LIVE-DB-PROVEN`
+- [ ] **P5-02** The path key is canonicalised and case-folded through the **same shared helper** as `path_lock` and checkpoint retention (`P3-16`) — three private normalisers is how the four spellings happened. → `UNIT-PROVEN`
+- [ ] **P5-03** Existing graph databases are migrated or reconciled, not orphaned. → `LIVE-DB-PROVEN`
+
+### P5-B · Non-destructive upsert
+- [ ] **P5-04** Stop `INSERT OR REPLACE` on nodes — it **cascade-deletes edges graph-wide**, so a single re-index silently discards relationships nothing will rebuild. → `LIVE-DB-PROVEN`
+- [ ] **P5-05** A real upsert: update in place, preserve edges, add what is new. → `UNIT-PROVEN`
+- [ ] **P5-06** Edge conservation is a **gate**: node count may change across a re-index, edge count may not fall without a deletion that asked for it. → `GATE-PROVEN`
+- [ ] **P5-07** The v6 ladder rung carries a backup for any destructive step (`TG1-04`). → `LIVE-DB-PROVEN`
+
+### P5-C · Incremental correctness
+- [ ] **P5-08** Re-cluster on incremental update — stale clusters after an edit are wrong answers delivered confidently. → `UNIT-PROVEN`
+- [ ] **P5-09** A changed file updates only its own subgraph. → `UNIT-PROVEN`
+- [ ] **P5-10** A deleted file removes its nodes and its dangling edges. → `UNIT-PROVEN`
+- [ ] **P5-11** A rename is a rename, not a delete plus an insert that loses history. → `UNIT-PROVEN`
+- [ ] **P5-12** Incremental and full re-index converge on the **same graph** for the same tree. The property that makes incremental trustworthy at all. → `GATE-PROVEN`
+- [ ] **P5-13** `nodes_fts` stays consistent with `nodes` across every mutation. → `UNIT-PROVEN`
+
+### P5-D · Graph-scoped context (M-18)
+- [ ] **P5-14** The graph is **read** during context selection — the capability's whole justification. → `GATE-PROVEN`
+- [ ] **P5-15** Relevance is scoped by graph distance, not by file order. → `UNIT-PROVEN`
+- [ ] **P5-16** The selection is bounded and interacts correctly with `P3-E` compaction. → `BENCH-PROVEN`
+- [ ] **P5-17** A recalled graph node **appears in the outbound prompt bytes** — the same standard `P3-44` holds memory to. → `GATE-PROVEN`
+
+### P5-E · The tools finally exist
+- [ ] **P5-18** The 27 `graph_tools.rs` structs implement `Tool`. → `UNIT-PROVEN`
+- [ ] **P5-19** They are **registered** and callable by an agent. → `GATE-PROVEN`
+- [ ] **P5-20** `TG1-01`'s registration clause closes; the readiness matrix's A1 Gates row flips. → `GATE-PROVEN`
+- [ ] **P5-21** Each tool's description is written to `P3-20`'s standard, not inherited from the 33 defective ones. → `DOC-GATE`
+
+**Smoke — S5**
+- [ ] **S5-01** Indexing the same tree twice by different path spellings produces **one** database.
+- [ ] **S5-02** Re-indexing a changed file preserves every edge not touched by the change.
+- [ ] **S5-03** Incremental and full re-index of the same tree produce identical graphs.
+- [ ] **S5-04** An agent calls a graph tool and receives a real answer.
+- [ ] **S5-05** Two different questions produce different graph-scoped context.
+
+---
+
+## §11.3 · P6 · UI — R2
+
+**Goal.** The anchor is implemented, no event is lost, every surface is reachable.
+**Depends on.** P5. **Spec.** `07`.
+
+### P6-A · The anchor
+- [ ] **P6-01** The 7px grid, type scale and token set from `ui-anchor.md`. → `DOC-GATE`
+- [ ] **P6-02** **Self-host the font.** The CSP blocks the external fetch — *this is why Graph City hangs*, not a rendering bug. → `SMOKE-PROVEN`
+- [ ] **P6-03** Dark mode: the app is light-only today. → `SMOKE-PROVEN`
+- [ ] **P6-04** Tokens are defined once and consumed everywhere; no literal hex in components. → `GATE-PROVEN`
+- [ ] **P6-05** Every surface adopts the anchor; drift is a gate failure. → `GATE-PROVEN`
+
+### P6-B · Event lifetime
+- [ ] **P6-06** The event subscription lives **above the tab boundary**, for the session — a tab switch currently drops it. → `SMOKE-PROVEN`
+- [ ] **P6-07** No event is lost across a tab switch, verified by counting emitted against received. → `GATE-PROVEN`
+- [ ] **P6-08** Reconnection replays what was missed rather than pretending it did not happen. → `UNIT-PROVEN`
+- [ ] **P6-09** An unmounted component's listener is removed — 10 dead listeners exist today. → `GATE-PROVEN`
+
+### P6-C · The command contract
+- [ ] **P6-10** Add the **2 missing** commands the frontend calls and the backend never defined. → `CODE-PRESENT`
+- [ ] **P6-11** Remove the **47 dead** commands no caller invokes. → `CODE-PRESENT`
+- [ ] **P6-12** Remove the **10 dead listeners** and **3 dead events**. → `CODE-PRESENT`
+- [ ] **P6-13** A **gate** asserting the two sides agree: every invoked command exists, every defined command is invoked. Hand-reconciling 62 mismatches once, without a gate, guarantees a 63rd. → `GATE-PROVEN`
+- [ ] **P6-14** Command argument and return types are checked, not assumed. → `GATE-PROVEN`
+
+### P6-D · Settings
+- [ ] **P6-15** Every setting persists and **hydrates on startup**. → `LIVE-DB-PROVEN`
+- [ ] **P6-16** Provider and model selection survive a restart (`P2-26`). → `SMOKE-PROVEN`
+- [ ] **P6-17** `ModelConfigsDb` is read as well as written (`P2-27`) — it is a writer with no reader today. → `GATE-PROVEN`
+- [ ] **P6-18** A setting with no effect is either wired or deleted; the UI must not offer an inert control. → `GATE-PROVEN`
+
+### P6-E · Graph City
+- [ ] **P6-19** It renders — unblocked by `P6-02`. → `SMOKE-PROVEN`
+- [ ] **P6-20** It reads the real graph from `P5`. → `SMOKE-PROVEN`
+- [ ] **P6-21** It stays interactive on a real repository's node count. → `BENCH-PROVEN`
+
+### P6-F · Reachability
+- [ ] **P6-22** Route or delete the **~3,700 orphaned LOC** in the frontend. → `CODE-PRESENT`
+- [ ] **P6-23** Every route is reachable by navigation from a cold start. → `GATE-PROVEN`
+- [ ] **P6-24** The frontend's own reachability gate, mirroring `reachability_gate.rs`. → `GATE-PROVEN`
+- [ ] **P6-25** The design surfaces (`PD1`–`PD6`) get UI — the standalone product needs what AutoDesign supplied in R1. → `SMOKE-PROVEN`
+- [ ] **P6-26** Ingestion progress is visible and cancellable for a 25–35 s conversion. → `SMOKE-PROVEN`
+- [ ] **P6-27** Fidelity scores are shown to the user, not only returned to callers. → `SMOKE-PROVEN`
+- [ ] **P6-28** Adaptation and change tools are drivable from the UI. → `SMOKE-PROVEN`
+
+**Smoke — S6**
+- [ ] **S6-01** Graph City renders and stays interactive with the font self-hosted.
+- [ ] **S6-02** Events emitted during a tab switch all arrive.
+- [ ] **S6-03** Every setting survives a restart.
+- [ ] **S6-04** Every route is reachable from a cold start.
+- [ ] **S6-05** A PSD is ingested, graded, adapted and exported entirely from the UI.
+
+---
+
+## §11.4 · P7 · Experience — R2
+
+**Goal.** A new user reaches a working agent turn without documentation.
+**Depends on.** P6. **Spec.** `07 §7`.
+
+### P7-A · First run
+- [ ] **P7-01** The BYOK flow: enter a key, see it accepted, reach a working turn. → `SMOKE-PROVEN`
+- [ ] **P7-02** The key is never echoed back — `INV-12`, already gated in P0. → `GATE-PROVEN`
+- [ ] **P7-03** First run states what AutoDev needs before it needs it. → `DOC-GATE`
+- [ ] **P7-04** No dead end: every first-run failure names its next action. → `SMOKE-PROVEN`
+
+### P7-B · Errors
+- [ ] **P7-05** **Fix the two toast producers** — a two-call-site import fix, not a system to build. → `CODE-PRESENT`
+- [ ] **P7-06** Every error surfaces once, in one place, in one voice. → `GATE-PROVEN`
+- [ ] **P7-07** A provider error says what the user can do about it. → `UNIT-PROVEN`
+- [ ] **P7-08** A degraded result (`PD0-04`) is distinguishable from a failure in the UI. → `SMOKE-PROVEN`
+
+### P7-C · Progress
+- [ ] **P7-09** Honest progress: no bar that stalls at 90%. → `SMOKE-PROVEN`
+- [ ] **P7-10** Cancellation actually cancels, threading `P3-08`'s token through. → `SMOKE-PROVEN`
+- [ ] **P7-11** Long operations report what they are doing, not merely that they are doing something. → `SMOKE-PROVEN`
+
+### P7-D · Destructive actions
+- [ ] **P7-12** The **10 unconfirmed destructive actions** are confirmed. → `GATE-PROVEN`
+- [ ] **P7-13** Each confirmation states what is lost and whether it is recoverable. → `DOC-GATE`
+- [ ] **P7-14** Undo exists where the underlying operation supports it (`git/checkpoint.rs`). → `SMOKE-PROVEN`
+
+### P7-E · Coherence
+- [ ] **P7-15** One vocabulary — worker, task, run, session mean one thing each, everywhere. → `DOC-GATE`
+- [ ] **P7-16** One interaction grammar across surfaces. → `DOC-GATE`
+- [ ] **P7-17** Empty states teach rather than apologise. → `SMOKE-PROVEN`
+- [ ] **P7-18** The capstone walkthrough runs with no documentation open. → `SMOKE-PROVEN`
+
+**Smoke — S7**
+- [ ] **S7-01** A new user with no documentation enters a key and completes a turn.
+- [ ] **S7-02** Every destructive action asks first.
+- [ ] **S7-03** A cancelled operation stops within a bounded time and says so.
+
+---
+
+## §11.5 · P9 · Delivery — R2
+
+**Goal.** Signed, verified installers for Windows, Linux and macOS.
+**Depends on.** P7. **Spec.** `09`.
+
+⚠ **Start certificate procurement at R1 close, not at P9.** Apple and Windows certificates
+have external lead time that no amount of engineering shortens, and this is the one task
+here whose duration is not ours to control.
+
+### P9-A · Signing
+- [ ] **P9-01** Apple Developer ID certificate obtained and stored. **Razi's action** — Claude must not generate, read or handle the private key. → `DOC-GATE`
+- [ ] **P9-02** Windows code-signing certificate obtained and stored. **Razi's action.** → `DOC-GATE`
+- [ ] **P9-03** The updater's production keypair generated and the public half pinned — closing `TG0-01`'s unproven clause, which has been open since P0. → `GATE-PROVEN`
+- [ ] **P9-04** CI signs without any secret reaching a log. → `GATE-PROVEN`
+
+### P9-B · Installers
+- [ ] **P9-05** Windows installer builds, installs, launches. → `SMOKE-PROVEN`
+- [ ] **P9-06** Linux installer builds, installs, launches. → `SMOKE-PROVEN`
+- [ ] **P9-07** macOS installer builds, installs, launches — **and is actually launched**, which P0 never did. → `SMOKE-PROVEN`
+- [ ] **P9-08** macOS notarisation passes. → `GATE-PROVEN`
+- [ ] **P9-09** Each installer carries no `.py`, no sidecar, no dev `.env` (`P8-21`, `TG0-04`). → `GATE-PROVEN`
+- [ ] **P9-10** Installed size is measured and recorded per platform. → `BENCH-PROVEN`
+
+### P9-C · The updater
+- [ ] **P9-11** An update signed by the pinned production key installs. → `SMOKE-PROVEN`
+- [ ] **P9-12** An unsigned or wrongly-signed update is **refused** — P0's guarantee, re-proven against the real key. → `GATE-PROVEN`
+- [ ] **P9-13** A failed update rolls back and the app still starts. → `SMOKE-PROVEN`
+- [ ] **P9-14** Update checks respect the user's setting and never run unasked. → `GATE-PROVEN`
+
+### P9-D · Capstone
+- [ ] **P9-15** **The headline acceptance test**: on a clean machine, install AutoDev, enter a key, hand it a task, and receive a build-verified artifact. → `SMOKE-PROVEN`
+- [ ] **P9-16** The R1 capability still works from the shipped installer — ingest, grade, adapt, export. **Shipping R2 must not silently break R1**, and the only way to know is to test it here. → `SMOKE-PROVEN`
+
+**Smoke — S9**
+- [ ] **S9-01** Clean-machine install on all three platforms.
+- [ ] **S9-02** A tampered update is refused.
+- [ ] **S9-03** The capstone task completes from a shipped installer.
+- [ ] **S9-04** A PSD ingests and exports from a shipped installer.
 
 ---
 
@@ -980,6 +1509,7 @@ Defaults are proposed above and adopted unless Razi says otherwise. The rest fol
 
 | Date | Rev | Change |
 |---|---|---|
+| 2026-09-01 | **Re-planned around two rollouts** (`ADR-LOG-RESTRUCT-0024`). `§5` rewritten: R1 *"backend ready, wire it to AutoDesign"*, R2 *"the application is ready"*, with an explicit **handover point after P8**. Design work promoted from `P3-G` (10 tasks) to **`§10.5`, phases PD0–PD6 (88 tasks)** — ingestion (PSD **and** PDF), pixel-level fidelity with refinement tooling, export (web/PDF/PSD), adaptation as a **deterministic tool**, changes, brand guideline. **`P8` moved into R1** before handover: measured at 3,867 LOC, 17 commands, 225 MB, 2 submodule stanzas; affordable because `NoOrchestrator` already exists. **`P5`–`P9` given full task breakdowns** (107 tasks) rather than deferred to phase start. **Providers narrowed to three** with Gemini primary; `P2-07` struck. **`P3-F` memory returned to the critical path.** Total open tasks: **292**. |
 | 2026-09-01 | 1.4 | **P0 built and closed out — 8 commits, `5fca2bb`…`4b17c6f`.** 26 of 28 original tasks done, plus `P0-13b` and six added tasks (`P0-28`…`P0-33`). **`P0-26` was REVERSED** — deleting the `dialog`/`fs` plugin config would have erased the only evidence of a live runtime break (the Logs export fails on every click); superseded by `P0-31`, which makes it work. **`P0-21` did not reach its evidence class**: the e2e harness exists and is wired into CI but has never executed an assertion (`msedgedriver` absent locally; `tauri-driver` has no WKWebView backend, so macOS can never run it). Readiness **0% → 2.7%**: Build ✅, Smoke and Gates ☐ under the no-partial-credit rule. Overlay: SO-4 and SO-11 → GREEN, SO-2 and SO-12 → AMBER; **SO-6 stays RED deliberately** — `platform/command.rs` is proven but has no caller, and a guard nothing calls is not a guard. Eight runtime ADRs logged (`0001`…`0008`), three of them `razi-ruled` or `flagged-and-proposed`. §0.16 gained **L-C6/L-C7/L-C8** and lessons **L-7…L-10**, and §0.2i now carries the incremental-write dispatch clause that L-C8 exists because I forgot. |
 | 2026-08-31 | 1.3 | **Razi's development rules from a sibling audit adapted into §0.** Added: **§0.2a** two mandatory post-phase auditors (work + area), with the area auditor's brief tuned to this codebase's measured defect profile — `let _ =`, dead parameters, guards that cannot fire · **§0.2b** a phase cannot close over an open finding · **§0.2c** every finding runs through Razi · **§0.2d** never stop midway, ask in-flight via `AskUserQuestion` · **§0.2e** every task names its proof · **§0.2i** two subagents is the floor · **§0.2j** search the web before escalating; escalate decisions, not facts · **§0.2m** adversarially verify each phase **before** building it · **§0.2n** every phase writes its learnings · **§0.2L-1…5** method rules. **§0.16 learnings register created and seeded from the planning phase** — five recurring classes with running counts, six lessons, and the method that worked. Two adaptations rather than literal adoptions, both stated: §0.2e allows gates to be **shared** across tasks (a 1:1 rule would manufacture coverage — the eight P0-A updater tasks prove one thing); and every example was **replaced with this repo's own evidence**, including the six errors this plan's own pre-GO review found in it. |
 | 2026-08-31 | 1.2 | **The three remaining open items closed, none of which needed an owner decision.** **R-8** — its two operational clauses become ordered tasks rather than prose: `P4-25` is explicitly blocked on `P4-07`, and new task `P4-24a` decides the fate of existing `routing_history` under §0.8 backup discipline. The gate harvest was right that a sequencing constraint is a task-dependency property, not a runtime assertion, so it is deliberately **not** a gate. **R-13** — the **operational cadence register is written (§14.5)**: thirteen mechanisms, each answering trigger · cadence · cost · failure behaviour · phase, including the retry policy that `ErrorClass::Retryable` had no reader for (GAP-12). Three values are flagged as preference rather than constraint. **R-1** — confirmed to correctly have no gate; its mitigation is outcome-gated slices, and no test can assert focus. **Razi ruled the `/mcp` deletion stays in P0**, with the P0→P4 fleet tool-access gap accepted and stated. |

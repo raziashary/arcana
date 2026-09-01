@@ -649,6 +649,45 @@ Razi: *"the ending is wiring AutoDev to AutoDesign — a design can be translate
 
 **Links.** `_verify/AUTODESIGN-INTEGRATION-RESEARCH.md` · `P3-45`—`P3-54` · `S3-06`—`S3-10` · `ADR-LOG-RESTRUCT-0019`
 
+## ADR-LOG-RESTRUCT-0024 — AutoDev ships twice; the design work becomes seven phases; every phase now has tasks
+
+**Status.** DECIDED
+**Author.** Claude · **Tier.** `razi-ruled` (third-pass direction, 2026-09-01)
+
+**What.**
+
+1. **Two rollouts.** R1 = *"the backend is ready, wire it to AutoDesign."* R2 = *"the entire application is ready for usage."* R1 ships first and is a **complete product with a different consumer**, not a subset of R2.
+2. **The design work is promoted from `P3-G` (10 tasks) to `PD0`—`PD6` (88 tasks).**
+3. **`P8` moves into R1, before the handover.**
+4. **`P5`—`P9` get full task breakdowns now** (107 tasks) rather than at phase start.
+5. **Providers become three** — Anthropic, OpenAI, Google, with **Gemini primary**. `P2-07` struck, `GAP-02` closed WONTFIX.
+6. **`P3-F` memory returns to the critical path**; its deferral is withdrawn.
+7. **Nothing is "deferred."** Every phase has a slot in R1 or R2.
+
+**Why.**
+
+**On (1).** Razi: *"The first one need to come first, the second one is the second rollout."* The consumer differs, so the definition of done differs. In R1 AutoDesign supplies the UI, the file, the user and the Apply/Reject surface; AutoDev supplies capability. Treating R1 as "R2 minus the UI" would have sequenced UI work before capability work and delivered neither.
+
+**On (2).** The scope Razi added does not fit a lettered sub-section: pixel-level fidelity **detection with refinement tooling**, PDF ingestion beside PSD, export to three formats including back to PSD, adaptation as a deterministic tool, a change system, and brand-guide ingestion. Sizing it honestly gives 88 tasks. Leaving it as a sub-section would have hidden a phase-sized body of work inside a phase.
+
+**On (3), which is the sequencing change with real evidence behind it.** Razi: *"we dont want them to have an unused sidecar on the backend of AutoDesign."* Measured, not assumed: **3,867 LOC** of sidecar Rust, **17** Tauri commands, **225 MB** of bundle resources, **2** `.gitmodules` stanzas, **14** referencing files. It is affordable now because `P1` already built the seam — `autodev-core` declares `OrchestratorProbe` and ships **`NoOrchestrator`**, so the excision is a seam swap rather than a port — and `runtime_config.skip_sidecars` already provides a tested path that never starts them. Its one real dependency is `P3-F`, which replaces `memory-mcp-server`.
+
+**On (4).** `§11` previously argued that writing task lists early guarantees staleness. That reasoning was sound and its guard survives: `§0.12` still requires re-reading the specs at each phase start. What it did not price was the cost of the *absence*: two rollouts cannot be sequenced against phases whose contents nobody has written, and Razi could not be told when to hand over.
+
+**On the doctrine in `PD4`.** *"The entire tool does the calculation and stuff and the LLM/AutoDev fleet here is only the executor of that tool."* Adaptation geometry is **deterministic code**. The fleet chooses when to adapt and to what; it never computes the layout. `PD4-02` gates the absence of a model call inside the tool, so this is a checked property rather than an intention.
+
+**On `PD5`'s grounding.** Razi: *"if we can build it from scratch then we can tune and reverse engineer it."* Verified in the source: the v4.7 pipeline constructs shape layers (`vectorMask` Bezier knots + `vectorFill`), editable type layers and pixel layers from nothing, then writes them with `writePsd`. **Construction reversed is mutation** — so changes are not new machinery, they are the existing machinery run backwards.
+
+**On `PD3-06`'s boundary.** Razi asked for semantic TypeScript/React *"where HTML and CSS cannot handle it with the code limitations."* Rather than leave that to taste, the eligible set is pinned to the source's own fidelity table — its **⚠ Approximate** and **❌ Not Supported** rows (Dissolve, Subtract, Divide, Hard Mix, bevel/emboss/satin, pattern overlays, adjustment layers). A component is written only for a row on that list. Without that anchor "semantic components" expands until it means rewriting the design by hand.
+
+**When.** 2026-09-01 · after P1 closeout, before P2
+
+**Where.** `MASTER_DEVELOPMENT_PLAN.md` `§5` (rewritten), `§10.5` (new, PD0—PD6), `§11` (rewritten, P5—P9) · `vision/00-AUTODEV-RESTRUCTURE-MASTER-PLAN.md` (directions 14—25)
+
+**How.** Grounded in the source repository, read rather than recalled: `psdconversions/index.html` (3,202 lines) and its four architecture documents — the four-phase operator-list pipeline, per-draw-op CTM tracking, the ten text-merge guards, the seven ingestion guards, the fidelity classification table, and the PSD construction path. The sidecar numbers are `wc -l` and `grep -c` against the tree on 2026-09-01. The velocity figures are measured from this repository's own commit timestamps: **P1 built 22 tasks in ~2 h 50 m and its post-phase audit cost a further ~3 h 30 m**, which is why the estimates below carry the audit rather than omitting it.
+
+**Links.** `_verify/AUTODESIGN-INTEGRATION-RESEARCH.md` · `ADR-LOG-RESTRUCT-0023` (superseded in scope by this entry) · `PD0`—`PD6` · `P8`
+
 # §5 · Standing entries carried from planning
 
 Not build-time decisions — but recorded here because a future session will otherwise rediscover them the hard way. Each is already ratified in vision Part 8; these are the **operational consequences** that bite during implementation.
