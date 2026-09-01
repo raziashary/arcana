@@ -90,6 +90,11 @@ export function normalizePsdText(raw: string): string {
       // Written as an escape, never as the literal character. A raw U+0003
       // in source is invisible in every editor, diff and review -- and this
       // line IS the fix, so it must be the most legible line in the file.
+      //
+      // `no-control-regex` exists to catch a control character that arrived
+      // by accident. This one is the entire point of the function, so the
+      // rule is disabled on this line specifically and nowhere else.
+      // eslint-disable-next-line no-control-regex
       .replace(/\u0003/g, '\n')
       .replace(/\r/g, '\n')
   )
@@ -250,9 +255,7 @@ function convertLayer(layer: Layer, state: ConvertState): DesignLayer {
         text: normalizePsdText(text.text ?? ''),
         style,
         styleRuns: toStyleRuns(text),
-        transform: (Array.isArray(text.transform) && text.transform.length === 6
-          ? text.transform
-          : [1, 0, 0, 1, 0, 0]) as TextLayerTransform,
+        transform: toTransform(text.transform),
       }
     }
 
@@ -282,6 +285,22 @@ function convertLayer(layer: Layer, state: ConvertState): DesignLayer {
 }
 
 type TextLayerTransform = readonly [number, number, number, number, number, number]
+/**
+ * PSD's 6-element affine transform, as a tuple.
+ *
+ * Built element by element rather than asserted from `number[]`: a cast
+ * would compile against an array of any length, and a short or absent
+ * transform would then reach the serializer as a malformed tuple and
+ * mis-scale every glyph on the layer. Identity is the correct default.
+ */
+function toTransform(raw: unknown): TextLayerTransform {
+  if (!Array.isArray(raw) || raw.length !== 6 || raw.some((n) => typeof n !== "number")) {
+    return [1, 0, 0, 1, 0, 0]
+  }
+  const t = raw as number[]
+  return [t[0], t[1], t[2], t[3], t[4], t[5]]
+}
+
 
 export interface ConversionResult {
   document: DesignDocument
