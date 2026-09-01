@@ -189,9 +189,16 @@ impl AnalyticsDb {
         let records = stmt
             .query_map(params![date_str], |row| {
                 let ts_str: String = row.get(1)?;
-                let timestamp = chrono::DateTime::parse_from_rfc3339(&ts_str)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now());
+                let timestamp =
+                    crate::db::timestamps::parse_db_timestamp(&ts_str).unwrap_or_else(|e| {
+                        // Substituting "now" makes an unreadable record look
+                        // brand new, which is worse than useless in a cost or
+                        // failure report. The fallback stays — these records
+                        // are display-only and a hard error would lose the rest
+                        // of the row — but it is no longer silent.
+                        tracing::warn!("[analytics] unreadable timestamp {ts_str:?}: {e}");
+                        Utc::now()
+                    });
                 Ok(TokenUsageRecord {
                     id: row.get(0)?,
                     timestamp,
@@ -397,11 +404,8 @@ impl AnalyticsDb {
                     0.0
                 };
                 let hb_str: Option<String> = row.get(6)?;
-                let last_heartbeat = hb_str.and_then(|s| {
-                    chrono::DateTime::parse_from_rfc3339(&s)
-                        .ok()
-                        .map(|dt| dt.with_timezone(&Utc))
-                });
+                let last_heartbeat =
+                    hb_str.and_then(|s| crate::db::timestamps::parse_db_timestamp(&s).ok());
                 Ok(WorkerStatsRecord {
                     worker_id: row.get(0)?,
                     date: end, // range end as the "as of" date
@@ -440,11 +444,8 @@ impl AnalyticsDb {
             .query_row(params![worker_id, date_str], |row| {
                 let date_str: String = row.get(1)?;
                 let hb_str: Option<String> = row.get(8)?;
-                let last_heartbeat = hb_str.and_then(|s| {
-                    chrono::DateTime::parse_from_rfc3339(&s)
-                        .ok()
-                        .map(|dt| dt.with_timezone(&Utc))
-                });
+                let last_heartbeat =
+                    hb_str.and_then(|s| crate::db::timestamps::parse_db_timestamp(&s).ok());
                 Ok(WorkerStatsRecord {
                     worker_id: row.get(0)?,
                     date: NaiveDate::parse_from_str(&date_str, "%Y-%m-%d").unwrap_or(date),
@@ -502,9 +503,16 @@ impl AnalyticsDb {
         let records = stmt
             .query_map(params![format!("-{}", hours)], |row| {
                 let ts_str: String = row.get(1)?;
-                let timestamp = chrono::DateTime::parse_from_rfc3339(&ts_str)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now());
+                let timestamp =
+                    crate::db::timestamps::parse_db_timestamp(&ts_str).unwrap_or_else(|e| {
+                        // Substituting "now" makes an unreadable record look
+                        // brand new, which is worse than useless in a cost or
+                        // failure report. The fallback stays — these records
+                        // are display-only and a hard error would lose the rest
+                        // of the row — but it is no longer silent.
+                        tracing::warn!("[analytics] unreadable timestamp {ts_str:?}: {e}");
+                        Utc::now()
+                    });
                 Ok(ApiFailureRecord {
                     id: row.get(0)?,
                     timestamp,
@@ -735,9 +743,16 @@ impl AnalyticsDb {
         let records = stmt
             .query_map(params![cutoff], |row| {
                 let ts_str: String = row.get(1)?;
-                let timestamp = chrono::DateTime::parse_from_rfc3339(&ts_str)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now());
+                let timestamp =
+                    crate::db::timestamps::parse_db_timestamp(&ts_str).unwrap_or_else(|e| {
+                        // Substituting "now" makes an unreadable record look
+                        // brand new, which is worse than useless in a cost or
+                        // failure report. The fallback stays — these records
+                        // are display-only and a hard error would lose the rest
+                        // of the row — but it is no longer silent.
+                        tracing::warn!("[analytics] unreadable timestamp {ts_str:?}: {e}");
+                        Utc::now()
+                    });
                 Ok(SystemEventRecord {
                     id: row.get(0)?,
                     timestamp,

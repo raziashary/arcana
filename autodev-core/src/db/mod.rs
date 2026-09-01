@@ -16,6 +16,7 @@ pub mod migrate;
 pub mod model_configs;
 pub mod plans;
 pub mod tasks;
+pub mod timestamps;
 pub mod workers;
 
 use crate::errors::{AutoDevError, Result};

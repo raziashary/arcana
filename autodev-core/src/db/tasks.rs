@@ -305,7 +305,10 @@ pub struct RoutingHistoryEntry {
 // ─── Repository ───────────────────────────────────────────────────────────────
 
 pub struct TasksDb {
-    conn: Connection,
+    /// Crate-visible so sibling modules can build realistic fixtures against a
+    /// temporary database — `orphan`'s TTL tests need a row whose
+    /// `updated_at` is in SQLite's own offset-less format.
+    pub(crate) conn: Connection,
 }
 
 impl TasksDb {
@@ -321,8 +324,13 @@ impl TasksDb {
     }
 
     pub fn open() -> Result<Self> {
-        let path = autodev_dir()?.join("tasks.db");
-        let conn = crate::db::open_tuned(&path)?;
+        Self::open_at(&autodev_dir()?.join("tasks.db"))
+    }
+
+    /// As `open`, against an explicit path, so tests never write to the user's
+    /// real `~/.autodev/tasks.db`.
+    pub fn open_at(path: &std::path::Path) -> Result<Self> {
+        let conn = crate::db::open_tuned(path)?;
         let db = Self { conn };
         db.migrate()?;
         Ok(db)
@@ -362,7 +370,31 @@ impl TasksDb {
                 created_by          TEXT    NOT NULL DEFAULT 'pa',
                 created_at          TEXT    NOT NULL DEFAULT (datetime('now')),
                 updated_at          TEXT    NOT NULL DEFAULT (datetime('now')),
-                completed_at        TEXT
+                completed_at        TEXT,
+                -- Columns added after the original CREATE TABLE. They belong
+                -- here, not only in ADDED_COLUMNS: `ensure_columns` runs before
+                -- the ladder and returns early when the table does not exist
+                -- yet, so a FRESH database is created entirely by this rung.
+                -- Omitting them left new installs without `claimed_by_pid` and
+                -- seventeen others, while every existing database looked fine.
+                claimed_by_pid         INTEGER,
+                claim_host             TEXT,
+                diff_analysis          TEXT,
+                budget_max_tokens      INTEGER,
+                budget_max_usd         REAL,
+                budget_max_turns       INTEGER DEFAULT 20,
+                budget_tokens_used     INTEGER DEFAULT 0,
+                budget_cost_usd        REAL    DEFAULT 0.0,
+                budget_turns_used      INTEGER DEFAULT 0,
+                budget_exceeded        INTEGER DEFAULT 0,
+                budget_exceeded_reason TEXT,
+                phase                  TEXT,
+                phase_order            INTEGER,
+                milestone              TEXT,
+                epic_id                TEXT,
+                blocked_by             TEXT,
+                under_review_by        TEXT,
+                task_qc_cost_usd       REAL    DEFAULT 0.0
             );
 
             CREATE INDEX IF NOT EXISTS idx_tasks_status     ON tasks(status);
@@ -1705,4 +1737,108 @@ fn row_to_worker_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkerMess
         created_at: row.get(7)?,
         read_at: row.get(8)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every column the live `~/.autodev/tasks.db` carries, in its own order.
+    ///
+    /// A fresh database must match it. The two are built by different paths —
+    /// a new install runs only the ladder's baseline rung, while an existing
+    /// one was built by the original `CREATE TABLE` plus twenty `ALTER`s — and
+    /// nothing else compares them.
+    const EXPECTED_COLUMNS: &[&str] = &[
+        "id",
+        "title",
+        "description",
+        "priority",
+        "task_type",
+        "status",
+        "acceptance_criteria",
+        "assigned_worker",
+        "rejection_reason",
+        "retry_count",
+        "created_by",
+        "created_at",
+        "updated_at",
+        "completed_at",
+        "claimed_by_pid",
+        "claim_host",
+        "diff_analysis",
+        "budget_max_tokens",
+        "budget_max_usd",
+        "budget_max_turns",
+        "budget_tokens_used",
+        "budget_cost_usd",
+        "budget_turns_used",
+        "budget_exceeded",
+        "budget_exceeded_reason",
+        "phase",
+        "phase_order",
+        "milestone",
+        "epic_id",
+        "blocked_by",
+        "under_review_by",
+        "task_qc_cost_usd",
+    ];
+
+    /// The regression this guards against was introduced by P1-10 and caught by
+    /// an unrelated test.
+    ///
+    /// `ensure_columns` runs *before* the ladder and returns early when the
+    /// table does not exist yet, so a **fresh** database is created entirely by
+    /// the baseline rung. The baseline was the original `CREATE TABLE`, which
+    /// lacks the twenty columns added later — so new installs came up without
+    /// `claimed_by_pid` and seventeen others, while every existing database
+    /// looked perfectly fine. No live-data check could have found it.
+    #[test]
+    fn a_fresh_database_has_every_column_an_existing_one_has() {
+        let dir = std::env::temp_dir().join("autodev-tasks-schema-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("tasks.db");
+
+        let db = TasksDb::open_at(&path).expect("open");
+        let actual: Vec<String> = {
+            let mut st = db.conn.prepare("PRAGMA table_info(tasks)").unwrap();
+            let r = st.query_map([], |r| r.get::<_, String>(1)).unwrap();
+            r.map(|c| c.unwrap()).collect()
+        };
+
+        let missing: Vec<&str> = EXPECTED_COLUMNS
+            .iter()
+            .filter(|c| !actual.iter().any(|a| a == *c))
+            .copied()
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "a fresh tasks.db is missing {missing:?}; the baseline rung and the              live schema have diverged"
+        );
+
+        let unexpected: Vec<&String> = actual
+            .iter()
+            .filter(|a| !EXPECTED_COLUMNS.contains(&a.as_str()))
+            .collect();
+        assert!(
+            unexpected.is_empty(),
+            "a fresh tasks.db has columns the live schema does not: {unexpected:?}.              If they are intended, add them to EXPECTED_COLUMNS."
+        );
+
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Every column named in `ADDED_COLUMNS` must also be in the baseline, or a
+    /// fresh install differs from a migrated one.
+    #[test]
+    fn every_repaired_column_is_also_in_the_baseline() {
+        for (name, _) in TasksDb::ADDED_COLUMNS {
+            assert!(
+                EXPECTED_COLUMNS.contains(name),
+                "{name} is repaired by ensure_columns but is not in the expected schema"
+            );
+        }
+    }
 }

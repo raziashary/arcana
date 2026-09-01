@@ -180,10 +180,29 @@ fn check_task(task: &Task) -> Option<String> {
     // TTL fallback for tasks without a recorded PID (pre-PID tasks or
     // tasks assigned via direct DB edits / UI drag-drop) AND for tasks
     // claimed on a different host where we can't validate the PID locally.
-    let updated = chrono::DateTime::parse_from_rfc3339(&task.updated_at).ok()?;
-    let age_hours = chrono::Utc::now()
-        .signed_duration_since(updated.with_timezone(&chrono::Utc))
-        .num_hours();
+    // `tasks.updated_at` is written by `datetime('now')`, which produces
+    // `2026-09-01 06:23:58` — no timezone offset. `parse_from_rfc3339` rejects
+    // that, so this line used to be
+    // `parse_from_rfc3339(&task.updated_at).ok()?`, which failed **every single
+    // time** and returned `None` from `check_task` — reported as "not an
+    // orphan". This entire TTL fallback could therefore never fire once, and
+    // the failure was indistinguishable from a healthy task.
+    //
+    // `parse_db_timestamp` reads both column formats. A value it still cannot
+    // read is logged and treated as "cannot judge", which is deliberately not
+    // the same thing as "healthy": releasing a live task is worse than leaving
+    // a stale one, so the conservative branch stays — but it is now visible.
+    let age_hours = match crate::db::timestamps::age_hours(&task.updated_at) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::warn!(
+                "[orphan] task {} has an unreadable updated_at ({:?}): {e}.                  Cannot apply the TTL fallback to it.",
+                task.id,
+                task.updated_at
+            );
+            return None;
+        }
+    };
     if age_hours > STALE_TTL_HOURS {
         return Some(format!(
             "no local PID validation possible and task is {}h stale (TTL fallback)",
@@ -198,4 +217,91 @@ fn current_hostname() -> String {
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "unknown".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::tasks::{CreateTaskInput, TasksDb};
+
+    fn temp_db(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("autodev-orphan-test-{tag}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        dir.join("tasks.db")
+    }
+
+    /// Insert a task whose `updated_at` is backdated to exactly what SQLite
+    /// writes, then read it back through the real query path.
+    ///
+    /// Inserted rather than updated: `tasks` carries an
+    /// `AFTER UPDATE … SET updated_at = datetime('now')` trigger, so any
+    /// `UPDATE` that tries to backdate the column is immediately overwritten by
+    /// the trigger. That is correct behaviour — `updated_at` means "last
+    /// touched" — but it means a stale row can only be constructed by
+    /// inserting one.
+    fn task_aged(db: &TasksDb, hours: i64) -> crate::db::tasks::Task {
+        db.conn
+            .execute(
+                "INSERT INTO tasks (title, priority, task_type, status, acceptance_criteria,                  created_by, created_at, updated_at, claimed_by_pid, claim_host)                  VALUES ('ttl probe', 'p2', 'chore', 'in_progress', '', 'test',                  datetime('now', ?1), datetime('now', ?1), NULL, 'some-other-host')",
+                rusqlite::params![format!("-{hours} hours")],
+            )
+            .expect("insert backdated task");
+        let id = db.conn.last_insert_rowid();
+        db.get_by_id(id).expect("get").expect("task")
+    }
+
+    /// The regression this repair exists for.
+    ///
+    /// `tasks.updated_at` is written by `datetime('now')`, which carries no
+    /// timezone offset, and the old code read it with
+    /// `parse_from_rfc3339(…).ok()?`. That parse failed every time and the `?`
+    /// returned `None` — reported as "not an orphan" — so this fallback could
+    /// never fire once, for any task, ever.
+    #[test]
+    fn a_stale_task_with_no_pid_is_now_detected_as_an_orphan() {
+        let path = temp_db("stale");
+        let db = TasksDb::open_at(&path).expect("open");
+
+        let task = task_aged(&db, STALE_TTL_HOURS + 6);
+
+        // Prove the column really is in the unparseable shape, or the test
+        // would pass for the wrong reason.
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(&task.updated_at).is_err(),
+            "fixture must reproduce the offset-less column, got {:?}",
+            task.updated_at
+        );
+
+        let verdict = check_task(&task);
+        assert!(
+            verdict.is_some(),
+            "a task {}h past the {STALE_TTL_HOURS}h TTL must be an orphan; got None",
+            STALE_TTL_HOURS + 6
+        );
+        assert!(
+            verdict.as_deref().unwrap_or_default().contains("stale"),
+            "unexpected reason: {verdict:?}"
+        );
+
+        drop(db);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// The other half: a fresh task must not be released. Without this, a
+    /// detector that returned `Some` unconditionally would pass the test above.
+    #[test]
+    fn a_recent_task_is_left_alone() {
+        let path = temp_db("fresh");
+        let db = TasksDb::open_at(&path).expect("open");
+
+        let task = task_aged(&db, 1);
+        assert!(
+            check_task(&task).is_none(),
+            "a task 1h old is well inside the {STALE_TTL_HOURS}h TTL"
+        );
+
+        drop(db);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
 }

@@ -90,10 +90,10 @@ impl TaskRouter {
         let duration_ms = history
             .iter()
             .find(|h| h.task_id == task_id && h.outcome.is_none())
-            .and_then(|h| chrono::DateTime::parse_from_rfc3339(&h.assigned_at).ok())
+            .and_then(|h| crate::db::timestamps::parse_db_timestamp(&h.assigned_at).ok())
             .map(|assigned| {
                 chrono::Utc::now()
-                    .signed_duration_since(assigned.with_timezone(&chrono::Utc))
+                    .signed_duration_since(assigned)
                     .num_milliseconds()
             })
             .filter(|ms| *ms >= 0)
