@@ -740,7 +740,7 @@ stamp its run id. Sequence a phase after its data producer. Put the capstone las
 
 # §8 · Phase P2 — Providers
 
-**Goal.** Four conforming providers, caching that measurably works, honest cost, and a spend ceiling that stops.
+**Goal.** Three conforming providers, caching that measurably works, honest cost, and a spend ceiling that stops. *(Was "four" until xAI was struck with P2-07, 2026-09-01.)*
 **Depends on.** P1.
 **Spec anchors.** `02` (all), ADR-01-04, ADR-01-05, ADR-02-05, ADR-03-01, ADR-03-05, G-04, G-06, G-10.
 
