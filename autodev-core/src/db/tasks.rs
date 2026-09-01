@@ -322,7 +322,7 @@ impl TasksDb {
 
     pub fn open() -> Result<Self> {
         let path = autodev_dir()?.join("tasks.db");
-        let conn = Connection::open(&path)?;
+        let conn = crate::db::open_tuned(&path)?;
         let db = Self { conn };
         db.migrate()?;
         Ok(db)

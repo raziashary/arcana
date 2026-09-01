@@ -27,7 +27,7 @@ pub const RETENTION_PER_FILE: usize = 50;
 // ─── Storage bootstrap ────────────────────────────────────────────────────────
 
 fn open_db() -> Result<Connection> {
-    let conn = Connection::open(autodev_dir()?.join("config.db"))
+    let conn = crate::db::open_tuned(&autodev_dir()?.join("config.db"))
         .map_err(|e| AutoDevError::Git(format!("config.db open: {e}")))?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS checkpoints (

@@ -69,7 +69,7 @@ impl GraphStore {
     /// application uses, rather than by reading the file separately — see
     /// `examples/migrate_check.rs`.
     pub fn schema_version(&self) -> Result<u32> {
-        let conn = Connection::open(&self.db_path)?;
+        let conn = crate::db::open_tuned(&self.db_path)?;
         super::migrations::get_schema_version(&conn)
     }
 
@@ -82,7 +82,7 @@ impl GraphStore {
             tracing::debug!("[GraphStore::open] Parent directory created: {:?}", parent);
         }
 
-        let mut conn = Connection::open(db_path)?;
+        let mut conn = crate::db::open_tuned(db_path)?;
         tracing::debug!("[GraphStore::open] Connection established");
         tracing::info!(
             "[GraphStore::open] Database file will be created at: {:?}",
@@ -109,7 +109,7 @@ impl GraphStore {
     }
 
     fn get_conn(&self) -> Result<Connection> {
-        let conn = Connection::open(&self.db_path)?;
+        let conn = crate::db::open_tuned(&self.db_path)?;
         conn.execute_batch("PRAGMA foreign_keys=ON")?;
         Ok(conn)
     }
@@ -181,7 +181,7 @@ impl GraphStore {
         agent_author: Option<&str>,
         task_id: Option<i64>,
     ) -> Result<usize> {
-        let mut conn = Connection::open(&self.db_path)?;
+        let mut conn = crate::db::open_tuned(&self.db_path)?;
         conn.execute_batch("PRAGMA foreign_keys=ON")?;
         conn.execute_batch("BEGIN IMMEDIATE")?;
 
@@ -224,7 +224,7 @@ impl GraphStore {
         agent_author: Option<&str>,
         task_id: Option<i64>,
     ) -> Result<usize> {
-        let mut conn = Connection::open(&self.db_path)?;
+        let mut conn = crate::db::open_tuned(&self.db_path)?;
         conn.execute_batch("PRAGMA foreign_keys=ON")?;
         conn.execute_batch("BEGIN IMMEDIATE")?;
 
@@ -494,7 +494,7 @@ impl GraphStore {
     /// Batch update community assignments for many nodes in a single transaction.
     /// ~100x faster than calling set_community in a loop.
     pub fn set_communities_batch(&self, assignments: &[(String, i32, String)]) -> Result<usize> {
-        let mut conn = Connection::open(&self.db_path)?;
+        let mut conn = crate::db::open_tuned(&self.db_path)?;
         conn.execute_batch("PRAGMA foreign_keys=ON")?;
         conn.execute_batch("BEGIN IMMEDIATE")?;
 

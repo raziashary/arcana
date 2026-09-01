@@ -27,7 +27,7 @@ impl AnalyticsDb {
     /// user's real `~/.autodev/analytics.db`.
     pub async fn new_at(db_path: &std::path::Path) -> Result<Self> {
         let db_path = db_path.to_path_buf();
-        let conn = Connection::open(&db_path).map_err(|e| AutoDevError::Database(e))?;
+        let conn = crate::db::open_tuned(&db_path)?;
 
         // Enable foreign keys
         conn.execute("PRAGMA foreign_keys = ON", [])

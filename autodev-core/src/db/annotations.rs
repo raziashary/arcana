@@ -61,7 +61,7 @@ impl AnnotationsDb {
 
     pub fn open() -> Result<Self> {
         let db_path = autodev_dir()?.join("annotations.db");
-        let conn = Connection::open(&db_path)
+        let conn = crate::db::open_tuned(&db_path)
             .map_err(|e| AutoDevError::Agent(format!("annotations.db open failed: {e}")))?;
         let db = Self { conn };
         db.migrate()?;

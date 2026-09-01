@@ -88,8 +88,7 @@ pub fn open() -> Result<Connection> {
 /// As `open`, against an explicit path, so tests never touch the user's real
 /// `config.db`.
 pub fn open_at(path: &std::path::Path) -> Result<Connection> {
-    let conn =
-        Connection::open(path).map_err(|e| AutoDevError::Agent(format!("config.db open: {e}")))?;
+    let conn = crate::db::open_tuned(path)?;
     // Per-connection, so it is set here rather than in a migration rung.
     conn.execute_batch("PRAGMA journal_mode = WAL;")
         .map_err(|e| AutoDevError::Agent(format!("config.db journal_mode: {e}")))?;

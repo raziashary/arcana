@@ -16,7 +16,7 @@ impl SessionStorage {
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let conn = Connection::open(&db_path)?;
+        let conn = crate::db::open_tuned(&db_path)?;
         let storage = Self { conn };
         storage.migrate()?;
         Ok(storage)

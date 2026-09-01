@@ -152,7 +152,7 @@ impl WorkersDb {
     /// left a file behind that made every later run fail — an order-dependent
     /// suite that also wrote to live user data.
     pub fn open_at(db_path: &std::path::Path) -> Result<Self> {
-        let conn = Connection::open(db_path)
+        let conn = crate::db::open_tuned(db_path)
             .map_err(|e| AutoDevError::Agent(format!("workers.db open failed: {e}")))?;
         let db = Self { conn };
         // Order matters: repair a pre-ladder database's columns first, so the

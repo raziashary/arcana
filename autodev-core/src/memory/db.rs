@@ -29,7 +29,7 @@ impl MemoryDb {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let conn = Connection::open(&path)?;
+        let conn = crate::db::open_tuned(&path)?;
         let db = Self { conn };
         db.migrate()?;
         Ok(db)

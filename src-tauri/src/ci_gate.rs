@@ -666,4 +666,95 @@ let x = 1;
             "reading a table is not creating it"
         );
     }
+
+    // ── TG-P1-05 · one tuned connection path ──────────────────────────────
+
+    /// Lines opening a SQLite connection without going through `open_tuned`.
+    ///
+    /// `open_with_flags` and `open_in_memory` are deliberately allowed: the
+    /// first is the read-only backup path, the second never touches a file.
+    fn untuned_open_sites(source: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for raw in source.lines() {
+            let line = raw.trim();
+            if line.starts_with("//") || line.starts_with('*') || line.starts_with("///") {
+                continue;
+            }
+            let code = line.split("//").next().unwrap_or("");
+            if code.contains("Connection::open(") && !code.contains("open_in_memory") {
+                out.push(line.to_string());
+            }
+        }
+        out
+    }
+
+    /// Every database connection in core goes through `db::open_tuned`.
+    ///
+    /// `journal_mode` is per-connection, and setting it at some open sites and
+    /// not others is not a style question: before P1, `analytics.db`,
+    /// `annotations.db` and `workers.db` were all sitting in `journal=delete`
+    /// on disk, and five of the six places `graph/store.rs` opens a connection
+    /// set nothing at all. Under `delete` a reader and a writer cannot proceed
+    /// at once — which is the shape of nearly every access here.
+    #[test]
+    fn tg_p1_05_every_core_connection_is_opened_tuned() {
+        let src = repo_root().join("autodev-core/src");
+        let mut files = Vec::new();
+        collect_rust_files(&src, &mut files);
+        assert!(
+            files.len() > 150,
+            "expected to walk core; found {}",
+            files.len()
+        );
+
+        let mut offenders = Vec::new();
+        for file in &files {
+            let Ok(text) = std::fs::read_to_string(file) else {
+                continue;
+            };
+            let rel = file
+                .strip_prefix(&src)
+                .unwrap_or(file)
+                .display()
+                .to_string()
+                .replace('\\', "/");
+            // `db/mod.rs` is where `open_tuned` itself lives.
+            if rel == "db/mod.rs" {
+                continue;
+            }
+            // Production code only: test modules open fixtures directly.
+            let production = text.split("#[cfg(test)]").next().unwrap_or("");
+            for line in untuned_open_sites(production) {
+                offenders.push(format!("{rel}: {line}"));
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "these open a SQLite connection without db::open_tuned, so they get              whatever journal_mode the file happens to carry: {}",
+            offenders.join(" | ")
+        );
+    }
+
+    /// The detector fires on a real open and ignores the allowed forms, so a
+    /// broken matcher cannot leave TG-P1-05 permanently green.
+    #[test]
+    fn tg_p1_05_detector_flags_untuned_opens_only() {
+        assert_eq!(
+            untuned_open_sites("    let conn = Connection::open(&path)?;").len(),
+            1
+        );
+        assert!(
+            untuned_open_sites("    let conn = Connection::open_in_memory()?;").is_empty(),
+            "in-memory databases touch no file"
+        );
+        assert!(
+            untuned_open_sites("    let c = crate::db::open_tuned(&path)?;").is_empty(),
+            "the tuned path is what we want"
+        );
+        assert!(
+            untuned_open_sites("// historically this used Connection::open(&p)").is_empty(),
+            "a comment is not a call"
+        );
+    }
 }

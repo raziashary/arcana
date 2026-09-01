@@ -16,7 +16,7 @@ pub struct HooksDb {
 impl HooksDb {
     pub fn open() -> Result<Self> {
         let path = autodev_dir()?.join("config.db");
-        let conn = Connection::open(&path)
+        let conn = crate::db::open_tuned(&path)
             .map_err(|e| AutoDevError::Agent(format!("HooksDb open: {e}")))?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
             .map_err(|e| AutoDevError::Agent(format!("HooksDb pragma: {e}")))?;
