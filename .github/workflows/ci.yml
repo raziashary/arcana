@@ -247,5 +247,13 @@ jobs:
       - name: Build the application
         run: npm run tauri -- build --debug --no-bundle
 
+      # WebKitGTK will not come up under Xvfb with its default renderer: the
+      # session is created, the app is launched, and it never becomes
+      # driveable — which surfaces as an 8-minute `Request timed out` at
+      # POST /session rather than as a crash. Both flags are the standard
+      # headless-CI workaround.
       - name: Run the end-to-end smoke
+        env:
+          WEBKIT_DISABLE_COMPOSITING_MODE: 1
+          WEBKIT_DISABLE_DMABUF_RENDERER: 1
         run: xvfb-run --auto-servernum npm run test:e2e

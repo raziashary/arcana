@@ -61,7 +61,8 @@ export const config: WebdriverIO.Config = {
   // listeners before anything is assertable, so these are deliberately
   // generous compared with a browser-only suite.
   waitforTimeout: 20_000,
-  connectionRetryTimeout: 120_000,
+  // 120s was long enough that a hung launch cost 8 minutes before reporting.
+  connectionRetryTimeout: 60_000,
   connectionRetryCount: 3,
 
   framework: 'mocha',
