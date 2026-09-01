@@ -32,7 +32,6 @@ use crate::agent::PAMode;
 use crate::errors::{AutoDevError, Result};
 use crate::provider::anthropic::AnthropicProvider;
 use crate::provider::google::GoogleProvider;
-use crate::provider::ollama::OllamaProvider;
 use crate::provider::openai::OpenAIProvider;
 use crate::provider::Provider;
 use crate::state::app_state::AppState;
@@ -236,22 +235,19 @@ async fn run_inner(
 /// Build a provider from the stored key. Mirrors `RecipeRunner`'s resolution so
 /// a subagent uses exactly the same credentials as its parent.
 fn build_provider(provider_id: &str) -> Result<Arc<dyn Provider>> {
-    // Ollama is local and takes no key.
-    let api_key = if provider_id == "ollama" {
-        String::new()
-    } else {
-        VaultManager::get(&provider_key(provider_id))?.ok_or_else(|| {
-            AutoDevError::Agent(format!(
-                "No API key stored for provider '{provider_id}' — set it in Settings"
-            ))
-        })?
-    };
+    // Every supported provider takes a key. The local-provider branch went
+      // with Ollama (P2-11) — there is no keyless provider any more, so the
+      // absence of a key is now unconditionally an error rather than a case.
+    let api_key = VaultManager::get(&provider_key(provider_id))?.ok_or_else(|| {
+        AutoDevError::Agent(format!(
+            "No API key stored for provider '{provider_id}' — set it in Settings"
+        ))
+    })?;
 
     Ok(match provider_id {
         "anthropic" => Arc::new(AnthropicProvider::new(api_key)) as Arc<dyn Provider>,
         "openai" => Arc::new(OpenAIProvider::new(api_key)),
         "google" => Arc::new(GoogleProvider::new(api_key)),
-        "ollama" => Arc::new(OllamaProvider::default_from_env()),
         other => {
             return Err(AutoDevError::Agent(format!(
                 "Unsupported provider for subagent: {other}"

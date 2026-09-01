@@ -9,6 +9,7 @@ use serde_json::json;
 use tracing::{debug, error};
 
 use super::traits::{Provider, StreamResult};
+use super::usage::Usage;
 use super::types::{
     CompletionRequest, CompletionResponse, MessageContent, ModelInfo, ProviderStatus, StreamChunk,
 };
@@ -241,9 +242,7 @@ impl Provider for GoogleProvider {
                 while let Some(pos) = buf.find('\n') {
                     let line = buf[..pos].trim_end_matches('\r').to_string();
                     *buf = buf[pos + 1..].to_string();
-                    if let Some(chunk) = parse_google_sse_line(&line)? {
-                        chunks.push(chunk);
-                    }
+                    chunks.extend(parse_google_sse_line(&line)?);
                 }
                 Ok(chunks)
             })
@@ -304,14 +303,14 @@ impl Provider for GoogleProvider {
     }
 }
 
-fn parse_google_sse_line(line: &str) -> Result<Option<StreamChunk>> {
+fn parse_google_sse_line(line: &str) -> Result<Vec<StreamChunk>> {
     let line = line.trim();
     if line.is_empty() || line.starts_with(':') {
-        return Ok(None);
+        return Ok(Vec::new());
     }
     let data = match line.strip_prefix("data: ") {
         Some(d) => d,
-        None => return Ok(None),
+        None => return Ok(Vec::new()),
     };
     match serde_json::from_str::<serde_json::Value>(data) {
         Ok(v) => parse_google_chunk(&v),
@@ -321,64 +320,95 @@ fn parse_google_sse_line(line: &str) -> Result<Option<StreamChunk>> {
     }
 }
 
-fn parse_google_chunk(v: &serde_json::Value) -> Result<Option<StreamChunk>> {
+/// Turn one Gemini SSE payload into every chunk it carries.
+///
+/// **Returns a `Vec`, and that is the fix.** The previous version returned at
+/// most one chunk and `return`ed on the first matching part, which produced
+/// three defects at once (`P2-34`, `P2-35`, `P2-44`):
+///
+/// 1. **Tool arguments were discarded.** `let _args = ...` computed them and
+///    dropped them, and no `ToolInputDelta` was ever emitted for Google. The
+///    engine then assembled the call from an empty accumulator, `from_str("")`
+///    failed, and `.unwrap_or` substituted `{}` — so **every** Gemini tool call
+///    ran with empty input, not merely parallel ones.
+/// 2. **Parallel calls were dropped.** Gemini emits them as several
+///    `functionCall` parts of one candidate; returning on the first discarded
+///    the rest.
+/// 3. **The usage handler was unreachable.** Both routes to it were blocked —
+///    a chunk with no `parts` returned early, and a chunk with text returned on
+///    the first text part — so `promptTokenCount` never arrived and token
+///    counts stayed zero.
+fn parse_google_chunk(v: &serde_json::Value) -> Result<Vec<StreamChunk>> {
+    let mut out = Vec::new();
+
     let candidates = match v["candidates"].as_array() {
         Some(c) => c,
-        None => return Ok(None),
+        None => return Ok(out),
     };
-    if candidates.is_empty() {
-        return Ok(None);
-    }
-
-    let content = &candidates[0]["content"];
-    let parts = match content["parts"].as_array() {
-        Some(p) => p,
-        None => return Ok(None),
+    let Some(candidate) = candidates.first() else {
+        return Ok(out);
     };
 
-    for part in parts {
-        // Text delta
-        if let Some(text) = part["text"].as_str() {
-            return Ok(Some(StreamChunk::TextDelta {
-                text: text.to_string(),
-            }));
-        }
+    // `parts` may be absent on a pure finish/usage frame. That is not a reason
+    // to return — the usage below is exactly what such a frame carries.
+    if let Some(parts) = candidate["content"]["parts"].as_array() {
+        for (idx, part) in parts.iter().enumerate() {
+            if let Some(text) = part["text"].as_str() {
+                out.push(StreamChunk::TextDelta {
+                    text: text.to_string(),
+                });
+                continue;
+            }
 
-        // Function call (tool use)
-        if let Some(func_call) = part["functionCall"].as_object() {
-            let name = func_call
-                .get("name")
-                .and_then(|n| n.as_str())
-                .unwrap_or("")
-                .to_string();
-            let _args = func_call.get("args").cloned().unwrap_or(json!({}));
+            if let Some(func_call) = part["functionCall"].as_object() {
+                let name = func_call
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let args = func_call.get("args").cloned().unwrap_or_else(|| json!({}));
 
-            // Gemini sends complete function calls, not deltas
-            return Ok(Some(StreamChunk::ToolUseStart {
-                id: format!("gemini-{}", name),
-                name,
-                block_index: 0,
-            }));
+                // The part index is the block index. Hardcoding 0 made two
+                // calls in one message collide in the engine's correlation map,
+                // and made the id collide whenever one tool was called twice.
+                let block_index = idx as u64;
+                out.push(StreamChunk::ToolUseStart {
+                    id: format!("gemini-{name}-{block_index}"),
+                    name,
+                    block_index,
+                });
+
+                // Gemini sends complete calls rather than deltas, so the whole
+                // argument object goes in one delta. `ToolInputDelta` already
+                // carries it — no enum change is needed, and the engine's
+                // accumulator handles it identically to Anthropic's partials.
+                out.push(StreamChunk::ToolInputDelta {
+                    block_index,
+                    partial_json: args.to_string(),
+                });
+            }
         }
     }
 
-    // Check for finish reason
-    if let Some(finish_reason) = candidates[0]["finishReason"].as_str() {
-        // Extract usage metadata if present
-        let usage_metadata = &v["usageMetadata"];
-        let tokens_in = usage_metadata["promptTokenCount"].as_u64().unwrap_or(0) as u32;
-        let tokens_out = usage_metadata["candidatesTokenCount"].as_u64().unwrap_or(0) as u32;
+    if let Some(finish_reason) = candidate["finishReason"].as_str() {
+        let usage = &v["usageMetadata"];
+        let prompt_total = usage["promptTokenCount"].as_u64().unwrap_or(0) as u32;
+        let cached_read = usage["cachedContentTokenCount"].as_u64().unwrap_or(0) as u32;
+        let output = usage["candidatesTokenCount"].as_u64().unwrap_or(0) as u32;
+        // Billed but not part of output. Never read before this change.
+        let reasoning = usage["thoughtsTokenCount"].as_u64().unwrap_or(0) as u32;
 
-        if tokens_in > 0 || tokens_out > 0 {
-            return Ok(Some(StreamChunk::MessageDelta {
-                stop_reason: finish_reason.to_string(),
-                tokens_in,
-                tokens_out,
-            }));
-        }
+        // Emitted even when every count is zero: the stop reason is the only
+        // signal that distinguishes a `max_tokens` truncation from a clean
+        // finish, and gating it on a non-zero token count — as the previous
+        // version did — threw that away whenever usage was absent.
+        out.push(StreamChunk::MessageDelta {
+            stop_reason: finish_reason.to_string(),
+            usage: Usage::from_inclusive_input(prompt_total, cached_read, 0, output).with_reasoning(reasoning),
+        });
     }
 
-    Ok(None)
+    Ok(out)
 }
 
 fn parse_completion_response(data: serde_json::Value) -> Result<CompletionResponse> {
@@ -391,8 +421,14 @@ fn parse_completion_response(data: serde_json::Value) -> Result<CompletionRespon
         .to_string();
 
     let usage_metadata = &data["usageMetadata"];
-    let tokens_in = usage_metadata["promptTokenCount"].as_u64().unwrap_or(0) as u32;
-    let tokens_out = usage_metadata["candidatesTokenCount"].as_u64().unwrap_or(0) as u32;
+    // INCLUSIVE vendor: `promptTokenCount` contains the cached tokens.
+    let usage = Usage::from_inclusive_input(
+        usage_metadata["promptTokenCount"].as_u64().unwrap_or(0) as u32,
+        usage_metadata["cachedContentTokenCount"].as_u64().unwrap_or(0) as u32,
+        0,
+        usage_metadata["candidatesTokenCount"].as_u64().unwrap_or(0) as u32,
+    )
+    .with_reasoning(usage_metadata["thoughtsTokenCount"].as_u64().unwrap_or(0) as u32);
 
     let mut content = Vec::new();
     if let Some(candidate) = candidates.get(0) {
@@ -428,8 +464,11 @@ fn parse_completion_response(data: serde_json::Value) -> Result<CompletionRespon
         message_id: "".to_string(),
         content,
         stop_reason,
-        tokens_in,
-        tokens_out,
+        usage,
         model: "gemini".to_string(),
     })
 }
+
+#[cfg(test)]
+#[path = "google_tests.rs"]
+mod google_tests;

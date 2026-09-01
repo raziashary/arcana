@@ -15,7 +15,6 @@ rusqlite    = { version = "0.31", features = ["bundled"] }
 reqwest     = { version = "0.12", features = ["json", "stream"] }
 async-trait = "0.1"
 futures     = "0.3"
-ollama-rs   = { version = "0.3.4", features = ["stream"] }
 uuid        = { version = "1", features = ["v4"] }
 keyring     = "2"
 serde_yaml  = "0.9"

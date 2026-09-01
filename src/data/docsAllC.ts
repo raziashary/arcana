@@ -32,7 +32,7 @@ export const C_SECTIONS: DocSection[] = [
         ['Anthropic', 'claude-haiku-4-5, claude-sonnet-4-5, claude-opus-4-5'],
         ['OpenAI', 'gpt-4o, gpt-4o-mini, o1, o3-mini'],
         ['Google Gemini', 'gemini-2.5-pro, gemini-2.5-flash'],
-        ['Ollama', 'Local models with custom endpoint'],
+        
         ['Azure OpenAI', 'Custom deployment URL + key'],
         ['AWS Bedrock', 'Regional Claude/Titan models'],
       ]},

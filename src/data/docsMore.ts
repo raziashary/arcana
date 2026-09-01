@@ -15,7 +15,7 @@ export const MORE_SECTIONS: DocSection[] = [
       { t: 'prose', text: 'Shows the live status of AutoDev\'s two Python sidecars: core-orchestrator (port 4000) and memory-mcp-server (port 3001). Green = running, red = offline. Provides start/stop/restart controls.' },
       { t: 'h2', text: 'Providers & Models' },
       { t: 'prose', text: 'Configure LLM providers. Each provider requires an API key stored in the OS keychain (Tauri vault). Select the default model for PA and for each worker. Available providers:' },
-      { t: 'list', items: ['Anthropic (claude-haiku-4-5, claude-sonnet-4-5, claude-opus-4-5)', 'OpenAI (gpt-4o, gpt-4o-mini, o1, o3-mini)', 'Google Gemini (gemini-2.5-pro, gemini-2.5-flash)', 'Ollama (local models, custom endpoint)', 'Azure OpenAI', 'AWS Bedrock'] },
+      { t: 'list', items: ['Google (gemini-3.5-pro, gemini-3.5-flash)', 'Anthropic (claude-opus-5, claude-sonnet-5, claude-fable-5, claude-haiku-4-5)', 'OpenAI (gpt-5.5, gpt-5.4, gpt-5.3-codex)'] },
       { t: 'h2', text: 'GitHub Configuration' },
       { t: 'prose', text: 'Provide a Personal Access Token (PAT) with repo + read:org scopes. AutoDev uses this for: reading Issues, creating PRs, and the QC agent merging approved branches.' },
       { t: 'h2', text: 'Workers (Fleet)' },

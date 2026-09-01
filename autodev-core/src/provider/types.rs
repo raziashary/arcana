@@ -1,3 +1,4 @@
+use super::usage::Usage;
 // Provider data types shared across all LLM provider implementations.
 
 use serde::{Deserialize, Serialize};
@@ -73,8 +74,10 @@ pub struct CompletionResponse {
     pub message_id: String,
     pub content: Vec<MessageContent>,
     pub stop_reason: String, // "end_turn" | "tool_use" | "max_tokens"
-    pub tokens_in: u32,
-    pub tokens_out: u32,
+    /// Six-field provider-reported usage. Replaced `tokens_in`/`tokens_out`
+    /// in P2-01: two fields cannot price a cached call, and cache_read is the
+    /// only instrument that can tell whether caching works at all.
+    pub usage: Usage,
     pub model: String,
 }
 
@@ -100,8 +103,7 @@ pub enum StreamChunk {
     },
     MessageDelta {
         stop_reason: String,
-        tokens_in: u32,
-        tokens_out: u32,
+        usage: Usage,
     },
     Done,
 }

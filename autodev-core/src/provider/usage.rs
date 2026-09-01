@@ -101,6 +101,16 @@ impl Usage {
         }
     }
 
+    /// Attach reasoning tokens, which are billed but are not output.
+    ///
+    /// A builder rather than a field in `from_inclusive_input`: only some
+    /// providers report them, and threading an `Option` through the common
+    /// constructor would make every call site carry a `None` it does not mean.
+    pub fn with_reasoning(mut self, reasoning: u32) -> Self {
+        self.reasoning = reasoning;
+        self
+    }
+
     /// Accumulate across the turns of a session.
     pub fn add(&mut self, other: &Usage) {
         self.input = self.input.saturating_add(other.input);

@@ -27,7 +27,7 @@ pub struct Cli {
     #[arg(long, global = true, env = "AIRSCTL_WORKING_DIR")]
     pub working_dir: Option<String>,
 
-    /// LLM provider override (e.g. anthropic, openai, ollama)
+    /// LLM provider override (e.g. google, anthropic, openai)
     #[arg(long, global = true, env = "AIRSDEV_PROVIDER")]
     pub provider: Option<String>,
 

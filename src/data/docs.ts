@@ -45,10 +45,10 @@ export const SECTIONS: DocSection[] = [
       { t: 'list', items: ['Locked to Anthropic subscriptions — rate limits cripple 24/7 agents', '512,000-line source leak (March 31 2026) exposed vulnerabilities', 'No model flexibility — cannot route workers to cheaper models', 'Proprietary — cannot audit, fork, or adapt'] },
       { t: 'callout', text: 'March 2026 source map leak confirmed — building a custom harness reduces dependency on opaque binaries.', variant: 'warn' },
       { t: 'h3', text: 'AutoDev Advantage' },
-      { t: 'list', items: ['Model-agnostic by design (Anthropic / OpenAI / Gemini / Ollama)', 'AUTODEV.md-native with SQLite-backed instruction system', 'AutoDev-native GitHub Issues board understanding', 'Secure and auditable — AIRS controls the harness', 'Downloadable single installer — no Python/Docker for end users'] },
+      { t: 'list', items: ['Model-agnostic by design (Google Gemini / Anthropic / OpenAI)', 'AUTODEV.md-native with SQLite-backed instruction system', 'AutoDev-native GitHub Issues board understanding', 'Secure and auditable — AIRS controls the harness', 'Downloadable single installer — no Python/Docker for end users'] },
       { t: 'h2', text: 'Key Features' },
       { t: 'table', headers: ['Feature', 'Detail', 'Status'], rows: [
-        ['Model-agnostic', 'Anthropic, OpenAI, Gemini, Ollama, Azure, Bedrock', 'live'],
+        ['Model-agnostic', 'Google Gemini, Anthropic, OpenAI', 'live'],
         ['Memory system', '3-tier episodic/semantic/procedural with context scoring', 'live'],
         ['Agent orchestration', '21 FSMs + A2A protocol via core-orchestrator', 'live'],
         ['AUTODEV.md system', 'SQLite-backed, editable from UI', 'live'],

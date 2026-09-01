@@ -9,6 +9,7 @@ use serde_json::json;
 use tracing::{debug, error};
 
 use super::traits::{Provider, StreamResult};
+use super::usage::Usage;
 use super::types::{
     CompletionRequest, CompletionResponse, MessageContent, ModelInfo, ProviderStatus, StreamChunk,
 };
@@ -388,21 +389,29 @@ fn parse_openai_chunk(v: &serde_json::Value) -> Result<Option<StreamChunk>> {
     if let Some(finish_reason) = choices[0]["finish_reason"].as_str() {
         if finish_reason != "null" && !finish_reason.is_empty() {
             // Extract usage if present
-            if let Some(usage) = v["usage"].as_object() {
-                let tokens_in = usage
-                    .get("prompt_tokens")
-                    .and_then(|t| t.as_u64())
-                    .unwrap_or(0) as u32;
-                let tokens_out = usage
-                    .get("completion_tokens")
-                    .and_then(|t| t.as_u64())
-                    .unwrap_or(0) as u32;
-                return Ok(Some(StreamChunk::MessageDelta {
-                    stop_reason: finish_reason.to_string(),
-                    tokens_in,
-                    tokens_out,
-                }));
-            }
+            // ⚠ OpenAI reports cached tokens INSIDE `prompt_tokens`, so the
+            // cached count is subtracted to reach `Usage`'s meaning. Treating
+            // it the way Anthropic is treated would bill cached tokens twice,
+            // at the uncached rate.
+            let u = &v["usage"];
+            let prompt_total = u["prompt_tokens"].as_u64().unwrap_or(0) as u32;
+            let cached_read = u["prompt_tokens_details"]["cached_tokens"]
+                .as_u64()
+                .unwrap_or(0) as u32;
+            let output = u["completion_tokens"].as_u64().unwrap_or(0) as u32;
+            let reasoning = u["completion_tokens_details"]["reasoning_tokens"]
+                .as_u64()
+                .unwrap_or(0) as u32;
+
+            // Emitted whether or not a usage object was present. Gating this on
+            // usage — as the previous version did — meant the stop reason was
+            // discarded on every stream, since `stream_options.include_usage`
+            // is what produces that object and was never sent.
+            return Ok(Some(StreamChunk::MessageDelta {
+                stop_reason: finish_reason.to_string(),
+                usage: Usage::from_inclusive_input(prompt_total, cached_read, 0, output)
+                    .with_reasoning(reasoning),
+            }));
         }
     }
 
@@ -412,8 +421,19 @@ fn parse_openai_chunk(v: &serde_json::Value) -> Result<Option<StreamChunk>> {
 fn parse_completion_response(data: serde_json::Value) -> Result<CompletionResponse> {
     let message_id = data["id"].as_str().unwrap_or("").to_string();
     let model = data["model"].as_str().unwrap_or("").to_string();
-    let tokens_in = data["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32;
-    let tokens_out = data["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32;
+    // INCLUSIVE vendor — see the streaming path above.
+    let u = &data["usage"];
+    let usage = Usage::from_inclusive_input(
+        u["prompt_tokens"].as_u64().unwrap_or(0) as u32,
+        u["prompt_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0) as u32,
+        0,
+        u["completion_tokens"].as_u64().unwrap_or(0) as u32,
+    )
+    .with_reasoning(
+        u["completion_tokens_details"]["reasoning_tokens"]
+            .as_u64()
+            .unwrap_or(0) as u32,
+    );
 
     let empty_array = vec![];
     let choices = data["choices"].as_array().unwrap_or(&empty_array);
@@ -452,8 +472,7 @@ fn parse_completion_response(data: serde_json::Value) -> Result<CompletionRespon
         message_id,
         content,
         stop_reason,
-        tokens_in,
-        tokens_out,
+        usage,
         model,
     })
 }

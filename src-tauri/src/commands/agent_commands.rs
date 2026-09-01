@@ -9,7 +9,6 @@ use crate::agent::permission::{PendingPermissions, PermissionMode, PermissionRes
 use crate::errors::{AutoDevError, Result};
 use crate::provider::anthropic::AnthropicProvider;
 use crate::provider::google::GoogleProvider;
-use crate::provider::ollama::OllamaProvider;
 use crate::provider::openai::OpenAIProvider;
 use crate::provider::traits::Provider;
 use crate::session::{manager::SessionManager, types::Message};
@@ -43,14 +42,13 @@ pub async fn send_message(
         (p, m)
     };
 
-    // Load API key from vault (not needed for local Ollama provider)
-    let api_key = if provider_id != "ollama" {
-        VaultManager::get(&provider_key(&provider_id))?.ok_or_else(|| {
-            AutoDevError::Agent(format!("No API key for provider '{provider_id}'"))
-        })?
-    } else {
-        String::new()
-    };
+    // Load API key from vault. Every supported provider needs one; the
+    // keyless local-provider branch went with Ollama (P2-11).
+    // Every supported provider takes a key; the keyless branch went with
+    // Ollama (P2-11).
+    let api_key = VaultManager::get(&provider_key(&provider_id))?.ok_or_else(|| {
+        AutoDevError::Agent(format!("No API key for provider '{provider_id}'"))
+    })?;
 
     // Load session history
     let session = session_mgr
@@ -139,7 +137,6 @@ pub async fn send_message(
             "anthropic" => Arc::new(AnthropicProvider::new(api_key)),
             "openai" => Arc::new(OpenAIProvider::new(api_key)),
             "google" => Arc::new(GoogleProvider::new(api_key)),
-            "ollama" => Arc::new(OllamaProvider::default_from_env()),
             _ => {
                 tracing::error!("Unsupported provider: {}", provider_id_c);
                 return;

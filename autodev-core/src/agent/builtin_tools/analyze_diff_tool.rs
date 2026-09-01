@@ -6,7 +6,6 @@ use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 use crate::diff_analysis::DiffAnalyzer;
 use crate::provider::anthropic::AnthropicProvider;
 use crate::provider::google::GoogleProvider;
-use crate::provider::ollama::OllamaProvider;
 use crate::provider::openai::OpenAIProvider;
 use crate::provider::traits::Provider;
 use crate::vault::keychain::{provider_key, VaultManager};
@@ -244,19 +243,14 @@ fn build_analyzer_from_vault() -> crate::errors::Result<DiffAnalyzer> {
     let model =
         std::env::var("AUTODEV_ACTIVE_MODEL").unwrap_or_else(|_| "claude-sonnet-4-6".to_string());
 
-    let api_key = if provider_id != "ollama" {
-        VaultManager::get(&provider_key(&provider_id))?.ok_or_else(|| {
-            AutoDevError::Agent(format!("No API key for provider '{provider_id}'"))
-        })?
-    } else {
-        String::new()
-    };
+    let api_key = VaultManager::get(&provider_key(&provider_id))?.ok_or_else(|| {
+        AutoDevError::Agent(format!("No API key for provider '{provider_id}'"))
+    })?;
 
     let provider: Arc<dyn Provider> = match provider_id.as_str() {
         "anthropic" => Arc::new(AnthropicProvider::new(api_key)),
         "openai" => Arc::new(OpenAIProvider::new(api_key)),
         "google" => Arc::new(GoogleProvider::new(api_key)),
-        "ollama" => Arc::new(OllamaProvider::default_from_env()),
         other => return Err(AutoDevError::Agent(format!("Unknown provider: {other}"))),
     };
 

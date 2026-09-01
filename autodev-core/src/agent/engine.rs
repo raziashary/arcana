@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use super::builtin_tools;
@@ -27,6 +27,7 @@ use crate::provider::traits::Provider;
 use crate::provider::types::{CompletionRequest, MessageContent, RequestMessage, StreamChunk};
 use crate::session::manager::SessionManager;
 use crate::state::AppState;
+use crate::provider::usage::Usage;
 
 const MAX_TOOL_TURNS: usize = 20;
 
@@ -135,8 +136,7 @@ impl AgentEngine {
         };
 
         let mut turn = 0;
-        let mut total_tokens_in: u32 = 0;
-        let mut total_tokens_out: u32 = 0;
+        let mut total_usage = Usage::default();
         // Ruflo Feature 4 — cumulative budget usage tracked across all turns
         let mut budget_status = crate::budget::BudgetStatus::default();
 
@@ -153,8 +153,8 @@ impl AgentEngine {
                 worker_id: None,
                 extra: serde_json::json!({
                     "turn": turn,
-                    "total_tokens_in": total_tokens_in,
-                    "total_tokens_out": total_tokens_out,
+                    "total_tokens_in": total_usage.total_input(),
+                    "total_tokens_out": total_usage.output,
                 }),
             };
             HookRegistry::fire(&HookType::AgentLoopStart, &loop_ctx).await;
@@ -217,21 +217,31 @@ impl AgentEngine {
             debug!("Starting LLM stream turn={turn} session={session_id}");
 
             // Stream response from provider
+            let mut turn_stop_reason: Option<String> = None;
             let stream_result = self
                 .stream_response(
                     session_id,
                     model,
                     request,
-                    &mut total_tokens_in,
-                    &mut total_tokens_out,
+                    &mut total_usage,
+                    &mut turn_stop_reason,
                 )
                 .await;
 
+            // P2-46. A turn cut short by the token ceiling is not a finished
+            // turn, and continuing the loop over a truncated assistant message
+            // silently corrupts the conversation.
+            if turn_stop_reason.as_deref() == Some("max_tokens") {
+                warn!(
+                    "Turn truncated by max_tokens (model={model}); the response is incomplete"
+                );
+            }
+
             // Ruflo Feature 4 — accumulate token usage into budget_status after each LLM response
             if let Ok(ref _r) = stream_result {
-                budget_status.tokens_used = (total_tokens_in + total_tokens_out) as u64;
+                budget_status.tokens_used = total_usage.total() as u64;
                 budget_status.cost_usd =
-                    CostTracker::calculate(model, total_tokens_in, total_tokens_out).cost_usd;
+                    CostTracker::calculate(model, total_usage.total_input(), total_usage.output).cost_usd;
                 if let Some(tid) = self.task_id {
                     if let Ok(db) = crate::db::tasks::TasksDb::open() {
                         let _ = db.update_task_budget_usage(
@@ -360,17 +370,17 @@ impl AgentEngine {
             worker_id: None,
             extra: serde_json::json!({
                 "final_turn": turn,
-                "total_tokens_in": total_tokens_in,
-                "total_tokens_out": total_tokens_out,
+                "total_tokens_in": total_usage.total_input(),
+                "total_tokens_out": total_usage.output,
             }),
         };
         HookRegistry::fire(&HookType::AgentLoopEnd, &loop_end_ctx).await;
 
         // Record cost in app state
-        let cost = CostTracker::calculate(model, total_tokens_in, total_tokens_out);
+        let cost = CostTracker::calculate(model, total_usage.total_input(), total_usage.output);
         {
             let mut state = self.state.lock().unwrap();
-            state.add_cost(cost.cost_usd, total_tokens_in, total_tokens_out);
+            state.add_cost(cost.cost_usd, total_usage.total_input(), total_usage.output);
         }
 
         // Phase 7.5 — Record token usage in analytics DB.
@@ -393,8 +403,8 @@ impl AgentEngine {
                 "mode1_agent".to_string(),
                 analytics_provider.to_string(),
                 model.to_string(),
-                total_tokens_in as i32,
-                total_tokens_out as i32,
+                total_usage.total_input() as i32,
+                total_usage.output as i32,
                 None,
                 cost.cost_usd,
                 "agent_session".to_string(),
@@ -406,8 +416,8 @@ impl AgentEngine {
         emit_agent_done(AgentDonePayload {
             session_id: session_id.to_string(),
             message_id: Uuid::new_v4().to_string(),
-            tokens_in: total_tokens_in,
-            tokens_out: total_tokens_out,
+            tokens_in: total_usage.total_input(),
+            tokens_out: total_usage.output,
             cost_usd: cost.cost_usd,
         });
 
@@ -416,14 +426,21 @@ impl AgentEngine {
 
     /// Stream a single LLM response, emitting token events to the frontend.
     /// Returns the fully assembled response content blocks.
+    /// `stop_reason` is an out-parameter because the caller must be able to
+    /// tell a `max_tokens` truncation from a clean finish (P2-46). It used to be
+    /// destructured away with `..`, so the two were literally the same code
+    /// path and silent truncation was invisible.
     async fn stream_response(
         &self,
         session_id: &str,
-        _model: &str,
+        model: &str,
         request: CompletionRequest,
-        total_tokens_in: &mut u32,
-        total_tokens_out: &mut u32,
+        total_usage: &mut Usage,
+        stop_reason: &mut Option<String>,
     ) -> Result<Vec<MessageContent>> {
+        // P2-58: `model` was `_model` — a parameter passed live and never read,
+        // sitting exactly where per-model streaming behaviour would go.
+        debug!("stream_response: model={model}");
         use futures::StreamExt;
 
         let mut stream = self.provider.stream(request).await?;
@@ -472,12 +489,15 @@ impl AgentEngine {
                     }
                 }
                 StreamChunk::MessageDelta {
-                    tokens_in,
-                    tokens_out,
-                    ..
+                    stop_reason: reason,
+                    usage,
                 } => {
-                    *total_tokens_in += tokens_in;
-                    *total_tokens_out += tokens_out;
+                    total_usage.add(&usage);
+                    // `message_start` opens the message and carries no stop
+                    // reason; only a non-empty value is a real one.
+                    if !reason.is_empty() {
+                        *stop_reason = Some(reason);
+                    }
                 }
                 StreamChunk::Done => break,
             }

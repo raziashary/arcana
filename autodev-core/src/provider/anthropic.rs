@@ -10,6 +10,7 @@ use tracing::{debug, error};
 
 use super::streaming::parse_sse_line;
 use super::traits::{Provider, StreamResult};
+use super::usage::Usage;
 use super::types::{
     CompletionRequest, CompletionResponse, MessageContent, ModelInfo, ProviderStatus, StreamChunk,
 };
@@ -284,8 +285,18 @@ fn parse_completion_response(data: serde_json::Value) -> Result<CompletionRespon
         .unwrap_or("end_turn")
         .to_string();
     let model = data["model"].as_str().unwrap_or("").to_string();
-    let tokens_in = data["usage"]["input_tokens"].as_u64().unwrap_or(0) as u32;
-    let tokens_out = data["usage"]["output_tokens"].as_u64().unwrap_or(0) as u32;
+    // Anthropic already EXCLUDES cached tokens from `input_tokens`, which is
+    // the meaning `Usage` fixes — so these are used as reported, with no
+    // subtraction. Doing what OpenAI/Google need here would under-count.
+    let u = &data["usage"];
+    let usage = Usage {
+        input: u["input_tokens"].as_u64().unwrap_or(0) as u32,
+        cached_read: u["cache_read_input_tokens"].as_u64().unwrap_or(0) as u32,
+        cache_write: u["cache_creation_input_tokens"].as_u64().unwrap_or(0) as u32,
+        output: u["output_tokens"].as_u64().unwrap_or(0) as u32,
+        reasoning: 0,
+        tool: 0,
+    };
 
     let content = data["content"]
         .as_array()
@@ -308,8 +319,7 @@ fn parse_completion_response(data: serde_json::Value) -> Result<CompletionRespon
         message_id,
         content,
         stop_reason,
-        tokens_in,
-        tokens_out,
+        usage,
         model,
     })
 }
