@@ -366,28 +366,57 @@ impl AgentEngine {
                 Vec::new()
             };
 
-            // Assemble results in order (unknown tools first, then batch results)
-            let mut tool_results: Vec<MessageContent> = unknown_tools
-                .into_iter()
-                .map(|(tool_use_id, name)| MessageContent::ToolResult {
-                    tool_use_id,
-                    content: format!("Unknown tool: {name}"),
-                    is_error: true,
-                })
-                .collect();
-
-            tool_results.extend(batch_results.into_iter().map(|(tool_use_id, result)| {
-                // Append hint inline so the LLM reads it as part of the result content.
+            // ── P2-61 · results follow the order of the CALLS ───────────
+            //
+            // This used to emit every unknown-tool error first and then the
+            // batch results, so the result sequence did not parallel the
+            // assistant message's tool_use sequence. Anthropic tolerates it;
+            // OpenAI emits `tool` messages in exactly this vec order, so a
+            // mismatch there pairs results with the wrong calls. It is also a
+            // third source of message-level churn once caching is on.
+            //
+            // Collected into a map and then walked in `tool_calls` order, which
+            // is the order the model emitted and (since P2-59) the order the
+            // assistant message carries.
+            let mut by_id: std::collections::HashMap<String, (String, bool)> =
+                std::collections::HashMap::new();
+            for (tool_use_id, name) in unknown_tools {
+                by_id.insert(tool_use_id, (format!("Unknown tool: {name}"), true));
+            }
+            for (tool_use_id, result) in batch_results {
+                // Hint appended inline so the model reads it as part of the result.
                 let content = match result.hint {
                     Some(hint) => format!("{}\n\n[HINT] {}", result.output, hint),
                     None => result.output,
                 };
-                MessageContent::ToolResult {
-                    tool_use_id,
-                    content,
-                    is_error: result.is_error,
+                by_id.insert(tool_use_id, (content, result.is_error));
+            }
+
+            let mut tool_results: Vec<MessageContent> = Vec::new();
+            for tc in &tool_calls {
+                if let MessageContent::ToolUse { id, name, .. } = tc {
+                    if let Some((content, is_error)) = by_id.remove(id) {
+                        tool_results.push(MessageContent::ToolResult {
+                            tool_use_id: id.clone(),
+                            name: name.clone(),
+                            content,
+                            is_error,
+                        });
+                    }
                 }
-            }));
+            }
+            // Anything left produced a result for a call the model did not make.
+            // It cannot be placed in order, and dropping it silently would hide
+            // a real executor bug — so it goes last, loudly.
+            for (tool_use_id, (content, is_error)) in by_id {
+                warn!("Tool result for an unrequested call id={tool_use_id}");
+                tool_results.push(MessageContent::ToolResult {
+                    tool_use_id,
+                    name: String::new(),
+                    content,
+                    is_error,
+                });
+            }
 
             // Add tool results as user message (Anthropic convention)
             history.push(RequestMessage {

@@ -38,6 +38,16 @@ pub enum MessageContent {
     },
     ToolResult {
         tool_use_id: String,
+        /// The tool this result came from.
+        ///
+        /// Added in P2-37. Google's `functionResponse` keys on the function
+        /// **name**, and the adapter was sending the tool-use **id** — so with
+        /// ids of the form `gemini-read_file-0` the round trip told Gemini a
+        /// function called `gemini-read_file-0` had replied, which is not a
+        /// function it knows. Recovering the name by parsing the id back would
+        /// work only for ids this adapter minted; carrying it is correct for
+        /// history from any provider.
+        name: String,
         content: String,
         is_error: bool,
     },

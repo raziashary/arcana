@@ -62,6 +62,16 @@ impl GoogleProvider {
         ]
     }
 
+    /// The request body, for conformance tests.
+    ///
+    /// Exposes the real builder rather than letting a test reimplement it —
+    /// a test that constructs its own body proves only that the test agrees
+    /// with itself.
+    #[cfg(test)]
+    pub fn build_body_for_test(&self, req: &CompletionRequest, _stream: bool) -> serde_json::Value {
+        self.build_body(req)
+    }
+
     fn build_body(&self, req: &CompletionRequest) -> serde_json::Value {
         // Convert messages to Gemini format
         let mut contents = Vec::new();
@@ -71,7 +81,18 @@ impl GoogleProvider {
             let role = match msg.role.as_str() {
                 "user" => "user",
                 "assistant" => "model",
-                _ => "user",
+                // P2-40. Gemini knows only `user` and `model`. Coercing is the
+                // right call — dropping the message loses context the model
+                // needs — but it was silent, and OpenAI dropped the same
+                // message instead. Two adapters, two different silent
+                // behaviours. Now coerced *and* logged, on both.
+                other => {
+                    tracing::warn!(
+                        "Gemini has no role '{other}'; sending it as 'user'. \
+                         The content is preserved, the attribution is not."
+                    );
+                    "user"
+                }
             };
 
             let parts: Vec<serde_json::Value> = msg
@@ -86,13 +107,26 @@ impl GoogleProvider {
                         }
                     }),
                     MessageContent::ToolResult {
-                        tool_use_id,
+                        tool_use_id: _,
+                        name,
                         content,
-                        is_error: _,
+                        is_error,
                     } => json!({
                         "functionResponse": {
-                            "name": tool_use_id,
-                            "response": { "result": content }
+                            // P2-37: the NAME, not the id. Sending the id told
+                            // Gemini that a function called `gemini-read_file-0`
+                            // had replied.
+                            "name": name,
+                            // P2-38: Gemini's wire format carries no error flag,
+                            // so failure is expressed in the payload. Dropping
+                            // it made a failed tool indistinguishable from a
+                            // successful one, and the model would build on a
+                            // result that never happened.
+                            "response": if *is_error {
+                                json!({ "error": content })
+                            } else {
+                                json!({ "result": content })
+                            }
                         }
                     }),
                 })
@@ -138,8 +172,14 @@ impl GoogleProvider {
             body["tools"] = json!(tools);
         }
 
-        // generationConfig: temperature, topP, thinkingConfig
+        // generationConfig: maxOutputTokens, temperature, topP, thinkingConfig
         let mut gen_config = serde_json::Map::new();
+        // P2-08/P2-45. `maxOutputTokens` appeared NOWHERE in the tree, so
+        // `max_tokens` was honoured by the Anthropic adapter alone. A Gemini
+        // turn had no output ceiling at all and could not report hitting one.
+        // Unconditional: the engine always supplies a ceiling, and an absent
+        // one is what silent truncation is made of.
+        gen_config.insert("maxOutputTokens".into(), json!(req.max_tokens));
         if let Some(temp) = req.temperature {
             gen_config.insert("temperature".into(), json!(temp));
         }
@@ -152,9 +192,10 @@ impl GoogleProvider {
                 json!({ "thinkingBudget": req.thinking_budget_tokens }),
             );
         }
-        if !gen_config.is_empty() {
-            body["generationConfig"] = serde_json::Value::Object(gen_config);
-        }
+        // Unconditional: `maxOutputTokens` is always inserted above, so the
+        // emptiness check that used to guard this could no longer fail. A guard
+        // that cannot fire is worse than no guard — it reads as a condition.
+        body["generationConfig"] = serde_json::Value::Object(gen_config);
 
         body
     }

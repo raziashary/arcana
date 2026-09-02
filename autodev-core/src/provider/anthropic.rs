@@ -64,6 +64,16 @@ impl AnthropicProvider {
         ]
     }
 
+    /// The request body, for conformance tests.
+    ///
+    /// Exposes the real builder rather than letting a test reimplement it —
+    /// a test that constructs its own body proves only that the test agrees
+    /// with itself.
+    #[cfg(test)]
+    pub fn build_body_for_test(&self, req: &CompletionRequest, _stream: bool) -> serde_json::Value {
+        self.build_body(req, _stream)
+    }
+
     fn build_body(&self, req: &CompletionRequest, stream: bool) -> serde_json::Value {
         // Phase 7.1 — normalize all model identifiers to bare direct-API IDs.
         //
@@ -104,6 +114,11 @@ impl AnthropicProvider {
                         }),
                         MessageContent::ToolResult {
                             tool_use_id,
+                            // Anthropic keys tool results on the id, not the
+                            // name, so the name is unused here — but it is
+                            // matched explicitly rather than with `..` so a
+                            // future field cannot be silently ignored.
+                            name: _,
                             content,
                             is_error,
                         } => json!({

@@ -71,6 +71,16 @@ impl OpenAIProvider {
         ]
     }
 
+    /// The request body, for conformance tests.
+    ///
+    /// Exposes the real builder rather than letting a test reimplement it —
+    /// a test that constructs its own body proves only that the test agrees
+    /// with itself.
+    #[cfg(test)]
+    pub fn build_body_for_test(&self, req: &CompletionRequest, _stream: bool) -> serde_json::Value {
+        self.build_body(req, _stream)
+    }
+
     fn build_body(&self, req: &CompletionRequest, stream: bool) -> serde_json::Value {
         let mut messages: Vec<serde_json::Value> = Vec::new();
 
@@ -92,23 +102,43 @@ impl OpenAIProvider {
                     .filter(|c| matches!(c, MessageContent::ToolResult { .. }))
                     .collect();
 
+                // P2-39. This used to be `if !tool_results.is_empty() { ... }
+                // else { text }`, so any Text sharing a message with tool
+                // results was **dropped entirely** — the model's own commentary
+                // silently vanished from its history.
                 if !tool_results.is_empty() {
                     // Add tool result messages (role: "tool")
                     for tr in tool_results {
                         if let MessageContent::ToolResult {
                             tool_use_id,
+                            name: _,
                             content,
-                            is_error: _,
+                            is_error,
                         } = tr
                         {
+                            // P2-38. OpenAI's `tool` message carries no error
+                            // flag, so failure has to be in the payload.
+                            // Discarding it made a failed tool look identical
+                            // to a successful one on two of three providers,
+                            // and the model builds on a result that never
+                            // happened.
+                            let body = if *is_error {
+                                format!("ERROR: {content}")
+                            } else {
+                                content.clone()
+                            };
                             messages.push(json!({
                                 "role": "tool",
                                 "tool_call_id": tool_use_id,
-                                "content": content,
+                                "content": body,
                             }));
                         }
                     }
-                } else {
+                }
+
+                // Text in the same message is emitted regardless of whether
+                // tool results were present.
+                {
                     // Regular user text message
                     let text = m
                         .content
@@ -120,10 +150,12 @@ impl OpenAIProvider {
                         .collect::<Vec<_>>()
                         .join("\n");
 
-                    messages.push(json!({
-                        "role": "user",
-                        "content": text,
-                    }));
+                    if !text.is_empty() {
+                        messages.push(json!({
+                            "role": "user",
+                            "content": text,
+                        }));
+                    }
                 }
             } else if m.role == "assistant" {
                 // Assistant messages: separate text and tool_calls
@@ -161,6 +193,28 @@ impl OpenAIProvider {
                 }
 
                 messages.push(msg);
+            } else {
+                // P2-40. There was no `else` at all, so a message with any
+                // other role **vanished silently** — while Google coerced the
+                // same message to `user`. Two adapters, two different silent
+                // behaviours for identical input. Both now coerce and log.
+                tracing::warn!(
+                    "OpenAI has no role '{}'; sending it as 'user'. The content \
+                     is preserved, the attribution is not.",
+                    m.role
+                );
+                let text = m
+                    .content
+                    .iter()
+                    .filter_map(|c| match c {
+                        MessageContent::Text { text } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !text.is_empty() {
+                    messages.push(json!({ "role": "user", "content": text }));
+                }
             }
         }
 
@@ -197,8 +251,22 @@ impl OpenAIProvider {
         if let Some(ref effort) = req.reasoning_effort {
             body["reasoning_effort"] = json!(effort);
         }
+        // P2-08/P2-45. `max_tokens` was read only by the Anthropic adapter;
+        // OpenAI and Google never sent it, so the engine's ceiling silently
+        // applied to one provider of three and truncation could not be
+        // requested, let alone detected.
+        //
+        // `max_completion_tokens` is the current field name; `max_tokens` is
+        // deprecated and rejected outright by the reasoning models.
+        body["max_completion_tokens"] = json!(req.max_tokens);
+
         if stream {
             body["stream"] = json!(true);
+            // P2-42. Without this OpenAI sends no `usage` object on a stream at
+            // all, so `parse_openai_sse_line`'s usage branch was a guard that
+            // could never fire — token counts AND the stop reason were both
+            // structurally zero for every streaming call.
+            body["stream_options"] = json!({ "include_usage": true });
         }
         body
     }
@@ -340,7 +408,29 @@ fn parse_openai_chunk(v: &serde_json::Value) -> Result<Option<StreamChunk>> {
         Some(c) => c,
         None => return Ok(None),
     };
+    // P2-42, second half. OpenAI delivers the usage frame as a final chunk
+    // with `choices: []`. Returning here discarded it, so adding
+    // `stream_options` alone would still have produced nothing — two edits were
+    // required, and a fix that made only one would have looked complete.
     if choices.is_empty() {
+        let u = &v["usage"];
+        if u.is_object() {
+            let prompt_total = u["prompt_tokens"].as_u64().unwrap_or(0) as u32;
+            let cached_read = u["prompt_tokens_details"]["cached_tokens"]
+                .as_u64()
+                .unwrap_or(0) as u32;
+            let output = u["completion_tokens"].as_u64().unwrap_or(0) as u32;
+            let reasoning = u["completion_tokens_details"]["reasoning_tokens"]
+                .as_u64()
+                .unwrap_or(0) as u32;
+            return Ok(Some(StreamChunk::MessageDelta {
+                // This frame carries usage, not a stop reason; the reason
+                // arrived on the chunk that closed the choice.
+                stop_reason: String::new(),
+                usage: Usage::from_inclusive_input(prompt_total, cached_read, 0, output)
+                    .with_reasoning(reasoning),
+            }));
+        }
         return Ok(None);
     }
 
@@ -392,7 +482,11 @@ fn parse_openai_chunk(v: &serde_json::Value) -> Result<Option<StreamChunk>> {
 
     // Message completion
     if let Some(finish_reason) = choices[0]["finish_reason"].as_str() {
-        if finish_reason != "null" && !finish_reason.is_empty() {
+        // P2-41. The old guard also compared against the four-character STRING
+        // "null". JSON `null` yields `None` from `as_str()` and never reaches
+        // this line, so that comparison was inert — it read like a null check
+        // and tested nothing.
+        if !finish_reason.is_empty() {
             // Extract usage if present
             // ⚠ OpenAI reports cached tokens INSIDE `prompt_tokens`, so the
             // cached count is subtracted to reach `Usage`'s meaning. Treating

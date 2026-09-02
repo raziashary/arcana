@@ -13,3 +13,7 @@ pub mod usage;
 
 pub use traits::Provider;
 pub use types::{CompletionRequest, CompletionResponse, ModelInfo, ProviderStatus, StreamChunk};
+
+#[cfg(test)]
+#[path = "conformance_tests.rs"]
+mod conformance_tests;
