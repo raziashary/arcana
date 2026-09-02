@@ -51,6 +51,14 @@ pub struct PriceTier {
     pub above_tokens: u32,
     pub input: f64,
     pub output: f64,
+    /// Cached reads tier too, and at a different multiple from input.
+    ///
+    /// Added when `gemini-3.1-pro` became the first tiered model on offer: it
+    /// doubles input ($2→$4), raises output by 1.5× ($12→$18) **and** doubles
+    /// cached reads ($0.20→$0.40). A tier that carried only input and output
+    /// would have under-billed every cached token above the cliff — and cached
+    /// tokens are exactly what a long context is made of.
+    pub cached_read: f64,
 }
 
 /// Verified prices, each with the date it was checked.
@@ -60,11 +68,11 @@ pub struct PriceTier {
 ///
 /// **Deliberately absent, awaiting Razi (2026-09-02):**
 ///
-/// - `gemini-3.5-pro` — 🔴 **this model may not exist.** One source records it
-///   as announced at I/O 2026 for a June release that never shipped, and
-///   "delayed indefinitely as of August 2026". It is currently offered in
-///   `src/data/models.ts` as a primary option. Either the id is wrong or the
-///   model is unavailable; pricing it would be pricing a thing nobody can call.
+/// - ~~`gemini-3.5-pro`~~ → **RESOLVED 2026-09-02, razi-ruled.** That model was
+///   announced at I/O 2026 for a June release that never shipped and was
+///   delayed indefinitely, yet it sat in `models.ts` as a primary option — a
+///   model a user could select and never reach. Replaced by `gemini-3.1-pro`,
+///   which is real, priced, and tiered.
 /// - `gpt-5.5-pro` and `gpt-5.3-codex` — not found in this pass at a source I
 ///   would act on. Absent rather than guessed.
 ///
@@ -84,6 +92,24 @@ const PRICES: &[(&str, ModelPrice)] = &[
             cached_read: 0.15,
             cache_write: 0.08333,
             tier: None,
+        },
+    ),
+    (
+        "gemini-3.1-pro",
+        ModelPrice {
+            // Verified 2026-09-02. The first model on offer with a real price
+            // cliff, which is what `P2-20` exists for: above 200k tokens Google
+            // charges 2× input, 1.5× output and 2× cached reads.
+            input: 2.00,
+            output: 12.00,
+            cached_read: 0.20,
+            cache_write: 0.0,
+            tier: Some(PriceTier {
+                above_tokens: 200_000,
+                input: 4.00,
+                output: 18.00,
+                cached_read: 0.40,
+            }),
         },
     ),
     // Anthropic — verified 2026-09-02.
@@ -217,15 +243,15 @@ pub fn cost_usd(model: &str, usage: &Usage) -> Result<f64> {
     // The tier is chosen by total input, cached tokens included: the vendor's
     // cliff is about how much context was processed, not how much was billed at
     // the fresh rate.
-    let (input_rate, output_rate) = match price.tier {
-        Some(t) if usage.total_input() > t.above_tokens => (t.input, t.output),
-        _ => (price.input, price.output),
+    let (input_rate, output_rate, cached_rate) = match price.tier {
+        Some(t) if usage.total_input() > t.above_tokens => (t.input, t.output, t.cached_read),
+        _ => (price.input, price.output, price.cached_read),
     };
 
     let per_million = |tokens: u32, rate: f64| (tokens as f64 / 1_000_000.0) * rate;
 
     Ok(per_million(usage.input, input_rate)
-        + per_million(usage.cached_read, price.cached_read)
+        + per_million(usage.cached_read, cached_rate)
         + per_million(usage.cache_write, price.cache_write)
         // Reasoning tokens are billed at the output rate.
         + per_million(usage.output + usage.reasoning, output_rate))
@@ -297,6 +323,35 @@ mod tests {
     }
 
     #[test]
+    fn gemini_pro_crosses_its_real_200k_cliff() {
+        // The first shipped model with a genuine price cliff. Below 200k it is
+        // $2/$12; above, Google charges 2x input, 1.5x output and 2x cached.
+        let below = cost_usd("gemini-3.1-pro", &usage(100_000, 0, 0, 0)).unwrap();
+        assert!((below - 0.20).abs() < 1e-9, "100k at $2/1M = $0.20");
+
+        let above = cost_usd("gemini-3.1-pro", &usage(300_000, 0, 0, 0)).unwrap();
+        assert!((above - 1.20).abs() < 1e-9, "300k at $4/1M = $1.20");
+
+        // The doubling is real, not a rounding artifact: the same token count
+        // priced at both rates differs by exactly 2x.
+        let at_low = cost_usd("gemini-3.1-pro", &usage(200_000, 0, 0, 0)).unwrap();
+        let at_high = cost_usd("gemini-3.1-pro", &usage(200_001, 0, 0, 0)).unwrap();
+        assert!(at_high > at_low * 1.9, "crossing the cliff must roughly double");
+    }
+
+    #[test]
+    fn cached_reads_tier_too_and_not_at_the_input_multiple() {
+        // Input doubles ($2->$4) but cached reads also double ($0.20->$0.40),
+        // and output rises only 1.5x. A tier carrying input and output alone
+        // would have under-billed every cached token above the cliff -- and a
+        // long context is mostly cached tokens, so that is where the money is.
+        let below = cost_usd("gemini-3.1-pro", &usage(0, 100_000, 0, 0)).unwrap();
+        let above = cost_usd("gemini-3.1-pro", &usage(0, 300_000, 0, 0)).unwrap();
+        assert!((below - 0.02).abs() < 1e-9, "100k cached at $0.20/1M");
+        assert!((above - 0.12).abs() < 1e-9, "300k cached at $0.40/1M");
+    }
+
+    #[test]
     fn a_tiered_model_switches_rate_above_its_threshold() {
         // No shipped model has a tier yet, so this proves the mechanism rather
         // than a vendor's number. A table that cannot express a cliff would
@@ -310,6 +365,7 @@ mod tests {
                 above_tokens: 200_000,
                 input: 2.0,
                 output: 4.0,
+                cached_read: 0.2,
             }),
         };
         let below = Usage {

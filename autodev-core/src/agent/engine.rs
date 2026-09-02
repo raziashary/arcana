@@ -240,8 +240,17 @@ impl AgentEngine {
             // Ruflo Feature 4 — accumulate token usage into budget_status after each LLM response
             if let Ok(ref _r) = stream_result {
                 budget_status.tokens_used = total_usage.total() as u64;
-                budget_status.cost_usd =
-                    CostTracker::calculate(model, total_usage.total_input(), total_usage.output).cost_usd;
+                // An unpriced model is a configuration error, not a $0 turn.
+                // `TG-P2-02` gates that every model the UI offers is priced, so
+                // reaching this branch means the model came from somewhere the
+                // picker does not control. Logged at error level and NOT folded
+                // into the running cost: adding 0.0 would under-report spend
+                // and, once the cap lands, let an unpriced model spend past it
+                // silently.
+                match CostTracker::calculate(model, &total_usage) {
+                    Ok(c) => budget_status.cost_usd = c.cost_usd,
+                    Err(e) => error!("Cost unavailable for this turn: {e}"),
+                }
                 if let Some(tid) = self.task_id {
                     if let Ok(db) = crate::db::tasks::TasksDb::open() {
                         let _ = db.update_task_budget_usage(
@@ -376,11 +385,19 @@ impl AgentEngine {
         };
         HookRegistry::fire(&HookType::AgentLoopEnd, &loop_end_ctx).await;
 
-        // Record cost in app state
-        let cost = CostTracker::calculate(model, total_usage.total_input(), total_usage.output);
+        // Record cost in app state. Tokens are recorded either way — they are
+        // provider-reported fact; only the dollar figure depends on a table we
+        // maintain, and a missing price must not erase the token record too.
+        let cost_usd = match CostTracker::calculate(model, &total_usage) {
+            Ok(c) => c.cost_usd,
+            Err(e) => {
+                error!("Cost unavailable for model '{model}': {e}");
+                0.0
+            }
+        };
         {
             let mut state = self.state.lock().unwrap();
-            state.add_cost(cost.cost_usd, total_usage.total_input(), total_usage.output);
+            state.add_cost(cost_usd, total_usage.total_input(), total_usage.output);
         }
 
         // Phase 7.5 — Record token usage in analytics DB.
@@ -406,7 +423,7 @@ impl AgentEngine {
                 total_usage.total_input() as i32,
                 total_usage.output as i32,
                 None,
-                cost.cost_usd,
+                cost_usd,
                 "agent_session".to_string(),
             ) {
                 error!("[Mode1] record_token_usage failed for session {session_id}: {e}");
@@ -418,7 +435,7 @@ impl AgentEngine {
             message_id: Uuid::new_v4().to_string(),
             tokens_in: total_usage.total_input(),
             tokens_out: total_usage.output,
-            cost_usd: cost.cost_usd,
+            cost_usd: cost_usd,
         });
 
         Ok(history)

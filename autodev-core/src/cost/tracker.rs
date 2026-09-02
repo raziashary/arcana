@@ -1,3 +1,5 @@
+use crate::errors::Result;
+use crate::provider::usage::Usage;
 // Cost and token tracking per session message.
 // Pricing data mirrors provider model definitions for correctness.
 
@@ -13,17 +15,23 @@ pub struct MessageCost {
 pub struct CostTracker;
 
 impl CostTracker {
-    /// Compute cost for a given model + token counts.
-    /// Pricing in USD per 1 million tokens.
-    pub fn calculate(model: &str, tokens_in: u32, tokens_out: u32) -> MessageCost {
-        let (cost_in_per_1m, cost_out_per_1m) = model_pricing(model);
-        let cost_usd = (tokens_in as f64 / 1_000_000.0) * cost_in_per_1m
-            + (tokens_out as f64 / 1_000_000.0) * cost_out_per_1m;
-        MessageCost {
-            tokens_in,
-            tokens_out,
-            cost_usd,
-        }
+    /// Cost for one request's usage, or an error naming the model.
+    ///
+    /// ⚠ **Returns `Result`, and that is the point.** This used to hand back a
+    /// number unconditionally, because `model_pricing` ended in
+    /// `_ => (1.0, 3.0)` — so an unknown model produced an invented bill that
+    /// looked exactly like a real one. The audit measured 9 of 12 offered
+    /// models hitting it. Spec `02 §5`: *"a wrong cost number is worse than no
+    /// cost number, because it is believed."*
+    ///
+    /// Callers must decide what to show when cost is unknown. Showing nothing
+    /// is a correct answer; showing $0.0000 is not.
+    pub fn calculate(model: &str, usage: &Usage) -> Result<MessageCost> {
+        Ok(MessageCost {
+            tokens_in: usage.total_input(),
+            tokens_out: usage.output,
+            cost_usd: super::pricing::cost_usd(model, usage)?,
+        })
     }
 
     /// Format a cost value for display (e.g. "$0.0042")
@@ -49,15 +57,6 @@ impl CostTracker {
     }
 }
 
-/// Pricing table (USD per 1M tokens): (input_price, output_price)
-fn model_pricing(model: &str) -> (f64, f64) {
-    match model {
-        m if m.contains("claude-opus") => (15.0, 75.0),
-        m if m.contains("claude-sonnet") => (3.0, 15.0),
-        m if m.contains("claude-haiku") => (0.25, 1.25),
-        m if m.contains("gpt-4o") => (2.5, 10.0),
-        m if m.contains("gpt-4o-mini") => (0.15, 0.6),
-        m if m.contains("gemini-1.5-pro") => (1.25, 5.0),
-        _ => (1.0, 3.0), // Safe default
-    }
-}
+// The pricing table lives in `cost::pricing`. It used to be six `contains()`
+// arms over a `_ => (1.0, 3.0)` default in this file; see that module for what
+// that produced and why exact-id matching replaced it.

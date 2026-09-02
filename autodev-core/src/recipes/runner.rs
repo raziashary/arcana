@@ -424,16 +424,29 @@ impl RecipeRunner {
                                 // numbers to bill against the worker's model.
                                 let tokens_in = result.tokens_in;
                                 let tokens_out = result.tokens_out;
-                                let cost = crate::cost::tracker::CostTracker::calculate(
-                                    &model, tokens_in, tokens_out,
-                                );
+                                // This is a Mode 2 (sidecar) path whose token
+                                // counts are already approximate; an unpriced
+                                // model on top of that is logged, not invented.
+                                let usage = crate::provider::usage::Usage {
+                                    input: tokens_in,
+                                    output: tokens_out,
+                                    ..Default::default()
+                                };
+                                let cost_usd =
+                                    match crate::cost::tracker::CostTracker::calculate(&model, &usage) {
+                                        Ok(c) => c.cost_usd,
+                                        Err(e) => {
+                                            error!("Cost unavailable for worker model '{model}': {e}");
+                                            0.0
+                                        }
+                                    };
                                 // Roll into the in-process AppState so the
                                 // StatusBar / Sidebar / TabBar cost meter (which
                                 // reads `cost_today_usd`) reflects Mode 2 spend
                                 // alongside Mode 1 PA spend.
                                 {
                                     let mut s = self.state.lock().unwrap();
-                                    s.add_cost(cost.cost_usd, tokens_in, tokens_out);
+                                    s.add_cost(cost_usd, tokens_in, tokens_out);
                                 }
                                 // Persist into the analytics DB so the Dashboard's
                                 // get_dashboard_summary picks it up across restarts.
@@ -467,7 +480,7 @@ impl RecipeRunner {
                                         tokens_in as i32,
                                         tokens_out as i32,
                                         None,
-                                        cost.cost_usd,
+                                        cost_usd,
                                         format!("worker_tick:{}", worker_slug),
                                     )
                                 {
@@ -481,7 +494,7 @@ impl RecipeRunner {
                                     session_id: format!("mode2:{}", worker_slug),
                                     tokens_in,
                                     tokens_out,
-                                    cost_usd: cost.cost_usd,
+                                    cost_usd: cost_usd,
                                     total_today,
                                 });
                                 // D.1 — emit tick-end before transitioning to idle
@@ -501,7 +514,7 @@ impl RecipeRunner {
                                 //
                                 // Doc 02 Phase 2 task 2.2: populate with real values so the
                                 // worker leaderboard widget shows actual per-worker spend
-                                // and timing instead of zeros. `cost.cost_usd` and
+                                // and timing instead of zeros. `cost_usd` and
                                 // `elapsed_ms` are already computed above; we just had
                                 // to stop hard-coding 0.0 / 0 here.
                                 //
@@ -515,7 +528,7 @@ impl RecipeRunner {
                                         1,              // tasks_completed (1 successful tick)
                                         0,              // tasks_failed
                                         time_spent_min, // time_spent_minutes (real)
-                                        cost.cost_usd,  // cost (real, from CostTracker above)
+                                        cost_usd,  // cost (real, from CostTracker above)
                                         time_spent_min, // avg_task_duration_minutes
                                     )
                                 {

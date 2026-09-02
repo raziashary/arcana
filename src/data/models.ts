@@ -34,7 +34,11 @@ export const MODEL_GROUPS: readonly ModelGroup[] = [
   {
     provider: 'google',
     label: 'Google Gemini',
-    models: ['gemini-3.5-pro', 'gemini-3.5-flash'],
+    // ⚠ 3.1 Pro, not 3.5 Pro. 3.5 Pro was announced at I/O 2026 for a June
+    // release that never shipped and was delayed indefinitely; it was in this
+    // list until 2026-09-02 as a primary option, so a user could select a
+    // model that cannot be called (razi-ruled: use 3.1 Pro).
+    models: ['gemini-3.1-pro', 'gemini-3.5-flash'],
   },
   {
     provider: 'anthropic',
