@@ -133,7 +133,7 @@ pub async fn send_message(
 
     tokio::spawn(async move {
         // Create provider based on provider_id
-        let provider: Arc<dyn Provider> = match provider_id_c.as_str() {
+        let inner: Arc<dyn Provider> = match provider_id_c.as_str() {
             "anthropic" => Arc::new(AnthropicProvider::new(api_key)),
             "openai" => Arc::new(OpenAIProvider::new(api_key)),
             "google" => Arc::new(GoogleProvider::new(api_key)),
@@ -142,6 +142,8 @@ pub async fn send_message(
                 return;
             }
         };
+        // Every call passes the daily ceiling (P2-21).
+        let provider = autodev_core::provider::capped::CappedProvider::wrap(inner, state_clone.clone());
 
         let engine = AgentEngine::new(
             provider,

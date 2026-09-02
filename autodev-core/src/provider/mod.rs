@@ -3,6 +3,7 @@
 // core-orchestrator's litellm provider. See DEVELOPMENT_PLAN.md Section 4.1.
 
 pub mod anthropic;
+pub mod capped;
 pub mod google;
 pub mod openai;
 pub mod streaming;

@@ -867,6 +867,99 @@ let x = 1;
         assert_eq!(unwrapped_sites("// we used to tool.execute(input) here"), 0);
     }
 
+    // ── TG-P2-04 · no provider call escapes the daily ceiling ─────────────────
+
+    /// Every site that builds a provider must wrap it in the ceiling.
+    ///
+    /// Spec `02 §5` puts the cap in *"the one place every call passes"*. That
+    /// place is the provider itself, not the agent loop — the loop, the recipe
+    /// runner, compaction and the diff classifier each build a provider and call
+    /// it directly, so a check in the loop leaves three paths spending freely.
+    ///
+    /// **A hole in a spend cap is not a partial cap; it is the path spend will
+    /// take.** This asserts there are none.
+    #[test]
+    fn tg_p2_04_every_provider_construction_is_capped() {
+        let mut unwrapped = Vec::new();
+
+        for dir in ["autodev-core/src", "src-tauri/src"] {
+            let mut stack = vec![repo_root().join(dir)];
+            while let Some(d) = stack.pop() {
+                let Ok(entries) = std::fs::read_dir(&d) else {
+                    continue;
+                };
+                for e in entries.flatten() {
+                    let path = e.path();
+                    if path.is_dir() {
+                        stack.push(path);
+                        continue;
+                    }
+                    if path.extension().and_then(|x| x.to_str()) != Some("rs") {
+                        continue;
+                    }
+                    // The decorator itself constructs nothing to cap.
+                    if path.ends_with("capped.rs") {
+                        continue;
+                    }
+                    // Named exception, with its reason. `settings_commands`
+                    // builds providers only to call `models()` — a static list
+                    // that spends nothing — and `test_connection()`, which
+                    // `CappedProvider` deliberately does not gate: refusing a
+                    // key check at the ceiling would leave a user unable to
+                    // verify credentials on the one day they most need to, the
+                    // day their work stopped. Exempting it by name keeps the
+                    // rule meaningful; loosening the rule would not.
+                    if path.ends_with("settings_commands.rs") {
+                        continue;
+                    }
+                    let text = std::fs::read_to_string(&path).unwrap_or_default();
+                    let production = text.split("#[cfg(test)]").next().unwrap_or("");
+
+                    // A file that dispatches on provider id to build one.
+                    let builds = production.contains("AnthropicProvider::new(")
+                        && production.contains("GoogleProvider::new(");
+                    if !builds {
+                        continue;
+                    }
+                    let capped = production.contains("CappedProvider::wrap");
+                    if !capped {
+                        unwrapped.push(
+                            path.strip_prefix(repo_root())
+                                .unwrap_or(&path)
+                                .to_string_lossy()
+                                .replace('\\', "/"),
+                        );
+                    }
+                }
+            }
+        }
+
+        assert!(
+            unwrapped.is_empty(),
+            "these files build a provider without wrapping it in the daily ceiling, \
+             so calls made through them can spend past the cap: {}",
+            unwrapped.join(", ")
+        );
+    }
+
+    /// The shipping binary must publish its state, or `wrap_global` is inert.
+    ///
+    /// `wrap_global` returns the provider **unwrapped** when no state has been
+    /// published — a deliberate concession so unit tests do not need a ceiling
+    /// they never configured. That concession is safe only while the real binary
+    /// publishes. Without this assertion the concession becomes the behaviour.
+    #[test]
+    fn tg_p2_04_the_desktop_binary_publishes_its_state() {
+        let main = std::fs::read_to_string(repo_root().join("src-tauri/src/main.rs"))
+            .expect("main.rs");
+        let production = main.split("#[cfg(test)]").next().unwrap_or("");
+        assert!(
+            production.contains("app_state::set_global("),
+            "main.rs must publish AppState, or CappedProvider::wrap_global silently \
+             returns an UNCAPPED provider for every core-side caller"
+        );
+    }
+
     // ── TG-P2-03 · an autonomous agent runs under a spend ceiling ─────────────
 
     /// Every unattended `AgentEngine` must be given a budget.

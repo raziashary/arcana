@@ -166,3 +166,37 @@ mod daily_rollover_tests {
         assert_eq!(s.cost_day, Some(day(2026, 9, 2)));
     }
 }
+
+// ── The process-wide handle ──────────────────────────────────────────────────
+//
+// The daily ceiling reads today's spend from `AppState`, and most provider call
+// sites already hold one. Two do not: `analyze_diff_tool` builds an analyzer
+// straight from the vault, and any future core-side tool would be in the same
+// position — tools receive a `ToolContext`, not application state.
+//
+// Without this, those paths would be the one place a call could pass **without**
+// meeting the ceiling, which is exactly the hole `P2-21` exists to close. A hole
+// in a spend cap is not a partial cap; it is the path spend will take.
+//
+// Set once at startup by whichever binary owns the state. Absent in a test
+// process, where `global()` returns `None` and the caller falls back to running
+// uncapped — a unit test must not depend on a ceiling it never configured.
+
+use std::sync::OnceLock;
+use std::sync::{Arc, Mutex};
+
+static GLOBAL_STATE: OnceLock<Arc<Mutex<AppState>>> = OnceLock::new();
+
+/// Publish the application state for core-side callers.
+///
+/// Idempotent: a second call is ignored rather than panicking, because both the
+/// desktop host and the CLI may reasonably try, and losing a race here should
+/// not take down the process.
+pub fn set_global(state: Arc<Mutex<AppState>>) {
+    let _ = GLOBAL_STATE.set(state);
+}
+
+/// The published state, if a binary has set one.
+pub fn global() -> Option<Arc<Mutex<AppState>>> {
+    GLOBAL_STATE.get().cloned()
+}

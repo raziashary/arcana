@@ -115,6 +115,13 @@ fn main() {
     let mcp_registry = Arc::new(mcp_registry);
 
     let app_state: Arc<Mutex<AppState>> = Arc::new(Mutex::new(AppState::new()));
+
+    // Publish it for core-side callers that hold no state of their own.
+    // `analyze_diff_tool` builds a provider straight from the vault, and a tool
+    // receives a ToolContext rather than application state — without this it
+    // would be the one path a provider call could take without meeting the
+    // daily ceiling (P2-21). TG-P2-04 asserts this line exists.
+    autodev_lib::state::app_state::set_global(app_state.clone());
     let skill_registry_managed = skill_registry.clone();
     let skill_registry_for_watch = skill_registry.clone();
 

@@ -166,7 +166,7 @@ async fn run_inner(
         config.model.clone()
     };
 
-    let provider = build_provider(&provider_id)?;
+    let provider = build_provider(&provider_id, deps.state.clone())?;
 
     emit(
         events_tx,
@@ -238,7 +238,15 @@ async fn run_inner(
 
 /// Build a provider from the stored key. Mirrors `RecipeRunner`'s resolution so
 /// a subagent uses exactly the same credentials as its parent.
-fn build_provider(provider_id: &str) -> Result<Arc<dyn Provider>> {
+/// Build the provider a subagent will use, **wrapped in the daily ceiling**.
+///
+/// The wrap happens here rather than at the call site so a future caller cannot
+/// get an uncapped provider by forgetting a step — the only way to obtain one
+/// from this module is through the cap.
+fn build_provider(
+    provider_id: &str,
+    state: Arc<std::sync::Mutex<AppState>>,
+) -> Result<Arc<dyn Provider>> {
     // Every supported provider takes a key. The local-provider branch went
       // with Ollama (P2-11) — there is no keyless provider any more, so the
       // absence of a key is now unconditionally an error rather than a case.
@@ -248,7 +256,7 @@ fn build_provider(provider_id: &str) -> Result<Arc<dyn Provider>> {
         ))
     })?;
 
-    Ok(match provider_id {
+    let inner: Arc<dyn Provider> = match provider_id {
         "anthropic" => Arc::new(AnthropicProvider::new(api_key)) as Arc<dyn Provider>,
         "openai" => Arc::new(OpenAIProvider::new(api_key)),
         "google" => Arc::new(GoogleProvider::new(api_key)),
@@ -257,7 +265,10 @@ fn build_provider(provider_id: &str) -> Result<Arc<dyn Provider>> {
                 "Unsupported provider for subagent: {other}"
             )))
         }
-    })
+    };
+
+    // Every subagent call passes the daily ceiling (P2-21).
+    Ok(crate::provider::capped::CappedProvider::wrap(inner, state))
 }
 
 /// Concatenate the text of the final assistant message.

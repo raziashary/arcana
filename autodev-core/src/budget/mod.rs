@@ -1,3 +1,4 @@
+pub mod daily;
 // Budget Circuit Breaker — Ruflo Feature 4.
 //
 // Pre-emptive per-task token and cost caps enforced inside the AgentEngine loop.

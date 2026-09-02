@@ -218,7 +218,7 @@ pub async fn generate_recipe_yaml(
         AutoDevError::Agent(format!("No API key for provider '{provider_id}'"))
     })?;
 
-    let provider: Arc<dyn Provider> = match provider_id.as_str() {
+    let inner: Arc<dyn Provider> = match provider_id.as_str() {
         "anthropic" => Arc::new(AnthropicProvider::new(api_key)),
         "openai" => Arc::new(OpenAIProvider::new(api_key)),
         "google" => Arc::new(GoogleProvider::new(api_key)),
@@ -228,6 +228,8 @@ pub async fn generate_recipe_yaml(
             )))
         }
     };
+    // Every call passes the daily ceiling (P2-21).
+    let provider = autodev_core::provider::capped::CappedProvider::wrap(inner, state.inner().clone());
 
     let prompt = format!(
         "Generate a recipe YAML for an AutoDev worker agent with the following details:\n\

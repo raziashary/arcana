@@ -247,12 +247,17 @@ fn build_analyzer_from_vault() -> crate::errors::Result<DiffAnalyzer> {
         AutoDevError::Agent(format!("No API key for provider '{provider_id}'"))
     })?;
 
-    let provider: Arc<dyn Provider> = match provider_id.as_str() {
+    let inner: Arc<dyn Provider> = match provider_id.as_str() {
         "anthropic" => Arc::new(AnthropicProvider::new(api_key)),
         "openai" => Arc::new(OpenAIProvider::new(api_key)),
         "google" => Arc::new(GoogleProvider::new(api_key)),
         other => return Err(AutoDevError::Agent(format!("Unknown provider: {other}"))),
     };
+
+    // This tool holds no AppState — tools receive a ToolContext — so it reaches
+    // the ceiling through the process-global handle. Without it this would be
+    // the one path a call could take without meeting the cap (P2-21).
+    let provider = crate::provider::capped::CappedProvider::wrap_global(inner);
 
     Ok(DiffAnalyzer::new(provider, model))
 }
