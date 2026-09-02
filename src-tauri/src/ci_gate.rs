@@ -901,6 +901,19 @@ let x = 1;
                     if path.ends_with("capped.rs") {
                         continue;
                     }
+                    // Test modules included via `#[path]` carry no
+                    // `#[cfg(test)]` marker inside them, so the split above
+                    // cannot strip them. A conformance test that builds a
+                    // provider to inspect its request body makes no API call
+                    // and needs no ceiling.
+                    if path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.ends_with("_tests.rs"))
+                        .unwrap_or(false)
+                    {
+                        continue;
+                    }
                     // Named exception, with its reason. `settings_commands`
                     // builds providers only to call `models()` — a static list
                     // that spends nothing — and `test_connection()`, which
