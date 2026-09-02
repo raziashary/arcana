@@ -2859,6 +2859,200 @@ let x = 1;
         );
     }
 
+    // ── TG-P3-39 · the gateway replaced the unrestricted write ────────────────
+
+    /// `remember_this` is gone, and the four gateway surfaces exist.
+    ///
+    /// 🔴 `P3-39` / `P3-47`. `remember_this` wrote into the user's long-term
+    /// memory at `confidence = 1.0` labelled `user_explicit`, from **every** PA
+    /// mode — and `recall_facts` had no scope predicate and ordered by
+    /// confidence. So a fleet worker's assertion landed at the top of the
+    /// interactive user's *"What I know about you and this project"*,
+    /// indistinguishable from something the user had said. `P4-31` made that
+    /// path live earlier the same day.
+    ///
+    /// ⚠ Asserts the tool is **deleted**, not deprecated. An unreferenced
+    /// second write path is a defect waiting for a caller — which is `TG3-07`'s
+    /// own phrasing, proven right once already this phase.
+    #[test]
+    fn tg_p3_39_the_memory_gateway_is_the_only_write_path() {
+        let dir = repo_root().join("autodev-core/src/agent/builtin_tools");
+
+        assert!(
+            !dir.join("remember_this.rs").exists(),
+            "remember_this.rs still exists. It gave any agent an unrestricted \
+             write at the user's own confidence and provenance; P3-39 removes \
+             it rather than deprecating it."
+        );
+
+        let registry = read_source(&dir.join("mod.rs"));
+        let code: String = registry
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            !code.contains("RememberThisTool"),
+            "the registry still registers RememberThisTool"
+        );
+
+        // All four surfaces spec `03 §4.5` names.
+        for tool in [
+            "SearchMemoryTool",
+            "GetMemoryTool",
+            "ListMemoriesTool",
+            "ProposeMemoryTool",
+        ] {
+            assert!(
+                code.contains(tool),
+                "the gateway is incomplete: {tool} is not registered"
+            );
+        }
+    }
+
+    /// An agent cannot elect its own provenance or confidence.
+    ///
+    /// 🔴 `P3-47`. The ceiling is only meaningful if the proposer is
+    /// **derived** from the runtime's identity. A schema field for `source`,
+    /// `proposer` or `importance` would let a model name itself the user, and
+    /// the whole control would be decorative.
+    #[test]
+    fn tg_p3_47_provenance_is_derived_not_declared() {
+        let tool = read_source(
+            &repo_root().join("autodev-core/src/agent/builtin_tools/propose_memory.rs"),
+        );
+
+        // The schema must not offer the model a way to claim provenance.
+        let schema = tool
+            .split("fn input_schema")
+            .nth(1)
+            .expect("propose_memory must declare a schema");
+        let schema_body = schema.split("async fn execute").next().unwrap_or(schema);
+        for forbidden in ["\"source\":", "\"proposer\":", "\"importance\":"] {
+            assert!(
+                !schema_body.contains(forbidden),
+                "propose_memory's schema exposes {forbidden} — provenance and \
+                 importance are assigned from the caller's identity, never taken \
+                 from the caller"
+            );
+        }
+
+        assert!(
+            tool.contains("Proposer::from_agent_role(&ctx.agent_role"),
+            "the proposer must be derived from the runtime's agent role"
+        );
+
+        // …and the ceiling itself must still discriminate.
+        let gw = read_source(&repo_root().join("autodev-core/src/memory/gateway.rs"));
+        assert!(
+            gw.contains("fn confidence_ceiling"),
+            "the confidence ceiling is what stops an agent outranking the user"
+        );
+        assert!(
+            gw.contains("clamp(0.0, ceiling)"),
+            "the claimed confidence must be CLAMPED by the ceiling, not merely \
+             compared against it"
+        );
+    }
+
+    /// Recall is scoped, and scoped means "nothing" when no scope is given.
+    ///
+    /// 🔴 `P3-31`. `recall_facts` filtered on `is_active` and `confidence`
+    /// only — `working_dir` was SELECTed and never used as a predicate. Every
+    /// project recalled every other project's memories.
+    #[test]
+    fn tg_p3_31_every_retrieval_path_applies_scope() {
+        let backend = read_source(&repo_root().join("autodev-core/src/memory/backend.rs"));
+        assert!(
+            backend.contains("if q.scope_keys.is_empty()"),
+            "the backend must handle an empty scope explicitly"
+        );
+        assert!(
+            backend.contains("return Ok(Vec::new())"),
+            "an empty scope must return NOTHING. Treating 'no scope' as 'all \
+             scopes' is exactly how cross-project contamination happens."
+        );
+
+        // The tools that read memory must scope too, or they are a way around
+        // the filter the prompt path enforces.
+        for tool in ["get_memory.rs", "list_memories.rs"] {
+            let src = read_source(
+                &repo_root()
+                    .join("autodev-core/src/agent/builtin_tools")
+                    .join(tool),
+            );
+            assert!(
+                src.contains("scope_keys_for(&ctx.working_dir)"),
+                "{tool} does not scope its reads — an id from another project \
+                 would be readable by guessing it"
+            );
+        }
+    }
+
+    /// Memory reaches the prompt on the override path too.
+    ///
+    /// 🔴 `P3-45`. An override returned an empty VOLATILE half, and the
+    /// memory block lives there — so a user-facing settings field silently
+    /// disabled all recall, and recipes and subagents (which both pass an
+    /// override) had none for the same reason.
+    ///
+    /// ⚠ `P3-44`'s original wording — *"a recalled memory appears in the
+    /// outbound prompt bytes"* — was already true and proved nothing, because
+    /// recall was query-blind: the same bytes appeared whatever was asked. This
+    /// asserts the two properties that were actually missing.
+    #[test]
+    fn tg_p3_44_45_memory_reaches_the_prompt_and_depends_on_the_query() {
+        let engine = read_source(&repo_root().join("autodev-core/src/agent/engine.rs"));
+        let ctx = read_source(&repo_root().join("autodev-core/src/agent/context.rs"));
+
+        // The override branch must assemble memory rather than empty it.
+        // ⚠ Comments stripped FIRST. This is the third time a gate of mine has
+        // tripped on prose describing the very fix it checks for (`glob`'s
+        // gitignore disclaimer, the removed depth constant, and this branch's
+        // "used to be String::new()" note). Recorded as a named sub-pattern of
+        // `L-27`: the comment explaining a fix names the defect, so a gate that
+        // reads comments finds the defect in its own explanation.
+        let engine_code: String = engine
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("
+");
+        let branch = engine_code
+            .split("match system_prompt_override")
+            .nth(1)
+            .expect("the override branch must exist");
+        let branch = branch.split("};").next().unwrap_or(branch);
+        assert!(
+            branch.contains("memory_block(working_dir, user_message)"),
+            "the override path does not assemble memory. It returns the \
+             volatile half, and the memory block lives there — so a custom \
+             system prompt silently disables all recall."
+        );
+        assert!(
+            !branch.contains("String::new()"),
+            "the override branch still empties the volatile half"
+        );
+
+        // The query must be threaded, not hardcoded.
+        assert!(
+            ctx.contains("pub fn memory_block(&self, repo_path: &str, query: &str)"),
+            "memory_block must take a query"
+        );
+        let ctx_code: String = ctx
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("
+");
+        assert!(
+            !ctx_code.contains("build_memory_context(sid, \"\", repo_path)"),
+            "the empty-string query is back. That single literal made recall \
+             byte-identical every turn, whatever the user asked."
+        );
+    }
+
     // ── TG-P3-17 · no validator subprocess runs without a ceiling ─────────────
 
     /// Every subprocess the validator spawns must go through `run_bounded`.

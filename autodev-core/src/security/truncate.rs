@@ -6,7 +6,7 @@
 // Four sites in this codebase did exactly that, on strings that routinely
 // contain non-ASCII:
 //
-//   * `remember_this.rs:101`      `&fact[..120]`
+//   * `remember_this.rs:101`      `&fact[..120]`  (file removed in P3-39)
 //   * `annotate_file_tool.rs:109` `&note[..80]`
 //   * `bash.rs:162`               a *computed tail*, `output[tail_start..]`
 //   * `bash.rs:415`               `&command[i..]`

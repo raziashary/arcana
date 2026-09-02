@@ -107,7 +107,7 @@ const FactsTab: React.FC = () => {
       {!facts.length && (
         <div className="memory-pane__empty">
           No facts stored yet. Facts are extracted automatically or added with the
-          <code> remember_this</code> tool.
+          <code> propose_memory</code> tool.
         </div>
       )}
 
@@ -243,7 +243,7 @@ const ProceduralTab: React.FC = () => {
 
       {!topics.length && (
         <div className="memory-pane__empty">
-          No patterns stored yet. Use the <code>remember_this</code> tool or create a topic above.
+          No patterns stored yet. Use the <code>propose_memory</code> tool or create a topic above.
         </div>
       )}
 

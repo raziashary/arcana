@@ -264,7 +264,7 @@ fn default_memory_md() -> String {
          > Last updated: {}\n\
          > Edit topic files in `~/.autodev/memory/topics/` or use the Memory sidebar.\n\n\
          ## Topics\n\
-         *(No topics yet — use `remember_this` or the Memory sidebar to add learnings)*\n",
+         *(No topics yet — use `propose_memory` or the Memory sidebar to add learnings)*\n",
         Utc::now().to_rfc3339()
     )
 }

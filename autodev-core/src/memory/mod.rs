@@ -7,7 +7,8 @@
 //
 //   Tier 2 — Semantic  (semantic.rs)
 //     Extracted facts: user preferences, architecture decisions, patterns,
-//     reference locations. Rule-based extraction + explicit `remember_this` tool.
+//     reference locations. Rule-based extraction + the `propose_memory`
+//     gateway (P3-39; `remember_this` was removed).
 //
 //   Tier 3 — Procedural (procedural.rs)
 //     Skills and patterns stored as MEMORY.md + topic/*.md files on disk,
@@ -19,6 +20,7 @@
 // See: DEVELOPMENT_PLAN.md Phase 4.1-4.8
 
 pub mod backend;
+pub mod gateway;
 pub mod manager;
 pub mod rank;
 pub mod vector;

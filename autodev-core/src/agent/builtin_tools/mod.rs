@@ -34,7 +34,9 @@ pub mod write_interface_spec;
 pub mod append_file;
 pub mod check_file;
 pub mod e2e_probe;
-pub mod remember_this;
+pub mod get_memory;
+pub mod list_memories;
+pub mod propose_memory;
 pub mod request_supervisor_action;
 pub mod search_memory;
 pub mod validate;
@@ -223,9 +225,16 @@ pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
             // Doc 09 T3.1 / T4.2 — interface spec + e2e smoke probe (PA parity).
             registry.register(Arc::new(write_interface_spec::WriteInterfaceSpecTool));
             registry.register(Arc::new(e2e_probe::E2eProbeTool));
-            // Memory tools (Phase 4.7) — available in all non-delegate modes
+            // ── The memory gateway (P3-39) ──────────────────────────
+            // `remember_this` was DELETED, not deprecated. It gave any agent an
+            // unrestricted write at `confidence = 1.0` labelled `user_explicit`
+            // — so a fleet worker could put a sentence at the top of the user's
+            // "What I know about you". An agent proposes now; the gateway
+            // decides, and assigns provenance from the runtime's own identity.
             registry.register(Arc::new(search_memory::SearchMemoryTool));
-            registry.register(Arc::new(remember_this::RememberThisTool));
+            registry.register(Arc::new(get_memory::GetMemoryTool));
+            registry.register(Arc::new(list_memories::ListMemoriesTool));
+            registry.register(Arc::new(propose_memory::ProposeMemoryTool));
             // Routing — suggest_worker for PA-mode routing awareness
             registry.register(Arc::new(suggest_worker_tool::SuggestWorkerTool));
             // Orphan detection — claim_task records PID for stale-task recovery
@@ -261,9 +270,16 @@ pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
             registry.register(Arc::new(create_task::CreateTaskTool));
             // Planner is task management, not file I/O — safe in Delegate mode
             registry.register(Arc::new(planner::PlannerTool));
-            // Memory tools available in Delegate mode — read-only and write facts
+            // ── The memory gateway (P3-39) ──────────────────────────
+            // `remember_this` was DELETED, not deprecated. It gave any agent an
+            // unrestricted write at `confidence = 1.0` labelled `user_explicit`
+            // — so a fleet worker could put a sentence at the top of the user's
+            // "What I know about you". An agent proposes now; the gateway
+            // decides, and assigns provenance from the runtime's own identity.
             registry.register(Arc::new(search_memory::SearchMemoryTool));
-            registry.register(Arc::new(remember_this::RememberThisTool));
+            registry.register(Arc::new(get_memory::GetMemoryTool));
+            registry.register(Arc::new(list_memories::ListMemoriesTool));
+            registry.register(Arc::new(propose_memory::ProposeMemoryTool));
         }
     }
 }

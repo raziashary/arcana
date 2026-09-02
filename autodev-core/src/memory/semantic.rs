@@ -8,7 +8,10 @@
 //
 // Fact extraction uses two paths:
 //   1. Rule-based: regex patterns for common preference statements
-//   2. Explicit:   `remember_this` builtin tool writes directly
+//   2. Explicit:   `propose_memory` proposes; the gateway decides (P3-39).
+//                  It was `remember_this`, which wrote DIRECTLY at
+//                  confidence 1.0 labelled `user_explicit` — so any agent
+//                  could put a sentence in the user's mouth.
 
 use chrono::Utc;
 use rusqlite::params;
