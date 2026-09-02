@@ -1391,6 +1391,42 @@ let x = 1;
     /// from inside the workspace under inspection.
     #[test]
     fn tg_p3_11_one_permission_gate_keyed_on_effect() {
+
+        // ── the invariant this gate should have asserted from the start ──
+        //
+        // 🔴 The P3 post-phase gap hunt found a SECOND `check_permission` call
+        // inside `execute_batch`'s write partition. Every write/execute tool
+        // was prompted twice — and with a fresh `Uuid::new_v4()` call id the
+        // second time, so the user saw an unrelated request for a call they
+        // had just approved.
+        //
+        // This gate was green throughout. It asserted the ABSENCE of
+        // `is_read_only` — the shape of the P3-64 fix — rather than "exactly
+        // one gate", which is what the fix existed to establish. `§0.16 L-C6`,
+        // written into a gate an hour after recording L-C6's seventh instance.
+        {
+            let executor = read_source(
+                &repo_root().join("autodev-core/src/agent/tool_executor.rs"),
+            );
+            let batch = executor
+                .split("pub async fn execute_batch")
+                .nth(1)
+                .expect("execute_batch must exist");
+
+            let gates = batch
+                .lines()
+                .filter(|l| {
+                    let code = l.split("//").next().unwrap_or("");
+                    code.contains("self.check_permission(")
+                })
+                .count();
+
+            assert_eq!(
+                gates, 1,
+                "`execute_batch` contains {gates} permission gates. Its own                  docstring says every tool passes exactly one; two means the                  user is asked twice for one call, and zero means the gate that                  P3-64 exists to enforce is gone."
+            );
+        }
+
         let src = read_source(&repo_root().join("autodev-core/src/agent/tool_executor.rs"));
 
         // Exactly one function may decide permission.
@@ -2355,35 +2391,54 @@ let x = 1;
             &repo_root().join("autodev-core/src/agent/tool_registry.rs"),
         );
 
-        // ── P3-58 · one boundary, defined once ──────────────────────────
-        for tool in ["spawn_subagent.rs", "spawn_parallel_subagents.rs"] {
-            let raw = read_source(
-                &repo_root()
-                    .join("autodev-core/src/agent/builtin_tools")
-                    .join(tool),
-            );
-            // ⚠ Comments stripped first. The comment recording this fix QUOTES
-            // the constant it removed, and scanning it flags the fix as the
-            // defect — the same way TG-P3-20 flagged `glob`'s disclaimer.
-            let text: String = raw
-                .lines()
-                .filter(|l| !l.trim_start().starts_with("//"))
-                .collect::<Vec<_>>()
-                .join("\n");
+        // ── P3-58 · the pool is the ONLY thing that decides depth ────────
+        //
+        // 🔴 F-21 (post-phase claims audit) rewrote this. The previous version
+        // asserted that each tool compared `ctx.depth + 1 > MAX` instead of
+        // `ctx.depth >= MAX` — and for `u32` **those are the same predicate**,
+        // so it was gating a no-op and calling it a fix.
+        //
+        // It also **enumerated two files** and therefore never saw the third
+        // guard, in `spawn_qc_review.rs`, written in the very spelling its own
+        // failure message called a defect. A gate that lists its subjects
+        // misses the one nobody listed; this one sweeps the directory.
+        {
+            let dir = repo_root().join("autodev-core/src/agent/builtin_tools");
+            let mut offenders = Vec::new();
+            let mut swept = 0usize;
+
+            for entry in std::fs::read_dir(&dir).expect("builtin_tools").flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                let raw = read_source(&path);
+                // Comments discuss the removed guards on purpose.
+                let text: String = raw
+                    .lines()
+                    .filter(|l| !l.trim_start().starts_with("//"))
+                    .collect::<Vec<_>>()
+                    .join("
+");
+                swept += 1;
+
+                let name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("?");
+                if text.contains("MAX_SUBAGENT_DEPTH")
+                    || text.contains("ctx.depth >= subagent::pool::MAX_NESTING_DEPTH")
+                    || text.contains("ctx.depth + 1 > subagent::pool::MAX_NESTING_DEPTH")
+                {
+                    offenders.push(name.to_string());
+                }
+            }
+
             assert!(
-                !text.contains("const MAX_SUBAGENT_DEPTH"),
-                "{tool} declares its own depth limit. Two constants for one \
-                 boundary is how the pool's guard became unreachable"
+                swept >= 30,
+                "only {swept} builtin tools swept — the gate is not reaching the tree"
             );
             assert!(
-                text.contains("subagent::pool::MAX_NESTING_DEPTH"),
-                "{tool} must compare against the pool's boundary, not its own"
-            );
-            assert!(
-                text.contains("let child_depth = ctx.depth + 1"),
-                "{tool} must test the CHILD's depth — the pool rejects on the \
-                 child, and testing the parent instead makes the two guards \
-                 disagree by exactly one generation"
+                offenders.is_empty(),
+                "these tools carry their own depth guard: {:?}. `pool.acquire` is                  the first thing `manager::spawn` does and already refuses a child                  past the limit with a message every caller surfaces. A second                  guard in front of it makes the pool's branch unreachable, which                  is the defect `P3-58` was written to remove — and which its own                  first fix preserved.",
+                offenders
             );
         }
 

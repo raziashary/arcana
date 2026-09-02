@@ -86,25 +86,23 @@ impl Tool for SpawnSubagentTool {
 
         // K.11 — Guard against unbounded recursion. If the caller is already
         // a subagent at the depth limit, refuse to spawn further.
-        // ⚠ P3-58. This was a LOCAL `const MAX_SUBAGENT_DEPTH: u32 = 3`
-        // compared as `ctx.depth >= 3` on the **parent**, while `pool.rs`
-        // rejects `> 3` on the **child** (which is `parent + 1`). Parent >= 3
-        // fires whenever child > 3 would — and one turn earlier — so the
-        // pool's own depth branch was **unreachable from any builtin tool**:
-        // a guard that could not fire, which is what `§0.16` names as its own
-        // recurring class.
+        // ⚠ P3-58, corrected by the post-phase claims audit (F-21).
         //
-        // One boundary now, defined once in `pool.rs` and compared against the
-        // same side of it everywhere: reject when the CHILD would exceed it.
-        let child_depth = ctx.depth + 1;
-        if child_depth > subagent::pool::MAX_NESTING_DEPTH {
-            return ToolResult::error(format!(
-                "Subagent depth limit ({}) reached — \
-                 complete this work directly rather than spawning a subagent."
-            ,
-                subagent::pool::MAX_NESTING_DEPTH
-            ));
-        }
+        // A local depth guard stood here. The task said it was "strictly
+        // tighter" than the pool's and fired a generation earlier; my fix
+        // rewrote it from `ctx.depth >= MAX` to `ctx.depth + 1 > MAX` and
+        // claimed the boundary had moved.
+        //
+        // 🔴 **Both were wrong.** For `u32`, `d >= 3` and `d + 1 > 3` are the
+        // SAME predicate — so the original premise was false and my fix was
+        // arithmetically a no-op that changed nothing while claiming to. The
+        // pool's depth branch stayed exactly as unreachable as before.
+        //
+        // The guard is gone instead. `pool.acquire` is the FIRST thing
+        // `manager::spawn` does and it already rejects `child_depth > MAX`
+        // with an actionable message, which every caller here surfaces. One
+        // boundary, decided in one place — which is what the task asked for
+        // and what neither version delivered.
 
         let mgr = match subagent::manager::global() {
             Some(m) => m,

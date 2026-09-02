@@ -290,3 +290,54 @@ mod p3_22_tests {
         assert!(recovered.unwrap().is_ok());
     }
 }
+
+#[cfg(test)]
+mod f21_tests {
+    use super::*;
+
+    /// The two predicates the P3-58 "fix" swapped between are the SAME.
+    ///
+    /// 🔴 F-21 (post-phase claims audit). The task claimed the tool guard
+    /// (`parent >= 3`) was "strictly tighter" than the pool's
+    /// (`child > 3`) and fired a generation earlier. For `u32`,
+    /// `d >= 3` ⟺ `d + 1 > 3` — identical for every input. The premise was
+    /// false and my rewrite was arithmetically a no-op that claimed otherwise.
+    ///
+    /// This test exists so the arithmetic is checked rather than reasoned
+    /// about, which is what nobody did the first two times.
+    #[test]
+    fn the_two_spellings_of_the_depth_boundary_are_one_predicate() {
+        for parent in 0u32..8 {
+            let tool_side = parent >= MAX_NESTING_DEPTH;
+            let pool_side = parent + 1 > MAX_NESTING_DEPTH;
+            assert_eq!(
+                tool_side, pool_side,
+                "at parent depth {parent} the two spellings disagree — if this \
+                 ever becomes true, one of them is the real boundary and the \
+                 other is a second, silent one"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_pool_is_now_the_only_thing_that_decides_depth() {
+        // With the three builtin-tool guards deleted, the pool's own branch is
+        // what refuses — reachable at last, and with a message the caller
+        // surfaces to the model.
+        let pool = SubagentPool::new();
+
+        let text = match pool.acquire("f21", MAX_NESTING_DEPTH + 1).await {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("a child past the limit must be refused"),
+        };
+
+        assert!(
+            text.contains("MAX_NESTING_DEPTH"),
+            "the refusal must name the limit so the model can act on it: {text}"
+        );
+        assert!(
+            pool.acquire("f21-ok", MAX_NESTING_DEPTH).await.is_ok(),
+            "a child exactly at the limit must still be allowed"
+        );
+    }
+}

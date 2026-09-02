@@ -437,8 +437,23 @@ impl ToolExecutor {
                     input: reported.clone(),
                 });
 
-                // Permission check — the same gate as everywhere else.
-                let approved = self.check_permission(&call_id, &tool, &input).await?;
+                // 🔴 G-1 (P3 post-phase gap hunt). A **second** permission
+                // check stood here, and it directly contradicted this
+                // function's own docstring — "every tool passes exactly one
+                // gate". Worse than a duplicate prompt: the pre-partition gate
+                // keys on `{session_id}-{tool_use_id}` while this one minted a
+                // fresh `Uuid::new_v4()`, so the user saw an unrelated second
+                // request for a call they had just approved. Only
+                // `always_allow` hid it; "allow once" asked twice.
+                //
+                // Every tool in `write_tools` came from `approved_tools`, so it
+                // has already passed the one gate. Nothing to re-decide.
+                //
+                // ⚠ `TG-P3-11` did not catch this because it asserted the
+                // ABSENCE of `is_read_only` — the shape of the P3-64 fix —
+                // rather than the invariant the fix existed to establish. That
+                // is `§0.16 L-C6` again, in the gate I wrote an hour after
+                // recording L-C6's seventh instance. The gate now counts gates.
 
                 // Fire PreToolUse hook
                 let pre_ctx = HookContext {
@@ -471,12 +486,9 @@ impl ToolExecutor {
                 let result = if !should_continue {
                     warn!("Tool '{}' blocked by PreToolUse hook", tool.name());
                     ToolResult::error(format!("Tool '{}' was blocked by a hook", tool.name()))
-                } else if approved {
+                } else {
                     debug!("Executing write tool: {}", tool.name());
                     Self::redact_result(tool.execute(input.clone(), &ctx).await)
-                } else {
-                    warn!("Write tool '{}' denied by user", tool.name());
-                    ToolResult::error(format!("Tool '{}' was denied by user", tool.name()))
                 };
 
                 // Fire PostToolUse or OnToolError hook

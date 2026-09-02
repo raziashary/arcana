@@ -76,15 +76,14 @@ impl Tool for SpawnQcReviewTool {
             _ => return ToolResult::error("'task_id' is required and must be a positive integer"),
         };
 
-        // K.11 — depth guard. qc-dispatcher runs at depth 0 → spawned reviewers
-        // at depth 1. Anyone else calling this tool is misbehaving.
-        if ctx.depth >= subagent::pool::MAX_NESTING_DEPTH {
-            return ToolResult::error(format!(
-                "spawn_qc_review rejected: caller is at depth {} (limit {})",
-                ctx.depth,
-                subagent::pool::MAX_NESTING_DEPTH
-            ));
-        }
+        // ⚠ P3-58 / F-21. A **third** depth guard stood here, in the spelling
+        // `TG-P3-58`'s own failure message calls a defect — and the gate never
+        // saw it, because its loop covered only `spawn_subagent.rs` and
+        // `spawn_parallel_subagents.rs`. A gate that enumerates its subjects
+        // misses the one nobody listed.
+        //
+        // Removed for the same reason as the other two: `pool.acquire` decides
+        // depth, once, and this call site surfaces its refusal.
 
         let mgr = match subagent::manager::global() {
             Some(m) => m,

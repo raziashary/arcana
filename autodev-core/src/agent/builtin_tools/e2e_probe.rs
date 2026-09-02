@@ -480,8 +480,26 @@ async fn run_probe(
 }
 
 async fn http_probe(url: &str, _expected: &str) -> Result<(u16, String), String> {
+    // 🔴 F-19 (post-phase claims audit). `validate_probe_url` confined the
+    // FIRST request and nothing else: no redirect policy was set, so reqwest
+    // follows up to ten hops by default. Any server the model can make respond
+    // — including the one it just started itself — returning
+    // `302 Location: http://169.254.169.254/…` defeated the confinement
+    // entirely, and the body still came back to the model. The check guarded
+    // the front door and left the hallway open.
+    //
+    // Every hop is now re-validated by the same function as the first.
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(PROBE_DEFAULT_HTTP_TIMEOUT))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 5 {
+                return attempt.stop();
+            }
+            match validate_probe_url(attempt.url().as_str()) {
+                Ok(()) => attempt.follow(),
+                Err(_) => attempt.stop(),
+            }
+        }))
         .build()
         .map_err(|e| format!("client build: {e}"))?;
     let resp = client
@@ -643,5 +661,46 @@ mod p3_21_68_tests {
             tail.len(),
             CHILD_LOG_TAIL_BYTES
         );
+    }
+}
+
+#[cfg(test)]
+mod f19_tests {
+    use super::*;
+
+    /// A redirect hop is validated exactly as the first request is.
+    ///
+    /// 🔴 F-19 (post-phase claims audit). `validate_probe_url` guarded only the
+    /// FIRST request; no redirect policy was set, so reqwest followed up to ten
+    /// hops. Any server the model could make respond — including the one it
+    /// just started — could answer `302 Location: http://169.254.169.254/…`
+    /// and the body still came back to it.
+    #[test]
+    fn the_metadata_endpoint_is_refused_as_a_redirect_target_too() {
+        // The policy re-uses this exact function, so proving the function
+        // refuses the target proves the hop is refused.
+        for target in [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://8.8.8.8/",
+            "https://example.com/",
+        ] {
+            assert!(
+                validate_probe_url(target).is_err(),
+                "{target} would be followed as a redirect and its body returned"
+            );
+        }
+    }
+
+    #[test]
+    fn a_loopback_redirect_is_still_allowed() {
+        // The no-fire half: a dev server redirecting `/` to `/index.html` or to
+        // a login page on its own port must keep working.
+        for target in [
+            "http://localhost:3000/index.html",
+            "http://127.0.0.1:8080/login",
+        ] {
+            validate_probe_url(target)
+                .unwrap_or_else(|e| panic!("{target} must still be followed: {e}"));
+        }
     }
 }

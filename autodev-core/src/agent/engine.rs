@@ -335,7 +335,17 @@ impl AgentEngine {
             session_id.to_string(),
             working_dir.to_string(),
             self.identity.clone(),
-        );
+        )
+        // 🔴 G-3 (P3 post-phase gap hunt). `with_state` had **zero callers
+        // workspace-wide**, so `self.state` was always `None` — and
+        // `request_permission`'s cancellation arm reads it through
+        // `.map(...).unwrap_or(false)`, which meant that arm could never fire.
+        // A user cancelling while a permission dialog was open waited the full
+        // 300s `PERMISSION_TIMEOUT` regardless.
+        //
+        // That is `§0.16 L-C12` — a helper built and wired to nothing — in
+        // `P3-08`'s own work, and the count stood at seven when I wrote it.
+        .with_state(self.state.clone());
         let mut tool_executor = match &self.session_mgr {
             Some(sm) => tool_executor.with_session_manager(sm.clone()),
             None => tool_executor,
@@ -438,6 +448,9 @@ impl AgentEngine {
                         compaction_usage.output
                     );
                     total_usage.add(&compaction_usage);
+                    // F-23: recorded now, not only at an exit the timeout may
+                    // never let us reach.
+                    self.stamp_accounting(model, &total_usage);
                 }
             }
 
@@ -1065,6 +1078,9 @@ impl AgentEngine {
                     usage,
                 } => {
                     total_usage.add(&usage);
+                    // F-23: see `stamp_accounting`. A dropped future runs no
+                    // exit path, so the accounting must already be written.
+                    self.stamp_accounting(model, &total_usage);
                     // `message_start` opens the message and carries no stop
                     // reason; only a non-empty value is a real one.
                     if !reason.is_empty() {
@@ -1149,6 +1165,35 @@ impl AgentEngine {
 }
 
 impl AgentEngine {
+    /// Stamp the running accounting so it survives a **dropped** future.
+    ///
+    /// F-23 (post-phase claims audit). `record_spend` runs only at the turn
+    /// loop's exit paths, and `tokio::time::timeout` DROPS the future rather
+    /// than letting it return -- so a subagent that hit its timeout ran none of
+    /// them, `last_run_accounting()` stayed `None`, and the result reported
+    /// $0.00. That is precisely the case `P3-62` claimed to have fixed: the
+    /// runs that die late are the expensive ones.
+    ///
+    /// Called after every accumulation, so whatever has been spent so far is
+    /// already recorded when the future is dropped mid-turn.
+    fn stamp_accounting(&self, model: &str, total: &Usage) {
+        if total.total() == 0 {
+            return;
+        }
+        let cost_usd = CostTracker::calculate(model, total)
+            .map(|c| c.cost_usd)
+            .unwrap_or(0.0);
+        let accounting = RunAccounting {
+            cost_usd,
+            tokens_in: total.total_input(),
+            tokens_out: total.output,
+        };
+        match self.last_run.lock() {
+            Ok(mut g) => *g = Some(accounting),
+            Err(p) => *p.into_inner() = Some(accounting),
+        }
+    }
+
     /// Fold one run's usage into the day's spend.
     ///
     /// ⚠ **Must be called on every path out of the turn loop**, including the
