@@ -182,7 +182,7 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         },
         vault_commands::{
             delete_github_pat, delete_provider_key, has_github_pat, has_provider_key,
-            list_vault_entries, set_github_pat, set_provider_key,
+            list_vault_entries, set_github_pat, set_provider_key, vault_backend_info,
         },
         worker_commands::{
             bind_worker_recipe, create_worker, delete_worker, get_worker_by_slug, list_workers,
@@ -236,6 +236,7 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         has_github_pat,
         delete_github_pat,
         list_vault_entries,
+        vault_backend_info,
         // Tasks (Internal Board)
         list_tasks,
         get_task,

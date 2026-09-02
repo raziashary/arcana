@@ -4,5 +4,6 @@
 //   macOS:   Keychain Services
 //   Linux:   libsecret / KDE Wallet
 
+pub mod fallback;
 pub mod keychain;
 pub use keychain::VaultManager;

@@ -5,6 +5,7 @@
 pub mod anthropic;
 pub mod capped;
 pub mod catalogue;
+pub mod factory;
 pub mod google;
 pub mod openai;
 pub mod routing;

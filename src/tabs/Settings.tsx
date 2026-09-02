@@ -1079,17 +1079,38 @@ function ProviderCard({ providerId }: { providerId: string }) {
   const hasKey        = provider.has_key
   const defaultModel  = provider.models[1]?.id ?? provider.models[0]?.id ?? ''
 
+  // P2-72. Three defects lived in the previous nine lines:
+  //
+  //   1. The key was promoted to ACTIVE immediately after being stored, with
+  //      nothing having checked it. The app then ran on an unvalidated
+  //      credential, and a mistyped or truncated paste surfaced later as an
+  //      agent failure that reads like a provider outage.
+  //   2. `setTestResult(null)` threw away the one signal the user had. Testing
+  //      a key and then saving it cleared the evidence that it worked.
+  //   3. A failed save was swallowed into `console.error`, so from the user's
+  //      side nothing at all happened — no message, no state change, no clue.
+  //
+  // Validation now runs on the save path in the backend (P2-23), which means
+  // this can simply trust the outcome: a rejected key throws and is never
+  // stored, so reaching the line after the await IS the confirmation.
   const handleSaveKey = async () => {
     if (!key.trim()) return
     setSaving(true)
+    setTestResult(null)
     try {
       await store.storeProviderKey(providerId, key.trim())
+
+      // Only now — the key exists and the provider accepted it.
       if (!isActive && defaultModel) {
         await store.setActiveProvider(providerId, defaultModel)
       }
       setKey('')
-      setTestResult(null)
+      setTestResult('Key verified and saved.')
     } catch (e) {
+      // Shown, not logged. The backend's message says what the provider
+      // actually rejected, which is the only useful thing the user can act on.
+      const message = e instanceof Error ? e.message : String(e)
+      setTestResult(message || 'The key could not be saved.')
       console.error('Failed to save key:', e)
     } finally {
       setSaving(false)

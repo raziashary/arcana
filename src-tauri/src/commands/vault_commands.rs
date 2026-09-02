@@ -18,7 +18,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::errors::Result;
-use crate::vault::keychain::{github_pat_key, provider_key, VaultManager};
+use crate::vault::keychain::{github_pat_key, provider_key, VaultBackend, VaultManager};
 
 /// Providers whose keys are probed by `list_vault_entries`.
 ///
@@ -65,6 +65,35 @@ pub struct VaultEntryStatus {
     /// True when a key exists for a provider AutoDev no longer supports, so the
     /// UI can offer to clean it up.
     pub orphaned: bool,
+    /// Which store is actually holding this secret (`P2-71`).
+    ///
+    /// ⚠ This was absent, and `docsMore.ts:160` described protections the code
+    /// did not implement. A user who believes their key is in the system
+    /// keychain when it is in a file in their home directory has been misled
+    /// about the one thing they would want to know before pasting it.
+    pub backend: String,
+    /// What that store actually protects against, stated plainly.
+    pub backend_note: String,
+}
+
+/// Which credential store this machine is using, for the Settings header.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VaultBackendInfo {
+    pub label: String,
+    pub note: String,
+    /// False when the encrypted-file fallback is in use, so the UI can mark it.
+    pub is_os_keychain: bool,
+}
+
+/// Report the credential store in use (`P2-71`).
+#[tauri::command]
+pub fn vault_backend_info() -> VaultBackendInfo {
+    let b = VaultManager::backend();
+    VaultBackendInfo {
+        label: b.label().to_string(),
+        note: b.security_note().to_string(),
+        is_os_keychain: b.is_os_keychain(),
+    }
 }
 
 /// Last four characters of a secret, or empty if it is too short to mask.
@@ -86,25 +115,74 @@ fn is_supported_provider(id: &str) -> bool {
 // ── Provider keys ────────────────────────────────────────────────────────────
 
 /// Store a provider API key. Inbound only — the value is never returned.
+///
+/// ── Validation happens HERE, before the key is stored (`P2-23`, `P2-72`) ─────
+///
+/// `Settings.tsx` used to store a key and mark the provider active in one
+/// action, then separately offer a "Test" button whose result it cleared on the
+/// next save. So the state the app ran on was an **unvalidated** key, and the
+/// only thing that could have told the user otherwise was a check they had to
+/// remember to run and that the save then discarded.
+///
+/// A key is validated against the live provider before it is written. The
+/// failure mode this closes is not exotic: a mistyped or truncated paste is
+/// stored, becomes the active credential, and then every agent run fails with
+/// a provider error that looks like an outage.
+///
+/// The validation call is `test_connection`, which each adapter implements as
+/// its cheapest authenticated request — a models list, not a completion. It
+/// costs nothing and it cannot be satisfied by a syntactically plausible key.
 #[tauri::command]
-pub fn set_provider_key(provider: String, api_key: String) -> Result<VaultWriteResult> {
-    let trimmed = api_key.trim();
+pub async fn set_provider_key(provider: String, api_key: String) -> Result<VaultWriteResult> {
+    let trimmed = api_key.trim().to_string();
     if trimmed.is_empty() {
         return Err(crate::errors::AutoDevError::Vault(
             "Refusing to store an empty API key.".into(),
         ));
     }
-    VaultManager::store(&provider_key(&provider), trimmed)?;
+
+    // Built from the shared factory rather than a fourth copy of the provider
+    // match. An unknown id is refused here rather than stored: a key for a
+    // provider we cannot construct is a key we can never use.
+    let candidate = autodev_core::provider::factory::build(&provider, trimmed.clone())?;
+
+    match candidate.test_connection().await {
+        Ok(autodev_core::provider::ProviderStatus::Connected) => {}
+        Ok(autodev_core::provider::ProviderStatus::Error(why)) => {
+            return Err(crate::errors::AutoDevError::Vault(format!(
+                "That key was not accepted by {provider}, so it has NOT been saved: {why}"
+            )));
+        }
+        Ok(other) => {
+            return Err(crate::errors::AutoDevError::Vault(format!(
+                "{provider} did not confirm the key ({other:?}); it has NOT been saved."
+            )));
+        }
+        Err(e) => {
+            // A network failure is not a bad key, and refusing to store on a
+            // transient error would leave a user offline unable to configure
+            // the app at all. Stored, with the uncertainty stated.
+            tracing::warn!(
+                "Could not reach {provider} to validate the key ({e}); storing it unvalidated."
+            );
+        }
+    }
+
+    VaultManager::store(&provider_key(&provider), &trimmed)?;
     Ok(VaultWriteResult {
         ok: true,
-        masked_last4: masked_last4(trimmed),
+        masked_last4: masked_last4(&trimmed),
     })
 }
 
 /// Whether a key is stored for this provider. Never returns the key.
+///
+/// P2-70: goes through `VaultManager::exists`, which zeroizes the secret it
+/// had to pull in order to answer. This used to be `get(..).is_some()`, which
+/// left the plaintext key in freed heap memory on every Settings render.
 #[tauri::command]
 pub fn has_provider_key(provider: String) -> Result<bool> {
-    Ok(VaultManager::get(&provider_key(&provider))?.is_some())
+    VaultManager::exists(&provider_key(&provider))
 }
 
 #[tauri::command]
@@ -137,7 +215,7 @@ pub fn set_github_pat(pat: String) -> Result<VaultWriteResult> {
 /// without any error surfacing.
 #[tauri::command]
 pub fn has_github_pat() -> Result<bool> {
-    Ok(VaultManager::get(&github_pat_key())?.is_some())
+    VaultManager::exists(&github_pat_key())
 }
 
 #[tauri::command]
@@ -147,34 +225,77 @@ pub fn delete_github_pat() -> Result<()> {
 
 // ── Enumeration ──────────────────────────────────────────────────────────────
 
-/// List every vault entry AutoDev knows how to look for, with presence only.
+/// List every vault entry, with presence only — never a value.
 ///
-/// The `keyring` crate offers no cross-platform way to enumerate a service's
-/// entries, so this probes a known key set rather than listing the keychain.
-/// The consequence is stated plainly: a secret stored under a key not in
-/// `PROBED_PROVIDERS` is invisible here.
+/// ── Two sources, because neither alone is complete (`P2-33`) ─────────────────
+///
+/// `keyring` offers no cross-platform enumeration, so this used to probe
+/// `PROBED_PROVIDERS` alone: a secret stored under any other key was invisible,
+/// with no way for the user to find or delete it. That is precisely the orphan
+/// case the command exists for.
+///
+/// It now unions the hardcoded probe list with `VaultManager::enumerate`, which
+/// reads a key-name index maintained on every write plus the fallback vault's
+/// own keys. The probe list stays because an index can be lost — a user who
+/// upgrades into this build has secrets stored before the index existed, and
+/// the probe list is what still finds those.
 #[tauri::command]
 pub fn list_vault_entries() -> Result<Vec<VaultEntryStatus>> {
-    let mut entries = Vec::with_capacity(PROBED_PROVIDERS.len() + 1);
+    let backend = VaultManager::backend();
+    let mut entries: Vec<VaultEntryStatus> = Vec::new();
 
-    for id in PROBED_PROVIDERS {
-        let key = provider_key(id);
-        let present = VaultManager::get(&key)?.is_some();
+    let mut seen: Vec<String> = Vec::new();
+    let mut push = |entries: &mut Vec<VaultEntryStatus>,
+                    seen: &mut Vec<String>,
+                    key: String,
+                    label: String,
+                    orphaned_if_present: bool|
+     -> Result<()> {
+        if seen.contains(&key) {
+            return Ok(());
+        }
+        seen.push(key.clone());
+        let present = VaultManager::exists(&key)?;
         entries.push(VaultEntryStatus {
             key,
-            label: format!("{id} API key"),
+            label,
             present,
-            orphaned: present && !is_supported_provider(id),
+            orphaned: present && orphaned_if_present,
+            backend: backend.label().to_string(),
+            backend_note: backend.security_note().to_string(),
         });
+        Ok(())
+    };
+
+    for id in PROBED_PROVIDERS {
+        push(
+            &mut entries,
+            &mut seen,
+            provider_key(id),
+            format!("{id} API key"),
+            !is_supported_provider(id),
+        )?;
     }
 
-    let pat_key = github_pat_key();
-    entries.push(VaultEntryStatus {
-        present: VaultManager::get(&pat_key)?.is_some(),
-        key: pat_key,
-        label: "GitHub personal access token".to_string(),
-        orphaned: false,
-    });
+    push(
+        &mut entries,
+        &mut seen,
+        github_pat_key(),
+        "GitHub personal access token".to_string(),
+        false,
+    )?;
+
+    // Anything the index knows about that the probe list does not. These are
+    // orphans by definition: nothing in the current product writes a key the
+    // probe list has never heard of.
+    for key in VaultManager::enumerate()? {
+        let label = key
+            .strip_prefix("provider.")
+            .and_then(|r| r.strip_suffix(".api_key"))
+            .map(|id| format!("{id} API key (unrecognised provider)"))
+            .unwrap_or_else(|| format!("{key} (unrecognised entry)"));
+        push(&mut entries, &mut seen, key, label, true)?;
+    }
 
     Ok(entries)
 }
@@ -282,7 +403,21 @@ mod tests {
             for block in production.split("#[tauri::command]").skip(1) {
                 let header = block.split_once('{').map(|(h, _)| h).unwrap_or(block);
 
-                if let Some(rest) = header.split("pub fn ").nth(1) {
+                // ⚠ Both `pub fn` and `pub async fn`.
+                //
+                // This split on `"pub fn "` alone until 2026-09-02, so the
+                // moment `set_provider_key` became async for key validation it
+                // VANISHED from this list — and the closed-set assertion below
+                // reported it as a removal. The real hole is the other
+                // direction: a new `pub async fn` command could have been added
+                // to this file and never appeared here at all, which is exactly
+                // the review this gate exists to force.
+                let after = header
+                    .split("pub async fn ")
+                    .nth(1)
+                    .or_else(|| header.split("pub fn ").nth(1));
+
+                if let Some(rest) = after {
                     let name: String = rest
                         .chars()
                         .take_while(|c| c.is_alphanumeric() || *c == '_')
@@ -312,6 +447,10 @@ mod tests {
                 "list_vault_entries",
                 "set_github_pat",
                 "set_provider_key",
+                // Reports WHICH credential store is in use (P2-71). Returns a
+                // label and a security note, never key material — and the
+                // return-type check above covers it the same as the rest.
+                "vault_backend_info",
             ];
             assert_eq!(
                 found, expected,
@@ -334,6 +473,8 @@ mod tests {
             label: "anthropic API key".into(),
             present: true,
             orphaned: false,
+                    backend: "test".to_string(),
+            backend_note: "test".to_string(),
         })
         .expect("serialize");
 

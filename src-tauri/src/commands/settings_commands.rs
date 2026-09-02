@@ -33,13 +33,17 @@ pub async fn list_providers(_state: State<'_, Arc<Mutex<AppState>>>) -> Result<V
 }
 
 fn build_provider_info(id: &str, name: &str) -> Result<ProviderInfo> {
-    let has_key = VaultManager::get(&provider_key(id))?.is_some();
-    let models = match id {
-        "anthropic" => AnthropicProvider::new(String::new()).models(),
-        "openai" => OpenAIProvider::new(String::new()).models(),
-        "google" => GoogleProvider::new(String::new()).models(),
-        _ => vec![],
-    };
+    // P2-70. `VaultManager::get(..).is_some()` pulled the plaintext key out of
+    // the keychain to compute a boolean and dropped it unzeroized — on every
+    // Settings render, once per provider. `exists` overwrites it instead.
+    let has_key = VaultManager::exists(&provider_key(id))?;
+
+    // P2-53/P2-23. The fourth copy of this provider match. An empty key is
+    // fine here: nothing is called, the adapter is constructed only to ask it
+    // which models it serves, and that answer comes from the shared catalogue.
+    let models = autodev_core::provider::factory::build(id, String::new())
+        .map(|p| p.models())
+        .unwrap_or_default();
     Ok(ProviderInfo {
         id: id.to_string(),
         name: name.to_string(),

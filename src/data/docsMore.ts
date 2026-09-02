@@ -156,8 +156,10 @@ export const MORE_SECTIONS: DocSection[] = [
       { t: 'prose', text: 'AgentEngine (src-tauri/src/agent/engine.rs) implements the ReAct loop: LLM call → tool parse → tool dispatch → result injection → repeat. Tool hints are appended inline to large results (grep > 50 matches, glob > 100 results) to guide the agent without token explosion.' },
       { t: 'h2', text: 'MCP Client' },
       { t: 'prose', text: 'AutoDev does not currently call external MCP servers. src-tauri/src/mcp/ registers user-configured servers and polls them for liveness, surfacing the result in Settings; nothing consumes their tools yet. AutoDev also no longer HOSTS an MCP server — it previously ran one on localhost so sidecar-hosted workers could reach its tools, which was an unauthenticated local endpoint exposing bash, write_file and spawn_subagent, and it was removed. Fleet workers now call those tools in-process.' },
-      { t: 'h2', text: 'Vault (OS Keychain)' },
-      { t: 'prose', text: 'API keys are stored via Tauri\'s vault module — macOS Keychain, Windows Credential Manager, or Linux SecretService. Never stored in plain files or SQLite. The vault is unlocked per-session with the OS credentials.' },
+      { t: 'h2', text: 'Vault (credential storage)' },
+      { t: 'prose', text: 'API keys are stored in the OS credential store where one is reachable - macOS Keychain, Windows Credential Manager, or Linux Secret Service. They are never written to SQLite.' },
+      { t: 'prose', text: 'Where no system keyring is reachable - a headless Linux host, a container, or a minimal desktop - AutoDev falls back to an encrypted file at ~/.autodev/config/vault.enc, readable only by your user account. This is weaker than the system keyring: anyone who can read your home directory can read both the vault and its key file. Installing gnome-keyring or KWallet restores keyring storage. Settings shows which store is actually in use, because the two are not equivalent.' },
+      { t: 'prose', text: 'The IPC bridge is one-way for secrets. No command returns key material: the frontend can store a key, ask whether one exists, see the last four characters it just wrote, and delete it - never read one back. Rust code that needs a key reads it in-process.' },
     ],
   },
 

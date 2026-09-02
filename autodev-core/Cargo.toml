@@ -30,6 +30,14 @@ async-trait = "0.1"
 futures     = "0.3"
 uuid        = { version = "1", features = ["v4"] }
 keyring     = "2"
+# P2-24 / P2-70. Two additions, both required by tasks in this phase:
+#   aes-gcm — the encrypted-file vault fallback for Linux hosts with no Secret
+#             Service. `deb` and `appimage` are shipped bundle targets, so this
+#             is a real configuration, not a hypothetical one.
+#   zeroize — so a secret pulled from the keychain to answer a yes/no question
+#             does not linger in process memory afterwards.
+aes-gcm     = "0.10"
+zeroize     = { version = "1", features = ["zeroize_derive"] }
 serde_yaml  = "0.9"
 base64      = "0.22"
 tokio       = { version = "1", features = ["full"] }
