@@ -195,6 +195,40 @@ impl AgentEngine {
         // same silent nothing as the cache it was built to catch.
         let cache_monitor = crate::cache::CacheMonitor::new();
 
+        // ── P2-27 · the model settings the user chose are actually applied ───
+        //
+        // `ModelConfigsDb` has a table, a set of Tauri commands, and a Settings
+        // panel that writes temperature, top_p, reasoning effort and thinking
+        // budget. Nothing read any of it: every request in this file was built
+        // with `temperature: None, top_p: None, reasoning_effort: None,
+        // thinking_budget_tokens: None`, hardcoded.
+        //
+        // So the sliders moved, the values persisted, and the model ran on
+        // provider defaults regardless — which is worse than not offering the
+        // controls, because the user reasonably believes their setting took
+        // effect and attributes the unchanged behaviour to the model.
+        //
+        // Read once per run rather than per turn: the config cannot change
+        // mid-run, and re-reading would open a database handle on every turn of
+        // every agent loop.
+        let model_config = crate::db::model_configs::ModelConfigsDb::open()
+            .and_then(|db| db.get(model))
+            .unwrap_or_else(|e| {
+                // A missing config is normal — most models have none. A failure
+                // to READ is not, and silently falling back to provider
+                // defaults is exactly the defect being fixed here.
+                warn!("Could not read the model config for {model}: {e}");
+                None
+            });
+
+        if let Some(ref cfg) = model_config {
+            debug!(
+                "Applying saved settings for {model}: temperature={:?} top_p={:?} \
+                 reasoning={:?} thinking={}",
+                cfg.temperature, cfg.top_p, cfg.reasoning_effort, cfg.thinking_enabled
+            );
+        }
+
         // Add user message to history
         history.push(RequestMessage {
             role: "user".to_string(),
@@ -304,10 +338,21 @@ impl AgentEngine {
                 system: Some(system_prompt.clone()),
                 tools: tool_defs.clone(),
                 max_tokens: 8192,
-                temperature: None,
-                top_p: None,
-                reasoning_effort: None,
-                thinking_budget_tokens: None,
+                // P2-27. From the user's saved settings rather than four
+                // hardcoded `None`s.
+                temperature: model_config.as_ref().and_then(|c| c.temperature),
+                top_p: model_config.as_ref().and_then(|c| c.top_p),
+                reasoning_effort: model_config
+                    .as_ref()
+                    .and_then(|c| c.reasoning_effort.clone()),
+                // The budget applies only when thinking is actually enabled.
+                // Sending a budget with thinking off is a request the provider
+                // may reject outright, and it would be a setting the user did
+                // not ask for.
+                thinking_budget_tokens: model_config
+                    .as_ref()
+                    .filter(|c| c.thinking_enabled)
+                    .and_then(|c| c.thinking_budget),
                 cache: cache_policy.clone(),
             };
 

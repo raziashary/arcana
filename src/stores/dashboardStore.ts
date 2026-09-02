@@ -52,7 +52,10 @@ export interface DashboardState {
   setDateRange: (start: string, end: string) => void;
   exportCsv: (start: string, end: string, path: string) => Promise<void>;
   exportJson: (start: string, end: string, path: string) => Promise<void>;
-  setDailyBudget: (amount: number) => void;
+  setDailyBudget: (amount: number) => Promise<void>;
+  /** Whether the ceiling is actually enforced, or only displayed. */
+  dailyBudgetEnabled: boolean;
+  loadDailyCap: () => Promise<void>;
   addBudgetAlert: (alert: BudgetAlert) => void;
   clearBudgetAlerts: () => void;
   startRealtimeUpdates: () => Promise<void>;
@@ -170,7 +173,16 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   isLoading: false,
   error: null,
   lastRefreshedAt: null,
+  // P2-50. This was a hardcoded 50 with no way to change it, and it was not
+  // the number that stopped anything: the enforcing ceiling is `DailyCap` in
+  // app settings, read by CappedProvider before every call. The two were
+  // unrelated, so a user could watch this count toward "$50" while the real cap
+  // was disabled entirely — or hit the real one with no warning shown.
+  //
+  // Seeded from the backend by `loadDailyCap()`. The literal below is only what
+  // renders for the instant before that resolves.
   dailyBudget: 50,
+  dailyBudgetEnabled: false,
   budgetAlerts: [],
   realtimeEnabled: false,
 
@@ -317,8 +329,28 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     }
   },
 
-  setDailyBudget: (amount: number) => {
-    set({ dailyBudget: amount });
+  loadDailyCap: async () => {
+    try {
+      const cap = await invoke<{ enabled: boolean; limit_usd: number }>('get_daily_cap');
+      set({ dailyBudget: cap.limit_usd, dailyBudgetEnabled: cap.enabled });
+    } catch (e) {
+      // Left at the seeded value. A failure to READ the cap must not make the
+      // dashboard unusable — but it is logged, because a silently wrong budget
+      // figure is exactly the defect P2-50 is about.
+      console.error('Failed to load the daily cap:', e);
+    }
+  },
+
+  setDailyBudget: async (amount: number) => {
+    // Writes through to the ceiling that actually enforces, rather than setting
+    // a local number that only affects a banner. The backend refuses a
+    // non-finite or non-positive limit — a NaN cap compares false against every
+    // spend, so it would read as "never exceeded" and enforce nothing.
+    const cap = await invoke<{ enabled: boolean; limit_usd: number }>('set_daily_cap', {
+      enabled: get().dailyBudgetEnabled,
+      limitUsd: amount,
+    });
+    set({ dailyBudget: cap.limit_usd, dailyBudgetEnabled: cap.enabled });
   },
 
   addBudgetAlert: (alert: BudgetAlert) => {

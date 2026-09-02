@@ -58,6 +58,8 @@ const Dashboard: React.FC = () => {
     tokenUsage,
     apiFailures,
     costPrediction,
+    dailyBudget,
+    loadDailyCap,
     dateRange,
     isLoading,
     error,
@@ -86,6 +88,11 @@ const Dashboard: React.FC = () => {
   // fallback for Mode 2 LivingAgent ticks that don't emit agent:done.
   useEffect(() => {
     refreshDashboard();
+    // P2-50. The ceiling that actually enforces, rather than the hardcoded 50
+    // this component was silently falling back to — it never passed the prop at
+    // all, so CostMeter used its OWN default and the figure on screen was
+    // unrelated to the cap that stops work.
+    loadDailyCap();
     startRealtimeUpdates();
 
     const interval = setInterval(() => {
@@ -217,7 +224,7 @@ const Dashboard: React.FC = () => {
             $0.00 / 0 tokens / 0 workers reading. */}
         <div className="metrics-row">
           {summary
-            ? <ErrorBoundary label="Cost Meter" inline><CostMeter summary={summary} prediction={costPrediction} tokenUsage={tokenUsage} /></ErrorBoundary>
+            ? <ErrorBoundary label="Cost Meter" inline><CostMeter summary={summary} prediction={costPrediction} tokenUsage={tokenUsage} dailyBudget={dailyBudget} /></ErrorBoundary>
             : <EmptyWidget label="Cost" />}
           {summary
             ? <ErrorBoundary label="Token Usage" inline><TokenUsage summary={summary} analytics={tokenUsage} costAnalytics={costAnalytics} /></ErrorBoundary>

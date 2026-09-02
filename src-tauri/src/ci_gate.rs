@@ -1150,6 +1150,172 @@ let x = 1;
         );
     }
 
+    // ── TG-P2-08 · a setting the UI writes is a setting the request carries ───
+
+    /// Model settings must reach the request, not merely the database.
+    ///
+    /// `ModelConfigsDb` has a table, four Tauri commands and a Settings panel
+    /// that writes temperature, top_p, reasoning effort and a thinking budget.
+    /// **Nothing read any of it.** Every `CompletionRequest` in the agent loop
+    /// was built with those four fields hardcoded to `None`.
+    ///
+    /// That is worse than not offering the controls: the slider moves, the value
+    /// persists, the panel redisplays it on reload — and the model runs on
+    /// provider defaults, so the user attributes the unchanged behaviour to the
+    /// model rather than to a setting that was never sent.
+    ///
+    /// The gate is deliberately narrow. It does not try to prove the values are
+    /// correct — it asserts that the agent engine reads the config at all and
+    /// does not build its request from literal `None`s, which is the exact
+    /// shape the defect had.
+    #[test]
+    fn tg_p2_08_model_settings_reach_the_request() {
+        let engine = std::fs::read_to_string(repo_root().join("autodev-core/src/agent/engine.rs"))
+            .expect("engine.rs");
+
+        assert!(
+            engine.contains("ModelConfigsDb"),
+            "the agent engine does not read ModelConfigsDb, so every model setting the \
+             user saves is written and never sent"
+        );
+
+        // Find the request the agent loop actually sends and check those four
+        // fields are not literal `None`s again.
+        let request = engine
+            .split("let request = CompletionRequest {")
+            .nth(1)
+            .and_then(|rest| rest.split_once("};").map(|(body, _)| body))
+            .expect("the agent loop builds a CompletionRequest");
+
+        for field in [
+            "temperature: None",
+            "top_p: None",
+            "reasoning_effort: None",
+            "thinking_budget_tokens: None",
+        ] {
+            assert!(
+                !request.contains(field),
+                "the agent request hardcodes `{field}`, so the user's saved setting for it \
+                 is written to the database and never sent to the provider"
+            );
+        }
+
+        assert!(
+            request.contains("model_config"),
+            "the agent request is not built from the saved model config"
+        );
+    }
+
+    // ── TG-P2-07 · a provider key never comes from argv or the environment ────
+
+    /// BYOK means the key comes from the user, through the UI, into the OS
+    /// credential store — and from nowhere else.
+    ///
+    /// Two routes were closed and this keeps them closed:
+    ///
+    ///   * **A CLI flag.** `airsctl` took an API key as an argument. A secret in
+    ///     argv is visible in shell history and in the process table to every
+    ///     other process on the machine, for the lifetime of the command.
+    ///   * **A process environment variable.** Falling back to
+    ///     `ANTHROPIC_API_KEY` means the app silently runs on a credential the
+    ///     user never gave it and cannot see, rotate, or delete from Settings.
+    ///     It also inverts the trust story: "no sensitive keys inside the
+    ///     application" stops being true the moment the app reads one from the
+    ///     ambient environment.
+    ///
+    /// ⚠ The dev `.env` is NOT an exception to this — it is outside it. The live
+    /// smoke reads that file directly and deliberately, never
+    /// `std::env::var`, and it is behind the `live-smoke` cargo feature so it is
+    /// not linked into either shipped binary. `tests/` is excluded here for that
+    /// reason and no other.
+    #[test]
+    fn tg_p2_07_no_shipped_code_reads_a_provider_key_from_argv_or_the_environment() {
+        let roots = [
+            repo_root().join("autodev-core/src"),
+            repo_root().join("src-tauri/src"),
+            repo_root().join("src-cli/src"),
+        ];
+
+        let mut offenders = Vec::new();
+        let mut scanned = 0usize;
+
+        for root in &roots {
+            let mut stack = vec![root.clone()];
+            while let Some(dir) = stack.pop() {
+                let Ok(entries) = std::fs::read_dir(&dir) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        stack.push(path);
+                        continue;
+                    }
+                    if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                        continue;
+                    }
+
+                    let text = std::fs::read_to_string(&path).unwrap_or_default();
+                    scanned += 1;
+                    let rel = path
+                        .strip_prefix(repo_root())
+                        .unwrap_or(&path)
+                        .display()
+                        .to_string()
+                        .replace('\\', "/");
+
+                    for (n, line) in text.lines().enumerate() {
+                        // Comments describing the closed hole are not the hole.
+                        let code = line.split("//").next().unwrap_or("");
+                        if code.trim().is_empty() {
+                            continue;
+                        }
+
+                        let reads_env = code.contains("env::var") || code.contains("env!(");
+                        let names_a_provider_key = code.contains("ANTHROPIC_API_KEY")
+                            || code.contains("OPENAI_API_KEY")
+                            || code.contains("GOOGLE_API_KEY")
+                            || code.contains("GEMINI_API_KEY");
+
+                        if reads_env && names_a_provider_key {
+                            offenders.push(format!(
+                                "{rel}:{} reads a provider key from the environment: {}",
+                                n + 1,
+                                code.trim()
+                            ));
+                        }
+
+                        // A clap argument literally named for a key.
+                        let is_cli_flag = code.contains("api_key")
+                            && (code.contains("#[arg") || code.contains("long ="));
+                        if is_cli_flag {
+                            offenders.push(format!(
+                                "{rel}:{} exposes an API key as a CLI argument, which puts it \
+                                 in shell history and the process table: {}",
+                                n + 1,
+                                code.trim()
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Floor assertion. A scan that walks nothing passes silently, and this
+        // gate is only meaningful if it actually read the tree.
+        assert!(
+            scanned > 100,
+            "only {scanned} source files scanned — this gate is not reaching the tree"
+        );
+
+        assert!(
+            offenders.is_empty(),
+            "BYOK requires that a provider key reach the app only from the user, through \
+             the UI, into the credential store:\n{}",
+            offenders.join("\n")
+        );
+    }
+
     // ── TG-P2-06 · every provider error carries a classification ──────────────
 
     /// A failed provider response must be classified, not just stringified.

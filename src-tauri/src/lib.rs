@@ -68,7 +68,7 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         browser_commands::{check_playwright_available, install_playwright_browsers},
         budget_commands::{
             cmd_set_task_budget, get_daily_budget_summary, get_task_budget_status,
-            set_default_worker_budget,
+            set_default_worker_budget, get_daily_cap, set_daily_cap,
         },
         diff_commands::{analyze_diff, analyze_pr_diff},
         file_commands::search_workspace_files,
@@ -485,6 +485,8 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         cmd_set_task_budget,
         get_task_budget_status,
         get_daily_budget_summary,
+        get_daily_cap,
+        set_daily_cap,
         set_default_worker_budget,
         // Browser Automation QC Skill (Ruflo Feature 7)
         check_playwright_available,

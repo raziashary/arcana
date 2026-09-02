@@ -122,6 +122,14 @@ fn main() {
     // would be the one path a provider call could take without meeting the
     // daily ceiling (P2-21). TG-P2-04 asserts this line exists.
     autodev_lib::state::app_state::set_global(app_state.clone());
+
+    // P2-26. Restore the user's provider and model choice. Without this the
+    // selection lived only in memory: they picked a model, used it, quit, and
+    // came back to an empty picker with no indication why.
+    //
+    // A saved model that has since been retired is discarded rather than
+    // restored — see `hydrate_active_provider`.
+    autodev_lib::commands::settings_commands::hydrate_active_provider(&app_state);
     let skill_registry_managed = skill_registry.clone();
     let skill_registry_for_watch = skill_registry.clone();
 

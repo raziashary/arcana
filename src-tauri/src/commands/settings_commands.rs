@@ -84,10 +84,60 @@ pub fn set_active_provider(
     model: String,
     state: State<'_, Arc<Mutex<AppState>>>,
 ) -> Result<()> {
+    // P2-26. This wrote to in-memory AppState and nowhere else, so the user's
+    // provider and model choice died on every restart — they picked a model,
+    // used it, quit, and came back to nothing selected.
+    //
+    // Persisted BEFORE the in-memory update: if the write fails, the process
+    // must not go on believing a selection that will not survive it. The
+    // opposite order gives the user a working session and a silent surprise
+    // next launch.
+    autodev_core::db::app_settings::set(ACTIVE_PROVIDER_KEY, &provider)?;
+    autodev_core::db::app_settings::set(ACTIVE_MODEL_KEY, &model)?;
+
     let mut s = state.lock().unwrap();
     s.active_provider = Some(provider);
     s.active_model = Some(model);
     Ok(())
+}
+
+/// Settings keys for the active selection (`P2-26`).
+pub const ACTIVE_PROVIDER_KEY: &str = "active_provider";
+pub const ACTIVE_MODEL_KEY: &str = "active_model";
+
+/// Restore the persisted selection into `AppState` at startup (`P2-26`).
+///
+/// ⚠ A persisted model that is no longer in the catalogue is DISCARDED rather
+/// than restored. Models are retired — four of ours were, in February 2026 —
+/// and hydrating a dead id would hand the user a selection that looks valid and
+/// 404s on first use, which is harder to diagnose than an empty picker.
+pub fn hydrate_active_provider(state: &Arc<Mutex<AppState>>) {
+    let provider = autodev_core::db::app_settings::get(ACTIVE_PROVIDER_KEY)
+        .ok()
+        .flatten();
+    let model = autodev_core::db::app_settings::get(ACTIVE_MODEL_KEY).ok().flatten();
+
+    let (Some(provider), Some(model)) = (provider, model) else {
+        return;
+    };
+
+    if autodev_core::provider::catalogue::entry(&model).is_none() {
+        tracing::warn!(
+            "The saved model '{model}' is no longer offered, so it has not been restored.              Choose a model in Settings."
+        );
+        return;
+    }
+
+    if autodev_core::provider::routing::provider_for_model(&model) != Some(provider.as_str()) {
+        tracing::warn!(
+            "The saved selection ({provider} / {model}) is inconsistent — that model is              not served by that provider — so it has not been restored."
+        );
+        return;
+    }
+
+    let mut s = state.lock().unwrap();
+    s.active_provider = Some(provider);
+    s.active_model = Some(model);
 }
 
 #[tauri::command]

@@ -7,7 +7,8 @@ import './widgets.css';
 interface CostMeterProps {
   summary: DashboardSummary;
   prediction: CostPrediction | null;
-  dailyBudget?: number;
+  /** The enforcing ceiling from `get_daily_cap`. Required — see P2-50. */
+  dailyBudget: number;
   tokenUsage?: TokenUsageAnalytics | null;
 }
 
@@ -17,7 +18,11 @@ interface CostBreakdown {
   percentage: number;
 }
 
-const CostMeter: React.FC<CostMeterProps> = ({ summary, prediction, dailyBudget = 50, tokenUsage }) => {
+// P2-50. `dailyBudget = 50` was a SECOND hardcoded default, independent of the
+// store's. A component that invents a budget when none is passed will silently
+// disagree with whatever the real ceiling is — so the fallback is gone and the
+// prop is required.
+const CostMeter: React.FC<CostMeterProps> = ({ summary, prediction, dailyBudget, tokenUsage }) => {
   const [showDrilldown, setShowDrilldown] = useState(false);
   
   const getTrendIcon = (percent: number) => {
