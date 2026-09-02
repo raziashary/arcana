@@ -21,6 +21,17 @@ use crate::state::lock::LockTolerant;
 const ANTHROPIC_API_BASE: &str = "https://api.anthropic.com/v1";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
+/// Beta required for `context_management` (`P3-25`).
+///
+/// ⚠ **Load-bearing, established by execution:** the identical request body
+/// WITHOUT this header returns `400 context_management: Extra inputs are not
+/// permitted`, and WITH it returns 200. Not a documentation claim -- both calls
+/// were made against `api.anthropic.com` on 2026-09-02 (`L-22`).
+///
+/// Sent only on requests that actually declare a clear policy: announcing a
+/// beta we are not using is noise on every other call.
+const ANTHROPIC_CONTEXT_MGMT_BETA: &str = "context-management-2025-06-27";
+
 pub struct AnthropicProvider {
     api_key: String,
     client: Client,
@@ -176,6 +187,32 @@ impl AnthropicProvider {
             }
             body["system"] = json!([block]);
         }
+        // P3-25 · the clear layer.
+        //
+        // Declared on every request that wants it; the API applies it only
+        // when `trigger` fires, so this is a standing policy rather than
+        // something the caller has to time. That is exactly why it sits BELOW
+        // compaction in the layering: clearing is cheap and server-side, while
+        // compaction costs a summarisation call and loses more.
+        if let Some(ref clear) = req.clear_tool_uses {
+            body["context_management"] = json!({
+                "edits": [{
+                    "type": "clear_tool_uses_20250919",
+                    "trigger": {
+                        "type": "input_tokens",
+                        "value": clear.trigger_input_tokens,
+                    },
+                    "keep": {
+                        "type": "tool_uses",
+                        "value": clear.keep_tool_uses,
+                    },
+                    "clear_at_least": {
+                        "type": "input_tokens",
+                        "value": clear.clear_at_least_input_tokens,
+                    },
+                }]
+            });
+        }
         if let Some(temp) = req.temperature {
             body["temperature"] = json!(temp);
         }
@@ -211,12 +248,18 @@ impl Provider for AnthropicProvider {
         let body = self.build_body(&request, false);
         debug!("Anthropic complete: model={}", request.model);
 
-        let resp = self
+        let mut builder = self
             .client
             .post(format!("{ANTHROPIC_API_BASE}/messages"))
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("content-type", "application/json")
+            .header("content-type", "application/json");
+        // P3-25. The body field is refused outright without this header, so
+        // the two must be set together or not at all.
+        if request.clear_tool_uses.is_some() {
+            builder = builder.header("anthropic-beta", ANTHROPIC_CONTEXT_MGMT_BETA);
+        }
+        let resp = builder
             .json(&body)
             .send()
             .await?;
@@ -246,12 +289,18 @@ impl Provider for AnthropicProvider {
         let body = self.build_body(&request, true);
         debug!("Anthropic stream: model={}", request.model);
 
-        let resp = self
+        let mut builder = self
             .client
             .post(format!("{ANTHROPIC_API_BASE}/messages"))
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("content-type", "application/json")
+            .header("content-type", "application/json");
+        // P3-25. The body field is refused outright without this header, so
+        // the two must be set together or not at all.
+        if request.clear_tool_uses.is_some() {
+            builder = builder.header("anthropic-beta", ANTHROPIC_CONTEXT_MGMT_BETA);
+        }
+        let resp = builder
             .json(&body)
             .send()
             .await?;

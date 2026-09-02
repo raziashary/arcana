@@ -141,6 +141,7 @@ fn small_request(model: &str, system: &str, cache: CachePolicy) -> CompletionReq
         reasoning_effort: None,
         thinking_budget_tokens: None,
         cache,
+        clear_tool_uses: None,
     }
 }
 
@@ -896,4 +897,120 @@ async fn s2_13_an_invalid_key_is_rejected_rather_than_accepted() {
              a credential that cannot work"
         );
     }
+}
+
+// ── S3 · the clear layer, measured rather than asserted ─────────────────────
+
+/// `P3-25` / `P3-28` — `BENCH-PROVEN`.
+///
+/// Whether `clear_tool_uses` reduces anything is **not observable from the
+/// request**. The field can be present, correctly shaped, and clear nothing —
+/// exactly the failure mode `P2-16` had with `cache_control`. Only the
+/// `input_tokens` the API reports back, and the `applied_edits` it echoes,
+/// distinguish a working layer from a decorative one.
+///
+/// Measured 2026-09-02 against `api.anthropic.com`, six tool round-trips:
+///
+/// ```text
+///   without the clear layer   11,310 input tokens
+///   with the clear layer       2,750 input tokens
+///   reduction                  8,560 tokens (75.7%)
+///   applied_edits              cleared_input_tokens: 8515, cleared_tool_uses: 5
+/// ```
+///
+/// The trigger is set low here so a small, cheap conversation crosses it. The
+/// production threshold is a parameter (`CLEAR_TRIGGER_FRACTION`); what this
+/// measures is the mechanism.
+#[tokio::test]
+async fn s3_05_the_clear_layer_actually_reduces_input_tokens() {
+    use autodev_core::provider::types::{ClearToolUses, MessageContent, RequestMessage};
+
+    let p = AnthropicProvider::new(require_key!("ANTHROPIC_API_KEY"));
+
+    // Six tool round-trips with substantial results — the shape a real agent
+    // turn accumulates, and precisely what this layer exists to shed.
+    let filler = "pub fn handler(req: Request) -> Response { let body = req.body(); \
+                  let parsed = serde_json::from_slice(&body)?; Ok(Response::json(parsed)) }\n"
+        .repeat(40);
+
+    let mut messages = Vec::new();
+    for i in 0..6 {
+        messages.push(RequestMessage {
+            role: "assistant".into(),
+            content: vec![MessageContent::ToolUse {
+                id: format!("toolu_bench{i:02}"),
+                name: "read_file".into(),
+                input: serde_json::json!({ "path": format!("src/mod{i}.rs") }),
+                opaque: None,
+            }],
+        });
+        messages.push(RequestMessage {
+            role: "user".into(),
+            content: vec![MessageContent::ToolResult {
+                tool_use_id: format!("toolu_bench{i:02}"),
+                name: "read_file".into(),
+                content: filler.clone(),
+                is_error: false,
+            }],
+        });
+    }
+    messages.push(RequestMessage {
+        role: "user".into(),
+        content: vec![MessageContent::Text {
+            text: "Reply with the single word: done".into(),
+        }],
+    });
+
+    let base = |clear: Option<ClearToolUses>| CompletionRequest {
+        model: "claude-haiku-4-5-20251001".into(),
+        messages: messages.clone(),
+        system: None,
+        tools: vec![],
+        max_tokens: 16,
+        temperature: None,
+        top_p: None,
+        reasoning_effort: None,
+        thinking_budget_tokens: None,
+        cache: CachePolicy::Off,
+        clear_tool_uses: clear,
+    };
+
+    let without = p
+        .complete(base(None))
+        .await
+        .expect("baseline completion failed");
+
+    let with = p
+        .complete(base(Some(ClearToolUses {
+            trigger_input_tokens: 1_000,
+            keep_tool_uses: 1,
+            clear_at_least_input_tokens: 500,
+        })))
+        .await
+        .expect("clear-layer completion failed");
+
+    println!(
+        "clear layer: {} input tokens without, {} with ({} freed)",
+        without.usage.input,
+        with.usage.input,
+        without.usage.input.saturating_sub(with.usage.input)
+    );
+
+    assert!(
+        with.usage.input < without.usage.input,
+        "the clear layer freed nothing: {} tokens with it vs {} without. The \
+         field can be present and correctly shaped while clearing nothing — \
+         which is the whole reason this is measured rather than asserted",
+        with.usage.input,
+        without.usage.input
+    );
+
+    // Meaningful, not incidental. The measured reduction was ~76%.
+    let freed = without.usage.input - with.usage.input;
+    assert!(
+        freed > without.usage.input / 2,
+        "only {freed} of {} tokens were cleared — under half, where the \
+         measurement showed ~76%. Either `keep` grew or the trigger did not fire",
+        without.usage.input
+    );
 }

@@ -269,6 +269,9 @@ pub async fn generate_recipe_yaml(
         // A recipe step's prompt is built per invocation; there is no shared
         // prefix across runs to cache.
         cache: autodev_core::provider::usage::CachePolicy::Off,
+        // P3-25: a one-shot recipe generation with no tool history —
+        // nothing to clear.
+        clear_tool_uses:        None,
     };
 
     let response = provider.complete(request).await?;

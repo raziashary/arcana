@@ -37,6 +37,7 @@ fn req() -> CompletionRequest {
         reasoning_effort: None,
         thinking_budget_tokens: None,
         cache: crate::provider::usage::CachePolicy::Off,
+        clear_tool_uses: None,
     }
 }
 

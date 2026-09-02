@@ -79,7 +79,11 @@ impl Tool for ListDirectoryTool {
             &mut entries,
         );
 
-        let truncated = entries.len() == max_entries;
+        // ⚠ This was `== max_entries`, which is `false` **exactly when the
+        // cap was overshot** — so the one signal that would have revealed the
+        // bug above reported clean at 100,000 entries. `>=` is exact now that
+        // the loop cannot overshoot, and it stays honest if it ever can again.
+        let truncated = entries.len() >= max_entries;
         let output = json!({
             "path":      base.display().to_string(),
             "entries":   entries,
@@ -141,6 +145,14 @@ fn collect_entries(
     });
 
     for entry in dir_entries {
+        // 🔴 P3-29. The cap was checked ONLY at function entry, never here —
+        // so a single directory pushed every one of its children regardless.
+        // With `recursive=false` (`max_depth = 1`) there is exactly one call
+        // and one loop, which made the cap **fully inert in the common case**.
+        if out.len() >= max_entries {
+            return;
+        }
+
         let name = entry.file_name();
         let name_str = name.to_string_lossy().to_string();
         if SKIP.iter().any(|s| *s == name_str) {
@@ -176,5 +188,69 @@ fn collect_entries(
         if is_dir {
             collect_entries(root, &entry_path, depth + 1, max_depth, max_entries, out);
         }
+    }
+}
+
+#[cfg(test)]
+mod p3_29_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn a_flat_directory_larger_than_the_cap_is_actually_capped() {
+        // 🔴 THE DEFECT. `collect_entries` checked `out.len() >= max_entries`
+        // only at FUNCTION ENTRY, never in the push loop. With
+        // `recursive=false` (`max_depth = 1`) there is exactly one call and one
+        // loop — so the cap was fully inert in the common case, and a directory
+        // with 100,000 files put all 100,000 into the model's context.
+        let dir = TempDir::new().unwrap();
+        for i in 0..250 {
+            std::fs::write(dir.path().join(format!("f{i:04}.txt")), "x").unwrap();
+        }
+
+        let mut out = Vec::new();
+        collect_entries(dir.path(), dir.path(), 0, 1, 50, &mut out);
+
+        assert_eq!(
+            out.len(),
+            50,
+            "the cap did not hold: {} entries returned for a cap of 50",
+            out.len()
+        );
+    }
+
+    #[test]
+    fn the_truncation_signal_fires_when_the_cap_is_reached() {
+        // ⚠ The old signal was `entries.len() == max_entries`, which is FALSE
+        // exactly when the cap was overshot — so the one thing that would have
+        // revealed the bug above reported clean at 100,000 entries.
+        let dir = TempDir::new().unwrap();
+        for i in 0..60 {
+            std::fs::write(dir.path().join(format!("f{i:04}.txt")), "x").unwrap();
+        }
+
+        let mut out = Vec::new();
+        collect_entries(dir.path(), dir.path(), 0, 1, 25, &mut out);
+
+        assert!(
+            out.len() >= 25,
+            "expected the cap to be reached, got {}",
+            out.len()
+        );
+    }
+
+    #[test]
+    fn a_directory_under_the_cap_is_returned_whole() {
+        // The no-fire half: capping the common small listing would be a
+        // regression of its own.
+        let dir = TempDir::new().unwrap();
+        for i in 0..7 {
+            std::fs::write(dir.path().join(format!("f{i}.txt")), "x").unwrap();
+        }
+
+        let mut out = Vec::new();
+        collect_entries(dir.path(), dir.path(), 0, 1, 100, &mut out);
+
+        assert_eq!(out.len(), 7);
     }
 }

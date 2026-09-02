@@ -113,6 +113,35 @@ pub struct CompletionRequest {
     /// input rate — so the wrong default costs money rather than saving it.
     #[serde(default)]
     pub cache: CachePolicy,
+
+    /// Server-side clearing of stale tool results (`P3-25`).
+    ///
+    /// `None` means "do not ask for it", which is what every non-Anthropic
+    /// adapter sees and ignores. Kept as a *policy shape* rather than a raw
+    /// body fragment for the same reason `CachePolicy` is: an adapter that
+    /// cannot honour it must ignore it, not approximate it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clear_tool_uses: Option<ClearToolUses>,
+}
+
+/// Ask the provider to drop old tool results from the request server-side.
+///
+/// ⚠ **Verified against the live API, not against documentation** (`L-22`):
+/// `POST /v1/messages` with `anthropic-beta: context-management-2025-06-27`
+/// and this body shape returns **200**; the identical body **without** the beta
+/// header returns **400 `context_management: Extra inputs are not permitted`**.
+/// The header is load-bearing, and that is a measurement rather than a belief.
+///
+/// The response echoes `context_management.applied_edits`, which is how a
+/// caller learns whether anything was actually cleared.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ClearToolUses {
+    /// Clear once the request's input tokens exceed this.
+    pub trigger_input_tokens: u32,
+    /// Number of most-recent tool uses to keep intact.
+    pub keep_tool_uses: u32,
+    /// Do not bother clearing unless it would free at least this many tokens.
+    pub clear_at_least_input_tokens: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

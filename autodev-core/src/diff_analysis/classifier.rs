@@ -136,6 +136,7 @@ Do not include any text outside the JSON object."#;
         build_prompt(diff, structural)
     );
 
+    // P3-25: a one-shot classification with no tool history — nothing to clear.
     let request = CompletionRequest {
         model: model.to_string(),
         messages: vec![RequestMessage {
@@ -152,6 +153,7 @@ Do not include any text outside the JSON object."#;
         // One-shot classification over a diff that differs every time.
         // Nothing to reuse, so nothing to cache.
         cache: crate::provider::usage::CachePolicy::Off,
+        clear_tool_uses: None,
     };
 
     let response = provider.complete(request).await?;

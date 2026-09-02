@@ -7,7 +7,7 @@
 //   4. Keep the last KEEP_RECENT_MESSAGES for recency
 // Pattern from Goose's check_if_compaction_needed() and Claude Code's context collapse.
 
-use crate::provider::types::{MessageContent, RequestMessage};
+use crate::provider::types::{ClearToolUses, MessageContent, RequestMessage};
 use tracing::info;
 
 /// Fraction of the context window at which the conversation is compacted.
@@ -29,6 +29,19 @@ use tracing::info;
 /// it fired at **16% of the real capacity**. It now reads the model's actual
 /// window from the catalogue.
 const COMPACTION_THRESHOLD: f32 = 0.80;
+
+/// Where the server-side clear layer starts, as a fraction of the window.
+///
+/// P3-25/P3-28. **Must stay below `COMPACTION_THRESHOLD`** -- the whole point
+/// of the layer is that the cheap server-side clear gets its chance before the
+/// expensive summarisation call. Asserted, not merely intended.
+const CLEAR_TRIGGER_FRACTION: f32 = 0.60;
+
+/// Most-recent tool uses kept intact when clearing.
+const CLEAR_KEEP_TOOL_USES: u32 = 3;
+
+/// Do not clear unless it frees at least this fraction of the window.
+const CLEAR_MIN_FRACTION: f32 = 0.05;
 const KEEP_RECENT_MESSAGES: usize = 10;
 
 /// Instruction injected before the messages being summarised
@@ -41,6 +54,45 @@ pub struct CompactionEngine;
 
 impl CompactionEngine {
     /// Check if the estimated token count exceeds threshold.
+    /// The clear policy for a model with this context window (`P3-25`/`P3-28`).
+    ///
+    /// ── Why these numbers ────────────────────────────────────────────────
+    ///
+    /// `P3-28` asks for the threshold to come from the measured cache-write
+    /// cost. **That trade-off is vacuous here, and the measurement is what
+    /// establishes it:** clearing changes the message region, so it would only
+    /// cost a cache write if a breakpoint were set there — and
+    /// `anthropic.rs` marks the SYSTEM block only. Nothing in the message
+    /// region is cached, so clearing forfeits no cache write at all.
+    ///
+    /// What clearing does cost is tool-result content the model may still
+    /// need. So the numbers are chosen against that, not against cache:
+    ///
+    /// * `trigger` at 60% of the window, against `COMPACTION_THRESHOLD` at
+    ///   80%. The 20-point band is where the cheap server-side layer works
+    ///   before the expensive summarisation layer is allowed to fire.
+    /// * `keep` = 3 most recent tool uses -- enough for a read -> edit ->
+    ///   verify cycle, which is the shortest loop that needs its own history.
+    /// * `clear_at_least` = 5% of the window, so a clear that would free
+    ///   almost nothing does not happen at all.
+    ///
+    /// ⚠ **If a message-region cache breakpoint is ever added, these must be
+    /// re-derived** -- at that point clearing DOES forfeit a cache write, the
+    /// trade-off stops being vacuous, and 60% is no longer justified by
+    /// anything.
+    pub fn clear_policy(context_window: u32) -> Option<ClearToolUses> {
+        let trigger = (context_window as f32 * CLEAR_TRIGGER_FRACTION) as u32;
+        let at_least = (context_window as f32 * CLEAR_MIN_FRACTION) as u32;
+        if trigger == 0 {
+            return None;
+        }
+        Some(ClearToolUses {
+            trigger_input_tokens: trigger,
+            keep_tool_uses: CLEAR_KEEP_TOOL_USES,
+            clear_at_least_input_tokens: at_least,
+        })
+    }
+
     pub fn needs_compaction(estimated_tokens: u32, context_window: u32) -> bool {
         estimated_tokens as f32 / context_window as f32 > COMPACTION_THRESHOLD
     }
@@ -157,6 +209,9 @@ impl CompactionEngine {
         // cost is real and currently unaccounted; the accounting is P2-66's
         // remaining half, and it needs the monitor's numbers to be worth
         // writing.
+        // P3-25: no clear layer here. This call exists to summarise the
+        // history; asking the API to drop parts of that history first would
+        // summarise something other than what was asked for.
         let summary_request = crate::provider::types::CompletionRequest {
             model: model.to_string(),
             messages: summary_conversation,
@@ -168,6 +223,7 @@ impl CompactionEngine {
             reasoning_effort: None,
             thinking_budget_tokens: None,
             cache: crate::provider::usage::CachePolicy::Off,
+            clear_tool_uses: None,
         };
 
         // Try to get a summary from the LLM
@@ -220,5 +276,78 @@ impl CompactionEngine {
     /// Legacy alias — synchronous truncation only (used where async is unavailable).
     pub fn compact(messages: Vec<RequestMessage>) -> Vec<RequestMessage> {
         Self::compact_truncate(messages)
+    }
+}
+
+#[cfg(test)]
+mod p3_25_28_tests {
+    use super::*;
+
+    #[test]
+    fn the_clear_layer_fires_before_the_compaction_layer() {
+        // 🔴 THE POINT OF THE LAYER. Clearing is server-side and costs one
+        // field on a request we were sending anyway; compaction costs a whole
+        // summarisation call and discards more. If the clear trigger were at
+        // or above the compaction threshold, the cheap layer would never get
+        // its chance and P3-25 would be decoration.
+        assert!(
+            CLEAR_TRIGGER_FRACTION < COMPACTION_THRESHOLD,
+            "clear fires at {CLEAR_TRIGGER_FRACTION} and compaction at \
+             {COMPACTION_THRESHOLD} — the cheap layer must come first"
+        );
+
+        // Stated concretely on a real window, because a fraction comparison
+        // that holds can still produce a useless band.
+        let window = 200_000u32;
+        let policy = CompactionEngine::clear_policy(window).expect("a policy for 200k");
+        let compact_at = (window as f32 * COMPACTION_THRESHOLD) as u32;
+
+        assert!(
+            policy.trigger_input_tokens < compact_at,
+            "clear at {} vs compaction at {compact_at}",
+            policy.trigger_input_tokens
+        );
+        assert!(
+            compact_at - policy.trigger_input_tokens > 10_000,
+            "the band between the layers is {} tokens — too narrow for the \
+             cheap layer to do anything before the expensive one fires",
+            compact_at - policy.trigger_input_tokens
+        );
+    }
+
+    #[test]
+    fn the_policy_scales_with_the_model_not_with_a_constant() {
+        // P2-57's lesson, one layer up: a hardcoded threshold means Gemini's
+        // 1M window gets treated as if it were 200k.
+        let small = CompactionEngine::clear_policy(200_000).unwrap();
+        let large = CompactionEngine::clear_policy(1_000_000).unwrap();
+
+        assert!(
+            large.trigger_input_tokens > small.trigger_input_tokens * 4,
+            "a 1M window must not clear at a 200k threshold: {} vs {}",
+            large.trigger_input_tokens,
+            small.trigger_input_tokens
+        );
+    }
+
+    #[test]
+    fn recent_tool_uses_are_kept() {
+        // Clearing everything would break the read → edit → verify loop, which
+        // is the shortest sequence that genuinely needs its own history.
+        let p = CompactionEngine::clear_policy(200_000).unwrap();
+        assert!(p.keep_tool_uses >= 3, "kept only {}", p.keep_tool_uses);
+    }
+
+    #[test]
+    fn a_clear_that_would_free_almost_nothing_does_not_happen() {
+        let p = CompactionEngine::clear_policy(200_000).unwrap();
+        assert!(
+            p.clear_at_least_input_tokens > 0,
+            "without a floor, the API churns applied_edits for no benefit"
+        );
+        assert!(
+            p.clear_at_least_input_tokens < p.trigger_input_tokens,
+            "the floor must be reachable once the trigger fires"
+        );
     }
 }

@@ -56,6 +56,17 @@ fn default_max_results() -> u32 {
     100
 } // 100 is the practical floor for real codebases
 
+/// Byte ceiling on any single line grep returns.
+///
+/// P3-29. `max_results` caps the match COUNT and never the bytes. A minified
+/// bundle is routinely one line of tens of megabytes, so a single match put all
+/// of it into the model's context -- and the cap reported nothing wrong,
+/// because one match is well under the limit it does enforce.
+///
+/// 2 KB is generous for source code and small enough that even `max_results`
+/// full-length lines stay bounded.
+const MAX_LINE_BYTES: usize = 2_048;
+
 #[async_trait]
 impl Tool for GrepTool {
     fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
@@ -242,18 +253,30 @@ impl Tool for GrepTool {
                     // K.5 — Collect context lines before and after the match.
                     let ctx_start = line_num.saturating_sub(params.context_lines as usize);
                     let ctx_end = (line_num + params.context_lines as usize + 1).min(lines.len());
-                    let context_before: Vec<String> = lines[ctx_start..line_num]
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect();
+                    // Context lines need the same bound: a match adjacent
+                    // to a minified line brings it in through the back door.
+                    let bound = |s: &str| {
+                        crate::security::truncate::truncate_bytes(s, MAX_LINE_BYTES).to_string()
+                    };
+                    let context_before: Vec<String> =
+                        lines[ctx_start..line_num].iter().map(|s| bound(s)).collect();
                     let context_after: Vec<String> = lines[line_num + 1..ctx_end]
                         .iter()
-                        .map(|s| s.to_string())
+                        .map(|s| bound(s))
                         .collect();
 
                     file_matches.push(GrepMatch {
                         line_number: line_num + 1,
-                        line_content: line.to_string(),
+                        // 🔴 P3-29. This was `line.to_string()` — unbounded.
+                        // `max_results` caps the match COUNT and never the
+                        // bytes, so a single minified bundle line (tens of MB,
+                        // routinely one line) entered the model's context
+                        // whole. One match was enough.
+                        line_content: crate::security::truncate::truncate_bytes(
+                            line,
+                            MAX_LINE_BYTES,
+                        )
+                        .to_string(),
                         match_positions,
                         context_before,
                         context_after,
@@ -313,5 +336,47 @@ impl Tool for GrepTool {
         } else {
             ToolResult::success(json_output)
         }
+    }
+}
+
+#[cfg(test)]
+mod p3_29_tests {
+    use super::*;
+
+    #[test]
+    fn a_minified_line_cannot_enter_context_whole() {
+        // 🔴 THE DEFECT. `max_results` caps the match COUNT and never the
+        // bytes, so ONE match on a minified bundle line — routinely tens of
+        // megabytes on a single line — put all of it into the model's context,
+        // while the cap reported nothing wrong because one match is well under
+        // its limit.
+        let enormous = "a".repeat(5_000_000);
+        let bounded = crate::security::truncate::truncate_bytes(&enormous, MAX_LINE_BYTES);
+
+        assert!(
+            bounded.len() <= MAX_LINE_BYTES,
+            "a {}-byte line survived at {} bytes",
+            enormous.len(),
+            bounded.len()
+        );
+    }
+
+    #[test]
+    fn ordinary_source_lines_are_returned_untouched() {
+        // The no-fire half. If this bound bit normal code, grep would return
+        // mangled lines on every search — worse than the defect.
+        let line = "    pub fn resolve_python() -> String {  // the longest realistic line";
+        assert_eq!(
+            crate::security::truncate::truncate_bytes(line, MAX_LINE_BYTES),
+            line
+        );
+    }
+
+    #[test]
+    fn the_bound_is_large_enough_for_real_code() {
+        assert!(
+            MAX_LINE_BYTES >= 1_024,
+            "a bound this tight would truncate ordinary long lines"
+        );
     }
 }

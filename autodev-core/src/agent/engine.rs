@@ -461,6 +461,27 @@ impl AgentEngine {
                 messages: history.clone(),
                 system: Some(system_prompt.clone()),
                 tools: tool_defs.clone(),
+                // ── P3-25 · the clear layer ──────────────────────────────
+                //
+                // Layered assembly is: cached prefix -> live history -> CLEAR
+                // -> compaction. The first and last landed in P2; this is the
+                // one that was missing, and its POSITION is the point.
+                //
+                // Clearing is server-side and costs one field on a request we
+                // were sending anyway. Compaction costs a whole summarisation
+                // call and discards more. So the cheap layer must get its
+                // chance first, which is why `CLEAR_TRIGGER_FRACTION` sits
+                // below `COMPACTION_THRESHOLD` -- the band between them is
+                // where clearing does its work, and compaction only fires if
+                // clearing was not enough.
+                //
+                // Declared on every turn rather than switched on at a
+                // threshold we compute: the API's own `trigger` decides, and
+                // it decides on REAL input tokens rather than our ~4-chars
+                // estimate.
+                clear_tool_uses: crate::agent::compaction::CompactionEngine::clear_policy(
+                    model_context,
+                ),
                 // ⚠ F-16. Clamped to what the model will actually emit.
                 //
                 // `ModelCapabilities::max_output` was added in P2-03 explicitly

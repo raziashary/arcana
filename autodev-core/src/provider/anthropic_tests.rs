@@ -287,3 +287,72 @@ fn a_cached_streamed_turn_counts_its_cache_read_once() {
     assert_eq!(total.input, 15);
     assert_eq!(total.output, 4);
 }
+
+// ── P3-25 · the clear layer reaches the wire in the shape the API accepts ──
+
+#[cfg(test)]
+mod p3_25_wire_tests {
+    use super::super::anthropic::AnthropicProvider;
+    use crate::provider::types::{ClearToolUses, CompletionRequest, RequestMessage, MessageContent};
+
+    fn base() -> CompletionRequest {
+        CompletionRequest {
+            model: "claude-haiku-4-5-20251001".into(),
+            messages: vec![RequestMessage {
+                role: "user".into(),
+                content: vec![MessageContent::Text { text: "hi".into() }],
+            }],
+            system: None,
+            tools: vec![],
+            max_tokens: 16,
+            temperature: None,
+            top_p: None,
+            reasoning_effort: None,
+            thinking_budget_tokens: None,
+            cache: Default::default(),
+            clear_tool_uses: None,
+        }
+    }
+
+    #[test]
+    fn the_body_matches_what_the_live_api_accepted() {
+        // ⚠ These exact strings were verified against `api.anthropic.com` on
+        // 2026-09-02 (`L-22` — ask the wire, not the docs). The same body with
+        // the beta header returns 200; without it, 400
+        // "context_management: Extra inputs are not permitted".
+        let p = AnthropicProvider::new("test-key".into());
+        let mut req = base();
+        req.clear_tool_uses = Some(ClearToolUses {
+            trigger_input_tokens: 120_000,
+            keep_tool_uses: 3,
+            clear_at_least_input_tokens: 10_000,
+        });
+
+        let body = p.build_body_for_test(&req, false);
+        let edit = &body["context_management"]["edits"][0];
+
+        assert_eq!(edit["type"], "clear_tool_uses_20250919");
+        assert_eq!(edit["trigger"]["type"], "input_tokens");
+        assert_eq!(edit["trigger"]["value"], 120_000);
+        assert_eq!(edit["keep"]["type"], "tool_uses");
+        assert_eq!(edit["keep"]["value"], 3);
+        assert_eq!(edit["clear_at_least"]["type"], "input_tokens");
+        assert_eq!(edit["clear_at_least"]["value"], 10_000);
+    }
+
+    #[test]
+    fn a_request_without_a_clear_policy_sends_no_context_management() {
+        // The no-fire half, and it is not cosmetic: the field is REFUSED
+        // outright on any request that does not carry the beta header, so
+        // emitting it unconditionally would 400 every call.
+        let p = AnthropicProvider::new("test-key".into());
+        let body = p.build_body_for_test(&base(), false);
+
+        assert!(
+            body.get("context_management").is_none(),
+            "context_management must be absent when no policy is set — the API \
+             rejects the field without the beta header, so an unconditional \
+             emit would fail every request"
+        );
+    }
+}
