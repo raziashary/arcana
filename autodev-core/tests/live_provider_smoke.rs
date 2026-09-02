@@ -922,7 +922,7 @@ async fn s2_13_an_invalid_key_is_rejected_rather_than_accepted() {
 /// production threshold is a parameter (`CLEAR_TRIGGER_FRACTION`); what this
 /// measures is the mechanism.
 #[tokio::test]
-async fn s3_05_the_clear_layer_actually_reduces_input_tokens() {
+async fn p3_25_bench_the_clear_layer_actually_reduces_input_tokens() {
     use autodev_core::provider::types::{ClearToolUses, MessageContent, RequestMessage};
 
     let p = AnthropicProvider::new(require_key!("ANTHROPIC_API_KEY"));

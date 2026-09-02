@@ -1,4 +1,11 @@
-// S3 · Permission modes are honoured — the smoke for `P3-12`, `P3-64`, `P3-65`.
+// P3-12 · Permission modes are honoured.
+//
+// ⚠ These were named `s3_01..04` until 2026-09-02, which SQUATTED the MDP's own
+// `S3-01`…`S3-04` smoke ids — those belong to different checks entirely (turn
+// growth, tool panics, subagent-without-sidecar, recall sets). Renamed to the
+// task they actually prove. An id that means two things is worse than no id.
+//
+// Permission modes are honoured — the smoke for `P3-12`, `P3-64`, `P3-65`.
 //
 // `P3-12` as originally written said the UI's mode dropdown was ignored. That
 // attribution was REFUTED during the P3 refutation pass: the dropdown sets
@@ -33,7 +40,7 @@ const EVERY_EFFECT: [ToolEffect; 5] = [
 ];
 
 #[test]
-fn s3_01_every_mode_is_reachable_from_something_a_user_can_set() {
+fn p3_12_01_every_mode_is_reachable_from_something_a_user_can_set() {
     // 🔴 P3-66. A mode nobody can select is a guard that cannot fire. Before
     // this, `SmartApprove` was exactly that — the interactive path hardcodes
     // ManualApproval and the recipe path hardcoded Autonomous.
@@ -53,7 +60,7 @@ fn s3_01_every_mode_is_reachable_from_something_a_user_can_set() {
 }
 
 #[test]
-fn s3_02_the_three_modes_decide_differently() {
+fn p3_12_02_the_three_modes_decide_differently() {
     // If two modes agree on every effect, one of them is decoration. This is
     // the check that would have failed while `SmartApprove` was unbuildable
     // *and* would fail again if someone collapsed the arms.
@@ -75,7 +82,7 @@ fn s3_02_the_three_modes_decide_differently() {
 }
 
 #[test]
-fn s3_03_autonomous_prompts_for_nothing_and_the_others_prompt_for_something() {
+fn p3_12_03_autonomous_prompts_for_nothing_and_the_others_prompt_for_something() {
     // The fleet depends on the first half; the user depends on the second.
     for effect in EVERY_EFFECT {
         assert!(
@@ -94,7 +101,7 @@ fn s3_03_autonomous_prompts_for_nothing_and_the_others_prompt_for_something() {
 }
 
 #[test]
-fn s3_04_reading_is_never_gated_and_running_always_is() {
+fn p3_12_04_reading_is_never_gated_and_running_always_is() {
     // 🔴 P3-64's inverse. The bypass was keyed on `is_read_only()`, which
     // `check_file` declared true while spawning external checkers. Effects,
     // not a boolean, are what decides now — so the two ends of the scale must
