@@ -154,7 +154,15 @@ impl AnthropicProvider {
             body["tools"] = json!(tools);
         }
         if let Some(sys) = &req.system {
-            body["system"] = json!(sys);
+            // P2-63. Sent as a one-element content-block ARRAY rather than a
+            // bare string.
+            //
+            // Anthropic accepts both, but `cache_control` can only be attached
+            // to a block object — so as a bare string there was nowhere to hang
+            // a cache breakpoint, and `P2-16` would have had to change this
+            // shape first. Changing it here, before the cache work, keeps that
+            // change out of the commit that has to prove caching works.
+            body["system"] = json!([{ "type": "text", "text": sys }]);
         }
         if let Some(temp) = req.temperature {
             body["temperature"] = json!(temp);

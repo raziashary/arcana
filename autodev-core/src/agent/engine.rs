@@ -203,8 +203,24 @@ impl AgentEngine {
                 break;
             }
 
-            // Compact if context approaching limit — uses LLM summary when possible
-            let model_context = 200_000u32;
+            // Compact if context approaching limit — uses LLM summary when possible.
+            //
+            // P2-57. This was a hardcoded `200_000`, ignoring
+            // `ModelInfo::context_window` which every adapter already populates.
+            // Gemini's window is 1M, so a Gemini conversation was compacted at
+            // **20% of its real capacity** — throwing away context the model
+            // could still hold, and paying for a summarisation call to do it.
+            let model_context = self
+                .provider
+                .models()
+                .iter()
+                .find(|m| m.id == model)
+                .map(|m| m.context_window)
+                // A model the adapter does not list falls back to the smallest
+                // window we ship rather than the largest: compacting early is
+                // wasteful, compacting late overflows the request and fails the
+                // turn outright.
+                .unwrap_or(200_000);
             if CompactionEngine::needs_compaction(
                 CompactionEngine::estimate_tokens(&history),
                 model_context,
@@ -445,6 +461,26 @@ impl AgentEngine {
         };
         HookRegistry::fire(&HookType::AgentLoopEnd, &loop_end_ctx).await;
 
+        // ── P2-52 · a turn that did work must not report zero usage ──────
+        //
+        // Eight separate `.unwrap_or(0)` guards cover the usage fields across
+        // three adapters, so a provider renaming a field degrades silently to
+        // "this call was free" — no error, no log line, and with the spend cap
+        // now live, a zero-cost turn passes every ceiling.
+        //
+        // Checked here as the INVARIANT rather than at each of the eight sites:
+        // what matters is not which field was missing, it is that a turn which
+        // produced output reported nothing. That is one condition, and it stays
+        // true if a ninth extraction site is added.
+        if total_usage.total() == 0 && turn > 0 {
+            error!(
+                "Provider '{}' returned content but reported ZERO tokens for model \
+                 '{model}'. Cost and every spend ceiling are blind to this turn. \
+                 The usage field names have most likely changed.",
+                self.provider.id()
+            );
+        }
+
         // Record cost in app state. Tokens are recorded either way — they are
         // provider-reported fact; only the dollar figure depends on a table we
         // maintain, and a missing price must not erase the token record too.
@@ -460,18 +496,31 @@ impl AgentEngine {
             state.add_cost(cost_usd, total_usage.total_input(), total_usage.output);
         }
 
+        // P2-49. `emit_cost_update` had exactly ONE caller — the Mode 2 worker
+        // tick — so the entire Mode 1 agent path was invisible to every cost
+        // surface that listens for it, including the only budget warning the UI
+        // had. Mode 1 emitted `agent_done` instead, which carries no cost.
+        {
+            let s = self.state.lock().unwrap();
+            crate::events::emit_cost_update(crate::events::CostUpdatePayload {
+                session_id: session_id.to_string(),
+                tokens_in: total_usage.total_input(),
+                tokens_out: total_usage.output,
+                cost_usd,
+                total_today: s.cost_today_usd,
+            });
+        }
+
         // Phase 7.5 — Record token usage in analytics DB.
         // Infer provider from model name (engine only knows the model string).
         {
-            let analytics_provider = if model.contains("claude") {
-                "anthropic"
-            } else if model.contains("gpt") || model.starts_with("o1") || model.starts_with("o3") {
-                "openai"
-            } else if model.contains("gemini") {
-                "google"
-            } else {
-                "unknown"
-            };
+            // P2-53. This substring ladder was written out here AND in the other
+                            // runtime path, and they did not agree: `o4-mini`
+                            // matched neither and was filed as "unknown",
+                            // attributing real spend to a vendor that does not
+                            // exist. One shared function now answers.
+                            let analytics_provider =
+                                crate::provider::routing::provider_for_analytics(model);
             // Phase 1 of docs/endtoendrun/14may2026/02 — fail loudly so a
             // future analytics regression shows up in the log instead of
             // silently zeroing the Dashboard.

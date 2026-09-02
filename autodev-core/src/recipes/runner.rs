@@ -450,18 +450,13 @@ impl RecipeRunner {
                                 }
                                 // Persist into the analytics DB so the Dashboard's
                                 // get_dashboard_summary picks it up across restarts.
-                                let analytics_provider = if model.contains("claude") {
-                                    "anthropic"
-                                } else if model.contains("gpt")
-                                    || model.starts_with("o1")
-                                    || model.starts_with("o3")
-                                {
-                                    "openai"
-                                } else if model.contains("gemini") {
-                                    "google"
-                                } else {
-                                    "unknown"
-                                };
+                                // P2-53. This substring ladder was written out here AND in the other
+                            // runtime path, and they did not agree: `o4-mini`
+                            // matched neither and was filed as "unknown",
+                            // attributing real spend to a vendor that does not
+                            // exist. One shared function now answers.
+                            let analytics_provider =
+                                crate::provider::routing::provider_for_analytics(&model);
                                 // Phase 1 of docs/endtoendrun/14may2026/02 — fail
                                 // loudly. The previous `let _ = ...` silently
                                 // swallowed every analytics write for the entire

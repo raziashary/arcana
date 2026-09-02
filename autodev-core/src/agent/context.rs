@@ -27,58 +27,22 @@ impl ContextBuilder {
         self.session_id = Some(session_id.into());
         self
     }
+    // ⚠ `build_system_prompt` was DELETED in P2-62.
+    //
+    // It had **zero callers** — a repo-wide search matched only its own
+    // definition — and it was not a harmless duplicate. It read AUTODEV.md from
+    // the filesystem only, never queried `AutodevInstructionsDb`, and never
+    // injected the memory block, so it produced a **different prefix** from the
+    // one actually sent by `build_system_prompt_with_mode`.
+    //
+    // That made it a trap for exactly the work that comes next: whoever wires
+    // prompt caching has to pick a builder, and picking this one would produce a
+    // cache key that never matches what the request carries — a cache that
+    // silently never hits, with no error and no symptom but the bill.
+    //
+    // Deleted rather than kept "for reference": a second implementation of a
+    // thing that must be byte-identical is a liability, not documentation.
 
-    /// Build the full system prompt including AUTODEV.md contents.
-    /// If override is provided, it replaces BASE_SYSTEM_PROMPT entirely.
-    ///
-    /// TODO: Phase 2.5 — Replace filesystem-based injection with SQLite DB
-    /// Current implementation uses legacy file-based approach as placeholder.
-    /// Final implementation will query `autodev_instructions` table.
-    pub fn build_system_prompt(&self, override_prompt: Option<&str>) -> String {
-        let base = override_prompt.unwrap_or(BASE_SYSTEM_PROMPT);
-        let mut parts = vec![base.to_string()];
-
-        // Reads `~/.autodev/config/autodev_global.md`. The comment here used
-        // to say `~/.airs/CLAUDE.md`, which was wrong twice over: the path moved
-        // in P1-14, and `CLAUDE.md` is forbidden by the naming lock (ADR-01-11)
-        // — this project uses `AUTODEV.md`.
-        // TODO: query SQLite for the global AUTODEV.md instead of the file.
-        // let global_content = autodev_instructions::get("global", None);
-        if let Some(home) = home_dir() {
-            let global_autodev = home
-                .join(".autodev")
-                .join("config")
-                .join("autodev_global.md");
-            if let Ok(content) = std::fs::read_to_string(&global_autodev) {
-                if !content.trim().is_empty() {
-                    debug!("Injecting global AUTODEV.md from {:?}", global_autodev);
-                    parts.push(format!("## Global Instructions (AUTODEV.md)\n\n{content}"));
-                }
-            }
-        }
-
-        // LEGACY: {cwd}/CLAUDE.md — will be replaced with SQLite query
-        // TODO: Query SQLite for repo-specific AUTODEV.md
-        // let repo_content = autodev_instructions::get("repo", Some(&self.working_dir));
-        let cwd_autodev = Path::new(&self.working_dir)
-            .join(".autodev")
-            .join("autodev.md");
-        if let Ok(content) = std::fs::read_to_string(&cwd_autodev) {
-            if !content.trim().is_empty() {
-                debug!("Injecting project AUTODEV.md from {:?}", cwd_autodev);
-                parts.push(format!("## Project Instructions (AUTODEV.md)\n\n{content}"));
-            }
-        }
-
-        // REMOVED: AGENTS.md fallback — AutoDev is AUTODEV.md only
-        // No CLAUDE.md compatibility — this is proprietary AIRS system
-
-        parts.join("\n\n---\n\n")
-    }
-
-    /// Build system prompt for a given PAMode.
-    /// Injects memory context when a session_id is attached via `with_session()`.
-    /// Fetches global + repo-specific AUTODEV.md from SQLite config.db.
     /// Falls back to filesystem paths if DB entry is empty.
     pub fn build_system_prompt_with_mode(&self, mode: super::PAMode, repo_path: &str) -> String {
         let base = match mode {

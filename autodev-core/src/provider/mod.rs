@@ -6,6 +6,7 @@ pub mod anthropic;
 pub mod capped;
 pub mod google;
 pub mod openai;
+pub mod routing;
 pub mod streaming;
 pub mod traits;
 pub mod types;
