@@ -4,14 +4,10 @@
 
 use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 use crate::diff_analysis::DiffAnalyzer;
-use crate::provider::anthropic::AnthropicProvider;
-use crate::provider::google::GoogleProvider;
-use crate::provider::openai::OpenAIProvider;
 use crate::provider::traits::Provider;
 use crate::vault::keychain::{provider_key, VaultManager};
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use std::sync::Arc;
 
 pub struct AnalyzeDiffTool;
 
@@ -236,28 +232,51 @@ fn detect_interface_drift(patch: &str) -> InterfaceDrift {
 fn build_analyzer_from_vault() -> crate::errors::Result<DiffAnalyzer> {
     use crate::errors::AutoDevError;
 
-    // Read active provider settings from a simple config file (same pattern as sidecar)
-    // Fallback: use vault to check which provider has a key
-    let provider_id =
-        std::env::var("AUTODEV_ACTIVE_PROVIDER").unwrap_or_else(|_| "anthropic".to_string());
-    let model =
-        std::env::var("AUTODEV_ACTIVE_MODEL").unwrap_or_else(|_| "claude-sonnet-4-6".to_string());
+    // ── P2-31 · this tool used to bypass model selection entirely ────────────
+    //
+    // It read `AUTODEV_ACTIVE_PROVIDER` and `AUTODEV_ACTIVE_MODEL` from the
+    // process environment — two variables **nothing in the tree ever sets** —
+    // and fell back to `"claude-sonnet-4-6"`, an id that appears in no provider
+    // catalogue. So the fallback was not a degraded path, it was the ONLY path,
+    // and it named a model that does not exist. Every call through this tool
+    // failed at the provider with a 404 that looked like an outage.
+    //
+    // It now reads the same persisted selection the rest of the app uses
+    // (`P2-26`), so the user's choice in Settings governs this tool too.
+    let provider_id = crate::db::app_settings::get("active_provider")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "anthropic".to_string());
+
+    let model = crate::db::app_settings::get("active_model")
+        .ok()
+        .flatten()
+        .filter(|m| crate::provider::catalogue::entry(m).is_some())
+        .or_else(|| {
+            // No saved choice, or one that has since been retired. Fall back to
+            // the first catalogued model this provider actually serves, rather
+            // than to a literal — a hardcoded id is exactly what rotted here.
+            crate::provider::catalogue::CATALOGUE
+                .iter()
+                .find(|e| e.provider == provider_id)
+                .map(|e| e.id.to_string())
+        })
+        .ok_or_else(|| {
+            AutoDevError::Agent(format!(
+                "No model available for provider '{provider_id}'. Choose a provider and \
+                 model in Settings."
+            ))
+        })?;
 
     let api_key = VaultManager::get(&provider_key(&provider_id))?.ok_or_else(|| {
         AutoDevError::Agent(format!("No API key for provider '{provider_id}'"))
     })?;
 
-    let inner: Arc<dyn Provider> = match provider_id.as_str() {
-        "anthropic" => Arc::new(AnthropicProvider::new(api_key)),
-        "openai" => Arc::new(OpenAIProvider::new(api_key)),
-        "google" => Arc::new(GoogleProvider::new(api_key)),
-        other => return Err(AutoDevError::Agent(format!("Unknown provider: {other}"))),
-    };
-
-    // This tool holds no AppState — tools receive a ToolContext — so it reaches
-    // the ceiling through the process-global handle. Without it this would be
-    // the one path a call could take without meeting the cap (P2-21).
-    let provider = crate::provider::capped::CappedProvider::wrap_global(inner);
+    // Built through the shared factory, which applies the daily ceiling. This
+    // tool holds no AppState — tools receive a ToolContext — so it reaches the
+    // cap through the process-global handle. Without it this would be the one
+    // path a call could take without meeting the ceiling (P2-21).
+    let provider = crate::provider::factory::build(&provider_id, api_key)?;
 
     Ok(DiffAnalyzer::new(provider, model))
 }

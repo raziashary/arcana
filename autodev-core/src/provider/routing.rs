@@ -83,7 +83,7 @@ mod tests {
 
     #[test]
     fn analytics_attribution_never_drops_a_call_but_never_guesses_a_vendor() {
-        assert_eq!(provider_for_analytics("gemini-3.5-flash"), "google");
+        assert_eq!(provider_for_analytics("gemini-3.7-flash"), "google");
         // Recorded, but not attributed to a real vendor.
         assert_eq!(provider_for_analytics("made-up"), "unknown");
         // And the routing function still refuses it.

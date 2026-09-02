@@ -156,7 +156,10 @@ impl Tool for SpawnQcReviewTool {
             .get("model")
             .and_then(|v| v.as_str())
             .filter(|s| !s.trim().is_empty())
-            .unwrap_or("claude-sonnet-4-5")
+            // P2-31. Was a hardcoded `claude-sonnet-4-5` — retired in
+            // February 2026, so every QC review that did not name a model
+            // explicitly ran against an id no provider would serve.
+            .unwrap_or(crate::db::workers::DEFAULT_MODEL)
             .to_string();
         let timeout_secs = input
             .get("timeout_secs")

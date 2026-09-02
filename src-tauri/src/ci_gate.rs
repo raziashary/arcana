@@ -1150,6 +1150,172 @@ let x = 1;
         );
     }
 
+    /// Whether a path is inside the sidecar, which is scheduled for deletion
+    /// and speaks LiteLLM proxy naming rather than direct-API ids.
+    fn rel_dir_is_sidecar(path: &std::path::Path) -> bool {
+        path.components()
+            .any(|c| c.as_os_str().to_str() == Some("sidecar"))
+    }
+
+    // ── TG-P2-09 · no shipped code names a model that does not exist ──────────
+
+    /// Every model id written into shipped code must be one the app offers.
+    ///
+    /// ── What this caught ────────────────────────────────────────────────────
+    ///
+    /// Model ids rot silently. Anthropic withdrew `claude-sonnet-4-5` and
+    /// `claude-opus-4-5` in February 2026, and by 2026-09-02 the tree still
+    /// named them in four places that mattered:
+    ///
+    ///   * `analyze_diff_tool.rs` fell back to `claude-sonnet-4-6` — an id that
+    ///     never existed in ANY catalogue — behind two environment variables
+    ///     nothing sets, so the fallback was the only path;
+    ///   * `spawn_qc_review.rs` defaulted every unnamed QC review to a retired
+    ///     model;
+    ///   * `recipes/runner.rs` fell back to one;
+    ///   * and `anthropic.rs`'s slug normaliser — whose entire purpose is to
+    ///     prevent 404s — mapped old names ONTO two retired ids, so it was
+    ///     manufacturing the failure it existed to prevent.
+    ///
+    /// None of it failed at compile time, and none of it failed in any test:
+    /// the ids are strings, and a string is wrong only when a provider says so.
+    ///
+    /// Comments and test files are excluded — a comment recording that an id was
+    /// retired is documentation, not a defect, and the fixture suites
+    /// deliberately name dead ids to assert they are refused.
+    #[test]
+    fn tg_p2_09_no_shipped_code_names_a_model_outside_the_catalogue() {
+        let catalogue =
+            std::fs::read_to_string(repo_root().join("autodev-core/src/provider/catalogue.rs"))
+                .expect("catalogue.rs");
+
+        // The ids the app offers, read from the catalogue's own entries.
+        let offered: Vec<String> = catalogue
+            .split("        id: \"")
+            .skip(1)
+            .filter_map(|rest| rest.split_once('"').map(|(id, _)| id.to_string()))
+            .collect();
+
+        assert!(
+            offered.len() >= 8,
+            "read only {} models from the catalogue — re-point this gate",
+            offered.len()
+        );
+
+        let roots = [
+            repo_root().join("autodev-core/src"),
+            repo_root().join("src-tauri/src"),
+            repo_root().join("src-cli/src"),
+        ];
+
+        let mut offenders = Vec::new();
+        let mut scanned = 0usize;
+
+        for root in &roots {
+            let mut stack = vec![root.clone()];
+            while let Some(dir) = stack.pop() {
+                let Ok(entries) = std::fs::read_dir(&dir) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        stack.push(path);
+                        continue;
+                    }
+                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    if !name.ends_with(".rs") {
+                        continue;
+                    }
+                    // The catalogue and price table are the registries
+                    // themselves; the fixture suites name dead ids on purpose.
+                    if name == "catalogue.rs"
+                        || name == "pricing.rs"
+                        || name.ends_with("_tests.rs")
+                    {
+                        continue;
+                    }
+
+                    // The sidecar translates INTO LiteLLM proxy naming
+                    // (`claude-4-5-haiku`), which is a different namespace from
+                    // the direct-API ids this gate governs — a dead id there is
+                    // a correct output, not a defect. It is also scheduled for
+                    // deletion in full before the AutoDesign handover (PD0-PD6),
+                    // so hardening it would be work with no destination.
+                    if rel_dir_is_sidecar(&path) {
+                        continue;
+                    }
+
+                    let text = std::fs::read_to_string(&path).unwrap_or_default();
+                    scanned += 1;
+                    let rel = path
+                        .strip_prefix(repo_root())
+                        .unwrap_or(&path)
+                        .display()
+                        .to_string()
+                        .replace('\\', "/");
+
+                    // Everything from the first inline `#[cfg(test)]` onward.
+                    //
+                    // Tests legitimately name ids the app does not offer — that
+                    // is how `the_retired_generation_is_gone` and
+                    // `a_dropped_provider_does_not_route` assert a model is
+                    // REFUSED. The gate governs shipped code.
+                    let production = match text.find("#[cfg(test)]") {
+                        Some(i) => &text[..i],
+                        None => &text[..],
+                    };
+
+                    for (n, line) in production.lines().enumerate() {
+                        let code = line.split("//").next().unwrap_or("");
+                        if code.trim().is_empty() {
+                            continue;
+                        }
+
+                        // Quoted tokens that look like a model id.
+                        for token in code.split('"').skip(1).step_by(2) {
+                            let looks_like_a_model = (token.starts_with("claude-")
+                                || token.starts_with("gemini-")
+                                || token.starts_with("gpt-"))
+                                && token.chars().any(|c| c.is_ascii_digit())
+                                && !token.contains(' ');
+
+                            if !looks_like_a_model {
+                                continue;
+                            }
+
+                            // A legacy slug being MAPPED to a live id is the fix,
+                            // not the defect — the offence is naming a dead id as
+                            // a destination or a default.
+                            let is_a_match_arm_input =
+                                code.contains("=>") && code.find(token) < code.find("=>");
+
+                            if !offered.iter().any(|o| o == token) && !is_a_match_arm_input {
+                                offenders.push(format!(
+                                    "{rel}:{} names '{token}', which the app does not offer: {}",
+                                    n + 1,
+                                    code.trim()
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(
+            scanned > 100,
+            "only {scanned} files scanned — this gate is not reaching the tree"
+        );
+
+        assert!(
+            offenders.is_empty(),
+            "these hardcoded model ids are not in the catalogue, so a call using one \
+             fails at the provider with a 404 that reads like an outage:\n{}",
+            offenders.join("\n")
+        );
+    }
+
     // ── TG-P2-08 · a setting the UI writes is a setting the request carries ───
 
     /// Model settings must reach the request, not merely the database.

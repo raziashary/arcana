@@ -66,13 +66,24 @@ impl AnthropicProvider {
         // run (log lines 5665, 18916, 21223, 21226, 29402, 37933, 39528, 53037,
         // 53040) for qc-agent and supervisor whenever Mode 1 fallback fired.
         //
+        // ⚠ P2-31 (2026-09-02). This map normalised old slugs onto ids that are
+        // THEMSELVES now retired: `claude-sonnet-4-5` and `claude-opus-4-5`
+        // were withdrawn in February 2026. So the function whose entire purpose
+        // is to stop 404s was producing two of them — a stored worker on
+        // `claude-4-5-sonnet` was faithfully normalised to a model that no
+        // longer exists.
+        //
+        // The targets are now current ids. This is a rename, not a preference:
+        // there is no version of this map where the old targets are correct,
+        // because api.anthropic.com will not serve them.
+        //
         // Canonical IDs accepted by api.anthropic.com/v1/messages:
-        //   claude-haiku-4-5  |  claude-sonnet-4-5  |  claude-opus-4-5
+        //   claude-haiku-4-5 | claude-sonnet-5 | claude-opus-5 | claude-fable-5
         let model = match req.model.as_str() {
-            // Old slug names → canonical direct-API IDs
+            // Old slug names → current direct-API IDs
             "claude-4-5-haiku" | "claude-haiku-4-5" => "claude-haiku-4-5",
-            "claude-4-5-sonnet" | "claude-sonnet-4-5" => "claude-sonnet-4-5",
-            "claude-4-5-opus" | "claude-opus-4-5" => "claude-opus-4-5",
+            "claude-4-5-sonnet" | "claude-sonnet-4-5" | "claude-sonnet-5" => "claude-sonnet-5",
+            "claude-4-5-opus" | "claude-opus-4-5" | "claude-opus-5" => "claude-opus-5",
             // Strip any LiteLLM "anthropic/" prefix that may have crept in via config
             s if s.starts_with("anthropic/") => s.trim_start_matches("anthropic/"),
             other => other,

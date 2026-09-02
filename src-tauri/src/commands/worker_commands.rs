@@ -356,16 +356,18 @@ fn write_yaml_model(agents_dir: &Path, slug: &str, model: &str) -> Result<()> {
 /// Dashscope and anything `-nvidia` to NVIDIA. None of those are supported
 /// providers: `is_supported_provider` accepts only these three, so no key can
 /// be stored for them and the route could never have completed.
+/// Which provider serves a model.
+///
+/// ⚠ P2-53 collapsed this substring ladder into `routing::provider_for_model`
+/// because three copies had drifted apart — `o4-mini` matched none of them and
+/// was filed under `"unknown"`, corrupting the per-provider cost breakdown.
+///
+/// This was a FIFTH copy, missed in that pass and found by `TG-P2-09` on
+/// 2026-09-02: its tests still asserted routing for `gpt-5.3-codex` and
+/// `gemini-3.5-pro`, models the app no longer offers — a copy quietly
+/// disagreeing with the registry, which is exactly the failure mode.
 fn model_to_provider(model: &str) -> Option<&'static str> {
-    if model.starts_with("claude") {
-        Some("anthropic")
-    } else if model.starts_with("gpt-") || model.starts_with("o1-") || model.starts_with("o3") {
-        Some("openai")
-    } else if model.starts_with("gemini") {
-        Some("google")
-    } else {
-        None
-    }
+    autodev_core::provider::routing::provider_for_model(model)
 }
 
 #[cfg(test)]
@@ -377,9 +379,9 @@ mod model_provider_tests {
         assert_eq!(model_to_provider("claude-opus-5"), Some("anthropic"));
         assert_eq!(model_to_provider("claude-haiku-4-5"), Some("anthropic"));
         assert_eq!(model_to_provider("gpt-5.5"), Some("openai"));
-        assert_eq!(model_to_provider("gpt-5.3-codex"), Some("openai"));
-        assert_eq!(model_to_provider("gemini-3.5-flash"), Some("google"));
-        assert_eq!(model_to_provider("gemini-3.5-pro"), Some("google"));
+        assert_eq!(model_to_provider("gpt-5.4-mini"), Some("openai"));
+        assert_eq!(model_to_provider("gemini-3.7-flash"), Some("google"));
+        assert_eq!(model_to_provider("gemini-3.1-pro-preview"), Some("google"));
     }
 
     #[test]

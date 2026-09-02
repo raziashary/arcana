@@ -181,9 +181,17 @@ impl RecipeRunner {
             worker_model
                 .or_else(|| recipe.model.clone())
                 .unwrap_or_else(|| {
+                    // P2-31. The literal here was `claude-sonnet-4-5`, retired
+                    // in February 2026 — so a run with no worker model, no
+                    // recipe model and no active selection reached for a model
+                    // that does not exist.
+                    //
+                    // `DEFAULT_MODEL` is the one place a fallback model id is
+                    // written down, and `TG-P2-09` holds every such id to the
+                    // catalogue.
                     s.active_model
                         .clone()
-                        .unwrap_or_else(|| "claude-sonnet-4-5".into())
+                        .unwrap_or_else(|| crate::db::workers::DEFAULT_MODEL.to_string())
                 })
         };
 
