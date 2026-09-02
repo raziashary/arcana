@@ -230,7 +230,17 @@ fn render(ranked: &[super::rank::Scored], degraded: bool) -> String {
                 "tool_result" => "from a tool result",
                 "test_result" => "from a test run",
                 "agent_observation" => "I observed",
-                _ => "from an earlier conversation",
+                // An unrecognised source is SHOWN as unrecognised, not
+                // laundered into a plausible one. The previous arm rendered
+                // `source = 'banana'` as "from an earlier conversation", so a
+                // bad value read to the model as ordinary provenance — the
+                // opposite of the "stored and flagged" the provenance gate
+                // forbids. `memories.source` has no CHECK constraint yet
+                // (`TG3-20`, open), so this arm is reachable.
+                other => {
+                    tracing::warn!("[memory] unrecognised source {other:?} on a recalled memory");
+                    "source unrecognised"
+                }
             };
             parts.push(format!(
                 "- ({origin}) {}\n",

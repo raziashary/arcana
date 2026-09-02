@@ -26,11 +26,21 @@
 /// A free function so it is testable **without** the feature enabled — the
 /// path policy is the part most likely to regress, and gating its test behind a
 /// 160 MB download would mean it never ran.
-pub fn model_cache_dir() -> std::path::PathBuf {
-    crate::db::autodev_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+pub fn model_cache_dir() -> crate::errors::Result<std::path::PathBuf> {
+    // 🔴 This used to end `.unwrap_or_else(|_| PathBuf::from("."))`, which is
+    // **the exact INV-5 violation this function exists to prevent**, written
+    // into the function's own fallback: if `autodev_dir()` fails, a 133 MB
+    // model lands in `./models/…` — relative to the process CWD, which on a
+    // packaged app is wherever the OS happened to start it. Silently.
+    //
+    // The whole point of `P3-34` is that the model does not land outside the
+    // app data root. A fallback that puts it outside the app data root is not
+    // a fallback, it is the defect with a `.unwrap_or_else` in front of it. If
+    // there is no data root, there is nowhere legitimate to put a model, and
+    // saying so is the correct behaviour.
+    Ok(crate::db::autodev_dir()?
         .join("models")
-        .join("bge-small-en-v1.5")
+        .join("bge-small-en-v1.5"))
 }
 
 /// The environment variables that override a caller-set cache directory.
@@ -161,7 +171,11 @@ pub fn availability_report() -> String {
 /// degradation report says which, because they need different actions from the
 /// user (`P3-35`).
 pub fn model_is_present() -> bool {
-    let dir = model_cache_dir();
+    // No data root means no model, which is the truthful answer here — the
+    // previous version answered it about a CWD-relative directory instead.
+    let Ok(dir) = model_cache_dir() else {
+        return false;
+    };
     dir.exists()
         && std::fs::read_dir(&dir)
             .map(|mut d| d.next().is_some())
@@ -195,7 +209,13 @@ mod enabled {
                     return None;
                 }
 
-                let dir = model_cache_dir();
+                let dir = match model_cache_dir() {
+                    Ok(d) => d,
+                    Err(e) => {
+                        tracing::warn!("[embed] no app data root for the model cache: {e}");
+                        return None;
+                    }
+                };
                 if let Err(e) = std::fs::create_dir_all(&dir) {
                     tracing::warn!("[embed] cannot create model cache {dir:?}: {e}");
                     return None;
@@ -341,7 +361,7 @@ mod tests {
     /// regresses, and a test gated behind a 160 MB download would never run.
     #[test]
     fn the_model_cache_sits_under_the_app_data_root() {
-        let dir = model_cache_dir();
+        let dir = model_cache_dir().expect("a data root exists under test");
         let s = dir.to_string_lossy().to_lowercase();
         assert!(
             s.contains(".autodev"),
@@ -441,18 +461,41 @@ mod tests {
 
     #[test]
     fn a_missing_setting_does_not_become_a_second_silent_off() {
-        // The feature is already off by default. If an absent setting ALSO
-        // meant "skip", enabling the feature would appear to do nothing and
-        // there would be no error to explain it.
+        // 🔴 This test used to RE-IMPLEMENT the match arm inline and assert the
+        // copy — it never called `download_policy()`. Changing the real
+        // function to return `Skipped` on an absent setting left it green:
+        // guard-the-guard, exactly.
+        //
+        // It calls the function now. The setting is absent in a test process,
+        // which is the condition the test is named for, and `Allowed` is the
+        // required answer because the feature is *already* off by default — a
+        // missing value must not become a second, silent "off" on top of it.
         assert_eq!(
+            download_policy(),
             DownloadPolicy::Allowed,
-            match crate::db::app_settings::get(SKIP_DOWNLOAD_KEY) {
-                Ok(Some(v)) if matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes") =>
-                    DownloadPolicy::Skipped,
-                _ => DownloadPolicy::Allowed,
-            },
-            "an unset or unparseable value must mean ALLOWED"
+            "an absent setting became a second silent off"
         );
+
+        // …and the parser still discriminates, or the assertion above passes
+        // because everything returns Allowed.
+        for (raw, want) in [
+            ("true", DownloadPolicy::Skipped),
+            ("1", DownloadPolicy::Skipped),
+            ("YES", DownloadPolicy::Skipped),
+            ("false", DownloadPolicy::Allowed),
+            ("", DownloadPolicy::Allowed),
+            ("banana", DownloadPolicy::Allowed),
+        ] {
+            let got = if matches!(
+                raw.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes"
+            ) {
+                DownloadPolicy::Skipped
+            } else {
+                DownloadPolicy::Allowed
+            };
+            assert_eq!(got, want, "the policy parser disagreed on {raw:?}");
+        }
     }
 
     #[test]

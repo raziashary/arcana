@@ -35,10 +35,9 @@ impl Tool for ProposeMemoryTool {
          whether to keep it — checking length, duplication against existing \
          memories in the same scope, and how much confidence your role is \
          permitted to assert. The result tells you what was decided and why.\n\n\
-         Set user_stated=true ONLY when the user has just told you this in so \
-         many words. It records the memory as the user's own statement, at full \
-         confidence, and everything else is stored as your observation at a \
-         lower one.\n\n\
+         Provenance is not yours to declare: the runtime records who is \
+         speaking from its own identity, and your confidence is capped by what \
+         your role may assert. You may ask for less; you cannot ask for more.\n\n\
          Scope determines who can recall it: 'project' (this workspace only) or \
          'global' (everywhere). Prefer 'project' — a global memory is recalled \
          in every other repository too."
@@ -212,6 +211,47 @@ mod tests {
             Proposer::from_agent_role(&c.agent_role).confidence_ceiling()
                 < Proposer::User.confidence_ceiling()
         );
+    }
+
+    /// 🔴 The description advertised `user_stated` for a phase and a half after
+    /// the parameter was removed from the schema.
+    ///
+    /// Removing the key and the read closed the hole; the **description** went
+    /// on telling the model to send the flag — i.e. it advertised, in the one
+    /// place the model actually reads, exactly the privilege escalation the
+    /// removal existed to take away. Two gates missed it: `TG-P3-20` matches a
+    /// fixed five-item list that `user_stated` was not on, and `TG-P3-47` scans
+    /// only the slice between `fn input_schema` and `async fn execute`, while
+    /// the description sits above both.
+    ///
+    /// ⚠ Asserted against the **schema's own keys**, not against a list of
+    /// banned words. A description may only name a parameter that exists, so
+    /// this cannot go stale the next time a field is added or removed.
+    #[test]
+    fn the_description_names_no_parameter_the_schema_does_not_have() {
+        let desc = ProposeMemoryTool.description().to_string();
+        let schema = ProposeMemoryTool.input_schema();
+        let keys: Vec<String> = schema["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+
+        // Every `snake_case=` or `snake_case:` token in the prose is a claim
+        // about the interface.
+        for word in desc.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
+            if word.len() < 4 || !word.contains('_') {
+                continue;
+            }
+            assert!(
+                keys.iter().any(|k| k == word),
+                "the description names {word:?}, which is not a parameter of \
+                 this tool — a description is instructions the model follows, \
+                 so naming a removed field re-offers the capability it was \
+                 removed to take away"
+            );
+        }
     }
 
     #[test]
