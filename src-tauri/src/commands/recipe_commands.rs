@@ -265,6 +265,9 @@ pub async fn generate_recipe_yaml(
         top_p:                  None,
         reasoning_effort:       None,
         thinking_budget_tokens: None,
+        // A recipe step's prompt is built per invocation; there is no shared
+        // prefix across runs to cache.
+        cache: autodev_core::provider::usage::CachePolicy::Off,
     };
 
     let response = provider.complete(request).await?;

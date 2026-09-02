@@ -149,6 +149,9 @@ Do not include any text outside the JSON object."#;
         top_p: None,
         reasoning_effort: None,
         thinking_budget_tokens: None,
+        // One-shot classification over a diff that differs every time.
+        // Nothing to reuse, so nothing to cache.
+        cache: crate::provider::usage::CachePolicy::Off,
     };
 
     let response = provider.complete(request).await?;

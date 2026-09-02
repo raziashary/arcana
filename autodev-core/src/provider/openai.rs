@@ -3,6 +3,7 @@
 // Implements the Provider trait with streaming support.
 
 use async_trait::async_trait;
+use super::usage::CachePolicy;
 use futures::StreamExt;
 use reqwest::Client;
 use serde_json::json;
@@ -230,6 +231,18 @@ impl OpenAIProvider {
         // `max_completion_tokens` is the current field name; `max_tokens` is
         // deprecated and rejected outright by the reasoning models.
         body["max_completion_tokens"] = json!(req.max_tokens);
+
+        // P2-16. OpenAI caches automatically — there is no breakpoint to place
+        // and nothing to switch on. What it does accept is a routing hint:
+        // identical prefixes cache per backend node, so requests that share a
+        // prefix have to land on the same node to hit it.
+        //
+        // `Explicit` is deliberately NOT approximated here. There is no field
+        // to express it, and sending something adjacent would make a request
+        // that reports as cached-by-request while caching by luck.
+        if let CachePolicy::Automatic { ref affinity_key } = req.cache {
+            body["prompt_cache_key"] = json!(affinity_key);
+        }
 
         if stream {
             body["stream"] = json!(true);

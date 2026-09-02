@@ -1,4 +1,4 @@
-use super::usage::Usage;
+use super::usage::{CachePolicy, Usage};
 // Provider data types shared across all LLM provider implementations.
 
 use serde::{Deserialize, Serialize};
@@ -77,6 +77,19 @@ pub struct CompletionRequest {
     pub top_p: Option<f32>,                  // nucleus sampling (0..1)
     pub reasoning_effort: Option<String>,    // "low" | "medium" | "high" (OpenAI reasoning models)
     pub thinking_budget_tokens: Option<u32>, // Anthropic extended thinking budget
+    /// What caching to request (`P2-16`).
+    ///
+    /// A *policy shape*, not a provider name: `Explicit` means we place the
+    /// breakpoints (Anthropic), `Automatic` means the vendor caches on its own
+    /// and we only steer affinity (OpenAI, Gemini). An adapter that cannot
+    /// honour the shape it is given ignores it rather than approximating —
+    /// approximating a cache produces a request that looks cached and is not.
+    ///
+    /// Defaults to `Off`. A default that cached would send `cache_control` on
+    /// behalf of callers who never asked, and a cache WRITE is billed above the
+    /// input rate — so the wrong default costs money rather than saving it.
+    #[serde(default)]
+    pub cache: CachePolicy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

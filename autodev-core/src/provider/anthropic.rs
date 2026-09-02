@@ -3,6 +3,7 @@
 // Implements the Provider trait with streaming support.
 
 use async_trait::async_trait;
+use super::usage::CachePolicy;
 use futures::StreamExt;
 use reqwest::Client;
 use serde_json::json;
@@ -142,7 +143,26 @@ impl AnthropicProvider {
             // a cache breakpoint, and `P2-16` would have had to change this
             // shape first. Changing it here, before the cache work, keeps that
             // change out of the commit that has to prove caching works.
-            body["system"] = json!([{ "type": "text", "text": sys }]);
+            // P2-16. The breakpoint goes on the system block when the caller
+            // asked for `Explicit` caching.
+            //
+            // Anthropic hashes `tools → system → messages` and caches
+            // everything up to the marked block, so marking the LAST system
+            // block caches the tool definitions and the whole system prompt in
+            // one entry. Volatile content is not here to be marked around:
+            // `cache::prefix` keeps it out of this region entirely (P2-14).
+            //
+            // Below the model's minimum Anthropic caches nothing and returns
+            // no error, which is why `cache::prefix::will_cache` is consulted
+            // before a policy of `Explicit` is ever set.
+            let mut block = json!({ "type": "text", "text": sys });
+            if let CachePolicy::Explicit { ref ttl, .. } = req.cache {
+                block["cache_control"] = json!({
+                    "type": "ephemeral",
+                    "ttl": ttl.as_wire_str(),
+                });
+            }
+            body["system"] = json!([block]);
         }
         if let Some(temp) = req.temperature {
             body["temperature"] = json!(temp);

@@ -44,7 +44,42 @@ impl ContextBuilder {
     // thing that must be byte-identical is a liability, not documentation.
 
     /// Falls back to filesystem paths if DB entry is empty.
+    /// The system prompt, as one string.
+    ///
+    /// Delegates to `build_system_prompt_parts` and joins, so the joined form
+    /// and the split form cannot drift apart. That drift is not hypothetical:
+    /// `build_system_prompt` was a second builder in this file that read
+    /// AUTODEV.md from the filesystem while the live path read SQLite and
+    /// injected memory, and it was deleted in P2-62 for exactly this reason.
     pub fn build_system_prompt_with_mode(&self, mode: super::PAMode, repo_path: &str) -> String {
+        let (stable, volatile) = self.build_system_prompt_parts(mode, repo_path);
+        if volatile.is_empty() {
+            stable
+        } else {
+            format!("{stable}\n\n---\n\n{volatile}")
+        }
+    }
+
+    /// The system prompt split at the cache breakpoint (`P2-14`).
+    ///
+    /// Returns `(stable, volatile)`. The stable half is the base prompt plus
+    /// the AUTODEV.md instructions — it changes only when the user edits those.
+    /// The volatile half is the memory block, which is rebuilt from
+    /// `get_recent_summaries` and `recall_facts` and therefore changes whenever
+    /// the agent learns anything.
+    ///
+    /// ⚠ **The order matters and is load-bearing.** Anthropic caches a prefix,
+    /// so volatile content has to come LAST or it invalidates everything behind
+    /// it. Memory was already last here — but it was last *inside a single
+    /// string*, with no way to place a breakpoint in front of it. Splitting it
+    /// out is what makes the base prompt cacheable at all: otherwise every new
+    /// remembered fact throws away the multi-KB prompt in front of it, on every
+    /// session, silently.
+    pub fn build_system_prompt_parts(
+        &self,
+        mode: super::PAMode,
+        repo_path: &str,
+    ) -> (String, String) {
         let base = match mode {
             super::PAMode::FastDevelopment => BASE_SYSTEM_PROMPT,
             super::PAMode::Review => REVIEW_SYSTEM_PROMPT,
@@ -92,13 +127,18 @@ impl ContextBuilder {
 
         // Phase 4.4 — Memory injection: recall relevant memories from all 3 tiers.
         // Skipped when no session_id is set (e.g. MCP server, subagent, recipe mode).
-        if let Some(ref sid) = self.session_id {
-            if let Some(memory_block) = crate::memory::build_memory_context(sid, "", repo_path) {
-                parts.push(memory_block);
-            }
-        }
+        //
+        // P2-14. This goes into the VOLATILE half, not into `parts`. It is
+        // rebuilt from the episodic and semantic stores on every call, so a
+        // single new fact changes these bytes — and anything sharing a cache
+        // region with it is invalidated along with it.
+        let volatile = self
+            .session_id
+            .as_ref()
+            .and_then(|sid| crate::memory::build_memory_context(sid, "", repo_path))
+            .unwrap_or_default();
 
-        parts.join("\n\n---\n\n")
+        (parts.join("\n\n---\n\n"), volatile)
     }
 
     /// Returns the default base system prompt (for display in settings).

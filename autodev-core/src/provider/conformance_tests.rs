@@ -36,6 +36,7 @@ fn req() -> CompletionRequest {
         top_p: None,
         reasoning_effort: None,
         thinking_budget_tokens: None,
+        cache: crate::provider::usage::CachePolicy::Off,
     }
 }
 
@@ -422,5 +423,101 @@ fn every_shipped_model_that_claims_parallel_tools_actually_gets_them() {
         let caps = crate::provider::catalogue::capabilities_for(e.id);
         assert!(caps.parallel_tools, "{} does not report parallel tool support", e.id);
         assert!(caps.tools && caps.streaming, "{} lost a base capability", e.id);
+    }
+}
+
+// ── P2-16 · the cache policy reaches the wire, per provider shape ───────────
+//
+// Each provider expresses caching differently, and an adapter that quietly
+// ignores the policy produces a request that is indistinguishable from a
+// correct one until the bill arrives. These assert the byte that has to be
+// there — and, just as importantly, that it is ABSENT when caching is off.
+
+fn req_with_cache(cache: crate::provider::usage::CachePolicy) -> CompletionRequest {
+    let mut r = req();
+    r.cache = cache;
+    r
+}
+
+#[test]
+fn anthropic_marks_a_breakpoint_only_when_explicit_caching_is_asked_for() {
+    use crate::provider::usage::{CachePolicy, CacheTtl};
+
+    let body = AnthropicProvider::new(String::new()).build_body_for_test(
+        &req_with_cache(CachePolicy::Explicit {
+            breakpoints: vec![0],
+            ttl: CacheTtl::FiveMinutes,
+        }),
+        false,
+    );
+    let block = &body["system"][0];
+    assert_eq!(
+        block["cache_control"]["type"], serde_json::json!("ephemeral"),
+        "no breakpoint means nothing caches, and Anthropic reports that as success"
+    );
+    assert_eq!(
+        block["cache_control"]["ttl"], serde_json::json!("5m"),
+        "the TTL is a COST decision: 1.25x write vs 2.0x for the hour"
+    );
+    // P2-63 made this an array so there was a block to hang this on at all.
+    assert!(body["system"].is_array(), "a bare string has nowhere to carry cache_control");
+
+    // And with caching off, the field must be absent — not present-and-false.
+    let off = AnthropicProvider::new(String::new())
+        .build_body_for_test(&req_with_cache(CachePolicy::Off), false);
+    assert!(
+        off["system"][0].get("cache_control").is_none(),
+        "an unasked-for cache WRITE is billed above the input rate — it must not appear by default"
+    );
+}
+
+#[test]
+fn openai_sends_an_affinity_key_only_for_automatic_caching() {
+    use crate::provider::usage::{CachePolicy, CacheTtl};
+
+    let body = OpenAIProvider::new(String::new()).build_body_for_test(
+        &req_with_cache(CachePolicy::Automatic {
+            affinity_key: "abc123".into(),
+        }),
+        false,
+    );
+    assert_eq!(body["prompt_cache_key"], serde_json::json!("abc123"));
+
+    let off = OpenAIProvider::new(String::new())
+        .build_body_for_test(&req_with_cache(CachePolicy::Off), false);
+    assert!(off.get("prompt_cache_key").is_none());
+
+    // `Explicit` is deliberately NOT approximated: OpenAI has no breakpoint
+    // field, and inventing an adjacent one would produce a request that reports
+    // as cached-by-request while caching only by luck.
+    let explicit = OpenAIProvider::new(String::new()).build_body_for_test(
+        &req_with_cache(CachePolicy::Explicit {
+            breakpoints: vec![0],
+            ttl: CacheTtl::OneHour,
+        }),
+        false,
+    );
+    assert!(
+        explicit.get("prompt_cache_key").is_none(),
+        "a policy this provider cannot express must be ignored, not approximated"
+    );
+}
+
+#[test]
+fn google_sends_no_cache_field_because_its_cache_is_implicit() {
+    use crate::provider::usage::{CachePolicy, CacheTtl};
+
+    for policy in [
+        CachePolicy::Off,
+        CachePolicy::Automatic { affinity_key: "k".into() },
+        CachePolicy::Explicit { breakpoints: vec![0], ttl: CacheTtl::FiveMinutes },
+    ] {
+        let body =
+            GoogleProvider::new(String::new()).build_body_for_test(&req_with_cache(policy), false);
+        let text = body.to_string();
+        assert!(
+            !text.contains("cache_control") && !text.contains("prompt_cache_key"),
+            "Gemini caches implicitly — another provider's field here would be rejected"
+        );
     }
 }

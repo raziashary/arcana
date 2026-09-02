@@ -763,11 +763,11 @@ stamp its run id. Sequence a phase after its data producer. Put the capstone las
       ✅ **2026-09-02** — 537 LOC deleted, 31 references across 10 files, `ollama-rs` dropped from **both** manifests, shipped UI copy corrected. `TG2-14`'s scope includes shipped copy, not only Rust.
 
 ### P2-B · Caching — alarm before cache
-- [ ] **P2-12** **Build the cache-hit alarm first.** Non-zero `cached_read` from request 2 is the invariant; zero means a silent invalidator. → `GATE-PROVEN`
-- [ ] **P2-13** One prefix builder, ordered maps (`BTreeMap`/`preserve_order`) — Anthropic needs a 100% byte match. → `UNIT-PROVEN`
-- [ ] **P2-14** Remove volatile content from the system prompt (it is not byte-stable today). → `UNIT-PROVEN`
-- [ ] **P2-15** Per-model cache minimums in `capabilities()`; warn when the prefix falls short (**no provider errors below the minimum**). → `UNIT-PROVEN`
-- [ ] **P2-16** Wire caching on all three. → `BENCH-PROVEN`
+- [x] **P2-12** **Build the cache-hit alarm first.** Non-zero `cached_read` from request 2 is the invariant; zero means a silent invalidator. → `GATE-PROVEN`
+- [x] **P2-13** One prefix builder, ordered maps (`BTreeMap`/`preserve_order`) — Anthropic needs a 100% byte match. → `UNIT-PROVEN`
+- [x] **P2-14** Remove volatile content from the system prompt (it is not byte-stable today). → `UNIT-PROVEN`
+- [x] **P2-15** Per-model cache minimums in `capabilities()`; warn when the prefix falls short (**no provider errors below the minimum**). → `UNIT-PROVEN`
+- [ ] **P2-16** Wire caching on all three. → `BENCH-PROVEN` *(Wire format landed and gate-proven on all three — Anthropic `cache_control`, OpenAI `prompt_cache_key`, Google implicit; the alarm (P2-12) observes every turn. **Stays open until P2-69 proves a live `cached_read > 0`** — the whole point of P2-12 is that the wire looking right proves nothing.)*
 
 ### P2-C · Cost and spend
 - [x] **P2-17** Handle `message_start` in streaming — **input tokens are 0 for all three cloud providers today**. → `UNIT-PROVEN`

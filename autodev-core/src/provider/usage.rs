@@ -106,6 +106,28 @@ impl Usage {
     /// A builder rather than a field in `from_inclusive_input`: only some
     /// providers report them, and threading an `Option` through the common
     /// constructor would make every call site carry a `None` it does not mean.
+    /// This turn's usage, given the running total before it.
+    ///
+    /// The agent loop accumulates into one `Usage` across turns, but the cache
+    /// alarm asks a per-turn question: *did THIS request read from cache?* A
+    /// running total answers it wrong in the worst direction — once any turn
+    /// has read from cache the total stays non-zero, so every subsequent silent
+    /// miss reports as a hit and the alarm never fires again.
+    ///
+    /// Saturating: a provider that reports a smaller total than the previous
+    /// call is malformed, and clamping to zero keeps that from wrapping into a
+    /// vast bogus delta.
+    pub fn delta_since(&self, earlier: &Usage) -> Usage {
+        Usage {
+            input: self.input.saturating_sub(earlier.input),
+            cached_read: self.cached_read.saturating_sub(earlier.cached_read),
+            cache_write: self.cache_write.saturating_sub(earlier.cache_write),
+            output: self.output.saturating_sub(earlier.output),
+            reasoning: self.reasoning.saturating_sub(earlier.reasoning),
+            tool: self.tool.saturating_sub(earlier.tool),
+        }
+    }
+
     pub fn with_reasoning(mut self, reasoning: u32) -> Self {
         self.reasoning = reasoning;
         self
@@ -163,6 +185,29 @@ pub enum CacheTtl {
     FiveMinutes,
     /// 2.0× write cost.
     OneHour,
+}
+
+impl CacheTtl {
+    /// The value Anthropic's `cache_control.ttl` expects.
+    ///
+    /// The two TTLs are priced differently on the WRITE (1.25x vs 2.0x input),
+    /// so this is a cost decision, not a tuning knob: the hour is only cheaper
+    /// than the five minutes if the prefix is actually re-read after the five
+    /// minutes would have expired.
+    pub fn as_wire_str(&self) -> &'static str {
+        match self {
+            CacheTtl::FiveMinutes => "5m",
+            CacheTtl::OneHour => "1h",
+        }
+    }
+
+    /// The write-cost multiple over the normal input rate.
+    pub fn write_multiplier(&self) -> f64 {
+        match self {
+            CacheTtl::FiveMinutes => 1.25,
+            CacheTtl::OneHour => 2.0,
+        }
+    }
 }
 
 /// How an error should be treated, per spec `02 §3`.
@@ -534,5 +579,51 @@ mod tests {
         assert!(!r.wants_tools());
         // An absent finish_reason stays distinguishable from a present unknown.
         assert_eq!(StopReason::parse("google", ""), StopReason::Other("google:<empty>".into()));
+    }
+
+    // ── P2-12 · the running total must not mask a per-turn miss ───────────
+
+    #[test]
+    fn a_per_turn_delta_reports_a_miss_that_the_running_total_would_hide() {
+        // This is the failure the alarm would have had if it read the running
+        // total: turn 1 reads 4,000 cached tokens, turn 2 reads NONE. The
+        // accumulated `cached_read` is still 4,000, so a check against the
+        // total sees a healthy number and the alarm never fires again for the
+        // rest of the session.
+        let after_turn_1 = Usage {
+            input: 500,
+            cached_read: 4_000,
+            cache_write: 0,
+            output: 100,
+            reasoning: 0,
+            tool: 0,
+        };
+        let after_turn_2 = Usage {
+            input: 4_800,
+            cached_read: 4_000, // unchanged — turn 2 read nothing
+            cache_write: 0,
+            output: 250,
+            reasoning: 0,
+            tool: 0,
+        };
+
+        assert!(after_turn_2.cached_read > 0, "the running total still looks healthy");
+        let turn_2 = after_turn_2.delta_since(&after_turn_1);
+        assert_eq!(turn_2.cached_read, 0, "but THIS turn read nothing from cache");
+        assert_eq!(turn_2.input, 4_300);
+        assert_eq!(turn_2.output, 150);
+    }
+
+    #[test]
+    fn a_delta_against_a_larger_earlier_total_clamps_instead_of_wrapping() {
+        // A provider reporting a smaller total than the previous call is
+        // malformed. Wrapping would turn that into a delta near u32::MAX and
+        // report a vast phantom cache read.
+        let later = Usage { input: 10, cached_read: 0, cache_write: 0, output: 5, reasoning: 0, tool: 0 };
+        let earlier = Usage { input: 100, cached_read: 50, cache_write: 0, output: 60, reasoning: 0, tool: 0 };
+        let d = later.delta_since(&earlier);
+        assert_eq!(d.input, 0);
+        assert_eq!(d.cached_read, 0);
+        assert_eq!(d.output, 0);
     }
 }

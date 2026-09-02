@@ -108,6 +108,20 @@ impl CompactionEngine {
             }],
         });
 
+        // P2-66. Compaction is deliberately UNCACHED.
+        //
+        // This call summarises the conversation so far, so its prompt is the
+        // conversation — different every time by construction. Requesting a
+        // cache here would write an entry that can never be read back, and a
+        // cache write is billed ABOVE the input rate: the request would cost
+        // strictly more than not asking.
+        //
+        // It is also the call that invalidates everything downstream. Rewriting
+        // the message history changes the bytes after the breakpoint, so the
+        // next agent turn starts from a cold messages region regardless. That
+        // cost is real and currently unaccounted; the accounting is P2-66's
+        // remaining half, and it needs the monitor's numbers to be worth
+        // writing.
         let summary_request = crate::provider::types::CompletionRequest {
             model: model.to_string(),
             messages: summary_conversation,
@@ -118,6 +132,7 @@ impl CompactionEngine {
             top_p: None,
             reasoning_effort: None,
             thinking_budget_tokens: None,
+            cache: crate::provider::usage::CachePolicy::Off,
         };
 
         // Try to get a summary from the LLM

@@ -137,6 +137,64 @@ impl AgentEngine {
         };
         let tool_defs = self.registry.to_definitions();
 
+        // ── P2-16 · decide the cache policy once, for the whole run ──────────
+        //
+        // The prefix is the same for every turn of a session — tools and system
+        // prompt do not change mid-run — so this is computed once and the
+        // verdict reused. Recomputing per turn would be harmless but would
+        // invite the prefix and the request to be built from different
+        // snapshots, which is the one way this fails silently.
+        let caps = self.provider.capabilities(model);
+        let cache_prefix = crate::cache::prefix::build(
+            &tool_defs
+                .iter()
+                .map(|t| (t.name.clone(), t.input_schema.to_string()))
+                .collect::<Vec<_>>(),
+            &system_prompt,
+            &[],
+            &[],
+        );
+        // `will_cache` warns when the prefix falls short of the model's
+        // minimum, which is the ONLY notice anyone gets — no provider errors
+        // below it (P2-15).
+        let cache_policy = if crate::cache::prefix::will_cache(&cache_prefix, &caps, model) {
+            match caps.cache {
+                crate::provider::usage::CacheSupport::Explicit { .. } => {
+                    crate::provider::usage::CachePolicy::Explicit {
+                        // One breakpoint, at the end of the system block. The
+                        // four-breakpoint budget is worth spending only where
+                        // there are distinct regions with different lifetimes;
+                        // here there is one.
+                        breakpoints: vec![0],
+                        // Five minutes, not an hour: the hour costs 2.0x on the
+                        // write against 1.25x, and only pays back if the prefix
+                        // is re-read after the five minutes would have expired.
+                        // Nothing measures that yet, so the cheaper write wins.
+                        ttl: crate::provider::usage::CacheTtl::FiveMinutes,
+                    }
+                }
+                crate::provider::usage::CacheSupport::Automatic { .. } => {
+                    // The affinity key steers identical prefixes onto the same
+                    // backend node. Keyed by the prefix hash rather than the
+                    // session: two sessions with the same prefix SHOULD share a
+                    // cache entry, and keying by session would stop them.
+                    crate::provider::usage::CachePolicy::Automatic {
+                        affinity_key: format!("{:x}", cache_prefix.hash),
+                    }
+                }
+                crate::provider::usage::CacheSupport::None => {
+                    crate::provider::usage::CachePolicy::Off
+                }
+            }
+        } else {
+            crate::provider::usage::CachePolicy::Off
+        };
+
+        // P2-12. The alarm. Built before the caching it watches, and consulted
+        // on every turn — a monitor that is constructed and never asked is the
+        // same silent nothing as the cache it was built to catch.
+        let cache_monitor = crate::cache::CacheMonitor::new();
+
         // Add user message to history
         history.push(RequestMessage {
             role: "user".to_string(),
@@ -250,12 +308,16 @@ impl AgentEngine {
                 top_p: None,
                 reasoning_effort: None,
                 thinking_budget_tokens: None,
+                cache: cache_policy.clone(),
             };
 
             debug!("Starting LLM stream turn={turn} session={session_id}");
 
             // Stream response from provider
             let mut turn_stop_reason: Option<String> = None;
+            // Snapshot for the per-turn delta. `total_usage` accumulates across
+            // turns, and the cache question is per-request.
+            let usage_before_turn = total_usage.clone();
             let stream_result = self
                 .stream_response(
                     session_id,
@@ -265,6 +327,25 @@ impl AgentEngine {
                     &mut turn_stop_reason,
                 )
                 .await;
+
+            // ── P2-12 · did this request actually read from cache? ───────────
+            //
+            // The only fact that separates working caching from broken caching.
+            // Every other signal — the request looking right, the call
+            // succeeding, the content being correct — is identical in both
+            // cases. `observe` stays quiet when zero cached reads is the
+            // correct outcome (first sighting, below the minimum, no cache
+            // support) and logs an error only when a repeated prefix read
+            // nothing.
+            if !matches!(cache_policy, crate::provider::usage::CachePolicy::Off) {
+                let turn_usage = total_usage.delta_since(&usage_before_turn);
+                cache_monitor.observe(
+                    cache_prefix.hash,
+                    cache_prefix.estimated_tokens,
+                    &caps,
+                    &turn_usage,
+                );
+            }
 
             // P2-46. A turn cut short by the token ceiling is not a finished
             // turn, and continuing the loop over a truncated assistant message
@@ -470,6 +551,12 @@ impl AgentEngine {
 
             turn += 1;
         }
+
+        // P2-64. If nearly every request carried its own prefix, caching is
+        // not merely useless here — it COSTS more, because each cache write is
+        // billed above the input rate and never read back. Reported once per
+        // run rather than per turn, since it is a property of the run.
+        cache_monitor.report_reuse(turn as u32);
 
         // Fire AgentLoopEnd hook when loop completes
         let loop_end_ctx = HookContext {
