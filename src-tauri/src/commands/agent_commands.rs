@@ -161,6 +161,21 @@ pub async fn send_message(
 
         let engine = AgentEngine::new(
             provider,
+            // ⚠ P3-12. This constant is deliberate, not an oversight, and the
+            // task that called it one was refuted (2026-09-02).
+            //
+            // The PA-mode dropdown sets `PAMode`, NOT `PermissionMode` — and
+            // `PAMode` is honoured: it drives the system prompt (`context.rs`)
+            // and the tool registry (`builtin_tools/mod.rs`, where Delegate
+            // strips every file tool). Wiring that one control to permission
+            // policy as well would fuse tool availability, prompt and consent
+            // onto a single three-valued dropdown, which is a product change
+            // nobody asked for.
+            //
+            // A user sitting in front of the assistant is present to answer, so
+            // the strictest interactive policy is the right default: prompt on
+            // everything except a pure read. The mode that is genuinely
+            // user-selectable is the RECIPE one (`P3-65`), and it now works.
             PermissionMode::ManualApproval,
             resolved_pa_mode,
             state_clone.clone(),

@@ -21,6 +21,34 @@ impl Default for RecipePermissionMode {
     }
 }
 
+impl From<&RecipePermissionMode> for crate::agent::permission::PermissionMode {
+    /// Translate a recipe's declared policy into the engine's permission mode.
+    ///
+    /// 🔴 `P3-65`. Until this existed, `permission_mode` was **written by nine
+    /// recipes and read by nothing**: `runner.rs` hardcoded
+    /// `PermissionMode::Autonomous`, so four recipes declaring `Supervised`
+    /// ran with every prompt suppressed. A reader of `permission_mode:
+    /// Supervised` on the QC agent would reasonably conclude it was
+    /// supervised. It was not.
+    ///
+    /// 🔴 `P3-66`. `SmartApprove` had **zero construction sites** anywhere —
+    /// the interactive path hardcodes `ManualApproval` — so its two live
+    /// `match` arms were unreachable: a guard that could not fire. This is
+    /// where it is built.
+    ///
+    /// The pairing is not arbitrary. `Supervised` is documented as *"prompts
+    /// before destructive operations"*, which is exactly `SmartApprove`'s
+    /// rule: prompt on `Execute` / `Network` / `Board`, pass `Read` and
+    /// `Write`. `ManualApproval` would prompt on a plain file write too, which
+    /// is a different and stricter policy than the one declared.
+    fn from(mode: &RecipePermissionMode) -> Self {
+        match mode {
+            RecipePermissionMode::Autonomous => Self::Autonomous,
+            RecipePermissionMode::Supervised => Self::SmartApprove,
+        }
+    }
+}
+
 /// Doc 05 Phase 3 — fallback policy declaration.
 ///
 /// Controls what the recipe runner does when Mode 2 (core-orchestrator
@@ -80,4 +108,62 @@ pub struct RecipeRun {
     pub started_at: String,
     pub ended_at: Option<String>,
     pub error: Option<String>,
+}
+
+#[cfg(test)]
+mod p3_65_66_tests {
+    use super::*;
+    use crate::agent::permission::PermissionMode;
+
+    #[test]
+    fn supervised_actually_supervises() {
+        // 🔴 P3-65. `permission_mode` was written by nine recipes and read by
+        // nothing — `runner.rs` hardcoded Autonomous — so a recipe declaring
+        // `Supervised` ran with every prompt suppressed.
+        let mode = PermissionMode::from(&RecipePermissionMode::Supervised);
+        assert_eq!(mode, PermissionMode::SmartApprove);
+
+        // And that mode must genuinely prompt, or the mapping is decorative.
+        use crate::agent::tool_effect::ToolEffect;
+        assert!(
+            ToolEffect::Execute.requires_prompt(&mode),
+            "Supervised must prompt before running a command"
+        );
+        assert!(
+            ToolEffect::Network.requires_prompt(&mode),
+            "Supervised must prompt before sending data off the machine"
+        );
+    }
+
+    #[test]
+    fn autonomous_still_prompts_for_nothing() {
+        // The no-fire half: the fleet depends on this staying silent.
+        let mode = PermissionMode::from(&RecipePermissionMode::Autonomous);
+        assert_eq!(mode, PermissionMode::Autonomous);
+
+        use crate::agent::tool_effect::ToolEffect;
+        for effect in [
+            ToolEffect::Read,
+            ToolEffect::Write,
+            ToolEffect::Execute,
+            ToolEffect::Network,
+            ToolEffect::Board,
+        ] {
+            assert!(
+                !effect.requires_prompt(&mode),
+                "{effect:?} must not prompt under Autonomous — unattended cron \
+                 work depends on it"
+            );
+        }
+    }
+
+    #[test]
+    fn smart_approve_now_has_a_construction_site() {
+        // 🔴 P3-66. `SmartApprove` had ZERO construction sites anywhere: the
+        // interactive path hardcodes ManualApproval and the recipe path
+        // hardcoded Autonomous. Its two live `match` arms were unreachable —
+        // a guard that could not fire. This mapping is where it is built.
+        let built = PermissionMode::from(&RecipePermissionMode::Supervised);
+        assert!(matches!(built, PermissionMode::SmartApprove));
+    }
 }

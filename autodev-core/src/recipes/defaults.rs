@@ -854,7 +854,14 @@ fn worker_platform_recipe() -> Recipe {
             "Handles infrastructure, CI/CD, Docker, and DevOps tasks in supervised mode.".into(),
         ),
         schedule: Some("*/5 * * * *".into()),
-        permission_mode: RecipePermissionMode::Supervised,
+        // ⚠ P3-65 (razi-ruled 2026-09-02). This declared `Supervised` while
+        // running on a cron schedule with nobody present to answer a prompt.
+        // The declaration was harmless only because nothing read it; once
+        // `runner.rs` honours the field, `Supervised` on a scheduled recipe
+        // means every Execute/Network/Board tool blocks for the 300s
+        // permission timeout and the fleet stalls. Autonomous is what an
+        // unattended recipe actually requires, and now it says so.
+        permission_mode: RecipePermissionMode::Autonomous,
         agent_role: Some("worker-platform".into()),
         model: None,
         is_system: true,
@@ -1306,7 +1313,14 @@ fn qc_agent_recipe() -> Recipe {
         title:           "QC Agent — Code Review".into(),
         description:     Some("Reviews completed worker output. Approves (done) or rejects with a specific, actionable reason.".into()),
         schedule:        Some("*/1 * * * *".into()),
-        permission_mode: RecipePermissionMode::Supervised,
+        // ⚠ P3-65 (razi-ruled 2026-09-02). This declared `Supervised` while
+        // running on a cron schedule with nobody present to answer a prompt.
+        // The declaration was harmless only because nothing read it; once
+        // `runner.rs` honours the field, `Supervised` on a scheduled recipe
+        // means every Execute/Network/Board tool blocks for the 300s
+        // permission timeout and the fleet stalls. Autonomous is what an
+        // unattended recipe actually requires, and now it says so.
+        permission_mode: RecipePermissionMode::Autonomous,
         agent_role:      Some("qc-agent".into()),
         model:           None,
         is_system:       true,
@@ -1854,7 +1868,14 @@ fn qc_dispatcher_recipe() -> Recipe {
         // 30 s cron — much tighter than the old qc-agent's 60 s because the
         // dispatcher tick is sub-second (just spawns; no LLM work).
         schedule:        Some("*/30 * * * * *".into()),
-        permission_mode: RecipePermissionMode::Supervised,
+        // ⚠ P3-65 (razi-ruled 2026-09-02). This declared `Supervised` while
+        // running on a cron schedule with nobody present to answer a prompt.
+        // The declaration was harmless only because nothing read it; once
+        // `runner.rs` honours the field, `Supervised` on a scheduled recipe
+        // means every Execute/Network/Board tool blocks for the 300s
+        // permission timeout and the fleet stalls. Autonomous is what an
+        // unattended recipe actually requires, and now it says so.
+        permission_mode: RecipePermissionMode::Autonomous,
         // Slug stays "qc-agent" so existing UI / scheduler / kick_worker call sites
         // continue to function. The recipe is what changed, not the worker identity.
         agent_role:      Some("qc-agent".into()),
@@ -1936,6 +1957,10 @@ fn fleet_smoke_recipe() -> Recipe {
         // No cron — this recipe runs on-demand, kicked by the supervisor
         // when an epic reaches the "all-children-qc_reviewed" condition.
         schedule:        None,
+        // ⚠ The ONE recipe that keeps `Supervised`, and now genuinely gets
+        // it: `schedule: None` — fleet-smoke is triggered by a human, who is
+        // therefore present to answer. This is the declaration that proves the
+        // control is live rather than decorative.
         permission_mode: RecipePermissionMode::Supervised,
         agent_role:      Some("fleet-smoke".into()),
         model:           Some("claude-haiku-4-5".into()),

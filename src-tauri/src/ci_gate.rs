@@ -1976,6 +1976,106 @@ let x = 1;
         );
     }
 
+    // ── TG-P3-65 · a scheduled recipe may not declare a prompting mode ────────
+
+    /// `permission_mode` is honoured, and no cron recipe asks for a prompt.
+    ///
+    /// 🔴 `P3-65`. The field was written by nine recipes and read by nothing:
+    /// `runner.rs` hardcoded `PermissionMode::Autonomous`, so four recipes
+    /// declaring `Supervised` ran with every prompt suppressed. Anyone reading
+    /// `permission_mode: Supervised` on the QC agent would conclude it was
+    /// supervised.
+    ///
+    /// ⚠ Wiring it up creates the opposite hazard, and **that** is what this
+    /// gate protects: a recipe on a cron schedule has nobody present to answer
+    /// a dialog, so a prompting mode there means every Execute/Network/Board
+    /// tool blocks for the 300s `PERMISSION_TIMEOUT`. `qc-dispatcher` fires
+    /// every 30 seconds — it would pile up blocked runs and stall the fleet.
+    ///
+    /// razi-ruled 2026-09-02: honour the field, and let the unattended recipes
+    /// declare the Autonomous they actually need. The rule that keeps both
+    /// halves true is the one asserted here.
+    #[test]
+    fn tg_p3_65_no_scheduled_recipe_declares_a_prompting_mode() {
+        let path = repo_root().join("autodev-core/src/recipes/defaults.rs");
+        let text = read_source(&path);
+
+        let mut current = String::new();
+        let mut schedule: Option<bool> = None; // Some(true) = has a cron schedule
+        let mut offenders = Vec::new();
+        let mut recipes = 0usize;
+        let mut scheduled = 0usize;
+
+        for line in text.lines() {
+            // ⚠ Comments only — several of the comments added by this very
+            // change discuss both "Supervised" and "schedule: None", and
+            // scanning them would make the gate report on its own prose.
+            let code = line.split("//").next().unwrap_or("");
+
+            if let Some(rest) = code.trim().strip_prefix("fn ") {
+                if rest.contains("_recipe() -> Recipe {") {
+                    current = rest.split("_recipe").next().unwrap_or("?").to_string();
+                    schedule = None;
+                    recipes += 1;
+                }
+            }
+
+            if code.contains("schedule:") {
+                schedule = Some(code.contains("Some("));
+                if schedule == Some(true) {
+                    scheduled += 1;
+                }
+            }
+
+            if code.contains("permission_mode:") && !code.contains("pub ") {
+                let prompting = code.contains("Supervised");
+                if prompting && schedule == Some(true) {
+                    offenders.push(format!(
+                        "{current}: scheduled on cron AND declares Supervised"
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            recipes >= 9,
+            "only {recipes} recipes found — this gate is not reaching the \
+             declarations, and an empty sweep passes silently"
+        );
+        assert!(
+            scheduled >= 3,
+            "only {scheduled} scheduled recipes found; the hazard this gate \
+             guards would be unrepresented"
+        );
+
+        assert!(
+            offenders.is_empty(),
+            "a cron-scheduled recipe declares a prompting permission mode. \
+             There is nobody present to answer, so every Execute/Network/Board \
+             tool will block for the full 300s permission timeout and the \
+             fleet will stall:\n  {}",
+            offenders.join("\n  ")
+        );
+
+        // The other half: the field must actually be READ, or none of the
+        // above matters and we are back to a decorative control.
+        let runner = read_source(&repo_root().join("autodev-core/src/recipes/runner.rs"));
+        assert!(
+            runner.contains("PermissionMode::from(&recipe.permission_mode)"),
+            "runner.rs must build the engine from the recipe's declared mode; \
+             a hardcoded constant there is what made this field dead"
+        );
+
+        // And `SmartApprove` must have a construction site (`P3-66`): a mode
+        // that cannot be selected is a guard that cannot fire.
+        let types = read_source(&repo_root().join("autodev-core/src/recipes/types.rs"));
+        assert!(
+            types.contains("Self::SmartApprove"),
+            "SmartApprove must be constructible — it had zero construction \
+             sites and two live but unreachable match arms"
+        );
+    }
+
     // ── TG-P3-17 · no validator subprocess runs without a ceiling ─────────────
 
     /// Every subprocess the validator spawns must go through `run_bounded`.

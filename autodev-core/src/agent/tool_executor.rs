@@ -28,7 +28,7 @@ use crate::state::lock::LockTolerant;
 /// — blocked the engine permanently. Five minutes is long enough that a user who
 /// stepped away still gets to answer, and short enough that an abandoned session
 /// frees itself.
-const PERMISSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+pub(crate) const PERMISSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 const MAX_CONCURRENT_READ_TOOLS: usize = 10;
 

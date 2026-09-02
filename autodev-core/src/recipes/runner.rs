@@ -28,6 +28,7 @@ use uuid::Uuid;
 
 use crate::agent::engine::AgentEngine;
 use crate::agent::permission::{PendingPermissions, PermissionMode};
+use crate::recipes::types::RecipePermissionMode;
 use crate::agent::PAMode;
 use crate::db::workers::WorkersDb;
 use crate::errors::{AutoDevError, Result};
@@ -46,6 +47,31 @@ use crate::session::manager::SessionManager;
 use crate::state::AppState;
 use crate::vault::keychain::{provider_key, VaultManager};
 use crate::state::lock::LockTolerant;
+
+/// A recipe that is scheduled AND asks for prompts, described.
+///
+/// Returns `Some(reason)` when the combination cannot work, `None` otherwise.
+///
+/// Split out of `run_recipe` so it can be tested without standing up an
+/// `AppState`, a `SessionManager` and a provider — an inline check that needs
+/// the whole runtime to exercise is an untested check.
+pub(crate) fn unanswerable_prompt_config(recipe: &Recipe) -> Option<String> {
+    if recipe.schedule.is_none() {
+        return None;
+    }
+    if !matches!(recipe.permission_mode, RecipePermissionMode::Supervised) {
+        return None;
+    }
+    Some(format!(
+        "Recipe '{}' is scheduled ({}) and also set to 'supervised'. A scheduled \
+         run has nobody present to answer a permission prompt, so it would stall \
+         for {}s and then be denied. Set permission_mode to 'autonomous', or \
+         remove the schedule and trigger it manually.",
+        recipe.id,
+        recipe.schedule.as_deref().unwrap_or("?"),
+        crate::agent::tool_executor::PERMISSION_TIMEOUT.as_secs(),
+    ))
+}
 
 /// Initial trigger message sent to the worker agent at each cron execution.
 const RECIPE_TRIGGER: &str =
@@ -86,6 +112,25 @@ impl RecipeRunner {
     /// Execute a recipe for the given worker slug.
     /// Updates worker status in DB: idle → working → idle/error.
     pub async fn run_recipe(&self, recipe: &Recipe, worker_slug: &str) -> Result<()> {
+        // ── P3-65 · a schedule and a prompt are mutually exclusive ──────────
+        //
+        // `TG-P3-65` holds this for the nine shipped recipes, but users author
+        // their own: `RecipeEditor.tsx` exposes `permission_mode` as a
+        // dropdown alongside the schedule field, so the invalid combination is
+        // two clicks away and no source gate can reach it.
+        //
+        // ⚠ Refusing is the only honest option here. Silently downgrading to
+        // Autonomous would run the recipe unprompted after the user asked for
+        // prompts — the exact defect P3-65 fixes, reintroduced as a
+        // "convenience". Honouring it would block every Execute/Network/Board
+        // tool for the full 300s `PERMISSION_TIMEOUT` with nobody there to
+        // answer, then deny. Both silently do something other than what was
+        // asked; this says so instead.
+        if let Some(msg) = unanswerable_prompt_config(recipe) {
+            warn!("[RecipeRunner] {msg}");
+            return Err(AutoDevError::Agent(msg));
+        }
+
         // ── Fleet-ready latch ───────────────────────────────────────────────────
         // Hold the very first tick until core-orchestrator has been
         // confirmed-healthy at least once. Without this, every worker fires
@@ -760,13 +805,24 @@ impl RecipeRunner {
             worker_slug, session_id
         );
 
-        // Build autonomous engine — workers never wait for user approval.
+        // ⚠ P3-65. This comment used to read "Build autonomous engine — workers
+        // never wait for user approval", and the line below hardcoded
+        // `PermissionMode::Autonomous`. That was true of every recipe
+        // regardless of what it declared, which is why four recipes could ask
+        // for `Supervised` and get none of it.
+        //
+        // A recipe on a cron schedule still must not prompt — there is nobody
+        // there to answer, and the 300s `PERMISSION_TIMEOUT` would stall the
+        // fleet. That constraint is now enforced where it belongs, on the
+        // *recipe declarations* (and gated by `TG-P3-65`), rather than by
+        // ignoring the field here.
+        //
         // NOTE: session_mgr is intentionally NOT attached. Recipe sessions are ephemeral
         // (session_id never inserted into sessions table), so append_message would fail
         // with FOREIGN KEY constraint. In-memory context is sufficient for recipe runs.
         let engine = AgentEngine::new(
             provider,
-            PermissionMode::Autonomous,
+            PermissionMode::from(&recipe.permission_mode),
             PAMode::FastDevelopment,
             self.state.clone(),
             self.pending.clone(),
@@ -1037,5 +1093,64 @@ impl RecipeRunner {
         let _ = fs::write(&guard_log, note);
 
         let _ = db.update_status(task.id, "build_failed", Some(worker_slug));
+    }
+}
+
+#[cfg(test)]
+mod p3_65_runner_tests {
+    use super::*;
+    use crate::recipes::types::RecipePermissionMode;
+
+    fn recipe(schedule: Option<&str>, mode: RecipePermissionMode) -> Recipe {
+        Recipe {
+            version: "1.0.0".into(),
+            id: "test-recipe".into(),
+            title: "Test".into(),
+            description: None,
+            schedule: schedule.map(String::from),
+            permission_mode: mode,
+            instructions: "do the thing".into(),
+            agent_role: None,
+            model: None,
+            is_system: false,
+            fallback_policy: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_scheduled_supervised_recipe_is_refused_with_a_reason() {
+        // `TG-P3-65` covers the nine SHIPPED recipes. This covers the ones
+        // users author: `RecipeEditor.tsx` puts `permission_mode` and
+        // `schedule` on the same form, so the invalid pair is two clicks away
+        // and no source gate can reach it.
+        let msg = unanswerable_prompt_config(&recipe(Some("*/1 * * * *"), RecipePermissionMode::Supervised))
+            .expect("a scheduled supervised recipe cannot work and must say so");
+
+        assert!(msg.contains("test-recipe"), "name the recipe: {msg}");
+        assert!(msg.contains("*/1 * * * *"), "name the schedule: {msg}");
+        assert!(
+            msg.contains("autonomous"),
+            "an error the user cannot act on is half an error: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_manual_supervised_recipe_is_exactly_what_supervision_is_for() {
+        // The no-fire half, and the whole point of wiring the field up: with
+        // no schedule, a human triggered it and is present to answer.
+        assert!(
+            unanswerable_prompt_config(&recipe(None, RecipePermissionMode::Supervised)).is_none(),
+            "a manually-triggered supervised recipe must be allowed — refusing \
+             it would leave the control as dead as it was before"
+        );
+    }
+
+    #[test]
+    fn a_scheduled_autonomous_recipe_is_the_normal_fleet_case() {
+        assert!(
+            unanswerable_prompt_config(&recipe(Some("*/5 * * * *"), RecipePermissionMode::Autonomous))
+                .is_none(),
+            "the entire fleet runs this way; refusing it would stop everything"
+        );
     }
 }
