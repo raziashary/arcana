@@ -44,3 +44,11 @@ pub use types::{
     EpisodicMemory, EpisodicRole, FactCategory, MemoryStats, MemoryTier, ProceduralMemory,
     RecallRequest, RecallResult, SemanticFact,
 };
+
+/// Apply `memory.db`'s real migration ladder to `conn`.
+///
+/// For integration tests only — but it runs the SHIPPED ladder, so a test can
+/// never pass against a schema the product does not build.
+pub fn run_ladder_for_tests(conn: &rusqlite::Connection) -> crate::errors::Result<i32> {
+    db::MemoryDb::run_ladder_on(conn)
+}

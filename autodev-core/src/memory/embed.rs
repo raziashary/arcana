@@ -87,6 +87,74 @@ pub fn with_pinned_cache<T>(dir: &std::path::Path, f: impl FnOnce() -> T) -> T {
     out
 }
 
+/// The setting that governs whether the model may be fetched (`P3-35`).
+///
+/// A user-visible key, not a compile-time constant: *"skipping degrades to
+/// lexical"* is a choice the person using the app makes, and a 133 MB download
+/// on a metered connection is exactly the kind of thing that must be refusable
+/// after the software has shipped.
+pub const SKIP_DOWNLOAD_KEY: &str = "memory.skip_model_download";
+
+/// What the user has said about fetching the model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadPolicy {
+    /// Fetch it when it is missing.
+    Allowed,
+    /// Never fetch it. Retrieval stays lexical and says so.
+    Skipped,
+}
+
+/// Read the policy. Absent or unparseable means **allowed** — the feature is
+/// already off by default, so a missing setting must not become a second,
+/// silent "off".
+pub fn download_policy() -> DownloadPolicy {
+    match crate::db::app_settings::get(SKIP_DOWNLOAD_KEY) {
+        Ok(Some(v)) if matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes") => {
+            DownloadPolicy::Skipped
+        }
+        _ => DownloadPolicy::Allowed,
+    }
+}
+
+/// Record the user's choice.
+pub fn set_download_policy(p: DownloadPolicy) -> crate::errors::Result<()> {
+    crate::db::app_settings::set(
+        SKIP_DOWNLOAD_KEY,
+        match p {
+            DownloadPolicy::Skipped => "true",
+            DownloadPolicy::Allowed => "false",
+        },
+    )
+}
+
+/// Why retrieval is in the state it is, in a sentence a user can act on.
+///
+/// ⚠ Four distinct states, deliberately. *"No semantic search"* is not one
+/// condition: a platform that can never have it, a build without the feature, a
+/// user who declined the download and a download that has not happened yet each
+/// need a **different** action from the person reading it — and collapsing them
+/// into one message is how a fixable problem gets read as a permanent one.
+pub fn availability_report() -> String {
+    if cfg!(target_os = "macos") {
+        return "Semantic search is unavailable on macOS: no ONNX Runtime is published                 for Intel Macs, and AutoDev ships a universal binary. Memory works by                 keyword."
+            .to_string();
+    }
+    if !cfg!(feature = "embeddings") {
+        return "Semantic search is not compiled into this build. Memory works by keyword."
+            .to_string();
+    }
+    if download_policy() == DownloadPolicy::Skipped {
+        return format!(
+            "Semantic search is off because the model download was skipped. Memory works              by keyword. Clear '{SKIP_DOWNLOAD_KEY}' in settings to enable it."
+        );
+    }
+    if !model_is_present() {
+        return "The embedding model has not finished downloading. Memory works by keyword                 until it does."
+            .to_string();
+    }
+    "Semantic search is active.".to_string()
+}
+
 /// Is the model present on disk?
 ///
 /// Distinguishes *"not downloaded yet"* from *"this platform cannot"* — the
@@ -119,6 +187,14 @@ mod enabled {
     fn model() -> Option<Arc<std::sync::Mutex<fastembed::TextEmbedding>>> {
         MODEL
             .get_or_init(|| {
+                // P3-35: the user's choice is checked BEFORE anything is
+                // fetched. A skip that only takes effect after the download has
+                // started is not a skip.
+                if super::download_policy() == super::DownloadPolicy::Skipped {
+                    tracing::info!("[embed] model download skipped by setting; staying lexical");
+                    return None;
+                }
+
                 let dir = model_cache_dir();
                 if let Err(e) = std::fs::create_dir_all(&dir) {
                     tracing::warn!("[embed] cannot create model cache {dir:?}: {e}");
@@ -334,6 +410,49 @@ mod tests {
                 None => std::env::remove_var(k),
             }
         }
+    }
+
+    #[test]
+    fn the_four_unavailable_states_are_distinguishable() {
+        // ⚠ "No semantic search" is not one condition. A platform that can
+        // never have it, a build without the feature, a declined download and
+        // an unfinished one each need a DIFFERENT action from the reader, and
+        // collapsing them is how a fixable problem reads as permanent.
+        let msg = availability_report();
+        assert!(!msg.is_empty());
+
+        if cfg!(target_os = "macos") {
+            assert!(msg.contains("macOS"), "the platform reason must be named: {msg}");
+            assert!(msg.contains("keyword"), "and what still works: {msg}");
+        } else if !cfg!(feature = "embeddings") {
+            assert!(
+                msg.contains("not compiled"),
+                "a build without the feature must say so rather than blaming the model: {msg}"
+            );
+        }
+
+        // Whatever the state, the message must say what memory still DOES —
+        // "unavailable" alone tells a user nothing they can use.
+        assert!(
+            msg.contains("keyword") || msg.contains("active"),
+            "the report must state what still works: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_missing_setting_does_not_become_a_second_silent_off() {
+        // The feature is already off by default. If an absent setting ALSO
+        // meant "skip", enabling the feature would appear to do nothing and
+        // there would be no error to explain it.
+        assert_eq!(
+            DownloadPolicy::Allowed,
+            match crate::db::app_settings::get(SKIP_DOWNLOAD_KEY) {
+                Ok(Some(v)) if matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes") =>
+                    DownloadPolicy::Skipped,
+                _ => DownloadPolicy::Allowed,
+            },
+            "an unset or unparseable value must mean ALLOWED"
+        );
     }
 
     #[test]

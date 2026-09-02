@@ -3053,6 +3053,77 @@ let x = 1;
         );
     }
 
+    // ── TG-P3-33 · the supply-chain surface is opt-in and pinned ──────────────
+
+    /// The embedding dependency cannot enter a build by accident.
+    ///
+    /// 🔴 `P3-33`. `fastembed` fetches the ONNX Runtime from a third-party CDN
+    /// **at build time**. The task prescribed disabling `ort`'s default
+    /// features — but `fastembed` already depends on `ort` with
+    /// `default-features = false`, and `ort` is not a direct dependency of ours,
+    /// so **the prescribed fix would have changed nothing while looking like a
+    /// fix**. The flag is on `fastembed`.
+    ///
+    /// razi-ruled: off by default, so a default build and CI fetch nothing, and
+    /// the vendoring decision stays open rather than being made silently by
+    /// adding a dependency.
+    #[test]
+    fn tg_p3_33_the_embedding_dependency_is_optional_and_exactly_pinned() {
+        let manifest = read_source(&repo_root().join("autodev-core/Cargo.toml"));
+        let code: String = manifest
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("
+");
+
+        let dep_line = code
+            .lines()
+            .find(|l| l.trim_start().starts_with("fastembed"))
+            .expect("fastembed must be declared");
+
+        // ⚠ Defence in depth, and NOT independently falsifiable — stated so
+        // because I tried. Removing `optional = true` makes Cargo reject the
+        // manifest outright, since `embeddings = ["dep:fastembed"]` requires an
+        // optional dependency. The plant produced a manifest error rather than
+        // a gate failure, so Cargo enforces this more strongly than the gate
+        // does. Kept because it states the requirement where a reader will find
+        // it; credited honestly, because "falsified" would have been false
+        // (`§0.16 L-26`).
+        assert!(
+            dep_line.contains("optional = true"),
+            "fastembed must be OPTIONAL. A non-optional dependency fetches ~30 MB              from a third-party CDN on every build, including CI: {dep_line}"
+        );
+        assert!(
+            dep_line.contains("\"=") || dep_line.contains("= \"="),
+            "fastembed must be pinned EXACTLY (`=x.y.z`). A supply-chain surface              is not something to let float on a caret range: {dep_line}"
+        );
+
+        // The feature must exist and must NOT be in `default`.
+        assert!(
+            code.contains("embeddings = [\"dep:fastembed\"]"),
+            "the `embeddings` feature must gate the dependency"
+        );
+        for line in code.lines() {
+            let t = line.trim();
+            if t.starts_with("default") && t.contains('=') {
+                assert!(
+                    !t.contains("embeddings"),
+                    "`embeddings` is in the default feature set — a default build                      would then fetch from the CDN: {t}"
+                );
+            }
+        }
+
+        // …and the vector backend must be compiled out on macOS regardless,
+        // because no x86_64 ONNX Runtime exists upstream and the DMG is a
+        // universal binary: enabling it there fails the build outright.
+        let manager = read_source(&repo_root().join("autodev-core/src/memory/manager.rs"));
+        assert!(
+            manager.contains("not(target_os = \"macos\")"),
+            "the vector backend must be excluded on macOS at compile time"
+        );
+    }
+
     // ── TG-P3-17 · no validator subprocess runs without a ceiling ─────────────
 
     /// Every subprocess the validator spawns must go through `run_bounded`.

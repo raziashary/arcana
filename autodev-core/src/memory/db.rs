@@ -24,6 +24,16 @@ impl MemoryDb {
         migrate::user_version(&self.conn)
     }
 
+    /// Apply this database's ladder to an arbitrary connection.
+    ///
+    /// Exposed for integration tests, which must run the **real** ladder rather
+    /// than a hand-written copy of the schema — a fixture that drifts from the
+    /// migration proves the fixture, not the product.
+    pub fn run_ladder_on(conn: &Connection) -> Result<i32> {
+        crate::memory::vector::register_once();
+        migrate::run_ladder(conn, "memory.db", Self::LADDER)
+    }
+
     pub fn open() -> Result<Self> {
         // ⚠ P3-30. BEFORE `open_tuned`, deliberately. `sqlite3_auto_extension`
         // installs a hook that only affects connections opened AFTER it runs —
