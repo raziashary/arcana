@@ -800,6 +800,68 @@ And one that decides the phase's own success: **every Gemini tool call executes 
 
 **Links.** `ADR-LOG-RESTRUCT-0025` · `_verify/P2-REFUTE-*.md` · `L-C8` · `L-C9` · `L-C12`
 
+## ADR-LOG-RESTRUCT-0027 — two P3 gates had no owning task; Razi ruled both into the phase
+
+**Status.** DECIDED
+**Author.** Claude (found) · Razi (ruled) · **Tier.** `razi-ruled` — both are capability calls
+that change the phase's scope, so `§0.15` puts them with the overseer, and `§0.2j` sends them
+immediately rather than at closeout.
+
+**What.** Reading spec `06` and `TESTING_GATES.md` against `§9`'s task list, before any P3 code,
+found **two gates that exist with no task that would build them**. Razi ruled both into P3:
+
+1. **`TG3-37` — the provisional-charge leak.** Fixed in P3, in full. New task **`P3-55`**.
+2. **`TG3-26` — egress consent.** The **prompting half** only, folded into `P3-11`'s
+   `ToolEffect::Network`. New task **`P3-56`**; the consent store is recorded against P4 rather
+   than left orphaned.
+
+**Why.**
+
+**On the orphaned gates as a class.** `§0.2e` says every task names its proof. This is the
+inverse failure and it had no rule watching for it: **a proof with no task**. `TG3-37` and
+`TG3-26` are written, numbered, and were going to be scored against a phase that builds
+neither — so they could only ever have gone red at closeout, or, worse, been quietly marked
+not-applicable. `L-C1`'s shape (a derived artifact not regenerated after its source changed) is
+adjacent but not the same: nothing here went stale, the two documents were **never reconciled in
+that direction**. The MDP was harvested from the specs, and the gate register was written from
+them separately; a gate the task harvest missed is invisible from the MDP side.
+
+**On `TG3-37` specifically — this is a live denial of service, not an accounting nit.**
+`spawn_qc_review` (`G10-67`) records a **$0.10 provisional charge before eight distinct error
+returns** and never reconciles it. The dispatcher ticks against already-claimed tasks; 50 ticks
+trip the **$5 hourly ceiling** and **block all QC review for an hour at zero real spend**. The
+fleet disables its own review capacity, and the ledger says it was busy. It is also exactly the
+shape of `P3-05` — *every exit path must do the thing* — which is why it sits well in this
+phase rather than in P4: the same `Drop`-guard reasoning covers both.
+
+**On `TG3-26` — why the prompting half is the right cut.** The gate as written wants a
+consent **store**: per workspace, per destination, recorded, revocable, with unattended work
+running under a standing consent whose absence blocks egress. That is a feature with a UI, and
+P3 has no UI slice. But the hole it protects against is live today and needs no store to close:
+`analyze_diff` declares `is_read_only = true`, is therefore **never prompted in any mode**, and
+**uploads the full diff of any repository to a third-party LLM** — under BYOK, that is the
+user's own code leaving the machine on the user's own key, with no prompt. `P3-11` already
+introduces `Network` as a distinct effect; making it prompt closes the exfiltration path using
+machinery the phase builds anyway. Razi's ruling takes that and leaves the store for P4 **with
+an owner**, which is the part that stops it drifting back to orphaned.
+
+**When.** 2026-09-02 · phase P3, before the first line of code · triggered by the `§0.12`
+re-read and the `§0.2m` pre-build pass.
+
+**Where.** `MASTER_DEVELOPMENT_PLAN.md §9` (`P3-55`, `P3-56` appended — **not** renumbered,
+per `§1`) · `TESTING_GATES.md` (`TG3-26`, `TG3-37` gain their owning task) ·
+`autodev-core/src/agent/builtin_tools/spawn_qc_review.rs` · the `ToolEffect` work in `P3-11`.
+
+**How.** `P3-55` is proven by `TG3-37`, parameterised over all eight error returns. `P3-56` is
+proven by `TG3-24`'s effect-keyed check plus a case asserting a `Network` tool prompts where an
+equivalent `Read` tool does not.
+
+⚠ **Sequencing carried from `C-6`.** `P3-56` cannot land before `P3-11`: reverting
+`is_read_only` to a concurrency hint and introducing `ToolEffect` must happen in the same
+change, or a window opens in which **nothing** gates prompting.
+
+**Links.** `TG3-26` · `TG3-37` · spec `06 §1.2`, `§5` · `G10-67` · `C-6` · `§0.2e` · `§0.2j`
+
 # §5 · Standing entries carried from planning
 
 Not build-time decisions — but recorded here because a future session will otherwise rediscover them the hard way. Each is already ratified in vision Part 8; these are the **operational consequences** that bite during implementation.
