@@ -99,8 +99,8 @@ pub fn get_active_provider(
 
 #[tauri::command]
 pub fn get_cost_today(state: State<'_, Arc<Mutex<AppState>>>) -> Result<(f64, u64, u64)> {
-    let s = state.lock().unwrap();
-    Ok((s.cost_today_usd, s.tokens_in_today, s.tokens_out_today))
+    let mut s = state.lock().unwrap();
+    Ok((s.cost_today(), s.tokens_in_today, s.tokens_out_today))
 }
 
 #[tauri::command]

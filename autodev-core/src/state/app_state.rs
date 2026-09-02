@@ -22,12 +22,26 @@ pub struct AppState {
     // Active model identifier (e.g. "claude-sonnet-4-5")
     pub active_model: Option<String>,
 
-    // Today's running cost in USD
+    // Today's running cost in USD. Reset at the local-date rollover — see
+    // `add_cost`.
     pub cost_today_usd: f64,
 
     // Today's cumulative token counts
     pub tokens_in_today: u64,
     pub tokens_out_today: u64,
+
+    /// The local date these "today" figures belong to.
+    ///
+    /// ⚠ **Without this, "today" meant "since process start" (`IN-50`).** The
+    /// counters were only ever incremented — `grep` found the declaration, one
+    /// `+=`, and three reads, and no reset anywhere. A desktop app left running
+    /// for a week reported a week's spend as today's, and the dashboard's
+    /// headline "today" figure was whatever had accumulated since launch.
+    ///
+    /// It also made a **daily** cap impossible to build honestly: a ceiling over
+    /// a counter that resets on restart is a per-process ceiling, and a user who
+    /// restarts twice spends three times the cap.
+    pub cost_day: Option<chrono::NaiveDate>,
 
     // Custom system prompt override (if set, replaces BASE_SYSTEM_PROMPT)
     pub system_prompt_override: Option<String>,
@@ -54,9 +68,101 @@ impl AppState {
             .unwrap_or(false)
     }
 
+    /// Add one turn's spend, rolling the counters over at local midnight.
+    ///
+    /// **Local** date, not UTC: a user in UTC+7 whose "day" rolled at 07:00
+    /// local would see the figure they are watching reset mid-morning, and a
+    /// daily cap would refill at a time that means nothing to them.
     pub fn add_cost(&mut self, cost_usd: f64, tokens_in: u32, tokens_out: u32) {
+        self.roll_day_if_needed(chrono::Local::now().date_naive());
         self.cost_today_usd += cost_usd;
         self.tokens_in_today += tokens_in as u64;
         self.tokens_out_today += tokens_out as u64;
+    }
+
+    /// Zero the "today" counters when the local date has changed.
+    ///
+    /// Takes the date rather than reading the clock so it can be tested without
+    /// waiting for midnight — a reset that can only be observed once a day is a
+    /// reset nobody verifies.
+    pub fn roll_day_if_needed(&mut self, today: chrono::NaiveDate) {
+        match self.cost_day {
+            Some(d) if d == today => {}
+            _ => {
+                self.cost_day = Some(today);
+                self.cost_today_usd = 0.0;
+                self.tokens_in_today = 0;
+                self.tokens_out_today = 0;
+            }
+        }
+    }
+
+    /// Today's spend, rolling over first so a read never returns yesterday's.
+    ///
+    /// Every read goes through this. Reading the field directly is how a stale
+    /// figure reaches the dashboard on the first look after midnight, before any
+    /// new spend has triggered a rollover.
+    pub fn cost_today(&mut self) -> f64 {
+        self.roll_day_if_needed(chrono::Local::now().date_naive());
+        self.cost_today_usd
+    }
+}
+
+#[cfg(test)]
+mod daily_rollover_tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    fn day(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    #[test]
+    fn spend_accumulates_within_one_day() {
+        let mut s = AppState::new();
+        s.roll_day_if_needed(day(2026, 9, 2));
+        s.cost_today_usd += 0.10;
+        s.roll_day_if_needed(day(2026, 9, 2));
+        s.cost_today_usd += 0.15;
+        assert!((s.cost_today_usd - 0.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn crossing_midnight_resets_every_counter() {
+        // The defect: without this, "today" meant "since process start", so a
+        // long-running desktop session reported a week as one day.
+        let mut s = AppState::new();
+        s.roll_day_if_needed(day(2026, 9, 2));
+        s.cost_today_usd = 4.20;
+        s.tokens_in_today = 900_000;
+        s.tokens_out_today = 80_000;
+
+        s.roll_day_if_needed(day(2026, 9, 3));
+        assert_eq!(s.cost_today_usd, 0.0);
+        assert_eq!(s.tokens_in_today, 0, "tokens must roll over with cost");
+        assert_eq!(s.tokens_out_today, 0);
+    }
+
+    #[test]
+    fn the_first_spend_of_a_process_establishes_the_day() {
+        // A fresh AppState has no day. If that were treated as "same day", the
+        // first turn after launch would inherit whatever the field defaulted to.
+        let mut s = AppState::new();
+        assert_eq!(s.cost_day, None);
+        s.roll_day_if_needed(day(2026, 9, 2));
+        assert_eq!(s.cost_day, Some(day(2026, 9, 2)));
+    }
+
+    #[test]
+    fn a_backwards_clock_still_rolls_rather_than_accumulating() {
+        // Clocks move backwards — NTP correction, a timezone change, a user
+        // setting the date. Treating "not equal" as a rollover keeps the figure
+        // honest for whatever day it now is, instead of merging two days.
+        let mut s = AppState::new();
+        s.roll_day_if_needed(day(2026, 9, 3));
+        s.cost_today_usd = 1.00;
+        s.roll_day_if_needed(day(2026, 9, 2));
+        assert_eq!(s.cost_today_usd, 0.0);
+        assert_eq!(s.cost_day, Some(day(2026, 9, 2)));
     }
 }

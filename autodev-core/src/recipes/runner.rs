@@ -489,7 +489,9 @@ impl RecipeRunner {
                                 // Live-broadcast a cost:update so the Dashboard
                                 // and any other cost listeners refresh immediately
                                 // rather than waiting for the 60s polling fallback.
-                                let total_today = self.state.lock().unwrap().cost_today_usd;
+                                // Through cost_today(), not the field: a direct read returns
+                                // yesterday's figure on the first look after midnight.
+                                let total_today = self.state.lock().unwrap().cost_today();
                                 crate::events::emit_cost_update(crate::events::CostUpdatePayload {
                                     session_id: format!("mode2:{}", worker_slug),
                                     tokens_in,

@@ -36,8 +36,8 @@ pub fn get_dashboard_summary(state: State<'_, Arc<Mutex<AppState>>>) -> Result<D
     // Read live in-process counters — daily_costs is only populated by yesterday rollup,
     // so reading it for today would always yield 0.
     let (live_cost_usd, live_tokens) = {
-        let s = state.lock().unwrap();
-        (s.cost_today_usd, s.tokens_in_today + s.tokens_out_today)
+        let mut s = state.lock().unwrap();
+        (s.cost_today(), s.tokens_in_today + s.tokens_out_today)
     };
     let manager = analytics::global();
     let queries = manager.queries();
