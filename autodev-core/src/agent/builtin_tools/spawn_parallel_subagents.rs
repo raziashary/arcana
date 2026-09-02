@@ -33,7 +33,10 @@ impl Tool for SpawnParallelSubagentsTool {
     }
 
     fn description(&self) -> &str {
-        "Spawn 2-10 subagents in parallel and aggregate their results. \
+        // P3-20: was "2-10". The schema declares `minItems: 1` and the code
+        // rejects only `> 10`, so one subtask is accepted — the stated floor
+        // did not exist.
+        "Spawn 1-10 subagents in parallel and aggregate their results. \
          Each subtask runs in its own isolated context. Use for fan-out \
          workloads (parallel file review, multi-strategy exploration, \
          codebase sharding). Returns one result per subtask in the same \

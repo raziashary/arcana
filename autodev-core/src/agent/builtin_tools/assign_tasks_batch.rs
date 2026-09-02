@@ -44,16 +44,16 @@ impl Tool for AssignTasksBatchTool {
 
     fn description(&self) -> &str {
         "Atomically assign MANY tasks to workers in a single tool call. Use this \
-         INSTEAD OF calling assign_task once per task — one batch call is ~10× \
-         faster than N sequential calls when dispatching a decomposed epic or a \
-         post-rejection retry queue. \
+         INSTEAD OF calling assign_task once per task when dispatching a \
+         decomposed epic or a post-rejection retry queue. \
          \
          Each assignment in the batch is validated independently; bad entries \
          (wrong worker slug, task not in a dispatchable state, missing task) are \
          reported in the per-task result list but don't fail the others. After \
          all assignments are written, each affected worker is kicked once \
          (deduped) so a 5-task assignment to worker-backend doesn't fire 5 \
-         redundant wake-ups."
+         redundant wake-ups — which is the actual saving: one round trip and \
+         one wake-up per worker instead of N of each."
     }
 
     fn input_schema(&self) -> Value {

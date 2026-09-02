@@ -1614,6 +1614,278 @@ let x = 1;
         );
     }
 
+    // ── TG-P3-19 · no executable is resolved from the inspected workspace ─────
+
+    /// The workspace under inspection must never supply a binary we then run.
+    ///
+    /// 🔴 `resolve_python` searched `<working_dir>/.venv/Scripts/python.exe`
+    /// **first** and returned it when present, so cloning a hostile repository
+    /// and asking the agent to check any `.py` file executed the repository's
+    /// own interpreter — unprompted in every mode, once `P3-64` is accounted
+    /// for.
+    ///
+    /// ⚠ Scoped by **measurement, not assumption**: a probe confirmed that
+    /// `Command::new("name").current_dir(untrusted)` does *not* resolve the
+    /// program from the child's directory on this platform, so
+    /// `.current_dir(working_dir)` on the other checkers is not a second
+    /// vector. The explicit path built by `resolve_python` was the only one.
+    ///
+    /// Keyed on the invariant — *"no executable path is built from the
+    /// workspace"* — rather than on `resolve_python`'s current body, so a new
+    /// resolver with the same shape fails too.
+    #[test]
+    fn tg_p3_19_no_executable_is_resolved_from_the_workspace() {
+        let path = repo_root().join("autodev-core/src/agent/builtin_tools/validate.rs");
+        let text = read_source(&path);
+
+        // Markers of an interpreter/executable location, in any spelling.
+        const EXE_MARKERS: [&str; 6] = ["Scripts", "/bin/", ".exe", "venv", "python.exe", "bin\\\\"];
+
+        let mut offenders = Vec::new();
+        for (i, line) in text.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or("");
+            if !code.contains("working_dir") {
+                continue;
+            }
+            if EXE_MARKERS.iter().any(|m| code.contains(m)) {
+                offenders.push(format!("{}: {}", i + 1, line.trim()));
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "an executable path is being built from the inspected workspace — the \
+             repository under review would supply the binary we then run:\n  {}",
+            offenders.join("\n  ")
+        );
+
+        // And the capability itself is gone, not merely unused: a resolver that
+        // cannot see the workspace cannot be edited back into reading from it.
+        assert!(
+            text.contains("pub fn resolve_python() -> String"),
+            "resolve_python must take no workspace argument; presence of the \
+             capability is what let the defect exist (§0 Rule 7)"
+        );
+    }
+
+    // ── TG-P3-20 · a tool description may not name a mechanism it lacks ───────
+
+    /// Split a builtin-tool source into (description text, the rest of the code).
+    ///
+    /// The split matters: a keyword occurring only *inside* the description is
+    /// a claim with nothing behind it, which is the whole defect class.
+    fn split_description(text: &str) -> Option<(String, String)> {
+        let i = text.find("fn description(&self)")?;
+        let j = text[i..].find("\n    }")? + i;
+
+        // ⚠ Only the string literal reaches the model — a `//` comment beside
+        // it does not. Stripping comment lines is not cosmetic: several of
+        // these descriptions now carry a comment QUOTING the false claim they
+        // replaced, and scanning those would flag the fix as the defect.
+        // (It did, on this gate's second run.)
+        let desc: String = text[i..j]
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        Some((desc, format!("{}{}", &text[..i], &text[j..])))
+    }
+
+    /// A description that names a mechanism must have that mechanism in its
+    /// own code.
+    ///
+    /// 🔴 `glob` claimed *"Automatically respects .gitignore"* and there was no
+    /// gitignore handling anywhere in the file — only a fixed `skip_dirs`
+    /// array. A model told its results are ignore-filtered assumes `.env` and
+    /// build output are absent from them. They were not.
+    ///
+    /// ⚠ Descriptions are **model-facing contract**, not comments: the model
+    /// cannot read the code to check them. A false one is acted on.
+    ///
+    /// Keyed on the class, not on the four tools that were wrong: a *new*
+    /// description promising an absent mechanism fails this too.
+    #[test]
+    fn tg_p3_20_a_description_may_not_name_a_mechanism_the_code_lacks() {
+        // (claim keyword in the description, tokens that would implement it)
+        const BACKING: [(&str, &[&str]); 5] = [
+            ("gitignore", &["gitignore", "ignore::", "GitignoreBuilder"]),
+            ("PID", &["process::id", "pid"]),
+            ("tears down", &["kill"]),
+            ("timeout", &["timeout", "Duration"]),
+            ("transaction", &["transaction", "BEGIN", "tx"]),
+        ];
+
+        let dir = repo_root().join("autodev-core/src/agent/builtin_tools");
+        let mut offenders = Vec::new();
+        let mut examined = 0usize;
+
+        for entry in std::fs::read_dir(&dir).expect("builtin_tools").flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let text = read_source(&path);
+            if !text.contains("impl Tool for") {
+                continue;
+            }
+            let Some((desc, code)) = split_description(&text) else {
+                continue;
+            };
+            examined += 1;
+
+            let name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("?");
+            for (claim, tokens) in BACKING {
+                if !desc.to_lowercase().contains(&claim.to_lowercase()) {
+                    continue;
+                }
+                // A description may legitimately name a mechanism in order to
+                // say it is ABSENT — `glob` now does exactly that, and the
+                // disclaimer is the most useful sentence in it. Only an
+                // un-negated mention is a promise.
+                //
+                // (This gate flagged that disclaimer on its first run. The
+                // check had been written from the claim's *shape* rather than
+                // its meaning — §0.16 L-C6, caught here by running it.)
+                let lowered = desc.to_lowercase();
+                let needle = claim.to_lowercase();
+
+                // ⚠ Sentence-splitting on '.' does not work here: the claim
+                // itself may begin with one (".gitignore"), which severs the
+                // negation from the word it negates and turns a disclaimer
+                // back into a promise. Look at the text immediately BEFORE
+                // each occurrence instead.
+                let promised = lowered.match_indices(&needle).any(|(at, _)| {
+                    let from = at.saturating_sub(60);
+                    let before = &lowered[from..at];
+                    !before.contains(" not ")
+                        && !before.contains("n't")
+                        && !before.contains("never")
+                });
+                if !promised {
+                    continue;
+                }
+
+                let backed = tokens
+                    .iter()
+                    .any(|t| code.to_lowercase().contains(&t.to_lowercase()));
+                if !backed {
+                    offenders.push(format!("{name}: description promises '{claim}'"));
+                }
+            }
+        }
+
+        assert!(
+            examined >= 30,
+            "only {examined} tool descriptions examined — this gate is not \
+             reaching the tree, and an empty sweep passes silently"
+        );
+
+        assert!(
+            offenders.is_empty(),
+            "these tool descriptions name a mechanism absent from their own \
+             code — the model cannot read the code to check, so it acts on the \
+             claim:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
+    /// A description that enumerates valid values must match the schema's enum.
+    ///
+    /// The other half of the same class: two lists of the same thing, one
+    /// model-facing prose and one machine-checked, drifting apart silently.
+    #[test]
+    fn tg_p3_20_enumerated_values_match_the_schema() {
+        let dir = repo_root().join("autodev-core/src/agent/builtin_tools");
+        let mut checked = 0usize;
+        let mut offenders = Vec::new();
+
+        // Every .rs in the core crate, concatenated once, so a value declared
+        // in a shared constant resolves.
+        //
+        // 🔴 **With descriptions stripped.** The first version concatenated the
+        // files whole — including the very descriptions being checked — so
+        // every listed value trivially "existed in the crate" and the gate
+        // could not fail. Falsification caught it: a planted `worker-ghost`
+        // passed. A corpus that contains the claim cannot corroborate it
+        // (`§0.16 L-C9`).
+        let crate_sources = {
+            let mut all = String::new();
+            let mut stack = vec![repo_root().join("autodev-core/src")];
+            while let Some(d) = stack.pop() {
+                for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                    let p = e.path();
+                    if p.is_dir() {
+                        stack.push(p);
+                    } else if p.extension().and_then(|x| x.to_str()) == Some("rs") {
+                        let t = read_source(&p);
+                        match split_description(&t) {
+                            Some((_, code)) => all.push_str(&code),
+                            None => all.push_str(&t),
+                        }
+                    }
+                }
+            }
+            all
+        };
+
+        for entry in std::fs::read_dir(&dir).expect("builtin_tools").flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let text = read_source(&path);
+            let Some((desc, code)) = split_description(&text) else {
+                continue;
+            };
+            let name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("?");
+
+            // "Valid statuses: a, b, c." / "Valid workers: a, b, c."
+            for marker in ["Valid statuses:", "Valid workers:"] {
+                let Some(rest) = desc.split(marker).nth(1) else {
+                    continue;
+                };
+                let listed: Vec<String> = rest
+                    .split('.')
+                    .next()
+                    .unwrap_or("")
+                    .replace('\\', " ")
+                    .split(',')
+                    .map(|t| t.trim().trim_matches('"').to_string())
+                    .filter(|t| !t.is_empty() && !t.contains(' '))
+                    .collect();
+                if listed.is_empty() {
+                    continue;
+                }
+                checked += 1;
+                // ⚠ The value may be defined in a shared constant rather than
+                // inline — `assign_task`'s `VALID_WORKERS` is `FLEET_WORKERS`
+                // from `recipes/defaults.rs`, which is correct indirection, not
+                // drift. The invariant is that the listed value exists SOMEWHERE
+                // in the crate, not that it is spelled in this file.
+                //
+                // (The first run of this gate flagged all five workers for
+                // exactly this reason. Scoping a check to the wrong file is how
+                // a green gate and a red one both fail to mean anything.)
+                for value in &listed {
+                    if !code.contains(value) && !crate_sources.contains(value) {
+                        offenders.push(format!(
+                            "{name}: description lists '{value}' under '{marker}', \
+                             but it appears nowhere in the code"
+                        ));
+                    }
+                }
+            }
+        }
+
+        assert!(
+            checked >= 1,
+            "no enumerated-value description was found — the gate would pass \
+             on an empty set, which proves nothing"
+        );
+        assert!(offenders.is_empty(), "{}", offenders.join("\n  "));
+    }
+
     // ── TG-P3-17 · no validator subprocess runs without a ceiling ─────────────
 
     /// Every subprocess the validator spawns must go through `run_bounded`.

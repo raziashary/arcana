@@ -56,10 +56,20 @@ impl Tool for GlobTool {
     }
 
     fn description(&self) -> &str {
+        // ⚠ P3-20. This claimed *"Automatically respects .gitignore"*. It does
+        // not, and never did: there is no gitignore parsing anywhere in this
+        // file — only the fixed `skip_dirs` list below. The claim mattered,
+        // because a model told its results are gitignore-filtered will assume
+        // ignored files (`.env`, credential dumps, build output) are absent
+        // from what it gets back. Stating the real rule lets it check.
         "Find files matching a glob pattern. \
          Supports patterns like '*.rs', '**/*.py', 'src/**/test_*.rs'. \
          Returns list of matching file paths. \
-         Automatically respects .gitignore and skips common noise directories."
+         \
+         Skips a fixed set of noise directories: node_modules, .git, target, \
+         dist, build, .next, .cache. It does NOT read .gitignore — files your \
+         VCS ignores WILL appear in these results unless they sit in one of \
+         those directories."
     }
 
     fn input_schema(&self) -> serde_json::Value {

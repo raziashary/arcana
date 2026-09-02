@@ -31,16 +31,29 @@ impl Tool for CheckFileTool {
     }
 
     fn description(&self) -> &str {
+        // ⚠ P3-20, three corrections in one description:
+        //   1. "Always runs" — false. `run_syntax` is `checks.contains("syntax")`;
+        //      the tier is in the DEFAULT set, but a caller passing
+        //      `checks: ["types"]` skips it entirely.
+        //   2. The syntax tier's coverage omitted .ts/.tsx/.jsx, which it has
+        //      handled via `tsc` since Doc 09 T1.2 (`validate.rs`, "ts"|"tsx"|"jsx").
+        //   3. "silently skipped" is no longer true after P3-18: a tier with no
+        //      checker now reports NOT CHECKED rather than vanishing, precisely
+        //      so absence of a check stops reading as a pass.
         "Run lint / syntax / import checks on a file without executing it. \
          Three tiers are available:\n\
          • syntax  — fast in-process parse (JSON/YAML/TOML) or subprocess \
-           (py_compile for .py, node --check for .js/.mjs/.cjs). Always runs.\n\
+           (py_compile for .py, node --check for .js/.mjs/.cjs, tsc for \
+           .ts/.tsx/.jsx). Included by default; omitted if you pass a \
+           `checks` list without \"syntax\".\n\
          • imports — cross-reference imports against requirements.txt / \
            package.json. Covers .py, .js, .ts, .tsx, .jsx. Default: included.\n\
          • types   — slow type checker (mypy/pyright for .py; tsc for .ts/.tsx; \
            eslint for .js/.jsx). Opt-in only.\n\n\
-         Tiers that have no checker for the given file extension are silently \
-         skipped — only actionable results are returned.\n\n\
+         A tier with no checker for the file's extension is skipped without \
+         output. A tier whose checker exists but could NOT RUN (binary not \
+         installed, or it exceeded its 30s ceiling) reports \"NOT CHECKED\" — \
+         that is not a pass, and the file remains unverified.\n\n\
          Use after write_file or edit_file reports a syntax error, or before \
          marking a task done to verify the code is clean."
     }

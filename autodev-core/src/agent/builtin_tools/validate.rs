@@ -144,7 +144,7 @@ pub async fn tier1_syntax(path: &Path, working_dir: &str) -> Option<LintResult> 
         "json" => Some(check_json(path)),
         "yaml" | "yml" => Some(check_yaml(path)),
         "toml" => Some(check_toml(path)),
-        "py" => Some(check_python_syntax(path, working_dir).await),
+        "py" => Some(check_python_syntax(path).await),
         "js" | "mjs" | "cjs" => Some(check_node_syntax(path).await),
         // Doc 09 T1.2 — TypeScript syntax via `tsc --noEmit --allowJs
         // --isolatedModules`. Falls back to a `warning` LintResult when
@@ -298,8 +298,8 @@ fn did_not_run(checker: &str, message: String) -> LintResult {
     }
 }
 
-async fn check_python_syntax(path: &Path, working_dir: &str) -> LintResult {
-    let python = resolve_python(working_dir);
+async fn check_python_syntax(path: &Path) -> LintResult {
+    let python = resolve_python();
     let mut cmd = tokio::process::Command::new(&python);
     cmd.args(["-m", "py_compile", &path.to_string_lossy()]);
 
@@ -1067,43 +1067,41 @@ async fn run_checker_subprocess(
 
 /// Return the Python binary path, preferring a virtual-environment interpreter
 /// over the system Python so that project dependencies are on sys.path.
-pub fn resolve_python(working_dir: &str) -> String {
-    // Common virtual-environment directory names, checked in priority order.
-    // Many tools use non-standard names (.env, env, .venv39, etc.) — cover the
-    // most common ones so `py_compile` doesn't silently fall back to a system
-    // Python that lacks the project's dependencies.
-    let candidates: Vec<String> = if cfg!(target_os = "windows") {
-        vec![
-            format!("{working_dir}\\.venv\\Scripts\\python.exe"),
-            format!("{working_dir}\\venv\\Scripts\\python.exe"),
-            format!("{working_dir}\\env\\Scripts\\python.exe"),
-            format!("{working_dir}\\.env\\Scripts\\python.exe"),
-            "python".into(),
-        ]
+/// The Python interpreter used for syntax validation. **Resolved from `PATH`
+/// only — never from the workspace.**
+///
+/// 🔴 `P3-19`. This took a `working_dir` and searched
+/// `<working_dir>/.venv/Scripts/python.exe` plus three sibling spellings
+/// **first**, returning the workspace copy whenever it existed. So the
+/// repository under inspection supplied the interpreter that would then be
+/// executed — cloning a hostile repo that ships a `.venv/` and asking the
+/// agent to check any `.py` file was arbitrary code execution. Combined with
+/// `P3-64` (read-only tools bypassed every permission check) it was also
+/// **unprompted, in every mode**.
+///
+/// ⚠ The stated reason for preferring the venv — *"so `py_compile` doesn't
+/// silently fall back to a system Python that lacks the project's
+/// dependencies"* — does not hold. `py_compile` compiles source to bytecode
+/// and imports nothing, so the project's dependencies are irrelevant to it.
+///
+/// What is genuinely lost is **version pinning**: syntax valid on 3.12 (`match`)
+/// is an error on a system 3.8. That produces a false *error*, never a false
+/// clean — it fails toward reporting a problem that is not there, which the
+/// user can see and dismiss. An execution primitive is not a fair price for
+/// avoiding it.
+///
+/// The parameter is gone rather than ignored: a function that cannot see the
+/// workspace cannot be edited back into running something from it.
+pub fn resolve_python() -> String {
+    // Bare names only. `Command` resolves these against `PATH`, and — verified
+    // by execution on this platform, not assumed — **not** against the child's
+    // `current_dir`, so a checker binary planted in the workspace is not
+    // reachable this way either.
+    if cfg!(target_os = "windows") {
+        "python".into()
     } else {
-        vec![
-            format!("{working_dir}/.venv/bin/python3"),
-            format!("{working_dir}/venv/bin/python3"),
-            format!("{working_dir}/env/bin/python3"),
-            format!("{working_dir}/.env/bin/python3"),
-            format!("{working_dir}/.venv/bin/python"),
-            format!("{working_dir}/venv/bin/python"),
-            "python3".into(),
-            "python".into(),
-        ]
-    };
-
-    for c in candidates {
-        // Absolute paths: check existence. System names: let OS find them.
-        if Path::new(&c).is_absolute() {
-            if Path::new(&c).exists() {
-                return c;
-            }
-        } else {
-            return c;
-        }
+        "python3".into()
     }
-    "python3".into()
 }
 
 /// Walk from `start` upward toward the filesystem root, but stop at
@@ -1653,5 +1651,64 @@ mod p3_17_18_tests {
                 }
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod p3_19_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Build the exact layout a hostile repository would ship.
+    fn plant_hostile_venv(root: &Path) -> PathBuf {
+        let (dir, exe) = if cfg!(target_os = "windows") {
+            (root.join(".venv").join("Scripts"), "python.exe")
+        } else {
+            (root.join(".venv").join("bin"), "python3")
+        };
+        fs::create_dir_all(&dir).unwrap();
+        let binary = dir.join(exe);
+        fs::write(&binary, "#!/bin/sh\necho pwned\n").unwrap();
+        binary
+    }
+
+    #[test]
+    fn an_interpreter_shipped_by_the_workspace_is_never_selected() {
+        // 🔴 THE DEFECT. `resolve_python(working_dir)` checked
+        // `<working_dir>/.venv/…` FIRST and returned it when the file existed,
+        // so the repository under inspection chose the interpreter that would
+        // be executed against it.
+        let repo = TempDir::new().unwrap();
+        let hostile = plant_hostile_venv(repo.path());
+        assert!(hostile.exists(), "the test must actually plant the binary");
+
+        let chosen = resolve_python();
+
+        assert!(
+            !Path::new(&chosen).is_absolute(),
+            "the interpreter must be a bare name resolved on PATH, got {chosen}"
+        );
+        assert!(
+            !chosen.contains(".venv") && !chosen.contains("Scripts") && !chosen.contains("/bin/"),
+            "a workspace-shipped interpreter was selected: {chosen}"
+        );
+        assert!(
+            !chosen.contains(&repo.path().to_string_lossy().to_string()),
+            "the chosen interpreter lives inside the inspected workspace: {chosen}"
+        );
+    }
+
+    #[test]
+    fn the_resolver_cannot_see_a_workspace_at_all() {
+        // Structural, not behavioural: with no `working_dir` parameter there is
+        // no workspace in scope to resolve from, so the defect cannot be
+        // reintroduced by an edit inside the function body.
+        //
+        // (`resolve_python()` taking zero arguments is what makes this compile;
+        // if someone re-adds the parameter, this line stops building.)
+        let f: fn() -> String = resolve_python;
+        let name = f();
+        assert!(!name.is_empty());
     }
 }
