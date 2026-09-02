@@ -1,0 +1,506 @@
+<title>Pre-P8 Review</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+  :root {
+    --ground:    #EFF1F4;
+    --surface:   #FFFFFF;
+    --raised:    #E4E8ED;
+    --ink:       #14181D;
+    --ink-soft:  #3A424C;
+    --muted:     #5B646F;
+    --faint:     #8A939E;
+    --line:      #D6DBE1;
+    --line-firm: #B9C1CB;
+    --accent:    #3E4C8A;
+    --accent-soft:#E5E8F3;
+    --critical:  #9E2A2B;
+    --critical-soft:#F7E7E6;
+    --fixed:     #2D6A4F;
+    --fixed-soft:#E3F0E9;
+    --open:      #8A6D1F;
+    --open-soft: #F6EFDC;
+    --shadow: 0 1px 2px rgba(20,24,29,.05), 0 8px 24px -14px rgba(20,24,29,.16);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:    #101317;
+      --surface:   #181C22;
+      --raised:    #202630;
+      --ink:       #E3E7EC;
+      --ink-soft:  #BAC2CC;
+      --muted:     #929BA6;
+      --faint:     #6B7480;
+      --line:      #272E38;
+      --line-firm: #3A434F;
+      --accent:    #8D9BD8;
+      --accent-soft:#1E2438;
+      --critical:  #E4837F;
+      --critical-soft:#2E1B1B;
+      --fixed:     #6FC49B;
+      --fixed-soft:#152720;
+      --open:      #D6B45E;
+      --open-soft: #2A2314;
+      --shadow: 0 1px 2px rgba(0,0,0,.45), 0 8px 24px -14px rgba(0,0,0,.7);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:    #101317;
+    --surface:   #181C22;
+    --raised:    #202630;
+    --ink:       #E3E7EC;
+    --ink-soft:  #BAC2CC;
+    --muted:     #929BA6;
+    --faint:     #6B7480;
+    --line:      #272E38;
+    --line-firm: #3A434F;
+    --accent:    #8D9BD8;
+    --accent-soft:#1E2438;
+    --critical:  #E4837F;
+    --critical-soft:#2E1B1B;
+    --fixed:     #6FC49B;
+    --fixed-soft:#152720;
+    --open:      #D6B45E;
+    --open-soft: #2A2314;
+    --shadow: 0 1px 2px rgba(0,0,0,.45), 0 8px 24px -14px rgba(0,0,0,.7);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "Source Serif 4", Georgia, serif;
+    font-size: 17px;
+    line-height: 1.62;
+    margin: 0;
+    padding: 0 20px 88px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1000px; margin: 0 auto; }
+  .col  { max-width: 66ch; }
+
+  header {
+    padding: 52px 0 26px;
+    border-bottom: 2px solid var(--ink);
+  }
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 11px; font-weight: 500; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 12px;
+  }
+  h1 {
+    font-family: Archivo, "Helvetica Neue", Arial, sans-serif;
+    font-weight: 700; font-size: clamp(2rem, 5vw, 2.9rem);
+    line-height: 1.06; letter-spacing: -.022em; text-wrap: balance; margin: 0 0 14px;
+  }
+  .standfirst { font-size: 1.13rem; color: var(--ink-soft); max-width: 58ch; margin: 0; }
+
+  section { padding-top: 50px; }
+  h2 {
+    font-family: Archivo, sans-serif; font-weight: 600;
+    font-size: 1.5rem; letter-spacing: -.015em; line-height: 1.2;
+    text-wrap: balance; margin: 0 0 8px;
+  }
+  h3 {
+    font-family: Archivo, sans-serif; font-weight: 600;
+    font-size: 1.02rem; margin: 30px 0 6px; letter-spacing: -.004em;
+  }
+  p { margin: 0 0 14px; }
+  .lede { font-size: 1.04rem; color: var(--ink-soft); }
+  strong { font-weight: 600; }
+  em { font-style: italic; color: var(--ink-soft); }
+
+  code {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .86em; background: var(--raised);
+    padding: .1em .36em; border-radius: 2px; color: var(--ink-soft);
+  }
+  pre {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .82rem; background: var(--raised); color: var(--ink-soft);
+    padding: 12px 14px; border-radius: 3px; overflow-x: auto;
+    border-left: 2px solid var(--line-firm); margin: 0 0 14px;
+  }
+
+  /* ── decision queue ─────────────────────────────────── */
+  .queue { display: grid; gap: 1px; background: var(--line);
+           border: 1px solid var(--line); border-radius: 3px;
+           overflow: hidden; margin: 22px 0 0; }
+  .dec { background: var(--surface); padding: 16px 18px;
+         display: grid; grid-template-columns: 34px 1fr; gap: 14px; align-items: start; }
+  .dec .n {
+    font-family: "IBM Plex Mono", monospace; font-size: .78rem; font-weight: 600;
+    color: var(--accent); background: var(--accent-soft);
+    border-radius: 2px; text-align: center; padding: 3px 0; letter-spacing: .02em;
+  }
+  .dec h4 { font-family: Archivo, sans-serif; font-weight: 600; font-size: .99rem;
+            margin: 0 0 4px; letter-spacing: -.004em; }
+  .dec p { margin: 0 0 6px; font-size: .93rem; color: var(--ink-soft); }
+  .dec .rec { font-size: .88rem; color: var(--muted); }
+  .dec .rec b { color: var(--accent); font-weight: 600; }
+
+  /* ── defect list ────────────────────────────────────── */
+  .defects { display: grid; gap: 10px; margin: 20px 0 0; }
+  .defect {
+    background: var(--surface); border: 1px solid var(--line);
+    border-left: 3px solid var(--line-firm); border-radius: 3px;
+    padding: 14px 16px;
+  }
+  .defect.crit { border-left-color: var(--critical); }
+  .defect.done { border-left-color: var(--fixed); }
+  .defect h4 {
+    font-family: Archivo, sans-serif; font-weight: 600; font-size: .99rem;
+    margin: 0 0 5px; letter-spacing: -.004em;
+    display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
+  }
+  .defect p { margin: 0 0 8px; font-size: .93rem; color: var(--ink-soft); }
+  .defect p:last-child { margin-bottom: 0; }
+  .tag {
+    font-family: "IBM Plex Mono", monospace; font-size: 9.5px; font-weight: 500;
+    letter-spacing: .09em; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 2px; white-space: nowrap;
+    border: 1px solid currentColor; flex: none;
+  }
+  .tag.crit { color: var(--critical); background: var(--critical-soft); }
+  .tag.done { color: var(--fixed);    background: var(--fixed-soft); }
+  .tag.open { color: var(--open);     background: var(--open-soft); }
+  .prov {
+    font-family: "IBM Plex Mono", monospace; font-size: .74rem;
+    color: var(--faint); letter-spacing: .01em;
+  }
+
+  /* ── notes ──────────────────────────────────────────── */
+  .note-block { border-top: 1px solid var(--line); padding-top: 22px; margin-top: 26px; }
+  .note-block:first-of-type { border-top: none; padding-top: 0; margin-top: 18px; }
+  .note-id {
+    font-family: "IBM Plex Mono", monospace; font-size: .74rem; font-weight: 500;
+    letter-spacing: .1em; text-transform: uppercase; color: var(--accent);
+    margin: 0 0 5px;
+  }
+  .verdict {
+    font-family: Archivo, sans-serif; font-weight: 600; font-size: 1.12rem;
+    letter-spacing: -.008em; margin: 0 0 10px; text-wrap: balance;
+  }
+
+  .scroller { overflow-x: auto; margin: 16px 0 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: .9rem; min-width: 460px; }
+  th {
+    font-family: Archivo, sans-serif; font-size: 10px; font-weight: 600;
+    letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
+    text-align: left; padding: 0 12px 7px 0;
+    border-bottom: 1px solid var(--line-firm); white-space: nowrap;
+  }
+  td { padding: 9px 12px 9px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; padding-right: 0; }
+
+  .callout {
+    background: var(--surface); border: 1px solid var(--line);
+    border-left: 3px solid var(--accent); border-radius: 3px;
+    padding: 14px 16px; margin: 16px 0; box-shadow: var(--shadow);
+  }
+  .callout h4 { font-family: Archivo, sans-serif; font-weight: 600;
+                font-size: .95rem; margin: 0 0 6px; }
+  .callout p { font-size: .93rem; margin: 0 0 8px; color: var(--ink-soft); }
+  .callout p:last-child { margin-bottom: 0; }
+
+  footer {
+    margin-top: 60px; padding-top: 22px; border-top: 1px solid var(--line);
+    font-size: .87rem; color: var(--muted);
+  }
+</style>
+
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">AIRS Foundry · Internal · 3 September 2026</p>
+  <h1>Pre-P8 Review</h1>
+  <p class="standfirst">Your seven notes, investigated. Four background audits and a direct read of the prompt path. One data-destroying bug is fixed and pushed; ten decisions are yours.</p>
+</header>
+
+<section class="col">
+  <h2>Where to start</h2>
+  <p class="lede">Two things changed my picture of the codebase, and both came from your notes rather than from the plan.</p>
+
+  <p><strong>Note 1 has the opposite answer to the one you feared.</strong> Workers are strongly differentiated — the recipe carries a full role-specific prompt. But because the recipe <em>replaces</em> the base prompt rather than extending it, nothing that should be universal <em>is</em>: not the git rules, not <code>AUTODEV.md</code>, not the prohibitions.</p>
+
+  <p><strong>Note 3 has a mechanism.</strong> Affinity is never consulted by any assignment. <code>assign_task</code> takes the worker slug from the model's tool arguments and only ever <em>writes</em> history. The scorer exists, learns nothing, and if called returns <code>supervisor</code> — which <code>assign_task</code> then rejects as invalid.</p>
+</section>
+
+<section>
+  <div class="col">
+    <h2>Decisions I need from you</h2>
+    <p class="lede">Ordered so earlier answers unblock later ones — except <strong>D10</strong>, which sits last only because I found it last. It is the one with the largest effect on whether the fleet works at all. Each carries my recommendation; none of them are mine to make.</p>
+  </div>
+
+  <div class="queue">
+    <div class="dec">
+      <span class="n">D1</span>
+      <div>
+        <h4>Prompt architecture — should anything be universal?</h4>
+        <p>A recipe's <code>instructions</code> replaces the base prompt entirely. So the seven prohibitions and the user's <code>AUTODEV.md</code> reach the interactive assistant and none of the agents that do the work.</p>
+        <p class="rec"><b>I recommend:</b> split the base prompt into a small invariant core — identity, the prohibitions, <code>AUTODEV.md</code> — that every agent gets, with the recipe adding to it. Recipes stay fully specialised; the safety floor stops being optional. The alternative is nine copies to keep in step, which is the shape that produced this.</p>
+      </div>
+    </div>
+    <div class="dec">
+      <span class="n">D2</span>
+      <div>
+        <h4>How should workers use git?</h4>
+        <p>All five worker recipes run <code>git add -A &amp;&amp; git commit</code> with no branch created first. On a fresh clone that is <code>main</code>. Nothing pushes, which is the only reason it is contained.</p>
+        <p class="rec"><b>I recommend:</b> create a branch before the first commit, and stage explicitly rather than <code>-A</code>. It is one line in five files. I have not touched it because how your fleet commits is a policy call, not a bug fix.</p>
+      </div>
+    </div>
+    <div class="dec">
+      <span class="n">D3</span>
+      <div>
+        <h4>Who executes the design work?</h4>
+        <p>Your Note 4 is exactly right, and it is not ambiguity: across all of PD1–PD6 the words <em>PA</em>, <em>fleet</em>, <em>worker</em> and <em>supervisor</em> appear zero times. <code>PD4-02</code> does say <em>"no model call inside the tool"</em>, so adaptation is deterministic — but something still has to choose target sizes, handle a <code>degraded</code> result, and apply a brand guide, which is judgement.</p>
+        <p class="rec"><b>I recommend:</b> Rollout 1 answers the contract with deterministic tools plus the PA for the judgement cases; the fleet becomes an additional consumer in Rollout 2. Either way <code>PD0</code> needs a task that states the execution model, so AutoDesign is not left to infer it.</p>
+      </div>
+    </div>
+    <div class="dec">
+      <span class="n">D4</span>
+      <div>
+        <h4>Fleet before design, or after?</h4>
+        <p>P4 is currently sequenced <em>after</em> PD6. So through all of Rollout 1 — including handover — there is no working fleet. If D3's answer is "the fleet executes", this dependency is backwards.</p>
+        <p class="rec"><b>I recommend:</b> leave the order if D3 is "tools + PA". Move P4 earlier only if you want the fleet driving design work in R1.</p>
+      </div>
+    </div>
+    <div class="dec">
+      <span class="n">D5</span>
+      <div>
+        <h4>Where does procedural memory at tool execution live?</h4>
+        <p>Your Note 2. <code>tool_executor.rs</code> does not consult memory at all today, so this is a new capability rather than a repair. P3-F is closed and appending to a closed phase is what the plan's own rules forbid.</p>
+        <p class="rec"><b>I recommend:</b> P4, since a worker repeating a build it has run before is the beneficiary. Bounded as: retrieved once per <em>turn</em> not per call, run through the flattener P3-F added, and advisory context only — never an input to a tool's arguments.</p>
+      </div>
+    </div>
+    <div class="dec">
+      <span class="n">D6</span>
+      <div>
+        <h4>ROI scoring — define it or drop it</h4>
+        <p>You asked for ROI in the fleet. It does not exist in any layer: no model, no writer, no reader, no UI, and no task. The only "ROI" in the tree is QC <em>cost</em> per task. This is net-new, not a repair.</p>
+        <p class="rec"><b>I need from you:</b> what the score is over — business value, effort, cost, or a ratio — who writes it, and whether it orders dispatch ahead of the existing <code>p0…p3</code> priority. I can't write the task without that.</p>
+      </div>
+    </div>
+    <div class="dec">
+      <span class="n">D7</span>
+      <div>
+        <h4>How much design UI does Rollout 2 need?</h4>
+        <p>Your Note 7 instinct matches the plan — <code>P6-25</code> and <code>P6-28</code> already put design surfaces in AutoDev's own UI, correctly in Rollout 2. But two checkboxes for a Photoshop-like canvas is not credible: that is a layer tree, selection, transform handles, snapping, undo/redo and a properties panel.</p>
+        <p class="rec"><b>I recommend:</b> decide first whether R2 needs an <em>editable</em> canvas or only view + adapt + export. Editing is where nearly all the cost is, and AutoDesign already does it. Then scope it properly — 15–20 tasks, or its own phase.</p>
+      </div>
+    </div>
+    <div class="dec">
+      <span class="n">D8</span>
+      <div>
+        <h4>What happens to <code>airsctl agent</code>?</h4>
+        <p>Five CLI subcommands — <code>run</code>, <code>list</code>, <code>status</code>, <code>stop</code>, <code>logs</code> — are pure HTTP calls to the Python orchestrator. After P8 they cannot succeed on any machine. This is the largest behavioural item in the sweep.</p>
+        <p class="rec"><b>I recommend:</b> reimplement <code>run</code> natively on the Rust engine and remove the other four. But removing a shipped CLI surface is your call.</p>
+      </div>
+    </div>
+    <div class="dec">
+      <span class="n">D10</span>
+      <div>
+        <h4>How should <code>bash</code> run a command on Windows? <em>— highest impact of the ten</em></h4>
+        <p>The rewriter translates POSIX pipes into PowerShell cmdlets and then executes them in <code>cmd</code>, which is why builds are recorded as failures. Fixing it is not a one-liner because there are three real options, and they differ in what you promise the model.</p>
+        <p class="rec"><b>I recommend:</b> stop rewriting, and run through a real POSIX shell where one exists — <code>platform/command.rs</code> was built in P1 for exactly this and still has no callers, which is what <code>P4-11</code> is for. Falling back to PowerShell <em>properly</em> (not <code>cmd</code>) when none is present. The alternative is to keep the rewriter and fix it, which means owning a shell translator for ever.</p>
+      </div>
+    </div>
+    <div class="dec">
+      <span class="n">D9</span>
+      <div>
+        <h4>Restore the Live Monitor, or formalise that it is dead?</h4>
+        <p>Worker tick telemetry — tick duration, last outcome, tick-start events — is emitted <em>only</em> from inside the dead Mode 2 branch. The UI that reads it is already permanently blank. Deleting that branch in P8 makes the breakage structural rather than accidental.</p>
+        <p class="rec"><b>I recommend:</b> re-emit it around the native engine run. It is a small addition and the fleet is hard to operate blind. The alternative is deleting the UI that reads it.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>Defects found</h2>
+    <p class="lede">Everything below I read in the code myself. Where a finding came from one of the four audits, I re-verified it before putting it here — several of their other claims I corrected or dropped.</p>
+  </div>
+
+  <div class="defects">
+
+    <div class="defect done">
+      <h4><span class="tag done">Fixed &amp; pushed</span> <code>edit_file</code> destroyed files on an empty <code>old_string</code></h4>
+      <p>With <code>replace_all</code>, <code>content.replace("", new)</code> inserts the replacement at <em>every</em> character boundary — a 10 KB source file written back as thousands of interleaved copies, reported as success. Without it, <code>find("")</code> returns <code>Some(0)</code> for ever and the loop never advances: an infinite loop holding that file's lock so no other tool can touch it.</p>
+      <p>The schema marked <code>old_string</code> required but never non-empty, and a model meaning "insert at the top of the file" reaches for <code>""</code> as the obvious way to say it. Refused now, with three tests that read the file back, and falsified by removing the guard.</p>
+      <p class="prov">commit 7ae53ee · 611 tests green</p>
+    </div>
+
+    <div class="defect crit">
+      <h4><span class="tag crit">Live</span> Any recipe saved in the UI is silently stranded</h4>
+      <p><code>FallbackPolicy</code> defaults to <code>Mode2Only</code>, the field is <code>#[serde(default)]</code>, and the recipe editor's payload omits it entirely. So a recipe you create in the UI deserialises as <code>Mode2Only</code>, hits the guard, and reports <code>fallback_idle</code> — it never runs, and never errors.</p>
+      <p>Worse: <code>update_recipe</code> does a <strong>full overwrite</strong>. Editing a <em>shipped</em> recipe through the editor strands it too — which silently undoes the P4-31 fix that flipped those eight recipes to <code>Mode1Capable</code>.</p>
+      <p class="prov">types.rs:64-88 · RecipeEditor.tsx buildRecipe() · recipe_commands.rs:115-135 — verified</p>
+    </div>
+
+    <div class="defect crit">
+      <h4><span class="tag crit">Live</span> Affinity is never consulted by any assignment</h4>
+      <p><code>assign_task</code> and <code>assign_tasks_batch</code> take the worker slug from the model's arguments and call <code>record_assignment</code> only — they write history and never read it. The decision is made by the supervisor LLM from a keyword table in its prompt, which explicitly tells it to skip the scorer.</p>
+      <p>And the scorer cannot answer usefully anyway: its static layer requires <code>confidence &gt; 0.85</code> while the highest any pattern declares is exactly <code>0.85</code>, so that branch is unreachable by construction. Outcomes are only ever written from a human clicking in the UI, so the learning gate never opens, every worker ties at 0.5, and the stable sort returns <code>supervisor</code> — which <code>assign_task</code> rejects as not a valid worker.</p>
+      <p class="prov">scorer.rs:135 vs patterns.rs:27,46 · assign_task.rs:119 — verified</p>
+    </div>
+
+    <div class="defect crit">
+      <h4><span class="tag crit">Live</span> <code>bash.rs</code> rewrites POSIX pipes into PowerShell, then runs them in <code>cmd</code></h4>
+      <p>This is the one you said keeps failing, and it is <strong><code>BUG-COMPILE</code></strong> — the first bug in the whole restructure tracker — unrepaired. <code>rewrite_for_windows</code> emits <code>Select-Object -First</code>, <code>Select-Object -Last</code> and <code>Select-String</code>, which are <em>PowerShell</em> cmdlets. Line 116 then hands the result to <code>cmd /C</code>, which has none of them.</p>
+      <p>So <code>npm run build 2&gt;&amp;1 | tail -50</code> becomes a pipeline whose right half does not exist. <code>cmd</code> reports the last element's status, the build evidence records a <strong>successful build as failed</strong>, and <code>update_task_status</code> reads that to veto <code>qc_review</code>. The work is done and the board says it failed.</p>
+      <p>Two more in the same file: nothing ever <strong>kills the child</strong> — no <code>kill_on_drop</code>, no process-group kill — while <code>validate.rs</code> and <code>e2e_probe.rs</code> both set it, so a timed-out <code>cargo build</code> holds <code>target/.cargo-lock</code> and every later build in the session times out too. And the rewrites are ordered so the <code>grep -i</code> branch can never match.</p>
+      <p class="prov">bash.rs:105-118, 533-545 — verified · 58 findings in that audit · see D10</p>
+    </div>
+
+    <div class="defect crit">
+      <h4><span class="tag crit">Live</span> The build-evidence gate matches command <em>text</em></h4>
+      <p><code>bash("grep -rn \"npm run build\" package.json")</code> exits 0, is classified as a passing Node build, and opens the <code>qc_review</code> door with nothing built. The gate that decides whether work may be marked complete can be satisfied by a command that mentions a build.</p>
+      <p class="prov">builtin_tools audit · agent-reported</p>
+    </div>
+
+    <div class="defect">
+      <h4><span class="tag open">Live</span> Unassigning a task leaves it half-assigned</h4>
+      <p><code>update_task_status</code> tells the model "pass null to unassign", and the database layer omits the column entirely on <code>None</code> — so the task becomes <code>ready</code> while still tagged with its worker. That is the exact half-assigned state the guard twelve lines above it exists to prevent.</p>
+      <p class="prov">db/tasks.rs:671-678 · agent-reported</p>
+    </div>
+
+    <div class="defect crit">
+      <h4><span class="tag crit">Live</span> Task theft is open on the path the fleet actually uses</h4>
+      <p>The hardened atomic claim exists — and the shipped recipes do not call it. They use <code>update_task_status(id, 'in_progress', slug)</code>, which performs no ownership check and no load guard. So the guard that was fixed sits on a path the fleet never takes, and no PID is ever recorded, which degrades orphan recovery to a four-hour timeout.</p>
+      <p class="prov">defaults.rs:431 and its four twins · agent-reported</p>
+    </div>
+
+    <div class="defect crit">
+      <h4><span class="tag crit">Live</span> Workers commit to <code>main</code>, staging everything</h4>
+      <p>All five worker recipes run <code>git add -A &amp;&amp; git commit</code> with no branch created. The base prompt's rules — never push to <code>main</code>, never <code>--force</code>, never commit secrets — reach none of them; <code>--force</code> does not appear anywhere in the recipe file. <code>worker-cleanup</code> is both the one told to <code>add -A</code> while deleting things and the only recipe with no secrets rule.</p>
+      <p>Its mandatory safety check then diffs <code>main</code> against the current branch — but nothing ever creates a branch, so in the default case it is diffing <code>main</code> against itself.</p>
+      <p class="prov">defaults.rs:462, 721, 953, 1073, 1253 — verified</p>
+    </div>
+
+    <div class="defect">
+      <h4><span class="tag open">Live</span> <code>AUTODEV.md</code> never reaches a worker</h4>
+      <p>Your global and per-repo instructions are appended inside one function, which the override path skips. I enumerated every injection site to be sure. The file you write to teach AutoDev your conventions is read by the interactive assistant and by none of the agents doing the work.</p>
+      <p class="prov">context.rs:113,131 · engine.rs:208-227 — verified</p>
+    </div>
+
+    <div class="defect">
+      <h4><span class="tag open">Live</span> The UI overstates how long work has waited</h4>
+      <p>A plausible amplifier of your original complaint. The QC queue parses an offset-less timestamp with an RFC3339 parser and falls back to zero, so every review reports an age of 0s and the stalled-review alert can never fire. The frontend has the same bug in the other direction — <code>new Date("2026-09-01 06:23:58")</code> is read as <em>local</em> time, so at UTC+5:30 every age is inflated by five and a half hours. A task assigned a minute ago can read as "6 hours ago".</p>
+      <p class="prov">task_commands.rs:137-141 · AutoDevPanel.tsx:41,51 · agent-reported</p>
+    </div>
+
+    <div class="defect">
+      <h4><span class="tag open">Live</span> "Delegate to Fleet" does not delegate</h4>
+      <p>The annotation modal passes <code>paMode: 'delegate'</code>, and <code>send_message</code> overrides it with the session's stored mode — which is <code>NOT NULL DEFAULT</code>, so it is never empty and the argument is unreachable. The button runs in whatever mode the session already had.</p>
+      <p class="prov">AnnotationModal.tsx:114 · agent_commands.rs:122-127 — verified</p>
+    </div>
+
+    <div class="defect">
+      <h4><span class="tag open">Live</span> <code>spawn_subagent</code> misdescribes its own tool grant</h4>
+      <p>The description tells the model an empty <code>tools</code> list means "MCP tools only". Empty means <strong>unrestricted</strong> — the child inherits the full registry. A model reading its own documentation grants more than it intends.</p>
+      <p class="prov">builtin_tools audit T-30 · agent-reported</p>
+    </div>
+
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>Your notes, one by one</h2>
+  </div>
+
+  <div class="col">
+
+    <div class="note-block">
+      <p class="note-id">Note 1 · shared base prompt</p>
+      <p class="verdict">Workers are differentiated. What is missing is the shared floor, not the specialisation.</p>
+      <p>Each recipe carries a substantial role-specific prompt — 5,443 to 12,483 characters, with genuinely distinct protocols. <code>worker-cleanup</code> has a five-criterion "Demonstrably Unused Standard" and a mandatory functionality check that the base prompt has no equivalent of. A backend worker and a frontend worker do not behave the same.</p>
+      <p>The problem is the mechanism: the recipe is passed as <code>system_prompt_override</code>, and the engine treats an override as a total replacement.</p>
+      <div class="scroller">
+        <table>
+          <thead><tr><th>Agent</th><th>Stable prompt</th><th>Gets AUTODEV.md?</th></tr></thead>
+          <tbody>
+            <tr><td>Interactive assistant</td><td>Base prompt, 7,257 chars</td><td>Yes</td></tr>
+            <tr><td>Fleet worker</td><td><strong>Recipe only</strong></td><td><strong>No</strong></td></tr>
+            <tr><td>Subagent with a prompt</td><td>That prompt only</td><td><strong>No</strong></td></tr>
+            <tr><td>Subagent without one</td><td>Base prompt</td><td>Yes</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>See <strong>D1</strong> and <strong>D2</strong>.</p>
+    </div>
+
+    <div class="note-block">
+      <p class="note-id">Note 1-extra · legacy sweep for P8</p>
+      <p class="verdict">37 proposed tasks, and one ordering constraint that would break the build if missed.</p>
+      <p>The sweep separates two things that share the words "Mode 1 / Mode 2" and must not be conflated. <code>PAMode</code> is <strong>fully live</strong> — it selects the prompt and the tool registry on the interactive path, and should not be swept up. <code>FallbackPolicy</code> is the inert half, and it is the live landmine in the defects above.</p>
+      <div class="callout">
+        <h4>P8 must re-point a gate before it deletes anything</h4>
+        <p><code>TG-P4-31</code> reads the literal <code>let orch_healthy = false</code> out of the runner and <strong>panics</strong> if it is gone. That is deliberate — it forces Mode 2's revival to be a visible decision — but it means the gate has to be rewritten first, or the first deletion commit fails CI for a reason that looks unrelated.</p>
+      </div>
+      <p>Beyond the sidecar itself, the sweep found ~106 lines of shipped in-app documentation describing the Python architecture, a base prompt that contradicts itself on lock files and describes GitHub-Issues coordination that no longer exists, and a dashboard component reporting fabricated 99.8% uptime for a service being deleted. Full task list is in the repo.</p>
+    </div>
+
+    <div class="note-block">
+      <p class="note-id">Note 2 · procedural memory at tool execution</p>
+      <p class="verdict">New capability, not a repair — and your poisoning concern is the right frame.</p>
+      <p>Three risks, all of which have already bitten this codebase: volume, since the fleet makes many calls per tick; injection, since P3-F just closed a hole where recalled memory could author the system prompt; and determinism, since tool behaviour that varies with what the agent remembers breaks replay evidence. See <strong>D5</strong> for the shape I would propose.</p>
+    </div>
+
+    <div class="note-block">
+      <p class="note-id">Note 3 · the fleet</p>
+      <p class="verdict">You were right that the algorithm exists. The deeper problem is that nothing calls it.</p>
+      <p>Fixing the scorer alone would change nothing, because no assignment path consults it. Beyond that, the audit found <strong>four distinct ways a worker goes permanently quiet</strong> while the roster still shows it scheduled: two statuses the cron gate does not match, a transient database error collapsing into the "deleted" branch, a worker stuck in <code>working</code> with no watchdog or heartbeat, and a dispatch slot that leaks on a panic.</p>
+      <p>On the features you named: <strong>epics are complete and unreachable</strong> — model, tools, commands and a UI tab all exist, and no recipe ever creates one, so the panel is permanently empty. <strong>Worker chat works agent-to-agent only when the recipient is already busy</strong>, because an idle worker's tick is short-circuited before it reads its inbox; there is no human-to-worker channel. <strong>ROI does not exist at all</strong> — see <strong>D6</strong>.</p>
+      <p>14 further P4 tasks proposed, plus 11 gaps not covered by any existing task.</p>
+      <p><em>I did not receive the picture you mentioned — if you attach it I will check the capabilities against it directly.</em></p>
+    </div>
+
+    <div class="note-block">
+      <p class="note-id">Note 4 · who does the design work</p>
+      <p class="verdict">Undefined, and the plan's sequencing assumes an answer it never states.</p>
+      <p>See <strong>D3</strong> and <strong>D4</strong>. The contract freezes four verbs and their job semantics but is silent on execution, which is precisely the gap you identified.</p>
+    </div>
+
+    <div class="note-block">
+      <p class="note-id">Note 5 · the tools</p>
+      <p class="verdict">34 findings. Four critical, one of them fixed tonight.</p>
+      <p>Your framing was right — this is where a failure takes everything with it. Beyond <code>edit_file</code> and <code>bash.rs</code>: <code>grep</code>'s byte bound cannot bind when the matches are in one file, <code>list_directory</code> follows symlinks out of the workspace jail, <code>check_file</code> returns success after running nothing when its <code>checks</code> argument is misspelled, and <code>spawn_parallel_subagents</code> reports success when every subagent failed.</p>
+      <p>One agent claim I checked and dropped: <code>propose_memory</code> does clamp its confidence — the gateway does it downstream.</p>
+    </div>
+
+    <div class="note-block">
+      <p class="note-id">Note 6 · the AAE adaptation engine</p>
+      <p class="verdict">The most useful thing it gives us is the record of what did not work.</p>
+      <p>It is not a constraint solve — it generates up to three hand-written seeds per aspect-ratio bucket and picks a winner by counting violations. Two findings matter most for our plan:</p>
+      <p><strong>There is no measured fidelity anywhere in it.</strong> No rasterisation, no comparison — every score is a penalty tally over the boxes the engine just produced. That validates <code>PD2</code> existing as a separate phase, and tells us what it must not become.</p>
+      <p><strong>Its correctness checker is complete and nothing imports it</strong> — an audit marked it resolved by checking that the file existed. Overlap is therefore never actually a violation. That is a shape this repo knows well.</p>
+      <p>Two failures were still open at the end: per-ratio layout templates never existed, so a landscape target came out as a rescaled square; and a brand guideline never reached the layout stage at all, so applying one changed nothing visible. Both map onto phases we have not built yet. 43 candidate tasks extracted, each traced to a file or a quoted finding.</p>
+      <p class="prov">⚠ The three root-level audit reports describe an engine that no longer exists — the real record is in docs/AAEAuditbyRazi/, your own June run.</p>
+    </div>
+
+    <div class="note-block">
+      <p class="note-id">Note 7 · adaptation in AutoDev's UI</p>
+      <p class="verdict">Already planned, in the right rollout, and under-scoped by roughly an order of magnitude.</p>
+      <p>See <strong>D7</strong>.</p>
+    </div>
+
+  </div>
+</section>
+
+<section class="col">
+  <h2>What I changed while you slept</h2>
+  <p>One commit: the <code>edit_file</code> guard, because it destroys files and the fix was unambiguous. Nothing else — no plan edits, no architecture changes. Every proposed task above is waiting on the decisions.</p>
+  <p>The four audit reports are in the repo under <code>docs/restructurization/_verify/</code> so nothing depends on this session surviving.</p>
+</section>
+
+<footer>
+  AutoDev restructure · pre-P8 review · P0–P3 closed at 34% readiness · 611 tests green
+</footer>
+
+</div>
