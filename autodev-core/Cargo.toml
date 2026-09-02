@@ -4,6 +4,19 @@ version = "1.0.0"
 edition = "2021"
 description = "AutoDev's agent runtime, providers, memory and platform layer — shared by the desktop app and the CLI, and free of any UI framework."
 
+[features]
+# The live provider smoke (P2-69). OFF by default and never enabled by the app.
+#
+# Fixture tests are the CI default because they need no credentials -- but a
+# fixture is a photograph: it freezes the vendor wire format at capture time and
+# goes on passing forever, including on the day a field is renamed. This feature
+# gates the only tests that can see that drift, and the only ones that can prove
+# prompt caching engages (usage.cached_read is not observable from the request).
+#
+# It spends real money. Run it deliberately:
+#   cargo test -p autodev-core --features live-smoke --test live_provider_smoke -- --nocapture
+live-smoke = []
+
 [dependencies]
 serde       = { version = "1", features = ["derive"] }
 serde_json  = "1"

@@ -50,18 +50,16 @@ mod tests {
         // The ids in `src/data/models.ts`. If one of these ever returns None,
         // requests for it have nowhere to go.
         for m in [
-            "gemini-3.1-pro",
-            "gemini-3.5-flash",
+            "gemini-3.1-pro-preview",
+            "gemini-3.7-flash",
             "claude-opus-5",
             "claude-sonnet-5",
             "claude-fable-5",
             "claude-haiku-4-5",
             "gpt-5.5",
-            "gpt-5.5-pro",
             "gpt-5.4",
             "gpt-5.4-mini",
             "gpt-5.4-nano",
-            "gpt-5.3-codex",
         ] {
             assert!(provider_for_model(m).is_some(), "{m} does not route");
         }

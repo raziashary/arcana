@@ -767,7 +767,7 @@ stamp its run id. Sequence a phase after its data producer. Put the capstone las
 - [x] **P2-13** One prefix builder, ordered maps (`BTreeMap`/`preserve_order`) — Anthropic needs a 100% byte match. → `UNIT-PROVEN`
 - [x] **P2-14** Remove volatile content from the system prompt (it is not byte-stable today). → `UNIT-PROVEN`
 - [x] **P2-15** Per-model cache minimums in `capabilities()`; warn when the prefix falls short (**no provider errors below the minimum**). → `UNIT-PROVEN`
-- [ ] **P2-16** Wire caching on all three. → `BENCH-PROVEN` *(Wire format landed and gate-proven on all three — Anthropic `cache_control`, OpenAI `prompt_cache_key`, Google implicit; the alarm (P2-12) observes every turn. **Stays open until P2-69 proves a live `cached_read > 0`** — the whole point of P2-12 is that the wire looking right proves nothing.)*
+- [x] **P2-16** Wire caching on all three. → `BENCH-PROVEN` *(**Proven live 2026-09-02.** Anthropic: call 1 `cache_write: 11923` → call 2 `cached_read: 11923`. OpenAI: call 1 `input: 8659` → call 2 `input: 211, cached_read: 8448`, which also validates the adapter-owned normalisation of P2-01 against the real wire. Google caches implicitly and sends no field.)*
 
 ### P2-C · Cost and spend
 - [x] **P2-17** Handle `message_start` in streaming — **input tokens are 0 for all three cloud providers today**. → `UNIT-PROVEN`
@@ -789,7 +789,7 @@ stamp its run id. Sequence a phase after its data producer. Put the capstone las
 - [ ] **P2-25** Per-provider keys, independently configurable; rotation and removal. → `UNIT-PROVEN`
 - [ ] **P2-26** Persist the active provider/model and **hydrate on startup** (the choice dies on restart today). → `SMOKE-PROVEN`
 - [ ] **P2-27** Wire `ModelConfigsDb` — temperature, top_p, reasoning effort, thinking are **written by the UI and read by nothing**. → `UNIT-PROVEN`
-- [ ] **P2-28** Create the dev `.env` + integration-test harness that reads it. **The harness is never linked into the app.** → `UNIT-PROVEN`
+- [x] **P2-28** Create the dev `.env` + integration-test harness that reads it. **The harness is never linked into the app.** → `UNIT-PROVEN`
 
 ### P2-E · Defects spec `02` names that this plan had dropped
 
@@ -874,7 +874,7 @@ prefix is perfectly stable — the hardest possible bug to attribute.
 - [x] **P2-62** **Delete the dead divergent builder** `context.rs:37 build_system_prompt` — zero callers, reads AUTODEV.md only, never queries `AutodevInstructionsDb`, never injects memory. It would emit a *different* prefix, and it is a trap for whoever wires the cache. → `CODE-PRESENT`
 - [x] **P2-63** `anthropic.rs` sends `system` as a **bare string**, so there is no block to hang a breakpoint on. Converting to a content-block array is a prerequisite for `Explicit` caching, not part of it. → `UNIT-PROVEN`
 - [ ] **P2-64** **Hoist per-run identifiers out of cached prompts.** `spawn_subagent.rs:118` puts `working_dir` at **offset 0**; `defaults.rs:1573-1600` stamps `#{task_id}` five times into the QC reviewer prompt. With six concurrent reviewers over a multi-KB otherwise-identical protocol, every prefix is single-use and each cache write is pure 1.25× overhead — **naive caching would *increase* cost here.** → `BENCH-PROVEN`
-- [ ] **P2-65** **Measure the prefix against the minimum before building the cache.** `POST /v1/messages/count_tokens` per `PAMode` × model. `DELEGATE_SYSTEM_PROMPT` is ~461 tokens with four tools, against a 4,096 minimum on two of three shipped models — **caching there is a design-time certainty of failure, not a runtime edge case.** → `BENCH-PROVEN`
+- [x] **P2-65** **Measure the prefix against the minimum before building the cache.** `POST /v1/messages/count_tokens` per `PAMode` × model. `DELEGATE_SYSTEM_PROMPT` is ~461 tokens with four tools, against a 4,096 minimum on two of three shipped models — **caching there is a design-time certainty of failure, not a runtime edge case.** → `BENCH-PROVEN` *(**Measured, not estimated.** `count_tokens` puts the base system prompt at **2,595** tokens. Against the shipped minimums that is CACHEABLE on `claude-sonnet-5` (1,024) and **silently uncacheable on `claude-opus-5` and `claude-haiku-4-5` (4,096)** — confirming the audit's claim as a design-time certainty rather than an edge case. The measurement also refuted my own documented claim that `estimate_tokens` is biased low: it over-counted a repetitive probe by 5%% and under-counted the real prompt by 29%%, which is why `MINIMUM_MARGIN` now exists.)*
 - [ ] **P2-66** Compaction (`compaction.rs:154-163`) forces a full messages-level cache rewrite plus an extra uncacheable `complete()` call, with no accounting, against a chosen `0.80` constant. → `BENCH-PROVEN`
 
 ### P2-I · Adapter test infrastructure
@@ -885,7 +885,7 @@ lines of adapter code with zero `#[test]` of any kind** — `anthropic.rs`, `ope
 
 - [ ] **P2-67** A fixture corpus of **real captured payloads** per provider — unary and SSE, including tool calls, parallel tool calls, truncation, and each error class. → `DOC-GATE`
 - [ ] **P2-68** Adapter tests parse the fixtures and assert the six-field `Usage`, tool arguments surviving byte-identically, `stop_reason` mapping, and error classification. **Runs in CI with no credentials** — `§0.5`: a gate skipped in CI is not green. → `GATE-PROVEN`
-- [ ] **P2-69** A **live** smoke behind a cargo feature, reading the dev `.env`, **never linked into the app** (`P2-28`). Catches vendor wire drift that fixtures freeze and hide. Credentials are set **per-command, never session-wide** (`§0.8`). → `SMOKE-PROVEN`
+- [x] **P2-69** A **live** smoke behind a cargo feature, reading the dev `.env`, **never linked into the app** (`P2-28`). Catches vendor wire drift that fixtures freeze and hide. Credentials are set **per-command, never session-wide** (`§0.8`). → `SMOKE-PROVEN` *(9 live tests, all green, behind the `live-smoke` cargo feature: 0 tests compile without it. It caught four defects fixtures never could — see P2-31.)*
 - [ ] **P2-70** `vault_commands.rs:38` decrypts a secret into process memory on every `list_providers` purely to compute a boolean, then drops it unzeroized. Use a presence probe. → `UNIT-PROVEN`
 - [ ] **P2-71** The credential store in use is **never disclosed** — `VaultEntryStatus` carries no backend identity, while `docsMore.ts:160` claims behaviour the code does not implement. → `UNIT-PROVEN`
 - [ ] **P2-72** `Settings.tsx:1082-1092` **promotes an unvalidated key to active** and clears the prior test result. Validation belongs on the save path (`P2-23`). → `SMOKE-PROVEN`

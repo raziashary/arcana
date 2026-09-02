@@ -80,7 +80,11 @@ pub const CATALOGUE: &[CatalogueEntry] = &[
     // minimum below which the implicit cache does not engage — so `Automatic`
     // carries a minimum rather than claiming to have none.
     CatalogueEntry {
-        id: "gemini-3.1-pro",
+        // ⚠ `-preview` is the ONLY id this model ships under. `gemini-3.1-pro`
+        // returns 404 from Google — caught by the live smoke on its first run,
+        // and by nothing else: a fixture test would have gone on passing
+        // against a captured payload forever.
+        id: "gemini-3.1-pro-preview",
         display_name: "Gemini 3.1 Pro",
         provider: "google",
         context_window: 1_000_000,
@@ -92,15 +96,17 @@ pub const CATALOGUE: &[CatalogueEntry] = &[
         cache: CacheSupport::Automatic { min_tokens: 2_048 },
     },
     CatalogueEntry {
-        id: "gemini-3.5-flash",
-        display_name: "Gemini 3.5 Flash",
+        // razi-ruled 2026-09-02: 3.7 Flash replaces 3.5 Flash — newer, and
+        // half the price at the current published rate.
+        id: "gemini-3.7-flash",
+        display_name: "Gemini 3.7 Flash",
         provider: "google",
         context_window: 1_000_000,
         max_output: 65_536,
         vision: true,
         reasoning: true,
         parallel_tools: true,
-        // Carried from Gemini 2.5 Flash pending P2-65.
+        // Carried from the Gemini 2.5 Flash line pending P2-65.
         cache: CacheSupport::Automatic { min_tokens: 1_024 },
     },
     // ── Anthropic ────────────────────────────────────────────────────────────
@@ -173,17 +179,6 @@ pub const CATALOGUE: &[CatalogueEntry] = &[
         cache: CacheSupport::Automatic { min_tokens: 1_024 },
     },
     CatalogueEntry {
-        id: "gpt-5.5-pro",
-        display_name: "GPT-5.5 Pro",
-        provider: "openai",
-        context_window: 400_000,
-        max_output: 128_000,
-        vision: true,
-        reasoning: true,
-        parallel_tools: true,
-        cache: CacheSupport::Automatic { min_tokens: 1_024 },
-    },
-    CatalogueEntry {
         id: "gpt-5.4",
         display_name: "GPT-5.4",
         provider: "openai",
@@ -216,17 +211,6 @@ pub const CATALOGUE: &[CatalogueEntry] = &[
         parallel_tools: true,
         cache: CacheSupport::Automatic { min_tokens: 1_024 },
     },
-    CatalogueEntry {
-        id: "gpt-5.3-codex",
-        display_name: "GPT-5.3 Codex",
-        provider: "openai",
-        context_window: 400_000,
-        max_output: 128_000,
-        vision: false,
-        reasoning: true,
-        parallel_tools: true,
-        cache: CacheSupport::Automatic { min_tokens: 1_024 },
-    },
 ];
 
 /// Models offered without a verified price.
@@ -237,10 +221,14 @@ pub const CATALOGUE: &[CatalogueEntry] = &[
 /// comment so a test can hold it.
 ///
 /// `cost/pricing.rs` deliberately refuses to invent a rate — a fabricated price
-/// is worse than none, because it looks metered. These two were searched for on
-/// 2026-09-02 and not found at a source worth acting on. **Flagged for Razi:
-/// price them, or stop offering them.**
-pub const UNPRICED: &[&str] = &["gpt-5.5-pro", "gpt-5.3-codex"];
+/// is worse than none, because it looks metered.
+///
+/// **Currently empty, and that is the intended state.** `gpt-5.5-pro` and
+/// `gpt-5.3-codex` sat here on 2026-09-02; razi-ruled the same day to stop
+/// offering them rather than ship a model whose spend the cap cannot see. The
+/// list stays as the mechanism, so the next unpriced model is a declared
+/// decision instead of a silent $0.
+pub const UNPRICED: &[&str] = &[];
 
 /// The catalogue row for `model`, or `None` if the app does not offer it.
 pub fn entry(model: &str) -> Option<&'static CatalogueEntry> {
@@ -369,6 +357,14 @@ mod tests {
             "gemini-2.5-pro",
             "gemini-2.5-flash",
             "gemini-2.0-flash-thinking-exp-01-21",
+            // Never existed at all. It was in the picker and the price table on
+            // 2026-09-02 and Google 404s it — the id is `-preview`.
+            "gemini-3.1-pro",
+            // Superseded by 3.7 Flash by ruling on 2026-09-02.
+            "gemini-3.5-flash",
+            // Removed the same day: offered, unpriced, and therefore uncapped.
+            "gpt-5.5-pro",
+            "gpt-5.3-codex",
         ] {
             assert!(entry(dead).is_none(), "{dead} is retired and must not be offered");
         }
@@ -380,8 +376,8 @@ mod tests {
         // catalogue, and against the stale list it found nothing for
         // `gemini-3.1-pro` and fell back to 200k — compacting at a fifth of the
         // real window while looking fixed.
-        assert_eq!(capabilities_for("gemini-3.1-pro").context_window, 1_000_000);
-        assert_eq!(capabilities_for("gemini-3.5-flash").context_window, 1_000_000);
+        assert_eq!(capabilities_for("gemini-3.1-pro-preview").context_window, 1_000_000);
+        assert_eq!(capabilities_for("gemini-3.7-flash").context_window, 1_000_000);
         // And the fallback it used to hit is still what an UNKNOWN model gets,
         // so this test fails if lookup silently breaks again.
         assert_eq!(capabilities_for("not-a-model").context_window, 200_000);
@@ -413,7 +409,10 @@ mod tests {
     fn each_provider_serves_the_models_it_is_supposed_to() {
         assert_eq!(models_for("google").len(), 2);
         assert_eq!(models_for("anthropic").len(), 4);
-        assert_eq!(models_for("openai").len(), 6);
+        // Four, not six: gpt-5.5-pro and gpt-5.3-codex were removed on
+        // 2026-09-02 because no verified price existed for them, and an
+        // unpriced model runs invisible to the daily spend cap.
+        assert_eq!(models_for("openai").len(), 4);
         assert_eq!(models_for("nonexistent").len(), 0);
         // And every ModelInfo carries a real window, not a zero.
         for p in ["google", "anthropic", "openai"] {

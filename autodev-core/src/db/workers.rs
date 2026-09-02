@@ -96,7 +96,11 @@ impl WorkerStatus {
 /// had to — drifts from the schema the moment either changes, and the drift is
 /// invisible because both produce a valid-looking worker.
 /// `the_default_model_constant_matches_the_schema_default` pins them together.
-pub const DEFAULT_MODEL: &str = "claude-sonnet-4-5";
+// ⚠ Was `claude-sonnet-4-5` until 2026-09-02 — a model RETIRED in February
+// 2026. Every worker created without an explicit model got an id that no
+// provider would answer, and the test below happily confirmed it matched the
+// schema default: two places agreeing on the same dead value (P2-31).
+pub const DEFAULT_MODEL: &str = "claude-sonnet-5";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Worker {
@@ -182,7 +186,7 @@ impl WorkersDb {
                 slug              TEXT NOT NULL UNIQUE,
                 worker_type       TEXT NOT NULL DEFAULT 'custom',
                 status            TEXT NOT NULL DEFAULT 'created',
-                model             TEXT NOT NULL DEFAULT 'claude-sonnet-4-5',
+                model             TEXT NOT NULL DEFAULT 'claude-sonnet-5',
                 primary_repos     TEXT NOT NULL DEFAULT '[]',
                 polling_interval  INTEGER NOT NULL DEFAULT 120,
                 recipe_id         TEXT,
@@ -280,6 +284,27 @@ impl WorkersDb {
             UPDATE workers SET model = 'claude-haiku-4-5'  WHERE model = 'claude-4-5-haiku';
             UPDATE workers SET model = 'claude-sonnet-4-5' WHERE model = 'claude-4-5-sonnet';
             UPDATE workers SET model = 'claude-opus-4-5'   WHERE model = 'claude-4-5-opus';
+
+            -- 2026-09-02 (P2-31). The two above are now themselves RETIRED —
+            -- Anthropic withdrew the 4.5 Opus and Sonnet ids, so any worker
+            -- still carrying one has a model no provider will answer. This is
+            -- the same rename this function already does, one generation on.
+            --
+            -- Haiku 4.5 is deliberately NOT renamed: it is still current and
+            -- still in the catalogue.
+            UPDATE workers SET model = 'claude-sonnet-5' WHERE model = 'claude-sonnet-4-5';
+            UPDATE workers SET model = 'claude-opus-5'   WHERE model = 'claude-opus-4-5';
+
+            -- Google renamed and superseded on the same day: `gemini-3.1-pro`
+            -- never existed as a callable id (Google 404s it; the real one
+            -- carries `-preview`), and 3.5 Flash was superseded by 3.7.
+            UPDATE workers SET model = 'gemini-3.1-pro-preview' WHERE model = 'gemini-3.1-pro';
+            UPDATE workers SET model = 'gemini-3.7-flash'       WHERE model = 'gemini-3.5-flash';
+
+            -- Removed for having no verified price, so no worker may sit on
+            -- one: an unpriced model bills $0 and runs invisible to the cap.
+            UPDATE workers SET model = 'gpt-5.5' WHERE model = 'gpt-5.5-pro';
+            UPDATE workers SET model = 'gpt-5.4' WHERE model = 'gpt-5.3-codex';
         "#,
             )
             .map_err(|e| AutoDevError::Agent(format!("migrate_model_names: {e}")))?;
@@ -303,7 +328,7 @@ impl WorkersDb {
                 "Supervisor",
                 "supervisor",
                 "supervisor",
-                "claude-opus-4-5",
+                "claude-opus-5",
                 120,
                 true,
                 "Polls the task board, assigns tasks to workers.",
@@ -329,7 +354,7 @@ impl WorkersDb {
                 "Worker Backend",
                 "worker-backend",
                 "backend",
-                "claude-sonnet-4-5",
+                "claude-sonnet-5",
                 120,
                 false,
                 "Implements backend tasks (Python / Rust).",
@@ -339,7 +364,7 @@ impl WorkersDb {
                 "Worker Frontend",
                 "worker-frontend",
                 "frontend",
-                "claude-sonnet-4-5",
+                "claude-sonnet-5",
                 120,
                 false,
                 "Implements frontend tasks (React / TypeScript).",
@@ -349,7 +374,7 @@ impl WorkersDb {
                 "Worker Platform",
                 "worker-platform",
                 "platform",
-                "claude-sonnet-4-5",
+                "claude-sonnet-5",
                 120,
                 false,
                 "Infrastructure, CI/CD, and DevOps tasks.",
@@ -359,7 +384,7 @@ impl WorkersDb {
                 "Worker MCP",
                 "worker-mcp",
                 "mcp",
-                "claude-opus-4-5",
+                "claude-opus-5",
                 120,
                 false,
                 "Builds and maintains MCP server extensions.",
@@ -642,7 +667,7 @@ mod tests {
                      name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE,
                      worker_type TEXT NOT NULL DEFAULT 'custom',
                      status TEXT NOT NULL DEFAULT 'created',
-                     model TEXT NOT NULL DEFAULT 'claude-sonnet-4-5',
+                     model TEXT NOT NULL DEFAULT 'claude-sonnet-5',
                      primary_repos TEXT NOT NULL DEFAULT '[]',
                      polling_interval INTEGER NOT NULL DEFAULT 120,
                      recipe_id TEXT, is_system_defined INTEGER NOT NULL DEFAULT 0,

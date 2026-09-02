@@ -34,11 +34,18 @@ export const MODEL_GROUPS: readonly ModelGroup[] = [
   {
     provider: 'google',
     label: 'Google Gemini',
-    // ⚠ 3.1 Pro, not 3.5 Pro. 3.5 Pro was announced at I/O 2026 for a June
-    // release that never shipped and was delayed indefinitely; it was in this
-    // list until 2026-09-02 as a primary option, so a user could select a
-    // model that cannot be called (razi-ruled: use 3.1 Pro).
-    models: ['gemini-3.1-pro', 'gemini-3.5-flash'],
+    // ⚠ Two corrections live here, both from selecting models that cannot be
+    // called.
+    //
+    // 3.5 Pro was announced at I/O 2026 for a June release that never shipped
+    // and was delayed indefinitely, yet sat here as a primary option
+    // (razi-ruled: use 3.1 Pro). Then the live smoke got a 404 for `gemini-3.1-pro`
+    // too — the id it actually ships under is `gemini-3.1-pro-preview`, and
+    // no fixture test could have found that.
+    //
+    // Fast model is 3.7 Flash as of 2026-09-02 (razi-ruled): newer than 3.5
+    // Flash and half the price at the current published rate.
+    models: ['gemini-3.1-pro-preview', 'gemini-3.7-flash'],
   },
   {
     provider: 'anthropic',
@@ -48,14 +55,11 @@ export const MODEL_GROUPS: readonly ModelGroup[] = [
   {
     provider: 'openai',
     label: 'OpenAI GPT',
-    models: [
-      'gpt-5.5',
-      'gpt-5.5-pro',
-      'gpt-5.4',
-      'gpt-5.4-mini',
-      'gpt-5.4-nano',
-      'gpt-5.3-codex',
-    ],
+    // gpt-5.5-pro and gpt-5.3-codex were removed on 2026-09-02 (razi-ruled).
+    // No verified price could be found for either, and an unpriced model bills
+    // at $0 — which makes its spend invisible to the daily cap and lets it run
+    // uncapped. They return when a price does.
+    models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano'],
   },
 ] as const
 

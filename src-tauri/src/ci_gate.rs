@@ -1100,7 +1100,25 @@ let x = 1;
         };
 
         let mut offered: Vec<String> = Vec::new();
-        for token in block.split('\'').skip(1).step_by(2) {
+        // Strip `//` comments BEFORE pairing quotes.
+        //
+        // The model ids are code; the prose around them is not. One apostrophe
+        // in a comment shifts every subsequent quote pair by one, so the scan
+        // reads the GAPS between ids rather than the ids themselves. That
+        // happened on 2026-09-02 while editing this very list — a comment
+        // containing "404" plus an apostrophe plus "d" — and the floor
+        // assertion below is what caught it: the gate found 0 models and said
+        // so, rather than finding a plausible subset and passing.
+        let code_only: String = block
+            .lines()
+            .map(|l| match l.find("//") {
+                Some(j) => &l[..j],
+                None => l,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for token in code_only.split('\'').skip(1).step_by(2) {
             let has_digit = token.chars().any(|c| c.is_ascii_digit());
             let has_sep = token.contains('-') || token.contains('.');
             if has_digit && has_sep && !token.contains(' ') {

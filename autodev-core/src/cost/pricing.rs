@@ -43,6 +43,19 @@ pub struct ModelPrice {
     /// Some models change rate above a context threshold — Google Pro's 200k
     /// cliff. `None` means one flat rate at every context length.
     pub tier: Option<PriceTier>,
+    /// The date this price is published to change, as `YYYY-MM-DD`.
+    ///
+    /// ⚠ Some vendors publish a **scheduled** price change rather than a
+    /// silent one — `gemini-3.7-flash` is listed at an introductory rate that
+    /// exactly doubles on 2027-01-01. A table with no notion of that keeps
+    /// billing the old rate afterwards and under-reports spend by 2x, which
+    /// under a live spend cap means the cap enforces against a number that is
+    /// half the truth.
+    ///
+    /// `a_scheduled_price_change_has_not_silently_passed` fails the build the
+    /// day one of these dates arrives, so the change is caught by a test rather
+    /// than by an invoice.
+    pub changes_on: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -73,29 +86,47 @@ pub struct PriceTier {
 ///   delayed indefinitely, yet it sat in `models.ts` as a primary option — a
 ///   model a user could select and never reach. Replaced by `gemini-3.1-pro`,
 ///   which is real, priced, and tiered.
-/// - `gpt-5.5-pro` and `gpt-5.3-codex` — not found in this pass at a source I
-///   would act on. Absent rather than guessed.
+/// - ~~`gpt-5.5-pro`, `gpt-5.3-codex`~~ → **RESOLVED 2026-09-02, razi-ruled:
+///   stop offering them.** No price was found at a source worth acting on, and
+///   an unpriced model bills at $0 — invisible to the daily cap, so it runs
+///   uncapped. Removed from the catalogue and the picker rather than shipped
+///   unmeterable. They come back when a verified price does.
 ///
-/// **One unresolved conflict, recorded rather than resolved by preference:**
-/// `gemini-3.5-flash` is quoted at **$1.50 / $9.00** by one source and
-/// **$0.750 / $4.50** by another — exactly 2×. The higher figure is used here
-/// because over-reporting a cost is the safer error under a spend cap, and the
-/// discrepancy is flagged for Razi. It matters more than most: this is
-/// `DEFAULT_MODEL`.
+/// **That conflict is now RESOLVED (2026-09-02).** `gemini-3.5-flash` was
+/// quoted at both **$1.50 / $9.00** and **$0.750 / $4.50** — exactly 2×, which
+/// looked like one source being wrong. Google's own pricing page shows both are
+/// correct and describe different things: $1.50/$9.00 is the standard rate and
+/// $0.75/$4.50 is the **Batch/Flex** tier, a published 50% discount. Choosing
+/// the higher figure was right, and for the right reason. Recorded because "two
+/// sources disagree by exactly 2×" turned out to mean "we are reading two
+/// different products", which is worth recognising faster next time.
 const PRICES: &[(&str, ModelPrice)] = &[
     // Google — verified 2026-09-02. Cached read is a 90% discount on input.
     (
-        "gemini-3.5-flash",
+        // razi-ruled 2026-09-02: the fast model moves from 3.5-flash to
+        // 3.7-flash, which is both newer and cheaper.
+        //
+        // ⚠ INTRODUCTORY RATE. Google publishes $0.75/$3.75 "through December
+        // 31, 2026" and $1.50/$7.50 from January 1, 2027 — an exact doubling on
+        // a known date. `changes_on` makes that fail a test rather than quietly
+        // halve every cost report in the new year.
+        "gemini-3.7-flash",
         ModelPrice {
-            input: 1.50,
-            output: 9.00,
-            cached_read: 0.15,
-            cache_write: 0.08333,
+            input: 0.75,
+            output: 3.75,
+            cached_read: 0.075,
+            cache_write: 0.04167,
             tier: None,
+            changes_on: Some("2027-01-01"),
         },
     ),
     (
-        "gemini-3.1-pro",
+        // ⚠ `-preview` is not a variant of this model, it is the ONLY id it
+        // ships under. A live call to `gemini-3.1-pro` returns 404 from
+        // Google: "models/gemini-3.1-pro is not found for API version v1beta".
+        // The bare id was in this table and in the picker for a day, and no
+        // fixture test could have caught it — only the live smoke did.
+        "gemini-3.1-pro-preview",
         ModelPrice {
             // Verified 2026-09-02. The first model on offer with a real price
             // cliff, which is what `P2-20` exists for: above 200k tokens Google
@@ -110,6 +141,7 @@ const PRICES: &[(&str, ModelPrice)] = &[
                 output: 18.00,
                 cached_read: 0.40,
             }),
+            changes_on: None,
         },
     ),
     // Anthropic — verified 2026-09-02.
@@ -123,6 +155,7 @@ const PRICES: &[(&str, ModelPrice)] = &[
             // pricing arrives with `CachePolicy::Explicit` in P2-B.
             cache_write: 6.25,
             tier: None,
+            changes_on: None,
         },
     ),
     (
@@ -135,6 +168,7 @@ const PRICES: &[(&str, ModelPrice)] = &[
             cached_read: 0.10,
             cache_write: 1.25,
             tier: None,
+            changes_on: None,
         },
     ),
     (
@@ -148,6 +182,7 @@ const PRICES: &[(&str, ModelPrice)] = &[
             cached_read: 1.00,
             cache_write: 12.50,
             tier: None,
+            changes_on: None,
         },
     ),
     // OpenAI — verified 2026-09-02. Every model carries a 90% cached-input
@@ -160,6 +195,7 @@ const PRICES: &[(&str, ModelPrice)] = &[
             cached_read: 0.50,
             cache_write: 0.0,
             tier: None,
+            changes_on: None,
         },
     ),
     (
@@ -170,6 +206,7 @@ const PRICES: &[(&str, ModelPrice)] = &[
             cached_read: 0.25,
             cache_write: 0.0,
             tier: None,
+            changes_on: None,
         },
     ),
     (
@@ -180,6 +217,7 @@ const PRICES: &[(&str, ModelPrice)] = &[
             cached_read: 0.075,
             cache_write: 0.0,
             tier: None,
+            changes_on: None,
         },
     ),
     (
@@ -190,6 +228,7 @@ const PRICES: &[(&str, ModelPrice)] = &[
             cached_read: 0.02,
             cache_write: 0.0,
             tier: None,
+            changes_on: None,
         },
     ),
     (
@@ -203,6 +242,7 @@ const PRICES: &[(&str, ModelPrice)] = &[
             cached_read: 0.20,
             cache_write: 2.50,
             tier: None,
+            changes_on: None,
         },
     ),
 ];
@@ -316,9 +356,9 @@ mod tests {
     #[test]
     fn reasoning_tokens_are_billed_at_the_output_rate() {
         let mut u = usage(0, 0, 0, 1_000_000);
-        let plain = cost_usd("gemini-3.5-flash", &u).unwrap();
+        let plain = cost_usd("gemini-3.7-flash", &u).unwrap();
         u.reasoning = 1_000_000;
-        let with_thinking = cost_usd("gemini-3.5-flash", &u).unwrap();
+        let with_thinking = cost_usd("gemini-3.7-flash", &u).unwrap();
         assert!((with_thinking - plain * 2.0).abs() < 1e-9);
     }
 
@@ -326,16 +366,16 @@ mod tests {
     fn gemini_pro_crosses_its_real_200k_cliff() {
         // The first shipped model with a genuine price cliff. Below 200k it is
         // $2/$12; above, Google charges 2x input, 1.5x output and 2x cached.
-        let below = cost_usd("gemini-3.1-pro", &usage(100_000, 0, 0, 0)).unwrap();
+        let below = cost_usd("gemini-3.1-pro-preview", &usage(100_000, 0, 0, 0)).unwrap();
         assert!((below - 0.20).abs() < 1e-9, "100k at $2/1M = $0.20");
 
-        let above = cost_usd("gemini-3.1-pro", &usage(300_000, 0, 0, 0)).unwrap();
+        let above = cost_usd("gemini-3.1-pro-preview", &usage(300_000, 0, 0, 0)).unwrap();
         assert!((above - 1.20).abs() < 1e-9, "300k at $4/1M = $1.20");
 
         // The doubling is real, not a rounding artifact: the same token count
         // priced at both rates differs by exactly 2x.
-        let at_low = cost_usd("gemini-3.1-pro", &usage(200_000, 0, 0, 0)).unwrap();
-        let at_high = cost_usd("gemini-3.1-pro", &usage(200_001, 0, 0, 0)).unwrap();
+        let at_low = cost_usd("gemini-3.1-pro-preview", &usage(200_000, 0, 0, 0)).unwrap();
+        let at_high = cost_usd("gemini-3.1-pro-preview", &usage(200_001, 0, 0, 0)).unwrap();
         assert!(at_high > at_low * 1.9, "crossing the cliff must roughly double");
     }
 
@@ -345,8 +385,8 @@ mod tests {
         // and output rises only 1.5x. A tier carrying input and output alone
         // would have under-billed every cached token above the cliff -- and a
         // long context is mostly cached tokens, so that is where the money is.
-        let below = cost_usd("gemini-3.1-pro", &usage(0, 100_000, 0, 0)).unwrap();
-        let above = cost_usd("gemini-3.1-pro", &usage(0, 300_000, 0, 0)).unwrap();
+        let below = cost_usd("gemini-3.1-pro-preview", &usage(0, 100_000, 0, 0)).unwrap();
+        let above = cost_usd("gemini-3.1-pro-preview", &usage(0, 300_000, 0, 0)).unwrap();
         assert!((below - 0.02).abs() < 1e-9, "100k cached at $0.20/1M");
         assert!((above - 0.12).abs() < 1e-9, "300k cached at $0.40/1M");
     }
@@ -367,6 +407,7 @@ mod tests {
                 output: 4.0,
                 cached_read: 0.2,
             }),
+            changes_on: None,
         };
         let below = Usage {
             input: 100_000,
@@ -410,6 +451,36 @@ mod tests {
             assert!(
                 m.starts_with("gemini-") || m.starts_with("claude-") || m.starts_with("gpt-"),
                 "{m} is not from a supported provider"
+            );
+        }
+    }
+    #[test]
+    fn a_scheduled_price_change_has_not_silently_passed() {
+        // Some vendors publish a price change on a known future date rather
+        // than changing it silently. `gemini-3.7-flash` is listed at an
+        // introductory rate that EXACTLY DOUBLES on 2027-01-01.
+        //
+        // Without this, the table would keep billing the old rate afterwards
+        // and under-report spend by 2x — and the daily cap would enforce
+        // against a number that is half the truth, which is the same class of
+        // hole as an unpriced model, just on a timer.
+        //
+        // When this fails: look up the new rate, update the entry, and either
+        // clear `changes_on` or set the next published date.
+        let today = chrono::Utc::now().date_naive();
+        for (model, price) in PRICES {
+            let Some(date) = price.changes_on else {
+                continue;
+            };
+            let change = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+                .unwrap_or_else(|e| panic!("{model} has an unparseable changes_on {date:?}: {e}"));
+            assert!(
+                today < change,
+                "{model}'s published price changed on {date} and this table still \
+                 carries the old rate (${:.2} in / ${:.2} out). Every cost report and \
+                 the daily spend cap are now wrong for this model.",
+                price.input,
+                price.output
             );
         }
     }

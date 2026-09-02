@@ -48,12 +48,21 @@ pub struct CachePrefix {
     pub hash: u64,
     /// Estimated token count of `stable`.
     ///
-    /// ⚠ **An estimate, not a measurement.** `P2-65` replaces this with
-    /// `count_tokens` per model. It is deliberately biased LOW (see
-    /// `estimate_tokens`) so that a prefix near the boundary is reported as
-    /// below the minimum rather than above it: a false "below" produces a
-    /// warning, while a false "above" makes the monitor expect a cache hit
-    /// that was never possible and raise a false alarm.
+    /// ⚠ **An estimate, not a measurement, and its error runs BOTH ways.**
+    ///
+    /// This was documented as "deliberately biased low" until 2026-09-02. That
+    /// was wrong, and the live smoke measured it wrong: a probe prompt built to
+    /// an estimated 4,296 tokens measured **4,087** against Anthropic's
+    /// `count_tokens` — an over-estimate of 5%. Four characters per token
+    /// under-counts dense prose and over-counts repetitive text, which
+    /// tokenises far more efficiently than its length suggests. The base system
+    /// prompt goes the other way: estimated 1,839, measured 2,595.
+    ///
+    /// The over-estimate is the harmful direction: it tells the monitor a
+    /// prefix cleared the minimum when the provider silently declined it, and
+    /// the monitor then reports a `SilentMiss` with no fault behind it. A
+    /// muted alarm is worse than no alarm, so `will_cache` applies
+    /// [`MINIMUM_MARGIN`] rather than trusting this number at the boundary.
     pub estimated_tokens: u32,
 }
 
@@ -106,14 +115,31 @@ pub fn build(
     }
 }
 
+/// How far above a model's minimum a prefix must estimate before we will
+/// claim it caches.
+///
+/// `estimate_tokens` is accurate to roughly ±10% and errs in both directions
+/// (measured 2026-09-02: −29% on the base system prompt, +5% on a repetitive
+/// probe). Without a margin, any prefix within that band of the minimum is a
+/// coin flip between "cached" and "silently declined" — and the losing side of
+/// that flip is a false alarm from the one instrument that is supposed to be
+/// trustworthy.
+///
+/// 1.2 covers the measured error with room to spare. The cost of the margin is
+/// that a prefix between 1.0x and 1.2x of the minimum caches without us
+/// claiming it does, which loses a little money quietly. The cost of NOT having
+/// it is a monitor nobody believes.
+pub const MINIMUM_MARGIN: f64 = 1.2;
+
 /// Rough token count for a string.
 ///
 /// Four characters per token is the usual approximation for English and code.
-/// It is used **only** to decide whether a prefix clears a model's minimum, and
-/// it rounds DOWN: `P2-65` measures this properly with `count_tokens`, and
-/// until then an under-estimate is the error that fails safe. Over-estimating
-/// would tell the monitor to expect a cache hit on a prefix the provider
-/// silently declined, producing an alarm with no fault behind it.
+///
+/// ⚠ **It is not a bound in either direction.** It under-counts dense prose and
+/// over-counts repetitive text; both were measured against Anthropic's
+/// `count_tokens` on 2026-09-02. Callers deciding whether a prefix will cache
+/// must go through [`will_cache`], which applies [`MINIMUM_MARGIN`]. `P2-65`
+/// replaces this with a real measurement.
 pub fn estimate_tokens(s: &str) -> u32 {
     (s.len() / 4) as u32
 }
@@ -129,11 +155,18 @@ pub fn will_cache(prefix: &CachePrefix, caps: &ModelCapabilities, model: &str) -
         return false;
     };
 
-    if prefix.estimated_tokens < minimum {
+    // The margin, not the bare minimum — see `MINIMUM_MARGIN`. Comparing
+    // directly against `minimum` would let a ±10% estimate decide, and the
+    // losing side of that is a false alarm from the cache monitor.
+    let required = (minimum as f64 * MINIMUM_MARGIN) as u32;
+
+    if prefix.estimated_tokens < required {
         warn!(
-            "Prompt caching will NOT engage for {model}: the cacheable prefix is about \
-             {} tokens against a {minimum}-token minimum. The provider returns no error \
-             for this — the request will simply cost full price every time.",
+            "Prompt caching will NOT be requested for {model}: the cacheable prefix is \
+             about {} tokens against a {minimum}-token minimum ({required} with the \
+             estimator margin). The provider returns no error below its minimum — the \
+             request would simply cost full price every time, plus a cache-write \
+             surcharge for the attempt.",
             prefix.estimated_tokens
         );
         return false;
@@ -254,13 +287,33 @@ mod tests {
     }
 
     #[test]
-    fn the_token_estimate_rounds_down() {
-        // Stated as a property because the direction of the error matters: an
-        // over-estimate makes the monitor expect a hit that was never possible
-        // and raise an alarm with no fault behind it.
+    fn the_token_estimate_is_four_chars_per_token() {
         assert_eq!(estimate_tokens(""), 0);
         assert_eq!(estimate_tokens("abc"), 0);
         assert_eq!(estimate_tokens("abcd"), 1);
         assert_eq!(estimate_tokens("abcdefg"), 1);
+    }
+
+    #[test]
+    fn a_prefix_inside_the_estimator_error_band_is_not_claimed_to_cache() {
+        // The correction of 2026-09-02. The estimate was documented as biased
+        // low; it is not — the live smoke measured it 5% HIGH on repetitive
+        // text and 29% LOW on the base prompt. So a prefix that merely clears
+        // the bare minimum on the estimate might not clear it in reality, and
+        // claiming otherwise makes the cache monitor raise an alarm with no
+        // fault behind it.
+        let c = caps(1_000);
+
+        // Just over the raw minimum, inside the error band → not claimed.
+        let borderline = build(&[], &"x".repeat(4_200), &[], &[]);
+        assert!(borderline.estimated_tokens > 1_000, "clears the bare minimum");
+        assert!(
+            !will_cache(&borderline, &c, "m"),
+            "must not claim a cache when the estimate could be wrong by more than the headroom"
+        );
+
+        // Comfortably above → claimed.
+        let ample = build(&[], &"x".repeat(8_000), &[], &[]);
+        assert!(will_cache(&ample, &c, "m"));
     }
 }
