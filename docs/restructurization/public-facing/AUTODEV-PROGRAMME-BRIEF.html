@@ -457,7 +457,17 @@
     </ul>
     <p>None of these failed to compile, and none failed a test. They are the reason the live check now runs at every phase closeout.</p>
 
-    <p>P1 built 22 tasks in 2 hours 50 minutes; its audit and the resulting fixes took a further 3 hours 30 minutes. P2 grew from 27 tasks to 74 as its pre-build audit and the live testing surfaced work that had not been visible when the phase was planned. The estimates above carry that cost rather than omitting it.</p>
+    <h3>What the mandatory audit found after that</h3>
+    <p>Every phase closes with an independent review by people &mdash; here, agents &mdash; who have not seen the reasoning behind the work. P2 passed its own tests first: 74 tasks, 12 smoke checks, 11 automated guards, all green. The audit then found four defects that would each have reached users:</p>
+    <ul>
+      <li><strong>Every streamed conversation with Anthropic was billed at double its real cost.</strong> The provider reports usage cumulatively and repeats it across two messages; we were adding both. Settled by capturing the raw network traffic, because two comments in our own code claimed opposite things.</li>
+      <li><strong>The application carried API keys in its process environment</strong>, where any command the AI itself chose to run could read them.</li>
+      <li><strong>The daily spending limit recorded nothing on the runs that spent most</strong> &mdash; including, precisely, the runs that stopped because they ran out of budget.</li>
+      <li><strong>Keys for the primary provider could not be saved at all</strong>, because the check that validates a key pointed at a model that had been withdrawn.</li>
+    </ul>
+    <p>None of them failed to compile. None of them failed a test. Three were inside code written to prevent exactly that kind of failure. Sixteen findings were fixed and locked behind new automated guards; six are recorded as open with the reason stated rather than quietly closed.</p>
+
+    <p>P1 built 22 tasks in 2 hours 50 minutes; its audit and the resulting fixes took a further 3 hours 30 minutes. P2 grew from 27 tasks to 74 as its pre-build audit and live testing surfaced work that had not been visible when the phase was planned, and its own audit added roughly a third again. The estimates above carry that cost rather than omitting it &mdash; it is the reason the figures are worth reading.</p>
   </section>
 
   <section class="col">
