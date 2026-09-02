@@ -18,6 +18,13 @@ pub struct SpawnSubagentTool;
 
 #[async_trait]
 impl Tool for SpawnSubagentTool {
+    // `Network`: a subagent makes provider calls with the user's key and
+    // then acts autonomously. Spawning one is a larger commitment than any
+    // single file write.
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Network
+    }
+
     fn name(&self) -> &str {
         "spawn_subagent"
     }
@@ -70,9 +77,6 @@ impl Tool for SpawnSubagentTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        false
-    }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let task_description = match input.get("task_description").and_then(|v| v.as_str()) {

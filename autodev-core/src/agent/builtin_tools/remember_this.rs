@@ -17,6 +17,14 @@ pub struct RememberThisTool;
 
 #[async_trait]
 impl Tool for RememberThisTool {
+    // `Board`: it writes durable state that other runs read back. Neither
+    // `Write` (the workspace) nor `Read` fits memory exactly — and this tool is
+    // removed entirely in `P3-39`, so it gets the fail-safe of the two rather
+    // than a new variant invented for something scheduled for deletion.
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Board
+    }
+
     fn name(&self) -> &str {
         "remember_this"
     }

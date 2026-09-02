@@ -12,6 +12,10 @@ pub struct WriteFileTool;
 
 #[async_trait]
 impl Tool for WriteFileTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Write
+    }
+
     fn name(&self) -> &str {
         "write_file"
     }
@@ -47,12 +51,6 @@ impl Tool for WriteFileTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        false
-    }
-    fn requires_permission(&self) -> bool {
-        true
-    }
 
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         let path_str = match input["path"].as_str() {

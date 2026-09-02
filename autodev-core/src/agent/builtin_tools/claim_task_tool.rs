@@ -13,6 +13,10 @@ pub struct ClaimTaskTool;
 
 #[async_trait]
 impl Tool for ClaimTaskTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Board
+    }
+
     fn name(&self) -> &str {
         "claim_task"
     }
@@ -37,9 +41,6 @@ impl Tool for ClaimTaskTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        false
-    }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let task_id = match input["task_id"].as_i64() {

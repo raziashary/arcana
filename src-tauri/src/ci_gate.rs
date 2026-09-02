@@ -808,9 +808,18 @@ let x = 1;
             }
         }
 
+        // ⚠ P3-67. This asserted `total >= 3`, sized to the executor's structure
+        // at the time rather than to the invariant — so `P3-10` (collapse to one
+        // execution path) would have **failed this gate by succeeding**. The
+        // message even anticipated it: *"has the executor been restructured?"*
+        //
+        // The invariant is *every execute site redacts, and at least one
+        // exists*. A floor of one keeps the gate from passing vacuously if the
+        // scan is ever re-pointed at the wrong file; it does not encode how many
+        // paths there happen to be. (`L-C6`.)
         assert!(
-            total >= 3,
-            "expected at least 3 tool.execute call sites, found {total} — has the executor been restructured? This gate must be re-pointed if so."
+            total >= 1,
+            "found no tool.execute call sites at all — this gate is scanning the wrong              file, so its green result means nothing"
         );
         assert!(
             unwrapped.is_empty(),
@@ -1358,6 +1367,166 @@ let x = 1;
             bare_clears <= 2,
             "found {bare_clears} sites clearing is_running; expected the Drop guard plus \
              at most the early-return path"
+        );
+    }
+
+    // ── TG-P3-11 · exactly one permission gate, keyed on ToolEffect ───────────
+
+    /// Every tool passes **exactly one** permission check, and `is_read_only`
+    /// gates nothing.
+    ///
+    /// ── The defect ───────────────────────────────────────────────────────────
+    ///
+    /// There were two divergent gates and one missing one. `execute()` matched
+    /// on the mode and used `is_read_only()` — a **concurrency hint** — as the
+    /// auto-approval key. The write partition of `execute_batch()` matched
+    /// differently. And the **read partition had no permission code at all**,
+    /// running under `// Execute (read-only always approved)` after cloning
+    /// `self.mode` and `self.always_allow` and binding them as `_mode` /
+    /// `_always_allow` to silence the unused warning.
+    ///
+    /// `execute_batch` is the only path the agent loop calls. So
+    /// `is_read_only() -> true` was an unconditional bypass of every permission
+    /// mode — and `check_file` declared it while executing binaries resolved
+    /// from inside the workspace under inspection.
+    #[test]
+    fn tg_p3_11_one_permission_gate_keyed_on_effect() {
+        let src = read_source(&repo_root().join("autodev-core/src/agent/tool_executor.rs"));
+
+        // Exactly one function may decide permission.
+        let gate_definitions = src.matches("async fn check_permission(").count();
+        assert_eq!(
+            gate_definitions, 1,
+            "expected exactly one permission gate, found {gate_definitions}"
+        );
+
+        // `is_read_only` must not appear in the executor **at all**.
+        //
+        // ⚠ The first version asked whether `is_read_only` appeared on a line
+        // that *also* mentioned `approved`, `request_permission` or
+        // `always_allow` — the shape the old code happened to have.
+        // Falsification exposed it at once: planting
+        // `if tool.is_read_only() || !tool.effect().requires_prompt(..)` back
+        // into the gate **passed**, because that line mentions none of those
+        // words. A check written from the defect's old shape rather than from
+        // the invariant is `L-C6`, and this was its seventh instance — written
+        // an hour after recording the sixth.
+        //
+        // The invariant is simply that the executor never consults it: the
+        // partition asks `effect().is_concurrency_safe()` and prompting asks
+        // `effect().requires_prompt()`. Zero occurrences, so a planted one
+        // fails however the line is written.
+        let offenders: Vec<String> = src
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| {
+                let code = l.split("//").next().unwrap_or("");
+                code.contains("is_read_only")
+            })
+            .map(|(n, l)| format!("{}: {}", n + 1, l.trim()))
+            .collect();
+
+        assert!(
+            offenders.is_empty(),
+            "tool_executor.rs still consults `is_read_only`. It is a concurrency hint, and \
+             using it here is how a flag became a security control — ask `effect()` \
+             instead:\n{}",
+            offenders.join("\n")
+        );
+
+        // The read partition must not run anything the gate has not seen.
+        //
+        // ⚠ Scanned with comments stripped. The first version matched the
+        // phrase anywhere in the file — and the docstring that *explains* the
+        // defect quotes it, so the gate flagged the documentation of the fix.
+        // Same shape as the apostrophe that broke `TG-P2-02`: prose describing
+        // a defect is not the defect.
+        let code_only: String = src
+            .lines()
+            .map(|l| match l.find("//") {
+                Some(i) => &l[..i],
+                None => l,
+            })
+            .collect::<Vec<_>>()
+            .join("
+");
+
+        assert!(
+            !code_only.contains("read-only always approved"),
+            "the read partition still executes without a permission check"
+        );
+
+        // And the decision must be reached before the partition, so a
+        // concurrency-safe tool cannot skip it.
+        let gate_at = src.find("self.check_permission(").expect("the gate must be called");
+        let partition_at = src
+            .find("Partition the approved calls")
+            .expect("the partition comment must exist");
+        assert!(
+            gate_at < partition_at,
+            "permission is decided after the partition, so the concurrent path can run \
+             tools the gate never saw"
+        );
+    }
+
+    // ── TG-P3-56 · a tool that leaves the machine declares it ─────────────────
+
+    /// Every tool declares a `ToolEffect`, and the ones that send data off the
+    /// machine declare `Network`.
+    ///
+    /// `analyze_diff` uploaded the full diff of any repository to a third-party
+    /// LLM while declaring `is_read_only = true`, so it was never prompted in
+    /// any mode. Under BYOK that is the user's own code on the user's own key.
+    #[test]
+    fn tg_p3_56_tools_that_leave_the_machine_declare_network() {
+        let dir = repo_root().join("autodev-core/src/agent/builtin_tools");
+
+        let mut declared = 0usize;
+        let mut missing = Vec::new();
+
+        for entry in std::fs::read_dir(&dir).expect("builtin_tools").flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let text = read_source(&path);
+            if !text.contains("impl Tool for") {
+                continue;
+            }
+            let name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("").to_string();
+
+            if text.contains("fn effect(") {
+                declared += 1;
+            } else {
+                missing.push(name.clone());
+            }
+
+            // The two that were mislabelled, pinned by name so a future edit
+            // cannot quietly return them to Read.
+            if name == "analyze_diff_tool" {
+                assert!(
+                    text.contains("ToolEffect::Network"),
+                    "analyze_diff uploads the repository diff to a third-party LLM; it must \
+                     declare Network"
+                );
+            }
+            if name == "check_file" {
+                assert!(
+                    text.contains("ToolEffect::Execute"),
+                    "check_file runs external checkers, including one resolved from inside \
+                     the inspected workspace; it must declare Execute"
+                );
+            }
+        }
+
+        assert!(
+            missing.is_empty(),
+            "these tools declare no effect, so nothing decides whether they prompt: {:?}",
+            missing
+        );
+        assert!(
+            declared >= 30,
+            "only {declared} tools declared an effect — this gate is not reaching the tree"
         );
     }
 

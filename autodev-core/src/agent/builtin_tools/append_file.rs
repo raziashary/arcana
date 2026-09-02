@@ -16,6 +16,10 @@ pub struct AppendFileTool;
 
 #[async_trait]
 impl Tool for AppendFileTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Write
+    }
+
     fn name(&self) -> &str {
         "append_file"
     }
@@ -47,9 +51,6 @@ impl Tool for AppendFileTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        false
-    }
 
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         let path_str = match input["path"].as_str() {

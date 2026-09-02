@@ -121,144 +121,64 @@ impl ToolExecutor {
         crate::security::redaction::redact_args(input)
     }
 
-    pub async fn execute(
-        &mut self,
-        tool: Arc<dyn Tool>,
-        input: serde_json::Value,
-    ) -> Result<ToolResult> {
-        let call_id = Uuid::new_v4().to_string();
-        let ctx = ToolContext {
-            session_id: self.session_id.clone(),
-            working_dir: self.working_dir.clone(),
-            call_id: call_id.clone(),
-            depth: self.identity.depth,
-            agent_role: self.identity.role.clone(),
-        };
-
-        // Redacted: tool arguments routinely carry credentials — a token passed
-        // to an HTTP call, a password in a connection string — and this payload
-        // reaches the renderer and every log that records it (M-40).
-        let reported = Self::reported_input(&input);
-
-        // Emit tool start event for UI.
-        emit_tool_start(ToolStartPayload {
-            session_id: self.session_id.clone(),
-            call_id: call_id.clone(),
-            tool_name: tool.name().to_string(),
-            input: reported.clone(),
-        });
-
-        // Permission check
-        let approved = match self.mode {
-            PermissionMode::Autonomous => true,
-            PermissionMode::ManualApproval => {
-                if tool.is_read_only() || self.always_allow.contains(tool.name()) {
-                    true
-                } else {
-                    self.request_permission(&call_id, &tool, &input).await?
-                }
-            }
-            PermissionMode::SmartApprove => {
-                // Phase 2: smart approval logic
-                // For now, auto-approve read-only, prompt otherwise
-                tool.is_read_only()
-                    || self.always_allow.contains(tool.name())
-                    || self.request_permission(&call_id, &tool, &input).await?
-            }
-        };
-
-        // Fire PreToolUse hook
-        let pre_ctx = HookContext {
-            hook_type: HookType::PreToolUse.as_str().to_string(),
-            timestamp: chrono::Utc::now(),
-            session_id: Some(self.session_id.clone()),
-            agent_mode: None,
-            tool_call: Some(ToolCallContext {
-                id: call_id.clone(),
-                name: tool.name().to_string(),
-                // A-08. Hooks are user-authored shell: whatever is in this
-                // payload reaches whatever the hook does with it — a curl, a
-                // log line, a file. The hook still learns which tool ran with
-                // which argument *names*; it does not learn the secrets.
-                input: reported.clone(),
-                result: None,
-                is_error: false,
-            }),
-            file_path: None,
-            task_id: None,
-            worker_id: None,
-            extra: serde_json::json!({
-                "working_dir": self.working_dir,
-                "is_read_only": tool.is_read_only(),
-            }),
-        };
-        let should_continue = HookRegistry::fire(&HookType::PreToolUse, &pre_ctx).await;
-
-        let result = if !should_continue {
-            warn!("Tool '{}' blocked by PreToolUse hook", tool.name());
-            ToolResult::error(format!("Tool '{}' was blocked by a hook", tool.name()))
-        } else if approved {
-            debug!("Executing tool: {}", tool.name());
-            Self::redact_result(tool.execute(input.clone(), &ctx).await)
-        } else {
-            warn!("Tool '{}' denied by user", tool.name());
-            ToolResult::error(format!("Tool '{}' was denied by user", tool.name()))
-        };
-
-        // Fire PostToolUse or OnToolError hook
-        let post_hook_type = if result.is_error {
-            HookType::OnToolError
-        } else {
-            HookType::PostToolUse
-        };
-        let post_ctx = HookContext {
-            hook_type: post_hook_type.as_str().to_string(),
-            timestamp: chrono::Utc::now(),
-            session_id: Some(self.session_id.clone()),
-            agent_mode: None,
-            tool_call: Some(ToolCallContext {
-                id: call_id.clone(),
-                name: tool.name().to_string(),
-                // A-08 — see the PreToolUse context above. `result.output` is
-                // already redacted, having come through `redact_result`.
-                input: reported.clone(),
-                result: Some(serde_json::json!({"output": &result.output})),
-                is_error: result.is_error,
-            }),
-            file_path: None,
-            task_id: None,
-            worker_id: None,
-            extra: serde_json::json!({
-                "output": &result.output,
-                "is_error": result.is_error,
-                "working_dir": self.working_dir,
-            }),
-        };
-        HookRegistry::fire(&post_hook_type, &post_ctx).await;
-
-        // The result was redacted at the `tool.execute` call above, so
-        // everything below this line handles redacted content only.
-        self.save_tool_message(
-            &call_id,
-            tool.name(),
-            reported,
-            &result.output,
-            result.is_error,
-        );
-
-        // Emit tool end event for UI
-        emit_tool_end(ToolEndPayload {
-            session_id: self.session_id.clone(),
-            call_id: call_id.clone(),
-            tool_name: tool.name().to_string(),
-            output: result.output.clone(),
-            is_error: result.is_error,
-        });
-
-        Ok(result)
-    }
+    // ⚠ `ToolExecutor::execute()` was DELETED in `P3-10`.
+    //
+    // It had **zero callers**. The agent loop calls `execute_batch`, which is
+    // the only live path — and that divergence was not academic: for a whole
+    // phase the redaction boundary was wired to `execute()`, so every real tool
+    // call carried raw output to the model, the database and the UI while the
+    // smoke test drove the dead method and the gate matched a substring inside
+    // it (`L-C12`). The same shape recurred here: `execute()` consulted
+    // `is_read_only()` as its auto-approval key while `execute_batch`'s read
+    // partition consulted nothing at all.
+    //
+    // Deleted rather than left unreferenced, per `TG3-07`: *an unreferenced
+    // second path is a defect waiting for a caller.* Two implementations of one
+    // security decision drift, and the drift is invisible until a gate that
+    // exists on one path is missing from the other.
 
     /// Execute a batch of tools with partitioned concurrency.
+    /// The **one** permission decision in the codebase (`P3-11`, `P3-64`).
+    ///
+    /// ── What this replaced ───────────────────────────────────────────────────
+    ///
+    /// There were two divergent gates and one missing one:
+    ///
+    ///   * `execute()` matched on the mode and consulted `is_read_only()` — a
+    ///     **concurrency hint** — as the auto-approval key;
+    ///   * the write partition of `execute_batch()` matched on the mode too, but
+    ///     differently, without the `is_read_only` clause;
+    ///   * and the **read partition had no permission code at all**. It ran
+    ///     under the comment `// Execute (read-only always approved)`, having
+    ///     cloned `self.mode` and `self.always_allow` into the task and bound
+    ///     them as `_mode` / `_always_allow` — underscore-prefixed to silence
+    ///     the unused warning.
+    ///
+    /// `execute_batch` is the only path the agent loop calls. So on the live
+    /// path, `is_read_only() -> true` was an **unconditional bypass of every
+    /// permission mode** — and `check_file` declared it while executing
+    /// binaries resolved from inside the workspace under inspection.
+    ///
+    /// Keyed on `ToolEffect` now, in one place, so a reviewer can read the
+    /// whole policy without reconciling three copies.
+    async fn check_permission(
+        &mut self,
+        call_id: &str,
+        tool: &Arc<dyn Tool>,
+        input: &serde_json::Value,
+    ) -> Result<bool> {
+        // A standing per-tool allowance the user granted earlier in the session.
+        if self.always_allow.contains(tool.name()) {
+            return Ok(true);
+        }
+
+        if !tool.effect().requires_prompt(&self.mode) {
+            return Ok(true);
+        }
+
+        self.request_permission(call_id, tool, input).await
+    }
+
     /// Read-only tools run concurrently (max 10), write tools run serially.
     /// Returns results in the same order as input.
     /// Pattern from Claude Code's partitionToolCalls() + runTools().
@@ -271,24 +191,88 @@ impl ToolExecutor {
             return Ok(Vec::new());
         }
 
-        // Partition: read-only vs write tools
+        // ── P3-64 · permission is decided BEFORE the partition ───────────────
+        //
+        // The read partition previously ran with no permission check of any
+        // kind, and it is the partition `is_read_only()` selects — so declaring
+        // read-only was an unconditional bypass.
+        //
+        // Deciding here, sequentially, before anything is spawned, gives three
+        // things the old shape could not: every tool passes exactly one gate;
+        // concurrent tools cannot race to open competing approval dialogs; and
+        // the order the user is asked in matches the order the model asked.
+        let total_calls = tools.len();
+        let mut approved_tools = Vec::with_capacity(total_calls);
+        let mut refused: Vec<(usize, String, ToolResult)> = Vec::new();
+
+        for (idx, (tool, input, tool_use_id)) in tools.into_iter().enumerate() {
+            let call_id = format!("{}-{}", self.session_id, tool_use_id);
+            if self.check_permission(&call_id, &tool, &input).await? {
+                approved_tools.push((tool, input, tool_use_id, idx));
+            } else {
+                // A refusal is a RESULT, not a dropped call. Dropping it would
+                // leave the assistant message carrying a `tool_use` with no
+                // matching `tool_result` — a hard 400 on the next request, the
+                // same defect as `P3-57`.
+                refused.push((
+                    idx,
+                    tool_use_id,
+                    ToolResult::error(format!(
+                        "The user declined permission for `{}` to {}.",
+                        tool.name(),
+                        tool.effect().describe()
+                    )),
+                ));
+            }
+        }
+
+        // Partition the approved calls: concurrency-safe ones run together.
         let mut read_tools: Vec<(Arc<dyn Tool>, serde_json::Value, String, usize)> = Vec::new();
         let mut write_tools: Vec<(Arc<dyn Tool>, serde_json::Value, String, usize)> = Vec::new();
 
-        for (idx, (tool, input, tool_use_id)) in tools.into_iter().enumerate() {
-            if tool.is_read_only() {
+        for (tool, input, tool_use_id, idx) in approved_tools {
+            if tool.effect().is_concurrency_safe() {
                 read_tools.push((tool, input, tool_use_id, idx));
             } else {
                 write_tools.push((tool, input, tool_use_id, idx));
             }
         }
 
-        let mut results: Vec<(String, ToolResult)> =
-            Vec::with_capacity(read_tools.len() + write_tools.len());
+        // ── P3-57 · every slot is pre-keyed with its REAL tool_use_id ────────
+        //
+        // This was `resize(n, (String::new(), error("placeholder")))` — every
+        // slot pre-filled with an **empty** id. When a tool panicked, the panic
+        // handler logged and left the placeholder in place (its own comment
+        // said *"Placeholder will be replaced; we need to find which one
+        // failed"*), so the slot kept `tool_use_id = ""`. The engine then
+        // inserted it under key `""`, `by_id.remove(real_id)` missed, and the
+        // assistant message went out carrying a `tool_use` with **no matching
+        // `tool_result`** — a hard 400 from the provider on the next request.
+        // With two panicking tools they collided on `""` in the map and all but
+        // one were silently dropped. Concurrency is 10.
+        //
+        // Sized to the ORIGINAL call count, not the approved count, because
+        // refused calls are placed at their original index — and pre-keyed, so
+        // a panic or a refusal leaves a correctly-addressed error rather than
+        // an orphan.
+        let mut results: Vec<(String, ToolResult)> = Vec::with_capacity(total_calls);
         results.resize(
-            read_tools.len() + write_tools.len(),
-            (String::new(), ToolResult::error("placeholder")),
+            total_calls,
+            (
+                String::new(),
+                ToolResult::error("the tool did not run and reported no reason"),
+            ),
         );
+        for (tool, _input, tool_use_id, idx) in read_tools.iter().chain(write_tools.iter()) {
+            let _ = tool;
+            results[*idx] = (
+                tool_use_id.clone(),
+                ToolResult::error("the tool did not complete"),
+            );
+        }
+        for (idx, tool_use_id, result) in refused {
+            results[idx] = (tool_use_id, result);
+        }
 
         // Execute read-only tools concurrently with semaphore
         if !read_tools.is_empty() {
@@ -307,8 +291,10 @@ impl ToolExecutor {
                 let sem_clone = Arc::clone(&semaphore);
                 let session_id = self.session_id.clone();
                 let working_dir = self.working_dir.clone();
-                let _mode = self.mode.clone();
-                let _always_allow = self.always_allow.clone();
+                // (`_mode` / `_always_allow` were cloned here and never used —
+                // underscore-prefixed to silence the warning. The permission
+                // decision now happens before the partition, so there is
+                // nothing for this task to consult. P3-64.)
                 let _pending = self.pending.clone();
                 let identity = self.identity.clone();
 
@@ -336,7 +322,10 @@ impl ToolExecutor {
                         input: reported.clone(),
                     });
 
-                    // Execute (read-only always approved)
+                    // Execute. Permission was decided before the partition
+                    // (P3-64) — this comment used to read "read-only always
+                    // approved", which described the bypass rather than a
+                    // policy.
                     let result = Self::redact_result(tool.execute(input.clone(), &ctx).await);
 
                     // Get tool name for persistence
@@ -425,21 +414,8 @@ impl ToolExecutor {
                     input: reported.clone(),
                 });
 
-                // Permission check (may prompt user)
-                let approved = match self.mode {
-                    PermissionMode::Autonomous => true,
-                    PermissionMode::ManualApproval => {
-                        if self.always_allow.contains(tool.name()) {
-                            true
-                        } else {
-                            self.request_permission(&call_id, &tool, &input).await?
-                        }
-                    }
-                    PermissionMode::SmartApprove => {
-                        self.always_allow.contains(tool.name())
-                            || self.request_permission(&call_id, &tool, &input).await?
-                    }
-                };
+                // Permission check — the same gate as everywhere else.
+                let approved = self.check_permission(&call_id, &tool, &input).await?;
 
                 // Fire PreToolUse hook
                 let pre_ctx = HookContext {
@@ -459,7 +435,11 @@ impl ToolExecutor {
                     worker_id: None,
                     extra: serde_json::json!({
                         "working_dir": self.working_dir,
-                        "is_read_only": tool.is_read_only(),
+                        // The EFFECT, not the concurrency flag. A hook shown
+                        // `is_read_only: true` for a tool being prompted as
+                        // `Execute` is being told the opposite of what matters.
+                        "effect": format!("{:?}", tool.effect()),
+                        "concurrency_safe": tool.effect().is_concurrency_safe(),
                         "batch": true,
                     }),
                 };

@@ -112,15 +112,34 @@ pub trait Tool: Send + Sync {
     fn description(&self) -> &str;
     fn input_schema(&self) -> serde_json::Value;
 
-    /// Read-only tools can run concurrently; write tools run serially.
-    /// Pattern from Claude Code's isConcurrencySafe().
-    fn is_read_only(&self) -> bool {
-        false
-    }
+    /// What this tool does to the world — **the only prompting key** (`P3-11`).
+    ///
+    /// ⚠ **Deliberately has no default.** A new tool must state its effect or
+    /// the crate does not compile.
+    ///
+    /// A permissive default is exactly how this codebase got here: prompting
+    /// was keyed on `is_read_only()`, which defaults to `false`… and then two
+    /// tools *overrode it to `true`* while uploading the user's repository to a
+    /// third party and executing binaries found inside the workspace under
+    /// inspection. A default that means "no prompt" is a default that silently
+    /// grants permission, and nothing in review looks wrong.
+    ///
+    /// See `agent::tool_effect::ToolEffect`.
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect;
 
-    /// Requires explicit user approval before execution.
-    fn requires_permission(&self) -> bool {
-        !self.is_read_only()
+    /// Whether this tool may run **concurrently** with others.
+    ///
+    /// ⚠ This is a **concurrency hint for the path lock and nothing else**. It
+    /// was written for that (`"Pattern from Claude Code's isConcurrencySafe()"`)
+    /// and was then used as the auto-approval key, which made it a security
+    /// control by accident — `P3-11`, `G-11`. It gates nothing now, and
+    /// `TG-P3-11` asserts it stays that way.
+    ///
+    /// Derived from the effect by default, so the two cannot disagree: only a
+    /// `Read` is concurrency-safe. A tool may still override where it knows
+    /// better about its own contention.
+    fn is_read_only(&self) -> bool {
+        self.effect().is_concurrency_safe()
     }
 
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult;
@@ -169,12 +188,26 @@ mod identity_tests {
     fn no_tool_context_site_hardcodes_identity() {
         let path =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/agent/tool_executor.rs");
-        let source = std::fs::read_to_string(&path).expect("read tool_executor.rs");
+        // Line endings normalised: git's CRLF conversion silently changed the
+        // meaning of three other gates that parse source (`L-C15`).
+        let source = std::fs::read_to_string(&path)
+            .expect("read tool_executor.rs")
+            .replace("
+", "
+");
 
         let sites = source.matches("ToolContext {").count();
+
+        // ⚠ P3-67. This asserted `sites >= 3`, which encoded how many
+        // construction sites the executor happened to have — so deleting the
+        // dead `execute()` path in `P3-10` failed it **by succeeding**.
+        //
+        // The invariant is *every site takes its depth from the threaded
+        // identity*, asserted below. The floor exists only so the gate cannot
+        // pass by scanning a file with no sites at all. (`L-C6`.)
         assert!(
-            sites >= 3,
-            "expected at least 3 ToolContext sites, found {sites}"
+            sites >= 1,
+            "found no ToolContext construction sites — this gate is scanning the wrong              file, so its green result means nothing"
         );
 
         // NOT `!contains("agent_role: None")`: `agent_role` is a `String` now, so

@@ -12,6 +12,10 @@ pub struct CreateTaskTool;
 
 #[async_trait]
 impl Tool for CreateTaskTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Board
+    }
+
     fn name(&self) -> &str {
         "create_task"
     }
@@ -51,9 +55,6 @@ impl Tool for CreateTaskTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        false
-    }
 
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let title = match input["title"].as_str() {

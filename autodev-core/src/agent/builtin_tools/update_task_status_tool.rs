@@ -14,6 +14,10 @@ pub struct UpdateTaskStatusTool;
 
 #[async_trait]
 impl Tool for UpdateTaskStatusTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Board
+    }
+
     fn name(&self) -> &str {
         "update_task_status"
     }
@@ -52,9 +56,6 @@ impl Tool for UpdateTaskStatusTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        false
-    }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let id = match input["id"].as_i64() {

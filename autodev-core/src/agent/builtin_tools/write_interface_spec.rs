@@ -51,6 +51,10 @@ struct RouteSpec {
 
 #[async_trait]
 impl Tool for WriteInterfaceSpecTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Write
+    }
+
     fn name(&self) -> &str {
         "write_interface_spec"
     }
@@ -102,12 +106,6 @@ impl Tool for WriteInterfaceSpecTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        false
-    }
-    fn requires_permission(&self) -> bool {
-        false
-    }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let routes_val = match input.get("routes") {

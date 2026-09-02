@@ -24,6 +24,10 @@ struct EditFileInput {
 
 #[async_trait]
 impl Tool for EditFileTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Write
+    }
+
     fn name(&self) -> &str {
         "edit_file"
     }
@@ -62,13 +66,7 @@ impl Tool for EditFileTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        false
-    }
 
-    fn requires_permission(&self) -> bool {
-        true
-    }
 
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         // Clone before moving into from_value so the hook context below can reference it.

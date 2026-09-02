@@ -14,6 +14,10 @@ pub struct AcknowledgeWorkerMessageTool;
 
 #[async_trait]
 impl Tool for AcknowledgeWorkerMessageTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Board
+    }
+
     fn name(&self) -> &str {
         "acknowledge_worker_message"
     }
@@ -39,9 +43,6 @@ impl Tool for AcknowledgeWorkerMessageTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        false
-    }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let id = match input["id"].as_i64() {

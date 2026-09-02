@@ -58,6 +58,10 @@ fn default_max_results() -> u32 {
 
 #[async_trait]
 impl Tool for GrepTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Read
+    }
+
     fn name(&self) -> &str {
         "grep"
     }
@@ -106,13 +110,7 @@ impl Tool for GrepTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        true
-    }
 
-    fn requires_permission(&self) -> bool {
-        false
-    }
 
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         let params: GrepInput = match serde_json::from_value(input) {

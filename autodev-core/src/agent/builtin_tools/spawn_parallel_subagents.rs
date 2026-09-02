@@ -24,6 +24,10 @@ pub struct SpawnParallelSubagentsTool;
 
 #[async_trait]
 impl Tool for SpawnParallelSubagentsTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Network
+    }
+
     fn name(&self) -> &str {
         "spawn_parallel_subagents"
     }
@@ -71,9 +75,6 @@ impl Tool for SpawnParallelSubagentsTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        false
-    }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let subtasks = match input.get("subtasks").and_then(|v| v.as_array()) {

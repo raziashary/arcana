@@ -19,6 +19,10 @@ const READ_FILE_MAX_LINES_PER_CALL: usize = 2000;
 
 #[async_trait]
 impl Tool for ReadFileTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Read
+    }
+
     fn name(&self) -> &str {
         "read_file"
     }
@@ -59,9 +63,6 @@ impl Tool for ReadFileTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        true
-    }
 
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         let path_str = match input["path"].as_str() {

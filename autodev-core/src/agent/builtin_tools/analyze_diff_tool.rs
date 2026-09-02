@@ -13,6 +13,14 @@ pub struct AnalyzeDiffTool;
 
 #[async_trait]
 impl Tool for AnalyzeDiffTool {
+    // ⚠ `Network`, not `Read`. It uploads the **full diff of the
+    // repository** to a third-party LLM — under BYOK, the user's own code on
+    // the user's own key. It declared `is_read_only = true` and was therefore
+    // never prompted in any mode.
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Network
+    }
+
     fn name(&self) -> &str {
         "analyze_diff"
     }
@@ -49,9 +57,6 @@ impl Tool for AnalyzeDiffTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        true
-    }
 
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let repo_path = match input["repo_path"].as_str() {

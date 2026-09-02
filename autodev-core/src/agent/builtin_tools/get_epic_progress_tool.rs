@@ -12,6 +12,10 @@ pub struct GetEpicProgressTool;
 
 #[async_trait]
 impl Tool for GetEpicProgressTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Read
+    }
+
     fn name(&self) -> &str {
         "get_epic_progress"
     }
@@ -36,9 +40,6 @@ impl Tool for GetEpicProgressTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        true
-    }
 
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let epic_id = match input["epic_id"].as_str() {

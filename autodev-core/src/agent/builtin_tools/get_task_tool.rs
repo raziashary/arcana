@@ -11,6 +11,10 @@ pub struct GetTaskTool;
 
 #[async_trait]
 impl Tool for GetTaskTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Read
+    }
+
     fn name(&self) -> &str {
         "get_task"
     }
@@ -34,9 +38,6 @@ impl Tool for GetTaskTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        true
-    }
 
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let id = match input["id"].as_i64() {

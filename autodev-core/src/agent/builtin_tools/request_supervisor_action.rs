@@ -20,6 +20,10 @@ pub struct RequestSupervisorActionTool;
 
 #[async_trait]
 impl Tool for RequestSupervisorActionTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Board
+    }
+
     fn name(&self) -> &str {
         "request_supervisor_action"
     }
@@ -62,9 +66,6 @@ impl Tool for RequestSupervisorActionTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        false
-    }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let request_type = match input["request_type"].as_str() {

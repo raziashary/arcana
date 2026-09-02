@@ -29,6 +29,10 @@ pub struct SpawnQcReviewTool;
 
 #[async_trait]
 impl Tool for SpawnQcReviewTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Network
+    }
+
     fn name(&self) -> &str {
         "spawn_qc_review"
     }
@@ -66,9 +70,6 @@ impl Tool for SpawnQcReviewTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        false
-    }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let task_id = match input.get("task_id").and_then(|v| v.as_i64()) {

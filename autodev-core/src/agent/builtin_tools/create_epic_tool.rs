@@ -12,6 +12,10 @@ pub struct CreateEpicTool;
 
 #[async_trait]
 impl Tool for CreateEpicTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Board
+    }
+
     fn name(&self) -> &str {
         "create_epic"
     }
@@ -41,9 +45,6 @@ impl Tool for CreateEpicTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        false
-    }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let title = match input["title"].as_str() {

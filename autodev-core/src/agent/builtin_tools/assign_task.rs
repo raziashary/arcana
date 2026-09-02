@@ -29,6 +29,10 @@ const VALID_WORKERS: &[&str] = FLEET_WORKERS;
 
 #[async_trait]
 impl Tool for AssignTaskTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Board
+    }
+
     fn name(&self) -> &str {
         "assign_task"
     }
@@ -59,9 +63,6 @@ impl Tool for AssignTaskTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        false
-    }
 
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let id = match input["id"].as_i64() {

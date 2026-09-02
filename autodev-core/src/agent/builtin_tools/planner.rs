@@ -17,6 +17,10 @@ pub struct PlannerTool;
 
 #[async_trait]
 impl Tool for PlannerTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Board
+    }
+
     fn name(&self) -> &str {
         "planner"
     }
@@ -40,9 +44,6 @@ impl Tool for PlannerTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        false
-    }
 
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let yaml_dsl = match input["yaml_dsl"].as_str() {

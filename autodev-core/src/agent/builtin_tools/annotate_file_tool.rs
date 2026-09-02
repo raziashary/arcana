@@ -12,6 +12,10 @@ pub struct AnnotateFileTool;
 
 #[async_trait]
 impl Tool for AnnotateFileTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Write
+    }
+
     fn name(&self) -> &str {
         "annotate_file"
     }
@@ -54,9 +58,6 @@ impl Tool for AnnotateFileTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        false
-    }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let file_path = match input["file_path"].as_str() {

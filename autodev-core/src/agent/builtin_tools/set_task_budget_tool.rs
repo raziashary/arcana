@@ -21,6 +21,10 @@ pub struct SetTaskBudgetTool;
 
 #[async_trait]
 impl Tool for SetTaskBudgetTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Board
+    }
+
     fn name(&self) -> &str {
         "set_task_budget"
     }
@@ -56,9 +60,6 @@ impl Tool for SetTaskBudgetTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        false
-    }
 
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let task_id = match input.get("task_id").and_then(|v| v.as_i64()) {

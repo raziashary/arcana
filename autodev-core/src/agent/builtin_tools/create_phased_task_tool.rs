@@ -13,6 +13,10 @@ pub struct CreatePhasedTaskTool;
 
 #[async_trait]
 impl Tool for CreatePhasedTaskTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Board
+    }
+
     fn name(&self) -> &str {
         "create_phased_task"
     }
@@ -75,9 +79,6 @@ impl Tool for CreatePhasedTaskTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        false
-    }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let epic_id = match input["epic_id"].as_str() {

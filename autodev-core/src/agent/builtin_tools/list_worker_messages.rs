@@ -19,6 +19,12 @@ pub struct ListWorkerMessagesTool;
 
 #[async_trait]
 impl Tool for ListWorkerMessagesTool {
+    // `Board`: reading the inbox marks messages read, so it mutates shared
+    // state despite the name.
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Board
+    }
+
     fn name(&self) -> &str {
         "list_worker_messages"
     }

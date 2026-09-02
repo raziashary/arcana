@@ -19,6 +19,13 @@ pub struct CheckFileTool;
 
 #[async_trait]
 impl Tool for CheckFileTool {
+    // ⚠ `Execute`, not `Read`. It runs external checkers, including one it
+    // resolves from **inside the workspace under inspection** (`P3-19`), so a
+    // cloned repository can supply the binary. It declared `is_read_only = true`.
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Execute
+    }
+
     fn name(&self) -> &str {
         "check_file"
     }
@@ -70,12 +77,6 @@ impl Tool for CheckFileTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        true
-    }
-    fn requires_permission(&self) -> bool {
-        false
-    }
 
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         // ── Resolve path ──────────────────────────────────────────────────────

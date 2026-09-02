@@ -38,6 +38,10 @@ fn is_known_recipient(slug: &str) -> bool {
 
 #[async_trait]
 impl Tool for SendWorkerMessageTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Board
+    }
+
     fn name(&self) -> &str {
         "send_worker_message"
     }
@@ -84,9 +88,6 @@ impl Tool for SendWorkerMessageTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        false
-    }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         // ── Validate `to` ────────────────────────────────────────────────────

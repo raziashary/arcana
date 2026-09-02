@@ -16,6 +16,10 @@ pub struct BashTool;
 
 #[async_trait]
 impl Tool for BashTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Execute
+    }
+
     fn name(&self) -> &str {
         "bash"
     }
@@ -44,12 +48,6 @@ impl Tool for BashTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        false
-    }
-    fn requires_permission(&self) -> bool {
-        true
-    }
 
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         let command = match input["command"].as_str() {

@@ -47,6 +47,10 @@ fn default_max_results() -> usize {
 
 #[async_trait]
 impl Tool for GlobTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Read
+    }
+
     fn name(&self) -> &str {
         "glob"
     }
@@ -85,13 +89,7 @@ impl Tool for GlobTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        true
-    }
 
-    fn requires_permission(&self) -> bool {
-        false
-    }
 
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         let params: GlobInput = match serde_json::from_value(input) {

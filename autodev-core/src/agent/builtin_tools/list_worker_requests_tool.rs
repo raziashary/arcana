@@ -13,6 +13,10 @@ pub struct ListWorkerRequestsTool;
 
 #[async_trait]
 impl Tool for ListWorkerRequestsTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Read
+    }
+
     fn name(&self) -> &str {
         "list_worker_requests"
     }
@@ -38,9 +42,6 @@ impl Tool for ListWorkerRequestsTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        true
-    }
 
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let status_filter = input["status"].as_str();

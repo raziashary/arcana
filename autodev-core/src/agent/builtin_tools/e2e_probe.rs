@@ -39,6 +39,12 @@ pub struct E2eProbeTool;
 
 #[async_trait]
 impl Tool for E2eProbeTool {
+    // `Network`: it fetches arbitrary URLs and returns the body, and also
+    // runs shell. The higher-consequence effect wins.
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Network
+    }
+
     fn name(&self) -> &str {
         "e2e_probe"
     }
@@ -87,12 +93,6 @@ impl Tool for E2eProbeTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        false
-    }
-    fn requires_permission(&self) -> bool {
-        false
-    }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let start_cmds: Vec<String> = match input.get("start_cmds") {

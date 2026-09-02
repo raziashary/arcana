@@ -14,6 +14,10 @@ pub struct SearchMemoryTool;
 
 #[async_trait]
 impl Tool for SearchMemoryTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Read
+    }
+
     fn name(&self) -> &str {
         "search_memory"
     }
@@ -49,9 +53,6 @@ impl Tool for SearchMemoryTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        true
-    }
 
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         let query = match input["query"].as_str() {

@@ -12,6 +12,10 @@ pub struct GetReadyTasksInPhaseTool;
 
 #[async_trait]
 impl Tool for GetReadyTasksInPhaseTool {
+    fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+        crate::agent::tool_effect::ToolEffect::Read
+    }
+
     fn name(&self) -> &str {
         "get_ready_tasks_in_phase"
     }
@@ -39,9 +43,6 @@ impl Tool for GetReadyTasksInPhaseTool {
         })
     }
 
-    fn is_read_only(&self) -> bool {
-        true
-    }
 
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let epic_id = match input["epic_id"].as_str() {
