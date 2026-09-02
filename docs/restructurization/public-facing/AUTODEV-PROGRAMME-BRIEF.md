@@ -4,9 +4,9 @@
 
 | | |
 |---|---|
-| **Prepared** | 2026-09-01 |
+| **Prepared** | 2026-09-02 |
 | **Owner** | Razi Ashary — Programming Lead, AIRS Foundry |
-| **Status** | P0, P1 and P2 complete · P3 next · overall readiness **22%** |
+| **Status** | P0, P1, P2 and **P3 A–E** complete · P3-F (memory) next · overall readiness **22%** |
 | **Source documents** | `docs/restructurization/vision/00-AUTODEV-RESTRUCTURE-MASTER-PLAN.md` (why) · `docs/restructurization/development/MASTER_DEVELOPMENT_PLAN.md` (what and when) |
 
 This brief condenses both. Where it is terse, those documents are authoritative.
@@ -87,8 +87,8 @@ Fifteen phases. Every one has an explicit slot — nothing is parked.
 | ✅ | **P0** Stop the bleeding | The security holes closed; CI can fail | 12 | done |
 | ✅ | **P1** Structural | Everything shipped is compiled; one owner per database; redaction live | 22 | done |
 | ✅ | **P2** Providers | Three providers conform; **Gemini primary**; cost honest; spend capped — proven against the live APIs, not only against fixtures | 74 | done |
-| 1 | **P3 A–E** Runtime | One tool path with a real permission gate; a panic cannot kill the app | 28 | ~12 h |
-| 2 | **P3-F** Memory | Memory that works and is provably read | 15 | ~7.5 h |
+| ✅ | **P3 A–E** Runtime | One tool path with a real permission gate; a panic cannot kill the app — **and four ways the model could reach past both, closed** | 43 | done |
+| 1 | **P3-F** Memory | Memory that works and is provably read | 15 | ~7.5 h |
 | 3 | **P8** Sidecar removal | The retired Python subsystem deleted entirely | 24 | ~6 h |
 | 🤝 | **Handover** | **The AutoDesign team can begin wiring** | — | **~37 h in** |
 | 5 | **PD1** Ingestion | PSD **and** PDF → one representation | 14 | ~6 h |
@@ -129,13 +129,37 @@ which are already decided.
 
 ## 5 · Where we are
 
-**P0 and P1 are complete**, both closed with a mandatory independent audit.
+**P0, P1, P2 and P3 A–E are complete**, each closed with a mandatory independent audit.
 
 Delivered so far: the security holes closed and gated; a `autodev-core` crate extracted with
 zero dependency on the UI framework, letting the desktop app and the command-line tool share
 one implementation; migration ladders on all ten databases, applied to live data with zero
-rows lost; secret redaction on the production path; and the first of the design work — the
-intermediate representation that everything in Rollout 1 is built on.
+rows lost; secret redaction on the production path; three providers proven against their live
+APIs rather than against fixtures; and the first of the design work — the intermediate
+representation that everything in Rollout 1 is built on.
+
+**P3 A–E — the runtime — closed on 2026-09-02.** 43 tasks, 19 automated gates, 520 tests. The
+headline outcome is that the agent can no longer reach past its own guards. Four of the
+defects it closed were reachable by the model itself:
+
+- The permission check **did not run at all** on tools classified read-only. A tool declaring
+  itself read-only was approved unconditionally in every mode, including the one whose entire
+  purpose is to ask first.
+- The syntax checker resolved its Python interpreter **from the repository being inspected**.
+  Cloning a hostile repository and opening a `.py` file ran that repository's own binary.
+- The end-to-end probe fetched **any URL the model named** and returned the response body. A
+  cloud metadata endpoint returns credentials.
+- Seven tools that take a file path never checked it against the workspace, two of which acted
+  on the path rather than merely reading it.
+
+None of these were in the phase's task list as written. They were found because the plan
+requires an adversarial pass *before* building, and two independent audits *after*.
+
+**Why the readiness figure did not move.** P3 is scored as one area covering A–G, and P3-F
+(memory) is untouched — so under the programme's own no-partial-credit rule the row stays at
+zero. Recording A–E against a row that spans A–G would be exactly the arithmetic the rule
+exists to prevent. What did move is the safety overlay: fault isolation from RED to AMBER,
+and four model-reachable holes closed under security posture.
 
 **Estimates are calibrated on measured throughput, not on judgement.** P1 built 22 tasks in
 2 h 50 m; its audit and the resulting fixes took a further 3 h 30 m. The figures in §4 carry
@@ -187,7 +211,8 @@ published guides and awaits approval), and confirmation of the exact model set b
 ## 8 · The one-paragraph summary
 
 AutoDev is being rebuilt to a standard where every claim is backed by a test that can fail.
-Two security-critical phases are complete and independently audited. The next milestone is a
+Four phases are complete and independently audited, including the runtime phase that closed
+four ways the agent could reach past its own guards. The next milestone is a
 working backend that turns designs into faithful, editable, adaptable code — handed to the
 AutoDesign team roughly 37 working hours from now, with a published contract and live stubs so
 they can build in parallel. Full capability follows at roughly 92 hours, and the standalone

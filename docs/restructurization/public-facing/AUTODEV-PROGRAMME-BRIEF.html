@@ -340,7 +340,7 @@
     <p class="standfirst">A desktop application in which a team of AI agents handles a programming task end to end. This is a condensed view of the restructure, for readers who are not in the code daily.</p>
 
     <dl class="strip">
-      <div class="stat"><dt>Readiness</dt><dd>22%<small>Three phases closed</small></dd></div>
+      <div class="stat"><dt>Readiness</dt><dd>22%<small>Four phases closed &middot; unchanged by design</small></dd></div>
       <div class="stat"><dt>Open tasks</dt><dd>218<small>All written out</small></dd></div>
       <div class="stat"><dt>To handover</dt><dd>~37h<small>AutoDesign can start</small></dd></div>
       <div class="stat"><dt>Rollout 1</dt><dd>~92h<small>208 tasks</small></dd></div>
@@ -397,8 +397,8 @@
           <tr class="is-done"><td class="phase">Stop the bleeding<span class="code">P0</span></td><td>Security holes closed; CI can fail</td><td class="n">12</td><td class="n">—</td><td><span class="chip done">Done</span></td></tr>
           <tr class="is-done"><td class="phase">Structural<span class="code">P1</span></td><td>Everything shipped is compiled; one owner per database; redaction live</td><td class="n">22</td><td class="n">—</td><td><span class="chip done">Done</span></td></tr>
           <tr class="is-done"><td class="phase">Providers<span class="code">P2</span></td><td>Three providers conform; Gemini primary; cost honest; spend capped</td><td class="n">74</td><td class="n">—</td><td><span class="chip done">Done</span></td></tr>
-          <tr class="is-now"><td class="phase">Runtime<span class="code">P3 A–E</span></td><td>One tool path with a real permission gate; a panic cannot kill the app</td><td class="n">28</td><td class="n">~12h</td><td><span class="chip now">Next</span></td></tr>
-          <tr><td class="phase">Memory<span class="code">P3-F</span></td><td>Memory that works and is provably read</td><td class="n">15</td><td class="n">~7.5h</td><td><span class="chip queued">Queued</span></td></tr>
+          <tr class="is-done"><td class="phase">Runtime<span class="code">P3 A–E</span></td><td>One tool path with a real permission gate; a panic cannot kill the app &mdash; and four ways the model could reach past both, closed</td><td class="n">43</td><td class="n">&mdash;</td><td><span class="chip done">Done</span></td></tr>
+          <tr class="is-now"><td class="phase">Memory<span class="code">P3-F</span></td><td>Memory that works and is provably read</td><td class="n">15</td><td class="n">~7.5h</td><td><span class="chip now">Next</span></td></tr>
           <tr><td class="phase">Sidecar removal<span class="code">P8</span></td><td>The retired Python subsystem deleted entirely</td><td class="n">24</td><td class="n">~6h</td><td><span class="chip queued">Queued</span></td></tr>
           <tr class="handover"><td colspan="5">↓ &nbsp;HANDOVER — the AutoDesign team can begin wiring, ~37 hours in</td></tr>
           <tr><td class="phase">Ingestion<span class="code">PD1</span></td><td>PSD and PDF become one representation</td><td class="n">14</td><td class="n">~6h</td><td><span class="chip queued">Queued</span></td></tr>
@@ -439,7 +439,42 @@
 
   <section class="col">
     <h2><span class="num">04</span> Where we are</h2>
-    <p>P0, P1 and P2 are complete. Delivered so far: the security holes closed and gated; an <code>autodev-core</code> crate extracted with zero dependency on the UI framework, letting the desktop app and the command-line tool share one implementation; migration ladders on all ten databases, applied to live data with zero rows lost; secret redaction on the production path; the intermediate representation that everything in Rollout 1 is built on; and now a provider layer that has been tested against the real APIs rather than only against itself.</p>
+    <p>P0, P1, P2 and P3 A&ndash;E are complete. Delivered so far: the security holes closed and gated; an <code>autodev-core</code> crate extracted with zero dependency on the UI framework, letting the desktop app and the command-line tool share one implementation; migration ladders on all ten databases, applied to live data with zero rows lost; secret redaction on the production path; the intermediate representation that everything in Rollout 1 is built on; and now a provider layer that has been tested against the real APIs rather than only against itself.</p>
+
+    <h3>What P3 A&ndash;E delivered</h3>
+    <p>The runtime phase closed on 2 September: 43 tasks, 19 automated guards, 520 tests. Its
+    headline outcome is that <strong>the agent can no longer reach past its own guards</strong>.
+    Four of the defects it closed were reachable by the model itself, and none of them appeared
+    in the phase&rsquo;s task list as written:</p>
+    <ul>
+      <li><strong>The permission check did not run at all</strong> on tools classified
+      read-only. A tool declaring itself read-only was approved unconditionally in every mode
+      &mdash; including the mode whose entire purpose is to ask first.</li>
+      <li><strong>The syntax checker resolved its Python interpreter from the repository being
+      inspected.</strong> Cloning a hostile repository and opening a <code>.py</code> file ran
+      that repository&rsquo;s own binary.</li>
+      <li><strong>The end-to-end probe fetched any URL the model named</strong> and returned the
+      response body to it. A cloud metadata endpoint returns credentials.</li>
+      <li><strong>Seven tools that take a file path never checked it against the
+      workspace</strong>, two of which acted on the path rather than merely reading it.</li>
+    </ul>
+    <p>They were found because the plan requires an adversarial pass <em>before</em> building
+    and two independent audits <em>after</em> &mdash; the same discipline that produced the P2
+    findings below.</p>
+
+    <p>The phase also made the agent&rsquo;s own accounting honest. A cost ceiling on code
+    review was computed from figures that were hardcoded to zero, so it cancelled itself on
+    every completed review; a provisional charge was taken and never released on eight failure
+    paths, so fifty routine retries could disable review for an hour at no real spend. Both are
+    fixed, and both are guarded by a check that fails if the shape returns.</p>
+
+    <h3>Why the readiness figure did not move</h3>
+    <p>P3 is scored as one area covering A&ndash;G, and P3-F &mdash; memory &mdash; is
+    untouched. Under the programme&rsquo;s own rule there is no partial credit for a scored
+    area, so the row stays at zero and the headline number stays at 22%. Recording A&ndash;E
+    against a row that spans A&ndash;G would be exactly the arithmetic that rule exists to
+    prevent. What did move is the safety overlay: fault isolation from red to amber, and four
+    model-reachable holes closed under security posture.</p>
 
     <h3>What P2 delivered</h3>
     <p>Prompt caching works and is <em>measured</em>, not asserted: a repeated prompt wrote 11,923 tokens to cache and read back exactly 11,923. That matters because caching is the one optimisation that fails completely silently — below a model&rsquo;s minimum length, or after a single changed byte, the provider caches nothing, returns no error, and the only symptom is the bill. So the alarm that detects a broken cache was built and proven <em>before</em> the caching it watches.</p>
@@ -509,7 +544,7 @@
 
   <section class="col">
     <h2><span class="num">07</span> In one paragraph</h2>
-    <p class="lede">AutoDev is being rebuilt to a standard where every claim is backed by a test that can fail. Two security-critical phases are complete and independently audited. The next milestone is a working backend that turns designs into faithful, editable, adaptable code — handed to the AutoDesign team roughly 37 working hours from now, with a published contract and live stubs so they can build in parallel. Full capability follows at roughly 92 hours, and the standalone application at roughly 127.</p>
+    <p class="lede">AutoDev is being rebuilt to a standard where every claim is backed by a test that can fail. Four phases are complete and independently audited, including the runtime phase that closed four ways the agent could reach past its own guards. The next milestone is a working backend that turns designs into faithful, editable, adaptable code — handed to the AutoDesign team roughly 37 working hours from now, with a published contract and live stubs so they can build in parallel. Full capability follows at roughly 92 hours, and the standalone application at roughly 127.</p>
   </section>
 
   <footer>
