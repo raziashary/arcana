@@ -58,13 +58,31 @@ impl Tool for AnalyzeDiffTool {
     }
 
 
-    async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
-        let repo_path = match input["repo_path"].as_str() {
+    // `_ctx` until P3-14: the workspace was never consulted, so any repository
+    // path the model named was diffed and uploaded.
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
+        let repo_path_raw = match input["repo_path"].as_str() {
             Some(p) if !p.is_empty() => p,
             _ => {
                 return ToolResult::error("'repo_path' is required and must be a non-empty string")
             }
         };
+
+        // ⚠ P3-14, and the second of the two tools that ACT on the path. This
+        // takes a repository path from the model, diffs it, and **uploads the
+        // result to a third-party LLM** — so an unjailed path here exfiltrates
+        // any repository on the machine, not merely reads it. It also declared
+        // `is_read_only = true` and was therefore never prompted (`P3-56`).
+        let repo_path_buf =
+            match super::path_jail::validate_workspace_path(
+                std::path::Path::new(repo_path_raw),
+                &ctx.working_dir,
+            ) {
+                Ok(canonical) => canonical,
+                Err(e) => return ToolResult::error(e),
+            };
+        let repo_path = repo_path_buf.to_string_lossy().to_string();
+        let repo_path = repo_path.as_str();
         let base_branch = match input["base_branch"].as_str() {
             Some(b) if !b.is_empty() => b,
             _ => {

@@ -47,10 +47,19 @@ impl Tool for ListDirectoryTool {
         let recursive = input["recursive"].as_bool().unwrap_or(false);
         let max_entries = input["max_entries"].as_u64().unwrap_or(500) as usize;
 
-        let base = if Path::new(path_str).is_absolute() {
+        let raw = if Path::new(path_str).is_absolute() {
             Path::new(path_str).to_path_buf()
         } else {
             Path::new(&ctx.working_dir).join(path_str)
+        };
+        // ⚠ P3-14. This tool did not call the jail and was auto-approved.
+        // Reading outside the workspace is an **exfiltration primitive**, not a
+        // harmless read: the model names a path, the contents enter its
+        // context, and nothing asked the user. Six tools bypassed the jail;
+        // two of them acted on the path rather than merely reading it.
+        let base = match super::path_jail::validate_workspace_path(&raw, &ctx.working_dir) {
+            Ok(canonical) => canonical,
+            Err(e) => return ToolResult::error(e),
         };
 
         if !base.exists() {

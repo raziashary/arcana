@@ -70,7 +70,15 @@ impl Tool for ReadFileTool {
             None => return ToolResult::error("Missing required field: path"),
         };
 
-        let path = resolve_path(&path_str, &ctx.working_dir);
+        // ⚠ P3-14. This tool did not call the jail, and was auto-approved.
+        // Reading a file outside the workspace is an **exfiltration
+        // primitive**, not a harmless read — the model names a path, the
+        // contents come back in its context, and nothing asked the user.
+        let resolved = resolve_path(&path_str, &ctx.working_dir);
+        let path = match super::path_jail::validate_workspace_path(&resolved, &ctx.working_dir) {
+            Ok(canonical) => canonical,
+            Err(e) => return ToolResult::error(e),
+        };
 
         // Fire PreFileRead hook
         let hook_ctx = HookContext {

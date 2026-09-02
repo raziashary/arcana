@@ -148,7 +148,17 @@ impl Tool for WriteInterfaceSpecTool {
         }
 
         // ── Locate INTERFACE.md at the workspace root ─────────────────────────
-        let path = PathBuf::from(&ctx.working_dir).join("INTERFACE.md");
+        // P3-14. The filename is fixed and the root is the workspace, so this
+        // is already inside the jail by construction — it is validated anyway.
+        // The rule the gate enforces is *a tool that writes to a path validates
+        // it*, with no "unless the path looks safe" exception: that exception is
+        // how the other seven came to bypass it, each for a locally reasonable
+        // reason.
+        let raw = PathBuf::from(&ctx.working_dir).join("INTERFACE.md");
+        let path = match super::path_jail::validate_workspace_path(&raw, &ctx.working_dir) {
+            Ok(canonical) => canonical,
+            Err(e) => return ToolResult::error(e),
+        };
 
         // Read existing file when in merge mode.
         let existing = if mode == "merge" && path.exists() {

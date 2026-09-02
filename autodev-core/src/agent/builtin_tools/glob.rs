@@ -97,7 +97,8 @@ impl Tool for GlobTool {
             Err(e) => return ToolResult::error(format!("Invalid input: {e}")),
         };
 
-        let search_path = if let Some(path) = &params.path {
+        // P3-14: the resolved root is jailed below.
+        let raw = if let Some(path) = &params.path {
             let p = PathBuf::from(path);
             if p.is_absolute() {
                 p
@@ -106,6 +107,18 @@ impl Tool for GlobTool {
             }
         } else {
             PathBuf::from(&ctx.working_dir)
+        };
+        // ⚠ P3-14. This tool did not call the jail and was auto-approved.
+        // Reading outside the workspace is an **exfiltration primitive**, not a
+        // harmless read: the model names a path, the contents enter its
+        // context, and nothing asked the user. Six tools bypassed the jail;
+        // two of them acted on the path rather than merely reading it.
+        let search_path = match super::path_jail::validate_workspace_path(
+            &raw,
+            &ctx.working_dir,
+        ) {
+            Ok(canonical) => canonical,
+            Err(e) => return ToolResult::error(e),
         };
 
         debug!("Globbing pattern '{}' in {:?}", params.pattern, search_path);

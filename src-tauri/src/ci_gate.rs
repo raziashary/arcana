@@ -1530,6 +1530,90 @@ let x = 1;
         );
     }
 
+    // ── TG-P3-14 · every path-taking tool calls the jail ──────────────────────
+
+    /// A tool that accepts a path from the model must validate it against the
+    /// workspace.
+    ///
+    /// Six bypassed it entirely and were auto-approved: `read_file`, `grep`,
+    /// `glob`, `list_directory` — **plus `check_file` and `analyze_diff`, which
+    /// act on the path rather than merely reading it**. `check_file` spawns
+    /// external checkers against it; `analyze_diff` diffs the repository and
+    /// uploads the result to a third-party LLM, and its `ToolContext` parameter
+    /// was named `_ctx` because the workspace was never consulted at all.
+    ///
+    /// Reading a file outside the workspace is an **exfiltration primitive**,
+    /// not a harmless read: the model names a path, the contents enter its
+    /// context, and nothing asks the user.
+    ///
+    /// ⚠ Keyed on *"declares a path input"*, so a **new** tool with a path
+    /// parameter and no jail call fails the build — which is `TG3-27`'s
+    /// requirement and the difference between fixing six tools and closing the
+    /// hole.
+    #[test]
+    fn tg_p3_14_every_path_taking_tool_calls_the_jail() {
+        let dir = repo_root().join("autodev-core/src/agent/builtin_tools");
+
+        let mut offenders = Vec::new();
+        let mut checked = 0usize;
+
+        for entry in std::fs::read_dir(&dir).expect("builtin_tools").flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("").to_string();
+            // The jail itself, and the lock that keys on jailed paths.
+            if name == "path_jail" || name == "path_lock" || name == "mod" {
+                continue;
+            }
+
+            let text = read_source(&path);
+            if !text.contains("impl Tool for") {
+                continue;
+            }
+
+            // Does its schema declare a path-shaped input?
+            let declares_path = text.contains("\"path\"")
+                || text.contains("\"repo_path\"")
+                || text.contains("\"file_path\"")
+                || text.contains("\"directory\"");
+
+            if !declares_path {
+                continue;
+            }
+            checked += 1;
+
+            // Board tools take a `path` that is a label, not a filesystem
+            // location — they never touch the disk. Recognised by having no
+            // filesystem access at all.
+            let touches_disk = text.contains("std::fs")
+                || text.contains("PathBuf::from")
+                || text.contains("Path::new")
+                || text.contains("tokio::fs");
+            if !touches_disk {
+                continue;
+            }
+
+            if !text.contains("validate_workspace_path") {
+                offenders.push(name);
+            }
+        }
+
+        assert!(
+            checked >= 6,
+            "only {checked} path-taking tools examined — this gate is not reaching the tree"
+        );
+
+        assert!(
+            offenders.is_empty(),
+            "these tools take a path from the model and touch the filesystem without \
+             validating it against the workspace, so the model can name any path on the \
+             machine: {:?}",
+            offenders
+        );
+    }
+
     // ── TG-P3-01 · the release profile is where Cargo will read it ────────────
 
     /// `[profile.release]` must live at the **workspace root**.

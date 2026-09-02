@@ -84,10 +84,18 @@ impl Tool for CheckFileTool {
             Some(p) => p,
             None => return ToolResult::error("Missing required field: path"),
         };
-        let path = if PathBuf::from(path_str).is_absolute() {
+        let raw = if PathBuf::from(path_str).is_absolute() {
             PathBuf::from(path_str)
         } else {
             PathBuf::from(&ctx.working_dir).join(path_str)
+        };
+        // ⚠ P3-14, and this is one of the two that **act** on the path rather
+        // than reading it: `check_file` spawns external checkers against it,
+        // including one it resolves from inside the workspace (`P3-19`). An
+        // unjailed path here is not a leak, it is an execution target.
+        let path = match super::path_jail::validate_workspace_path(&raw, &ctx.working_dir) {
+            Ok(canonical) => canonical,
+            Err(e) => return ToolResult::error(e),
         };
 
         if !path.exists() {

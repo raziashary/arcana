@@ -48,6 +48,40 @@ fn canonicalize_target(target: &Path) -> Result<PathBuf, String> {
         });
     }
 
+    // ── P3-15 · a path that cannot be normalised is REFUSED ──────────────
+    //
+    // `..` inside a non-existent tail used to be **silently deleted and the
+    // path rewritten**, and the rewritten path was returned as `Ok` — so
+    // `write_file.rs` used it as the write destination. Measured:
+    // `validate_workspace_path(<ws>/newdir/sub/../x.txt)` returned
+    // `Ok(<ws>/newdir/sub/x.txt)`, a different file, accepted.
+    //
+    // The mechanism is subtle and worth naming: `Path::file_name()` returns
+    // **`None`** for a `..` component, so the `if let Some(name)` below skipped
+    // it and the rejoin simply lost it. Nothing failed; the path just changed.
+    //
+    // Corruption is worse than rejection because rejection is visible. A
+    // refused call tells the model to retry with a real path; a rewritten one
+    // writes to somewhere nobody asked for.
+    //
+    // The existing part of the path is canonicalised by the OS, which resolves
+    // `..` correctly. Only the **non-existent tail** is unresolvable, and there
+    // a `..` has no meaning we can honour.
+    for component in target.components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            // Only a problem when it falls in the part we cannot canonicalise.
+            // If the whole path exists, the branch above already returned.
+            if !target.exists() {
+                return Err(format!(
+                    "Path '{}' contains '..' in a part that does not exist yet, so it \
+                     cannot be resolved. This call has been refused rather than rewritten \
+                     — retry with a path that has no '..' segments.",
+                    target.display()
+                ));
+            }
+        }
+    }
+
     // Walk up to the first existing ancestor. Track the tail components we
     // skipped so we can rejoin them after canonicalizing the existing part.
     let mut tail: Vec<&std::ffi::OsStr> = Vec::new();
@@ -55,8 +89,18 @@ fn canonicalize_target(target: &Path) -> Result<PathBuf, String> {
     let canonical_existing = loop {
         match cursor.parent() {
             Some(parent) => {
-                if let Some(name) = cursor.file_name() {
-                    tail.push(name);
+                match cursor.file_name() {
+                    Some(name) => tail.push(name),
+                    // `file_name()` is `None` for `..` and for a root. Either
+                    // way the component cannot be reproduced, and skipping it
+                    // is what silently rewrote the path. Refuse.
+                    None => {
+                        return Err(format!(
+                            "Path '{}' has a component that cannot be resolved. Refused \
+                             rather than rewritten.",
+                            target.display()
+                        ))
+                    }
                 }
                 if parent.exists() {
                     break parent.canonicalize().map_err(|e| {
@@ -94,6 +138,19 @@ fn canonicalize_target(target: &Path) -> Result<PathBuf, String> {
 /// prefix even though they refer to the same location.
 fn strip_verbatim_prefix(p: &Path) -> PathBuf {
     let s = p.to_string_lossy();
+
+    // ⚠ P3-15, second corruption. `\\?\UNC\server\share\…` is a UNC path in
+    // verbatim form. Stripping the `\\?\` blindly yields `UNC\server\share\…`
+    // — a **relative** path — and that was returned as the validated write
+    // target. A relative path resolves against the process CWD, so a network
+    // share became a write somewhere else entirely.
+    //
+    // The verbatim prefix is only safe to strip when what follows is a drive
+    // path (`\\?\C:\…`). For the UNC form the correct de-verbatim spelling is
+    // `\\server\share\…`, so the `UNC\` is replaced rather than dropped.
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
     if let Some(stripped) = s.strip_prefix(r"\\?\") {
         PathBuf::from(stripped)
     } else {
@@ -250,5 +307,117 @@ mod tests {
             .to_string();
         let result = validate_workspace_path(&target, &bogus_workspace);
         assert!(result.is_err());
+    }
+}
+
+#[cfg(test)]
+mod p3_15_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn ws() -> (TempDir, String) {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().to_string_lossy().to_string();
+        (dir, path)
+    }
+
+    #[test]
+    fn a_dotdot_in_an_unresolvable_tail_is_refused_not_rewritten() {
+        // 🔴 The measured defect. This returned
+        // `Ok(<ws>/newdir/sub/x.txt)` — a DIFFERENT path — and `write_file`
+        // used that return value as its write destination.
+        //
+        // The mechanism: `Path::file_name()` yields `None` for `..`, so the
+        // tail-rejoin loop skipped it and the path silently changed.
+        let (dir, workspace) = ws();
+        let target = dir.path().join("newdir").join("sub").join("..").join("x.txt");
+
+        let result = validate_workspace_path(&target, &workspace);
+
+        assert!(
+            result.is_err(),
+            "an unresolvable `..` must be refused, not rewritten — got {result:?}"
+        );
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("refused") || msg.contains("Refused"),
+            "the refusal must say so: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_dotdot_that_the_os_can_resolve_is_still_accepted() {
+        // ⚠ The no-fire half (`TG3-28`): a jail that refuses everything passes
+        // a refusal-only test and breaks the product. When the whole path
+        // exists, the OS canonicalises `..` correctly and the call is fine.
+        let (dir, workspace) = ws();
+        fs::create_dir_all(dir.path().join("a/b")).unwrap();
+        fs::write(dir.path().join("a/target.txt"), "x").unwrap();
+
+        let target = dir.path().join("a").join("b").join("..").join("target.txt");
+        let result = validate_workspace_path(&target, &workspace);
+
+        assert!(
+            result.is_ok(),
+            "a resolvable `..` inside the workspace must still be accepted — got {result:?}"
+        );
+    }
+
+    #[test]
+    fn ordinary_paths_are_unaffected() {
+        // The rest of the no-fire corpus: every legitimate shape must still
+        // pass, or the fix has broken the product to close the hole.
+        let (dir, workspace) = ws();
+        fs::create_dir_all(dir.path().join("src/components")).unwrap();
+
+        for rel in ["file.txt", "src/main.rs", "src/components/App.tsx", "deep/new/dir/f.ts"] {
+            let target = dir.path().join(rel);
+            assert!(
+                validate_workspace_path(&target, &workspace).is_ok(),
+                "{rel} must be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn a_verbatim_unc_path_does_not_become_relative() {
+        // The second corruption. A verbatim UNC path had its prefix stripped
+        // blindly, leaving a path that begins with the literal text "UNC" -- a
+        // RELATIVE path -- and that was returned as the validated write target,
+        // so it resolved against the process CWD instead of the share.
+        //
+        // Built by concatenation rather than as a backslash-heavy literal: the
+        // first version of this test failed because the LITERAL was mangled in
+        // transit while the code under test was correct. Concatenation removes
+        // that ambiguity.
+        let bs = std::path::MAIN_SEPARATOR;
+        let input = format!("{bs}{bs}?{bs}UNC{bs}server{bs}share{bs}dir{bs}f.txt");
+        let out = strip_verbatim_prefix(std::path::Path::new(&input));
+        let text = out.to_string_lossy().to_string();
+
+        assert!(
+            text.starts_with(&format!("{bs}{bs}")),
+            "a de-verbatimised UNC path must keep its network root, got {text}"
+        );
+        assert!(
+            !text.starts_with("UNC"),
+            "the UNC marker must become the network root, not be dropped: {text}"
+        );
+        assert!(text.contains("server"), "the server must survive: {text}");
+    }
+
+    #[test]
+    fn a_verbatim_drive_path_still_strips_cleanly() {
+        // The no-fire half: the common Windows case must be unchanged, or every
+        // path on Windows stops matching its own workspace.
+        let bs = std::path::MAIN_SEPARATOR;
+        let input = format!("{bs}{bs}?{bs}C:{bs}work{bs}repo{bs}src{bs}main.rs");
+        let out = strip_verbatim_prefix(std::path::Path::new(&input));
+
+        assert_eq!(
+            out.to_string_lossy(),
+            format!("C:{bs}work{bs}repo{bs}src{bs}main.rs")
+        );
     }
 }
