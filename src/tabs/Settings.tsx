@@ -42,6 +42,9 @@ export default function SettingsTab() {
         <SectionHeader title="Demo Mode" />
         <DemoModeCard />
 
+        <SectionHeader title="Credential Storage" />
+        <VaultBackendCard />
+
         <SectionHeader title="Daily Spend Ceiling" />
         <DailyCapCard />
 
@@ -308,6 +311,94 @@ function DemoModeCard() {
         <div className="font-mono text-xs" style={{ color: 'var(--danger)' }}>
           {cfg.error}
         </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Credential Storage (P2-24/P2-33/P2-71, wired F-14) ─────────────────────
+//
+// ⚠ Both halves of this shipped without a caller.
+//
+// `vault_backend_info` reports WHICH store is holding the user's keys, which
+// matters because the two are not equivalent — the OS keychain is protected by
+// the operating system, the encrypted-file fallback by file permissions alone.
+// `list_vault_entries` surfaces orphaned keys for providers the app no longer
+// supports, so they can be deleted rather than left in the keychain forever.
+//
+// Neither command was called from anywhere in the UI. So "tell the user which
+// store is in use" was implemented, tested, documented — and invisible.
+function VaultBackendCard() {
+  const [backend, setBackend] = useState<{ label: string; note: string; is_os_keychain: boolean } | null>(null)
+  const [entries, setEntries] = useState<Array<{ key: string; label: string; present: boolean; orphaned: boolean }>>([])
+  const [error, setError] = useState<string | null>(null)
+
+  const refresh = () => {
+    invoke<{ label: string; note: string; is_os_keychain: boolean }>('vault_backend_info')
+      .then(setBackend)
+      .catch(e => setError(String(e)))
+    invoke<Array<{ key: string; label: string; present: boolean; orphaned: boolean }>>('list_vault_entries')
+      .then(setEntries)
+      .catch(e => setError(String(e)))
+  }
+
+  useEffect(refresh, [])
+
+  const handleDelete = async (key: string) => {
+    // The key here is the canonical vault key, e.g. `provider.xai.api_key`.
+    const provider = key.replace(/^provider\./, '').replace(/\.api_key$/, '')
+    try {
+      await invoke('delete_provider_key', { provider })
+      refresh()
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
+  const orphans = entries.filter(e => e.orphaned)
+
+  return (
+    <div
+      className="rounded-sm p-4 space-y-3"
+      style={{ background: 'var(--bg-card)', border: '1px solid var(--border-1)' }}
+    >
+      {backend && (
+        <>
+          <div className="font-mono text-xs" style={{ color: 'var(--text-2)' }}>
+            {backend.label}
+          </div>
+          <div
+            className="font-mono text-xs"
+            style={{ color: backend.is_os_keychain ? 'var(--text-3)' : 'var(--warning, #fbbf24)' }}
+          >
+            {backend.note}
+          </div>
+        </>
+      )}
+
+      {orphans.length > 0 && (
+        <div className="space-y-2">
+          <div className="font-mono text-xs" style={{ color: 'var(--warning, #fbbf24)' }}>
+            {orphans.length} key{orphans.length === 1 ? '' : 's'} stored for a provider AutoDev
+            no longer supports. These sit in your credential store until removed.
+          </div>
+          {orphans.map(o => (
+            <div key={o.key} className="flex items-center gap-3">
+              <span className="font-mono text-xs" style={{ color: 'var(--text-2)' }}>{o.label}</span>
+              <button
+                onClick={() => handleDelete(o.key)}
+                className="font-mono text-xs px-2 py-0.5 rounded-sm"
+                style={{ background: 'var(--bg-2)', border: '1px solid var(--border-2)', color: 'var(--text-2)' }}
+              >
+                Delete
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {error && (
+        <div className="font-mono text-xs" style={{ color: 'var(--danger, #f87171)' }}>{error}</div>
       )}
     </div>
   )

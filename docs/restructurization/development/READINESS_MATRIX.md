@@ -70,6 +70,17 @@ Cross-cutting invariants, scored **independently of the phase areas**.
 | A9 | **P9 · Delivery** | 4 | ☐ | ☐ | ☐ | 0% | 0.0 |
 | | **Total** | **100** | | | | | **22.0** |
 
+> **A2 scored 100% twice, and the first time was wrong.** It was marked complete
+> on 74/74 tasks, 12/12 smokes and 11 green gates — and the mandatory post-phase
+> audit (`§0.2a`) then found a live 2× cost bug on the primary agent path,
+> provider keys ambient in the shipped process environment, a spend ceiling that
+> recorded nothing on the runs that spent most, and five capabilities that were
+> built, tested, documented and never reached. All are fixed and gated; the
+> score stands on the remediated state. It is recorded here because *"the phase
+> passed its own tests"* was exactly the evidence that turned out to be
+> insufficient, and a matrix that hid that would be repeating the mistake.
+> See [`P2-AUDIT-TRIAGE.md`](_verify/P2-AUDIT-TRIAGE.md).
+
 **Why P4 carries the most weight.** It is the only phase whose completion means AutoDev does what it claims: a task runs end to end on three operating systems and produces a build-verified, reversible artifact the user can run. Everything before it is a precondition; everything after it is polish, cleanup or distribution.
 
 ---
