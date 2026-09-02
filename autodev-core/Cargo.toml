@@ -5,6 +5,21 @@ edition = "2021"
 description = "AutoDev's agent runtime, providers, memory and platform layer — shared by the desktop app and the CLI, and free of any UI framework."
 
 [features]
+# Semantic (vector) memory retrieval. OFF by default.
+#
+# ⚠ NOT available on macOS at any setting, and that is upstream, not a choice:
+# Microsoft publishes no x86_64 macOS ONNX Runtime in any release from v1.25.0
+# to v1.29.0, our DMG is a UNIVERSAL binary, and a universal binary needs both
+# slices to link. Enabling this on macOS does not degrade Intel support — it
+# fails the DMG build outright. `memory::manager` therefore compiles the vector
+# backend out on macOS regardless of this flag, and memory falls back to
+# FTS5/BM25 while REPORTING that it is degraded (spec 03 §4.4).
+#
+# Enabling this triggers a ~30 MB build-time download from a third-party CDN
+# and a ~133 MB model download at first run:
+#   cargo build -p autodev-core --features embeddings
+embeddings = ["dep:fastembed"]
+
 # The live provider smoke (P2-69). OFF by default and never enabled by the app.
 #
 # Fixture tests are the CI default because they need no credentials -- but a
@@ -31,6 +46,26 @@ rusqlite    = { version = "0.31", features = ["bundled"] }
 # `loadable_extension` never meets `bundled`. Verified before adoption.
 # 0.1.9 is the latest stable; 0.1.10 is alpha.
 sqlite-vec  = "0.1.9"
+
+# ── Local embeddings (P3-32/33/34) · OPTIONAL, off by default ──────────────
+#
+# 🔴 razi-ruled 2026-09-02. `fastembed` pulls the ONNX Runtime from a
+# third-party CDN (`cdn.pyke.io`) **at build time**, ~30 MB, and the flag that
+# controls it is on `fastembed` — NOT on `ort`, which fastembed already depends
+# on with `default-features = false`. P3-33's original prescription ("disable
+# ort's default features") would therefore have changed nothing while looking
+# like a fix. And disabling the download outright also drops `hf-hub`, which
+# removes `TextEmbedding::try_new` — so there is no "no download, still loads
+# models" configuration.
+#
+# The resolution: OFF BY DEFAULT. A default build and CI fetch nothing. The
+# vendoring/hosting decision that would make this dependency ours rather than a
+# third party's is Razi's to make before it enters a release build, rather than
+# mine to make silently by adding it here.
+#
+# Pinned EXACTLY (`=`) rather than caret: a supply-chain surface is not
+# something to let float.
+fastembed = { version = "=6.0.2", optional = true }
 reqwest     = { version = "0.12", features = ["json", "stream"] }
 async-trait = "0.1"
 futures     = "0.3"

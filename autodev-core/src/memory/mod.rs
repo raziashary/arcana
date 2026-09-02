@@ -20,6 +20,7 @@
 // See: DEVELOPMENT_PLAN.md Phase 4.1-4.8
 
 pub mod backend;
+pub mod embed;
 pub mod gateway;
 pub mod manager;
 pub mod rank;

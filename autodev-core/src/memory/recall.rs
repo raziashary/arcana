@@ -18,11 +18,8 @@ use super::semantic::SemanticStore;
 use super::types::{MemoryStats, MemoryTier, RecallRequest, RecallResult};
 use crate::errors::Result;
 
-// ─── Per-spec injection limits ───────────────────────────────────────────────
-
-const EPISODIC_LIMIT: u32 = 5;
-const SEMANTIC_LIMIT: u32 = 10;
-const PROCEDURAL_LIMIT: u32 = 3;
+// Per-tier limits now live in `rank::TierBudget` (P3-41), so the budget and
+// the ranking cannot disagree about them.
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
@@ -266,22 +263,6 @@ pub fn get_stats() -> MemoryStats {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/// Naïve keyword relevance: fraction of query words found in text (0.0–1.0).
-fn keyword_score(text: &str, query: &str) -> f64 {
-    if query.trim().is_empty() {
-        return 1.0; // empty query: everything matches
-    }
-    let text_lower = text.to_lowercase();
-    let query_words: Vec<&str> = query.split_whitespace().filter(|w| w.len() > 2).collect();
-    if query_words.is_empty() {
-        return 1.0;
-    }
-    let hits = query_words
-        .iter()
-        .filter(|w| text_lower.contains(*w))
-        .count();
-    hits as f64 / query_words.len() as f64
-}
 
 /// Truncate to `max` bytes with an ellipsis.
 ///
