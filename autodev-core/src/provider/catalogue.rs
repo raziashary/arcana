@@ -241,6 +241,25 @@ pub fn entry(model: &str) -> Option<&'static CatalogueEntry> {
 /// A model with no verified price reports `0.0` rather than a guess — the
 /// pricing module treats an absent price as an error and says so there; a
 /// plausible fabricated number here would bury it.
+/// The model to use for `provider` when nothing better is known.
+///
+/// P3-61. A subagent inherited a hardcoded **Anthropic** id regardless of the
+/// active provider, so a Google-primary install sent Anthropic ids to Google on
+/// every default subagent. Any fallback that is not provider-aware has the same
+/// defect, so the fallback lives here -- beside the table that knows which
+/// models each provider actually serves.
+///
+/// The first catalogue entry for a provider is its default: entries are listed
+/// most-capable-first within each provider, and `models_for` preserves that
+/// order. Returns `None` for a provider with no entries, which is a
+/// configuration error rather than something to paper over with a guess.
+pub fn default_model_for(provider: &str) -> Option<&'static str> {
+    CATALOGUE
+        .iter()
+        .find(|e| e.provider == provider)
+        .map(|e| e.id)
+}
+
 pub fn models_for(provider: &str) -> Vec<ModelInfo> {
     CATALOGUE
         .iter()
@@ -376,10 +395,48 @@ mod tests {
         // catalogue, and against the stale list it found nothing for
         // `gemini-3.1-pro` and fell back to 200k — compacting at a fifth of the
         // real window while looking fixed.
-        assert_eq!(capabilities_for("gemini-3.1-pro-preview").context_window, 1_000_000);
-        assert_eq!(capabilities_for("gemini-3.7-flash").context_window, 1_000_000);
-        // And the fallback it used to hit is still what an UNKNOWN model gets,
-        // so this test fails if lookup silently breaks again.
+        //
+        // 🔴 `P3-59` — **my own defect, from P2.** This test asserted on
+        // `capabilities_for(..).context_window`, which is
+        // `ModelCapabilities::context_window`. Production reads
+        // `ModelInfo::context_window`, reached through `provider.models()` →
+        // `models_static()` → `models_for()`. **Two different fields.** They
+        // agree only because both derive from the same `CatalogueEntry`, so a
+        // regression in `models_for` alone would have left this green while
+        // Gemini silently compacted at 200k again.
+        //
+        // That is `L-C6` — a check written from the claim rather than the
+        // invariant — inside the very test written to stop `L-18` recurring.
+        // It now walks the production path.
+        let window_of = |id: &str| -> Option<u32> {
+            models_for("google")
+                .into_iter()
+                .find(|m| m.id == id)
+                .map(|m| m.context_window)
+        };
+
+        assert_eq!(
+            window_of("gemini-3.1-pro-preview"),
+            Some(1_000_000),
+            "the field PRODUCTION reads must carry the full window"
+        );
+        assert_eq!(window_of("gemini-3.7-flash"), Some(1_000_000));
+
+        // The two fields must also agree, since both are shipped. A drift
+        // between them is a real defect even though production reads only one.
+        assert_eq!(
+            capabilities_for("gemini-3.1-pro-preview").context_window,
+            window_of("gemini-3.1-pro-preview").unwrap(),
+            "ModelCapabilities and ModelInfo disagree about the same model's window"
+        );
+
+        // And the fallback production uses for an unknown model is still the
+        // smallest window we ship, so a lookup that silently breaks compacts
+        // early rather than overflowing.
+        assert!(
+            models_for("google").iter().all(|m| m.id != "not-a-model"),
+            "the unknown-model probe must actually be unknown"
+        );
         assert_eq!(capabilities_for("not-a-model").context_window, 200_000);
     }
 

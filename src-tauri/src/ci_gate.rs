@@ -2329,6 +2329,191 @@ let x = 1;
         );
     }
 
+    // ── TG-P3-58/60/61/62/63 · every declared subagent control is read ────────
+
+    /// Five fields a caller can set on a subagent, all of which were written
+    /// and none of which were read.
+    ///
+    /// 🔴 `P3-58` one depth boundary, not two on opposite sides ·
+    /// 🔴 `P3-60` `SubagentConfig.tools` had zero readers, so a declared tool
+    /// subset was a containment promise the code did not keep ·
+    /// 🔴 `P3-61` `DEFAULT_MODEL` is an Anthropic id handed to whichever
+    /// provider is active ·
+    /// 🔴 `P3-62` cost and tokens hardcoded to zero, which is what the QC
+    /// hourly ceiling is computed from ·
+    /// 🔴 `P3-63` `max_turns` defaulted then discarded.
+    ///
+    /// ⚠ These are one gate because they are one defect class — `§0.16 L-C12`,
+    /// a field or helper wired to nothing, standing at seven instances. The
+    /// assertions are all of the same shape: the value must reach a **reader**.
+    #[test]
+    fn tg_p3_58_63_declared_subagent_controls_are_honoured() {
+        let runner = read_source(
+            &repo_root().join("autodev-core/src/subagent/native_runner.rs"),
+        );
+        let registry = read_source(
+            &repo_root().join("autodev-core/src/agent/tool_registry.rs"),
+        );
+
+        // ── P3-58 · one boundary, defined once ──────────────────────────
+        for tool in ["spawn_subagent.rs", "spawn_parallel_subagents.rs"] {
+            let raw = read_source(
+                &repo_root()
+                    .join("autodev-core/src/agent/builtin_tools")
+                    .join(tool),
+            );
+            // ⚠ Comments stripped first. The comment recording this fix QUOTES
+            // the constant it removed, and scanning it flags the fix as the
+            // defect — the same way TG-P3-20 flagged `glob`'s disclaimer.
+            let text: String = raw
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                !text.contains("const MAX_SUBAGENT_DEPTH"),
+                "{tool} declares its own depth limit. Two constants for one \
+                 boundary is how the pool's guard became unreachable"
+            );
+            assert!(
+                text.contains("subagent::pool::MAX_NESTING_DEPTH"),
+                "{tool} must compare against the pool's boundary, not its own"
+            );
+            assert!(
+                text.contains("let child_depth = ctx.depth + 1"),
+                "{tool} must test the CHILD's depth — the pool rejects on the \
+                 child, and testing the parent instead makes the two guards \
+                 disagree by exactly one generation"
+            );
+        }
+
+        // ── P3-60 · the declared tool subset is applied ──────────────────
+        assert!(
+            registry.contains("pub fn restrict_to"),
+            "the registry must be narrowable"
+        );
+        assert!(
+            runner.contains("with_tool_subset(&config.tools)"),
+            "`config.tools` must reach the engine — it was written by all three \
+             spawn tools and the Tauri command, and read by nothing"
+        );
+
+        // ── P3-61 · the model is routed, not assumed ─────────────────────
+        assert!(
+            runner.contains("pick_servable_model(&provider_id"),
+            "the subagent's model must be checked against the provider that \
+             will serve it"
+        );
+        assert!(
+            !runner.contains("fallback_model.unwrap_or_else(|| SubagentConfig::DEFAULT_MODEL"),
+            "the dead `is_empty()` fallback is back: `manager.rs` fills \
+             `config.model` before this runs, so that branch never executes"
+        );
+
+        // ── P3-63 · max_turns reaches the budget the engine enforces ─────
+        assert!(
+            runner.contains("budget.max_turns = Some(config.max_turns)"),
+            "`config.max_turns` must reach `TaskBudget`, which is the thing the \
+             engine actually enforces"
+        );
+
+        // ── P3-62 · the reported cost is the real one, on BOTH arms ──────
+        let zero_costs = runner.matches("cost_usd: 0.0").count();
+        assert_eq!(
+            zero_costs, 0,
+            "a SubagentResult still reports zero cost. The QC hourly dollar \
+             ceiling is computed from this field, so a zero here makes the \
+             ceiling self-cancel on completion and bound nothing but in-flight \
+             concurrency"
+        );
+        assert_eq!(
+            runner.matches("cost_usd: accounting.cost_usd").count(),
+            2,
+            "both the completed AND the failed arm must report real cost — a \
+             subagent that timed out at 600s is exactly the expensive one"
+        );
+    }
+
+    // ── TG-P3-59 · compaction reads the window through the production path ────
+
+    /// The compaction window must be correct **through `Provider::models()`**,
+    /// which is what the engine actually calls.
+    ///
+    /// 🔴 `P3-59` — my own defect from P2. The guarding test asserted on
+    /// `capabilities_for(..).context_window`
+    /// (`ModelCapabilities::context_window`) while production reads
+    /// `ModelInfo::context_window` via `provider.models()`. **Two different
+    /// fields**, agreeing only because both derive from one `CatalogueEntry` —
+    /// so a regression in `models_for` alone would leave the test green while
+    /// Gemini compacted at 200k again, which is the exact bug `P2-57` fixed.
+    ///
+    /// ⚠ This gate constructs a **real provider** and calls the real trait
+    /// method, rather than reaching into the catalogue. `models()` is static
+    /// data, so the dummy key never leaves the process and no request is made.
+    /// The point is to traverse every hop the engine traverses: a break at any
+    /// one of them fails here.
+    #[test]
+    fn tg_p3_59_the_compaction_window_survives_the_production_path() {
+        use autodev_core::provider::traits::Provider;
+
+        // The engine's lookup, reproduced exactly: find the model in
+        // `provider.models()` and read `context_window`.
+        fn window_via_provider(p: &dyn Provider, model: &str) -> Option<u32> {
+            p.models().iter().find(|m| m.id == model).map(|m| m.context_window)
+        }
+
+        let google = autodev_core::provider::google::GoogleProvider::new("not-a-real-key".into());
+
+        // Every Google model must survive the trip with a usable window.
+        let listed = google.models();
+        assert!(
+            !listed.is_empty(),
+            "the Google adapter lists no models — `provider.models()` is the \
+             engine's only source for the window, so this alone would compact \
+             every Gemini conversation at the 200k fallback"
+        );
+
+        for m in &listed {
+            let via = window_via_provider(&google, &m.id).unwrap_or(0);
+            assert!(
+                via > 0,
+                "{} reaches production with no context window",
+                m.id
+            );
+            assert_eq!(
+                via,
+                autodev_core::provider::catalogue::capabilities_for(&m.id).context_window,
+                "{}'s window differs between ModelInfo (what production reads) \
+                 and ModelCapabilities (what the old test read). Two fields for \
+                 one fact is how the P2 test passed over a live regression",
+                m.id
+            );
+        }
+
+        // The headline case, stated concretely: Gemini's window must not be
+        // the 200k fallback.
+        let gemini = listed
+            .iter()
+            .find(|m| m.id.starts_with("gemini"))
+            .expect("the catalogue must ship at least one Gemini");
+        assert!(
+            gemini.context_window > 200_000,
+            "{} arrives at the engine with a {}-token window — that IS the \
+             unknown-model fallback, so compaction fires at a fifth of the real \
+             capacity while looking fixed",
+            gemini.id,
+            gemini.context_window
+        );
+
+        // And the engine must still be reading that field, not a constant.
+        let engine = read_source(&repo_root().join("autodev-core/src/agent/engine.rs"));
+        assert!(
+            engine.contains(".map(|m| m.context_window)"),
+            "the engine must read the window from `provider.models()`; a \
+             hardcoded limit here is P2-57 reintroduced"
+        );
+    }
+
     // ── TG-P3-17 · no validator subprocess runs without a ceiling ─────────────
 
     /// Every subprocess the validator spawns must go through `run_bounded`.

@@ -31,6 +31,20 @@ use crate::state::lock::LockTolerant;
 
 const MAX_TOOL_TURNS: usize = 20;
 
+/// What one run of the engine actually cost.
+///
+/// P3-62. `SubagentResult`'s cost and token fields were hardcoded `0.0/0/0`
+/// under a comment saying roll-up "is not wired yet". The QC **hourly dollar
+/// ceiling** is computed from exactly those fields, so every completed
+/// reviewer settled at $0.00 and the ceiling only ever bounded in-flight
+/// concurrency -- never spend. It self-cancelled on completion.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RunAccounting {
+    pub cost_usd: f64,
+    pub tokens_in: u32,
+    pub tokens_out: u32,
+}
+
 pub struct AgentEngine {
     provider: Arc<dyn Provider>,
     registry: ToolRegistry,
@@ -46,6 +60,9 @@ pub struct AgentEngine {
     // Ruflo Feature 4 — Budget Circuit Breaker: set via with_task_budget()
     task_id: Option<i64>,
     task_budget: Option<crate::budget::TaskBudget>,
+    /// Accounting for the most recent run (`P3-62`). Interior mutability
+    /// because `run` takes `&self` at every call site.
+    last_run: Mutex<Option<RunAccounting>>,
 }
 
 impl AgentEngine {
@@ -71,6 +88,27 @@ impl AgentEngine {
             session_mgr: None,
             task_id: None,
             task_budget: None,
+            last_run: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Narrow this engine's tool registry to a declared subset (`P3-60`).
+    ///
+    /// Empty means unrestricted. Applied after `register_for_mode`, so a
+    /// subset can only ever REMOVE tools the PA mode already granted — it can
+    /// never widen access.
+    pub fn with_tool_subset(mut self, names: &[String]) -> Self {
+        self.registry.restrict_to(names);
+        self
+    }
+
+    /// Usage and cost of the most recent run on this engine (`P3-62`).
+    ///
+    /// `None` until a run has settled its spend.
+    pub fn last_run_accounting(&self) -> Option<RunAccounting> {
+        match self.last_run.lock() {
+            Ok(g) => *g,
+            Err(p) => *p.into_inner(),
         }
     }
 
@@ -1143,6 +1181,24 @@ impl AgentEngine {
             cost_usd,
             total_today,
         });
+
+        // P3-62. Recorded here rather than returned up through `run`, because
+        // `record_spend` is called on EVERY exit path out of the turn loop
+        // (including the error paths — D-1) and `run` returns history, not
+        // accounting. A caller that needs the number reads it after awaiting;
+        // `SubagentResult` is the one that needs it, and the QC hourly ceiling
+        // is computed from that.
+        {
+            let accounting = RunAccounting {
+                cost_usd,
+                tokens_in: total_usage.total_input(),
+                tokens_out: total_usage.output,
+            };
+            match self.last_run.lock() {
+                Ok(mut g) => *g = Some(accounting),
+                Err(p) => *p.into_inner() = Some(accounting),
+            }
+        }
 
         cost_usd
     }

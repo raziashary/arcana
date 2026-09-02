@@ -86,11 +86,23 @@ impl Tool for SpawnSubagentTool {
 
         // K.11 — Guard against unbounded recursion. If the caller is already
         // a subagent at the depth limit, refuse to spawn further.
-        const MAX_SUBAGENT_DEPTH: u32 = 3;
-        if ctx.depth >= MAX_SUBAGENT_DEPTH {
+        // ⚠ P3-58. This was a LOCAL `const MAX_SUBAGENT_DEPTH: u32 = 3`
+        // compared as `ctx.depth >= 3` on the **parent**, while `pool.rs`
+        // rejects `> 3` on the **child** (which is `parent + 1`). Parent >= 3
+        // fires whenever child > 3 would — and one turn earlier — so the
+        // pool's own depth branch was **unreachable from any builtin tool**:
+        // a guard that could not fire, which is what `§0.16` names as its own
+        // recurring class.
+        //
+        // One boundary now, defined once in `pool.rs` and compared against the
+        // same side of it everywhere: reject when the CHILD would exceed it.
+        let child_depth = ctx.depth + 1;
+        if child_depth > subagent::pool::MAX_NESTING_DEPTH {
             return ToolResult::error(format!(
-                "Subagent depth limit ({MAX_SUBAGENT_DEPTH}) reached — \
+                "Subagent depth limit ({}) reached — \
                  complete this work directly rather than spawning a subagent."
+            ,
+                subagent::pool::MAX_NESTING_DEPTH
             ));
         }
 

@@ -222,6 +222,30 @@ mod p3_22_tests {
     /// them, or from `list()`, which only the UI calls. With the subagent
     /// monitor panel closed, the 17th spawn blocked permanently.
     #[tokio::test]
+    async fn the_depth_boundary_is_where_it_says_it_is() {
+        // P3-58. The three builtin-tool guards rejected at `>= 3` on the
+        // PARENT while this pool rejects at `> 3` on the CHILD (= parent + 1).
+        // Parent >= 3 fires whenever child > 3 would, and one generation
+        // earlier -- so the pool's depth branch was unreachable from any
+        // builtin tool: a guard that could not fire.
+        //
+        // One boundary, asserted on one side. A child exactly AT the limit is
+        // allowed; one past it is not.
+        let pool = SubagentPool::new();
+
+        assert!(
+            pool.acquire("at-the-limit", MAX_NESTING_DEPTH).await.is_ok(),
+            "a child at exactly MAX_NESTING_DEPTH={MAX_NESTING_DEPTH} must be              allowed, or the effective limit is one less than the constant says"
+        );
+        assert!(
+            pool.acquire("past-the-limit", MAX_NESTING_DEPTH + 1)
+                .await
+                .is_err(),
+            "a child past MAX_NESTING_DEPTH must be rejected"
+        );
+    }
+
+    #[tokio::test]
     async fn a_released_permit_restores_capacity() {
         let pool = SubagentPool::new();
 

@@ -25,7 +25,7 @@ use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
 use tracing::{info, warn};
 
-use crate::agent::engine::AgentEngine;
+use crate::agent::engine::{AgentEngine, RunAccounting};
 use crate::agent::permission::{PendingPermissions, PermissionMode};
 use crate::agent::tool_trait::AgentIdentity;
 use crate::agent::PAMode;
@@ -49,6 +49,45 @@ use crate::state::lock::LockTolerant;
 pub struct RunnerDeps {
     pub state: Arc<Mutex<AppState>>,
     pub pending: PendingPermissions,
+}
+
+/// Choose a model the active provider can actually serve.
+///
+/// 🔴 `P3-61`. A subagent inherited `DEFAULT_MODEL` — a hardcoded Anthropic id
+/// — regardless of which provider was active, so a Google-primary install sent
+/// Anthropic ids to Google on every default subagent. `spawn_qc_review` had the
+/// same defect against its own hardcoded id.
+///
+/// Order: the requested model if this provider serves it, then the user's
+/// active model if this provider serves that, then the provider's own default.
+/// The last step is what makes this total — there is always an answer, and it
+/// is always one the provider recognises.
+fn pick_servable_model(provider_id: &str, requested: &str, active: Option<&str>) -> String {
+    let serves = |m: &str| {
+        !m.trim().is_empty()
+            && crate::provider::routing::provider_for_model(m) == Some(provider_id)
+    };
+
+    if serves(requested) {
+        return requested.to_string();
+    }
+    if let Some(a) = active {
+        if serves(a) {
+            warn!(
+                "[NativeSubagent] requested model '{requested}' is not served by \
+                 '{provider_id}' — falling back to the active model '{a}'"
+            );
+            return a.to_string();
+        }
+    }
+
+    let fallback = crate::provider::catalogue::default_model_for(provider_id)
+        .unwrap_or(SubagentConfig::DEFAULT_MODEL);
+    warn!(
+        "[NativeSubagent] neither '{requested}' nor the active model is served by \
+         '{provider_id}' — using its default '{fallback}'"
+    );
+    fallback.to_string()
 }
 
 /// Execute a subagent to completion on a nested `AgentEngine`.
@@ -76,7 +115,16 @@ pub async fn run(
         },
     );
 
-    let outcome = run_inner(&deps, &subagent_id, &config, &prompt, &events_tx).await;
+    let mut accounting = RunAccounting::default();
+    let outcome = run_inner(
+        &deps,
+        &subagent_id,
+        &config,
+        &prompt,
+        &events_tx,
+        &mut accounting,
+    )
+    .await;
     let duration_secs = started_at.elapsed().as_secs_f64();
 
     match outcome {
@@ -106,13 +154,19 @@ pub async fn run(
                 // rather than guessed — a fabricated file list is worse than
                 // an honest absence.
                 files_modified: Vec::new(),
-                // The child engine records its own token usage and cost into
-                // analytics per session. Rolling that up to the subagent level
-                // is not wired yet, so these are reported as zero rather than
-                // invented.
-                cost_usd: 0.0,
-                tokens_in: 0,
-                tokens_out: 0,
+                // 🔴 P3-62. These were hardcoded `0.0/0/0` under a comment
+                // saying roll-up "is not wired yet". The QC **hourly dollar
+                // ceiling** is computed from exactly these fields, so every
+                // completed reviewer settled at $0.00 and the ceiling only
+                // ever bounded in-flight concurrency — it self-cancelled on
+                // completion and never bounded spend at all.
+                //
+                // Pairs with `P3-55`: that was a charge never released, this
+                // is a cost never recorded. Either one alone leaves the
+                // ceiling meaningless.
+                cost_usd: accounting.cost_usd,
+                tokens_in: accounting.tokens_in,
+                tokens_out: accounting.tokens_out,
                 duration_secs,
                 error: None,
             })
@@ -134,9 +188,12 @@ pub async fn run(
                 status: SubagentStatus::Failed,
                 result_summary: String::new(),
                 files_modified: Vec::new(),
-                cost_usd: 0.0,
-                tokens_in: 0,
-                tokens_out: 0,
+                // P3-62. A failed subagent still spent money — a timeout at
+                // 600s spent a great deal of it. Reporting zero here would
+                // hide precisely the runs the ceiling exists to catch.
+                cost_usd: accounting.cost_usd,
+                tokens_in: accounting.tokens_in,
+                tokens_out: accounting.tokens_out,
                 duration_secs,
                 error: Some(message),
             })
@@ -152,6 +209,13 @@ async fn run_inner(
     config: &SubagentConfig,
     prompt: &str,
     events_tx: &mpsc::UnboundedSender<SubagentEvent>,
+    // ⚠ P3-62. An out-param rather than a return value, deliberately: the
+    // accounting must survive the **error** paths too, and a `Result` carries
+    // it on neither. A subagent that timed out still spent the user's money —
+    // and under the QC hourly ceiling, the runs that fail late are exactly the
+    // expensive ones. Same discipline as `record_spend`: written on every exit,
+    // especially the ones that return early.
+    accounting: &mut RunAccounting,
 ) -> Result<String> {
     let (provider_id, fallback_model) = {
         let s = deps.state.lock_tolerant();
@@ -161,11 +225,17 @@ async fn run_inner(
         AutoDevError::Agent("No active provider set — cannot spawn a subagent".into())
     })?;
 
-    let model = if config.model.is_empty() {
-        fallback_model.unwrap_or_else(|| SubagentConfig::DEFAULT_MODEL.to_string())
-    } else {
-        config.model.clone()
-    };
+    // ⚠ P3-61. `manager.rs::spawn` fills `config.model` with
+    // `SubagentConfig::DEFAULT_MODEL` (an **Anthropic** id) before the config
+    // is cloned, so `config.model.is_empty()` was never true by the time
+    // execution reached here — making this whole `fallback_model` branch dead
+    // code. On a Google-primary install, which `models.ts` declares as
+    // supported, **every default subagent sent an Anthropic model id to
+    // Google**.
+    //
+    // Emptiness is therefore the wrong question. The right one is whether the
+    // model belongs to the provider that will actually serve it.
+    let model = pick_servable_model(&provider_id, &config.model, fallback_model.as_deref());
 
     let provider = build_provider(&provider_id, deps.state.clone())?;
 
@@ -204,7 +274,26 @@ async fn run_inner(
     // P2-48. A subagent is autonomous and fans out — `spawn_parallel_subagents`
     // runs several at once — so an unbounded one multiplies. Same default
     // ceiling as a worker.
-    .with_budget(crate::budget::TaskBudget::default_worker());
+    .with_budget({
+        // ⚠ P3-63. `config.max_turns` was defaulted in `manager.rs::spawn` and
+        // then never read by anything: a caller setting a turn bound on a
+        // subagent got the worker default regardless. `TaskBudget` already
+        // carries `max_turns` and the engine already enforces it — the field
+        // simply was not connected to it.
+        let mut budget = crate::budget::TaskBudget::default_worker();
+        if config.max_turns > 0 {
+            budget.max_turns = Some(config.max_turns);
+        }
+        budget
+    })
+    // ⚠ P3-60. `SubagentConfig.tools` is documented as "tool subset the
+    // subagent is allowed to use", is written by all three spawn tools AND the
+    // Tauri command, and had **zero readers** — the child received the full
+    // registry. A containment promise the code did not keep.
+    //
+    // Narrowing happens after `register_for_mode`, so a subset can only REMOVE
+    // tools the PA mode already granted; it can never widen access.
+    .with_tool_subset(&config.tools);
 
     let working_dir = config.working_dir.clone();
     let system_prompt =
@@ -219,12 +308,19 @@ async fn run_inner(
         system_prompt.as_deref(),
     );
 
-    let history = match timeout(
+    let outcome = timeout(
         Duration::from_secs(config.timeout_secs.max(1) as u64),
         run_future,
     )
-    .await
-    {
+    .await;
+
+    // Read BEFORE unwrapping the outcome, so a timeout or an engine error
+    // still reports what it spent.
+    if let Some(spent) = engine.last_run_accounting() {
+        *accounting = spent;
+    }
+
+    let history = match outcome {
         Ok(result) => result?,
         Err(_) => {
             return Err(AutoDevError::Agent(format!(
@@ -389,5 +485,84 @@ mod tests {
         let parent = AgentIdentity::worker("worker-backend");
         let config = config_at_depth(parent.depth + 1);
         assert_eq!(identity_for("subagent-x", &config).depth, parent.depth + 1);
+    }
+}
+
+#[cfg(test)]
+mod p3_58_63_tests {
+    use super::*;
+
+    // ── P3-61 · a subagent never gets a model its provider cannot serve ──
+
+    #[test]
+    fn a_google_install_never_receives_an_anthropic_model_id() {
+        // 🔴 THE DEFECT. `manager.rs::spawn` fills `config.model` with
+        // `DEFAULT_MODEL` — an Anthropic id — BEFORE the config is cloned, so
+        // `config.model.is_empty()` was never true here and the whole
+        // `fallback_model` branch was dead code. On a Google-primary install,
+        // which `models.ts` declares as supported, every default subagent sent
+        // an Anthropic id to Google.
+        let chosen = pick_servable_model("google", SubagentConfig::DEFAULT_MODEL, None);
+
+        assert_eq!(
+            crate::provider::routing::provider_for_model(&chosen),
+            Some("google"),
+            "a Google-primary install was handed '{chosen}', which Google does \
+             not serve"
+        );
+    }
+
+    #[test]
+    fn the_qc_default_is_corrected_too() {
+        // `spawn_qc_review` hardcodes `claude-sonnet-5`. It reaches the same
+        // chokepoint, which is why the fix lives here rather than at each
+        // caller — a per-caller fix leaves the next caller broken.
+        let chosen = pick_servable_model("google", crate::db::workers::DEFAULT_MODEL, None);
+        assert_eq!(
+            crate::provider::routing::provider_for_model(&chosen),
+            Some("google")
+        );
+    }
+
+    #[test]
+    fn a_requested_model_the_provider_serves_is_honoured() {
+        // The no-fire half: if this over-corrects, every explicit model choice
+        // is silently discarded.
+        let chosen = pick_servable_model("anthropic", SubagentConfig::DEFAULT_MODEL, None);
+        assert_eq!(chosen, SubagentConfig::DEFAULT_MODEL);
+    }
+
+    #[test]
+    fn the_active_model_is_preferred_over_the_providers_default() {
+        // A user who picked a specific Gemini should get that one, not
+        // whichever Gemini the catalogue lists first.
+        let active = crate::provider::catalogue::models_for("google")
+            .into_iter()
+            .map(|m| m.id)
+            .find(|id| Some(id.as_str()) != crate::provider::catalogue::default_model_for("google"));
+
+        if let Some(active) = active {
+            let chosen = pick_servable_model("google", "claude-opus-4", Some(&active));
+            assert_eq!(
+                chosen, active,
+                "the user's active model must win over the catalogue default"
+            );
+        }
+    }
+
+    #[test]
+    fn every_provider_has_a_default_the_router_agrees_with() {
+        // Guards the fallback itself: a provider whose default is served by a
+        // DIFFERENT provider would send the wrong id on every subagent, which
+        // is the exact defect one layer down.
+        for provider in ["anthropic", "openai", "google"] {
+            let d = crate::provider::catalogue::default_model_for(provider)
+                .unwrap_or_else(|| panic!("{provider} has no catalogue entry"));
+            assert_eq!(
+                crate::provider::routing::provider_for_model(d),
+                Some(provider),
+                "{provider}'s default '{d}' routes elsewhere"
+            );
+        }
     }
 }
