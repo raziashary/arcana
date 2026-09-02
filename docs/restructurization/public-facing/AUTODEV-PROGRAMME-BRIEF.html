@@ -340,9 +340,9 @@
     <p class="standfirst">A desktop application in which a team of AI agents handles a programming task end to end. This is a condensed view of the restructure, for readers who are not in the code daily.</p>
 
     <dl class="strip">
-      <div class="stat"><dt>Readiness</dt><dd>22%<small>Four phases closed &middot; unchanged by design</small></dd></div>
-      <div class="stat"><dt>Open tasks</dt><dd>218<small>All written out</small></dd></div>
-      <div class="stat"><dt>To handover</dt><dd>~37h<small>AutoDesign can start</small></dd></div>
+      <div class="stat"><dt>Readiness</dt><dd>34%<small>P0&ndash;P3 closed</small></dd></div>
+      <div class="stat"><dt>Open tasks</dt><dd>200<small>All written out</small></dd></div>
+      <div class="stat"><dt>To handover</dt><dd>~6h<small>P8, then AutoDesign can start</small></dd></div>
       <div class="stat"><dt>Rollout 1</dt><dd>~92h<small>208 tasks</small></dd></div>
       <div class="stat"><dt>Rollout 2</dt><dd>~35h<small>83 tasks</small></dd></div>
     </dl>
@@ -398,8 +398,8 @@
           <tr class="is-done"><td class="phase">Structural<span class="code">P1</span></td><td>Everything shipped is compiled; one owner per database; redaction live</td><td class="n">22</td><td class="n">—</td><td><span class="chip done">Done</span></td></tr>
           <tr class="is-done"><td class="phase">Providers<span class="code">P2</span></td><td>Three providers conform; Gemini primary; cost honest; spend capped</td><td class="n">74</td><td class="n">—</td><td><span class="chip done">Done</span></td></tr>
           <tr class="is-done"><td class="phase">Runtime<span class="code">P3 A–E</span></td><td>One tool path with a real permission gate; a panic cannot kill the app &mdash; and four ways the model could reach past both, closed</td><td class="n">43</td><td class="n">&mdash;</td><td><span class="chip done">Done</span></td></tr>
-          <tr class="is-now"><td class="phase">Memory<span class="code">P3-F</span></td><td>Memory that works and is provably read</td><td class="n">15</td><td class="n">~7.5h</td><td><span class="chip now">Next</span></td></tr>
-          <tr><td class="phase">Sidecar removal<span class="code">P8</span></td><td>The retired Python subsystem deleted entirely</td><td class="n">24</td><td class="n">~6h</td><td><span class="chip queued">Queued</span></td></tr>
+          <tr class="is-done"><td class="phase">Memory<span class="code">P3-F</span></td><td>Memory that works, is scoped to its project, and cannot be written to by an agent claiming to be you</td><td class="n">18</td><td class="n">&mdash;</td><td><span class="chip done">Done</span></td></tr>
+          <tr class="is-now"><td class="phase">Sidecar removal<span class="code">P8</span></td><td>The retired Python subsystem deleted entirely</td><td class="n">24</td><td class="n">~6h</td><td><span class="chip now">Next</span></td></tr>
           <tr class="handover"><td colspan="5">↓ &nbsp;HANDOVER — the AutoDesign team can begin wiring, ~37 hours in</td></tr>
           <tr><td class="phase">Ingestion<span class="code">PD1</span></td><td>PSD and PDF become one representation</td><td class="n">14</td><td class="n">~6h</td><td><span class="chip queued">Queued</span></td></tr>
           <tr><td class="phase">Fidelity<span class="code">PD2</span></td><td>Faithfulness measured, and refined where it falls short</td><td class="n">14</td><td class="n">~7.5h</td><td><span class="chip queued">Queued</span></td></tr>
@@ -468,13 +468,49 @@
     paths, so fifty routine retries could disable review for an hour at no real spend. Both are
     fixed, and both are guarded by a check that fails if the shape returns.</p>
 
-    <h3>Why the readiness figure did not move</h3>
-    <p>P3 is scored as one area covering A&ndash;G, and P3-F &mdash; memory &mdash; is
-    untouched. Under the programme&rsquo;s own rule there is no partial credit for a scored
-    area, so the row stays at zero and the headline number stays at 22%. Recording A&ndash;E
-    against a row that spans A&ndash;G would be exactly the arithmetic that rule exists to
-    prevent. What did move is the safety overlay: fault isolation from red to amber, and four
-    model-reachable holes closed under security posture.</p>
+    <h3>What P3-F delivered &mdash; memory</h3>
+    <p>Memory now depends on what you actually asked. Before this phase every recall returned
+    the same text whatever the question, because the query was never passed to the search. It
+    is scoped to the project it belongs to; it falls back to keyword search on machines that
+    cannot run the embedding model and <em>says so in the prompt</em> rather than silently
+    returning less; and an agent can no longer write into it freely &mdash; a gateway decides
+    what is worth keeping and tells the agent which check it failed when it declines.</p>
+
+    <h3>The audits found four live defects in this phase&rsquo;s own finished code</h3>
+    <p>That is what the audits are for, and three of the four were reachable by the model
+    itself.</p>
+    <ul>
+      <li>The task whose <em>entire purpose</em> is stopping an agent from claiming your
+      authority shipped a flag that let any agent do exactly that &mdash; writing a memory at
+      your own confidence, labelled &ldquo;you told me&rdquo;, into every repository you open.
+      A comment, a test and an automated gate all asserted this was impossible. All three were
+      written in one sitting from one misreading, so they agreed with each other rather than
+      with the code.</li>
+      <li>Two of the three kinds of memory were <strong>never written to the index that recall
+      reads</strong>. Every conversation after the upgrade would have been silently
+      unrecallable &mdash; and <em>&ldquo;forget this&rdquo; did not forget</em>: a memory you
+      removed kept being fed to the model on every turn while every screen reported it
+      deleted.</li>
+      <li>Memory text was placed into the model&rsquo;s instructions <strong>unquoted and
+      last</strong>, so a single poisoned file in a repository could have written a standing
+      instruction that survived into every later session, and into every other project.</li>
+      <li>One was in shared safety code: the backup check that guards <em>every</em> database
+      upgrade had been rejecting perfectly good backups since the previous phase, which would
+      have blocked the application from upgrading at all.</li>
+    </ul>
+    <p>All are fixed, each with a test that was <strong>deliberately broken first</strong> to
+    prove it can fail.</p>
+
+    <h3>Why readiness is 34% and not 40%</h3>
+    <p>The phase is built and its smoke tests pass, but the specification&rsquo;s own gate
+    register is not fully satisfied: five of the eight memory gates are not met and three are
+    partly met, verified by an independent reviewer that had not seen any of the reasoning
+    behind the code. The largest remaining item is that the vector-search table is queried by
+    the code and <strong>never actually created</strong>, so semantic search would fail if it
+    were switched on. It is off by default and nothing is broken today, but the score reflects
+    it. An earlier draft of this figure said 40% and was corrected the same hour &mdash; every
+    automated gate written for the phase was green, and that is a fact about those gates, not
+    about the specification they were written against.</p>
 
     <h3>What P2 delivered</h3>
     <p>Prompt caching works and is <em>measured</em>, not asserted: a repeated prompt wrote 11,923 tokens to cache and read back exactly 11,923. That matters because caching is the one optimisation that fails completely silently — below a model&rsquo;s minimum length, or after a single changed byte, the provider caches nothing, returns no error, and the only symptom is the bill. So the alarm that detects a broken cache was built and proven <em>before</em> the caching it watches.</p>

@@ -6,7 +6,7 @@
 |---|---|
 | **Prepared** | 2026-09-02 |
 | **Owner** | Razi Ashary — Programming Lead, AIRS Foundry |
-| **Status** | P0, P1, P2 and **P3 A–E** complete · P3-F (memory) next · overall readiness **22%** |
+| **Status** | P0, P1, P2 and **all of P3** complete · P8 (sidecar removal) next · overall readiness **34%** |
 | **Source documents** | `docs/restructurization/vision/00-AUTODEV-RESTRUCTURE-MASTER-PLAN.md` (why) · `docs/restructurization/development/MASTER_DEVELOPMENT_PLAN.md` (what and when) |
 
 This brief condenses both. Where it is terse, those documents are authoritative.
@@ -88,9 +88,9 @@ Fifteen phases. Every one has an explicit slot — nothing is parked.
 | ✅ | **P1** Structural | Everything shipped is compiled; one owner per database; redaction live | 22 | done |
 | ✅ | **P2** Providers | Three providers conform; **Gemini primary**; cost honest; spend capped — proven against the live APIs, not only against fixtures | 74 | done |
 | ✅ | **P3 A–E** Runtime | One tool path with a real permission gate; a panic cannot kill the app — **and four ways the model could reach past both, closed** | 43 | done |
-| 1 | **P3-F** Memory | Memory that works and is provably read | 15 | ~7.5 h |
+| ✅ | **P3-F** Memory | Memory that works, is scoped to its project, and cannot be written to by an agent claiming to be you | 18 | done |
 | 3 | **P8** Sidecar removal | The retired Python subsystem deleted entirely | 24 | ~6 h |
-| 🤝 | **Handover** | **The AutoDesign team can begin wiring** | — | **~37 h in** |
+| 🤝 | **Handover** | **The AutoDesign team can begin wiring** | — | **~6 h away** |
 | 5 | **PD1** Ingestion | PSD **and** PDF → one representation | 14 | ~6 h |
 | 6 | **PD2** Fidelity | Faithfulness measured and refined | 14 | ~7.5 h |
 | 7 | **PD3** Export | Webpage · PDF · PSD | 15 | ~7 h |
@@ -129,7 +129,7 @@ which are already decided.
 
 ## 5 · Where we are
 
-**P0, P1, P2 and P3 A–E are complete**, each closed with a mandatory independent audit.
+**P0, P1, P2 and all of P3 are complete**, each closed with a mandatory independent audit.
 
 Delivered so far: the security holes closed and gated; a `autodev-core` crate extracted with
 zero dependency on the UI framework, letting the desktop app and the command-line tool share
@@ -155,11 +155,42 @@ defects it closed were reachable by the model itself:
 None of these were in the phase's task list as written. They were found because the plan
 requires an adversarial pass *before* building, and two independent audits *after*.
 
-**Why the readiness figure did not move.** P3 is scored as one area covering A–G, and P3-F
-(memory) is untouched — so under the programme's own no-partial-credit rule the row stays at
-zero. Recording A–E against a row that spans A–G would be exactly the arithmetic the rule
-exists to prevent. What did move is the safety overlay: fault isolation from RED to AMBER,
-and four model-reachable holes closed under security posture.
+**P3-F — memory — closed on 2026-09-02.** 18 tasks, 608 tests. Memory now depends on what
+you actually asked: before this phase every recall returned the same text whatever the
+question, because the query was never passed to the search. It is scoped to the project it
+belongs to, it degrades to keyword search on machines that cannot run the embedding model and
+says so in the prompt rather than silently returning less, and an agent can no longer write
+into it freely — a gateway decides what is worth keeping and tells the agent why when it
+declines.
+
+**The audits found four live defects in the phase's own finished code, and that is the point
+of running them.** Three were reachable by the model itself:
+
+- The task whose *entire purpose* is stopping an agent from claiming your authority shipped a
+  flag that let any agent do exactly that — writing a memory at your own confidence, labelled
+  "you told me", into every repository you open. A comment, a test and an automated gate all
+  asserted this was impossible. All three were written in one sitting from one misreading, so
+  they agreed with each other rather than with the code.
+- Two of the three kinds of memory were **never written to the index recall reads**. Every
+  conversation after the upgrade would have been silently unrecallable — and *"forget this"*
+  did not forget: a memory you removed kept being fed to the model on every turn while every
+  screen reported it deleted.
+- Memory text was placed into the model's instructions **unquoted and last**, so a single
+  poisoned file in a repository could have written a standing instruction that survived into
+  every later session, and into every other project.
+- One defect was in shared safety code: the backup check that guards *every* database upgrade
+  had been rejecting perfectly good backups since the previous phase, which would have blocked
+  the app from upgrading at all.
+
+All are fixed, each with a test that was **deliberately broken first** to prove it can fail.
+
+**Readiness rose 22% → 34%, not to 40%.** The phase is built and its smoke tests pass, but the
+specification's own gate register is not fully satisfied — five of the eight memory gates are
+not met and three are partly met, verified by an independent reviewer that had not seen any of
+the reasoning behind the code. The largest remaining item: the vector-search table is queried
+by the code and **never actually created**, so semantic search would fail if switched on. It
+is off by default and nothing is broken today, but the honest score reflects it. An earlier
+draft of this figure said 40% and was corrected the same hour.
 
 **Estimates are calibrated on measured throughput, not on judgement.** P1 built 22 tasks in
 2 h 50 m; its audit and the resulting fixes took a further 3 h 30 m. The figures in §4 carry
