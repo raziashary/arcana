@@ -26,118 +26,221 @@ const PROCEDURAL_LIMIT: u32 = 3;
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
-/// Build the `## Memory` section injected into the system prompt.
-/// Returns `None` when all tiers are empty (avoids a blank section).
-pub fn build_memory_context(session_id: &str, query: &str, _working_dir: &str) -> Option<String> {
-    let summaries =
-        EpisodicStore::get_recent_summaries(session_id, EPISODIC_LIMIT).unwrap_or_default();
-    let facts = SemanticStore::recall_facts(SEMANTIC_LIMIT).unwrap_or_default();
-    let procs = ProceduralStore::search(query, PROCEDURAL_LIMIT).unwrap_or_default();
+/// The scopes a recall may draw from, in the order they are declared.
+///
+/// 🔴 `P3-31`. Scope is a **mandatory** filter and an empty list means
+/// **nothing**, never everything. The sidecar's episodic recall never forwarded
+/// `agent_id` despite the callee supporting it, and procedural recall had no
+/// type filter at all — "unscoped" is precisely how cross-project and
+/// cross-agent contamination happened.
+pub fn scope_keys_for(working_dir: &str) -> Vec<String> {
+    let mut keys = vec!["global".to_string()];
+    if !working_dir.trim().is_empty() {
+        keys.push(format!("project:{working_dir}"));
+    }
+    keys
+}
 
-    if summaries.is_empty() && facts.is_empty() && procs.is_empty() {
-        return None;
+/// The result of a recall, including whether it was degraded.
+pub struct Recalled {
+    pub block: Option<String>,
+    pub degraded: Option<String>,
+    pub ids: Vec<String>,
+}
+
+/// Build the `## Memory` section injected into the system prompt.
+///
+/// 🔴 This function's third parameter was `_working_dir` — bound to an
+/// underscore and discarded — and its second was passed the **empty string
+/// literal** by the only production caller. Semantic recall did not take a
+/// query *by signature*; episodic was recency-only; procedural received `""`
+/// and did `LIKE '%%'`, matching every row. **All three tiers were
+/// query-independent, so the injected block was byte-identical every turn**,
+/// whatever the user asked. `TG3-12` failed by construction.
+///
+/// Both parameters are now load-bearing: `query` drives retrieval and
+/// `working_dir` determines scope.
+pub fn recall(session_id: &str, query: &str, working_dir: &str) -> Recalled {
+    let _ = session_id; // reserved: session-anchored boosting (OQ-7)
+
+    let db = match super::db::MemoryDb::open() {
+        Ok(db) => db,
+        Err(e) => {
+            debug!("[recall] memory unavailable: {e}");
+            return Recalled { block: None, degraded: Some(format!("memory unavailable: {e}")), ids: Vec::new() };
+        }
+    };
+
+    let backend = super::manager::active_backend();
+    let budget = super::rank::TierBudget::default();
+    let q = super::backend::RetrievalQuery {
+        text: query.to_string(),
+        scope_keys: scope_keys_for(working_dir),
+        tiers: Vec::new(),
+        // Over-fetch, then let the reranker and the budget decide. Fetching
+        // exactly the budget would make the budget the ranking.
+        limit: budget.total() * 4,
+    };
+
+    let candidates = match backend.search(&db.conn, &q) {
+        Ok(c) => c,
+        Err(e) => {
+            debug!("[recall] search failed: {e}");
+            return Recalled { block: None, degraded: Some(format!("retrieval failed: {e}")), ids: Vec::new() };
+        }
+    };
+
+    let ranked = super::rank::rank_and_budget(
+        candidates,
+        &budget,
+        &super::rank::RerankWeights::default(),
+        working_dir,
+        chrono::Utc::now(),
+    );
+
+    if ranked.is_empty() {
+        return Recalled {
+            block: None,
+            degraded: backend.degraded_reason(),
+            ids: Vec::new(),
+        };
     }
 
+    let ids: Vec<String> = ranked.iter().map(|s| s.candidate.id.clone()).collect();
+    record_access(&db.conn, &ids);
+
+    Recalled {
+        block: Some(render(&ranked, backend.degraded_reason().is_some())),
+        degraded: backend.degraded_reason(),
+        ids,
+    }
+}
+
+/// Back-compatible entry point for the prompt assembler.
+pub fn build_memory_context(session_id: &str, query: &str, working_dir: &str) -> Option<String> {
+    recall(session_id, query, working_dir).block
+}
+
+/// Render the ranked set, grouped by tier.
+fn render(ranked: &[super::rank::Scored], degraded: bool) -> String {
     let mut parts = vec!["## Memory (from previous sessions)\n".to_string()];
 
-    if !summaries.is_empty() {
-        parts.push("### Recent Session Summaries\n".to_string());
-        for s in &summaries {
-            let date = s.created_at.format("%Y-%m-%d").to_string();
-            parts.push(format!("- [{date}] {}\n", truncate(&s.content, 300)));
-        }
+    if degraded {
+        // ⚠ Stated in the prompt, not only in a log. The model is the consumer
+        // here, and it should know that a miss may mean "not matched" rather
+        // than "not known" (`TG3-17`).
+        parts.push(
+            "_(Retrieval is running in keyword-only mode; a differently-worded \
+             memory may not have surfaced.)_\n"
+                .to_string(),
+        );
     }
 
-    if !facts.is_empty() {
-        parts.push("\n### What I know about you and this project\n".to_string());
-        for f in &facts {
-            let conf_label = if f.confidence >= 0.95 {
-                "confirmed"
-            } else {
-                "likely"
+    for (tier, heading) in [
+        (MemoryTier::Semantic, "### What I know about you and this project"),
+        (MemoryTier::Episodic, "### Relevant moments from earlier sessions"),
+        (MemoryTier::Procedural, "### Relevant patterns & learnings"),
+    ] {
+        let rows: Vec<&super::rank::Scored> = ranked
+            .iter()
+            .filter(|s| s.candidate.tier == tier)
+            .collect();
+        if rows.is_empty() {
+            continue;
+        }
+        parts.push(format!("\n{heading}\n"));
+        for s in rows {
+            let c = &s.candidate;
+            // Provenance is rendered (`P3-38`). A memory the agent inferred and
+            // one the user stated are different kinds of thing, and the model
+            // cannot weigh them if the prompt hides the difference.
+            let origin = match c.source.as_str() {
+                "user" => "you told me",
+                "repository" => "from the repository",
+                "tool_result" => "from a tool result",
+                "test_result" => "from a test run",
+                "agent_observation" => "I observed",
+                _ => "from an earlier conversation",
             };
-            parts.push(format!("- ({conf_label}) {}\n", f.fact_text));
+            parts.push(format!(
+                "- ({origin}) {}\n",
+                truncate(&c.content, 300)
+            ));
         }
     }
 
-    if !procs.is_empty() {
-        parts.push("\n### Relevant patterns & learnings\n".to_string());
-        for p in &procs {
-            let excerpt = truncate(&p.content, 200);
-            parts.push(format!("- **{}**: {excerpt}\n", p.title));
-        }
-    }
+    parts.join("")
+}
 
-    let block = parts.join("");
-    debug!("[recall] assembled memory block ({} chars)", block.len());
-    Some(block)
+/// Bump `access_count` / `last_accessed_at` for what was actually recalled.
+///
+/// The anchor asks for access frequency to be tracked (§11) and `P3-42` weights
+/// it. Recording it at recall — the moment the memory is *used* — is what makes
+/// the term mean anything; incrementing at write time would just re-count
+/// creation.
+fn record_access(conn: &rusqlite::Connection, ids: &[String]) {
+    if ids.is_empty() {
+        return;
+    }
+    let placeholders = (0..ids.len()).map(|i| format!("?{}", i + 2)).collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "UPDATE memories SET access_count = access_count + 1, last_accessed_at = ?1
+         WHERE id IN ({placeholders})"
+    );
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(now)];
+    for id in ids {
+        params.push(Box::new(id.clone()));
+    }
+    let refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| b.as_ref()).collect();
+    if let Err(e) = conn.execute(&sql, refs.as_slice()) {
+        // A failure to record usage must never fail the recall itself.
+        debug!("[recall] could not record access: {e}");
+    }
 }
 
 /// Cross-tier search — used by the `search_memory` builtin tool.
 pub fn search_all(req: &RecallRequest) -> Result<Vec<RecallResult>> {
-    let limit = req.limit.unwrap_or(20);
-    let mut results: Vec<RecallResult> = Vec::new();
+    let db = super::db::MemoryDb::open()?;
+    let backend = super::manager::active_backend();
+    let limit = req.limit.unwrap_or(20) as usize;
 
-    let allowed = |tier: MemoryTier| -> bool {
-        req.tier_filter
-            .as_ref()
-            .map(|f| f.contains(&tier))
-            .unwrap_or(true)
+    let tiers = req.tier_filter.clone().unwrap_or_default();
+    let q = super::backend::RetrievalQuery {
+        text: req.query.clone(),
+        // The tool is scoped to the caller's workspace plus global, exactly as
+        // prompt assembly is. A tool that could read every scope would be a
+        // way around the filter that the prompt path enforces.
+        scope_keys: scope_keys_for(req.working_dir.as_deref().unwrap_or("")),
+        tiers,
+        limit: limit * 4,
     };
 
-    if allowed(MemoryTier::Episodic) {
-        let summaries = EpisodicStore::get_recent_summaries(&req.session_id, limit)?;
-        for s in summaries {
-            let score = keyword_score(&s.content, &req.query);
-            if score > 0.0 {
-                results.push(RecallResult {
-                    tier: MemoryTier::Episodic,
-                    id: s.id,
-                    content: truncate(&s.content, 400),
-                    score,
-                    created_at: s.created_at,
-                });
-            }
-        }
-    }
+    let candidates = backend.search(&db.conn, &q)?;
+    let ranked = super::rank::rank_and_budget(
+        candidates,
+        &super::rank::TierBudget { episodic: limit, semantic: limit, procedural: limit },
+        &super::rank::RerankWeights::default(),
+        req.working_dir.as_deref().unwrap_or(""),
+        chrono::Utc::now(),
+    );
 
-    if allowed(MemoryTier::Semantic) {
-        let facts = SemanticStore::search(&req.query, limit)?;
-        for f in facts {
-            let score = keyword_score(&f.fact_text, &req.query) * f.confidence;
-            results.push(RecallResult {
-                tier: MemoryTier::Semantic,
-                id: f.id,
-                content: f.fact_text,
-                score,
-                created_at: f.created_at,
-            });
-        }
-    }
+    let ids: Vec<String> = ranked.iter().map(|s| s.candidate.id.clone()).collect();
+    record_access(&db.conn, &ids);
 
-    if allowed(MemoryTier::Procedural) {
-        let procs = ProceduralStore::search(&req.query, limit)?;
-        for p in procs {
-            let score = keyword_score(&p.content, &req.query);
-            results.push(RecallResult {
-                tier: MemoryTier::Procedural,
-                id: p.id,
-                content: format!("**{}**: {}", p.title, truncate(&p.content, 300)),
-                score,
-                created_at: p.created_at,
-            });
-        }
-    }
-
-    // Sort by score descending, then by recency.
-    results.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| b.created_at.cmp(&a.created_at))
-    });
-    results.truncate(limit as usize);
-    Ok(results)
+    Ok(ranked
+        .into_iter()
+        .take(limit)
+        .map(|s| RecallResult {
+            tier: s.candidate.tier,
+            id: s.candidate.id,
+            content: truncate(&s.candidate.content, 400),
+            score: s.score as f64,
+            created_at: chrono::DateTime::parse_from_rfc3339(&s.candidate.created_at)
+                .map(|d| d.with_timezone(&chrono::Utc))
+                .unwrap_or_else(|_| chrono::Utc::now()),
+        })
+        .collect())
 }
 
 /// Aggregate statistics across all three tiers.

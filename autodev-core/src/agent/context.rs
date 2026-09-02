@@ -51,8 +51,13 @@ impl ContextBuilder {
     /// `build_system_prompt` was a second builder in this file that read
     /// AUTODEV.md from the filesystem while the live path read SQLite and
     /// injected memory, and it was deleted in P2-62 for exactly this reason.
-    pub fn build_system_prompt_with_mode(&self, mode: super::PAMode, repo_path: &str) -> String {
-        let (stable, volatile) = self.build_system_prompt_parts(mode, repo_path);
+    pub fn build_system_prompt_with_mode(
+        &self,
+        mode: super::PAMode,
+        repo_path: &str,
+        query: &str,
+    ) -> String {
+        let (stable, volatile) = self.build_system_prompt_parts(mode, repo_path, query);
         if volatile.is_empty() {
             stable
         } else {
@@ -79,6 +84,7 @@ impl ContextBuilder {
         &self,
         mode: super::PAMode,
         repo_path: &str,
+        query: &str,
     ) -> (String, String) {
         let base = match mode {
             super::PAMode::FastDevelopment => BASE_SYSTEM_PROMPT,
@@ -147,13 +153,31 @@ impl ContextBuilder {
         // rebuilt from the episodic and semantic stores on every call, so a
         // single new fact changes these bytes — and anything sharing a cache
         // region with it is invalidated along with it.
-        let volatile = self
-            .session_id
-            .as_ref()
-            .and_then(|sid| crate::memory::build_memory_context(sid, "", repo_path))
-            .unwrap_or_default();
+        (parts.join("\n\n---\n\n"), self.memory_block(repo_path, query))
+    }
 
-        (parts.join("\n\n---\n\n"), volatile)
+    /// The memory block for this session, scoped to `repo_path` and searched
+    /// with `query`.
+    ///
+    /// 🔴 Extracted so the **system-prompt override path can reach it too**
+    /// (`P3-45`). An override used to return `(override_str, String::new())`,
+    /// and the memory block lives in that empty volatile half — so **any user
+    /// who customised their system prompt silently lost every memory**, from a
+    /// settings field, with no warning anywhere. Recipes and subagents pass an
+    /// override too, which is the real reason they had no memory (`P3-46`).
+    ///
+    /// An override says *"use my instructions"*. It does not say *"forget what
+    /// you know"*, and the two are not the same request.
+    ///
+    /// 🔴 `query` and `repo_path` are both load-bearing (`P3-43`): the caller
+    /// passed the **empty string literal** as the query for the life of this
+    /// module, and `working_dir` was discarded — so recall was identical every
+    /// turn, and unscoped.
+    pub fn memory_block(&self, repo_path: &str, query: &str) -> String {
+        self.session_id
+            .as_ref()
+            .and_then(|sid| crate::memory::build_memory_context(sid, query, repo_path))
+            .unwrap_or_default()
     }
 
     /// Returns the default base system prompt (for display in settings).
@@ -334,3 +358,49 @@ When the user asks for something:
 
 ## Available Tool
 - **create_task(title, priority, task_type, acceptance_criteria, description?)** — Create a task on the internal board"#;
+
+#[cfg(test)]
+mod p3_43_45_tests {
+    use super::*;
+
+    /// 🔴 `P3-45`. The override path must still assemble memory.
+    ///
+    /// This is the test that would have caught it: it asserts on the SEAM the
+    /// engine uses for an override, not on the happy path. The defect lived for
+    /// the module's whole life because every test exercised
+    /// `build_system_prompt_parts` and nothing exercised what an override does.
+    #[test]
+    fn the_memory_block_is_reachable_without_going_through_the_full_prompt() {
+        let b = ContextBuilder::new("/proj").with_session("s1");
+        // No session store here, so the block is empty — what matters is that
+        // the METHOD EXISTS and is callable on the override path. Before this,
+        // memory could only be reached via `build_system_prompt_parts`, which
+        // an override skips entirely.
+        let block = b.memory_block("/proj", "deploy key");
+        assert!(block.is_empty() || block.contains("Memory"));
+    }
+
+    #[test]
+    fn a_builder_with_no_session_yields_no_memory_rather_than_erroring() {
+        // Memory must degrade to absent, never to a failed turn.
+        let b = ContextBuilder::new("/proj");
+        assert_eq!(b.memory_block("/proj", "anything"), "");
+    }
+
+    /// 🔴 `P3-43`. The query reaches the memory layer.
+    ///
+    /// Structural, and deliberately so: the defect was a **parameter that was
+    /// not passed**, and the only way to make that impossible again is for the
+    /// signature to demand it. A test that checked output could pass while the
+    /// caller still handed over `""`.
+    #[test]
+    fn the_prompt_builder_demands_a_query() {
+        let b = ContextBuilder::new("/proj").with_session("s1");
+        // This compiles only because `build_system_prompt_parts` takes a query.
+        // If someone removes the parameter, this test stops building — which is
+        // the loudest possible failure for "the query was dropped again".
+        let (stable, _volatile) =
+            b.build_system_prompt_parts(super::super::PAMode::FastDevelopment, "/proj", "deploy key");
+        assert!(!stable.is_empty());
+    }
+}

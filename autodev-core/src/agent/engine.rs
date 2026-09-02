@@ -209,8 +209,27 @@ impl AgentEngine {
             // An explicit override is opaque to us: we cannot know which part of
             // it is stable, so all of it is treated as stable and nothing is
             // hoisted. Callers that want caching should not override.
-            Some(override_str) => (override_str.to_string(), String::new()),
-            None => context_builder.build_system_prompt_parts(self.pa_mode, working_dir),
+            //
+            // 🔴 P3-45. The volatile half used to be `String::new()` here, and
+            // the MEMORY BLOCK lives in the volatile half — so an override did
+            // not merely skip caching, it **silently disabled all memory
+            // recall**. It is a user-facing settings field, so any user who
+            // customised their system prompt lost every memory with no warning;
+            // and because recipes and subagents both pass an override, it is
+            // also the real reason they had none (`P3-46`) — not the missing
+            // session id that `context.rs`'s comment blamed for four revisions.
+            //
+            // An override replaces the INSTRUCTIONS. It was never a request to
+            // forget what the agent knows.
+            Some(override_str) => (
+                override_str.to_string(),
+                context_builder.memory_block(working_dir, user_message),
+            ),
+            // 🔴 P3-43. `user_message` is the query. It used to be the empty
+            // string literal, which made recall byte-identical every turn.
+            None => {
+                context_builder.build_system_prompt_parts(self.pa_mode, working_dir, user_message)
+            }
         };
 
         // What actually goes on the wire, in the order the cache requires:

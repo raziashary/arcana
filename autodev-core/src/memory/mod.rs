@@ -19,6 +19,8 @@
 // See: DEVELOPMENT_PLAN.md Phase 4.1-4.8
 
 pub mod backend;
+pub mod manager;
+pub mod rank;
 pub mod vector;
 pub mod db;
 pub mod episodic;
