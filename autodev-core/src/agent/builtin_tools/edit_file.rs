@@ -50,7 +50,8 @@ impl Tool for EditFileTool {
                 },
                 "old_string": {
                     "type": "string",
-                    "description": "Exact text to find and replace. Must match exactly including whitespace."
+                    "minLength": 1,
+                    "description": "Must not be empty. Exact text to find and replace. Must match exactly including whitespace."
                 },
                 "new_string": {
                     "type": "string",
@@ -129,6 +130,38 @@ impl Tool for EditFileTool {
                 ));
             }
         };
+
+        // 🔴 An empty `old_string` is not an edit, and both branches below
+        // handle it catastrophically.
+        //
+        // `"abc".matches("")` yields one match per char boundary, so
+        // `match_count` is `len + 1` and the code takes the "found many times"
+        // path. There, `content[start..].find("")` returns `Some(0)` for ever
+        // and `start += pos + 0` never advances — an **infinite loop** that
+        // also grows `positions` without bound, while holding this path's lock
+        // so no other tool can touch the file either.
+        //
+        // With `replace_all = true` it does not loop; it is worse.
+        // `content.replace("", new)` inserts `new` at **every** character
+        // boundary, so a 10 KB source file becomes ten thousand copies of the
+        // replacement interleaved with the original — and that is what gets
+        // written to disk. The user's file is destroyed, and the tool reports
+        // success.
+        //
+        // The schema marks `old_string` required but never says non-empty, and
+        // a model that means "insert at the top of the file" reaches for `""`
+        // as the obvious way to say it. So this is not a hostile input, it is
+        // an ordinary one.
+        if params.old_string.is_empty() {
+            return ToolResult::error(format!(
+                "'old_string' must not be empty. An empty match has no location \
+                 in '{}' — it matches at every position, so there is nothing to \
+                 replace. To insert text, pass the surrounding line as \
+                 'old_string' and include it in 'new_string'; to create or \
+                 overwrite the whole file, use write_file.",
+                params.path
+            ));
+        }
 
         let match_count = content.matches(&params.old_string).count();
 
@@ -232,5 +265,107 @@ impl Tool for EditFileTool {
             old_lines,
             new_lines
         ))
+    }
+}
+
+#[cfg(test)]
+mod empty_old_string_tests {
+    use super::*;
+    use crate::agent::permission::PermissionMode;
+
+    fn ctx(dir: &std::path::Path) -> ToolContext {
+        ToolContext {
+            session_id: "s1".into(),
+            working_dir: dir.to_string_lossy().to_string(),
+            call_id: "c1".into(),
+            permission_mode: PermissionMode::Autonomous,
+            depth: 0,
+            agent_role: "supervisor".into(),
+        }
+    }
+
+    fn sandbox(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("autodev-editfile-{tag}"));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// 🔴 An empty `old_string` had two catastrophic outcomes and no guard.
+    ///
+    /// ⚠ Only the `replace_all = true` half is exercised by *running* it. The
+    /// other half is an **infinite loop**, so a test that drove it would hang
+    /// the suite rather than fail it — it is proven by reading
+    /// (`content[start..].find("")` is always `Some(0)` and `start` advances by
+    /// `pos + 0`), and it is closed by the same guard this asserts.
+    #[tokio::test]
+    async fn an_empty_old_string_is_refused_rather_than_shredding_the_file() {
+        let dir = sandbox("shred");
+        let file = dir.join("src.rs");
+        let original = "fn main() {\n    println!(\"hello\");\n}\n";
+        std::fs::write(&file, original).unwrap();
+
+        let out = EditFileTool
+            .execute(
+                json!({
+                    "path": file.to_string_lossy(),
+                    "old_string": "",
+                    "new_string": "X",
+                    "replace_all": true
+                }),
+                &ctx(&dir),
+            )
+            .await;
+
+        assert!(
+            out.is_error,
+            "an empty old_string was accepted — `content.replace(\"\", \"X\")` \
+             inserts at EVERY character boundary, so this call rewrites the \
+             file as shredded output and reports success"
+        );
+
+        // The file is the real assertion: a refusal that still wrote is not a
+        // refusal.
+        let after = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(
+            after, original,
+            "the file was modified despite the call being refused"
+        );
+    }
+
+    /// The no-fire half: a real edit still works, or the guard above is just
+    /// breaking the tool.
+    #[tokio::test]
+    async fn an_ordinary_edit_still_applies() {
+        let dir = sandbox("ok");
+        let file = dir.join("src.rs");
+        std::fs::write(&file, "let x = 1;\n").unwrap();
+
+        let out = EditFileTool
+            .execute(
+                json!({
+                    "path": file.to_string_lossy(),
+                    "old_string": "let x = 1;",
+                    "new_string": "let x = 2;"
+                }),
+                &ctx(&dir),
+            )
+            .await;
+
+        assert!(!out.is_error, "a valid edit was refused: {}", out.output);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "let x = 2;\n");
+    }
+
+    /// The schema tells the model before it tries, so the refusal above is a
+    /// backstop rather than the only signal.
+    #[test]
+    fn the_schema_declares_old_string_non_empty() {
+        let schema = EditFileTool.input_schema();
+        let old = &schema["properties"]["old_string"];
+        assert_eq!(
+            old["minLength"], 1,
+            "the schema permits an empty old_string, so a well-behaved model \
+             has no way to know it is invalid"
+        );
     }
 }
