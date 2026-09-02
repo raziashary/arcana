@@ -42,6 +42,9 @@ export default function SettingsTab() {
         <SectionHeader title="Demo Mode" />
         <DemoModeCard />
 
+        <SectionHeader title="Daily Spend Ceiling" />
+        <DailyCapCard />
+
         <SectionHeader title="Default Worker Budget" />
         <DefaultWorkerBudgetCard />
 
@@ -306,6 +309,110 @@ function DemoModeCard() {
           {cfg.error}
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── Daily Spend Ceiling (P2-21/P2-22, wired F-15) ──────────────────────────
+//
+// ⚠ The enforcement machinery for this shipped without any way to switch it on.
+// `DailyCap::default()` is `enabled: false`, `CappedProvider::check` therefore
+// returned `Disabled` forever, and `setDailyBudget` had no caller anywhere in
+// the app. So the ceiling was correct, tested, and unreachable — the phase's own
+// narrative success criterion ("set a daily cap and watch it actually stop")
+// could not be executed by anyone.
+//
+// This is the control that arms it.
+function DailyCapCard() {
+  const [enabled, setEnabled] = useState(false)
+  const [limit, setLimit] = useState(25)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    invoke<{ enabled: boolean; limit_usd: number }>('get_daily_cap')
+      .then(cap => { setEnabled(cap.enabled); setLimit(cap.limit_usd) })
+      .catch(e => setError(String(e)))
+  }, [])
+
+  const handleSave = async () => {
+    setSaving(true)
+    setError(null)
+    try {
+      // The backend refuses a non-finite or non-positive limit. A NaN cap
+      // compares false against every spend, so storing one would read as
+      // "never exceeded" and silently disable the ceiling it was meant to set.
+      const cap = await invoke<{ enabled: boolean; limit_usd: number }>('set_daily_cap', {
+        enabled,
+        limitUsd: limit,
+      })
+      setEnabled(cap.enabled)
+      setLimit(cap.limit_usd)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (e) {
+      // Shown, not logged: a rejected limit that looks saved is worse than no
+      // ceiling, because the user believes they are protected.
+      setError(String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const labelStyle = { color: 'var(--text-3)', fontSize: '10px' } as const
+
+  return (
+    <div
+      className="rounded-sm p-4 space-y-4"
+      style={{ background: 'var(--bg-card)', border: '1px solid var(--border-1)' }}
+    >
+      <div className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
+        Stops every provider call once the day&rsquo;s spend reaches this figure, and pauses
+        the fleet. Spend is counted across restarts, so closing the app does not reset it.
+        <span style={{ color: 'var(--text-2)' }}> Off by default.</span>
+      </div>
+
+      <div className="flex items-center gap-4">
+        <label className="flex items-center gap-2 font-mono" style={labelStyle}>
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={e => setEnabled(e.target.checked)}
+          />
+          ENFORCE DAILY CEILING
+        </label>
+
+        <div>
+          <div className="font-mono mb-1" style={labelStyle}>LIMIT (USD)</div>
+          <input
+            type="number" min={0.01} step={0.01}
+            value={limit}
+            onChange={e => setLimit(Math.max(0.01, parseFloat(e.target.value) || 0.01))}
+            disabled={!enabled}
+            style={{
+              background: 'var(--bg-2)', border: '1px solid var(--border-2)',
+              color: 'var(--text-1)', borderRadius: '2px', padding: '3px 6px',
+              fontFamily: 'monospace', fontSize: '11px', width: 90,
+              opacity: enabled ? 1 : 0.5,
+            }}
+            title="Daily spend ceiling in USD"
+          />
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3">
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="font-mono text-xs px-3 py-1 rounded-sm"
+          style={{ background: 'var(--accent)', color: 'var(--bg-1)' }}
+        >
+          {saving ? 'Saving…' : 'Save ceiling'}
+        </button>
+        {saved && <span className="font-mono text-xs" style={{ color: 'var(--accent)' }}>Saved</span>}
+        {error && <span className="font-mono text-xs" style={{ color: 'var(--danger, #f87171)' }}>{error}</span>}
+      </div>
     </div>
   )
 }

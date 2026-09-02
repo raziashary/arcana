@@ -772,3 +772,71 @@ async fn s2_10_a_failed_tool_result_survives_a_real_round_trip_on_every_provider
         );
     }
 }
+
+// ── S2-13 · key validation actually accepts a valid key ──────────────────────
+
+#[tokio::test]
+async fn s2_13_a_valid_key_validates_on_every_provider() {
+    // ⚠ The gap that let D-10 through for a whole phase.
+    //
+    // This suite tested completions, streaming, caching, truncation and tool
+    // round trips — and never once called `test_connection`, the function the
+    // UI uses to check a key. So Google's validation could point at a model
+    // retired in February 2026, 404 on every call, and pass every test here.
+    //
+    // Since `P2-23` now refuses to STORE a key the provider rejects, that made
+    // a valid Google key unsaveable — on the provider chosen as primary for
+    // rollout 1. The defect was in the one path no test exercised.
+    let cases: Vec<(&str, Box<dyn Provider>)> = vec![
+        (
+            "anthropic",
+            Box::new(AnthropicProvider::new(require_key!("ANTHROPIC_API_KEY"))),
+        ),
+        (
+            "openai",
+            Box::new(OpenAIProvider::new(require_key!("OPENAI_API_KEY"))),
+        ),
+        (
+            "google",
+            Box::new(GoogleProvider::new(require_key!("GOOGLE_API_KEY"))),
+        ),
+    ];
+
+    for (id, provider) in cases {
+        let status = provider
+            .test_connection()
+            .await
+            .unwrap_or_else(|e| panic!("{id} test_connection errored: {e}"));
+
+        println!("{id}: {status:?}");
+        assert_eq!(
+            status,
+            autodev_core::provider::ProviderStatus::Connected,
+            "{id} rejected a key that works for every other call in this suite — so the \
+             UI would refuse to save it"
+        );
+    }
+}
+
+#[tokio::test]
+async fn s2_13_an_invalid_key_is_rejected_rather_than_accepted() {
+    // The other direction, and the one that matters for BYOK: validation that
+    // accepts anything is not validation. A garbage key must come back as an
+    // error, not as Connected.
+    let cases: Vec<(&str, Box<dyn Provider>)> = vec![
+        ("anthropic", Box::new(AnthropicProvider::new("sk-ant-invalid-key-for-testing".into())) as Box<dyn Provider>),
+        ("openai", Box::new(OpenAIProvider::new("sk-invalid-key-for-testing".into()))),
+        ("google", Box::new(GoogleProvider::new("AIza-invalid-key-for-testing".into()))),
+    ];
+
+    for (id, provider) in cases {
+        let status = provider.test_connection().await.expect("must not error out");
+        println!("{id} (bad key): {status:?}");
+        assert_ne!(
+            status,
+            autodev_core::provider::ProviderStatus::Connected,
+            "{id} accepted an invalid key — so P2-23's save-path validation would store \
+             a credential that cannot work"
+        );
+    }
+}

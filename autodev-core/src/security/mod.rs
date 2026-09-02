@@ -5,3 +5,5 @@
 // — prompts, memory writes, analytics, logs — all live in core.
 
 pub mod redaction;
+
+pub mod env_scrub;

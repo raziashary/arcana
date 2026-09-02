@@ -158,15 +158,32 @@ impl CacheMonitor {
         self.seen.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 
-    /// Warn when a prefix is single-use across many requests (`P2-64`).
+    /// Warn when prefixes are single-use across many requests (`P2-64`).
     ///
     /// Naive caching is not merely useless there, it is **more expensive**: a
     /// cache write is billed above the normal input rate, so a prefix that
     /// never gets read back turns every request into full price plus a
     /// surcharge. Six concurrent QC reviewers over an otherwise identical
     /// multi-KB protocol, each stamped with its own `task_id`, is exactly this.
+    ///
+    /// ⚠ **This is a CROSS-RUN question, and it was being asked per-run**
+    /// (F-13, P2 post-phase audit). A single agent run computes its prefix once,
+    /// so `distinct` was structurally 1 and the condition could never be
+    /// satisfied — an alarm for the P2-64 failure mode that was incapable of
+    /// firing on it, because that failure mode IS six separate runs.
+    ///
+    /// Call it on [`global()`], which accumulates across runs. Called on a
+    /// per-run monitor it is a no-op by construction, and says so rather than
+    /// staying quiet.
     pub fn report_reuse(&self, requests: u32) {
         let distinct = self.distinct_prefixes() as u32;
+
+        if distinct <= 1 {
+            // Nothing to conclude: one prefix means either perfect reuse or a
+            // single run. Distinguishing them needs the cross-run monitor.
+            return;
+        }
+
         if requests >= 4 && distinct * 2 > requests {
             warn!(
                 "Cache prefixes are effectively single-use: {distinct} distinct prefixes \
@@ -176,6 +193,22 @@ impl CacheMonitor {
             );
         }
     }
+}
+
+/// The process-wide monitor.
+///
+/// ── Why a global, when the per-run one already exists ────────────────────────
+///
+/// `P2-64`'s failure mode is **six concurrent QC reviewers**, which is six
+/// separate agent runs. A monitor scoped to one run computes one prefix and can
+/// never observe that the other five differ — so the alarm for it was
+/// structurally incapable of firing (F-13).
+///
+/// This one accumulates. Every run observes into it as well as into its own,
+/// so "distinct prefixes across the process" becomes answerable.
+pub fn global() -> &'static CacheMonitor {
+    static GLOBAL: std::sync::OnceLock<CacheMonitor> = std::sync::OnceLock::new();
+    GLOBAL.get_or_init(CacheMonitor::new)
 }
 
 #[cfg(test)]
@@ -328,5 +361,43 @@ mod tests {
         assert_eq!(m.distinct_prefixes(), 6, "six requests, six prefixes — nothing reusable");
         assert_eq!(m.alarm_count(), 0, "no prefix repeated, so no miss to report");
         m.report_reuse(6);
+    }
+    #[test]
+    fn a_single_prefix_draws_no_conclusion_about_reuse() {
+        // F-13. A per-run monitor sees exactly one prefix, so `distinct == 1`
+        // says nothing — it is equally consistent with perfect reuse and with a
+        // single run. Reporting either way would be a guess.
+        let m = CacheMonitor::new();
+        let c = caps(CacheSupport::Explicit { min_tokens: 1024 });
+        for _ in 0..10 {
+            m.observe(0xAAA, 4096, &c, &usage_with_cached_read(4000));
+        }
+        assert_eq!(m.distinct_prefixes(), 1);
+        m.report_reuse(10); // no-op, and must not panic
+    }
+
+    #[test]
+    fn the_process_monitor_accumulates_across_runs() {
+        // The cross-run view F-13 needed. Two "runs" observing into the same
+        // monitor produce two distinct prefixes, which is the signal
+        // `report_reuse` exists to read.
+        let shared = CacheMonitor::new();
+        let c = caps(CacheSupport::Explicit { min_tokens: 1024 });
+
+        for run in 0..6u64 {
+            // Each run has its own prefix — the P2-64 shape.
+            shared.observe(run, 4096, &c, &usage_with_cached_read(0));
+        }
+
+        assert_eq!(shared.distinct_prefixes(), 6, "six runs, six single-use prefixes");
+        assert_eq!(shared.alarm_count(), 0, "no prefix repeated, so no MISS to report");
+        shared.report_reuse(6);
+    }
+
+    #[test]
+    fn the_global_monitor_is_one_instance() {
+        let a = global() as *const CacheMonitor;
+        let b = global() as *const CacheMonitor;
+        assert_eq!(a, b, "the process monitor must be a single accumulating instance");
     }
 }

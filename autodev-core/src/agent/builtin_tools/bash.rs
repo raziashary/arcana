@@ -94,7 +94,7 @@ impl Tool for BashTool {
             command
         };
 
-        let shell_cmd = if cfg!(target_os = "windows") {
+        let mut shell_cmd = if cfg!(target_os = "windows") {
             let mut cmd = Command::new("cmd");
             cmd.args(["/C", &command]);
             cmd
@@ -103,6 +103,23 @@ impl Tool for BashTool {
             cmd.args(["-c", &command]);
             cmd
         };
+
+        // ⚠ F-8, defence in depth — applied to BOTH shells, once.
+        //
+        // `main.rs` scrubs credentials from the process environment at startup,
+        // and this strips them again on the way into the child. Two independent
+        // guards, deliberately, because this tool runs commands the **model**
+        // chose: a single missed variable here is a readable secret, not a
+        // degraded feature, and `echo $ANTHROPIC_API_KEY` needs no
+        // vulnerability beyond an inherited environment.
+        //
+        // The first version of this landed in the Windows branch only, which is
+        // its own small lesson about two-branch fixes.
+        for (key, _) in std::env::vars() {
+            if crate::security::env_scrub::looks_like_a_credential(&key) {
+                shell_cmd.env_remove(&key);
+            }
+        }
 
         let result = timeout(
             Duration::from_secs(timeout_secs),

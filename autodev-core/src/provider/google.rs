@@ -312,46 +312,55 @@ impl Provider for GoogleProvider {
     }
 
     async fn test_connection(&self) -> Result<ProviderStatus> {
-        // Use a minimal generateContent call to test
-        // ⚠ The key goes in a HEADER, never the URL. See `auth_header`.
-        let url = format!(
-            "{}/v1beta/models/gemini-2.5-flash:generateContent",
-            GOOGLE_API_BASE
-        );
+        // ⚠ D-10 (P2 post-phase audit). This used to POST a `generateContent`
+        // call to a hardcoded `gemini-2.5-flash` — a model this tree's own
+        // `the_retired_generation_is_gone` test lists as withdrawn. So key
+        // validation 404'd for every user, and since `P2-23` now refuses to
+        // store a key the provider rejects, a **valid Google key could not be
+        // saved at all** — on the provider chosen as primary for rollout 1.
+        //
+        // It was also a billed completion, while `vault_commands` told the user
+        // validation is "a models list, not a completion. It costs nothing",
+        // and `capped.rs` exempts `test_connection` from the daily ceiling
+        // *because* of that claim. Two documents describing behaviour the code
+        // did not have.
+        //
+        // Now the models-list endpoint, which is free, needs no model id, and
+        // is what the other two adapters already used. A validation call that
+        // names a specific model can only rot again.
+        //
+        // ⚠ The key goes in a HEADER, never the URL (P2 pre-build audit).
+        let url = format!("{GOOGLE_API_BASE}/v1beta/models");
 
-        let test_body = json!({
-            "contents": [{
-                "role": "user",
-                "parts": [{ "text": "Hi" }]
-            }]
-        });
-
-        let resp = self
+        match self
             .client
-            .post(&url)
+            .get(&url)
             .header("x-goog-api-key", &self.api_key)
-            .header("Content-Type", "application/json")
-            .json(&test_body)
             .send()
-            .await;
-
-        match resp {
+            .await
+        {
             Ok(r) if r.status().is_success() => Ok(ProviderStatus::Connected),
-            Ok(r) if r.status() == 403 => Ok(ProviderStatus::Error("Invalid API key".into())),
+            // ⚠ 400 too, not just 401/403.
+            //
+            // Google answers a malformed API key on the models endpoint with
+            // **400 Bad Request**, where the other two return 401. Measured
+            // live: without 400 here the user sees "Google returned 400 Bad
+            // Request" for a mistyped key — technically accurate and useless,
+            // when the actionable answer is that the key is wrong.
+            Ok(r) if r.status() == 400 || r.status() == 401 || r.status() == 403 => {
+                Ok(ProviderStatus::Error("Invalid API key".into()))
+            }
             Ok(r) => {
                 let code = r.status();
-                Ok(ProviderStatus::Error(format!("HTTP {code}")))
+                Ok(ProviderStatus::Error(format!("Google returned {code}")))
             }
             Err(e) => {
-                // Redacted before it is logged OR returned. `reqwest`'s Error
-                // Display includes the request URL, and this value crosses the
-                // Tauri IPC boundary into the renderer (`Settings.tsx`). Even
-                // with the key now in a header rather than the URL, an error
-                // string that reaches the UI is not a place to trust a
-                // transport library's formatting.
-                let safe = crate::security::redaction::redact_text(&e.to_string());
-                error!("Google connection test failed: {safe}");
-                Ok(ProviderStatus::Error(safe))
+                // ⚠ Never interpolate the reqwest error here. Its Display
+                // includes the request URL, and that is how a key in a query
+                // string reached the renderer before (P2 pre-build audit).
+                // The URL carries no key now, but the habit is the guard.
+                error!("Google connection test failed: {e}");
+                Ok(ProviderStatus::Error("Connection failed".into()))
             }
         }
     }

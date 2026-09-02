@@ -62,6 +62,36 @@ fn main() {
         eprintln!("[AutoDev] No .env file found — relying on system environment variables");
     }
 
+    // ─── Scrub credentials out of the process environment (F-8) ──────────────
+    //
+    // ⚠ This runs unconditionally, and it runs HERE — after the two sidecar
+    // path variables above have been read, and before anything can spawn a
+    // child process.
+    //
+    // `dotenvy::dotenv()` above loads the WHOLE file. The repo `.env` declares
+    // the three provider API keys and AWS credentials alongside those two
+    // paths, so a running application carried live secrets in its environment —
+    // inherited by every child process the agent spawns, including `bash.rs`,
+    // which runs commands the MODEL chooses. Reading a key needed no
+    // vulnerability beyond `echo $ANTHROPIC_API_KEY`.
+    //
+    // The app never needed them: BYOK reads keys from the OS credential store,
+    // and the live smoke reads `.env` from disk rather than from the
+    // environment, deliberately.
+    //
+    // Names are logged, never values.
+    {
+        let removed = autodev_core::security::env_scrub::scrub_process_env();
+        if !removed.is_empty() {
+            eprintln!(
+                "[AutoDev] Removed {} credential-shaped variable(s) from the process \
+                 environment: {}",
+                removed.len(),
+                removed.join(", ")
+            );
+        }
+    }
+
     // Capture panics and write them to both stderr and the tracing log file
     // before the process exits. This makes the "app restart" root cause visible.
     std::panic::set_hook(Box::new(|info| {

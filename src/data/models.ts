@@ -74,7 +74,14 @@ export const ALL_KNOWN_MODELS: ReadonlySet<string> = new Set(
  * Gemini Flash: the primary provider for rollout 1, and its cheapest tier —
  * a default that costs the most is a bill nobody chose.
  */
-export const DEFAULT_MODEL = 'gemini-3.5-flash'
+// ⚠ Was `gemini-3.5-flash` until the P2 post-phase audit — a model this
+// repository's own catalogue test asserts "must not be offered", and which the
+// worker database actively migrates away from. It was the initial model for
+// every new worker.
+//
+// It survived TG-P2-09 because that gate scans Rust and this is TypeScript.
+// TG-P2-05 now holds this file against the Rust catalogue.
+export const DEFAULT_MODEL = 'gemini-3.7-flash' 
 
 /**
  * Which provider serves a model id.

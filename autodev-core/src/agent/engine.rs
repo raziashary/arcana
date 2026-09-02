@@ -130,10 +130,34 @@ impl AgentEngine {
         }
 
         let context_builder = ContextBuilder::new(working_dir).with_session(session_id);
-        let system_prompt = if let Some(override_str) = system_prompt_override {
-            override_str.to_string()
+
+        // ── D-12 (P2 post-phase audit) · the two halves stay apart ───────────
+        //
+        // `build_system_prompt_parts` returns (stable, volatile) precisely so
+        // the memory block can sit AFTER the cache breakpoint — and this call
+        // site used the joining wrapper, then handed the joined string to
+        // `prefix::build` as `system_base` with empty slices for everything
+        // else. So the split existed, was unit-tested, and was **never taken in
+        // production**: memory sat inside the cached region, every learned fact
+        // invalidated the whole prefix, and each turn paid the cache-write
+        // surcharge for a prefix that could never be read back.
+        //
+        // That is `L-18` — a fix that lands in the right place and is never
+        // reached — committed in the same phase that recorded the lesson.
+        let (stable_prompt, volatile_prompt) = match system_prompt_override {
+            // An explicit override is opaque to us: we cannot know which part of
+            // it is stable, so all of it is treated as stable and nothing is
+            // hoisted. Callers that want caching should not override.
+            Some(override_str) => (override_str.to_string(), String::new()),
+            None => context_builder.build_system_prompt_parts(self.pa_mode, working_dir),
+        };
+
+        // What actually goes on the wire, in the order the cache requires:
+        // stable first, volatile last.
+        let system_prompt = if volatile_prompt.is_empty() {
+            stable_prompt.clone()
         } else {
-            context_builder.build_system_prompt_with_mode(self.pa_mode, working_dir)
+            format!("{stable_prompt}\n\n---\n\n{volatile_prompt}")
         };
         let tool_defs = self.registry.to_definitions();
 
@@ -150,9 +174,16 @@ impl AgentEngine {
                 .iter()
                 .map(|t| (t.name.clone(), t.input_schema.to_string()))
                 .collect::<Vec<_>>(),
-            &system_prompt,
+            // ⚠ The STABLE half only. Passing the joined prompt here — which is
+            // what this did until the P2 audit — puts the memory block inside
+            // the hashed region, so the prefix changes whenever the agent
+            // learns anything and no two requests ever share a cache entry.
+            &stable_prompt,
             &[],
-            &[],
+            // The volatile half is declared, not discarded: it is what makes
+            // `CachePrefix::volatile` non-empty, and it is sent after the
+            // breakpoint as part of `system_prompt` above.
+            std::slice::from_ref(&volatile_prompt),
         );
         // `will_cache` warns when the prefix falls short of the model's
         // minimum, which is the ONLY notice anyone gets — no provider errors
@@ -289,6 +320,10 @@ impl AgentEngine {
                     if let Some(tid) = self.task_id {
                         self.escalate_budget_exceeded(tid, &budget_status, &reason_str);
                     }
+                    // D-1. Record BEFORE returning. This is the budget path:
+                    // the run that ends here is by construction the one that
+                    // spent the most, and it used to record nothing at all.
+                    self.record_spend(session_id, model, &total_usage);
                     return Err(AutoDevError::BudgetExceeded(reason_str));
                 }
             }
@@ -408,6 +443,16 @@ impl AgentEngine {
                     &caps,
                     &turn_usage,
                 );
+                // F-13. Also into the process-wide monitor, which is the only
+                // one that can see the cross-RUN reuse problem — six concurrent
+                // QC reviewers are six runs, and a per-run monitor computes one
+                // prefix and can never observe that the other five differ.
+                crate::cache::monitor::global().observe(
+                    cache_prefix.hash,
+                    cache_prefix.estimated_tokens,
+                    &caps,
+                    &turn_usage,
+                );
             }
 
             // P2-46. A turn cut short by the token ceiling is not a finished
@@ -507,6 +552,9 @@ impl AgentEngine {
                         session_id: session_id.to_string(),
                         message: e.to_string(),
                     });
+                    // D-1. A stream that failed mid-run still spent whatever
+                    // the provider had already billed for.
+                    self.record_spend(session_id, model, &total_usage);
                     return Err(e);
                 }
             };
@@ -549,7 +597,16 @@ impl AgentEngine {
 
             // Execute batch with concurrency control
             let batch_results = if !tool_batch.is_empty() {
-                tool_executor.execute_batch(tool_batch).await?
+                // D-1. The `?` here was the third path that jumped over cost
+                // recording: a tool-batch failure discarded the whole run's
+                // spend. Handled explicitly so the record happens first.
+                match tool_executor.execute_batch(tool_batch).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        self.record_spend(session_id, model, &total_usage);
+                        return Err(e);
+                    }
+                }
             } else {
                 Vec::new()
             };
@@ -619,7 +676,10 @@ impl AgentEngine {
         // not merely useless here — it COSTS more, because each cache write is
         // billed above the input rate and never read back. Reported once per
         // run rather than per turn, since it is a property of the run.
-        cache_monitor.report_reuse(turn as u32);
+        // F-13. Asked of the PROCESS monitor: within one run the prefix is
+        // stable by design, so the per-run monitor can only ever answer "one
+        // prefix", which says nothing.
+        crate::cache::monitor::global().report_reuse(turn as u32);
 
         // Fire AgentLoopEnd hook when loop completes
         let loop_end_ctx = HookContext {
@@ -650,7 +710,14 @@ impl AgentEngine {
         // what matters is not which field was missing, it is that a turn which
         // produced output reported nothing. That is one condition, and it stays
         // true if a ninth extraction site is added.
-        if total_usage.total() == 0 && turn > 0 {
+        // ⚠ F-6 (P2 post-phase audit). This read `turn > 0`, and `turn` counts
+        // TOOL-EXECUTING iterations — it is 0 for a single question answered
+        // without tools, which is the commonest turn there is. So the alarm
+        // could not fire for the case it most needed to cover.
+        //
+        // The condition is "the model produced something and reported nothing",
+        // so it is asked of the content, not of the loop counter.
+        if total_usage.total() == 0 && !history.is_empty() {
             error!(
                 "Provider '{}' returned content but reported ZERO tokens for model \
                  '{model}'. Cost and every spend ceiling are blind to this turn. \
@@ -659,35 +726,32 @@ impl AgentEngine {
             );
         }
 
-        // Record cost in app state. Tokens are recorded either way — they are
-        // provider-reported fact; only the dollar figure depends on a table we
-        // maintain, and a missing price must not erase the token record too.
-        let cost_usd = match CostTracker::calculate(model, &total_usage) {
-            Ok(c) => c.cost_usd,
-            Err(e) => {
-                error!("Cost unavailable for model '{model}': {e}");
-                0.0
-            }
-        };
-        {
-            let mut state = self.state.lock().unwrap();
-            state.add_cost(cost_usd, total_usage.total_input(), total_usage.output);
-        }
+        // Record cost in app state.
+        //
+        // ⚠ D-1 (P2 post-phase audit). This used to live HERE and only here —
+        // after the turn loop — so it was reached only when the loop exited via
+        // `break`. Three paths `return` out of the loop body instead, and each
+        // discarded the entire run's accumulated usage:
+        //
+        //   * the per-task budget tripping, which by construction is the most
+        //     expensive run there is;
+        //   * a stream error;
+        //   * a tool-batch failure.
+        //
+        // So an eighteen-turn run that died on turn nineteen recorded **$0.00**
+        // against the daily ceiling. Mode 2 was unaffected because
+        // `recipes/runner.rs` records per-turn, inside its loop — which is
+        // probably why nobody noticed.
+        //
+        // `record_spend` is now called on every exit path.
+        let cost_usd = self.record_spend(session_id, model, &total_usage);
 
         // P2-49. `emit_cost_update` had exactly ONE caller — the Mode 2 worker
         // tick — so the entire Mode 1 agent path was invisible to every cost
         // surface that listens for it, including the only budget warning the UI
         // had. Mode 1 emitted `agent_done` instead, which carries no cost.
-        {
-            let s = self.state.lock().unwrap();
-            crate::events::emit_cost_update(crate::events::CostUpdatePayload {
-                session_id: session_id.to_string(),
-                tokens_in: total_usage.total_input(),
-                tokens_out: total_usage.output,
-                cost_usd,
-                total_today: s.cost_today_usd,
-            });
-        }
+        // (The cost event is emitted by `record_spend`, on every exit path
+        // rather than only this one.)
 
         // Phase 7.5 — Record token usage in analytics DB.
         // Infer provider from model name (engine only knows the model string).
@@ -901,6 +965,69 @@ impl AgentEngine {
                 error!("[budget] failed to open tasks DB for escalation on task {task_id}: {e}");
             }
         }
+    }
+}
+
+impl AgentEngine {
+    /// Fold one run's usage into the day's spend.
+    ///
+    /// ⚠ **Must be called on every path out of the turn loop**, including the
+    /// error paths — especially those, since a run that ended because it ran out
+    /// of budget is by definition the expensive one. `D-1` in the P2 post-phase
+    /// audit was exactly this: `add_cost` sat after the loop and three `return`s
+    /// jumped over it.
+    ///
+    /// Safe to call with an empty `Usage`: it is a no-op then, so an early exit
+    /// before any turn costs nothing and records nothing.
+    fn record_spend(&self, session_id: &str, model: &str, total_usage: &Usage) -> f64 {
+        if total_usage.total() == 0 {
+            return 0.0;
+        }
+
+        // ⚠ D-7. An unpriced model used to record `0.0` here, which is not a
+        // neutral default — the daily ceiling is denominated in dollars, so a
+        // $0 record means the call is INVISIBLE to it and the model runs
+        // uncapped. The catalogue gate proves every model we *offer* is priced;
+        // it cannot prove that every model reaching this line came from the
+        // catalogue, and several do not (worker rows, recipe YAML, subagent
+        // config all set a model without consulting it).
+        //
+        // Tokens are still recorded either way — they are provider-reported
+        // fact. What changed is that the dollar figure is no longer quietly
+        // zero: the ceiling is told it cannot account for this call.
+        let cost_usd = match CostTracker::calculate(model, total_usage) {
+            Ok(c) => c.cost_usd,
+            Err(e) => {
+                error!(
+                    "UNMETERED SPEND: model '{model}' has no verified price ({e}), so this \
+                     run's {} input / {} output tokens cannot be costed and the daily \
+                     ceiling cannot see them. This model should not be reachable — it is \
+                     not in the catalogue.",
+                    total_usage.total_input(),
+                    total_usage.output
+                );
+                0.0
+            }
+        };
+
+        let total_today = {
+            let mut state = self.state.lock().unwrap();
+            state.add_cost(cost_usd, total_usage.total_input(), total_usage.output);
+            state.cost_today_usd
+        };
+
+        // P2-49. Emitted here rather than at the single happy-path exit, so the
+        // cost surface updates when a run ends in an ERROR too — which is
+        // exactly when the user most wants to see what it spent.
+        crate::events::emit_cost_update(crate::events::CostUpdatePayload {
+            session_id: session_id.to_string(),
+            tokens_in: total_usage.total_input(),
+            tokens_out: total_usage.output,
+            cost_usd,
+            total_today,
+        });
+
+        cost_usd
     }
 }
 

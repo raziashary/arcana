@@ -1157,6 +1157,276 @@ let x = 1;
             .any(|c| c.as_os_str().to_str() == Some("sidecar"))
     }
 
+    // ── TG-P2-05 · the Rust catalogue and the picker are the same list ────────
+
+    /// `provider/catalogue.rs` and `src/data/models.ts` must offer exactly the
+    /// same models.
+    ///
+    /// ⚠ **This gate was cited twice in `catalogue.rs` and did not exist.** Its
+    /// doc comment says "`TG-P2-05` fails the build if it does not", and no such
+    /// test had been written — so the file carried an assurance nothing
+    /// provided. The two lists then disagreed exactly as predicted: `models.ts`
+    /// declared `DEFAULT_MODEL = 'gemini-3.5-flash'`, a model the Rust
+    /// catalogue asserts must not be offered and the worker database migrates
+    /// away from, and it was the initial model for every new worker.
+    ///
+    /// `TG-P2-09` did not catch it because that gate scans Rust only. A model
+    /// id living in TypeScript is exactly as dead as one living in Rust.
+    #[test]
+    fn tg_p2_05_the_backend_catalogue_and_the_frontend_picker_agree() {
+        let catalogue =
+            std::fs::read_to_string(repo_root().join("autodev-core/src/provider/catalogue.rs"))
+                .expect("catalogue.rs");
+        let models_ts =
+            std::fs::read_to_string(repo_root().join("src/data/models.ts")).expect("models.ts");
+
+        // The Rust side: every `id: "..."` inside a CatalogueEntry.
+        let mut backend: Vec<String> = catalogue
+            .split("        id: \"")
+            .skip(1)
+            .filter_map(|r| r.split_once('"').map(|(id, _)| id.to_string()))
+            .collect();
+        backend.sort();
+
+        // The TypeScript side: quoted tokens inside MODEL_GROUPS, comments
+        // stripped first so an apostrophe in prose cannot shift the pairing.
+        let block = {
+            let from = models_ts.find("MODEL_GROUPS").expect("MODEL_GROUPS");
+            let rest = &models_ts[from..];
+            let to = rest.find("] as const").unwrap_or(rest.len());
+            &rest[..to]
+        };
+        let code_only: String = block
+            .lines()
+            .map(|l| match l.find("//") {
+                Some(i) => &l[..i],
+                None => l,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let mut frontend: Vec<String> = code_only
+            .split('\'')
+            .skip(1)
+            .step_by(2)
+            .filter(|t| {
+                t.chars().any(|c| c.is_ascii_digit())
+                    && (t.contains('-') || t.contains('.'))
+                    && !t.contains(' ')
+            })
+            .map(|t| t.to_string())
+            .collect();
+        frontend.sort();
+
+        assert!(
+            backend.len() >= 8 && frontend.len() >= 8,
+            "read {} backend and {} frontend models — re-point this gate",
+            backend.len(),
+            frontend.len()
+        );
+
+        assert_eq!(
+            backend, frontend,
+            "the Rust catalogue and the model picker disagree. A model offered in the UI \
+             but absent from the catalogue has no capabilities, no context window and no \
+             route; one in the catalogue but not the UI cannot be selected."
+        );
+
+        // The frontend's own default must be a model that exists. This is the
+        // specific defect the missing gate let through.
+        let default_model = models_ts
+            .split("export const DEFAULT_MODEL = '")
+            .nth(1)
+            .and_then(|r| r.split_once('\'').map(|(m, _)| m))
+            .expect("models.ts must declare DEFAULT_MODEL");
+
+        assert!(
+            backend.contains(&default_model.to_string()),
+            "DEFAULT_MODEL is '{default_model}', which the catalogue does not offer — it is \
+             the initial model for every new worker"
+        );
+    }
+
+    // ── TG-P2-10 · every exit from the turn loop records its spend ────────────
+
+    /// A run that ends in an error still spent money.
+    ///
+    /// **D-1, from the P2 post-phase audit.** `add_cost` sat after the turn
+    /// loop, so it was reached only when the loop exited via `break`. Three
+    /// paths `return` out of the loop body instead — the per-task budget
+    /// tripping, a stream error, and a tool-batch failure — and each discarded
+    /// the entire run's accumulated usage. An eighteen-turn run that died on
+    /// turn nineteen recorded **$0.00** against the daily ceiling.
+    ///
+    /// The budget path is the worst of the three: the run that ends because it
+    /// ran out of budget is by construction the expensive one.
+    ///
+    /// Mode 2 was unaffected — `recipes/runner.rs` records per-turn, inside its
+    /// loop — which is most likely why this survived.
+    #[test]
+    fn tg_p2_10_every_error_exit_from_the_agent_loop_records_its_spend() {
+        let engine = std::fs::read_to_string(repo_root().join("autodev-core/src/agent/engine.rs"))
+            .expect("engine.rs");
+
+        // The run loop, from `loop {` to the cost recording that follows it.
+        let run = engine
+            .split("    pub async fn run(")
+            .nth(1)
+            .expect("run() must exist");
+
+        let mut unrecorded = Vec::new();
+        let mut recorded = 0usize;
+
+        // Every `return Err(` inside run() must be preceded by a spend record
+        // within the few lines before it.
+        let lines: Vec<&str> = run.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            if !line.trim_start().starts_with("return Err(") {
+                continue;
+            }
+            // The guard clause before any turn has run cannot have spent
+            // anything — it precedes the loop entirely.
+            let window_start = i.saturating_sub(6);
+            let preceded_by_record = lines[window_start..i]
+                .iter()
+                .any(|l| l.contains("record_spend("));
+
+            if preceded_by_record {
+                recorded += 1;
+            } else {
+                // A `return` before the loop starts is fine. Detect that by
+                // whether any turn machinery appears above it.
+                let before: String = lines[..i].join("\n");
+                if before.contains("loop {") {
+                    unrecorded.push(format!("line ~{}: {}", i + 1, line.trim()));
+                }
+            }
+        }
+
+        assert!(
+            recorded >= 3,
+            "expected at least 3 recorded error exits, found {recorded} — re-point this \
+             gate if run() changed shape"
+        );
+
+        assert!(
+            unrecorded.is_empty(),
+            "these exits from the agent loop discard the run's spend, so it never reaches \
+             the daily ceiling:\n{}",
+            unrecorded.join("\n")
+        );
+    }
+
+    // ── TG-P2-11 · the cache prefix excludes the volatile half ────────────────
+
+    /// The stable/volatile split must be USED, not merely built.
+    ///
+    /// **D-12, from the P2 post-phase audit.** `build_system_prompt_parts`
+    /// correctly returned `(stable, volatile)` with the memory block in the
+    /// volatile half, and `cache::prefix` correctly kept the two apart — and
+    /// the engine called the *joining* wrapper and passed the whole prompt as
+    /// `system_base` with empty slices for everything else.
+    ///
+    /// So the capability existed, was unit-tested, and was never invoked in
+    /// production: memory sat inside the hashed region, every learned fact
+    /// invalidated the prefix, and each turn paid the cache-write surcharge for
+    /// a prefix that could never be read back. `cache::` passed 17/17 the whole
+    /// time — a green test for a path production does not take, which is the
+    /// exact shape of `L-18`.
+    #[test]
+    fn tg_p2_11_the_cached_prefix_is_built_from_the_stable_half_only() {
+        let engine = std::fs::read_to_string(repo_root().join("autodev-core/src/agent/engine.rs"))
+            .expect("engine.rs");
+
+        assert!(
+            engine.contains("build_system_prompt_parts"),
+            "the engine uses the JOINING prompt builder, so the volatile half is inside \
+             the cached region and every new memory invalidates the whole prefix"
+        );
+
+        let call = engine
+            .split("crate::cache::prefix::build(")
+            .nth(1)
+            .and_then(|r| r.split_once(");").map(|(a, _)| a))
+            .expect("the engine must build a cache prefix");
+
+        assert!(
+            call.contains("stable_prompt"),
+            "the prefix is not built from the stable half:\n{call}"
+        );
+        assert!(
+            !call.contains("&system_prompt"),
+            "the prefix is built from the JOINED prompt, which puts volatile content \
+             inside the hashed region:\n{call}"
+        );
+    }
+
+    // ── TG-P2-12 · key validation cannot name a model ─────────────────────────
+
+    /// `test_connection` must not depend on a specific model id.
+    ///
+    /// **D-10, from the P2 post-phase audit.** Google's validation POSTed a
+    /// `generateContent` call to a hardcoded `gemini-2.5-flash` — a model this
+    /// tree's own `the_retired_generation_is_gone` test lists as withdrawn. So
+    /// validation 404'd for every user, and because `P2-23` refuses to store a
+    /// key the provider rejects, a **valid Google key could not be saved at
+    /// all** — on the provider chosen as primary for rollout 1.
+    ///
+    /// It was also a billed completion, while the vault command told the user
+    /// validation is "a models list, not a completion. It costs nothing" and
+    /// `capped.rs` exempts `test_connection` from the ceiling *because* of that
+    /// claim.
+    ///
+    /// A validation call that names a model can only rot again, so the gate
+    /// forbids naming one rather than forbidding the specific dead id.
+    #[test]
+    fn tg_p2_12_key_validation_does_not_name_a_model() {
+        let dir = repo_root().join("autodev-core/src/provider");
+        let mut offenders = Vec::new();
+
+        for adapter in ["anthropic.rs", "openai.rs", "google.rs"] {
+            let text = std::fs::read_to_string(dir.join(adapter)).expect("read adapter");
+
+            let f = text
+                .split("async fn test_connection(")
+                .nth(1)
+                .unwrap_or_else(|| panic!("{adapter} has no test_connection"));
+            // The function body, up to the next top-level `\n    }`.
+            let body = f.split("\n    }").next().unwrap_or(f);
+
+            for (n, line) in body.lines().enumerate() {
+                let code = line.split("//").next().unwrap_or("");
+                for token in code.split('"').skip(1).step_by(2) {
+                    let names_a_model = (token.contains("claude-")
+                        || token.contains("gemini-")
+                        || token.contains("gpt-"))
+                        && token.chars().any(|c| c.is_ascii_digit());
+                    if names_a_model {
+                        offenders.push(format!(
+                            "{adapter} test_connection line ~{}: names '{token}'",
+                            n + 1
+                        ));
+                    }
+                }
+
+                if code.contains("generateContent") || code.contains("/messages") {
+                    offenders.push(format!(
+                        "{adapter} test_connection line ~{}: validates with a BILLED \
+                         completion, not a models list",
+                        n + 1
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "key validation must not name a model or spend money — a named model rots, \
+             and a billed call contradicts what the UI tells the user:\n{}",
+            offenders.join("\n")
+        );
+    }
+
     // ── TG-P2-09 · no shipped code names a model that does not exist ──────────
 
     /// Every model id written into shipped code must be one the app offers.
