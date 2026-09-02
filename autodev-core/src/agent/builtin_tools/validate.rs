@@ -35,8 +35,31 @@ impl LintResult {
         }
     }
 
+    /// The checker ran to completion.
+    ///
+    /// ⚠ `P3-18`. Distinguishes *"I checked and found nothing"* from *"I could
+    /// not check"* — which the old two-severity model could not express, so
+    /// both rendered as `"✓ No syntax errors."`.
+    pub fn ran(&self) -> bool {
+        !self
+            .diagnostics
+            .iter()
+            .any(|d| d.severity == SEVERITY_UNAVAILABLE)
+    }
+
+    /// The file is clean **and that statement is backed by a check that ran**.
+    ///
+    /// 🔴 This was `!any(severity == "error")`, and a missing binary produced a
+    /// `"warning"` — so `is_clean()` returned `true` and `check_file` printed
+    /// `"✓ No syntax errors."` for a file **nothing had looked at**. The model
+    /// then proceeded on that assurance.
+    ///
+    /// This is why `P3-17` could not ship alone: adding a timeout without this
+    /// change would route a **hang** into the same `"warning"` branch and
+    /// report it as clean — strictly worse than the hang, because a hang is at
+    /// least visible.
     pub fn is_clean(&self) -> bool {
-        !self.diagnostics.iter().any(|d| d.severity == "error")
+        self.ran() && !self.diagnostics.iter().any(|d| d.severity == "error")
     }
 
     pub fn error_count(&self) -> usize {
@@ -59,12 +82,18 @@ impl LintResult {
         if self.diagnostics.is_empty() {
             return String::new();
         }
-        let mut out = format!(
-            "[{}] {} error(s), {} warning(s):",
-            self.checker,
-            self.error_count(),
-            self.warning_count()
-        );
+        let mut out = if self.ran() {
+            format!(
+                "[{}] {} error(s), {} warning(s):",
+                self.checker,
+                self.error_count(),
+                self.warning_count()
+            )
+        } else {
+            // Never "0 error(s)" for a check that did not happen — that reads
+            // as a pass.
+            format!("[{}] NOT CHECKED:", self.checker)
+        };
         for d in &self.diagnostics {
             let loc = d.line.map(|l| format!(" line {l}")).unwrap_or_default();
             out.push_str(&format!(
@@ -215,27 +244,83 @@ fn check_toml(path: &Path) -> LintResult {
     }
 }
 
+/// Severity for *"this checker did not run"*.
+///
+/// A distinct value rather than `"warning"`: warnings are advisory findings
+/// **from** a check, and `is_clean()` ignores them by design. A check that did
+/// not happen is not a finding, and must not be ignored.
+pub(crate) const SEVERITY_UNAVAILABLE: &str = "unavailable";
+
+/// Wall-clock ceiling for any validator subprocess.
+///
+/// 🔴 `P3-17`. There was **no timeout on any of the five spawn sites**. `tsc`
+/// on a large project, a `node` process waiting on stdin, or a `mypy` walking
+/// a huge tree would hang the calling tool — and these run inside `write_file`,
+/// so a hung checker hangs the write.
+///
+/// 30s sits above a cold `tsc` start (typically 2–8s) and well below the
+/// executor's `PERMISSION_TIMEOUT`.
+const CHECKER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// What happened when we tried to run a checker.
+enum Ran {
+    /// The process ran to completion. Its verdict is trustworthy.
+    Completed(std::process::Output),
+    /// The binary is not installed / could not be spawned.
+    NotFound,
+    /// The process exceeded its ceiling and was killed.
+    TimedOut,
+}
+
+/// Run a checker with a wall-clock ceiling, killing it if it overruns.
+///
+/// ⚠ `kill_on_drop(true)` is load-bearing, not decorative: on timeout the
+/// future is dropped, and without it the child would be **orphaned and still
+/// running** — a leak that repeats on every subsequent write.
+async fn run_bounded(mut cmd: tokio::process::Command, timeout: std::time::Duration) -> Ran {
+    cmd.kill_on_drop(true);
+    match tokio::time::timeout(timeout, cmd.output()).await {
+        Ok(Ok(out)) => Ran::Completed(out),
+        Ok(Err(_)) => Ran::NotFound,
+        Err(_elapsed) => Ran::TimedOut,
+    }
+}
+
+/// The `unavailable` result for a checker that could not run.
+fn did_not_run(checker: &str, message: String) -> LintResult {
+    LintResult {
+        checker: checker.to_string(),
+        diagnostics: vec![LintDiagnostic {
+            severity: SEVERITY_UNAVAILABLE,
+            message,
+            line: None,
+        }],
+    }
+}
+
 async fn check_python_syntax(path: &Path, working_dir: &str) -> LintResult {
     let python = resolve_python(working_dir);
-    let output = tokio::process::Command::new(&python)
-        .args(["-m", "py_compile", &path.to_string_lossy()])
-        .output()
-        .await;
+    let mut cmd = tokio::process::Command::new(&python);
+    cmd.args(["-m", "py_compile", &path.to_string_lossy()]);
 
-    match output {
-        Err(_) => LintResult {
-            checker: "py_compile".into(),
-            diagnostics: vec![LintDiagnostic {
-                severity: "warning",
-                message: format!(
-                    "Could not run '{python}' — Python not available, syntax not checked. \
-                     Install Python to enable automatic validation."
-                ),
-                line: None,
-            }],
-        },
-        Ok(out) if out.status.success() => LintResult::clean("py_compile"),
-        Ok(out) => {
+    match run_bounded(cmd, CHECKER_TIMEOUT).await {
+        Ran::NotFound => did_not_run(
+            "py_compile",
+            format!(
+                "Could not run '{python}' — Python not available, so the syntax of \
+                 this file was NOT checked. Install Python to enable validation."
+            ),
+        ),
+        Ran::TimedOut => did_not_run(
+            "py_compile",
+            format!(
+                "'{python}' exceeded {}s and was killed — the syntax of this file \
+                 was NOT checked.",
+                CHECKER_TIMEOUT.as_secs()
+            ),
+        ),
+        Ran::Completed(out) if out.status.success() => LintResult::clean("py_compile"),
+        Ran::Completed(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
             let line = parse_python_error_line(&stderr);
             LintResult {
@@ -252,24 +337,26 @@ async fn check_python_syntax(path: &Path, working_dir: &str) -> LintResult {
 
 async fn check_node_syntax(path: &Path) -> LintResult {
     // `node --check` validates syntax without executing the file.
-    let output = tokio::process::Command::new("node")
-        .args(["--check", &path.to_string_lossy()])
-        .output()
-        .await;
+    let mut cmd = tokio::process::Command::new("node");
+    cmd.args(["--check", &path.to_string_lossy()]);
 
-    match output {
-        Err(_) => LintResult {
-            checker: "node_check".into(),
-            diagnostics: vec![LintDiagnostic {
-                severity: "warning",
-                message: "Could not run 'node' — Node.js not available, syntax not checked. \
-                           Install Node.js to enable automatic validation."
-                    .into(),
-                line: None,
-            }],
-        },
-        Ok(out) if out.status.success() => LintResult::clean("node_check"),
-        Ok(out) => {
+    match run_bounded(cmd, CHECKER_TIMEOUT).await {
+        Ran::NotFound => did_not_run(
+            "node_check",
+            "Could not run 'node' — Node.js not available, so the syntax of this \
+             file was NOT checked. Install Node.js to enable validation."
+                .to_string(),
+        ),
+        Ran::TimedOut => did_not_run(
+            "node_check",
+            format!(
+                "'node --check' exceeded {}s and was killed — the syntax of this \
+                 file was NOT checked.",
+                CHECKER_TIMEOUT.as_secs()
+            ),
+        ),
+        Ran::Completed(out) if out.status.success() => LintResult::clean("node_check"),
+        Ran::Completed(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
             let line = parse_node_error_line(&stderr);
             LintResult {
@@ -300,8 +387,8 @@ async fn check_node_syntax(path: &Path) -> LintResult {
 /// successful write — just with a visible note that TS wasn't checked.
 async fn check_tsc_syntax(path: &Path, working_dir: &str) -> LintResult {
     let path_str = path.to_string_lossy().to_string();
-    let output = tokio::process::Command::new("tsc")
-        .args([
+    let mut cmd = tokio::process::Command::new("tsc");
+    cmd.args([
             "--noEmit",
             "--allowJs",
             "--isolatedModules",
@@ -315,24 +402,26 @@ async fn check_tsc_syntax(path: &Path, working_dir: &str) -> LintResult {
             "node",
             &path_str,
         ])
-        .current_dir(working_dir)
-        .output()
-        .await;
+        .current_dir(working_dir);
 
-    match output {
-        Err(_) => LintResult {
-            checker: "tsc_check".into(),
-            diagnostics: vec![LintDiagnostic {
-                severity: "warning",
-                message: "Could not run 'tsc' — TypeScript not installed. \
-                           Install it (`npm install -g typescript`) to enable \
-                           automatic .ts/.tsx syntax validation."
-                    .into(),
-                line: None,
-            }],
-        },
-        Ok(out) if out.status.success() => LintResult::clean("tsc_check"),
-        Ok(out) => {
+    match run_bounded(cmd, CHECKER_TIMEOUT).await {
+        Ran::NotFound => did_not_run(
+            "tsc_check",
+            "Could not run 'tsc' — TypeScript is not installed, so this file was \
+             NOT checked. Install it (`npm install -g typescript`) to enable \
+             .ts/.tsx validation."
+                .to_string(),
+        ),
+        Ran::TimedOut => did_not_run(
+            "tsc_check",
+            format!(
+                "'tsc' exceeded {}s and was killed — this file was NOT checked. \
+                 On a large project, prefer a project-level type-check.",
+                CHECKER_TIMEOUT.as_secs()
+            ),
+        ),
+        Ran::Completed(out) if out.status.success() => LintResult::clean("tsc_check"),
+        Ran::Completed(out) => {
             let combined = format!(
                 "{}{}",
                 String::from_utf8_lossy(&out.stdout),
@@ -822,25 +911,25 @@ pub async fn tier3_types(path: &Path, working_dir: &str, checker: Option<&str>) 
         ("js" | "jsx", Some("eslint")) | ("js" | "jsx", None) => {
             run_eslint(path, working_dir).await
         }
-        _ => LintResult {
-            checker: "tier3".into(),
-            diagnostics: vec![LintDiagnostic {
-                severity: "warning",
-                message: format!("No type checker configured for .{ext} files."),
-                line: None,
-            }],
-        },
+        // Also a non-run, not a warning: nothing examined this file, so it
+        // must not report as clean.
+        _ => did_not_run(
+            "tier3",
+            format!("No type checker is configured for .{ext} files — NOT checked."),
+        ),
     }
 }
 
 async fn run_pyright_or_mypy(path: &Path, working_dir: &str) -> LintResult {
     // Prefer pyright if available, fall back to mypy.
-    let pyright_available = tokio::process::Command::new("pyright")
-        .arg("--version")
-        .output()
-        .await
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    // ⚠ P3-17: even the *availability probe* was unbounded. A `pyright` that
+    // hangs on startup hung the write that triggered it.
+    let mut probe = tokio::process::Command::new("pyright");
+    probe.arg("--version");
+    let pyright_available = matches!(
+        run_bounded(probe, std::time::Duration::from_secs(10)).await,
+        Ran::Completed(o) if o.status.success()
+    );
 
     if pyright_available {
         run_pyright(path, working_dir).await
@@ -912,26 +1001,28 @@ async fn run_checker_subprocess(
     working_dir: &str,
     checker: &str,
 ) -> LintResult {
-    let result = tokio::process::Command::new(bin)
-        .args(args)
-        .current_dir(working_dir)
-        .output()
-        .await;
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.args(args).current_dir(working_dir);
 
-    match result {
-        Err(_) => LintResult {
-            checker: checker.to_string(),
-            diagnostics: vec![LintDiagnostic {
-                severity: "warning",
-                message: format!(
-                    "'{bin}' not found — install it to enable type checking. \
-                     (e.g. `pip install {bin}` or `npm install -g {bin}`)"
-                ),
-                line: None,
-            }],
-        },
-        Ok(out) if out.status.success() => LintResult::clean(checker),
-        Ok(out) => {
+    match run_bounded(cmd, CHECKER_TIMEOUT).await {
+        Ran::NotFound => did_not_run(
+            checker,
+            format!(
+                "'{bin}' not found, so this file was NOT type-checked. Install it \
+                 to enable checking (e.g. `pip install {bin}` or \
+                 `npm install -g {bin}`)."
+            ),
+        ),
+        Ran::TimedOut => did_not_run(
+            checker,
+            format!(
+                "'{bin}' exceeded {}s and was killed — this file was NOT \
+                 type-checked.",
+                CHECKER_TIMEOUT.as_secs()
+            ),
+        ),
+        Ran::Completed(out) if out.status.success() => LintResult::clean(checker),
+        Ran::Completed(out) => {
             let combined = format!(
                 "{}{}",
                 String::from_utf8_lossy(&out.stdout),
@@ -1430,4 +1521,137 @@ fn node_builtin_set() -> HashSet<&'static str> {
         "node:zlib",
     ]
     .into()
+}
+
+#[cfg(test)]
+mod p3_17_18_tests {
+    use super::*;
+
+    fn diag(severity: &'static str) -> LintDiagnostic {
+        LintDiagnostic {
+            severity,
+            message: "m".into(),
+            line: None,
+        }
+    }
+
+    #[test]
+    fn a_checker_that_did_not_run_is_not_clean() {
+        // 🔴 THE DEFECT. `is_clean()` was `!any(severity == "error")`, so a
+        // missing binary produced a "warning" and the file reported as
+        // "✓ No syntax errors." — for a file nothing had looked at.
+        let missing = did_not_run("tsc_check", "not installed".into());
+
+        assert!(
+            !missing.is_clean(),
+            "a checker that never ran must never report the file clean"
+        );
+        assert!(!missing.ran());
+    }
+
+    #[test]
+    fn a_real_warning_still_reports_clean() {
+        // The no-fire half. Warnings are advisory findings FROM a check that
+        // ran; `is_clean()` is supposed to ignore them. If this flipped too,
+        // the fix would just be a different kind of wrong.
+        let warned = LintResult {
+            checker: "py_compile".into(),
+            diagnostics: vec![diag("warning")],
+        };
+
+        assert!(warned.ran());
+        assert!(
+            warned.is_clean(),
+            "a warning from a check that RAN is not an error"
+        );
+    }
+
+    #[test]
+    fn an_error_is_still_an_error() {
+        let broken = LintResult {
+            checker: "py_compile".into(),
+            diagnostics: vec![diag("error")],
+        };
+        assert!(broken.ran());
+        assert!(!broken.is_clean());
+    }
+
+    #[test]
+    fn a_non_run_never_renders_as_zero_errors() {
+        // "0 error(s), 1 warning(s)" reads as a pass at a glance, which is how
+        // the original defect survived review.
+        let text = did_not_run("tsc_check", "not installed".into()).format_inline();
+
+        assert!(text.contains("NOT CHECKED"), "got: {text}");
+        assert!(
+            !text.contains("0 error(s)"),
+            "a check that did not happen must not render a zero error count: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_hanging_checker_is_killed_and_reported_as_not_checked() {
+        // 🔴 P3-17 + P3-18 together. Before this pair: no timeout at all, so
+        // this hung forever. Add only the timeout and it lands in the old
+        // "warning" branch — reporting a HANG as "✓ No syntax errors", which
+        // is strictly worse than hanging, because a hang is at least visible.
+        let (bin, args): (&str, Vec<&str>) = if cfg!(windows) {
+            ("powershell", vec!["-NoProfile", "-Command", "Start-Sleep 30"])
+        } else {
+            ("sleep", vec!["30"])
+        };
+
+        let mut cmd = tokio::process::Command::new(bin);
+        cmd.args(&args);
+
+        let started = std::time::Instant::now();
+        let outcome = run_bounded(cmd, std::time::Duration::from_millis(600)).await;
+        let elapsed = started.elapsed();
+
+        assert!(
+            matches!(outcome, Ran::TimedOut),
+            "a checker that outlives its ceiling must be killed, not awaited"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "the ceiling did not bound the wait: {elapsed:?}"
+        );
+
+        // And the timeout must not be reportable as clean.
+        let result = did_not_run("py_compile", "timed out".into());
+        assert!(!result.is_clean(), "a timeout must never report as clean");
+    }
+
+    #[tokio::test]
+    async fn a_missing_binary_is_not_found_not_a_hang() {
+        let cmd = tokio::process::Command::new("autodev-no-such-binary-p3-17");
+        assert!(matches!(
+            run_bounded(cmd, std::time::Duration::from_secs(5)).await,
+            Ran::NotFound
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_fast_checker_still_completes() {
+        // The no-fire half of the timeout: a normal checker must be unaffected.
+        let (bin, args): (&str, Vec<&str>) = if cfg!(windows) {
+            ("cmd", vec!["/C", "exit 0"])
+        } else {
+            ("true", vec![])
+        };
+        let mut cmd = tokio::process::Command::new(bin);
+        cmd.args(&args);
+
+        match run_bounded(cmd, CHECKER_TIMEOUT).await {
+            Ran::Completed(out) => assert!(out.status.success()),
+            other => panic!(
+                "a trivially fast process must complete, got {}",
+                match other {
+                    Ran::TimedOut => "TimedOut",
+                    Ran::NotFound => "NotFound",
+                    _ => unreachable!(),
+                }
+            ),
+        }
+    }
 }

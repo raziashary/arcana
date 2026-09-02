@@ -145,6 +145,14 @@ impl Tool for CheckFileTool {
             if let Some(result) = validate::tier1_syntax(&path, &ctx.working_dir).await {
                 let status = if result.is_clean() {
                     format!("[{}] ✓ No syntax errors.", result.checker)
+                } else if !result.ran() {
+                    // ⚠ P3-18. A checker that could not run is NOT an error —
+                    // razi-ruled 2026-09-02. The defect being fixed is the false
+                    // *claim*, not the absent tool: an uninstalled `tsc` must
+                    // never render as "✓ No syntax errors", but neither should
+                    // it fail a tool call the model cannot possibly repair by
+                    // retrying. `format_inline` renders "NOT CHECKED".
+                    result.format_inline()
                 } else {
                     has_errors = true;
                     result.format_inline()
@@ -214,6 +222,11 @@ impl Tool for CheckFileTool {
                 validate::tier3_types(&path, &ctx.working_dir, type_checker.as_deref()).await;
             let status = if result.is_clean() {
                 format!("[{}] ✓ No type errors.", result.checker)
+            } else if !result.ran() {
+                // ⚠ P3-18, as above: no type checker installed (or none
+                // configured for this extension) is a gap in coverage, not a
+                // defect in the file.
+                result.format_inline()
             } else {
                 has_errors = true;
                 result.format_inline()

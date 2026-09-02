@@ -83,7 +83,13 @@ pub fn lock_key(target: &Path, working_dir: &str) -> PathBuf {
     } else {
         Path::new(working_dir).join(target)
     };
-    lexically_normalise(&joined)
+
+    // ⚠ P3-16 / C-7. This was `lexically_normalise`, which resolves `.` and
+    // `..` and **nothing else** — no canonicalisation, no case-folding. So
+    // `C:.rs` and `c:.rs` took two mutexes for one file, on Windows
+    // and macOS. The same missing normalisation exists in the graph DB key and
+    // checkpoint retention: three subsystems, one helper, fixed once.
+    PathBuf::from(crate::security::path_key::path_key(&joined))
 }
 
 /// Acquire the per-path mutex for `key`. Awaits if another caller currently
@@ -180,5 +186,71 @@ mod tests {
         );
 
         h1.await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod p3_16_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn all_spellings_of_one_file_take_one_lock_slot() {
+        // 🔴 The defect: `lock_key` normalised only `.` and `..`, so two
+        // spellings of one file took two mutexes — and two mutexes is no
+        // mutual exclusion at all.
+        let dir = TempDir::new().unwrap();
+        let ws = dir.path().to_string_lossy().to_string();
+        fs::write(dir.path().join("File.rs"), "x").unwrap();
+
+        let direct = lock_key(&dir.path().join("File.rs"), &ws);
+        let dotted = lock_key(&dir.path().join("./File.rs"), &ws);
+        let relative = lock_key(std::path::Path::new("File.rs"), &ws);
+
+        assert_eq!(direct, dotted, "`./` produced a second lock slot");
+        assert_eq!(direct, relative, "a relative path produced a second lock slot");
+    }
+
+    #[test]
+    fn case_variants_share_a_slot_where_the_platform_shares_the_file() {
+        let dir = TempDir::new().unwrap();
+        let ws = dir.path().to_string_lossy().to_string();
+        fs::write(dir.path().join("File.rs"), "x").unwrap();
+
+        let upper = lock_key(&dir.path().join("File.rs"), &ws);
+        let lower = lock_key(&dir.path().join("file.rs"), &ws);
+
+        if crate::security::path_key::platform_is_case_insensitive() {
+            assert_eq!(
+                upper, lower,
+                "on this platform these are ONE file; two lock slots is the lost-update race"
+            );
+        } else {
+            // The no-fire half: on Linux they are two files, and merging their
+            // locks would be a correctness bug in the other direction.
+            assert_ne!(upper, lower);
+        }
+    }
+
+    #[test]
+    fn the_pre_jail_and_post_jail_forms_agree() {
+        // The race that was actually live: `write_file` locked the pre-jail
+        // path and `edit_file` the post-jail canonical one. Both forms must
+        // land in the same slot, or the two tools do not exclude each other.
+        let dir = TempDir::new().unwrap();
+        let ws = dir.path().to_string_lossy().to_string();
+        fs::write(dir.path().join("shared.rs"), "x").unwrap();
+
+        let pre_jail = dir.path().join("shared.rs");
+        let post_jail =
+            crate::agent::builtin_tools::path_jail::validate_workspace_path(&pre_jail, &ws)
+                .expect("inside the workspace");
+
+        assert_eq!(
+            lock_key(&pre_jail, &ws),
+            lock_key(&post_jail, &ws),
+            "write_file and edit_file must contend on the same slot"
+        );
     }
 }

@@ -1614,6 +1614,102 @@ let x = 1;
         );
     }
 
+    // ── TG-P3-17 · no validator subprocess runs without a ceiling ─────────────
+
+    /// Every subprocess the validator spawns must go through `run_bounded`.
+    ///
+    /// 🔴 There were **five** spawn sites in `validate.rs` and **not one had a
+    /// timeout** — including the `pyright --version` availability probe. These
+    /// run inside `write_file`, so a checker that hangs hangs the write.
+    ///
+    /// ⚠ Keyed on the **invariant** (`no bare .output().await outside the one
+    /// bounded helper`), not on the presence of the fix. A gate that merely
+    /// looked for the string `run_bounded` would pass while a **new** sixth
+    /// spawn site sat beside it, unbounded — which is exactly the shape that
+    /// let `TG-P3-11` pass over a planted defect (`§0.16 L-C6`).
+    #[test]
+    fn tg_p3_17_every_validator_subprocess_is_bounded() {
+        let path = repo_root().join("autodev-core/src/agent/builtin_tools/validate.rs");
+        let text = read_source(&path);
+
+        // The single legitimate `.output()` lives inside `run_bounded`, which
+        // wraps it in `tokio::time::timeout` and sets `kill_on_drop`.
+        let bounded_helper = text
+            .split("async fn run_bounded")
+            .nth(1)
+            .expect("run_bounded must exist — it is the only sanctioned spawn path");
+        let helper_body = bounded_helper
+            .split("\n}\n")
+            .next()
+            .expect("run_bounded must have a body");
+
+        assert!(
+            helper_body.contains("tokio::time::timeout"),
+            "run_bounded must actually impose a ceiling"
+        );
+        assert!(
+            helper_body.contains("kill_on_drop"),
+            "without kill_on_drop the timed-out child is orphaned and keeps running"
+        );
+
+        // Now: every OTHER `.output()` in the file is an unbounded spawn.
+        let total_output_calls = text.matches(".output()").count();
+        let in_helper = helper_body.matches(".output()").count();
+
+        assert_eq!(
+            in_helper, 1,
+            "run_bounded should contain exactly one `.output()`; found {in_helper}"
+        );
+        assert_eq!(
+            total_output_calls, 1,
+            "found {} unbounded validator subprocess spawn(s) — every \
+             `tokio::process::Command` in validate.rs must go through \
+             `run_bounded`, or a hanging checker hangs the write that called it",
+            total_output_calls - in_helper
+        );
+
+        // And the ceiling must be a real bound, not `Duration::MAX`.
+        assert!(
+            text.contains("const CHECKER_TIMEOUT"),
+            "the ceiling must be a named constant, not scattered literals"
+        );
+    }
+
+    /// A checker that did not run must never be reportable as clean.
+    ///
+    /// 🔴 `is_clean()` was `!any(severity == "error")` while a missing binary
+    /// produced a `"warning"` — so an uninstalled `tsc` rendered as
+    /// `"✓ No syntax errors."`. Paired with `TG-P3-17` because the timeout
+    /// alone would have routed a **hang** into that same branch.
+    #[test]
+    fn tg_p3_18_a_check_that_did_not_run_cannot_report_clean() {
+        let path = repo_root().join("autodev-core/src/agent/builtin_tools/validate.rs");
+        let text = read_source(&path);
+
+        let is_clean = text
+            .split("pub fn is_clean(&self) -> bool {")
+            .nth(1)
+            .expect("LintResult::is_clean must exist");
+        let body = is_clean.split("    }").next().expect("is_clean body");
+
+        assert!(
+            body.contains("self.ran()"),
+            "is_clean must consult whether the checker ran; without it, \
+             'not checked' and 'checked and fine' are the same verdict"
+        );
+
+        // The severity must be its own value. Folding it back into "warning"
+        // would silently restore the defect while leaving `ran()` in place.
+        assert!(
+            text.contains("SEVERITY_UNAVAILABLE"),
+            "the did-not-run state needs a severity of its own"
+        );
+        assert!(
+            !text.contains("severity: \"warning\",\n                message: format!(\n                    \"Could not run"),
+            "a missing binary must not be a warning"
+        );
+    }
+
     // ── TG-P3-01 · the release profile is where Cargo will read it ────────────
 
     /// `[profile.release]` must live at the **workspace root**.

@@ -81,10 +81,21 @@ impl Tool for WriteFileTool {
         // write_file targeting the same path waits its turn rather than
         // racing the read-modify-write cycle.
         //
-        // We compute the key from the pre-canonical `resolved` path (the
-        // jail's canonicalised path may not yet exist on a fresh-file
-        // write). lock_key normalises both forms to the same slot.
-        let _lock_guard = path_lock::acquire_for(&resolved, &ctx.working_dir).await;
+        // ⚠ P3-16. This locked the **pre-jail** `resolved` path while
+        // `edit_file` and `append_file` lock the **post-jail canonical** one —
+        // two different strings, two different mutex slots, for the same file.
+        // The lost-update race that `edit_file`'s own comment documents was
+        // therefore live between those tools.
+        //
+        // The comment here claimed *"lock_key normalises both forms to the same
+        // slot"*. It did not: lexical normalisation cannot resolve symlinks or
+        // case, which is precisely what separates the two forms.
+        //
+        // All three now lock the jailed path. `validate_workspace_path` handles
+        // a non-existent tail by canonicalising the existing ancestor, so the
+        // original objection — that a fresh file has no canonical path — does
+        // not hold.
+        let _lock_guard = path_lock::acquire_for(&path, &ctx.working_dir).await;
 
         // Refuse-on-exists. Workers create files with write_file and modify
         // them with edit_file; rewriting an existing file via write_file is
