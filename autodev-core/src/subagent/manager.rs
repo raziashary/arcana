@@ -51,8 +51,27 @@ struct ManagerEntry {
     /// claimed was happening.
     permit: Option<PoolPermit>,
     /// Background task running `native_runner::run`. Aborting this future
-    /// cancels the child engine's turn loop (used by `abort_subagent`).
+    /// cancels the child engine's turn loop.
+    ///
+    /// ⚠ **`await_result` takes it**, because awaiting a `JoinHandle` consumes
+    /// it. From that moment `terminate` finds `None` here — see `abort`.
     task: Option<JoinHandle<Result<SubagentResult>>>,
+    /// A handle that can cancel the task **after** `task` has been taken.
+    ///
+    /// 🔴 `G-9` (post-phase gap hunt). `terminate` reached for `task`, found
+    /// `None` for any subagent its parent was awaiting, **skipped the abort
+    /// entirely**, removed the registry entry and returned `Ok(())` — so the
+    /// caller was told the subagent had been stopped while it ran on to
+    /// completion, billing.
+    ///
+    /// That is exactly the case `P3-24` exists for: `spawn_subagent` awaits its
+    /// child, so an in-flight subagent is *always* one whose handle has been
+    /// taken. Both of `P3-24`'s tests ran against an empty registry and could
+    /// not have seen it.
+    ///
+    /// `AbortHandle` is cheap, `Clone`, and independent of the `JoinHandle`'s
+    /// lifetime — which is the whole reason it exists.
+    abort: Option<tokio::task::AbortHandle>,
     /// Set when the entry reaches a terminal state. Used by `prune_terminal`
     /// to sweep entries older than TERMINAL_RETENTION.
     terminated_at: Option<Instant>,
@@ -144,6 +163,7 @@ impl SubagentManager {
                 handle: handle.clone(),
                 last_event: None,
                 permit: Some(permit),
+                abort: Some(task.abort_handle()),
                 task: Some(task),
                 terminated_at: None,
             },
@@ -222,20 +242,42 @@ impl SubagentManager {
     /// Graceful termination: cancels the bridge task, then ensures core-orchestrator
     /// has the agent deleted.
     pub async fn terminate(self: &Arc<Self>, id: &str, force: bool) -> Result<()> {
-        let task = {
+        let (task, abort) = {
             let mut reg = self.registry.lock().await;
             let entry = reg
                 .get_mut(id)
                 .ok_or_else(|| AutoDevError::Agent(format!("unknown subagent {id}")))?;
             entry.handle.status = SubagentStatus::Terminated;
-            entry.task.take()
+            // Capacity is freed the moment we decide to stop it, exactly as at
+            // any other terminal transition (`P3-22`).
+            drop(entry.permit.take());
+            (entry.task.take(), entry.abort.take())
         };
 
-        if let Some(t) = task {
-            if force {
-                t.abort();
+        match task {
+            // We still hold the JoinHandle: abort and await it, so the OS has
+            // reclaimed everything before this returns.
+            Some(t) => {
+                if force {
+                    t.abort();
+                }
+                let _ = t.await;
             }
-            let _ = t.await;
+            // 🔴 G-9. The handle was taken by `await_result`, which is the case
+            // for EVERY subagent its parent is awaiting — i.e. every in-flight
+            // one. This branch used to do nothing at all, and `terminate`
+            // returned `Ok(())` regardless: the caller was told the subagent
+            // had stopped while it ran to completion and billed.
+            //
+            // Not awaited here: the future belongs to `await_result`, which
+            // will observe the cancellation itself.
+            None => {
+                if force {
+                    if let Some(h) = abort {
+                        h.abort();
+                    }
+                }
+            }
         }
 
         // Nothing to clean up remotely: aborting the task above ends the
@@ -502,6 +544,67 @@ mod p3_24_tests {
             state: Arc::new(std::sync::Mutex::new(AppState::new())),
             pending: new_pending_permissions(),
         })
+    }
+
+    /// A subagent whose parent is AWAITING it can still be aborted.
+    ///
+    /// 🔴 G-9 (post-phase gap hunt). `await_result` consumes the `JoinHandle`,
+    /// so `terminate` found `entry.task == None`, skipped the abort entirely,
+    /// removed the entry and returned `Ok(())` — telling the caller the
+    /// subagent had stopped while it ran on to completion and billed.
+    ///
+    /// ⚠ That is the ONLY case that matters: `spawn_subagent` awaits its child,
+    /// so every in-flight subagent is one whose handle has been taken. P3-24's
+    /// two tests ran against an EMPTY registry and could not have seen it —
+    /// which is why this one holds a real, running task.
+    #[tokio::test]
+    async fn a_subagent_being_awaited_can_still_be_aborted() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        // A task that never finishes on its own — the shape of a subagent mid
+        // turn. If the abort does not reach it, this test times out.
+        let finished = Arc::new(AtomicBool::new(false));
+        let flag = finished.clone();
+        let task = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            flag.store(true, Ordering::SeqCst);
+        });
+
+        let abort = task.abort_handle();
+
+        // Simulate `await_result`: the JoinHandle is TAKEN out of the registry.
+        let taken = task;
+
+        // What `terminate` now does when `entry.task` is `None`.
+        abort.abort();
+
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), taken).await;
+        let joined = outcome.expect("the abort must reach a task whose handle was taken");
+
+        assert!(
+            joined.is_err() && joined.unwrap_err().is_cancelled(),
+            "the task was not cancelled — `terminate` would have returned Ok              while the subagent kept running"
+        );
+        assert!(
+            !finished.load(Ordering::SeqCst),
+            "the task ran to completion despite being aborted"
+        );
+    }
+
+    #[test]
+    fn the_abort_handle_is_kept_beside_the_join_handle() {
+        // Structural, and it is the part that made G-9 possible: if the entry
+        // holds only the JoinHandle, `await_result` taking it leaves nothing
+        // for `terminate` to use.
+        let src = include_str!("manager.rs");
+        assert!(
+            src.contains("abort: Option<tokio::task::AbortHandle>"),
+            "the registry entry must keep an abort handle that survives              `await_result` consuming the JoinHandle"
+        );
+        assert!(
+            src.contains("abort: Some(task.abort_handle())"),
+            "the abort handle must be captured at spawn, not derived later              from a handle that may already be gone"
+        );
     }
 
     #[tokio::test]
