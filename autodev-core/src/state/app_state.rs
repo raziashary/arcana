@@ -11,6 +11,16 @@ pub struct ActiveAgent {
     pub cancel_flag: bool,
 }
 
+
+// ── Persisted spend counters (S2-06) ─────────────────────────────────────────
+//
+// The daily ceiling reads `cost_today()`. Held in memory alone, that figure was
+// zero on every launch — so a user who reached the cap could restart the app and
+// keep going. These four keys are what make "daily" mean daily.
+const KEY_COST_DAY: &str = "cost_day";
+const KEY_COST_TODAY: &str = "cost_today_usd";
+const KEY_TOKENS_IN_TODAY: &str = "tokens_in_today";
+const KEY_TOKENS_OUT_TODAY: &str = "tokens_out_today";
 #[derive(Debug, Default)]
 pub struct AppState {
     // Active agent sessions (session_id → state)
@@ -78,6 +88,72 @@ impl AppState {
         self.cost_today_usd += cost_usd;
         self.tokens_in_today += tokens_in as u64;
         self.tokens_out_today += tokens_out as u64;
+        self.persist_today();
+    }
+
+    /// Write today's counters to app settings (`S2-06`).
+    ///
+    /// ── Why the ceiling needs this to mean anything ──────────────────────────
+    ///
+    /// These counters lived **only in memory**. The daily cap reads
+    /// `cost_today()`, so on every launch it saw zero — a user who reached the
+    /// ceiling could close the app, reopen it, and carry on spending. A cap
+    /// that resets on restart is not a cap; it is a per-session cap that
+    /// describes itself as daily.
+    ///
+    /// A failed write is logged and not propagated: losing the persistence of
+    /// one turn is bad, and failing the turn over it is worse. The next turn
+    /// rewrites the running total, so a transient failure self-heals.
+    fn persist_today(&self) {
+        use crate::db::app_settings;
+
+        let write = |key: &str, value: String| {
+            if let Err(e) = app_settings::set(key, &value) {
+                tracing::warn!("could not persist {key}: {e}");
+            }
+        };
+
+        if let Some(day) = self.cost_day {
+            write(KEY_COST_DAY, day.to_string());
+        }
+        write(KEY_COST_TODAY, self.cost_today_usd.to_string());
+        write(KEY_TOKENS_IN_TODAY, self.tokens_in_today.to_string());
+        write(KEY_TOKENS_OUT_TODAY, self.tokens_out_today.to_string());
+    }
+
+    /// Restore today's counters at startup (`S2-06`).
+    ///
+    /// ⚠ **The stored DATE is what makes this safe.** Restoring the figures
+    /// without checking which day they belong to would carry yesterday's spend
+    /// into today and cap a user who has spent nothing. `roll_day_if_needed`
+    /// zeroes them when the date has moved, so a stale row is discarded rather
+    /// than trusted.
+    pub fn hydrate_today(&mut self) {
+        use crate::db::app_settings;
+
+        let get = |key: &str| app_settings::get(key).ok().flatten();
+
+        self.cost_day = get(KEY_COST_DAY).and_then(|v| v.parse().ok());
+        self.cost_today_usd = get(KEY_COST_TODAY)
+            .and_then(|v| v.parse().ok())
+            // A negative or non-finite stored figure would make the cap
+            // unreachable. Discarded rather than trusted.
+            .filter(|v: &f64| v.is_finite() && *v >= 0.0)
+            .unwrap_or(0.0);
+        self.tokens_in_today = get(KEY_TOKENS_IN_TODAY).and_then(|v| v.parse().ok()).unwrap_or(0);
+        self.tokens_out_today = get(KEY_TOKENS_OUT_TODAY).and_then(|v| v.parse().ok()).unwrap_or(0);
+
+        // Discards the restored figures if they belong to a previous day.
+        self.roll_day_if_needed(chrono::Local::now().date_naive());
+
+        if self.cost_today_usd > 0.0 {
+            tracing::info!(
+                "Restored today's spend: ${:.4} ({} in / {} out tokens)",
+                self.cost_today_usd,
+                self.tokens_in_today,
+                self.tokens_out_today
+            );
+        }
     }
 
     /// Zero the "today" counters when the local date has changed.

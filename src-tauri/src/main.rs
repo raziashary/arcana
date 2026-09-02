@@ -129,6 +129,17 @@ fn main() {
     //
     // A saved model that has since been retired is discarded rather than
     // restored — see `hydrate_active_provider`.
+    // S2-06. Restore today's spend BEFORE anything can call a provider.
+    //
+    // These counters lived only in memory, so the daily ceiling saw zero on
+    // every launch: a user who reached the cap could close the app, reopen it,
+    // and carry on spending. A cap that resets on restart is a per-session cap
+    // describing itself as daily.
+    {
+        let mut s = app_state.lock().unwrap();
+        s.hydrate_today();
+    }
+
     autodev_lib::commands::settings_commands::hydrate_active_provider(&app_state);
     let skill_registry_managed = skill_registry.clone();
     let skill_registry_for_watch = skill_registry.clone();
