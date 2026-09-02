@@ -157,17 +157,33 @@ impl Tool for BashTool {
                 // Build output starts with progress lines (noise) and ends with errors (signal).
                 // Showing the tail means the agent sees the actual failure reason.
                 if output.len() > MAX_OUTPUT_BYTES {
-                    let tail_start = output.len() - MAX_OUTPUT_BYTES;
-                    // Walk forward to a newline boundary to avoid cutting mid-line.
-                    let boundary = output[tail_start..]
-                        .find('\n')
-                        .map(|i| tail_start + i + 1)
-                        .unwrap_or(tail_start);
+                    // ⚠ P3-04. `output[tail_start..]` panicked here, and this is
+                    // the site most likely to fire: `tail_start` is an arbitrary
+                    // byte offset, and rustc and cargo emit box-drawing
+                    // characters (`┌ │ └`) in ordinary diagnostics — so any
+                    // command that compiles something could produce a
+                    // multi-byte character straddling the cut.
+                    //
+                    // The panic happened AT THE SLICE, before the newline search
+                    // that follows it ever ran. That is why a fix templated on
+                    // `&x[..N]` would have missed this site entirely: it slices
+                    // a computed *start*, not a length.
+                    let total = output.len();
+                    let tail = crate::security::truncate::truncate_bytes_from_end(
+                        &output,
+                        MAX_OUTPUT_BYTES,
+                    );
+                    // Now trim to a line boundary *within* the safe tail, so a
+                    // partial first line is dropped rather than shown.
+                    let shown = match tail.find('\n') {
+                        Some(i) => &tail[i + 1..],
+                        None => tail,
+                    };
                     output = format!(
                         "[⚠ Output truncated — showing last {} bytes of {} bytes total]\n{}",
-                        output.len() - boundary,
-                        output.len(),
-                        &output[boundary..]
+                        shown.len(),
+                        total,
+                        shown
                     );
                 }
                 let is_error = exit_code != 0;
@@ -412,7 +428,14 @@ fn strip_heredoc_bodies(command: &str) -> Option<String> {
             if delim.is_empty() {
                 // Malformed; bail out, return whole command minus the marker
                 // so the outer scanner still gets a shot at later tokens.
-                out.push_str(&command[i..]);
+                // P3-04. `i` comes from a byte-wise scan, so it is not
+                // guaranteed to sit on a character boundary — a heredoc
+                // delimiter containing any non-ASCII byte reaches here with a
+                // mid-character index.
+                out.push_str(crate::security::truncate::truncate_bytes_from_end(
+                    &command[..],
+                    command.len().saturating_sub(i),
+                ));
                 break;
             }
             // Find the closing delimiter on its own line.

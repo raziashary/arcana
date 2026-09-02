@@ -180,13 +180,14 @@ fn keyword_score(text: &str, query: &str) -> f64 {
     hits as f64 / query_words.len() as f64
 }
 
+/// Truncate to `max` bytes with an ellipsis.
+///
+/// ⚠ P3-04. This was one of **two byte-identical copies** of a correct
+/// UTF-8-safe truncation — the other was in `memory/summarizer.rs` — while four
+/// *other* sites in the tree panicked doing the same thing by hand, and the
+/// plan pointed all of them at a `validate.rs` range that is not a truncation
+/// helper at all. Both copies now delegate, so there is one implementation and
+/// one place to fix.
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        return s.to_string();
-    }
-    let mut end = max;
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &s[..end])
+    crate::security::truncate::truncate_with_note(s, max)
 }

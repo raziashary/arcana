@@ -106,7 +106,8 @@ impl Tool for AnnotateFileTool {
                     start_line,
                     end_line,
                     severity,
-                    if note.len() > 80 { &note[..80] } else { &note }
+                    // P3-04: `&note[..80]` panicked on a multi-byte note.
+                    crate::security::truncate::truncate_bytes(&note, 80)
                 )),
                 Err(e) => ToolResult::error(format!("Failed to create annotation: {e}")),
             },

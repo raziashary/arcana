@@ -243,7 +243,7 @@ impl OrchestratorClient {
             let body = resp.text().await.unwrap_or_default();
             return Err(AutoDevError::Agent(format!(
                 "service login failed (HTTP {status}): {}",
-                &body[..body.len().min(400)]
+                autodev_core::security::truncate::truncate_bytes(&body, 400)
             )));
         }
 
@@ -702,7 +702,7 @@ impl OrchestratorClient {
             let text = resp.text().await.unwrap_or_default();
             return Err(AutoDevError::Agent(format!(
                 "agent config update failed (HTTP {status}): {}",
-                &text[..text.len().min(400)]
+                autodev_core::security::truncate::truncate_bytes(&text, 400)
             )));
         }
         debug!("[OrchestratorClient] pushed llm_model='{model}' to agent {agent_id}");
@@ -859,7 +859,7 @@ impl OrchestratorClient {
 
             return Err(AutoDevError::Agent(format!(
                 "agent creation failed (HTTP {status}): {}",
-                &body[..body.len().min(400)]
+                autodev_core::security::truncate::truncate_bytes(&body, 400)
             )));
         }
 
@@ -920,7 +920,7 @@ impl OrchestratorClient {
             let text = resp.text().await.unwrap_or_default();
             return Err(AutoDevError::Agent(format!(
                 "invoke failed (HTTP {status}): {}",
-                &text[..text.len().min(400)]
+                autodev_core::security::truncate::truncate_bytes(&text, 400)
             )));
         }
 
@@ -1382,7 +1382,7 @@ impl OrchestratorClient {
             let body = resp.text().await.unwrap_or_default();
             return Err(AutoDevError::Agent(format!(
                 "subagent creation failed (HTTP {status}): {}",
-                &body[..body.len().min(400)]
+                autodev_core::security::truncate::truncate_bytes(&body, 400)
             )));
         }
 
@@ -1426,7 +1426,7 @@ impl OrchestratorClient {
         let body = resp.text().await.unwrap_or_default();
         Err(AutoDevError::Agent(format!(
             "delete agent failed (HTTP {status}): {}",
-            &body[..body.len().min(400)]
+            autodev_core::security::truncate::truncate_bytes(&body, 400)
         )))
     }
 
@@ -1478,7 +1478,7 @@ impl OrchestratorClient {
             let text = resp.text().await.unwrap_or_default();
             return Err(AutoDevError::Agent(format!(
                 "stream invoke failed (HTTP {status}): {}",
-                &text[..text.len().min(400)]
+                autodev_core::security::truncate::truncate_bytes(&text, 400)
             )));
         }
         Ok(resp)

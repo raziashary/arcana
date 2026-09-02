@@ -6,3 +6,36 @@ members = [
     "src-shared",
 ]
 resolver = "2"
+
+# ── Release profile (P3-01) ──────────────────────────────────────────────────
+#
+# ⚠ This block lived in `src-tauri/Cargo.toml` and was being **silently
+# discarded**. Cargo only honours `[profile.*]` at the workspace root, and it
+# says so on every invocation:
+#
+#   warning: profiles for the non root package will be ignored,
+#            specify profiles at the workspace root:
+#     package:   .../src-tauri/Cargo.toml
+#     workspace: .../Cargo.toml
+#
+# So none of these settings has ever been in effect. Two consequences, and the
+# first is why P3 exists:
+#
+#   * `panic = "abort"` was **never applied** — unwinding has been on all along.
+#     P3's headline fault-isolation task was to change that line to "unwind",
+#     which would have been a no-op that closed `M-41` on paper. The real fault
+#     isolation work is `catch_unwind` at the turn boundary and poison-tolerant
+#     locking (`P3-02`, `P3-03`), not this line.
+#   * `lto`, `codegen-units`, `opt-level` and `strip` were also inert, so every
+#     release build shipped un-LTO'd and unstripped.
+#
+# `panic = "unwind"` is stated explicitly rather than omitted. It is already the
+# default, but this block's whole history is a setting that was assumed to be in
+# force and was not — so the fault-isolation contract is written down where the
+# next reader looks, not left to a default.
+[profile.release]
+panic = "unwind"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

@@ -12,6 +12,20 @@ use autodev_core::budget::daily::{CapState, DailyCap};
 use autodev_core::cost::pricing;
 use autodev_core::provider::usage::Usage;
 
+/// Read a source file with line endings normalised.
+///
+/// ⚠ Found 2026-09-02: git's CRLF conversion broke `S2-11` below. It splits on
+/// `"\n}\n"` to isolate a function body, that pattern does not occur in a CRLF
+/// file, and the `unwrap_or` fallback silently widened the check to the whole
+/// file — which then failed on a symbol 40 KB away. The ordering path was, and
+/// is, correct.
+fn read_source(path: &std::path::Path) -> String {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .replace("\r\n", "\n")
+}
+
+
 // ── S2-05 · exceeding the cap stops work ─────────────────────────────────────
 
 #[test]
@@ -165,10 +179,9 @@ fn s2_11_tool_call_ordering_does_not_depend_on_hash_iteration_order() {
     // index — so the property is checked structurally too. Re-running the same
     // assembly in one process cannot detect a per-process hash seed; asserting
     // the ordering path holds no `HashMap` can.
-    let engine = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/agent/engine.rs"),
-    )
-    .expect("engine.rs");
+    let engine = read_source(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/agent/engine.rs"),
+    );
 
     let assembler = engine
         .split("fn assemble_in_wire_order(")
@@ -190,10 +203,9 @@ fn s2_11_tool_call_ordering_does_not_depend_on_hash_iteration_order() {
     );
 
     // And the prefix builder sorts its tools for the same reason.
-    let prefix = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/cache/prefix.rs"),
-    )
-    .expect("prefix.rs");
+    let prefix = read_source(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/cache/prefix.rs"),
+    );
     assert!(
         prefix.contains("tools.sort_by"),
         "an unsorted tool list produces a different cache prefix on every restart"
@@ -212,10 +224,9 @@ fn s2_06_the_daily_spend_counter_is_persisted_and_date_stamped() {
     // Checked structurally rather than by launching a second process: the
     // property is that spend is written on every add and read back at startup,
     // and both halves have to exist for either to matter.
-    let state_src = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/state/app_state.rs"),
-    )
-    .expect("app_state.rs");
+    let state_src = read_source(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/state/app_state.rs"),
+    );
 
     let add_cost = state_src
         .split("pub fn add_cost(")
@@ -247,13 +258,12 @@ fn s2_06_the_daily_spend_counter_is_persisted_and_date_stamped() {
 
     // And startup must actually call it — a hydrate nobody calls is the same
     // silent nothing as no hydrate at all.
-    let main_src = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+    let main_src = read_source(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("workspace root")
             .join("src-tauri/src/main.rs"),
-    )
-    .expect("main.rs");
+    );
     assert!(
         main_src.contains("hydrate_today()"),
         "the desktop binary never restores today's spend at startup"

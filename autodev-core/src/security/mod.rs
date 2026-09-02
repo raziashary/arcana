@@ -7,3 +7,5 @@
 pub mod redaction;
 
 pub mod env_scrub;
+
+pub mod truncate;

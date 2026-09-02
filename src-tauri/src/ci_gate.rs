@@ -202,7 +202,7 @@ mod tests {
         // version checked only for a literal `tsc`, so `"lint": "npm run
         // typecheck"` restored the exact defect and passed (F-18).
         let package_json =
-            std::fs::read_to_string(repo_root().join("package.json")).expect("read package.json");
+            read_source(&repo_root().join("package.json"));
         let parsed: serde_json::Value =
             serde_json::from_str(&package_json).expect("parse package.json");
         let lint = parsed["scripts"]["lint"]
@@ -435,8 +435,7 @@ mod tests {
     /// required a `tauri::AppHandle` (ADR-LOG-RESTRUCT-0011).
     #[test]
     fn tg_p1_01_autodev_core_does_not_depend_on_tauri() {
-        let manifest = std::fs::read_to_string(repo_root().join("autodev-core/Cargo.toml"))
-            .expect("autodev-core/Cargo.toml");
+        let manifest = read_source(&repo_root().join("autodev-core/Cargo.toml"));
         let offenders = tauri_dependency_lines(&manifest);
         assert!(
             offenders.is_empty(),
@@ -925,7 +924,7 @@ let x = 1;
                     if path.ends_with("settings_commands.rs") {
                         continue;
                     }
-                    let text = std::fs::read_to_string(&path).unwrap_or_default();
+                    let text = read_source(&path);
                     let production = text.split("#[cfg(test)]").next().unwrap_or("");
 
                     // A file that dispatches on provider id to build one.
@@ -963,8 +962,7 @@ let x = 1;
     /// publishes. Without this assertion the concession becomes the behaviour.
     #[test]
     fn tg_p2_04_the_desktop_binary_publishes_its_state() {
-        let main = std::fs::read_to_string(repo_root().join("src-tauri/src/main.rs"))
-            .expect("main.rs");
+        let main = read_source(&repo_root().join("src-tauri/src/main.rs"));
         let production = main.split("#[cfg(test)]").next().unwrap_or("");
         assert!(
             production.contains("app_state::set_global("),
@@ -999,7 +997,7 @@ let x = 1;
 
         let mut unbudgeted = Vec::new();
         for rel in autonomous {
-            let text = std::fs::read_to_string(repo_root().join(rel)).expect(rel);
+            let text = read_source(&repo_root().join(rel));
             let production = text.split("#[cfg(test)]").next().unwrap_or("");
             if !production.contains("AgentEngine::new(") {
                 continue;
@@ -1077,10 +1075,9 @@ let x = 1;
     #[test]
     fn tg_p2_02_every_offered_model_is_priced_or_documented() {
         let offered_src =
-            std::fs::read_to_string(repo_root().join("src/data/models.ts")).expect("models.ts");
+            read_source(&repo_root().join("src/data/models.ts"));
         let pricing_src =
-            std::fs::read_to_string(repo_root().join("autodev-core/src/cost/pricing.rs"))
-                .expect("pricing.rs");
+            read_source(&repo_root().join("autodev-core/src/cost/pricing.rs"));
 
         // Every quoted token in the MODEL_GROUPS block that looks like a model id.
         //
@@ -1180,7 +1177,7 @@ let x = 1;
         let mut offenders = Vec::new();
 
         for adapter in ["anthropic.rs", "openai.rs", "google.rs"] {
-            let text = std::fs::read_to_string(dir.join(adapter)).expect("read adapter");
+            let text = read_source(&dir.join(adapter));
 
             for (n, line) in text.lines().enumerate() {
                 let code = line.split("//").next().unwrap_or("");
@@ -1211,6 +1208,230 @@ let x = 1;
         );
     }
 
+        /// Read a source file with line endings normalised to `\n`.
+///
+    /// ── Why this exists (found 2026-09-02, P3) ───────────────────────────────────
+///
+    /// Several gates locate a function body by splitting on a literal `"\n}\n"` or
+    /// `"\n    }"`. Git's `core.autocrlf` rewrote the working tree to CRLF, so those
+    /// patterns stopped matching — and the `unwrap_or(whole_file)` fallback meant
+    /// the gate silently widened from *"this function's body"* to **"the rest of the
+    /// file"**, then failed on a symbol that appears somewhere further down.
+///
+    /// `S2-11` failed exactly this way: it asserts the tool-ordering path holds no
+    /// `HashMap`, the path is `BTreeMap`-only and correct, and the gate reported it
+    /// broken because it was reading 40 KB it was never meant to see.
+///
+    /// A gate whose meaning depends on how git happened to check the file out is
+    /// not a gate. Every gate that parses source reads through here.
+    fn read_source(path: &std::path::Path) -> String {
+        std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .replace("\r\n", "\n")
+    }
+
+    // ── TG-P3-01 · the release profile is where Cargo will read it ────────────
+
+    /// `[profile.release]` must live at the **workspace root**.
+    ///
+    /// **`P3-01` was a no-op as written.** The block lived in
+    /// `src-tauri/Cargo.toml`, a non-root member, and Cargo discards those —
+    /// it says so on every invocation:
+    ///
+    /// > `warning: profiles for the non root package will be ignored, specify`
+    /// > `profiles at the workspace root`
+    ///
+    /// So `panic = "abort"` was **never in effect**, and the phase's headline
+    /// fault-isolation task was to edit a line that does nothing. `lto`,
+    /// `codegen-units`, `opt-level` and `strip` were inert for the same reason,
+    /// so every release build shipped un-LTO'd and unstripped.
+    ///
+    /// The gate asserts the location, not the values — a setting in the wrong
+    /// file is indistinguishable from no setting at all, and that is the defect.
+    #[test]
+    fn tg_p3_01_the_release_profile_is_at_the_workspace_root() {
+        let root = read_source(&repo_root().join("Cargo.toml"));
+
+        assert!(
+            root.contains("[profile.release]"),
+            "the workspace root declares no [profile.release]; any profile in a member \
+             crate is silently discarded by Cargo"
+        );
+        assert!(
+            root.contains("panic = \"unwind\""),
+            "the root profile does not set panic = \"unwind\". Fault isolation (M-41) \
+             depends on unwinding, and this is the file Cargo actually reads"
+        );
+
+        // And no member may re-declare one, because a member's block looks
+        // authoritative in review and is ignored at build time.
+        for member in ["src-tauri", "autodev-core", "src-cli", "src-shared"] {
+            let path = repo_root().join(member).join("Cargo.toml");
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let declares = text
+                .lines()
+                .any(|l| l.trim_start().starts_with("[profile."));
+            assert!(
+                !declares,
+                "{member}/Cargo.toml declares a [profile.*] block. Cargo ignores it, so it \
+                 is a setting that reads as active and is not"
+            );
+        }
+    }
+
+    // ── TG-P3-04 · no site slices a string by a raw byte index ────────────────
+
+    /// Truncation must go through the shared UTF-8-safe helper.
+    ///
+    /// Slicing a `&str` at a byte index that is not a character boundary
+    /// **panics**. Four sites did exactly that on strings that routinely carry
+    /// non-ASCII — and `bash.rs` is the one most likely to fire, because rustc
+    /// and cargo emit box-drawing characters in ordinary diagnostics.
+    ///
+    /// ⚠ The gate asserts the **invariant** (no raw byte-index slicing of a
+    /// string anywhere), not that those four sites were fixed. Written the
+    /// other way it would pass for a fifth site added tomorrow — which is
+    /// `L-C6`, and this codebase has six recorded instances of it.
+    #[test]
+    fn tg_p3_04_no_string_is_sliced_by_a_raw_byte_index() {
+        let roots = [
+            repo_root().join("autodev-core/src"),
+            repo_root().join("src-tauri/src"),
+            repo_root().join("src-cli/src"),
+        ];
+
+        // `&name[..N]`, `&name[N..]`, `name[expr..]` where the index is not a
+        // literal 0 and the expression is not obviously a byte-slice.
+        let pattern = regex_lite_slice();
+        let mut offenders = Vec::new();
+        let mut scanned = 0usize;
+
+        for root in &roots {
+            let mut stack = vec![root.clone()];
+            while let Some(dir) = stack.pop() {
+                let Ok(entries) = std::fs::read_dir(&dir) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        stack.push(path);
+                        continue;
+                    }
+                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    if !name.ends_with(".rs") || name.ends_with("_tests.rs") {
+                        continue;
+                    }
+                    // The helper itself is the one place allowed to do this.
+                    if name == "truncate.rs" {
+                        continue;
+                    }
+
+                    let text = read_source(&path);
+                    scanned += 1;
+                    let rel = path
+                        .strip_prefix(repo_root())
+                        .unwrap_or(&path)
+                        .display()
+                        .to_string()
+                        .replace('\\', "/");
+
+                    let production = match text.find("#[cfg(test)]") {
+                        Some(i) => &text[..i],
+                        None => &text[..],
+                    };
+
+                    for (n, line) in production.lines().enumerate() {
+                        let code = line.split("//").next().unwrap_or("");
+                        if pattern(code) {
+                            offenders.push(format!("{rel}:{}: {}", n + 1, code.trim()));
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(
+            scanned > 100,
+            "only {scanned} files scanned — this gate is not reaching the tree"
+        );
+
+        assert!(
+            offenders.is_empty(),
+            "these slice a string by a raw byte index, which panics when the index falls \
+             inside a UTF-8 character — route them through security::truncate:\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    /// Detects a string sliced at an index that could fall **inside** a
+    /// character.
+    ///
+    /// ── The distinction that makes this gate usable ──────────────────────────
+    ///
+    /// Not every `&s[i..]` is a hazard, and a gate that says so gets muted.
+    ///
+    /// * An index from `str::find(..)`, `position(..)` or `char_indices()` is
+    ///   **always a valid boundary** — `find` returns the start of a match, and
+    ///   a match on an ASCII pattern lands on a boundary by construction. The
+    ///   first draft of this gate flagged `graph/changes.rs:55`
+    ///   (`&line[plus_idx + 1..]`, where `plus_idx` comes from `find('+')`) and
+    ///   `bash.rs`'s own full-range `[..]`. Both are correct code.
+    /// * An index derived from **`len()` arithmetic** or a numeric literal is
+    ///   arbitrary, and that is precisely how all five real sites were written.
+    ///
+    /// So the rule is: flag a literal or a `len()`-derived index; ignore one
+    /// that came from a boundary-returning search. This is `TG3-28`'s paired
+    /// no-fire discipline applied to a static check — a gate that refuses
+    /// everything passes a refusal-only test and breaks the build for correct
+    /// code.
+    fn regex_lite_slice() -> impl Fn(&str) -> bool {
+        |code: &str| {
+            if !code.contains('[') {
+                return false;
+            }
+            // A full range is always safe.
+            if code.contains("[..]") {
+                return false;
+            }
+            // Bytes and vectors are not strings.
+            if code.contains("as_bytes()") || code.contains("Vec<") || code.contains("&self.0[") {
+                return false;
+            }
+            // An index from a boundary-returning search is safe by construction.
+            if code.contains("find(")
+                || code.contains("position(")
+                || code.contains("char_indices")
+                || code.contains("is_char_boundary")
+                || code.contains("truncate_bytes")
+            {
+                return false;
+            }
+
+            // The string bindings this codebase slices, named rather than
+            // guessed: a broad heuristic flags every Vec slice in the tree.
+            let touches_a_string = [
+                "&fact[", "&note[", "&output[", "&command[", "&text[", "&s[", "&content[",
+                "&combined[", "&stdout[", "&stderr[", "&line[", "&body[", "&prompt[",
+            ]
+            .iter()
+            .any(|b| code.contains(b));
+
+            if !touches_a_string {
+                return false;
+            }
+
+            // Arbitrary only if the index is a literal or comes from `len()`.
+            let has_literal_index = code
+                .split(&['[', ']', '.'][..])
+                .any(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()));
+
+            has_literal_index || code.contains("len()")
+        }
+    }
+
     // ── TG-P2-05 · the Rust catalogue and the picker are the same list ────────
 
     /// `provider/catalogue.rs` and `src/data/models.ts` must offer exactly the
@@ -1229,10 +1450,9 @@ let x = 1;
     #[test]
     fn tg_p2_05_the_backend_catalogue_and_the_frontend_picker_agree() {
         let catalogue =
-            std::fs::read_to_string(repo_root().join("autodev-core/src/provider/catalogue.rs"))
-                .expect("catalogue.rs");
+            read_source(&repo_root().join("autodev-core/src/provider/catalogue.rs"));
         let models_ts =
-            std::fs::read_to_string(repo_root().join("src/data/models.ts")).expect("models.ts");
+            read_source(&repo_root().join("src/data/models.ts"));
 
         // The Rust side: every `id: "..."` inside a CatalogueEntry.
         let mut backend: Vec<String> = catalogue
@@ -1319,8 +1539,7 @@ let x = 1;
     /// loop — which is most likely why this survived.
     #[test]
     fn tg_p2_10_every_error_exit_from_the_agent_loop_records_its_spend() {
-        let engine = std::fs::read_to_string(repo_root().join("autodev-core/src/agent/engine.rs"))
-            .expect("engine.rs");
+        let engine = read_source(&repo_root().join("autodev-core/src/agent/engine.rs"));
 
         // The run loop, from `loop {` to the cost recording that follows it.
         let run = engine
@@ -1389,8 +1608,7 @@ let x = 1;
     /// exact shape of `L-18`.
     #[test]
     fn tg_p2_11_the_cached_prefix_is_built_from_the_stable_half_only() {
-        let engine = std::fs::read_to_string(repo_root().join("autodev-core/src/agent/engine.rs"))
-            .expect("engine.rs");
+        let engine = read_source(&repo_root().join("autodev-core/src/agent/engine.rs"));
 
         assert!(
             engine.contains("build_system_prompt_parts"),
@@ -1439,7 +1657,7 @@ let x = 1;
         let mut offenders = Vec::new();
 
         for adapter in ["anthropic.rs", "openai.rs", "google.rs"] {
-            let text = std::fs::read_to_string(dir.join(adapter)).expect("read adapter");
+            let text = read_source(&dir.join(adapter));
 
             let f = text
                 .split("async fn test_connection(")
@@ -1510,8 +1728,7 @@ let x = 1;
     #[test]
     fn tg_p2_09_no_shipped_code_names_a_model_outside_the_catalogue() {
         let catalogue =
-            std::fs::read_to_string(repo_root().join("autodev-core/src/provider/catalogue.rs"))
-                .expect("catalogue.rs");
+            read_source(&repo_root().join("autodev-core/src/provider/catalogue.rs"));
 
         // The ids the app offers, read from the catalogue's own entries.
         let offered: Vec<String> = catalogue
@@ -1570,7 +1787,7 @@ let x = 1;
                         continue;
                     }
 
-                    let text = std::fs::read_to_string(&path).unwrap_or_default();
+                    let text = read_source(&path);
                     scanned += 1;
                     let rel = path
                         .strip_prefix(repo_root())
@@ -1660,8 +1877,7 @@ let x = 1;
     /// shape the defect had.
     #[test]
     fn tg_p2_08_model_settings_reach_the_request() {
-        let engine = std::fs::read_to_string(repo_root().join("autodev-core/src/agent/engine.rs"))
-            .expect("engine.rs");
+        let engine = read_source(&repo_root().join("autodev-core/src/agent/engine.rs"));
 
         assert!(
             engine.contains("ModelConfigsDb"),
@@ -1745,7 +1961,7 @@ let x = 1;
                         continue;
                     }
 
-                    let text = std::fs::read_to_string(&path).unwrap_or_default();
+                    let text = read_source(&path);
                     scanned += 1;
                     let rel = path
                         .strip_prefix(repo_root())
@@ -1831,7 +2047,7 @@ let x = 1;
         let mut offenders = Vec::new();
 
         for adapter in ["anthropic.rs", "openai.rs", "google.rs"] {
-            let text = std::fs::read_to_string(dir.join(adapter)).expect("read adapter");
+            let text = read_source(&dir.join(adapter));
 
             // Each `if !status.is_success()` block is one error path.
             let blocks = text.matches("if !status.is_success()").count();
@@ -1887,7 +2103,7 @@ let x = 1;
             if path.extension().and_then(|e| e.to_str()) != Some("rs") {
                 continue;
             }
-            let text = std::fs::read_to_string(&path).expect("read");
+            let text = read_source(&path);
             let production = text.split("#[cfg(test)]").next().unwrap_or("");
             for (i, raw) in production.lines().enumerate() {
                 let line = raw.trim();
@@ -1935,8 +2151,7 @@ let x = 1;
     /// whole phase. This asserts the shape rather than the claim.
     #[test]
     fn tg_p2_01_both_log_sinks_are_redacted() {
-        let text = std::fs::read_to_string(repo_root().join("src-tauri/src/logging.rs"))
-            .expect("logging.rs");
+        let text = read_source(&repo_root().join("src-tauri/src/logging.rs"));
         let production = text.split("#[cfg(test)]").next().unwrap_or("");
 
         let console_wrapped = production.contains("RedactingMakeWriter(std::io::stderr)");

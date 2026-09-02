@@ -98,7 +98,10 @@ impl Tool for RememberThisTool {
         };
 
         let display = if fact.len() > 120 {
-            &fact[..120]
+            // P3-04: `&fact[..120]` panicked on any fact whose 120th byte
+            // fell inside a character — and a "fact" is free text the model
+            // wrote, so non-ASCII is routine.
+            crate::security::truncate::truncate_bytes(&fact, 120)
         } else {
             &fact
         };

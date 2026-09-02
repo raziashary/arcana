@@ -114,9 +114,7 @@ dotenvy = "0.15"
 # This section is required by tauri-build to locate icons and capabilities
 icons = ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
 
-[profile.release]
-panic = "abort"
-codegen-units = 1
-lto = true
-opt-level = "s"
-strip = true
+# ⚠ The `[profile.release]` block that lived here was **moved to the workspace
+# root** in `P3-01`. Cargo ignores `[profile.*]` in a non-root member and warns
+# on every invocation, so none of it — including `panic = "abort"` — was ever in
+# effect. Do not re-add it here; see the root `Cargo.toml`.
