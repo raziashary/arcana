@@ -1886,6 +1886,96 @@ let x = 1;
         assert!(offenders.is_empty(), "{}", offenders.join("\n  "));
     }
 
+    // ── TG-P3-21/68 · e2e_probe captures evidence and cannot leave the box ──
+
+    /// `e2e_probe` must keep its children's output and must not fetch
+    /// off-machine URLs.
+    ///
+    /// 🔴 `P3-68`: `probe_url` was fetched with **no restriction** and up to
+    /// 400 characters of the response body were returned to the model — an
+    /// SSRF with readback. `http://169.254.169.254/latest/meta-data/...`
+    /// returns IAM credentials on any EC2 host.
+    ///
+    /// 🔴 `P3-21`: both child streams were `Stdio::null()`, so a failed probe
+    /// reported FAIL and could not say why — while the file's own header
+    /// claims it catches "dev server crashed on boot".
+    ///
+    /// ⚠ The URL check must run **before** anything is spawned. Validating
+    /// after the children start would still boot the model's shell commands on
+    /// the way to rejecting the URL.
+    #[test]
+    fn tg_p3_21_68_e2e_probe_keeps_evidence_and_stays_on_this_machine() {
+        let path = repo_root().join("autodev-core/src/agent/builtin_tools/e2e_probe.rs");
+        let text = read_source(&path);
+
+        // ── P3-68 · the URL is confined, by resolution rather than spelling ─
+        let validator = text
+            .split("fn validate_probe_url")
+            .nth(1)
+            .expect("e2e_probe must validate probe_url before fetching it");
+        let validator_body = validator.split("\n}\n").next().unwrap_or(validator);
+
+        assert!(
+            validator_body.contains("is_loopback"),
+            "probe_url must be confined to loopback — the response body is \
+             returned to the model, so any other host is an exfiltration read"
+        );
+        assert!(
+            validator_body.contains("to_socket_addrs"),
+            "the host must be RESOLVED, not string-matched: `127.0.0.1.nip.io` \
+             and any attacker-controlled DNS name read as ordinary hostnames"
+        );
+
+        // ── ordering: validated before any child is spawned ──────────────
+        let call_site = text
+            .find("validate_probe_url(&probe_url)")
+            .expect("validate_probe_url must actually be CALLED, not merely defined");
+        let spawn_site = text
+            .find("run_probe(")
+            .expect("run_probe must exist");
+        assert!(
+            call_site < spawn_site,
+            "probe_url is validated at byte {call_site} but children are spawned \
+             at {spawn_site} — rejecting the URL after booting the model's shell \
+             commands is not a check, it is a postscript"
+        );
+
+        // ── P3-21 · the children's output is kept ────────────────────
+        let runner = text
+            .split("async fn run_probe")
+            .nth(1)
+            .expect("run_probe must exist");
+        let spawn_block = runner.split("let started_processes").next().unwrap_or(runner);
+
+        assert!(
+            !spawn_block.contains("stdout(Stdio::null())"),
+            "the children's stdout is discarded — a failing probe then reports \
+             FAIL with no evidence, which is the one thing a smoke test exists \
+             to provide"
+        );
+        assert!(
+            !spawn_block.contains("stderr(Stdio::null())"),
+            "the children's stderr is discarded — that is where the boot error is"
+        );
+        assert!(
+            spawn_block.contains("Stdio::piped()"),
+            "the children's streams must be piped so they can be captured"
+        );
+        assert!(
+            text.contains("start_cmd_output"),
+            "the captured output must reach the report — capturing it and \
+             dropping it on the floor is the same as not capturing it"
+        );
+
+        // ── the consent sentence matches the act ────────────────────
+        assert!(
+            text.contains("ToolEffect::Execute"),
+            "e2e_probe runs arbitrary shell, so the user must be asked about \
+             running a command — it declared `Network` (\"send data to an \
+             external service\"), which is consent for a different act"
+        );
+    }
+
     // ── TG-P3-17 · no validator subprocess runs without a ceiling ─────────────
 
     /// Every subprocess the validator spawns must go through `run_bounded`.
