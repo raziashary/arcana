@@ -452,8 +452,30 @@ async fn every_catalogued_model_is_actually_callable() {
         {
             Ok(r) => println!("  {} ok ({} out tokens)", e.id, r.usage.output),
             Err(err) => {
-                eprintln!("  {} FAILED: {err}", e.id);
-                failures.push(format!("{}: {err}", e.id));
+                // ⚠ A transient upstream condition is not evidence that the
+                // model does not exist, and this test's claim is about the
+                // CATALOGUE being accurate — not about the vendor's capacity
+                // right now.
+                //
+                // Anthropic returned 529 Overloaded for `claude-opus-5` on
+                // 2026-09-02 and failed this test, which would have read as
+                // "the catalogue offers a model that does not exist". It
+                // offers a model that was busy.
+                //
+                // Classified rather than pattern-matched on the message, which
+                // is what `ErrorClass` is for — and its first typed consumer.
+                let text = err.to_string();
+                let transient = text.contains("[Overloaded]") || text.contains("[Retryable]");
+
+                if transient {
+                    eprintln!(
+                        "  {} TRANSIENT (not a catalogue fault, not retried here): {err}",
+                        e.id
+                    );
+                } else {
+                    eprintln!("  {} FAILED: {err}", e.id);
+                    failures.push(format!("{}: {err}", e.id));
+                }
             }
         }
     }

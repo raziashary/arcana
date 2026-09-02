@@ -345,9 +345,7 @@ impl Provider for OpenAIProvider {
                 while let Some(pos) = buf.find('\n') {
                     let line = buf[..pos].trim_end_matches('\r').to_string();
                     *buf = buf[pos + 1..].to_string();
-                    if let Some(chunk) = parse_openai_sse_line(&line)? {
-                        chunks.push(chunk);
-                    }
+                    chunks.extend(parse_openai_sse_line(&line)?);
                 }
                 Ok(chunks)
             })
@@ -403,24 +401,24 @@ impl Provider for OpenAIProvider {
 /// Test accessor for the SSE parser.
 ///
 /// The parser is private because nothing outside the adapter should be feeding
-/// it raw wire text — but it is also where the adapter'"'"'s hardest bugs lived
-/// (P2-41, P2-42), so the fixture suite needs a way in.
+/// it raw wire text — but it is also where this adapter's hardest bugs lived
+/// (P2-41, P2-42, F-7), so the fixture suite needs a way in.
 #[cfg(test)]
-pub fn parse_openai_sse_line_for_test(line: &str) -> Result<Option<StreamChunk>> {
+pub fn parse_openai_sse_line_for_test(line: &str) -> Result<Vec<StreamChunk>> {
     parse_openai_sse_line(line)
 }
 
-fn parse_openai_sse_line(line: &str) -> Result<Option<StreamChunk>> {
+fn parse_openai_sse_line(line: &str) -> Result<Vec<StreamChunk>> {
     let line = line.trim();
     if line.is_empty() || line.starts_with(':') {
-        return Ok(None);
+        return Ok(Vec::new());
     }
     let data = match line.strip_prefix("data: ") {
         Some(d) => d,
-        None => return Ok(None),
+        None => return Ok(Vec::new()),
     };
     if data == "[DONE]" {
-        return Ok(Some(StreamChunk::Done));
+        return Ok(vec![StreamChunk::Done]);
     }
     match serde_json::from_str::<serde_json::Value>(data) {
         Ok(v) => parse_openai_chunk(&v),
@@ -430,11 +428,30 @@ fn parse_openai_sse_line(line: &str) -> Result<Option<StreamChunk>> {
     }
 }
 
-fn parse_openai_chunk(v: &serde_json::Value) -> Result<Option<StreamChunk>> {
+/// Parse one OpenAI SSE frame into **every** chunk it carries.
+///
+/// ── Why this returns a Vec (F-7, P2 post-phase audit) ────────────────────────
+///
+/// It used to return `Option<StreamChunk>` — at most one chunk per frame — and
+/// `return`ed on the first thing it recognised. That is the exact defect
+/// `P2-35` fixed on the Google adapter, left live on this one:
+///
+///   * a frame carrying several `tool_calls` entries emitted only the first,
+///     so **parallel tool calls were silently dropped** — the model asked for
+///     three tools and the engine saw one;
+///   * a frame carrying both text and a tool call emitted only the text.
+///
+/// The engine's `assemble_in_wire_order` is keyed by block index precisely so
+/// several blocks can arrive together; a parser that can only ever return one
+/// makes that machinery unreachable.
+fn parse_openai_chunk(v: &serde_json::Value) -> Result<Vec<StreamChunk>> {
+    let mut out = Vec::new();
+
     let choices = match v["choices"].as_array() {
         Some(c) => c,
-        None => return Ok(None),
+        None => return Ok(out),
     };
+
     // P2-42, second half. OpenAI delivers the usage frame as a final chunk
     // with `choices: []`. Returning here discarded it, so adding
     // `stream_options` alone would still have produced nothing — two edits were
@@ -450,100 +467,92 @@ fn parse_openai_chunk(v: &serde_json::Value) -> Result<Option<StreamChunk>> {
             let reasoning = u["completion_tokens_details"]["reasoning_tokens"]
                 .as_u64()
                 .unwrap_or(0) as u32;
-            return Ok(Some(StreamChunk::MessageDelta {
+            out.push(StreamChunk::MessageDelta {
                 // This frame carries usage, not a stop reason; the reason
                 // arrived on the chunk that closed the choice.
                 stop_reason: String::new(),
                 usage: Usage::from_inclusive_input(prompt_total, cached_read, 0, output)
                     .with_reasoning(reasoning),
-            }));
+            });
         }
-        return Ok(None);
+        return Ok(out);
     }
 
     let delta = &choices[0]["delta"];
 
-    // Text content delta
+    // Text content delta.
     if let Some(content) = delta["content"].as_str() {
         // OpenAI's chat stream carries no per-block index for content — the
         // text of one message arrives as one logical block, and tool calls carry
         // their own `index` separately. Block 0 is therefore correct here, not a
         // placeholder.
-        return Ok(Some(StreamChunk::TextDelta {
+        //
+        // No longer an early return: a frame can carry text AND a tool call.
+        out.push(StreamChunk::TextDelta {
             block_index: 0,
             text: content.to_string(),
-        }));
+        });
     }
 
-    // Tool calls delta
+    // Tool calls delta — EVERY entry, not just the first.
     if let Some(tool_calls) = delta["tool_calls"].as_array() {
         for tc in tool_calls {
             let index = tc["index"].as_u64().unwrap_or(0);
 
-            // Tool use start
+            // The id and name appear only on the first fragment for an index.
             if let Some(id) = tc["id"].as_str() {
-                if let Some(func) = tc["function"].as_object() {
-                    if let Some(name) = func.get("name").and_then(|n| n.as_str()) {
-                        return Ok(Some(StreamChunk::ToolUseStart {
-                            id: id.to_string(),
-                            name: name.to_string(),
-                            block_index: index,
-                            // OpenAI issues no echo token.
-                            opaque: None,
-                        }));
-                    }
+                if let Some(name) = tc["function"]["name"].as_str() {
+                    out.push(StreamChunk::ToolUseStart {
+                        id: id.to_string(),
+                        name: name.to_string(),
+                        block_index: index,
+                        // OpenAI issues no echo token.
+                        opaque: None,
+                    });
                 }
             }
 
-            // Tool input delta
-            if let Some(func) = tc["function"].as_object() {
-                if let Some(args) = func.get("arguments").and_then(|a| a.as_str()) {
-                    if !args.is_empty() {
-                        return Ok(Some(StreamChunk::ToolInputDelta {
-                            block_index: index,
-                            partial_json: args.to_string(),
-                        }));
-                    }
+            // Argument fragments, keyed by index alone.
+            if let Some(args) = tc["function"]["arguments"].as_str() {
+                if !args.is_empty() {
+                    out.push(StreamChunk::ToolInputDelta {
+                        block_index: index,
+                        partial_json: args.to_string(),
+                    });
                 }
             }
         }
     }
 
-    // Message completion
+    // P2-41. The stop reason. This compared `finish_reason != "null"` against
+    // the four-character STRING; JSON `null` yields `None` from `as_str()` and
+    // never reached that comparison, so the check was inert.
     if let Some(finish_reason) = choices[0]["finish_reason"].as_str() {
-        // P2-41. The old guard also compared against the four-character STRING
-        // "null". JSON `null` yields `None` from `as_str()` and never reaches
-        // this line, so that comparison was inert — it read like a null check
-        // and tested nothing.
         if !finish_reason.is_empty() {
-            // Extract usage if present
-            // ⚠ OpenAI reports cached tokens INSIDE `prompt_tokens`, so the
-            // cached count is subtracted to reach `Usage`'s meaning. Treating
-            // it the way Anthropic is treated would bill cached tokens twice,
-            // at the uncached rate.
             let u = &v["usage"];
-            let prompt_total = u["prompt_tokens"].as_u64().unwrap_or(0) as u32;
-            let cached_read = u["prompt_tokens_details"]["cached_tokens"]
-                .as_u64()
-                .unwrap_or(0) as u32;
-            let output = u["completion_tokens"].as_u64().unwrap_or(0) as u32;
-            let reasoning = u["completion_tokens_details"]["reasoning_tokens"]
-                .as_u64()
-                .unwrap_or(0) as u32;
+            let usage = if u.is_object() {
+                let prompt_total = u["prompt_tokens"].as_u64().unwrap_or(0) as u32;
+                let cached_read = u["prompt_tokens_details"]["cached_tokens"]
+                    .as_u64()
+                    .unwrap_or(0) as u32;
+                let output = u["completion_tokens"].as_u64().unwrap_or(0) as u32;
+                let reasoning = u["completion_tokens_details"]["reasoning_tokens"]
+                    .as_u64()
+                    .unwrap_or(0) as u32;
+                Usage::from_inclusive_input(prompt_total, cached_read, 0, output)
+                    .with_reasoning(reasoning)
+            } else {
+                Usage::default()
+            };
 
-            // Emitted whether or not a usage object was present. Gating this on
-            // usage — as the previous version did — meant the stop reason was
-            // discarded on every stream, since `stream_options.include_usage`
-            // is what produces that object and was never sent.
-            return Ok(Some(StreamChunk::MessageDelta {
+            out.push(StreamChunk::MessageDelta {
                 stop_reason: finish_reason.to_string(),
-                usage: Usage::from_inclusive_input(prompt_total, cached_read, 0, output)
-                    .with_reasoning(reasoning),
-            }));
+                usage,
+            });
         }
     }
 
-    Ok(None)
+    Ok(out)
 }
 
 fn parse_completion_response(data: serde_json::Value) -> Result<CompletionResponse> {

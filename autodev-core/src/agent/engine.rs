@@ -390,7 +390,16 @@ impl AgentEngine {
                 messages: history.clone(),
                 system: Some(system_prompt.clone()),
                 tools: tool_defs.clone(),
-                max_tokens: 8192,
+                // ⚠ F-16. Clamped to what the model will actually emit.
+                //
+                // `ModelCapabilities::max_output` was added in P2-03 explicitly
+                // to bound this, and nothing read it — so a request could ask
+                // for more than the model allows and be rejected outright,
+                // which reads as a provider outage rather than a
+                // misconfiguration. Clamped rather than errored: the caller
+                // asked for "up to", and every model we ship allows well over
+                // the 8,192 default.
+                max_tokens: 8192.min(caps.max_output),
                 // P2-27. From the user's saved settings rather than four
                 // hardcoded `None`s.
                 temperature: model_config.as_ref().and_then(|c| c.temperature),

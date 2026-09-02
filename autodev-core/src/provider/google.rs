@@ -515,7 +515,7 @@ fn parse_completion_response(data: serde_json::Value) -> Result<CompletionRespon
     let mut content = Vec::new();
     if let Some(candidate) = candidates.get(0) {
         if let Some(parts) = candidate["content"]["parts"].as_array() {
-            for part in parts {
+            for (idx, part) in parts.iter().enumerate() {
                 // Text content
                 if let Some(text) = part["text"].as_str() {
                     content.push(MessageContent::Text {
@@ -533,7 +533,16 @@ fn parse_completion_response(data: serde_json::Value) -> Result<CompletionRespon
                     let args = func_call.get("args").cloned().unwrap_or(json!({}));
 
                     content.push(MessageContent::ToolUse {
-                        id: format!("gemini-{}", name),
+                        // ⚠ F-4. The part index is part of the id.
+                        //
+                        // P2-36 added it on the STREAMING path and left this
+                        // one at `gemini-{name}`, so two calls to the same tool
+                        // in one unary response shared an id — and the engine
+                        // correlates results to calls by id, so one result
+                        // would answer both calls and the other would go
+                        // unanswered. "Read these two files" is the everyday
+                        // shape that triggers it.
+                        id: format!("gemini-{}-{}", name, idx),
                         name,
                         input: args,
                         // Must be echoed back verbatim on the next request or
