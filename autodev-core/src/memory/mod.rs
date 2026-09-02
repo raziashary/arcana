@@ -18,6 +18,8 @@
 //
 // See: DEVELOPMENT_PLAN.md Phase 4.1-4.8
 
+pub mod backend;
+pub mod vector;
 pub mod db;
 pub mod episodic;
 pub mod migration;

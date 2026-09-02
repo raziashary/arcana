@@ -25,6 +25,12 @@ anyhow      = "1"
 tracing     = "0.1"
 chrono      = { version = "0.4", features = ["serde"] }
 rusqlite    = { version = "0.31", features = ["bundled"] }
+# P3-30. Vector search for memory. Its ENTIRE `[dependencies]` is `cc`:
+# it compiles sqlite-vec.c with -DSQLITE_CORE and never touches
+# libsqlite3-sys, so there is nothing to conflict with the pin above and
+# `loadable_extension` never meets `bundled`. Verified before adoption.
+# 0.1.9 is the latest stable; 0.1.10 is alpha.
+sqlite-vec  = "0.1.9"
 reqwest     = { version = "0.12", features = ["json", "stream"] }
 async-trait = "0.1"
 futures     = "0.3"
