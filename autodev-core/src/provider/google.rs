@@ -356,6 +356,7 @@ fn parse_google_chunk(v: &serde_json::Value) -> Result<Vec<StreamChunk>> {
             if let Some(text) = part["text"].as_str() {
                 out.push(StreamChunk::TextDelta {
                     text: text.to_string(),
+                    block_index: idx as u64,
                 });
                 continue;
             }

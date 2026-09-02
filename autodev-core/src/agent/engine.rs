@@ -4,7 +4,6 @@
 // Claude Code's query.ts runQuery().
 // See DEVELOPMENT_PLAN.md Section 9.4 for full state machine diagram.
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -494,21 +493,39 @@ impl AgentEngine {
 
         let mut stream = self.provider.stream(request).await?;
 
-        let mut text_buffer = String::new();
-        // Keyed by tool use UUID — accumulates (tool_name, partial_input_json)
-        let mut tool_use_map: HashMap<String, (String, String)> = HashMap::new();
-        // Maps content block index → tool use UUID for ToolInputDelta correlation
-        let mut index_to_id: HashMap<u64, String> = HashMap::new();
+        // ── Ordering (P2-59, P2-60) ──────────────────────────────────────
+        //
+        // Both maps are keyed by the wire's own **content block index** and are
+        // `BTreeMap`s, so assembly below walks them in the order the model
+        // actually emitted.
+        //
+        // This was a `HashMap` keyed by tool-use UUID. `std::collections::HashMap`
+        // iterates in an order derived from a per-process `RandomState` seed, so
+        // when a model emitted two or more parallel tool calls the block order
+        // written into `history` was **arbitrary and differed between runs of the
+        // same binary** — and that reordered assistant message is then replayed
+        // on every subsequent turn. It corrupts the transcript relative to the
+        // wire, and once caching is on it is a messages-level invalidator that
+        // looks exactly like "caching doesn't work" while the prefix is perfectly
+        // stable: the hardest possible bug to attribute.
+        //
+        // Text was separately buffered into one string and pushed **first**,
+        // inverting any commentary the model emitted after a tool call.
+        let mut text_by_block: std::collections::BTreeMap<u64, String> =
+            std::collections::BTreeMap::new();
+        // block index → (tool_use_id, tool_name, partial_input_json)
+        let mut tool_use_map: std::collections::BTreeMap<u64, (String, String, String)> =
+            std::collections::BTreeMap::new();
         let mut content_blocks: Vec<MessageContent> = Vec::new();
 
         while let Some(chunk) = stream.next().await {
             match chunk? {
-                StreamChunk::TextDelta { text } => {
+                StreamChunk::TextDelta { text, block_index } => {
                     emit_token(TokenPayload {
                         session_id: session_id.to_string(),
                         text: text.clone(),
                     });
-                    text_buffer.push_str(&text);
+                    text_by_block.entry(block_index).or_default().push_str(&text);
                 }
                 StreamChunk::ThinkingDelta { text } => {
                     emit_thinking(ThinkingPayload {
@@ -522,19 +539,20 @@ impl AgentEngine {
                     block_index,
                 } => {
                     debug!("Tool use start: name={name} id={id} block_index={block_index}");
-                    index_to_id.insert(block_index, id.clone());
-                    tool_use_map.insert(id, (name, String::new()));
+                    tool_use_map.insert(block_index, (id, name, String::new()));
                 }
                 StreamChunk::ToolInputDelta {
                     block_index,
                     partial_json,
                 } => {
-                    if let Some(tool_id) = index_to_id.get(&block_index) {
-                        if let Some(entry) = tool_use_map.get_mut(tool_id) {
-                            entry.1.push_str(&partial_json);
-                        }
+                    // Keyed directly by block index now, so the id->index
+                    // correlation map is gone: it existed only because the
+                    // accumulator was keyed by id, which is what made ordering
+                    // depend on hash iteration in the first place.
+                    if let Some(entry) = tool_use_map.get_mut(&block_index) {
+                        entry.2.push_str(&partial_json);
                     } else {
-                        debug!("ToolInputDelta: no tool_id for block_index={block_index}");
+                        debug!("ToolInputDelta: no tool started at block_index={block_index}");
                     }
                 }
                 StreamChunk::MessageDelta {
@@ -552,15 +570,7 @@ impl AgentEngine {
             }
         }
 
-        // Assemble content blocks from buffered data
-        if !text_buffer.is_empty() {
-            content_blocks.push(MessageContent::Text { text: text_buffer });
-        }
-        for (id, (name, json_str)) in tool_use_map {
-            let input = serde_json::from_str(&json_str)
-                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-            content_blocks.push(MessageContent::ToolUse { id, name, input });
-        }
+        content_blocks.extend(assemble_in_wire_order(text_by_block, tool_use_map));
 
         Ok(content_blocks)
     }
@@ -629,6 +639,135 @@ impl AgentEngine {
             Err(e) => {
                 error!("[budget] failed to open tasks DB for escalation on task {task_id}: {e}");
             }
+        }
+    }
+}
+
+/// Merge buffered text and tool calls back into the order the model emitted.
+///
+/// Extracted from `stream_response` so the ordering can be tested without a
+/// live provider — the defect it fixes (P2-59) was **non-deterministic across
+/// processes**, which is exactly the kind that survives manual checking.
+///
+/// Both inputs are keyed by the wire's content-block index and are `BTreeMap`s,
+/// so merging them is simply walking the union in key order.
+fn assemble_in_wire_order(
+    text_by_block: std::collections::BTreeMap<u64, String>,
+    tool_use_map: std::collections::BTreeMap<u64, (String, String, String)>,
+) -> Vec<MessageContent> {
+    let mut ordered: std::collections::BTreeMap<u64, MessageContent> =
+        std::collections::BTreeMap::new();
+
+    for (idx, text) in text_by_block {
+        // An empty text block is dropped rather than emitted: an empty content
+        // block poisons every later send in the session (P3-07's defect).
+        if !text.is_empty() {
+            ordered.insert(idx, MessageContent::Text { text });
+        }
+    }
+    for (idx, (id, name, json_str)) in tool_use_map {
+        // A tool call whose arguments never arrived becomes `{}` rather than
+        // failing the turn — the provider said the model wanted this tool, and
+        // dropping the call entirely would leave the model waiting for a result
+        // it never gets.
+        let input = serde_json::from_str(&json_str)
+            .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+        ordered.insert(idx, MessageContent::ToolUse { id, name, input });
+    }
+
+    ordered.into_values().collect()
+}
+
+#[cfg(test)]
+mod wire_order_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn tool(id: &str, name: &str, json: &str) -> (String, String, String) {
+        (id.to_string(), name.to_string(), json.to_string())
+    }
+
+    #[test]
+    fn blocks_come_back_in_the_order_the_model_emitted() {
+        let mut text = BTreeMap::new();
+        text.insert(1u64, "thinking about it".to_string());
+        let mut tools = BTreeMap::new();
+        tools.insert(0u64, tool("a", "read_file", r#"{"p":"a"}"#));
+        tools.insert(2u64, tool("b", "grep", r#"{"q":"x"}"#));
+
+        let out = assemble_in_wire_order(text, tools);
+        assert_eq!(out.len(), 3);
+        // Tool at 0, text at 1, tool at 2 — not "all text, then all tools".
+        assert!(matches!(out[0], MessageContent::ToolUse { .. }));
+        assert!(matches!(out[1], MessageContent::Text { .. }));
+        assert!(matches!(out[2], MessageContent::ToolUse { .. }));
+    }
+
+    #[test]
+    fn text_after_a_tool_call_stays_after_it() {
+        // The old code pushed all buffered text FIRST, unconditionally, so a
+        // model that called a tool and then commented had the two swapped —
+        // and the swapped message is replayed on every later turn.
+        let mut text = BTreeMap::new();
+        text.insert(5u64, "and that is why".to_string());
+        let mut tools = BTreeMap::new();
+        tools.insert(1u64, tool("a", "read_file", "{}"));
+
+        let out = assemble_in_wire_order(text, tools);
+        assert!(matches!(out[0], MessageContent::ToolUse { .. }));
+        assert!(matches!(out[1], MessageContent::Text { .. }));
+    }
+
+    #[test]
+    fn parallel_tool_calls_keep_their_relative_order_every_time() {
+        // The defect was non-deterministic ACROSS PROCESSES: HashMap iteration
+        // is seeded per process, so a single run proved nothing. Ten identical
+        // assemblies must agree, and with a BTreeMap they agree by construction
+        // rather than by luck.
+        let mut expected: Option<Vec<String>> = None;
+        for _ in 0..10 {
+            let mut tools = BTreeMap::new();
+            for i in 0..6u64 {
+                tools.insert(i, tool(&format!("id{i}"), &format!("tool{i}"), "{}"));
+            }
+            let names: Vec<String> = assemble_in_wire_order(BTreeMap::new(), tools)
+                .into_iter()
+                .map(|b| match b {
+                    MessageContent::ToolUse { name, .. } => name,
+                    _ => "?".to_string(),
+                })
+                .collect();
+            match &expected {
+                None => expected = Some(names),
+                Some(e) => assert_eq!(e, &names, "assembly order must be stable"),
+            }
+        }
+        assert_eq!(
+            expected.unwrap(),
+            vec!["tool0", "tool1", "tool2", "tool3", "tool4", "tool5"]
+        );
+    }
+
+    #[test]
+    fn an_empty_text_block_is_dropped() {
+        // An empty content block poisons every later send in the session.
+        let mut text = BTreeMap::new();
+        text.insert(0u64, String::new());
+        assert!(assemble_in_wire_order(text, BTreeMap::new()).is_empty());
+    }
+
+    #[test]
+    fn a_tool_call_with_no_arguments_becomes_an_empty_object() {
+        // Dropping the call would leave the model waiting for a result it never
+        // gets; `{}` at least lets the tool refuse cleanly.
+        let mut tools = BTreeMap::new();
+        tools.insert(0u64, tool("a", "read_file", ""));
+        let out = assemble_in_wire_order(BTreeMap::new(), tools);
+        match &out[0] {
+            MessageContent::ToolUse { input, .. } => {
+                assert!(input.is_object() && input.as_object().unwrap().is_empty());
+            }
+            _ => panic!("expected a tool use"),
         }
     }
 }

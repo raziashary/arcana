@@ -348,7 +348,12 @@ fn parse_openai_chunk(v: &serde_json::Value) -> Result<Option<StreamChunk>> {
 
     // Text content delta
     if let Some(content) = delta["content"].as_str() {
+        // OpenAI's chat stream carries no per-block index for content — the
+        // text of one message arrives as one logical block, and tool calls carry
+        // their own `index` separately. Block 0 is therefore correct here, not a
+        // placeholder.
         return Ok(Some(StreamChunk::TextDelta {
+            block_index: 0,
             text: content.to_string(),
         }));
     }

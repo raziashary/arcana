@@ -63,7 +63,10 @@ fn parse_anthropic_event(v: &serde_json::Value) -> Result<Option<StreamChunk>> {
             match delta["type"].as_str().unwrap_or("") {
                 "text_delta" => {
                     let text = delta["text"].as_str().unwrap_or("").to_string();
-                    Ok(Some(StreamChunk::TextDelta { text }))
+                    Ok(Some(StreamChunk::TextDelta {
+                        text,
+                        block_index: v["index"].as_u64().unwrap_or(0),
+                    }))
                 }
                 "thinking_delta" => {
                     let text = delta["thinking"].as_str().unwrap_or("").to_string();

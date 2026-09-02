@@ -88,6 +88,15 @@ pub struct CompletionResponse {
 pub enum StreamChunk {
     TextDelta {
         text: String,
+        /// Which content block this text belongs to.
+        ///
+        /// Added in P2-60. The engine used to buffer all text into one string
+        /// and push it **before** every tool call, so a model that emitted
+        /// `tool_use` and then commentary had the two swapped in the transcript
+        /// — and that reordered message is replayed on every later turn.
+        /// Anthropic sends this index on `content_block_delta` and it was being
+        /// discarded.
+        block_index: u64,
     },
     ThinkingDelta {
         text: String,
