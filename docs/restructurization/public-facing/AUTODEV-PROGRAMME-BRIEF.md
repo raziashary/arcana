@@ -6,7 +6,7 @@
 |---|---|
 | **Prepared** | 2026-09-01 |
 | **Owner** | Razi Ashary — Programming Lead, AIRS Foundry |
-| **Status** | P0 and P1 complete · P2 next · overall readiness **8.0%** |
+| **Status** | P0, P1 and P2 complete · P3 next · overall readiness **22%** |
 | **Source documents** | `docs/restructurization/vision/00-AUTODEV-RESTRUCTURE-MASTER-PLAN.md` (why) · `docs/restructurization/development/MASTER_DEVELOPMENT_PLAN.md` (what and when) |
 
 This brief condenses both. Where it is terse, those documents are authoritative.
@@ -86,10 +86,10 @@ Fifteen phases. Every one has an explicit slot — nothing is parked.
 |---|---|---|---|---|
 | ✅ | **P0** Stop the bleeding | The security holes closed; CI can fail | 12 | done |
 | ✅ | **P1** Structural | Everything shipped is compiled; one owner per database; redaction live | 22 | done |
-| 1 | **P2** Providers | Three providers conform; **Gemini primary**; cost honest; spend capped | 27 | ~11 h |
-| 2 | **P3 A–E** Runtime | One tool path with a real permission gate; a panic cannot kill the app | 28 | ~12 h |
-| 3 | **P3-F** Memory | Memory that works and is provably read | 15 | ~7.5 h |
-| 4 | **P8** Sidecar removal | The retired Python subsystem deleted entirely | 24 | ~6 h |
+| ✅ | **P2** Providers | Three providers conform; **Gemini primary**; cost honest; spend capped — proven against the live APIs, not only against fixtures | 74 | done |
+| 1 | **P3 A–E** Runtime | One tool path with a real permission gate; a panic cannot kill the app | 28 | ~12 h |
+| 2 | **P3-F** Memory | Memory that works and is provably read | 15 | ~7.5 h |
+| 3 | **P8** Sidecar removal | The retired Python subsystem deleted entirely | 24 | ~6 h |
 | 🤝 | **Handover** | **The AutoDesign team can begin wiring** | — | **~37 h in** |
 | 5 | **PD1** Ingestion | PSD **and** PDF → one representation | 14 | ~6 h |
 | 6 | **PD2** Fidelity | Faithfulness measured and refined | 14 | ~7.5 h |
