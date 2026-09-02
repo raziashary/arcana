@@ -93,6 +93,8 @@ fn parse_anthropic_event(v: &serde_json::Value) -> Result<Option<StreamChunk>> {
                     id,
                     name,
                     block_index,
+                    // Anthropic issues no echo token (see MessageContent::ToolUse).
+                    opaque: None,
                 }))
             } else {
                 Ok(None)

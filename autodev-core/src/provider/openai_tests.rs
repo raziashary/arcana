@@ -90,7 +90,7 @@ fn a_tool_calls_id_and_name_arrive_only_on_its_first_fragment() {
     .expect("parse")
     .expect("a ToolUseStart");
 
-    let StreamChunk::ToolUseStart { id, name, block_index } = first else {
+    let StreamChunk::ToolUseStart { id, name, block_index, .. } = first else {
         panic!("expected ToolUseStart, got {first:?}");
     };
     assert_eq!(id, "call_abc");

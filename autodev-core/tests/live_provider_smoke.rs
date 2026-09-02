@@ -218,10 +218,22 @@ async fn p2_16_anthropic_prompt_caching_actually_reads_from_cache() {
         .await
         .expect("first call failed");
     println!("call 1: {:?}", first.usage);
+
+    // ⚠ Either outcome proves the breakpoint reached Anthropic.
+    //
+    // This asserted `cache_write > 0` and failed on its third run — with
+    // `cached_read: 11923, cache_write: 0`. Nothing was broken: the entry
+    // written minutes earlier was still inside its five-minute TTL, so the
+    // "first" call HIT it. The assertion had encoded a cold-cache assumption
+    // rather than the invariant, and a test that fails when the feature works
+    // better than expected is a bad test.
+    //
+    // The invariant is that the prefix is cacheable AT ALL — a write on a cold
+    // cache, a read on a warm one, and never both zero.
     assert!(
-        first.usage.cache_write > 0,
-        "the first call reported no cache WRITE ({:?}) — the breakpoint never reached \
-         Anthropic, so there is nothing for the second call to read",
+        first.usage.cache_write > 0 || first.usage.cached_read > 0,
+        "the first call neither wrote nor read a cache ({:?}) — the breakpoint never \
+         reached Anthropic, so there is nothing for the second call to read",
         first.usage
     );
 
@@ -246,7 +258,8 @@ async fn p2_16_anthropic_prompt_caching_actually_reads_from_cache() {
     let hash = 0xC0FFEE;
     assert_eq!(
         monitor.observe(hash, estimated, &caps, &first.usage),
-        CacheVerdict::FirstSighting
+        CacheVerdict::FirstSighting,
+        "the monitor must not alarm on a prefix it has never seen"
     );
     let verdict = monitor.observe(hash, estimated, &caps, &second.usage);
     assert!(
@@ -517,6 +530,245 @@ async fn cache_minimums_are_not_silently_wrong() {
         assert!(
             measured >= min_tokens,
             "the probe prompt for {model} did not clear its own claimed minimum"
+        );
+    }
+}
+
+
+// ── S2-08 · a Gemini tool call carries REAL arguments, and two run in parallel ─
+
+#[tokio::test]
+async fn s2_08_gemini_tool_calls_carry_their_arguments_and_run_in_parallel() {
+    // The defect this proves fixed was total, not partial: `google.rs` computed
+    // the arguments and dropped them (`let _args = ...`), emitting no
+    // `ToolInputDelta` at all. The engine then assembled the call from an empty
+    // accumulator, `from_str("")` failed, and `.unwrap_or` substituted `{}` — so
+    // EVERY Gemini tool call ran with empty input. Gemini is the primary
+    // provider for rollout 1.
+    //
+    // Fixtures already assert the parser. This asserts the live model actually
+    // produces what the parser expects, which a fixture cannot.
+    use autodev_core::provider::types::ToolDefinition;
+
+    let p = GoogleProvider::new(require_key!("GOOGLE_API_KEY"));
+
+    let mut req = small_request("gemini-3.7-flash", "Use the tools you are given.", CachePolicy::Off);
+    req.max_tokens = 2048;
+    req.tools = vec![ToolDefinition {
+        name: "read_file".to_string(),
+        description: "Read a file from disk".to_string(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": { "path": { "type": "string", "description": "Path to read" } },
+            "required": ["path"]
+        }),
+    }];
+    req.messages[0].content = vec![MessageContent::Text {
+        text: "Read the two files src/main.rs and src/lib.rs. Call read_file for \
+               each of them, both in this turn."
+            .to_string(),
+    }];
+
+    let r = p.complete(req).await.expect("gemini tool call failed");
+
+    let calls: Vec<(&String, &serde_json::Value)> = r
+        .content
+        .iter()
+        .filter_map(|c| match c {
+            MessageContent::ToolUse { name, input, .. } => Some((name, input)),
+            _ => None,
+        })
+        .collect();
+
+    println!("gemini returned {} tool call(s)", calls.len());
+    for (name, input) in &calls {
+        println!("  {name}({input})");
+    }
+
+    assert!(!calls.is_empty(), "gemini made no tool call at all");
+
+    for (name, input) in &calls {
+        assert_eq!(*name, "read_file");
+        assert!(
+            input.get("path").and_then(|v| v.as_str()).is_some_and(|p| !p.is_empty()),
+            "a tool call arrived with EMPTY arguments ({input}) — this is exactly the \
+             defect P2-06 fixed, and it makes every Gemini tool call a no-op"
+        );
+    }
+
+    // Parallel is model-dependent, so it is reported rather than asserted: the
+    // load-bearing claim is that arguments survive.
+    if calls.len() < 2 {
+        eprintln!(
+            "⚠ gemini made {} call(s), not 2 — parallel tool use is model-discretionary, \
+             so this is not a failure, but the parallel path was not exercised here. \
+             The wire-format assertion for it is in conformance_tests.",
+            calls.len()
+        );
+    }
+}
+
+// ── S2-03 · reported cost is reconcilable with reported usage ────────────────
+
+#[tokio::test]
+async fn s2_03_session_cost_matches_the_providers_own_reported_usage() {
+    // Not "the number looks plausible" — recomputed from the provider's own
+    // usage against the price table, and compared.
+    use autodev_core::cost::pricing;
+
+    let p = AnthropicProvider::new(require_key!("ANTHROPIC_API_KEY"));
+    let model = "claude-sonnet-5";
+    let r = p
+        .complete(small_request(model, "Be terse.", CachePolicy::Off))
+        .await
+        .expect("completion failed");
+
+    let cost = pricing::cost_usd(model, &r.usage).expect("the model must be priced");
+
+    let price = pricing::price_for(model).expect("priced");
+    let expected = (r.usage.input as f64 / 1_000_000.0) * price.input
+        + (r.usage.cached_read as f64 / 1_000_000.0) * price.cached_read
+        + (r.usage.cache_write as f64 / 1_000_000.0) * price.cache_write
+        + ((r.usage.output + r.usage.reasoning) as f64 / 1_000_000.0) * price.output;
+
+    println!("usage={:?} cost=${cost:.8} expected=${expected:.8}", r.usage);
+    assert!(
+        (cost - expected).abs() < 1e-9,
+        "cost ${cost} does not reconcile with the provider's reported usage (${expected})"
+    );
+
+    // And a turn that produced output must not be free — the P2-52 invariant,
+    // checked against a real response rather than a fixture.
+    assert!(r.usage.total() > 0, "a turn that returned content reported zero tokens");
+    assert!(cost > 0.0, "a turn that spent tokens reported zero cost");
+}
+
+// ── S2-10 · a failed tool is reported as failed, on all three ────────────────
+
+#[tokio::test]
+async fn s2_10_a_failed_tool_result_survives_a_real_round_trip_on_every_provider() {
+    // `openai.rs` and `google.rs` destructured `is_error: _`, so a failed tool
+    // was indistinguishable from a successful one on two of three providers —
+    // the model would read a failure as a result and build on something that
+    // never happened.
+    //
+    // ── Why this does a REAL two-turn round trip ─────────────────────────────
+    //
+    // The first version of this test hand-built the assistant turn. That cannot
+    // work for Gemini: it attaches an opaque `thoughtSignature` to every
+    // `functionCall` and rejects a replayed call that is missing one, and a
+    // signature is issued by the server — it cannot be fabricated.
+    //
+    // That limitation turned out to be the point. Asking the model for the tool
+    // call, feeding its OWN call back with a failure, and reading its reaction
+    // exercises the entire path the agent loop actually takes, including the
+    // signature capture-and-echo the live smoke found missing on 2026-09-02.
+    use autodev_core::provider::types::ToolDefinition;
+
+    let cases: Vec<(&str, &str, Box<dyn Provider>)> = vec![
+        (
+            "anthropic",
+            "claude-sonnet-5",
+            Box::new(AnthropicProvider::new(require_key!("ANTHROPIC_API_KEY"))),
+        ),
+        (
+            "openai",
+            "gpt-5.4-mini",
+            Box::new(OpenAIProvider::new(require_key!("OPENAI_API_KEY"))),
+        ),
+        (
+            "google",
+            "gemini-3.7-flash",
+            Box::new(GoogleProvider::new(require_key!("GOOGLE_API_KEY"))),
+        ),
+    ];
+
+    let tool = ToolDefinition {
+        name: "read_file".to_string(),
+        description: "Read a file from disk".to_string(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": { "path": { "type": "string" } },
+            "required": ["path"]
+        }),
+    };
+
+    for (id, model, provider) in cases {
+        // ── Turn 1: get the model to call the tool ───────────────────────────
+        let mut first = small_request(model, "Use the read_file tool when asked.", CachePolicy::Off);
+        first.max_tokens = 2048;
+        first.tools = vec![tool.clone()];
+        first.messages[0].content = vec![MessageContent::Text {
+            text: "Read the file /nope/missing.rs using the read_file tool.".to_string(),
+        }];
+
+        let r1 = provider.complete(first).await.expect("turn 1 failed");
+
+        let call = r1.content.iter().find_map(|c| match c {
+            MessageContent::ToolUse { id, .. } => Some(id.clone()),
+            _ => None,
+        });
+
+        let Some(call_id) = call else {
+            eprintln!("⚠ {id} did not call the tool on turn 1; skipping its round trip");
+            continue;
+        };
+
+        // ── Turn 2: hand back its OWN call, with a failure ───────────────────
+        //
+        // `r1.content` is replayed verbatim, which is what carries Gemini's
+        // signature back. Rebuilding the call by hand is what the API rejects.
+        let mut second = small_request(model, "", CachePolicy::Off);
+        second.max_tokens = 2048;
+        second.tools = vec![tool.clone()];
+        second.system = Some(
+            "If the tool call failed, reply with exactly the word FAILED. Otherwise reply \
+             with exactly the word OK."
+                .to_string(),
+        );
+        second.messages = vec![
+            RequestMessage {
+                role: "user".to_string(),
+                content: vec![MessageContent::Text {
+                    text: "Read the file /nope/missing.rs using the read_file tool.".to_string(),
+                }],
+            },
+            RequestMessage {
+                role: "assistant".to_string(),
+                content: r1.content.clone(),
+            },
+            RequestMessage {
+                role: "user".to_string(),
+                content: vec![MessageContent::ToolResult {
+                    tool_use_id: call_id,
+                    name: "read_file".to_string(),
+                    content: "Error: No such file or directory (os error 2)".to_string(),
+                    is_error: true,
+                }],
+            },
+        ];
+
+        let r2 = provider
+            .complete(second)
+            .await
+            .unwrap_or_else(|e| panic!("{id} rejected the replayed tool call: {e}"));
+
+        let text: String = r2
+            .content
+            .iter()
+            .filter_map(|c| match c {
+                MessageContent::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        println!("{id}: {}", text.trim());
+        assert!(
+            text.to_uppercase().contains("FAIL"),
+            "{id} did not convey the tool failure to the model — it answered {text:?}. A \
+             failed tool that reads as a success makes the agent build on a result that \
+             does not exist."
         );
     }
 }

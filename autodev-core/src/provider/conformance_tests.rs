@@ -273,16 +273,19 @@ fn parallel_tool_turn() -> CompletionRequest {
                     id: "call_a".to_string(),
                     name: "read_file".to_string(),
                     input: serde_json::json!({"path": "a.rs"}),
+                    opaque: None,
                 },
                 MessageContent::ToolUse {
                     id: "call_b".to_string(),
                     name: "read_file".to_string(),
                     input: serde_json::json!({"path": "b.rs"}),
+                    opaque: None,
                 },
                 MessageContent::ToolUse {
                     id: "call_c".to_string(),
                     name: "grep".to_string(),
                     input: serde_json::json!({"pattern": "fn main"}),
+                    opaque: None,
                 },
             ],
         },
@@ -518,6 +521,70 @@ fn google_sends_no_cache_field_because_its_cache_is_implicit() {
         assert!(
             !text.contains("cache_control") && !text.contains("prompt_cache_key"),
             "Gemini caches implicitly — another provider's field here would be rejected"
+        );
+    }
+}
+
+
+#[test]
+fn google_echoes_a_tool_calls_signature_back_verbatim() {
+    // The other half of the round trip. Capturing the signature is useless if
+    // the replayed request does not carry it — and the failure is a 400 on the
+    // NEXT turn, after the model has already done the work.
+    let mut r = req();
+    r.messages = vec![RequestMessage {
+        role: "assistant".to_string(),
+        content: vec![MessageContent::ToolUse {
+            id: "gemini-read_file-0".to_string(),
+            name: "read_file".to_string(),
+            input: serde_json::json!({"path": "a.rs"}),
+            opaque: Some("CtEBAVKm-sig-xyz".to_string()),
+        }],
+    }];
+
+    let body = GoogleProvider::new(String::new()).build_body_for_test(&r, false);
+    let part = &body["contents"][0]["parts"][0];
+
+    assert_eq!(
+        part["thoughtSignature"],
+        serde_json::json!("CtEBAVKm-sig-xyz"),
+        "Gemini rejects a replayed call whose thoughtSignature is missing"
+    );
+    // It belongs on the PART, not inside the functionCall object.
+    assert!(part["functionCall"].get("thoughtSignature").is_none());
+
+    // And a call with no signature must not emit the key at all — an explicit
+    // null is not the same as absent to this API.
+    let mut without = r.clone();
+    if let MessageContent::ToolUse { opaque, .. } = &mut without.messages[0].content[0] {
+        *opaque = None;
+    }
+    let body = GoogleProvider::new(String::new()).build_body_for_test(&without, false);
+    assert!(body["contents"][0]["parts"][0].get("thoughtSignature").is_none());
+}
+
+#[test]
+fn the_other_two_providers_do_not_invent_an_echo_token() {
+    // `opaque` is generic on purpose — another vendor may introduce one. But a
+    // provider that issues none must not emit a field for it.
+    let mut r = req();
+    r.messages = vec![RequestMessage {
+        role: "assistant".to_string(),
+        content: vec![MessageContent::ToolUse {
+            id: "call_1".to_string(),
+            name: "read_file".to_string(),
+            input: serde_json::json!({"path": "a.rs"}),
+            opaque: Some("should-not-appear".to_string()),
+        }],
+    }];
+
+    for body in [
+        AnthropicProvider::new(String::new()).build_body_for_test(&r, false),
+        OpenAIProvider::new(String::new()).build_body_for_test(&r, false),
+    ] {
+        assert!(
+            !body.to_string().contains("should-not-appear"),
+            "a provider that issues no echo token must not send one back"
         );
     }
 }

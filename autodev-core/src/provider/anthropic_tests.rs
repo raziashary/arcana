@@ -82,7 +82,7 @@ fn tool_arguments_arrive_as_partial_json_and_must_concatenate() {
     .expect("parse")
     .expect("a ToolUseStart");
 
-    let StreamChunk::ToolUseStart { id, name, block_index } = start else {
+    let StreamChunk::ToolUseStart { id, name, block_index, .. } = start else {
         panic!("expected ToolUseStart, got {start:?}");
     };
     assert_eq!(id, "toolu_01");

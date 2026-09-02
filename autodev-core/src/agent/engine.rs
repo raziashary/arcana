@@ -321,9 +321,27 @@ impl AgentEngine {
                 model_context,
             ) {
                 info!("Compacting conversation for session {session_id}");
-                history =
+                // P2-66. Compaction performs a real, billed `complete()` call,
+                // and its usage used to be discarded — the response was consumed
+                // for its text and dropped. Compaction fires on LONG sessions,
+                // which are the expensive ones, and it summarises the whole
+                // middle of the conversation, so its input side is by
+                // construction most of a context window.
+                //
+                // Folded into the turn total so it reaches cost, the daily
+                // ceiling, and analytics like any other call.
+                let (compacted, compaction_usage) =
                     CompactionEngine::compact_with_summary(history, self.provider.as_ref(), model)
                         .await;
+                history = compacted;
+                if compaction_usage.total() > 0 {
+                    info!(
+                        "Compaction cost {} input / {} output tokens",
+                        compaction_usage.total_input(),
+                        compaction_usage.output
+                    );
+                    total_usage.add(&compaction_usage);
+                }
             }
 
             // Cancel check
@@ -517,7 +535,7 @@ impl AgentEngine {
             let mut unknown_tools: Vec<(String, String)> = Vec::new(); // (tool_use_id, name)
 
             for tc in &tool_calls {
-                if let MessageContent::ToolUse { id, name, input } = tc {
+                if let MessageContent::ToolUse { id, name, input, .. } = tc {
                     match self.registry.get(name) {
                         Some(tool) => {
                             tool_batch.push((tool, input.clone(), id.clone()));
@@ -752,7 +770,11 @@ impl AgentEngine {
         let mut text_by_block: std::collections::BTreeMap<u64, String> =
             std::collections::BTreeMap::new();
         // block index → (tool_use_id, tool_name, partial_input_json)
-        let mut tool_use_map: std::collections::BTreeMap<u64, (String, String, String)> =
+        // (id, name, accumulated-json, opaque-echo-token)
+        //
+        // The fourth element is Gemini'"'"'s `thoughtSignature`, which must be
+        // echoed back on the next request or the turn is rejected with a 400.
+        let mut tool_use_map: std::collections::BTreeMap<u64, (String, String, String, Option<String>)> =
             std::collections::BTreeMap::new();
         let mut content_blocks: Vec<MessageContent> = Vec::new();
 
@@ -775,9 +797,10 @@ impl AgentEngine {
                     id,
                     name,
                     block_index,
+                    opaque,
                 } => {
                     debug!("Tool use start: name={name} id={id} block_index={block_index}");
-                    tool_use_map.insert(block_index, (id, name, String::new()));
+                    tool_use_map.insert(block_index, (id, name, String::new(), opaque));
                 }
                 StreamChunk::ToolInputDelta {
                     block_index,
@@ -891,7 +914,7 @@ impl AgentEngine {
 /// so merging them is simply walking the union in key order.
 fn assemble_in_wire_order(
     text_by_block: std::collections::BTreeMap<u64, String>,
-    tool_use_map: std::collections::BTreeMap<u64, (String, String, String)>,
+    tool_use_map: std::collections::BTreeMap<u64, (String, String, String, Option<String>)>,
 ) -> Vec<MessageContent> {
     let mut ordered: std::collections::BTreeMap<u64, MessageContent> =
         std::collections::BTreeMap::new();
@@ -903,14 +926,26 @@ fn assemble_in_wire_order(
             ordered.insert(idx, MessageContent::Text { text });
         }
     }
-    for (idx, (id, name, json_str)) in tool_use_map {
+    for (idx, (id, name, json_str, opaque)) in tool_use_map {
         // A tool call whose arguments never arrived becomes `{}` rather than
         // failing the turn — the provider said the model wanted this tool, and
         // dropping the call entirely would leave the model waiting for a result
         // it never gets.
         let input = serde_json::from_str(&json_str)
             .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-        ordered.insert(idx, MessageContent::ToolUse { id, name, input });
+        ordered.insert(
+            idx,
+            MessageContent::ToolUse {
+                id,
+                name,
+                input,
+                // Carried from the stream. Gemini rejects a replayed call whose
+                // signature is missing, so losing it here would break the
+                // conversation one turn later — at the point where the model
+                // has already done the work.
+                opaque,
+            },
+        );
     }
 
     ordered.into_values().collect()
@@ -921,8 +956,18 @@ mod wire_order_tests {
     use super::*;
     use std::collections::BTreeMap;
 
-    fn tool(id: &str, name: &str, json: &str) -> (String, String, String) {
-        (id.to_string(), name.to_string(), json.to_string())
+    fn tool(id: &str, name: &str, json: &str) -> (String, String, String, Option<String>) {
+        (id.to_string(), name.to_string(), json.to_string(), None)
+    }
+
+    /// A tool call carrying a provider echo token (Gemini'"'"'s thoughtSignature).
+    fn tool_with_signature(
+        id: &str,
+        name: &str,
+        json: &str,
+        sig: &str,
+    ) -> (String, String, String, Option<String>) {
+        (id.to_string(), name.to_string(), json.to_string(), Some(sig.to_string()))
     }
 
     #[test]

@@ -80,12 +80,26 @@ impl GoogleProvider {
                 .iter()
                 .map(|c| match c {
                     MessageContent::Text { text } => json!({ "text": text }),
-                    MessageContent::ToolUse { id: _, name, input } => json!({
-                        "functionCall": {
-                            "name": name,
-                            "args": input,
+                    MessageContent::ToolUse {
+                        id: _,
+                        name,
+                        input,
+                        opaque,
+                    } => {
+                        // The signature must be echoed back verbatim or Gemini
+                        // rejects the whole turn with a 400. It is attached to
+                        // the PART, not to the functionCall object.
+                        let mut part = json!({
+                            "functionCall": {
+                                "name": name,
+                                "args": input,
+                            }
+                        });
+                        if let Some(sig) = opaque {
+                            part["thoughtSignature"] = json!(sig);
                         }
-                    }),
+                        part
+                    }
                     MessageContent::ToolResult {
                         tool_use_id: _,
                         name,
@@ -413,10 +427,28 @@ fn parse_google_chunk(v: &serde_json::Value) -> Result<Vec<StreamChunk>> {
                 // calls in one message collide in the engine's correlation map,
                 // and made the id collide whenever one tool was called twice.
                 let block_index = idx as u64;
+                // ⚠ Captured, not ignored. Gemini attaches a `thoughtSignature`
+                // to the PART (not to the functionCall object) and **rejects
+                // the turn with a 400** when a replayed call is missing it:
+                //
+                //   "Function call is missing a thought_signature in
+                //    functionCall parts. This is required for tools to work
+                //    correctly."
+                //
+                // Dropping it broke every multi-turn Gemini tool conversation
+                // on the second request. Found by the live smoke; no fixture
+                // could have caught it, because the captured payloads predate
+                // the requirement and go on passing forever.
+                let opaque = part
+                    .get("thoughtSignature")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+
                 out.push(StreamChunk::ToolUseStart {
                     id: format!("gemini-{name}-{block_index}"),
                     name,
                     block_index,
+                    opaque,
                 });
 
                 // Gemini sends complete calls rather than deltas, so the whole
@@ -495,6 +527,12 @@ fn parse_completion_response(data: serde_json::Value) -> Result<CompletionRespon
                         id: format!("gemini-{}", name),
                         name,
                         input: args,
+                        // Must be echoed back verbatim on the next request or
+                        // Gemini rejects the turn — see the streaming path.
+                        opaque: part
+                            .get("thoughtSignature")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
                     });
                 }
             }

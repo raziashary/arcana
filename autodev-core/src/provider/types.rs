@@ -35,6 +35,29 @@ pub enum MessageContent {
         id: String,
         name: String,
         input: serde_json::Value,
+        /// An opaque provider-issued token that must be echoed back verbatim.
+        ///
+        /// ── Why this field exists ────────────────────────────────────────────
+        ///
+        /// Gemini attaches a `thoughtSignature` to each `functionCall` it emits,
+        /// and **rejects the turn with a 400 if that signature is missing when
+        /// the call is replayed**:
+        ///
+        /// > Function call is missing a thought_signature in functionCall parts.
+        /// > This is required for tools to work correctly.
+        ///
+        /// We parsed the call and dropped the signature, so every multi-turn
+        /// Gemini tool conversation failed on the second request — and Gemini is
+        /// the primary provider for rollout 1. No fixture could have caught it:
+        /// the captured payloads predate the requirement, and they go on passing
+        /// forever. The live smoke (`P2-69`) found it on its second run.
+        ///
+        /// Deliberately opaque and deliberately generic. It is not named
+        /// `thought_signature` because the other two providers may well
+        /// introduce their own must-echo token, and the correct handling is
+        /// identical: carry it, echo it, never interpret it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        opaque: Option<String>,
     },
     ToolResult {
         tool_use_id: String,
@@ -114,6 +137,18 @@ pub struct CompletionResponse {
     pub model: String,
 }
 
+impl CompletionResponse {
+    /// Record this response'"'"'s usage into `out` and return the response.
+    ///
+    /// A small convenience with a specific purpose (`P2-66`): it makes it hard
+    /// to consume a response for its content while silently dropping what it
+    /// cost, which is exactly what compaction did.
+    pub fn usage_recorded(self, out: &mut crate::provider::usage::Usage) -> Self {
+        *out = self.usage.clone();
+        self
+    }
+}
+
 // ── Streaming ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,6 +173,13 @@ pub enum StreamChunk {
         id: String,
         name: String,
         block_index: u64,
+        /// The opaque echo token, when the provider issues one on the streaming
+        /// path. See `MessageContent::ToolUse::opaque` — Gemini rejects a
+        /// replayed call whose `thoughtSignature` is missing, and streaming is
+        /// the primary agent path, so it has to survive here as well as in the
+        /// unary response.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        opaque: Option<String>,
     },
     ToolInputDelta {
         block_index: u64,

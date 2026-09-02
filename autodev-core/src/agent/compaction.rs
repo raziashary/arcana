@@ -10,6 +10,24 @@
 use crate::provider::types::{MessageContent, RequestMessage};
 use tracing::info;
 
+/// Fraction of the context window at which the conversation is compacted.
+///
+/// ⚠ **A chosen number, not a measured one** (`P2-66`), and the trade it makes
+/// is asymmetric:
+///
+///   * Too LOW wastes money continuously — it throws away context the model
+///     could still hold, and pays for a summarisation call to do it.
+///   * Too HIGH fails the turn outright: the request overflows and the whole
+///     turn is lost, along with everything spent producing it.
+///
+/// 0.80 leaves a fifth of the window for the turn's own output plus the tool
+/// results it will accumulate before the next check, which is why the error is
+/// taken on the low side.
+///
+/// It became meaningfully safer in `P2-57`: this fraction was previously
+/// applied to a hardcoded 200,000 regardless of model, so on Gemini's 1M window
+/// it fired at **16% of the real capacity**. It now reads the model's actual
+/// window from the catalogue.
 const COMPACTION_THRESHOLD: f32 = 0.80;
 const KEEP_RECENT_MESSAGES: usize = 10;
 
@@ -75,13 +93,30 @@ impl CompactionEngine {
 
     /// Async LLM-based compaction — calls the provider to summarize middle messages.
     /// Falls back to truncation if the LLM call fails.
+    /// Summarise the middle of the conversation, returning the compacted
+    /// history **and what it cost** (`P2-66`).
+    ///
+    /// ── Why the usage comes back ─────────────────────────────────────────────
+    ///
+    /// This performs a real, billed `complete()` call, and its `usage` was
+    /// **discarded** — the response was consumed for its text and dropped. So
+    /// compaction spent money that never reached the cost tracker, never
+    /// counted toward the daily ceiling, and never appeared in analytics.
+    ///
+    /// It is not a rounding error. Compaction fires on long sessions, which are
+    /// the expensive ones, and it summarises the entire middle of the
+    /// conversation — the input side of this call is by construction most of a
+    /// context window.
+    ///
+    /// Returning the usage lets the caller fold it into the turn's total, which
+    /// is the only place with a whole-run view.
     pub async fn compact_with_summary(
         messages: Vec<RequestMessage>,
         provider: &dyn crate::provider::traits::Provider,
         model: &str,
-    ) -> Vec<RequestMessage> {
+    ) -> (Vec<RequestMessage>, crate::provider::usage::Usage) {
         if messages.len() <= KEEP_RECENT_MESSAGES + 1 {
-            return messages;
+            return (messages, crate::provider::usage::Usage::default());
         }
 
         let total = messages.len();
@@ -136,8 +171,10 @@ impl CompactionEngine {
         };
 
         // Try to get a summary from the LLM
+        let mut compaction_usage = crate::provider::usage::Usage::default();
         let summary_text = match provider.complete(summary_request).await {
             Ok(response) => response
+                .usage_recorded(&mut compaction_usage)
                 .content
                 .into_iter()
                 .find_map(|block| {
@@ -155,7 +192,9 @@ impl CompactionEngine {
                 }),
             Err(e) => {
                 info!("LLM summary failed ({e}), falling back to truncation");
-                return Self::compact_truncate(messages);
+                // No usage to report — the call did not complete. Truncation is
+                // free, which is the one good thing about this path.
+                return (Self::compact_truncate(messages), compaction_usage);
             }
         };
 
@@ -175,7 +214,7 @@ impl CompactionEngine {
             }],
         });
         compacted.extend_from_slice(&messages[keep_tail_start..]);
-        compacted
+        (compacted, compaction_usage)
     }
 
     /// Legacy alias — synchronous truncation only (used where async is unavailable).

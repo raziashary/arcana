@@ -98,7 +98,7 @@ impl AnthropicProvider {
                     .iter()
                     .map(|c| match c {
                         MessageContent::Text { text } => json!({ "type": "text", "text": text }),
-                        MessageContent::ToolUse { id, name, input } => json!({
+                        MessageContent::ToolUse { id, name, input, .. } => json!({
                             "type": "tool_use",
                             "id":   id,
                             "name": name,
@@ -362,6 +362,10 @@ fn parse_completion_response(data: serde_json::Value) -> Result<CompletionRespon
                 id: block["id"].as_str().unwrap_or("").to_string(),
                 name: block["name"].as_str().unwrap_or("").to_string(),
                 input: block["input"].clone(),
+                // Anthropic issues no echo token. `None` rather than an empty
+                // string: absent and empty are different, and a future provider
+                // could legitimately issue an empty one.
+                opaque: None,
             }),
             _ => None,
         })

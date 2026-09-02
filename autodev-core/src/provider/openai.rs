@@ -143,7 +143,7 @@ impl OpenAIProvider {
                 let tool_calls: Vec<serde_json::Value> = m.content.iter()
                     .enumerate()
                     .filter_map(|(_idx, c)| match c {
-                        MessageContent::ToolUse { id, name, input } => Some(json!({
+                        MessageContent::ToolUse { id, name, input, .. } => Some(json!({
                             "id": id,
                             "type": "function",
                             "function": {
@@ -474,6 +474,8 @@ fn parse_openai_chunk(v: &serde_json::Value) -> Result<Option<StreamChunk>> {
                             id: id.to_string(),
                             name: name.to_string(),
                             block_index: index,
+                            // OpenAI issues no echo token.
+                            opaque: None,
                         }));
                     }
                 }
@@ -575,7 +577,12 @@ fn parse_completion_response(data: serde_json::Value) -> Result<CompletionRespon
                 let args_str = func["arguments"].as_str().unwrap_or("{}");
                 let input = serde_json::from_str(args_str).unwrap_or_else(|_| json!({}));
 
-                content.push(MessageContent::ToolUse { id, name, input });
+                content.push(MessageContent::ToolUse {
+                    id,
+                    name,
+                    input,
+                    opaque: None,
+                });
             }
         }
     }

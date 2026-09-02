@@ -1570,20 +1570,29 @@ If 3 or fewer files: review directly. Do not spawn subagents.
 /// `repo_path` is the worker's reported repository root. Optional — when None
 /// the reviewer skips Phase 0 (analyze_diff) and Phase 4 (browser tests) and
 /// falls back to a workspace-scoped Phase 3 review.
-pub fn qc_reviewer_system_prompt(task_id: i64, repo_path: Option<&str>) -> String {
-    let repo_line = match repo_path {
-        Some(p) if !p.trim().is_empty() => format!("Repository under review: {p}\n"),
-        _ => "Repository: (none specified — operate on the current workspace)\n".to_string(),
-    };
-
-    format!(
-        r#"You are an AIRS QC Reviewer — an ephemeral subagent spawned by the AutoDev qc-dispatcher to review exactly ONE task.
-
-Task under review: #{task_id}
-{repo_line}
-Your scope is bounded:
-- Inspect task #{task_id} and ONLY task #{task_id}. Do NOT iterate the QC queue.
-- Call `get_task` with id=#{task_id} as your FIRST action to read the acceptance criteria.
+/// The QC review protocol — **byte-identical for every reviewer** (`P2-64`).
+///
+/// ── Why this is a `const` and not a `format!` ───────────────────────────────
+///
+/// This protocol used to be built with `task_id` interpolated at **offset ~120
+/// of a multi-KB prompt**, and stamped five more times below. The dispatcher
+/// runs up to six QC reviewers concurrently, so all six prompts were identical
+/// except for a handful of digits near the top — and a prefix cache matches on
+/// exact bytes from the start, so every one of those six prefixes was
+/// single-use.
+///
+/// That is not merely "caching does not help here". A cache WRITE is billed
+/// **above** the normal input rate (1.25x at the five-minute TTL), and a prefix
+/// that is never read back is a write with no read. Requesting caching in that
+/// shape makes the fleet cost **more** than not requesting it, on every run,
+/// and nothing in the response would say so.
+///
+/// The protocol is now constant and the per-run facts are appended after it, so
+/// six concurrent reviewers share one cache entry.
+const QC_REVIEWER_PROTOCOL: &str = r#"You are an AIRS QC Reviewer — an ephemeral subagent spawned by the AutoDev qc-dispatcher to review exactly ONE task.
+        Your scope is bounded:
+- Inspect ONLY the task named in "This run" at the end of this prompt. Do NOT iterate the QC queue.
+- Call `get_task` with that id as your FIRST action to read the acceptance criteria.
 - Make a binary decision: `done` (all criteria met, build passes, security clear) or `rejected` (specific failure with actionable fix).
 - After your decision, reply with text only and stop. Do not chain into another task.
 
@@ -1592,7 +1601,7 @@ Your scope is bounded:
 ## Phase 0 — Diff Risk Assessment (skip when no repo_path)
 
 If the task has a `repo_path` in metadata:
-1. Call `analyze_diff` with the repo_path, base_branch (default: "main"), head_branch (the task's branch or "HEAD"), AND `task_id={task_id}`. The task_id persists the analysis card on the task.
+1. Call `analyze_diff` with the repo_path, base_branch (default: "main"), head_branch (the task's branch or "HEAD"), AND that same `task_id`. The task_id persists the analysis card on the task.
 2. Read `risk_level`:
    - "critical" → reject immediately with rejection_reason explaining the risk. Skip Phases 1, 2, 3.
    - "high"     → proceed through every phase AND run all `suggested_checks` from the analysis.
@@ -1608,7 +1617,7 @@ Check the workspace for failure artifacts:
 - build_guard.log (dependency sentinel was missing).
 
 If evidence found, reject without reading implementation:
-  update_task_status({task_id}, 'rejected', assigned_worker,
+  update_task_status(<TASK_ID>, 'rejected', assigned_worker,
     rejection_reason=
       'CRITERION FAILED: Build must pass before QC.
        EXPECTED: validate command exits 0 with output artifact present.
@@ -1647,10 +1656,10 @@ See Domain Review Checklists below. Run every applicable check for the worker do
 
 ### 3d. Decide
 All criteria verified AND all domain checks pass:
-  update_task_status({task_id}, 'done', assigned_worker)
+  update_task_status(<TASK_ID>, 'done', assigned_worker)
 
 Any criterion unmet OR any check fails:
-  update_task_status({task_id}, 'rejected', assigned_worker, rejection_reason=<STRUCTURED REASON>)
+  update_task_status(<TASK_ID>, 'rejected', assigned_worker, rejection_reason=<STRUCTURED REASON>)
 
 ---
 
@@ -1799,7 +1808,31 @@ After your decision (done / rejected), reply with text-only and emit ZERO furthe
 - e2e_probe          — Phase 4 live smoke probe (REQUIRED before approval, Doc 09 T4.3)
 - check_file         — Inspect lint / imports / exports / api_contract for a file
 - update_task_status — Gate decision: 'done' or 'rejected'
-"#
+"#;
+
+/// Build the per-task system prompt for a `qc-reviewer-*` subagent.
+///
+/// `task_id` is the integer ID of the task awaiting review. `repo_path` is the
+/// worker's reported repository root; when `None` the reviewer skips Phase 0
+/// (analyze_diff) and Phase 4 (browser tests).
+///
+/// ⚠ **The per-run facts go LAST, and that ordering is load-bearing** (`P2-64`).
+/// Everything before them is byte-identical across reviewers and can be cached
+/// once; anything placed in front of the protocol would make the whole protocol
+/// single-use again. See `cache::prefix` for the same split applied to the
+/// main agent prompt.
+pub fn qc_reviewer_system_prompt(task_id: i64, repo_path: Option<&str>) -> String {
+    let repo_line = match repo_path {
+        Some(p) if !p.trim().is_empty() => format!("Repository under review: {p}"),
+        _ => "Repository: (none specified — operate on the current workspace)".to_string(),
+    };
+
+    format!(
+        "{QC_REVIEWER_PROTOCOL}\n\n---\n\n\
+         ## This run\n\n\
+         Task under review: #{task_id}\n\
+         {repo_line}\n\n\
+         Inspect this task and only this task.\n"
     )
 }
 
@@ -1992,5 +2025,94 @@ and emit ZERO further tool_use blocks.
 - e2e_probe          — Spawn processes + probe URL (CORE TOOL)
 - update_task_status — Mark the epic done / rejected / build_failed
 "#.into(),
+    }
+}
+
+
+#[cfg(test)]
+mod qc_prompt_cache_tests {
+    use super::*;
+    use crate::cache::prefix;
+
+    /// The six concurrent reviewers the dispatcher can run.
+    fn six_reviewers() -> Vec<String> {
+        (1..=6i64)
+            .map(|id| qc_reviewer_system_prompt(id, Some("/repo/autodev")))
+            .collect()
+    }
+
+    #[test]
+    fn six_concurrent_reviewers_share_one_cacheable_prefix() {
+        // P2-64, stated as the thing that actually matters.
+        //
+        // Before: `task_id` sat at offset ~120 of a multi-KB prompt, so all six
+        // prompts diverged within the first two lines and every prefix was
+        // single-use. A cache write is billed ABOVE the input rate, so
+        // requesting caching in that shape cost MORE than not requesting it —
+        // on every fleet run, with nothing in the response to say so.
+        let prompts = six_reviewers();
+
+        // The protocol is identical across all six...
+        for p in &prompts {
+            assert!(
+                p.starts_with(QC_REVIEWER_PROTOCOL),
+                "a reviewer prompt no longer opens with the shared protocol, so the \
+                 protocol is single-use again"
+            );
+        }
+
+        // ...and hashing the shared region gives ONE key for all six.
+        let hashes: std::collections::HashSet<u64> = prompts
+            .iter()
+            .map(|_| prefix::build(&[], QC_REVIEWER_PROTOCOL, &[], &[]).hash)
+            .collect();
+        assert_eq!(hashes.len(), 1, "the shared prefix must hash to a single key");
+
+        // The prompts themselves still differ — the per-run facts are present,
+        // just not in front of the protocol.
+        let whole: std::collections::HashSet<&String> = prompts.iter().collect();
+        assert_eq!(whole.len(), 6, "each reviewer must still be told its own task");
+    }
+
+    #[test]
+    fn the_per_run_facts_are_after_the_protocol_not_before_it() {
+        // The ordering IS the fix. A task id in front of the protocol makes
+        // every byte after it uncacheable, which is the whole defect.
+        let p = qc_reviewer_system_prompt(4242, Some("/repo/autodev"));
+
+        let id_at = p.find("4242").expect("the task id must still be present");
+        let protocol_len = QC_REVIEWER_PROTOCOL.len();
+
+        assert!(
+            id_at > protocol_len,
+            "the task id appears at byte {id_at}, inside the {protocol_len}-byte shared \
+             protocol — everything after it is uncacheable"
+        );
+        assert!(p.contains("/repo/autodev"), "the repo path must still be present");
+    }
+
+    #[test]
+    fn the_protocol_carries_no_interpolation_at_all() {
+        // A single leftover `{...}` placeholder would either fail to render or
+        // vary per run. Checked against the const itself so it cannot drift.
+        assert!(
+            !QC_REVIEWER_PROTOCOL.contains("{task_id}"),
+            "an interpolated task id in the shared protocol makes it single-use"
+        );
+        assert!(!QC_REVIEWER_PROTOCOL.contains("{repo_line}"));
+        assert!(!QC_REVIEWER_PROTOCOL.contains("{repo_path}"));
+    }
+
+    #[test]
+    fn the_shared_protocol_is_large_enough_to_be_worth_caching() {
+        // If the protocol were small, this whole exercise would be theatre —
+        // it would sit below every model's cache minimum and never cache
+        // regardless of ordering (P2-15/P2-65).
+        let tokens = prefix::estimate_tokens(QC_REVIEWER_PROTOCOL);
+        assert!(
+            tokens > 1_500,
+            "the shared protocol estimates at {tokens} tokens; below the minimums we \
+             ship, hoisting it buys nothing"
+        );
     }
 }

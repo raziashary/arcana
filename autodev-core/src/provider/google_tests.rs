@@ -237,3 +237,59 @@ fn an_empty_candidate_list_yields_nothing_rather_than_panicking() {
         .expect("parse")
         .is_empty());
 }
+
+
+#[test]
+fn a_tool_calls_thought_signature_survives_the_round_trip() {
+    // 🔴 Found live on 2026-09-02, and unfindable from fixtures alone.
+    //
+    // Gemini attaches a `thoughtSignature` to each `functionCall` part and
+    // REJECTS the next request with a 400 if it is missing when the call is
+    // replayed:
+    //
+    //   "Function call is missing a thought_signature in functionCall parts.
+    //    This is required for tools to work correctly."
+    //
+    // We parsed the call and dropped the signature, so every multi-turn Gemini
+    // tool conversation failed on its SECOND request — and Gemini is the
+    // primary provider for rollout 1. The captured payloads in this file
+    // predate the requirement, so they went on passing forever; only the live
+    // smoke could see it.
+    let chunks = parse_google_sse_line(&sse(
+        r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"read_file","args":{"path":"a.rs"}},"thoughtSignature":"CtEBAVKm-sig-xyz"}]}}]}"#,
+    ))
+    .expect("parse");
+
+    let start = chunks
+        .iter()
+        .find(|c| matches!(c, StreamChunk::ToolUseStart { .. }))
+        .expect("a ToolUseStart");
+    let StreamChunk::ToolUseStart { opaque, .. } = start else {
+        unreachable!()
+    };
+    assert_eq!(
+        opaque.as_deref(),
+        Some("CtEBAVKm-sig-xyz"),
+        "the signature must be captured, or the next request is rejected outright"
+    );
+}
+
+#[test]
+fn a_call_without_a_signature_is_still_parsed() {
+    // Not every functionCall carries one, and a missing signature must not
+    // drop the call — the model asked for a tool either way.
+    let chunks = parse_google_sse_line(&sse(
+        r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"grep","args":{"pattern":"fn"}}}]}}]}"#,
+    ))
+    .expect("parse");
+
+    let start = chunks
+        .iter()
+        .find(|c| matches!(c, StreamChunk::ToolUseStart { .. }))
+        .expect("the call must still be parsed");
+    let StreamChunk::ToolUseStart { opaque, name, .. } = start else {
+        unreachable!()
+    };
+    assert_eq!(name, "grep");
+    assert!(opaque.is_none(), "absent is not the same as empty");
+}

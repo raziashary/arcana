@@ -108,21 +108,34 @@ impl Tool for SpawnSubagentTool {
             input.get("task_context").and_then(|v| v.as_str()),
             input.get("system_prompt").and_then(|v| v.as_str()),
         ) {
+            // ── P2-64 · per-run facts go LAST, never first ────────────────
+            //
+            // `working_dir` used to sit at **offset 0** of every one of these,
+            // and it differs per run. A prefix cache matches on exact bytes
+            // from the start, so a differing first line makes everything after
+            // it uncacheable — including `DEFAULT_SUBAGENT_SYSTEM_PROMPT`,
+            // which is otherwise identical for every subagent ever spawned.
+            //
+            // A cache WRITE costs more than a normal input token, so requesting
+            // caching over a prefix that can never be read back does not merely
+            // fail to save — it adds cost to every call, silently.
             (Some(task_ctx), _) => format!(
-                "You are an AutoDev subagent. Working directory: {working_dir}.\n\
-                 Task context: {task_ctx}\n\
-                 Perform your assigned subtask and produce a structured summary."
+                "You are an AutoDev subagent. Perform your assigned subtask and \
+                 produce a structured summary.\n\n\
+                 [AUTODEV WORKSPACE]\nworking_dir: {working_dir}\n\
+                 Task context: {task_ctx}"
             ),
             (None, Some(sp)) => format!(
-                "[AUTODEV WORKSPACE]\nworking_dir: {working_dir}\n\
+                "{sp}\n\n\
+                 [AUTODEV WORKSPACE]\nworking_dir: {working_dir}\n\
                  All file operations MUST be resolved relative to this absolute path \
-                 unless an explicit absolute path is provided.\n\n{sp}"
+                 unless an explicit absolute path is provided."
             ),
             (None, None) => format!(
-                "[AUTODEV WORKSPACE]\nworking_dir: {working_dir}\n\
+                "{DEFAULT_SUBAGENT_SYSTEM_PROMPT}\n\n\
+                 [AUTODEV WORKSPACE]\nworking_dir: {working_dir}\n\
                  All file operations MUST be resolved relative to this absolute path \
-                 unless an explicit absolute path is provided.\n\n\
-                 {DEFAULT_SUBAGENT_SYSTEM_PROMPT}"
+                 unless an explicit absolute path is provided."
             ),
         };
 
