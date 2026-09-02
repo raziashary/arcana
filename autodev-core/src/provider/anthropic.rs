@@ -16,6 +16,7 @@ use super::types::{
     CompletionRequest, CompletionResponse, MessageContent, ModelInfo, ProviderStatus, StreamChunk,
 };
 use crate::errors::{AutoDevError, Result};
+use crate::state::lock::LockTolerant;
 
 const ANTHROPIC_API_BASE: &str = "https://api.anthropic.com/v1";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -281,7 +282,7 @@ impl Provider for AnthropicProvider {
             .map(move |bytes_result| -> Result<Vec<StreamChunk>> {
                 let bytes = bytes_result.map_err(AutoDevError::Http)?;
                 let text = String::from_utf8_lossy(&bytes);
-                let mut buf = buffer.lock().unwrap();
+                let mut buf = buffer.lock_tolerant();
                 buf.push_str(&text);
                 let mut chunks = Vec::new();
                 // Only parse complete lines — leave any trailing partial line in the buffer.

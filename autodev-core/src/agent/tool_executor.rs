@@ -19,6 +19,7 @@ use crate::events::{
 use crate::hooks::{HookContext, HookRegistry, HookType, ToolCallContext};
 use crate::session::manager::SessionManager;
 use crate::session::types::Message;
+use crate::state::lock::LockTolerant;
 
 // Max concurrent read-only tools (Claude Code uses 10)
 const MAX_CONCURRENT_READ_TOOLS: usize = 10;
@@ -538,7 +539,7 @@ impl ToolExecutor {
     ) -> Result<bool> {
         let (tx, rx) = oneshot::channel::<PermissionResponse>();
         {
-            let mut pending = self.pending.lock().unwrap();
+            let mut pending = self.pending.lock_tolerant();
             pending.insert(call_id.to_string(), tx);
         }
 

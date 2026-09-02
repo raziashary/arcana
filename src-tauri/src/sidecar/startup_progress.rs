@@ -27,6 +27,7 @@ use std::sync::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tracing::{debug, info};
+use autodev_core::state::lock::LockTolerant;
 
 /// Tauri event name the frontend listens for.
 pub const EVT_STARTUP_PROGRESS: &str = "startup:progress";
@@ -138,7 +139,7 @@ impl StartupProgress {
     /// Advance the state machine to `target` if it would move strictly forward.
     /// Idempotent: calling with a ≤ current phase is a no-op.
     pub fn advance(&self, target: StartupPhase) {
-        let mut cur = self.current.lock().unwrap();
+        let mut cur = self.current.lock_tolerant();
         if target <= *cur && target != StartupPhase::Init {
             // Allow Init to fire once as the initial event even though it's
             // the stored default.
@@ -166,7 +167,7 @@ impl StartupProgress {
 
     /// Current phase (mostly useful for tests and debugging).
     pub fn current(&self) -> StartupPhase {
-        *self.current.lock().unwrap()
+        *self.current.lock_tolerant()
     }
 
     /// Snapshot of the current phase as a frontend-ready payload.

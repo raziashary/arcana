@@ -13,6 +13,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::State;
+use autodev_core::state::lock::LockTolerant;
 
 // ─── Backup helpers ────────────────────────────────────────────────────────────
 
@@ -200,7 +201,7 @@ pub async fn generate_recipe_yaml(
     use crate::provider::types::{CompletionRequest, MessageContent, RequestMessage};
 
     let (provider_id, model) = {
-        let s = state.lock().unwrap();
+        let s = state.lock_tolerant();
         let p = s
             .active_provider
             .clone()

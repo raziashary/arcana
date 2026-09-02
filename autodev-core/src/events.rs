@@ -23,6 +23,7 @@
 
 use serde::Serialize;
 use std::sync::{Arc, OnceLock};
+use crate::state::lock::LockTolerant;
 
 /// A host that can deliver events to a user interface.
 ///
@@ -520,7 +521,7 @@ mod tests {
 
     impl EventSink for Recorder {
         fn emit(&self, name: &str, payload: serde_json::Value) {
-            self.seen.lock().unwrap().push((name.to_string(), payload));
+            self.seen.lock_tolerant().push((name.to_string(), payload));
         }
     }
 
@@ -543,7 +544,7 @@ mod tests {
         let rec = Arc::new(Recorder::default());
         rec.emit("tool:start", serde_json::json!({"tool": "bash"}));
 
-        let seen = rec.seen.lock().unwrap();
+        let seen = rec.seen.lock_tolerant();
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0].0, "tool:start");
         assert_eq!(seen[0].1["tool"], "bash");

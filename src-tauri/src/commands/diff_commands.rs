@@ -12,10 +12,11 @@ use crate::provider::openai::OpenAIProvider;
 use crate::provider::traits::Provider;
 use crate::state::AppState;
 use crate::vault::keychain::{provider_key, VaultManager};
+use autodev_core::state::lock::LockTolerant;
 
 fn build_analyzer(state: &Arc<Mutex<AppState>>) -> Result<DiffAnalyzer> {
     let (provider_id, model) = {
-        let s = state.lock().unwrap();
+        let s = state.lock_tolerant();
         let p = s
             .active_provider
             .clone()

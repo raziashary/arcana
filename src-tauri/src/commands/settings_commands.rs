@@ -12,6 +12,7 @@ use crate::vault::keychain::{provider_key, VaultManager};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use tauri::State;
+use autodev_core::state::lock::LockTolerant;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProviderInfo {
@@ -95,7 +96,7 @@ pub fn set_active_provider(
     autodev_core::db::app_settings::set(ACTIVE_PROVIDER_KEY, &provider)?;
     autodev_core::db::app_settings::set(ACTIVE_MODEL_KEY, &model)?;
 
-    let mut s = state.lock().unwrap();
+    let mut s = state.lock_tolerant();
     s.active_provider = Some(provider);
     s.active_model = Some(model);
     Ok(())
@@ -135,7 +136,7 @@ pub fn hydrate_active_provider(state: &Arc<Mutex<AppState>>) {
         return;
     }
 
-    let mut s = state.lock().unwrap();
+    let mut s = state.lock_tolerant();
     s.active_provider = Some(provider);
     s.active_model = Some(model);
 }
@@ -144,7 +145,7 @@ pub fn hydrate_active_provider(state: &Arc<Mutex<AppState>>) {
 pub fn get_active_provider(
     state: State<'_, Arc<Mutex<AppState>>>,
 ) -> Result<Option<(String, String)>> {
-    let s = state.lock().unwrap();
+    let s = state.lock_tolerant();
     match (&s.active_provider, &s.active_model) {
         (Some(p), Some(m)) => Ok(Some((p.clone(), m.clone()))),
         _ => Ok(None),
@@ -153,13 +154,13 @@ pub fn get_active_provider(
 
 #[tauri::command]
 pub fn get_cost_today(state: State<'_, Arc<Mutex<AppState>>>) -> Result<(f64, u64, u64)> {
-    let mut s = state.lock().unwrap();
+    let mut s = state.lock_tolerant();
     Ok((s.cost_today(), s.tokens_in_today, s.tokens_out_today))
 }
 
 #[tauri::command]
 pub fn get_system_prompt(state: State<'_, Arc<Mutex<AppState>>>) -> Result<Option<String>> {
-    let s = state.lock().unwrap();
+    let s = state.lock_tolerant();
     Ok(s.system_prompt_override.clone())
 }
 
@@ -168,7 +169,7 @@ pub fn set_system_prompt(
     prompt: Option<String>,
     state: State<'_, Arc<Mutex<AppState>>>,
 ) -> Result<()> {
-    let mut s = state.lock().unwrap();
+    let mut s = state.lock_tolerant();
     s.system_prompt_override = prompt
         .map(|p| p.trim().to_string())
         .filter(|p| !p.is_empty());

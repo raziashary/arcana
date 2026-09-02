@@ -45,6 +45,7 @@ use crate::recipes::types::Recipe;
 use crate::session::manager::SessionManager;
 use crate::state::AppState;
 use crate::vault::keychain::{provider_key, VaultManager};
+use crate::state::lock::LockTolerant;
 
 /// Initial trigger message sent to the worker agent at each cron execution.
 const RECIPE_TRIGGER: &str =
@@ -177,7 +178,7 @@ impl RecipeRunner {
             .filter(|m| !m.is_empty());
 
         let model = {
-            let s = self.state.lock().unwrap();
+            let s = self.state.lock_tolerant();
             worker_model
                 .or_else(|| recipe.model.clone())
                 .unwrap_or_else(|| {
@@ -453,7 +454,7 @@ impl RecipeRunner {
                                 // reads `cost_today_usd`) reflects Mode 2 spend
                                 // alongside Mode 1 PA spend.
                                 {
-                                    let mut s = self.state.lock().unwrap();
+                                    let mut s = self.state.lock_tolerant();
                                     s.add_cost(cost_usd, tokens_in, tokens_out);
                                 }
                                 // Persist into the analytics DB so the Dashboard's
@@ -494,7 +495,7 @@ impl RecipeRunner {
                                 // rather than waiting for the 60s polling fallback.
                                 // Through cost_today(), not the field: a direct read returns
                                 // yesterday's figure on the first look after midnight.
-                                let total_today = self.state.lock().unwrap().cost_today();
+                                let total_today = self.state.lock_tolerant().cost_today();
                                 crate::events::emit_cost_update(crate::events::CostUpdatePayload {
                                     session_id: format!("mode2:{}", worker_slug),
                                     tokens_in,
@@ -694,7 +695,7 @@ impl RecipeRunner {
         // Provider + API key are resolved here (only when Mode 2 is unavailable)
         // so that Mode 2-only setups do not require a Rust provider to be configured.
         let provider_id = {
-            let s = self.state.lock().unwrap();
+            let s = self.state.lock_tolerant();
             s.active_provider.clone()
         };
 

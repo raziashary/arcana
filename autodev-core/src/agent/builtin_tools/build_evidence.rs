@@ -19,6 +19,7 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
+use crate::state::lock::LockTolerant;
 
 /// Build evidence stays in the tracker for 15 minutes. Long enough for a
 /// worker tick (build → write artefact → smoke → commit → status update),
@@ -176,7 +177,7 @@ pub fn record(session_id: &str, command: &str, exit_code: i32) {
         recorded_at: Instant::now(),
         kind,
     };
-    let mut map = ring().lock().unwrap();
+    let mut map = ring().lock_tolerant();
     map.entry(session_id.to_string())
         .or_default()
         .push(evidence);
@@ -187,7 +188,7 @@ pub fn record(session_id: &str, command: &str, exit_code: i32) {
 /// side effect.
 pub fn most_recent_build(session_id: &str) -> Option<BuildEvidence> {
     let now = Instant::now();
-    let mut map = ring().lock().unwrap();
+    let mut map = ring().lock_tolerant();
     let Some(entries) = map.get_mut(session_id) else {
         return None;
     };
@@ -202,7 +203,7 @@ pub fn most_recent_build(session_id: &str) -> Option<BuildEvidence> {
 /// Return the most-recent smoke evidence for a session.
 pub fn most_recent_smoke(session_id: &str) -> Option<BuildEvidence> {
     let now = Instant::now();
-    let mut map = ring().lock().unwrap();
+    let mut map = ring().lock_tolerant();
     let Some(entries) = map.get_mut(session_id) else {
         return None;
     };

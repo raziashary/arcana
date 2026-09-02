@@ -9,6 +9,7 @@ use tracing::info;
 use super::loader::SkillLoader;
 use super::types::{Skill, SkillCategory, SkillSummary};
 use crate::errors::{AutoDevError, Result};
+use autodev_core::state::lock::RwLockTolerant;
 
 #[derive(Debug, Default)]
 struct RegistryInner {
@@ -33,7 +34,7 @@ impl SkillRegistry {
         let loaded = loader.load_all();
         let count = loaded.len();
 
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write_tolerant();
         inner.skills.clear();
         for skill in loaded {
             inner.skills.insert(skill.name.clone(), skill);
@@ -90,13 +91,13 @@ impl SkillRegistry {
 
     /// Total count of loaded skills.
     pub fn count(&self) -> usize {
-        self.inner.read().unwrap().skills.len()
+        self.inner.read_tolerant().skills.len()
     }
 
     /// Return names grouped by category (for palette sidebar).
     pub fn by_category(&self) -> HashMap<String, Vec<SkillSummary>> {
         let mut map: HashMap<String, Vec<SkillSummary>> = HashMap::new();
-        for skill in self.inner.read().unwrap().skills.values() {
+        for skill in self.inner.read_tolerant().skills.values() {
             map.entry(skill.category.as_str().to_string())
                 .or_default()
                 .push(SkillSummary::from(skill));

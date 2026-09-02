@@ -30,7 +30,7 @@ pub async fn send_message(
 ) -> Result<String> {
     // Resolve active provider + model from app state
     let (provider_id, model) = {
-        let s = state.lock().unwrap();
+        let s = state.lock_tolerant();
         let p = s
             .active_provider
             .clone()
@@ -59,7 +59,7 @@ pub async fn send_message(
 
     // Register agent as running in app state
     {
-        let mut s = state.lock().unwrap();
+        let mut s = state.lock_tolerant();
         s.agents.insert(
             session_id.clone(),
             crate::state::app_state::ActiveAgent {
@@ -107,7 +107,7 @@ pub async fn send_message(
 
     // Capture system prompt override before spawning
     let system_prompt_override = {
-        let s = state.lock().unwrap();
+        let s = state.lock_tolerant();
         s.system_prompt_override.clone()
     };
 
@@ -132,18 +132,32 @@ pub async fn send_message(
     };
 
     tokio::spawn(async move {
-        // Create provider based on provider_id
-        let inner: Arc<dyn Provider> = match provider_id_c.as_str() {
-            "anthropic" => Arc::new(AnthropicProvider::new(api_key)),
-            "openai" => Arc::new(OpenAIProvider::new(api_key)),
-            "google" => Arc::new(GoogleProvider::new(api_key)),
-            _ => {
-                tracing::error!("Unsupported provider: {}", provider_id_c);
+        // ⚠ P3-05. This `match` was a sixth copy of the provider ladder, and
+        // its `_ =>` arm **returned without emitting any terminal event** — so
+        // an unsupported provider left the UI spinning forever on a task that
+        // was already dead. `TG3-01` names "unsupported provider" as one of the
+        // exit paths that must emit exactly one terminal event.
+        //
+        // Built through the shared factory, which also applies the daily
+        // ceiling (P2-21) rather than each caller remembering to wrap.
+        let provider = match autodev_core::provider::factory::build(&provider_id_c, api_key) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("Unsupported provider {provider_id_c}: {e}");
+                autodev_core::events::emit_agent_error(
+                    autodev_core::events::AgentErrorPayload {
+                        session_id: session_id_c.clone(),
+                        message: format!("Unsupported provider: {provider_id_c}"),
+                    },
+                );
+                let mut s = state_clone.lock_tolerant();
+                if let Some(agent) = s.agents.get_mut(&session_id_c) {
+                    agent.is_running = false;
+                    agent.cancel_flag = false;
+                }
                 return;
             }
         };
-        // Every call passes the daily ceiling (P2-21).
-        let provider = autodev_core::provider::capped::CappedProvider::wrap(inner, state_clone.clone());
 
         let engine = AgentEngine::new(
             provider,
@@ -157,23 +171,77 @@ pub async fn send_message(
         )
         .with_session_manager(session_mgr_clone.clone());
 
-        let result = engine
-            .run(
+        // ── P3-02/P3-03 · the turn is contained, and the flag always clears ──
+        //
+        // `is_running` was cleared *after* the await. A panic inside the turn
+        // therefore skipped it and left the session permanently marked running:
+        // the user could never start another turn in that session, and nothing
+        // said why.
+        //
+        // The guard clears it on **every** unwind path, including a panic,
+        // because `Drop` runs during unwinding. It is deliberately a guard
+        // rather than a line after `catch_unwind` — the latter is one early
+        // `return` away from being skipped again.
+        struct RunningGuard {
+            state: std::sync::Arc<std::sync::Mutex<autodev_core::state::AppState>>,
+            session_id: String,
+        }
+        impl Drop for RunningGuard {
+            fn drop(&mut self) {
+                let mut s = self.state.lock_tolerant();
+                if let Some(agent) = s.agents.get_mut(&self.session_id) {
+                    agent.is_running = false;
+                    agent.cancel_flag = false;
+                }
+            }
+        }
+        let _running = RunningGuard {
+            state: state_clone.clone(),
+            session_id: session_id_c.clone(),
+        };
+
+        // `catch_unwind` contains a panicking tool or provider to THIS turn.
+        //
+        // ⚠ It is necessary and not sufficient. Unwinding is already on (see
+        // `P3-01` — the `panic = "abort"` everyone believed was in force was in
+        // a file Cargo discards), so a panic already failed only this task. What
+        // it also did was **poison every mutex the panicking thread held**, and
+        // this codebase had 98 `.lock().unwrap()` sites: one panic became a
+        // cascade of unrelated panics at every later lock. `P3-03`'s
+        // `lock_tolerant` is the other half.
+        //
+        // `AssertUnwindSafe` is required because `&mut` state crosses the
+        // boundary. That is sound here precisely because of `lock_tolerant`:
+        // the state is readable after a panic by design, and the fields it
+        // holds carry no cross-field invariant a half-finished turn could break.
+        let result = match futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(
+            engine.run(
                 &session_id_c,
                 &working_dir_c,
                 &model_c,
                 history,
                 &user_msg_c,
                 system_prompt_override.as_deref(),
-            )
-            .await;
+            ),
+        ))
+        .await
+        {
+            Ok(r) => r,
+            Err(panic) => {
+                // The panic payload is usually a `&str` or `String`; anything
+                // else is reported as such rather than dropped.
+                let detail = panic
+                    .downcast_ref::<&str>()
+                    .map(|s| (*s).to_string())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "non-string panic payload".to_string());
 
-        // Clear running flag
-        let mut s = state_clone.lock().unwrap();
-        if let Some(agent) = s.agents.get_mut(&session_id_c) {
-            agent.is_running = false;
-            agent.cancel_flag = false;
-        }
+                tracing::error!("Agent turn panicked and was contained: {detail}");
+                Err(autodev_core::errors::AutoDevError::Agent(format!(
+                    "The turn failed unexpectedly and was contained: {detail}"
+                )))
+            }
+        };
 
         match result {
             Ok(updated_history) => {
@@ -229,7 +297,7 @@ pub async fn send_message(
 /// Cancel a running agent session.
 #[tauri::command]
 pub fn cancel_agent(session_id: String, state: State<'_, Arc<Mutex<AppState>>>) -> Result<()> {
-    let mut s = state.lock().unwrap();
+    let mut s = state.lock_tolerant();
     s.cancel_agent(&session_id);
     Ok(())
 }
@@ -246,7 +314,7 @@ pub fn respond_to_permission(
         "allow_always" => PermissionResponse::AllowAlways,
         _ => PermissionResponse::Deny,
     };
-    let mut pending = pending_perms.lock().unwrap();
+    let mut pending = pending_perms.lock_tolerant();
     if let Some(tx) = pending.remove(&call_id) {
         info!("Permission granted call_id={call_id} response={response}");
         let _ = tx.send(perm_response);
@@ -257,6 +325,7 @@ pub fn respond_to_permission(
 }
 
 use crate::provider::types::{MessageContent, RequestMessage};
+use autodev_core::state::lock::LockTolerant;
 
 fn build_history(messages: &[Message]) -> Vec<RequestMessage> {
     use crate::session::types::MessageRole;

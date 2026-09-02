@@ -38,6 +38,7 @@ use crate::state::app_state::AppState;
 use crate::vault::keychain::{provider_key, VaultManager};
 
 use super::types::{SubagentConfig, SubagentEvent, SubagentResult, SubagentStatus};
+use crate::state::lock::LockTolerant;
 
 /// What the runner needs from the application to stand up a child engine.
 ///
@@ -153,7 +154,7 @@ async fn run_inner(
     events_tx: &mpsc::UnboundedSender<SubagentEvent>,
 ) -> Result<String> {
     let (provider_id, fallback_model) = {
-        let s = deps.state.lock().unwrap();
+        let s = deps.state.lock_tolerant();
         (s.active_provider.clone(), s.active_model.clone())
     };
     let provider_id = provider_id.ok_or_else(|| {

@@ -19,6 +19,7 @@ use super::runner::RecipeRunner;
 use crate::db::workers::WorkersDb;
 use crate::errors::{AutoDevError, Result};
 use crate::recipes::parser::load_recipe_by_id;
+use crate::state::lock::LockTolerant;
 
 // ─── RecipeScheduler ──────────────────────────────────────────────────────────
 
@@ -336,7 +337,7 @@ impl RecipeScheduler {
 
     /// Stop all running worker schedules (called on app shutdown).
     pub fn stop_all(&self) {
-        let mut handles = self.handles.lock().unwrap();
+        let mut handles = self.handles.lock_tolerant();
         for (slug, handle) in handles.drain() {
             handle.abort();
             info!("[RecipeScheduler] Aborted schedule for worker '{}'", slug);
@@ -345,12 +346,12 @@ impl RecipeScheduler {
 
     /// Returns the slugs of currently-scheduled workers.
     pub fn active_workers(&self) -> Vec<String> {
-        self.handles.lock().unwrap().keys().cloned().collect()
+        self.handles.lock_tolerant().keys().cloned().collect()
     }
 
     /// Check if a specific worker has an active schedule.
     pub fn is_running(&self, worker_slug: &str) -> bool {
-        self.handles.lock().unwrap().contains_key(worker_slug)
+        self.handles.lock_tolerant().contains_key(worker_slug)
     }
 
     // ── Push-based kick (Phase 3.0 R1) ────────────────────────────────────────
@@ -380,7 +381,7 @@ impl RecipeScheduler {
         // is in flight, but it is no longer the ordering primitive.
         let slug_for_inflight = worker_slug.to_string();
         {
-            let mut inflight = kick_inflight().lock().unwrap();
+            let mut inflight = kick_inflight().lock_tolerant();
             if !inflight.insert(slug_for_inflight.clone()) {
                 info!(
                     "[RecipeScheduler] kick_worker('{}'): skipped (another \
@@ -403,7 +404,7 @@ impl RecipeScheduler {
         impl Drop for KickGuard {
             fn drop(&mut self) {
                 if !self.committed {
-                    kick_inflight().lock().unwrap().remove(&self.slug);
+                    kick_inflight().lock_tolerant().remove(&self.slug);
                 }
             }
         }
@@ -494,7 +495,7 @@ impl RecipeScheduler {
                 );
             }
             // Free the kick slot so the next push-based kick can fire.
-            kick_inflight().lock().unwrap().remove(&slug);
+            kick_inflight().lock_tolerant().remove(&slug);
         });
         // The spawned task now owns the responsibility for clearing the
         // kick_inflight entry; mark the guard committed so its Drop doesn't
@@ -505,7 +506,7 @@ impl RecipeScheduler {
     // ── Internal helpers ──────────────────────────────────────────────────────
 
     fn abort_worker_task(&self, worker_slug: &str) {
-        if let Some(handle) = self.handles.lock().unwrap().remove(worker_slug) {
+        if let Some(handle) = self.handles.lock_tolerant().remove(worker_slug) {
             handle.abort();
             info!(
                 "[RecipeScheduler] Aborted previous task for worker '{}'",

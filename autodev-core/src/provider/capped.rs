@@ -28,6 +28,7 @@ use super::types::{CompletionRequest, CompletionResponse, ModelInfo, ProviderSta
 use crate::budget::daily::{CapState, DailyCap};
 use crate::errors::{AutoDevError, Result};
 use crate::state::app_state::AppState;
+use crate::state::lock::LockTolerant;
 
 /// Wraps any provider so no call proceeds past the daily ceiling.
 pub struct CappedProvider {
@@ -68,7 +69,7 @@ impl CappedProvider {
     fn check(&self) -> Result<()> {
         let cap = DailyCap::load();
         let spent = {
-            let mut s = self.state.lock().unwrap();
+            let mut s = self.state.lock_tolerant();
             s.cost_today()
         };
 

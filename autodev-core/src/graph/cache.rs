@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use crate::state::lock::LockTolerant;
 
 #[derive(Debug, Clone)]
 pub struct CacheEntry<T> {
@@ -30,7 +31,7 @@ impl<T: Clone> QueryCache<T> {
     }
 
     pub fn get(&self, key: &str) -> Option<T> {
-        let mut cache = self.cache.lock().unwrap();
+        let mut cache = self.cache.lock_tolerant();
 
         if let Some(entry) = cache.get_mut(key) {
             // Check if expired
@@ -49,7 +50,7 @@ impl<T: Clone> QueryCache<T> {
     }
 
     pub fn set(&self, key: String, data: T) {
-        let mut cache = self.cache.lock().unwrap();
+        let mut cache = self.cache.lock_tolerant();
 
         // Evict LRU entry if at capacity
         if cache.len() >= self.max_entries && !cache.contains_key(&key) {
@@ -73,22 +74,22 @@ impl<T: Clone> QueryCache<T> {
     }
 
     pub fn invalidate(&self, key: &str) {
-        let mut cache = self.cache.lock().unwrap();
+        let mut cache = self.cache.lock_tolerant();
         cache.remove(key);
     }
 
     pub fn clear(&self) {
-        let mut cache = self.cache.lock().unwrap();
+        let mut cache = self.cache.lock_tolerant();
         cache.clear();
     }
 
     pub fn size(&self) -> usize {
-        let cache = self.cache.lock().unwrap();
+        let cache = self.cache.lock_tolerant();
         cache.len()
     }
 
     pub fn stats(&self) -> CacheStats {
-        let cache = self.cache.lock().unwrap();
+        let cache = self.cache.lock_tolerant();
         let total_hits: u32 = cache.values().map(|e| e.hit_count).sum();
         let avg_hits = if cache.is_empty() {
             0.0

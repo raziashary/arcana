@@ -27,6 +27,7 @@ use crate::provider::types::{CompletionRequest, MessageContent, RequestMessage, 
 use crate::session::manager::SessionManager;
 use crate::state::AppState;
 use crate::provider::usage::{StopReason, Usage};
+use crate::state::lock::LockTolerant;
 
 const MAX_TOOL_TURNS: usize = 20;
 
@@ -123,7 +124,7 @@ impl AgentEngine {
         system_prompt_override: Option<&str>,
     ) -> Result<Vec<RequestMessage>> {
         // Check for cancellation before starting
-        if self.state.lock().unwrap().is_cancelled(session_id) {
+        if self.state.lock_tolerant().is_cancelled(session_id) {
             return Err(AutoDevError::Agent(
                 "Agent was cancelled before start".into(),
             ));
@@ -380,7 +381,7 @@ impl AgentEngine {
             }
 
             // Cancel check
-            if self.state.lock().unwrap().is_cancelled(session_id) {
+            if self.state.lock_tolerant().is_cancelled(session_id) {
                 info!("Agent cancelled during turn {turn}");
                 break;
             }
@@ -1031,7 +1032,7 @@ impl AgentEngine {
         };
 
         let total_today = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock_tolerant();
             state.add_cost(cost_usd, total_usage.total_input(), total_usage.output);
             state.cost_today_usd
         };

@@ -23,6 +23,7 @@ use crate::db::tasks::TasksDb;
 use crate::recipes::defaults::qc_reviewer_system_prompt;
 use crate::subagent::pool::QC_DISPATCHER_SLUG;
 use crate::subagent::{self, SubagentConfig, SubagentStatus};
+use crate::state::lock::LockTolerant;
 
 pub struct SpawnQcReviewTool;
 
@@ -366,6 +367,7 @@ fn record_analytics_event(
 // under the cap just because their realised costs aren't in yet.
 
 mod qc_cost_guard {
+    use crate::state::lock::LockTolerant;
     use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
 
@@ -389,7 +391,7 @@ mod qc_cost_guard {
     }
 
     fn current_sum(now: Instant) -> f64 {
-        let mut g = ring().lock().unwrap();
+        let mut g = ring().lock_tolerant();
         g.retain(|e| now.duration_since(e.at) < WINDOW);
         g.iter().map(|e| e.cost).sum()
     }
@@ -408,7 +410,7 @@ mod qc_cost_guard {
                  Reviewer not spawned — wait for in-flight reviewers to complete."
             ));
         }
-        let mut g = ring().lock().unwrap();
+        let mut g = ring().lock_tolerant();
         g.push(Entry {
             at: now,
             cost: PROVISIONAL_COST_USD,
@@ -422,7 +424,7 @@ mod qc_cost_guard {
     /// dispatches, so we simply pop one provisional entry (any one) and push
     /// the real cost. Over a busy window this self-corrects.
     pub fn record_dispatch_complete(realised_cost: f64) {
-        let mut g = ring().lock().unwrap();
+        let mut g = ring().lock_tolerant();
         // Pop the oldest provisional entry if present.
         if let Some(idx) = g
             .iter()

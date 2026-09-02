@@ -45,6 +45,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
+use crate::state::lock::LockTolerant;
 
 type Registry = StdMutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>;
 
@@ -94,7 +95,7 @@ pub fn lock_key(target: &Path, working_dir: &str) -> PathBuf {
 /// registry contention to microseconds even under heavy fleet write load.
 pub async fn acquire_owned(key: &Path) -> OwnedMutexGuard<()> {
     let lock: Arc<AsyncMutex<()>> = {
-        let mut reg = registry().lock().unwrap();
+        let mut reg = registry().lock_tolerant();
         if let Some(existing) = reg.get(key) {
             existing.clone()
         } else {

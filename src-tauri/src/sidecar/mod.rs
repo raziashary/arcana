@@ -50,7 +50,7 @@ fn new_stderr_tail() -> StderrTail {
 }
 
 fn push_stderr_line(tail: &StderrTail, line: String) {
-    let mut q = tail.lock().unwrap();
+    let mut q = tail.lock_tolerant();
     if q.len() >= STDERR_TAIL_LEN {
         q.pop_front();
     }
@@ -59,6 +59,7 @@ fn push_stderr_line(tail: &StderrTail, line: String) {
 
 use crate::errors::{AutoDevError, Result};
 use startup_progress::{StartupPhase, StartupProgress};
+use autodev_core::state::lock::LockTolerant;
 
 /// Environment variables that belong to the Python sidecars and MUST NOT be
 /// inherited from AutoDev's parent process. The parent's dotenvy loads
@@ -459,7 +460,7 @@ impl SidecarManager {
             "memory-mcp-server" => &self.memory_stderr_tail,
             _ => return Vec::new(),
         };
-        let q = tail.lock().unwrap();
+        let q = tail.lock_tolerant();
         q.iter().cloned().collect()
     }
 
@@ -467,11 +468,11 @@ impl SidecarManager {
     /// Tauri AppHandle is available. Safe to call multiple times — replaces the
     /// previous tracker.
     pub fn set_progress(&self, progress: Arc<StartupProgress>) {
-        *self.progress.lock().unwrap() = Some(progress);
+        *self.progress.lock_tolerant() = Some(progress);
     }
 
     fn progress(&self) -> Option<Arc<StartupProgress>> {
-        self.progress.lock().unwrap().clone()
+        self.progress.lock_tolerant().clone()
     }
 
     // ─── memory-mcp-server lifecycle ───────────────────────────────────────────
@@ -481,12 +482,12 @@ impl SidecarManager {
     /// Must be called (and healthy) before `start()` for core-orchestrator.
     pub fn start_memory(&self, cwd: &PathBuf) -> Result<()> {
         {
-            let s = self.memory_status.lock().unwrap();
+            let s = self.memory_status.lock_tolerant();
             if matches!(*s, SidecarStatus::Running | SidecarStatus::Starting) {
                 return Ok(());
             }
         }
-        *self.memory_status.lock().unwrap() = SidecarStatus::Starting;
+        *self.memory_status.lock_tolerant() = SidecarStatus::Starting;
         info!(
             "[SidecarManager] Spawning memory-mcp-server from: {}",
             cwd.display()
@@ -551,23 +552,23 @@ impl SidecarManager {
             );
         }
 
-        *self.memory_process.lock().unwrap() = Some(child);
+        *self.memory_process.lock_tolerant() = Some(child);
         info!("[SidecarManager] memory-mcp-server spawned; awaiting health check on :8000");
         Ok(())
     }
 
     /// Terminate memory-mcp-server.
     pub fn stop_memory(&self) {
-        if let Some(mut child) = self.memory_process.lock().unwrap().take() {
+        if let Some(mut child) = self.memory_process.lock_tolerant().take() {
             let _ = child.kill();
             info!("[SidecarManager] memory-mcp-server terminated");
         }
-        *self.memory_status.lock().unwrap() = SidecarStatus::Stopped;
+        *self.memory_status.lock_tolerant() = SidecarStatus::Stopped;
     }
 
     /// Mark memory-mcp-server as healthy (call after /health probe passes).
     pub fn mark_memory_running(&self) {
-        *self.memory_status.lock().unwrap() = SidecarStatus::Running;
+        *self.memory_status.lock_tolerant() = SidecarStatus::Running;
         info!("[SidecarManager] memory-mcp-server is ready on :8000");
         if let Some(p) = self.progress() {
             p.advance(StartupPhase::MemoryReady);
@@ -577,23 +578,23 @@ impl SidecarManager {
     /// Mark memory-mcp-server as errored.
     pub fn mark_memory_error(&self, msg: &str) {
         warn!("[SidecarManager] memory-mcp-server error: {msg}");
-        *self.memory_status.lock().unwrap() = SidecarStatus::Error(msg.to_string());
+        *self.memory_status.lock_tolerant() = SidecarStatus::Error(msg.to_string());
     }
 
     pub fn memory_status(&self) -> SidecarStatus {
-        self.memory_status.lock().unwrap().clone()
+        self.memory_status.lock_tolerant().clone()
     }
 
     pub fn memory_is_running(&self) -> bool {
         matches!(
-            self.memory_status.lock().unwrap().clone(),
+            self.memory_status.lock_tolerant().clone(),
             SidecarStatus::Running
         )
     }
 
     /// Returns the OS PID of memory-mcp-server child process, if alive.
     pub fn memory_pid(&self) -> Option<u32> {
-        self.memory_process.lock().unwrap().as_ref().map(|c| c.id())
+        self.memory_process.lock_tolerant().as_ref().map(|c| c.id())
     }
 
     // ─── core-orchestrator lifecycle ───────────────────────────────────────────
@@ -603,12 +604,12 @@ impl SidecarManager {
     /// Call this after memory-mcp-server health check passes.
     pub fn start(&self, cwd: &PathBuf) -> Result<()> {
         {
-            let s = self.orch_status.lock().unwrap();
+            let s = self.orch_status.lock_tolerant();
             if matches!(*s, SidecarStatus::Running | SidecarStatus::Starting) {
                 return Ok(());
             }
         }
-        *self.orch_status.lock().unwrap() = SidecarStatus::Starting;
+        *self.orch_status.lock_tolerant() = SidecarStatus::Starting;
         info!(
             "[SidecarManager] Spawning core-orchestrator from: {}",
             cwd.display()
@@ -669,23 +670,23 @@ impl SidecarManager {
             );
         }
 
-        *self.orch_process.lock().unwrap() = Some(child);
+        *self.orch_process.lock_tolerant() = Some(child);
         info!("[SidecarManager] core-orchestrator spawned; awaiting health check on :4000");
         Ok(())
     }
 
     /// Terminate core-orchestrator.
     pub fn stop(&self) {
-        if let Some(mut child) = self.orch_process.lock().unwrap().take() {
+        if let Some(mut child) = self.orch_process.lock_tolerant().take() {
             let _ = child.kill();
             info!("[SidecarManager] core-orchestrator terminated");
         }
-        *self.orch_status.lock().unwrap() = SidecarStatus::Stopped;
+        *self.orch_status.lock_tolerant() = SidecarStatus::Stopped;
     }
 
     /// Mark core-orchestrator as healthy (call after /api/system/health passes).
     pub fn mark_running(&self) {
-        *self.orch_status.lock().unwrap() = SidecarStatus::Running;
+        *self.orch_status.lock_tolerant() = SidecarStatus::Running;
         info!("[SidecarManager] core-orchestrator is ready and accepting requests on :4000");
         if let Some(p) = self.progress() {
             p.advance(StartupPhase::OrchReady);
@@ -703,27 +704,27 @@ impl SidecarManager {
     /// Mark core-orchestrator as errored.
     pub fn mark_error(&self, msg: &str) {
         warn!("[SidecarManager] core-orchestrator error: {msg}");
-        *self.orch_status.lock().unwrap() = SidecarStatus::Error(msg.to_string());
+        *self.orch_status.lock_tolerant() = SidecarStatus::Error(msg.to_string());
     }
 
     // ─── Combined accessors ────────────────────────────────────────────────────
 
     /// Status of core-orchestrator (the primary gateway the UI cares about).
     pub fn status(&self) -> SidecarStatus {
-        self.orch_status.lock().unwrap().clone()
+        self.orch_status.lock_tolerant().clone()
     }
 
     /// True only when core-orchestrator is Running.
     pub fn is_running(&self) -> bool {
         matches!(
-            self.orch_status.lock().unwrap().clone(),
+            self.orch_status.lock_tolerant().clone(),
             SidecarStatus::Running
         )
     }
 
     /// Returns the OS PID of core-orchestrator child process, if alive.
     pub fn orch_pid(&self) -> Option<u32> {
-        self.orch_process.lock().unwrap().as_ref().map(|c| c.id())
+        self.orch_process.lock_tolerant().as_ref().map(|c| c.id())
     }
 
     /// True only when memory-mcp-server AND core-orchestrator are Running.
@@ -751,7 +752,7 @@ impl SidecarManager {
 
     /// Mark Redis as healthy (call after PING returns +PONG).
     pub fn mark_redis_running(&self) {
-        let mut s = self.redis_status.lock().unwrap();
+        let mut s = self.redis_status.lock_tolerant();
         if !matches!(*s, SidecarStatus::Running) {
             info!("[SidecarManager] Redis/Memurai is reachable on :6379");
         }
@@ -762,7 +763,7 @@ impl SidecarManager {
     /// means the warm memory tier is unavailable and core-orchestrator will
     /// fall back to cold tier only.
     pub fn mark_redis_unavailable(&self) {
-        let mut s = self.redis_status.lock().unwrap();
+        let mut s = self.redis_status.lock_tolerant();
         if !matches!(*s, SidecarStatus::Error(_)) {
             warn!(
                 "[SidecarManager] Redis/Memurai not reachable on :6379 — \
@@ -773,12 +774,12 @@ impl SidecarManager {
     }
 
     pub fn redis_status(&self) -> SidecarStatus {
-        self.redis_status.lock().unwrap().clone()
+        self.redis_status.lock_tolerant().clone()
     }
 
     pub fn redis_is_running(&self) -> bool {
         matches!(
-            self.redis_status.lock().unwrap().clone(),
+            self.redis_status.lock_tolerant().clone(),
             SidecarStatus::Running
         )
     }
@@ -795,7 +796,7 @@ impl SidecarManager {
     /// Non-blocking check: returns true if the core-orchestrator Child has exited.
     /// Returns false when no process has been started.
     pub fn orch_exited(&self) -> bool {
-        if let Some(child) = self.orch_process.lock().unwrap().as_mut() {
+        if let Some(child) = self.orch_process.lock_tolerant().as_mut() {
             matches!(child.try_wait(), Ok(Some(_)))
         } else {
             false
@@ -805,7 +806,7 @@ impl SidecarManager {
     /// Non-blocking check: returns true if memory-mcp-server Child has exited.
     /// Returns false when no process has been started.
     pub fn memory_exited(&self) -> bool {
-        if let Some(child) = self.memory_process.lock().unwrap().as_mut() {
+        if let Some(child) = self.memory_process.lock_tolerant().as_mut() {
             matches!(child.try_wait(), Ok(Some(_)))
         } else {
             false

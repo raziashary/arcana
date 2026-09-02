@@ -5,6 +5,7 @@ use super::storage::SessionStorage;
 use super::types::{Message, Session};
 use crate::errors::Result;
 use std::sync::{Arc, Mutex};
+use crate::state::lock::LockTolerant;
 
 pub struct SessionManager {
     storage: Arc<Mutex<SessionStorage>>,
@@ -25,13 +26,13 @@ impl SessionManager {
         model: &str,
     ) -> Result<Session> {
         let session = Session::new(working_dir, provider, model);
-        let storage = self.storage.lock().unwrap();
+        let storage = self.storage.lock_tolerant();
         storage.upsert_session(&session)?;
         Ok(session)
     }
 
     pub fn list_sessions(&self) -> Result<Vec<Session>> {
-        self.storage.lock().unwrap().list_sessions()
+        self.storage.lock_tolerant().list_sessions()
     }
 
     pub fn get_session(&self, session_id: &str) -> Result<Option<Session>> {
@@ -54,19 +55,19 @@ impl SessionManager {
     }
 
     pub fn delete_session(&self, session_id: &str) -> Result<()> {
-        self.storage.lock().unwrap().delete_session(session_id)
+        self.storage.lock_tolerant().delete_session(session_id)
     }
 
     pub fn append_message(&self, msg: &Message) -> Result<()> {
-        self.storage.lock().unwrap().insert_message(msg)
+        self.storage.lock_tolerant().insert_message(msg)
     }
 
     pub fn update_message(&self, msg: &Message) -> Result<()> {
-        self.storage.lock().unwrap().update_message(msg)
+        self.storage.lock_tolerant().update_message(msg)
     }
 
     pub fn update_session_title(&self, session: &Session) -> Result<()> {
-        self.storage.lock().unwrap().upsert_session(session)
+        self.storage.lock_tolerant().upsert_session(session)
     }
 
     /// Phase 3.0 R3 — persist the PA mode toggle for a session.

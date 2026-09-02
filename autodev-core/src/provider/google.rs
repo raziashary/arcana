@@ -14,6 +14,7 @@ use super::types::{
     CompletionRequest, CompletionResponse, MessageContent, ModelInfo, ProviderStatus, StreamChunk,
 };
 use crate::errors::{AutoDevError, Result};
+use crate::state::lock::LockTolerant;
 
 const GOOGLE_API_BASE: &str = "https://generativelanguage.googleapis.com";
 
@@ -289,7 +290,7 @@ impl Provider for GoogleProvider {
             .map(move |bytes_result| -> Result<Vec<StreamChunk>> {
                 let bytes = bytes_result.map_err(AutoDevError::Http)?;
                 let text = String::from_utf8_lossy(&bytes);
-                let mut buf = buffer.lock().unwrap();
+                let mut buf = buffer.lock_tolerant();
                 buf.push_str(&text);
                 let mut chunks = Vec::new();
                 // Only parse complete lines

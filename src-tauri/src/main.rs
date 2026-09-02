@@ -15,6 +15,7 @@ use autodev_lib::state::AppState;
 use autodev_lib::updater::{start_background_check, UpdateChannel, UpdaterState};
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
+use autodev_core::state::lock::LockTolerant;
 
 fn main() {
     // ─── .env loading ────────────────────────────────────────────────────────
@@ -166,7 +167,7 @@ fn main() {
     // and carry on spending. A cap that resets on restart is a per-session cap
     // describing itself as daily.
     {
-        let mut s = app_state.lock().unwrap();
+        let mut s = app_state.lock_tolerant();
         s.hydrate_today();
     }
 

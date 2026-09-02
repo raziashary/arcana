@@ -24,6 +24,7 @@ use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use crate::errors::{AutoDevError, Result};
+use autodev_core::state::lock::LockTolerant;
 
 /// Result of a Mode 2 LivingAgent invocation.
 ///
@@ -257,7 +258,7 @@ impl OrchestratorClient {
             .ok_or_else(|| AutoDevError::Agent("service login response missing 'token'".into()))?;
 
         // Cache the JWT token
-        *self.jwt_token.lock().unwrap() = Some(token.to_string());
+        *self.jwt_token.lock_tolerant() = Some(token.to_string());
         debug!("[OrchestratorClient] authenticated successfully, JWT cached");
 
         Ok(())
@@ -268,7 +269,7 @@ impl OrchestratorClient {
     /// If no JWT token is cached, attempts to authenticate. Call this before
     /// any request that requires authentication.
     async fn ensure_authenticated(&self) -> Result<()> {
-        let has_token = self.jwt_token.lock().unwrap().is_some();
+        let has_token = self.jwt_token.lock_tolerant().is_some();
         if !has_token {
             self.authenticate().await?;
         }
@@ -653,7 +654,7 @@ impl OrchestratorClient {
         // fall through to the slow-path so we can PUT /config and rewrite
         // the agent's YAML before the next invoke.
         {
-            let cache = self.agent_cache.lock().unwrap();
+            let cache = self.agent_cache.lock_tolerant();
             if let Some((id, applied_model)) = cache.get(slug) {
                 if applied_model == model {
                     debug!("[OrchestratorClient] cache hit '{slug}' → {id} (model='{model}')");
@@ -1184,7 +1185,7 @@ impl OrchestratorClient {
     /// `None` so the caller can fall back to the raw key.
     pub async fn resolve_model_name(&self, key: &str) -> Option<String> {
         {
-            let cache = self.model_registry_cache.lock().unwrap();
+            let cache = self.model_registry_cache.lock_tolerant();
             if let Some(name) = cache.get(key) {
                 debug!("[OrchestratorClient] model cache hit '{key}' → {name}");
                 return Some(name.clone());
@@ -1205,7 +1206,7 @@ impl OrchestratorClient {
         {
             Ok(resp) if resp.status().is_success() => {
                 let models: Vec<serde_json::Value> = resp.json().await.unwrap_or_default();
-                let mut cache = self.model_registry_cache.lock().unwrap();
+                let mut cache = self.model_registry_cache.lock_tolerant();
                 for m in &models {
                     let rkey = m["registry_key"].as_str().unwrap_or("");
                     let name = m["name"].as_str().unwrap_or("");
@@ -1234,7 +1235,7 @@ impl OrchestratorClient {
     /// Clear the slug → agent_id cache. Call after core-orchestrator restarts so
     /// agents are re-registered/re-discovered on the next recipe tick.
     pub fn clear_cache(&self) {
-        self.agent_cache.lock().unwrap().clear();
+        self.agent_cache.lock_tolerant().clear();
         debug!("[OrchestratorClient] agent cache cleared");
     }
 

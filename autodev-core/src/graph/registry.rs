@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use crate::state::lock::LockTolerant;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoEntry {
@@ -99,7 +100,7 @@ impl RepoRegistry {
         std::fs::write(&self.db_path, serde_json::to_string_pretty(&registry)?)?;
 
         // Remove from cache
-        let mut cache = self.store_cache.lock().unwrap();
+        let mut cache = self.store_cache.lock_tolerant();
         cache.remove(path);
 
         Ok(())
@@ -120,7 +121,7 @@ impl RepoRegistry {
     }
 
     pub fn get_store(&self, path: &Path) -> Result<Arc<Mutex<GraphStore>>> {
-        let mut cache = self.store_cache.lock().unwrap();
+        let mut cache = self.store_cache.lock_tolerant();
 
         if let Some(store) = cache.get(path) {
             return Ok(store.clone());
@@ -171,7 +172,7 @@ pub fn merge_all_repos(registry: &RepoRegistry, output_path: &Path) -> Result<Me
     for entry in &entries {
         let path = PathBuf::from(&entry.path);
         if let Ok(store_arc) = registry.get_store(&path) {
-            let store = store_arc.lock().unwrap();
+            let store = store_arc.lock_tolerant();
             let nodes = store.get_all_nodes_for_graph(i64::MAX, 0)?;
             let edges = store.get_all_edges_for_graph(i64::MAX, 0)?;
 

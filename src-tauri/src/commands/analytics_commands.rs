@@ -6,6 +6,7 @@ use chrono::NaiveDate;
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::State;
 use tracing::info;
+use autodev_core::state::lock::LockTolerant;
 
 // Doc 02 Phase 3.4 — one-shot diagnostic log on first dashboard hit.
 // On-call debugging frequently needs to know "is the dashboard actually
@@ -36,7 +37,7 @@ pub fn get_dashboard_summary(state: State<'_, Arc<Mutex<AppState>>>) -> Result<D
     // Read live in-process counters — daily_costs is only populated by yesterday rollup,
     // so reading it for today would always yield 0.
     let (live_cost_usd, live_tokens) = {
-        let mut s = state.lock().unwrap();
+        let mut s = state.lock_tolerant();
         (s.cost_today(), s.tokens_in_today + s.tokens_out_today)
     };
     let manager = analytics::global();

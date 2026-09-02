@@ -13,6 +13,7 @@
 // Compiled only under `cfg(test)`.
 
 use std::path::{Path, PathBuf};
+use autodev_core::state::lock::RwLockTolerant;
 
 /// Repository root — one level above `src-tauri/`.
 fn repo_root() -> PathBuf {
@@ -1228,6 +1229,136 @@ let x = 1;
         std::fs::read_to_string(path)
             .unwrap_or_default()
             .replace("\r\n", "\n")
+    }
+
+    // ── TG-P3-03 · one panic cannot poison the application ────────────────────
+
+    /// No shipped code may take a `std::sync` lock with `.lock().unwrap()`.
+    ///
+    /// ── What this actually prevents ──────────────────────────────────────────
+    ///
+    /// `P3-03` said a panicking worker takes down the app. It does not — agent
+    /// paths run inside `tokio::spawn` and unwinding is on. What happens is that
+    /// the panic **poisons every mutex the thread held**, and this tree had
+    /// **98 `.lock().unwrap()` sites against 5 poison-tolerant**. So one panic
+    /// became a cascade of unrelated panics at every later lock: a permanent,
+    /// restart-only failure presenting several layers from its cause.
+    ///
+    /// `catch_unwind` contains the *first* panic and does nothing about the
+    /// poison it leaves behind. Both halves are required; this gate holds the
+    /// second.
+    ///
+    /// ⚠ Asserted as *"no bare `.lock().unwrap()` exists"* rather than *"those
+    /// 98 sites were changed"*, so site 99 added next week is caught too.
+    #[test]
+    fn tg_p3_03_no_lock_propagates_poison() {
+        let roots = [
+            repo_root().join("autodev-core/src"),
+            repo_root().join("src-tauri/src"),
+            repo_root().join("src-cli/src"),
+        ];
+
+        let mut offenders = Vec::new();
+        let mut scanned = 0usize;
+
+        for root in &roots {
+            let mut stack = vec![root.clone()];
+            while let Some(dir) = stack.pop() {
+                let Ok(entries) = std::fs::read_dir(&dir) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        stack.push(path);
+                        continue;
+                    }
+                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    if !name.ends_with(".rs") {
+                        continue;
+                    }
+                    // `lock.rs` demonstrates the raw pattern on purpose, and
+                    // its tests must be able to observe a genuine poisoning.
+                    if name == "lock.rs" {
+                        continue;
+                    }
+
+                    let text = read_source(&path);
+                    scanned += 1;
+                    let rel = path
+                        .strip_prefix(repo_root())
+                        .unwrap_or(&path)
+                        .display()
+                        .to_string()
+                        .replace('\\', "/");
+
+                    let production = match text.find("#[cfg(test)]") {
+                        Some(i) => &text[..i],
+                        None => &text[..],
+                    };
+
+                    for (n, line) in production.lines().enumerate() {
+                        let code = line.split("//").next().unwrap_or("");
+                        if code.contains(".lock().unwrap()")
+                            || code.contains(".read().unwrap()")
+                            || code.contains(".write().unwrap()")
+                        {
+                            offenders.push(format!("{rel}:{}: {}", n + 1, code.trim()));
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(
+            scanned > 100,
+            "only {scanned} files scanned — this gate is not reaching the tree"
+        );
+
+        assert!(
+            offenders.is_empty(),
+            "these propagate lock poisoning, so one panic anywhere becomes a cascade of \
+             unrelated panics and a restart-only application. Use `lock_tolerant()` / \
+             `read_tolerant()` / `write_tolerant()`:\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    // ── TG-P3-02 · a panicking turn is contained and always clears its flag ───
+
+    /// The agent turn runs under `catch_unwind`, and `is_running` clears on
+    /// every unwind path.
+    ///
+    /// `is_running` was cleared on the line *after* the await, so a panic
+    /// skipped it and left the session permanently marked running — the user
+    /// could never start another turn there, and nothing said why. A `Drop`
+    /// guard clears it during unwinding; a line after `catch_unwind` is one
+    /// early `return` away from being skipped again.
+    #[test]
+    fn tg_p3_02_a_panicking_turn_is_contained_and_releases_its_session() {
+        let src = read_source(&repo_root().join("src-tauri/src/commands/agent_commands.rs"));
+
+        assert!(
+            src.contains("catch_unwind"),
+            "the agent turn does not run under catch_unwind, so a panicking tool takes \
+             the whole spawn down with no reported failure"
+        );
+
+        assert!(
+            src.contains("impl Drop for RunningGuard"),
+            "is_running is not cleared by a Drop guard, so a panicking turn leaves the \
+             session permanently marked running"
+        );
+
+        // And the clear must NOT also sit as a bare post-await statement: two
+        // clears is a sign the guard was added without removing the old path,
+        // which is how the guard silently stops being the thing that matters.
+        let bare_clears = src.matches("agent.is_running = false;").count();
+        assert!(
+            bare_clears <= 2,
+            "found {bare_clears} sites clearing is_running; expected the Drop guard plus \
+             at most the early-return path"
+        );
     }
 
     // ── TG-P3-01 · the release profile is where Cargo will read it ────────────
