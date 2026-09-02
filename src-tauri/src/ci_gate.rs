@@ -2076,6 +2076,104 @@ let x = 1;
         );
     }
 
+    // ── TG-P3-55 · the QC provisional charge is released on every exit ────────
+
+    /// A dispatch that never flies must not hold its provisional charge.
+    ///
+    /// 🔴 `P3-55`. `spawn_qc_review` recorded $0.10 at dispatch start and
+    /// released it only from the background completion task — with **eight
+    /// error returns in between**, none of which released. The dominant case
+    /// is routine: the qc-dispatcher recipe ticks every 30 seconds, and a task
+    /// already claimed for review takes the already-claimed branch every time.
+    /// **50 ticks x $0.10 = $5.00**, the hourly ceiling — so QC disables
+    /// itself for an hour at zero real spend while the ledger says it was busy.
+    ///
+    /// ⚠ The sharp assertion is the **ordering**: the handoff must come after
+    /// the LAST early return. A guard whose handoff sits above some error
+    /// return leaves that path leaking, and every other check here would still
+    /// pass. This is the same shape as `P3-05` — every exit path must do the
+    /// thing, and only the type system writes that once.
+    #[test]
+    fn tg_p3_55_the_provisional_charge_is_released_on_every_failed_dispatch() {
+        let path =
+            repo_root().join("autodev-core/src/agent/builtin_tools/spawn_qc_review.rs");
+        let text = read_source(&path);
+
+        // The release must be automatic, not eight hand-written call sites.
+        assert!(
+            text.contains("impl Drop for ProvisionalCharge"),
+            "the provisional charge must release via Drop — adding a release \
+             call to each error branch works until the ninth branch is added"
+        );
+
+        // The guard must be BOUND. `let _ = ...` drops it immediately, which
+        // releases the charge before the reviewer is dispatched and makes the
+        // ceiling blind to in-flight work — a different bug wearing the fix.
+        assert!(
+            text.contains("let _charge = match qc_cost_guard::check_and_record_dispatch_intent()"),
+            "the charge must be bound to a named variable; `let _ =` would run \
+             Drop immediately and defeat the ceiling"
+        );
+
+        // ── the ordering that makes the guard load-bearing ────────────────
+        let execute = text
+            .split("async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult")
+            .nth(1)
+            .expect("execute must exist");
+
+        let charge_at = execute
+            .find("let _charge =")
+            .expect("the charge must be taken inside execute");
+        let handoff_at = execute
+            .find("_charge.handed_off()")
+            .expect(
+                "the charge must be handed off once the reviewer is in flight, or \
+                 the success path releases it and the ceiling never sees in-flight work",
+            );
+
+        assert!(
+            charge_at < handoff_at,
+            "the charge is handed off before it is taken"
+        );
+
+        // Every early return between them is covered by Drop. What must be
+        // proven is that none sits AFTER the handoff.
+        let after_handoff = &execute[handoff_at..];
+        let leaked: Vec<&str> = after_handoff
+            .lines()
+            .filter(|l| {
+                let code = l.split("//").next().unwrap_or("");
+                code.contains("return ToolResult::error")
+            })
+            .collect();
+
+        assert!(
+            leaked.is_empty(),
+            "these failure paths sit AFTER the charge is handed off, so they \
+             leak it — move the handoff below them:\n  {}",
+            leaked.join("\n  ")
+        );
+
+        // And the guard must actually be guarding something: at least one
+        // failure path between taking the charge and handing it off. If this
+        // ever reaches zero the guard is dead weight and someone has moved the
+        // charge, not fixed it.
+        let covered = execute[charge_at..handoff_at]
+            .lines()
+            .filter(|l| {
+                let code = l.split("//").next().unwrap_or("");
+                code.contains("return ToolResult::error")
+            })
+            .count();
+
+        assert!(
+            covered >= 5,
+            "only {covered} failure paths sit under the charge guard; there \
+             were eight, so the charge has probably been moved rather than the \
+             leak fixed"
+        );
+    }
+
     // ── TG-P3-17 · no validator subprocess runs without a ceiling ─────────────
 
     /// Every subprocess the validator spawns must go through `run_bounded`.

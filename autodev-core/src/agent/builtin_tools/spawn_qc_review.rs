@@ -101,9 +101,15 @@ impl Tool for SpawnQcReviewTool {
         // BEFORE claiming the task so a tripped guard doesn't leak claim
         // state. Guard reads/writes a module-level counter so it's
         // thread-safe and lock-free.
-        if let Some(reject) = qc_cost_guard::check_and_record_dispatch_intent() {
-            return ToolResult::error(&reject);
-        }
+        // ⚠ P3-55. `_charge` must be BOUND, not dropped immediately — naming
+        // it `_` would run `Drop` here and release the provisional cost before
+        // the reviewer is even dispatched, which defeats the ceiling entirely.
+        // Every `return` below this line releases it; the handoff before
+        // `tokio::spawn` is what stops it being released on the success path.
+        let _charge = match qc_cost_guard::check_and_record_dispatch_intent() {
+            Ok(charge) => charge,
+            Err(reject) => return ToolResult::error(&reject),
+        };
 
         // ── Atomic claim ────────────────────────────────────────────────────
         let tasks_db = match TasksDb::open() {
@@ -212,6 +218,18 @@ impl Tool for SpawnQcReviewTool {
             "[spawn_qc_review] dispatched task #{task_id} -> subagent '{subagent_id}' \
              (claim_token='{claim_token}')"
         );
+
+        // ⚠ P3-55. The reviewer is dispatched and running: from here the
+        // background task below owns settlement and will call
+        // `record_dispatch_complete` with the realised cost. Handing the
+        // charge off is what stops the guard releasing it on the SUCCESS path
+        // — without this line the provisional cost would vanish the moment
+        // this function returns, and the ceiling would never see an in-flight
+        // reviewer at all.
+        //
+        // It goes here, after the last early return, so that every failure
+        // above still releases and every success below does not.
+        _charge.handed_off();
 
         // ── Background completion handler ──────────────────────────────────
         // await_result blocks until the reviewer terminates. We can't block
@@ -397,15 +415,63 @@ mod qc_cost_guard {
         g.iter().map(|e| e.cost).sum()
     }
 
-    /// Called at dispatch START. Returns Some(reason) when the guard is
-    /// tripped (and the spawn should be rejected), None when the spawn may
-    /// proceed. Side effect: records a provisional cost in the ring so the
-    /// next check sees the in-flight reviewer.
-    pub fn check_and_record_dispatch_intent() -> Option<String> {
+    /// A provisional charge that is **released when it goes out of scope**,
+    /// unless the reviewer actually reached flight.
+    ///
+    /// 🔴 `P3-55`. The charge was recorded at dispatch start and released only
+    /// by the background task on completion — but **eight error returns sit
+    /// between those two points** (`open tasks.db failed`, `task not found`,
+    /// `read task`, two already-claimed branches, the worker-slug check,
+    /// `claim task`, and the spawn failure itself). None of them released it.
+    ///
+    /// The dominant case is not exotic. The qc-dispatcher recipe ticks every
+    /// 30 seconds; a task already claimed for review returns at the
+    /// already-claimed branch every single time. **50 ticks × $0.10 = $5.00**,
+    /// which is the hourly ceiling — so QC disables itself for an hour at
+    /// **zero real spend**, while the ledger reports it was busy.
+    ///
+    /// ⚠ Same shape as `P3-05`: *every* exit path must do the thing, and the
+    /// only way to write that once is to let the type system do it. Adding a
+    /// release call to the eight branches would work until the ninth is added.
+    pub struct ProvisionalCharge {
+        settled: bool,
+    }
+
+    impl ProvisionalCharge {
+        /// The reviewer is in flight; the background task owns settlement now
+        /// and will call `record_dispatch_complete` with the realised cost.
+        pub fn handed_off(mut self) {
+            self.settled = true;
+        }
+    }
+
+    impl Drop for ProvisionalCharge {
+        fn drop(&mut self) {
+            if self.settled {
+                return;
+            }
+            // Every path that leaves without a reviewer lands here.
+            let mut g = ring().lock_tolerant();
+            if let Some(idx) = g
+                .iter()
+                .position(|e| (e.cost - PROVISIONAL_COST_USD).abs() < 1e-9)
+            {
+                g.remove(idx);
+            }
+        }
+    }
+
+    /// Called at dispatch START.
+    ///
+    /// `Err(reason)` means the guard tripped and nothing was charged.
+    /// `Ok(charge)` records a provisional cost so the next check sees this
+    /// in-flight reviewer — and **releases it on drop** unless
+    /// [`ProvisionalCharge::handed_off`] is called.
+    pub fn check_and_record_dispatch_intent() -> Result<ProvisionalCharge, String> {
         let now = Instant::now();
         let sum = current_sum(now);
         if sum + PROVISIONAL_COST_USD > CEILING_USD_PER_HOUR {
-            return Some(format!(
+            return Err(format!(
                 "QC cost guard tripped: rolling 1h spend ~${sum:.2} + provisional \
                  ${PROVISIONAL_COST_USD:.2} would exceed ${CEILING_USD_PER_HOUR:.2}/hour. \
                  Reviewer not spawned — wait for in-flight reviewers to complete."
@@ -416,7 +482,12 @@ mod qc_cost_guard {
             at: now,
             cost: PROVISIONAL_COST_USD,
         });
-        None
+        Ok(ProvisionalCharge { settled: false })
+    }
+
+    /// The rolling-window sum, for tests and diagnostics.
+    pub fn rolling_sum_usd() -> f64 {
+        current_sum(Instant::now())
     }
 
     /// Called at dispatch COMPLETE with the realised cost. The matching
@@ -437,5 +508,70 @@ mod qc_cost_guard {
             at: Instant::now(),
             cost: realised_cost.max(0.0),
         });
+    }
+}
+
+#[cfg(test)]
+mod p3_55_tests {
+    use super::qc_cost_guard;
+
+    /// One test, deliberately.
+    ///
+    /// The guard's ring is a process-wide `static`, so two tests touching it
+    /// would race and produce a flake that reads as a real regression. The
+    /// whole scenario runs in sequence here instead.
+    #[test]
+    fn a_dispatch_that_never_flies_does_not_hold_its_charge() {
+        // Establish the baseline: whatever the ring already holds.
+        let baseline = qc_cost_guard::rolling_sum_usd();
+
+        // ── 🔴 THE DEFECT ────────────────────────────────────────────────
+        // The qc-dispatcher recipe ticks every 30 seconds. When a task is
+        // already claimed for review, `spawn_qc_review` returns at the
+        // already-claimed branch — one of EIGHT error returns that sat
+        // between the provisional charge and its only release.
+        //
+        // 50 such ticks × $0.10 = $5.00 = the hourly ceiling. QC would then
+        // refuse every review for an hour, at zero real spend, while the
+        // ledger reported it was busy.
+        for _ in 0..50 {
+            let charge = qc_cost_guard::check_and_record_dispatch_intent()
+                .expect("the guard must not trip while nothing is actually spending");
+            // The dispatch fails here — task already claimed, db open failed,
+            // slug rejected, spawn errored. `charge` goes out of scope.
+            drop(charge);
+        }
+
+        let after_50_failures = qc_cost_guard::rolling_sum_usd();
+        assert!(
+            (after_50_failures - baseline).abs() < 1e-6,
+            "50 dispatches that never flew left ${:.2} on the ledger — that is \
+             the $5.00 ceiling reached at zero real spend, which disables QC \
+             for an hour",
+            after_50_failures - baseline
+        );
+
+        // ── the no-fire half ─────────────────────────────────────────────
+        // A reviewer that DOES fly must keep its provisional charge, or the
+        // ceiling stops seeing in-flight work and the guard is decoration.
+        let flying = qc_cost_guard::check_and_record_dispatch_intent().unwrap();
+        flying.handed_off();
+
+        let with_one_in_flight = qc_cost_guard::rolling_sum_usd();
+        assert!(
+            with_one_in_flight > after_50_failures,
+            "a dispatched reviewer must still be counted against the ceiling; \
+             releasing on the success path would make the guard blind to \
+             in-flight work"
+        );
+
+        // And settling it with the realised cost replaces the provisional.
+        qc_cost_guard::record_dispatch_complete(0.02);
+        let settled = qc_cost_guard::rolling_sum_usd();
+        assert!(
+            settled < with_one_in_flight,
+            "the realised cost ($0.02) must replace the pessimistic \
+             provisional ($0.10), got {settled:.4} vs {with_one_in_flight:.4}"
+        );
     }
 }
