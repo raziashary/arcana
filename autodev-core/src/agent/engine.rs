@@ -435,7 +435,18 @@ impl AgentEngine {
             // correct outcome (first sighting, below the minimum, no cache
             // support) and logs an error only when a repeated prefix read
             // nothing.
-            if !matches!(cache_policy, crate::provider::usage::CachePolicy::Off) {
+            //
+            // ⚠ D-8. Only when the stream actually SUCCEEDED.
+            //
+            // The monitor was consulted before `stream_result` was checked, so a
+            // network failure — which reports zero usage, because no call
+            // completed — looked exactly like a repeated prefix that read
+            // nothing from cache. The alarm then fired with no caching fault
+            // behind it, on the one instrument whose entire value is that it
+            // does not cry wolf.
+            if stream_result.is_ok()
+                && !matches!(cache_policy, crate::provider::usage::CachePolicy::Off)
+            {
                 let turn_usage = total_usage.delta_since(&usage_before_turn);
                 cache_monitor.observe(
                     cache_prefix.hash,

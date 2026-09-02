@@ -106,20 +106,36 @@ fn parse_anthropic_event(v: &serde_json::Value) -> Result<Option<StreamChunk>> {
                 .as_str()
                 .unwrap_or("end_turn")
                 .to_string();
-            // Anthropic EXCLUDES cached tokens from `input_tokens`, which is
-            // already `Usage`'s meaning — used as reported, no subtraction.
+            // ⚠ D-9 (P2 post-phase audit). The input side is DELIBERATELY ZERO
+            // here, and that is a correction, not an omission.
             //
-            // `input` is read here as well as in `message_start` because the
-            // vendor may report it in either frame; the engine accumulates, so
-            // a field absent from one frame contributes zero rather than
-            // overwriting the other.
+            // The previous comment said "the vendor may report it in either
+            // frame; the engine accumulates, so a field absent from one frame
+            // contributes zero". Anthropic reports it in **both**, always —
+            // captured from the live wire on 2026-09-02:
+            //
+            //   message_start  usage: {"input_tokens":9, "output_tokens":5, ...}
+            //   message_delta  usage: {"input_tokens":9, "output_tokens":5, ...}
+            //
+            // Anthropic's per-message usage is **cumulative**, not incremental.
+            // The engine sums every `MessageDelta`, so reading the input side
+            // here counted it twice: every Anthropic STREAMING call reported
+            // exactly 2× its real input cost, burned the daily ceiling at twice
+            // the rate, and wrote a doubled figure to analytics. `complete()`
+            // was unaffected, which is why the cost-reconciliation smoke — which
+            // uses the unary path — passed throughout.
+            //
+            // The input side is fixed for a message and fully known at
+            // `message_start`, so it is taken there and only there. `output` is
+            // taken here and only here, because `message_start` reports a
+            // partial count and this frame carries the final total —
+            // `message_start` correspondingly emits `output: 0`.
             Ok(Some(StreamChunk::MessageDelta {
                 stop_reason: stop_r,
                 usage: Usage {
-                    input: usage["input_tokens"].as_u64().unwrap_or(0) as u32,
-                    cached_read: usage["cache_read_input_tokens"].as_u64().unwrap_or(0) as u32,
-                    cache_write: usage["cache_creation_input_tokens"].as_u64().unwrap_or(0)
-                        as u32,
+                    input: 0,
+                    cached_read: 0,
+                    cache_write: 0,
                     output: usage["output_tokens"].as_u64().unwrap_or(0) as u32,
                     reasoning: 0,
                     tool: 0,

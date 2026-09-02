@@ -128,6 +128,10 @@ fn a_truncated_turn_is_distinguishable_from_a_clean_one() {
         };
         assert_eq!(stop_reason, wire, "the raw wire value is preserved verbatim");
         assert_eq!(usage.output, 42);
+        // D-9. The input side belongs to `message_start` alone.
+        assert_eq!(usage.input, 0);
+        assert_eq!(usage.cached_read, 0);
+        assert_eq!(usage.cache_write, 0);
         assert_eq!(
             super::usage::StopReason::parse("anthropic", &stop_reason).is_truncated(),
             expect_truncated,
@@ -203,4 +207,83 @@ fn usage_absent_from_a_frame_reads_as_zero_rather_than_failing_the_turn() {
     };
     assert_eq!(usage.output, 0);
     assert_eq!(usage.total(), 0);
+}
+
+
+#[test]
+fn a_streamed_turn_does_not_double_count_its_input() {
+    // 🔴 D-9, measured from the live wire on 2026-09-02. Anthropic's per-message
+    // usage is CUMULATIVE, and it repeats the input side on both frames:
+    //
+    //   message_start  usage: {"input_tokens":9, "output_tokens":5, ...}
+    //   message_delta  usage: {"input_tokens":9, "output_tokens":5, ...}
+    //
+    // The engine sums every MessageDelta, so reading the input side from both
+    // reported 2× the real cost on every Anthropic streaming call — the primary
+    // agent path. `complete()` was unaffected, which is why the unary
+    // cost-reconciliation smoke passed the whole time.
+    //
+    // These are the exact bytes from that capture.
+    let start = parse_sse_line(&sse(
+        r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":9,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":5}}}"#,
+    ))
+    .expect("parse")
+    .expect("message_start");
+
+    let delta = parse_sse_line(&sse(
+        r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":9,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":5}}"#,
+    ))
+    .expect("parse")
+    .expect("message_delta");
+
+    let (StreamChunk::MessageDelta { usage: u1, .. }, StreamChunk::MessageDelta { usage: u2, .. }) =
+        (start, delta)
+    else {
+        panic!("both frames must yield MessageDelta");
+    };
+
+    // What the engine actually does.
+    let mut total = super::usage::Usage::default();
+    total.add(&u1);
+    total.add(&u2);
+
+    assert_eq!(
+        total.input, 9,
+        "the turn used 9 input tokens; summing both frames reported {}",
+        total.input
+    );
+    assert_eq!(total.output, 5, "output belongs to message_delta alone");
+    assert_eq!(total.total_input(), 9);
+}
+
+#[test]
+fn a_cached_streamed_turn_counts_its_cache_read_once() {
+    // The same defect on the field the cache alarm reads. Double-counting
+    // `cached_read` would also make a cached turn look twice as expensive as it
+    // was — inverting the saving caching exists to produce.
+    let start = parse_sse_line(&sse(
+        r#"{"type":"message_start","message":{"id":"m","usage":{"input_tokens":15,"cache_read_input_tokens":11923,"cache_creation_input_tokens":0,"output_tokens":0}}}"#,
+    ))
+    .expect("parse")
+    .expect("message_start");
+
+    let delta = parse_sse_line(&sse(
+        r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":15,"cache_read_input_tokens":11923,"cache_creation_input_tokens":0,"output_tokens":4}}"#,
+    ))
+    .expect("parse")
+    .expect("message_delta");
+
+    let (StreamChunk::MessageDelta { usage: u1, .. }, StreamChunk::MessageDelta { usage: u2, .. }) =
+        (start, delta)
+    else {
+        panic!("both frames must yield MessageDelta");
+    };
+
+    let mut total = super::usage::Usage::default();
+    total.add(&u1);
+    total.add(&u2);
+
+    assert_eq!(total.cached_read, 11_923, "counted once, not twice");
+    assert_eq!(total.input, 15);
+    assert_eq!(total.output, 4);
 }

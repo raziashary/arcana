@@ -98,6 +98,19 @@ impl VaultManager {
     pub fn store(key: &str, value: &str) -> Result<()> {
         match Entry::new(SERVICE, key).and_then(|e| e.set_password(value)) {
             Ok(()) => {
+                // ⚠ D-2. Remove any fallback copy of the same key.
+                //
+                // `get` prefers the keychain, so a stale fallback entry is
+                // normally shadowed — but the reverse order is the dangerous
+                // one: if a write ever landed in the fallback and a later write
+                // succeeded to the keychain, two different values for one
+                // provider would exist. Rotating a LEAKED key and having the old
+                // one survive somewhere is the failure that matters here.
+                if fallback::is_present() {
+                    if let Err(e) = fallback::delete(key) {
+                        tracing::warn!("could not clear the fallback copy of {key}: {e}");
+                    }
+                }
                 index_add(key);
                 Ok(())
             }
@@ -106,7 +119,9 @@ impl VaultManager {
                     "OS keychain unavailable ({e}); storing in the encrypted-file vault \
                      instead. This is weaker — see VaultBackend::security_note."
                 );
-                fallback::store(key, value)
+                fallback::store(key, value)?;
+                index_add(key);
+                Ok(())
             }
         }
     }
@@ -177,8 +192,7 @@ impl VaultManager {
         // Always attempt the fallback too. A key can exist in both if the
         // environment changed between writes, and deleting only one leaves the
         // user believing a secret is gone while it is still on disk.
-        if fallback::is_present() {
-            fallback::delete(key)?;
+        if fallback::is_present() && fallback::delete(key)? {
             removed_anywhere = true;
         }
 

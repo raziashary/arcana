@@ -112,6 +112,23 @@ fn load_or_create_key() -> Result<[u8; 32]> {
         return Ok(key);
     }
 
+    // ⚠ D-4. Generating a fresh key when a vault already exists would make
+    // every stored secret permanently undecryptable — and silently, because the
+    // next `load()` would simply fail to decrypt and report corruption.
+    //
+    // Refused instead, with the actual remedy stated. The keys are recoverable
+    // by re-entering them; a vault silently replaced by an empty one is not
+    // recoverable at all, and the user would not know to try.
+    if vault_path()?.exists() {
+        return Err(AutoDevError::Vault(format!(
+            "the vault at {} exists but its key file {} is missing. Every stored secret \
+             is unreadable without it. If you have a copy of the key file, restore it; \
+             otherwise delete the vault file and re-enter your API keys in Settings.",
+            vault_path()?.display(),
+            path.display()
+        )));
+    }
+
     let key = Aes256Gcm::generate_key(&mut OsRng);
     write_owner_only(&path, key.as_slice())?;
     let mut out = [0u8; 32];
@@ -179,7 +196,30 @@ fn save(entries: &BTreeMap<String, String>) -> Result<()> {
     let mut blob = nonce.to_vec();
     blob.extend_from_slice(&ciphertext);
 
-    write_owner_only(&vault_path()?, &blob)
+    // ⚠ D-3. Written to a temporary file and RENAMED over the real one.
+    //
+    // This used to truncate the live vault in place. A crash, a power loss, or
+    // a full disk between the truncate and the write left a zero-length or
+    // half-written file — and since the contents are a single encrypted blob,
+    // that is not "some keys lost", it is **every key lost**, unrecoverably,
+    // with no backup anywhere.
+    //
+    // `rename` within the same directory is atomic on every platform we ship:
+    // a reader sees either the old vault or the new one, never a partial.
+    let target = vault_path()?;
+    let temp = target.with_extension("enc.tmp");
+
+    write_owner_only(&temp, &blob)?;
+    std::fs::rename(&temp, &target).map_err(|e| {
+        // Leave the temp file: it holds the only copy of the new state, and
+        // deleting it here would discard the write we just made.
+        AutoDevError::Vault(format!(
+            "could not replace the vault at {}: {e}. The new contents are in {} — \
+             rename it manually to recover.",
+            target.display(),
+            temp.display()
+        ))
+    })
 }
 
 /// Apply a store to an entry map.
@@ -206,10 +246,19 @@ pub fn get(key: &str) -> Result<Option<String>> {
     Ok(load()?.get(key).cloned())
 }
 
-pub fn delete(key: &str) -> Result<()> {
+/// Remove a key. Returns whether anything was actually removed.
+///
+/// D-5: the bool used to be discarded here while a test comment claimed
+/// `VaultManager::delete` surfaces it to the caller — so "no such secret" and
+/// "removed successfully" were the same outcome, and a typo'd provider id
+/// reported success.
+pub fn delete(key: &str) -> Result<bool> {
     let mut entries = load()?;
-    apply_delete(&mut entries, key);
-    save(&entries)
+    let removed = apply_delete(&mut entries, key);
+    if removed {
+        save(&entries)?;
+    }
+    Ok(removed)
 }
 
 /// Every key held here.

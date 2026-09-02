@@ -379,8 +379,22 @@ impl Provider for OpenAIProvider {
                 Ok(ProviderStatus::Error(format!("HTTP {code}")))
             }
             Err(e) => {
+                // ⚠ D-6. NEVER return the raw transport error to the caller.
+                //
+                // `reqwest::Error`'s Display includes the request URL, and this
+                // value becomes `ProviderStatus::Error` — which crosses the
+                // Tauri IPC boundary and is rendered in Settings. That is
+                // exactly how a key in a query string reached the renderer in
+                // P2's pre-build audit; the URL fix was applied to Google and
+                // this conduit was left open on the other two.
+                //
+                // Since P2-23, `set_provider_key` surfaces this string to the
+                // user directly, so the conduit is now load-bearing.
+                //
+                // Logged in full (the log sink redacts), returned as a fixed
+                // string.
                 error!("OpenAI connection test failed: {e}");
-                Ok(ProviderStatus::Error(e.to_string()))
+                Ok(ProviderStatus::Error("Connection failed".into()))
             }
         }
     }

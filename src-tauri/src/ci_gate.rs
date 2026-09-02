@@ -1157,6 +1157,60 @@ let x = 1;
             .any(|c| c.as_os_str().to_str() == Some("sidecar"))
     }
 
+    // ── TG-P2-13 · a transport error never reaches the renderer ───────────────
+
+    /// `ProviderStatus::Error` must not carry a raw `reqwest::Error`.
+    ///
+    /// **D-6, from the P2 post-phase audit — and a recurrence.** `reqwest`'s
+    /// `Error` Display includes the request URL. `ProviderStatus` crosses the
+    /// Tauri IPC boundary and is rendered in Settings, so returning
+    /// `e.to_string()` publishes whatever was in that URL to the renderer.
+    ///
+    /// P2's pre-build audit found exactly this leaking a Google API key from a
+    /// `?key=` query string. The fix moved the key to a header — and left the
+    /// conduit itself open on two of the three adapters. Since `P2-23`,
+    /// `set_provider_key` surfaces that string to the user directly, so the
+    /// conduit became load-bearing rather than merely latent.
+    ///
+    /// The error is still logged in full; the log sink redacts. Only the
+    /// IPC-facing value is fixed text.
+    #[test]
+    fn tg_p2_13_no_adapter_returns_a_raw_transport_error_to_the_renderer() {
+        let dir = repo_root().join("autodev-core/src/provider");
+        let mut offenders = Vec::new();
+
+        for adapter in ["anthropic.rs", "openai.rs", "google.rs"] {
+            let text = std::fs::read_to_string(dir.join(adapter)).expect("read adapter");
+
+            for (n, line) in text.lines().enumerate() {
+                let code = line.split("//").next().unwrap_or("");
+                if !code.contains("ProviderStatus::Error(") {
+                    continue;
+                }
+                // `e.to_string()` or a format! interpolating the error binding.
+                let leaks = code.contains("e.to_string()")
+                    || code.contains("{e}")
+                    || code.contains("{err}")
+                    || code.contains("err.to_string()");
+                if leaks {
+                    offenders.push(format!(
+                        "{adapter}:{} returns a transport error across the IPC boundary, and                          reqwest's Display includes the request URL: {}",
+                        n + 1,
+                        code.trim()
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "a provider status shown in the UI must not carry a raw transport error:
+{}",
+            offenders.join("
+")
+        );
+    }
+
     // ── TG-P2-05 · the Rust catalogue and the picker are the same list ────────
 
     /// `provider/catalogue.rs` and `src/data/models.ts` must offer exactly the
