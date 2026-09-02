@@ -257,15 +257,24 @@ async fn run_inner(
     // (F-21), in the commit that claimed depth was now unforgeable.
     let identity = identity_for(subagent_id, config);
 
-    // Autonomous: a subagent has no user to prompt for permission, and a
-    // blocked prompt would hang until the timeout.
+    // ⚠ G-5. This hardcoded `PermissionMode::Autonomous` under the comment
+    // *"a subagent has no user to prompt for permission, and a blocked prompt
+    // would hang until the timeout"* — while `deps.pending`, the permission
+    // channel itself, was passed in two lines below. A model held in
+    // `ManualApproval` escaped every prompt with one `spawn_subagent` call:
+    // the child ran unattended, with `bash`, on the user's own key.
+    //
+    // The mode is inherited from the parent now. A fleet recipe already runs
+    // Autonomous, so its subagents still do — nothing about unattended work
+    // changes. What changes is that an INTERACTIVE parent's child is bound by
+    // the same policy the user chose for the parent.
     //
     // No SessionManager is attached: subagent sessions are ephemeral and were
     // never inserted into the sessions table, so append_message would fail on a
     // foreign-key constraint. This mirrors RecipeRunner's Mode 1 path.
     let engine = AgentEngine::new(
         provider,
-        PermissionMode::Autonomous,
+        config.permission_mode.clone(),
         PAMode::FastDevelopment,
         deps.state.clone(),
         deps.pending.clone(),
@@ -424,6 +433,7 @@ mod tests {
         SubagentConfig {
             parent_slug: "worker-backend".into(),
             role: "subagent".into(),
+            permission_mode: PermissionMode::Autonomous,
             parent_session_id: "sess-1".into(),
             system_prompt: String::new(),
             tools: Vec::new(),
@@ -562,6 +572,76 @@ mod p3_58_63_tests {
                 crate::provider::routing::provider_for_model(d),
                 Some(provider),
                 "{provider}'s default '{d}' routes elsewhere"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod g5_tests {
+    use super::*;
+    use crate::agent::permission::PermissionMode;
+    use crate::agent::tool_effect::ToolEffect;
+
+    /// A subagent inherits its parent's permission mode.
+    ///
+    /// 🔴 G-5 (post-phase gap hunt). `native_runner` hardcoded
+    /// `PermissionMode::Autonomous` for every subagent regardless of parent,
+    /// `tools` defaulted to empty (= unrestricted), and the child got `bash`.
+    /// So a model held in `ManualApproval` escaped every prompt with a single
+    /// `spawn_subagent` call — on the user's own key, under BYOK.
+    ///
+    /// The justification comment read "a subagent has no user to prompt for
+    /// permission"; two lines below it, `deps.pending` — the permission
+    /// channel — was passed straight in.
+    #[test]
+    fn a_child_cannot_outrank_its_parent() {
+        for parent in [
+            PermissionMode::ManualApproval,
+            PermissionMode::SmartApprove,
+            PermissionMode::Autonomous,
+        ] {
+            let ctx_mode = parent.clone();
+            // What the spawn tools now write into the config.
+            let child = ctx_mode.clone();
+
+            assert_eq!(
+                child, parent,
+                "the child's mode must equal the parent's; anything else is an \
+                 escape hatch the model can reach with one tool call"
+            );
+
+            // And the inheritance must be load-bearing: under a prompting
+            // parent, the child must still prompt for the dangerous effects.
+            if !matches!(parent, PermissionMode::Autonomous) {
+                assert!(
+                    ToolEffect::Execute.requires_prompt(&child),
+                    "a child of a {parent:?} parent runs commands unprompted"
+                );
+                assert!(
+                    ToolEffect::Network.requires_prompt(&child),
+                    "a child of a {parent:?} parent leaves the machine unprompted"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_fleet_is_unaffected() {
+        // The no-fire half, and it matters: a recipe already runs Autonomous,
+        // so its subagents still do. If inheritance changed that, unattended
+        // cron work would stall on prompts nobody can answer.
+        let fleet_parent = PermissionMode::Autonomous;
+        for effect in [
+            ToolEffect::Read,
+            ToolEffect::Write,
+            ToolEffect::Execute,
+            ToolEffect::Network,
+            ToolEffect::Board,
+        ] {
+            assert!(
+                !effect.requires_prompt(&fleet_parent),
+                "{effect:?} would prompt a fleet subagent"
             );
         }
     }

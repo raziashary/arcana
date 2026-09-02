@@ -320,6 +320,11 @@ impl ToolExecutor {
                 // nothing for this task to consult. P3-64.)
                 let _pending = self.pending.clone();
                 let identity = self.identity.clone();
+                // G-5. The permission DECISION happens before this partition
+                // (P3-64), but the child's ToolContext still has to carry the
+                // mode: `spawn_subagent` reads it to stop a subagent
+                // outranking its parent.
+                let mode = self.mode.clone();
 
                 let handle = tokio::spawn(async move {
                     let _permit = sem_clone.acquire().await.unwrap();
@@ -331,6 +336,7 @@ impl ToolExecutor {
                         call_id: call_id.clone(),
                         depth: identity.depth,
                         agent_role: identity.role.clone(),
+                        permission_mode: mode.clone(),
                     };
 
                     // Redaction boundary — see `redact_result`. The tool is
@@ -424,6 +430,9 @@ impl ToolExecutor {
                 let ctx = ToolContext {
                     session_id: self.session_id.clone(),
                     working_dir: self.working_dir.clone(),
+                    // G-5: the child must not be able to outrank its parent.
+                    // G-5: the child must not be able to outrank its parent.
+                    permission_mode: self.mode.clone(),
                     call_id: call_id.clone(),
                     depth: self.identity.depth,
                     agent_role: self.identity.role.clone(),

@@ -58,18 +58,36 @@ impl Tool for BashTool {
             .as_u64()
             .unwrap_or(DEFAULT_TIMEOUT_SECS);
 
-        // Workspace path-jail (Phase 1 of docs/endtoendrun/14may2026/07).
+        // ⚠ G-4 (post-phase gap hunt). This block was commented as the
+        // **workspace path-jail** — "the shell cwd MUST be inside the
+        // configured workspace", guarding against a `ctx.working_dir` that had
+        // "drifted away from the configured workspace".
         //
-        // 1. The shell cwd MUST be inside the configured workspace. Without
-        //    this check, a Mode 2 worker whose `ctx.working_dir` somehow
-        //    drifted away from the configured workspace would run shell
-        //    commands against the wrong tree.
+        // 🔴 It is not a jail and never was. Both arguments below are the SAME
+        // VALUE, so the comparison is trivially satisfied; the only way it can
+        // fail is if the path does not canonicalise. It is an **existence and
+        // canonicalisation check** wearing a jail's description — and both
+        // `check_redirect_targets`'s docstring and `builtin_tools/mod.rs`
+        // deferred to it as the load-bearing defence.
+        //
+        // It cannot be made into a jail here: there is no separately
+        // configured workspace root anywhere in `AppState` to compare against,
+        // so the drift it claims to detect is undetectable from this position.
+        // Introducing one is an architectural decision, flagged rather than
+        // invented (`ADR-LOG-RESTRUCT-0029`).
+        //
+        // **What actually bounds `bash`:** it declares `ToolEffect::Execute`,
+        // so it is prompted in every mode but `Autonomous` — consent, not
+        // containment. `check_redirect_targets` is a secondary heuristic over
+        // `>` / `>>` / `tee` tokens and does not see `copy`, `curl -o`, or
+        // `python -c "open(...,'w')"`. A shell tool is bounded by the user
+        // saying yes, and saying otherwise in a comment is how a reader comes
+        // to believe otherwise.
         let cwd_path = PathBuf::from(&ctx.working_dir);
         if let Err(msg) = validate_workspace_path(&cwd_path, &ctx.working_dir) {
-            // validate_workspace_path returns an error if the path doesn't
-            // canonicalize. A workspace that can't canonicalize is itself a
-            // configuration failure — surface to the agent so it asks the
-            // user/supervisor rather than running blindly.
+            // A working directory that cannot canonicalise is a configuration
+            // failure — surface it rather than running blindly in an unknown
+            // location.
             return ToolResult::error(msg);
         }
 
@@ -77,7 +95,9 @@ impl Tool for BashTool {
         //    point outside the workspace. This is heuristic — shell
         //    redirection has many forms (here-docs, process substitution,
         //    eval, dynamic vars) we cannot statically extract. The cwd jail
-        //    above is the load-bearing check; this catches the easy cases.
+        //    above is NOT a load-bearing check (G-4: it compares the working
+        //    directory against itself). Consent is what bounds this tool;
+        //    this scanner catches the easy cases on top of that.
         if let Some(err) = check_redirect_targets(&command, &ctx.working_dir) {
             return ToolResult::error(err);
         }
@@ -246,7 +266,11 @@ async fn run_command(
 /// of the form `<< EOF ... > /etc/foo` that resolve outside the workspace.
 /// Heuristic only: a misbehaving model could still escape via variable
 /// expansion (`> "$VAR"`), process substitution (`> >(cmd)`), or `eval`, so
-/// the cwd jail in `execute` is the load-bearing check.
+/// ⚠ G-4: this docstring said "the cwd jail in `execute` is the load-bearing
+/// check". There is no cwd jail — that call compares `ctx.working_dir` with
+/// itself. What bounds `bash` is the permission prompt its `Execute` effect
+/// forces; this scanner is a heuristic on top, and it does not see `copy`,
+/// `curl -o`, or `python -c "open(...,'w')"`.
 ///
 /// Bug C — the detector now also:
 ///   * skips bytes inside an identified heredoc body (so a `>` *inside* a

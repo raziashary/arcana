@@ -50,6 +50,19 @@ pub struct ToolContext {
     pub session_id: String,
     pub working_dir: String,
     pub call_id: String,
+    /// The permission mode this call is being made under.
+    ///
+    /// 🔴 `G-5` (post-phase gap hunt). Without it, the spawn tools could not
+    /// tell a subagent what policy its parent was running under — and
+    /// `native_runner` hardcoded `PermissionMode::Autonomous` regardless. So a
+    /// model held in `ManualApproval` escaped every prompt with a single
+    /// `spawn_subagent` call: the child ran unattended, with `bash`, on the
+    /// user's own key.
+    ///
+    /// ⚠ The justification comment at that site read *"a subagent has no user
+    /// to prompt for permission"* — and two lines below it, `deps.pending` was
+    /// passed straight in. The permission channel was there all along.
+    pub permission_mode: crate::agent::permission::PermissionMode,
     /// K.11 — Subagent nesting depth (0 = top-level agent, n+1 = subagent
     /// spawned by an agent at depth n). Spawn tools read this to guard against
     /// unbounded recursion.

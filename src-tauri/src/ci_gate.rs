@@ -2569,6 +2569,72 @@ let x = 1;
         );
     }
 
+    // ── TG-P3-G5 · a subagent never outranks its parent ───────────────────────
+
+    /// The permission mode is inherited, never hardcoded.
+    ///
+    /// 🔴 `G-5` (post-phase gap hunt). `native_runner` built every child
+    /// with `PermissionMode::Autonomous` regardless of its parent, so a model
+    /// held in `ManualApproval` escaped every prompt with one `spawn_subagent`
+    /// call — unattended, with `bash`, on the user's own key under BYOK.
+    ///
+    /// ⚠ The comment justifying it read *"a subagent has no user to prompt for
+    /// permission"*, and two lines below, `deps.pending` — the permission
+    /// channel itself — was passed in. A justification contradicted by the
+    /// line beneath it is the tell.
+    #[test]
+    fn tg_p3_g5_a_subagent_inherits_its_parents_permission_mode() {
+        let runner = read_source(
+            &repo_root().join("autodev-core/src/subagent/native_runner.rs"),
+        );
+
+        let engine_call = runner
+            .split("let engine = AgentEngine::new(")
+            .nth(1)
+            .expect("the runner must build an engine");
+        let args = engine_call.split(");").next().unwrap_or(engine_call);
+
+        assert!(
+            args.contains("config.permission_mode"),
+            "the subagent engine's mode must come from its config, which the              spawn tools fill from the PARENT's context. A literal here is a              one-call escape from whatever the user chose."
+        );
+        assert!(
+            !args.contains("PermissionMode::Autonomous"),
+            "the runner hardcodes Autonomous again"
+        );
+
+        // ── and the tools must actually pass it down ────────────────────
+        let dir = repo_root().join("autodev-core/src/agent/builtin_tools");
+        let mut spawners = 0usize;
+        let mut offenders = Vec::new();
+
+        for entry in std::fs::read_dir(&dir).expect("builtin_tools").flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let text = read_source(&path);
+            if !text.contains("SubagentConfig {") {
+                continue;
+            }
+            spawners += 1;
+            let name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("?");
+            if !text.contains("permission_mode: ctx.permission_mode") {
+                offenders.push(name.to_string());
+            }
+        }
+
+        assert!(
+            spawners >= 3,
+            "only {spawners} spawn tools found — the sweep is not reaching them"
+        );
+        assert!(
+            offenders.is_empty(),
+            "these spawn tools do not pass the caller's permission mode to the              child, so the child's policy is whatever the config defaults to:              {:?}",
+            offenders
+        );
+    }
+
     // ── TG-P3-17 · no validator subprocess runs without a ceiling ─────────────
 
     /// Every subprocess the validator spawns must go through `run_bounded`.

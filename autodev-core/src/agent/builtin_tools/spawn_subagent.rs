@@ -185,6 +185,8 @@ impl Tool for SpawnSubagentTool {
                 .map(|n| n as u32)
                 .unwrap_or(0),
             depth: ctx.depth + 1, // K.11 — increment nesting depth
+                // G-5: a child never outranks its parent.
+                permission_mode: ctx.permission_mode.clone(),
         };
 
         // Spawn (returns immediately) then await the bridge task to drive it

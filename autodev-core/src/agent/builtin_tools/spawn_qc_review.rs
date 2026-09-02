@@ -175,6 +175,10 @@ impl Tool for SpawnQcReviewTool {
 
         let config = SubagentConfig {
             parent_slug: QC_DISPATCHER_SLUG.to_string(),
+            // G-5: inherited, not chosen. The dispatcher is a cron
+            // recipe running Autonomous, so its reviewers still do —
+            // what changes is that the mode is READ rather than assumed.
+            permission_mode: ctx.permission_mode.clone(),
             // Matches the qc-agent recipe, so annotations this reviewer
             // writes are attributed to QC and not to "user" (F-04).
             role: "qc-agent".to_string(),

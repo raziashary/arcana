@@ -44,6 +44,16 @@ impl SpawnSubagentRequest {
         let cfg = SubagentConfig {
             parent_slug: self.parent_slug,
             role: "subagent".to_string(),
+            // ⚠ G-5. A subagent spawned straight from the UI has a user
+            // sitting in front of it — the same situation as the interactive
+            // assistant, which runs `ManualApproval` deliberately
+            // (`agent_commands.rs`). It is NOT part of the unattended fleet,
+            // so it does not inherit the fleet's Autonomous.
+            //
+            // Deliberately not a field on the request: the mode is not the
+            // caller's to choose. Letting the renderer name it would put the
+            // policy back in reach of whatever can send this command.
+            permission_mode: autodev_core::agent::permission::PermissionMode::ManualApproval,
             parent_session_id: self.parent_session_id,
             system_prompt: self.system_prompt.unwrap_or_default(),
             tools: self.tools,

@@ -19,6 +19,14 @@ pub struct SubagentConfig {
     /// Slug of the parent agent (e.g. "worker-backend", "supervisor", "pa").
     pub parent_slug: String,
 
+    /// The permission mode the child runs under (`G-5`).
+    ///
+    /// Inherited from the parent, never chosen by the model. `native_runner`
+    /// hardcoded `Autonomous` for every subagent regardless of its parent, so
+    /// `spawn_subagent` was a one-call escape from `ManualApproval`.
+    #[serde(default)]
+    pub permission_mode: crate::agent::permission::PermissionMode,
+
     /// The child's ROLE — what kind of agent it is ("qc-agent", "subagent"),
     /// not which instance it is.
     ///
