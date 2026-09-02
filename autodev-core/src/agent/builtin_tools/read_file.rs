@@ -17,6 +17,19 @@ const READ_FILE_REQUIRE_RANGE_OVER_LINES: usize = 800;
 /// performed as multiple paged calls.
 const READ_FILE_MAX_LINES_PER_CALL: usize = 2000;
 
+/// Byte ceiling on one `read_file` response.
+///
+/// ⚠ `TG3-16` requires that `read_file` bounds **bytes**. It bounded only
+/// LINES, which is not the same claim: 2,000 lines of a minified bundle, a
+/// base64 blob, or a generated data file is tens of megabytes and passes the
+/// line cap untouched. The line cap remains — it is what makes paging
+/// predictable — and this is the bound that actually limits what enters the
+/// model's context.
+///
+/// 256 KB is far above any hand-written source file and far below the point
+/// where a single read dominates a context window.
+const READ_FILE_MAX_BYTES: usize = 256 * 1024;
+
 #[async_trait]
 impl Tool for ReadFileTool {
     fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
@@ -190,6 +203,23 @@ impl Tool for ReadFileTool {
                     .collect::<Vec<_>>()
                     .join("\n");
 
+                // TG3-16: bound the bytes, and SAY SO. A silent byte cap is
+                // the `P3-18` shape — output that looks complete and is not.
+                if output.len() > READ_FILE_MAX_BYTES {
+                    let kept = crate::security::truncate::truncate_bytes(
+                        &output,
+                        READ_FILE_MAX_BYTES,
+                    )
+                    .to_string();
+                    let dropped = output.len() - kept.len();
+                    output = format!(
+                        "{kept}\n\n[⚠ Output truncated at {} KB — {dropped} further bytes \
+                         were not returned. This file's lines are long (minified, base64 or \
+                         generated); narrow the range with start_line/end_line.]",
+                        READ_FILE_MAX_BYTES / 1024,
+                    );
+                }
+
                 if truncated_by_hard_cap {
                     output.push_str(&format!(
                         "\n\n[⚠ Output truncated to {max} lines — file has {total} lines, \
@@ -216,5 +246,39 @@ fn resolve_path(path: &str, working_dir: &str) -> std::path::PathBuf {
         p.to_path_buf()
     } else {
         Path::new(working_dir).join(path)
+    }
+}
+
+#[cfg(test)]
+mod tg3_16_tests {
+    use super::*;
+
+    #[test]
+    fn the_byte_bound_is_a_different_bound_from_the_line_bound() {
+        // ⚠ `TG3-16` requires `read_file` to bound BYTES. It bounded only
+        // LINES, which is not the same claim: 2,000 lines of a minified
+        // bundle, a base64 blob or a generated data file sails through the
+        // line cap at tens of megabytes.
+        let worst_case_bytes = READ_FILE_MAX_LINES_PER_CALL * 100_000;
+        assert!(
+            READ_FILE_MAX_BYTES < worst_case_bytes,
+            "the line cap alone permits {worst_case_bytes} bytes; the byte cap \
+             must bind well before that"
+        );
+        // And it must not bind on ordinary source: 2,000 lines of 80 columns.
+        assert!(
+            READ_FILE_MAX_BYTES > READ_FILE_MAX_LINES_PER_CALL * 80,
+            "the byte cap would truncate an ordinary 2,000-line source file"
+        );
+    }
+
+    #[test]
+    fn an_over_long_output_is_truncated_on_a_character_boundary() {
+        // The truncation helper is what makes this safe on non-ASCII; slicing
+        // by raw byte index is the P3-14 defect.
+        let text = "é".repeat(200_000);
+        let cut = crate::security::truncate::truncate_bytes(&text, READ_FILE_MAX_BYTES);
+        assert!(cut.len() <= READ_FILE_MAX_BYTES);
+        assert!(text.starts_with(cut), "truncation must be a prefix");
     }
 }

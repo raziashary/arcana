@@ -67,6 +67,15 @@ fn default_max_results() -> u32 {
 /// full-length lines stay bounded.
 const MAX_LINE_BYTES: usize = 2_048;
 
+/// Byte ceiling on the whole grep response.
+///
+/// ⚠ `TG3-16` asks for a bound *per line as well as in total*. Per-line alone
+/// leaves the product unbounded in practice: `max_results` defaults to 100 and
+/// the caller may raise it, and each match can carry `context_lines` on either
+/// side — so 1,000 matches at 2 KB each with context is still tens of
+/// megabytes. The two bounds are not the same bound.
+const MAX_TOTAL_BYTES: usize = 256 * 1024;
+
 #[async_trait]
 impl Tool for GrepTool {
     fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
@@ -318,6 +327,30 @@ impl Tool for GrepTool {
             Err(e) => return ToolResult::error(format!("Failed to serialize results: {e}")),
         };
 
+        // TG3-16: the TOTAL, not only each line. `max_results` is caller-raisable
+        // and each match carries context on both sides, so the per-line bound
+        // alone leaves the product unbounded. Dropping whole matches keeps the
+        // JSON parseable -- truncating the serialized string would hand the
+        // model a document it cannot read, which is worse than fewer results.
+        if json_output.len() > MAX_TOTAL_BYTES {
+            let mut trimmed = output;
+            while trimmed.results.len() > 1
+                && serde_json::to_string(&trimmed).map(|j| j.len()).unwrap_or(0) > MAX_TOTAL_BYTES
+            {
+                trimmed.results.pop();
+            }
+            trimmed.truncated = true;
+            let refit = serde_json::to_string(&trimmed)
+                .unwrap_or_else(|_| json_output[..MAX_TOTAL_BYTES.min(json_output.len())].to_string());
+            return ToolResult::success_with_hint(
+                refit,
+                format!(
+                    "Results trimmed to stay under {} KB total (truncated=true). Narrow the                      pattern, add a glob filter, or search a subdirectory.",
+                    MAX_TOTAL_BYTES / 1024
+                ),
+            );
+        }
+
         if total_matches == 0 {
             ToolResult::success(format!("No matches found for pattern '{}'", params.pattern))
         } else if total_matches >= params.max_results as usize {
@@ -369,6 +402,19 @@ mod p3_29_tests {
         assert_eq!(
             crate::security::truncate::truncate_bytes(line, MAX_LINE_BYTES),
             line
+        );
+    }
+
+    #[test]
+    fn the_total_bound_is_a_different_bound_from_the_per_line_one() {
+        // TG3-16 asks for both, and they are not the same: `max_results`
+        // defaults to 100 and is caller-raisable, and each match carries
+        // context on both sides. 1,000 matches at the per-line cap is still
+        // tens of megabytes.
+        assert!(MAX_TOTAL_BYTES > MAX_LINE_BYTES);
+        assert!(
+            MAX_TOTAL_BYTES < MAX_LINE_BYTES * 1_000,
+            "the total bound must actually bind before a large result set does"
         );
     }
 
