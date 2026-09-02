@@ -205,3 +205,64 @@ mod tests {
         assert!(extra.is_err(), "should have rejected (MAX_PER_PARENT)");
     }
 }
+
+#[cfg(test)]
+mod p3_22_tests {
+    use super::*;
+
+    /// Releasing a permit must restore global capacity — and holding one past
+    /// termination must consume it.
+    ///
+    /// 🔴 `P3-22`. The manager held each subagent's permit inside its registry
+    /// entry for the whole `TERMINAL_RETENTION` window and beyond. Retention
+    /// exists so the UI can show a final result; it has nothing to do with
+    /// capacity. So 16 **completed** subagents consumed the entire global cap,
+    /// and the only thing that would free them — `prune_terminal` — was
+    /// reachable from `spawn` **only after** the `acquire` that was waiting on
+    /// them, or from `list()`, which only the UI calls. With the subagent
+    /// monitor panel closed, the 17th spawn blocked permanently.
+    #[tokio::test]
+    async fn a_released_permit_restores_capacity() {
+        let pool = SubagentPool::new();
+
+        // Fill the global cap. Each spawn uses a distinct parent so the
+        // per-parent cap (10) is not what we are measuring.
+        let mut held = Vec::new();
+        for i in 0..MAX_GLOBAL_CONCURRENT {
+            held.push(
+                pool.acquire(&format!("parent-{i}"), 0)
+                    .await
+                    .unwrap_or_else(|e| panic!("permit {i} of {MAX_GLOBAL_CONCURRENT}: {e}")),
+            );
+        }
+
+        // The next one must wait — this is the state 16 finished-but-unreleased
+        // subagents put the pool in.
+        let blocked = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            pool.acquire("parent-overflow", 0),
+        )
+        .await;
+        assert!(
+            blocked.is_err(),
+            "the global cap did not hold at {MAX_GLOBAL_CONCURRENT}; this test \
+             cannot detect the deadlock it exists to detect"
+        );
+
+        // Terminating one subagent releases its permit — which is what
+        // `finalise` now does, and what its docstring always claimed it did.
+        drop(held.pop().expect("one held permit"));
+
+        let recovered = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            pool.acquire("parent-after-release", 0),
+        )
+        .await;
+        assert!(
+            recovered.is_ok(),
+            "capacity was not restored by releasing a permit — a finished \
+             subagent still holds its slot, which is the deadlock"
+        );
+        assert!(recovered.unwrap().is_ok());
+    }
+}

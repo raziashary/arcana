@@ -2174,6 +2174,161 @@ let x = 1;
         );
     }
 
+    // ── TG-P3-22 · a finished subagent does not hold its pool slot ────────────
+
+    /// Capacity is released at termination, and the prune runs before the wait.
+    ///
+    /// 🔴 `P3-22`. The permit lived in the registry entry and was released
+    /// only when `prune_terminal`'s `retain` dropped it. `spawn` called
+    /// `acquire` first and `prune_terminal` **after** — so the prune that
+    /// would free permits sat behind the acquire waiting for them.
+    /// `prune_terminal`'s only other caller is `list()`, reached solely from
+    /// Tauri commands the UI drives. **With the subagent monitor panel closed,
+    /// 16 completed subagents blocked the 17th spawn permanently.**
+    ///
+    /// ⚠ `finalise`'s own docstring said *"The pool permit is released here"*.
+    /// It stamped status and nothing else. A docstring that promises behaviour
+    /// the code does not perform is a defect, and this one concealed a
+    /// deadlock for as long as it was believed.
+    ///
+    /// The gate asserts the **invariant**, not the two lines that were wrong:
+    /// every site that stamps `terminated_at` must also release the permit.
+    /// A third such site — and there are already two — fails this.
+    #[test]
+    fn tg_p3_22_capacity_is_released_at_termination() {
+        let path = repo_root().join("autodev-core/src/subagent/manager.rs");
+        let text = read_source(&path);
+
+        // The permit must be takeable at all: `_permit: PoolPermit` is held
+        // for the entry's whole life by construction.
+        assert!(
+            text.contains("permit: Option<PoolPermit>"),
+            "the permit must be releasable independently of the registry \
+             entry — retention is for the UI, not for capacity"
+        );
+
+        // ── the invariant · every terminal stamp releases ────────────────
+        let stamps: Vec<usize> = text
+            .match_indices("terminated_at = Some(Instant::now())")
+            .map(|(i, _)| i)
+            .collect();
+
+        assert!(
+            stamps.len() >= 2,
+            "expected at least two terminal-stamping sites (`finalise` and the \
+             event pump); found {}. If they were consolidated, re-point this \
+             gate deliberately rather than letting it pass on an empty set",
+            stamps.len()
+        );
+
+        for at in &stamps {
+            // The release must sit in the same block, right after the stamp.
+            let window_end = (at + 220).min(text.len());
+            let window = &text[*at..window_end];
+            assert!(
+                window.contains("permit.take()"),
+                "a site stamps `terminated_at` without releasing the pool \
+                 permit. That subagent is finished but still consuming one of \
+                 the {} global slots, and the only thing that would free it is \
+                 a prune the UI has to trigger:\n...{}",
+                "MAX_GLOBAL_CONCURRENT",
+                &window[..window.len().min(160)]
+            );
+        }
+
+        // ── the ordering · prune before the wait ─────────────────────────
+        let spawn_fn = text
+            .split("pub async fn spawn(")
+            .nth(1)
+            .expect("spawn must exist");
+
+        let prune_at = spawn_fn
+            .find("self.prune_terminal().await")
+            .expect("spawn must prune stale terminal entries");
+        let acquire_at = spawn_fn
+            .find("self.pool.acquire(")
+            .expect("spawn must acquire a permit");
+
+        assert!(
+            prune_at < acquire_at,
+            "`prune_terminal` runs AFTER `acquire` in spawn. `acquire` waits on \
+             the semaphore, and the prune queued behind it is the only thing \
+             that would release those permits — that is a deadlock, not an \
+             ordering preference"
+        );
+    }
+
+    // ── TG-P3-24 · cancelling a parent stops its children ─────────────────────
+
+    /// A cancelled session must not leave subagents running.
+    ///
+    /// 🔴 `P3-24`. Subagents are detached tokio tasks, and dropping the
+    /// `JoinHandle` the parent awaits **detaches** rather than aborts. So a
+    /// cancelled parent left every child running to completion — finishing its
+    /// work, emitting its events, and billing the user's own key under BYOK for
+    /// a turn nobody would read.
+    ///
+    /// ⚠ The load-bearing assertion is that the helper is **called**, not that
+    /// it exists. `§0.16 L-C12` — a helper built and wired to nothing — stands
+    /// at seven instances, every one of which passed a gate that checked only
+    /// for the helper's definition.
+    #[test]
+    fn tg_p3_24_cancellation_reaches_the_children() {
+        let manager = read_source(
+            &repo_root().join("autodev-core/src/subagent/manager.rs"),
+        );
+        let engine = read_source(&repo_root().join("autodev-core/src/agent/engine.rs"));
+
+        assert!(
+            manager.contains("pub async fn abort_children_of"),
+            "the manager must be able to stop a parent's children"
+        );
+
+        // ── it is CALLED, from the cancel path, not merely defined ────────
+        let cancel_site = engine
+            .find("is_cancelled(session_id)")
+            .expect("the engine must check for cancellation");
+        let after_cancel = &engine[cancel_site..];
+        let block_end = after_cancel.find("            }").unwrap_or(after_cancel.len());
+        let cancel_block = &after_cancel[..block_end.min(1400)];
+
+        assert!(
+            cancel_block.contains("abort_children_of"),
+            "the engine breaks out of its turn loop on cancellation without \
+             stopping the subagents it spawned — they keep running and billing"
+        );
+
+        // ── the collect-then-terminate ordering ──────────────────────────
+        let helper = manager
+            .split("pub async fn abort_children_of")
+            .nth(1)
+            .expect("abort_children_of body");
+        let body = helper.split("\n    }").next().unwrap_or(helper);
+
+        let collect_at = body
+            .find(".collect()")
+            .expect("the ids must be collected before terminating");
+        let terminate_at = body
+            .find("self.abort(")
+            .expect("it must actually terminate the children it found");
+
+        assert!(
+            collect_at < terminate_at,
+            "ids must be collected BEFORE terminating: `terminate` takes the \
+             registry lock itself, so holding it across the calls deadlocks on \
+             the first child"
+        );
+
+        // The lock must be released between the phases — a `let reg = ...`
+        // still in scope at the terminate call is the deadlock.
+        let between = &body[collect_at..terminate_at];
+        assert!(
+            between.contains("};"),
+            "the registry lock must go out of scope between collecting and \
+             terminating; found no scope close between the two phases"
+        );
+    }
+
     // ── TG-P3-17 · no validator subprocess runs without a ceiling ─────────────
 
     /// Every subprocess the validator spawns must go through `run_bounded`.

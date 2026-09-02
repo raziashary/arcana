@@ -134,6 +134,14 @@ impl AgentEngine {
 
         // Check for cancellation before starting
         if self.state.lock_tolerant().is_cancelled(session_id) {
+            // P3-24, and this site was found by `TG-P3-24` itself rather than
+            // by me: a session can be cancelled while children spawned by an
+            // EARLIER run of the same session are still live. Returning here
+            // without stopping them leaves them running and billing, exactly
+            // as the in-loop path did.
+            if let Some(mgr) = crate::subagent::manager::global() {
+                mgr.abort_children_of(session_id).await;
+            }
             terminal.error("The run was cancelled before it started.");
             return Err(AutoDevError::Agent(
                 "Agent was cancelled before start".into(),
@@ -394,6 +402,19 @@ impl AgentEngine {
             // Cancel check
             if self.state.lock_tolerant().is_cancelled(session_id) {
                 info!("Agent cancelled during turn {turn}");
+                // P3-24. Children are DETACHED tokio tasks: dropping the
+                // JoinHandle the parent awaits detaches rather than aborts, so
+                // breaking out here used to leave every subagent this session
+                // spawned running to completion -- finishing its work, emitting
+                // its events, and billing the user's key for a turn nobody
+                // would ever read.
+                //
+                // `spawn_subagent` and `spawn_parallel_subagents` both set
+                // `parent_slug: ctx.session_id`, so the session id stops
+                // exactly this session's children and nothing else.
+                if let Some(mgr) = crate::subagent::manager::global() {
+                    mgr.abort_children_of(session_id).await;
+                }
                 break;
             }
 

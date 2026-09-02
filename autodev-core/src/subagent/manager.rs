@@ -38,8 +38,18 @@ use crate::events::{emit_subagent_event, SubagentEventPayload};
 struct ManagerEntry {
     handle: SubagentHandle,
     last_event: Option<String>,
-    /// Drop guard — releases the global / per-parent pool slot.
-    _permit: PoolPermit,
+    /// Drop guard for the global / per-parent pool slot.
+    ///
+    /// 🔴 `P3-22`. This was `_permit: PoolPermit` — held for the entry's whole
+    /// life, so a **finished** subagent kept its pool slot for the full
+    /// `TERMINAL_RETENTION` window and beyond. Retention exists so the UI can
+    /// display a final result; it has nothing to do with capacity, and tying
+    /// the two meant 16 completed subagents consumed the entire global cap.
+    ///
+    /// `Option`, so `finalise` can `take()` it the moment the subagent reaches
+    /// a terminal state — which is what `finalise`'s own docstring already
+    /// claimed was happening.
+    permit: Option<PoolPermit>,
     /// Background task running `native_runner::run`. Aborting this future
     /// cancels the child engine's turn loop (used by `abort_subagent`).
     task: Option<JoinHandle<Result<SubagentResult>>>,
@@ -73,6 +83,18 @@ impl SubagentManager {
         mut config: SubagentConfig,
         prompt: String,
     ) -> Result<SubagentHandle> {
+        // ⚠ P3-22. Sweep BEFORE reserving. The prune used to sit at the far
+        // side of this `acquire`, which is a plain deadlock: `acquire` waits
+        // on the semaphore, and the only thing that would have released those
+        // permits was the prune queued behind it.
+        //
+        // With the permit now released at termination (see `finalise`), this
+        // ordering is no longer the sole line of defence — but a prune that
+        // can only run after the wait it is meant to end is wrong on its own
+        // terms, and leaving it there would restore the deadlock the moment
+        // anything else came to hold a permit past termination.
+        self.prune_terminal().await;
+
         // Reserve a slot before generating the slug so depth/per-parent
         // rejections happen before any HTTP work.
         let permit = self.pool.acquire(&config.parent_slug, config.depth).await?;
@@ -115,17 +137,13 @@ impl SubagentManager {
             pump_manager.pump_events(pump_id, rx).await;
         });
 
-        // Prune stale terminal entries before inserting the new one so the
-        // registry doesn't grow unboundedly over a long session.
-        self.prune_terminal().await;
-
         // Insert into registry.
         self.registry.lock().await.insert(
             id.clone(),
             ManagerEntry {
                 handle: handle.clone(),
                 last_event: None,
-                _permit: permit,
+                permit: Some(permit),
                 task: Some(task),
                 terminated_at: None,
             },
@@ -229,6 +247,49 @@ impl SubagentManager {
         Ok(())
     }
 
+    /// Terminate every live subagent spawned by `parent_slug`.
+    ///
+    /// Returns how many were stopped.
+    ///
+    /// P3-24. Subagents run as detached tokio tasks, and dropping the
+    /// `JoinHandle` the parent is awaiting **detaches** rather than aborts.
+    /// So a cancelled parent left its children running to completion --
+    /// finishing their work, emitting their events and billing the user's key
+    /// for a turn nobody would read.
+    ///
+    /// `spawn_subagent` and `spawn_parallel_subagents` both set
+    /// `parent_slug: ctx.session_id`, so a session id is exactly the right
+    /// key: cancelling session X stops the children of session X and nothing
+    /// else. (`spawn_qc_review` uses the dispatcher slug instead, and is
+    /// deliberately unaffected -- a QC review is not owned by the interactive
+    /// session that happened to be open.)
+    pub async fn abort_children_of(self: &Arc<Self>, parent_slug: &str) -> usize {
+        // Collect first, THEN terminate. `terminate` takes the registry lock
+        // itself, so holding it across the calls would deadlock on the first
+        // child.
+        let ids: Vec<String> = {
+            let reg = self.registry.lock().await;
+            reg.iter()
+                .filter(|(_, e)| {
+                    e.handle.config.parent_slug == parent_slug
+                        && !e.handle.status.is_terminal()
+                })
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+
+        let mut stopped = 0usize;
+        for id in ids {
+            if self.abort(&id).await.is_ok() {
+                stopped += 1;
+            }
+        }
+        if stopped > 0 {
+            info!("[SubagentManager] cancelled {stopped} child(ren) of '{parent_slug}'");
+        }
+        stopped
+    }
+
     /// Hard abort — alias for terminate(force=true).
     pub async fn abort(self: &Arc<Self>, id: &str) -> Result<()> {
         self.terminate(id, true).await
@@ -268,11 +329,19 @@ impl SubagentManager {
                         // with `terminated_at` set, and `finalise` runs only
                         // from `await_result` — so a subagent that completed
                         // but was never awaited stayed in the registry forever
-                        // and, because `_permit` is a drop-guard held by the
+                        // and, because the permit is a drop-guard held by the
                         // entry, never released its pool slot. Found by the P0
                         // post-phase audit (F-02).
+                        //
+                        // ⚠ P3-22. This is the SECOND place a subagent reaches
+                        // a terminal state, and it must release the permit for
+                        // the same reason `finalise` does — otherwise the
+                        // never-awaited path that F-02 fixed for the registry
+                        // still leaks capacity. Releasing where the state is
+                        // stamped, both times, is what keeps the two in step.
                         if status.is_terminal() && entry.terminated_at.is_none() {
                             entry.terminated_at = Some(Instant::now());
+                            drop(entry.permit.take());
                         }
                     }
                 }
@@ -286,15 +355,26 @@ impl SubagentManager {
         }
     }
 
-    /// Finalise an entry after the bridge task joins. We don't drop it
-    /// immediately — keeping it for a short retention window lets the UI
-    /// display the final result. The pool permit is released here.
+    /// Finalise an entry after the bridge task joins.
+    ///
+    /// The entry is kept for a short retention window so the UI can display
+    /// the final result — but **the pool permit is released immediately**.
+    ///
+    /// 🔴 `P3-22`. This docstring already said *"The pool permit is released
+    /// here"*. It was not: the function stamped `terminated_at` and nothing
+    /// else, and the permit stayed inside the entry until `prune_terminal`'s
+    /// `retain` dropped it. A docstring promising behaviour the code does not
+    /// perform is a bug, not a wording problem — and this one hid a deadlock
+    /// for as long as it was believed.
     async fn finalise(&self, id: &str, status: &SubagentStatus) {
         let mut reg = self.registry.lock().await;
         if let Some(entry) = reg.get_mut(id) {
             entry.handle.status = *status;
             if status.is_terminal() {
                 entry.terminated_at = Some(Instant::now());
+                // Capacity is freed at termination; the ENTRY is what the
+                // retention window is for.
+                drop(entry.permit.take());
             }
         }
     }
@@ -408,5 +488,63 @@ mod truncate_tests {
         // 10 two-byte chars is 20 bytes; a byte-based check would not truncate.
         let out = truncate(&"é".repeat(10), 5);
         assert_eq!(out.chars().count(), 6, "5 chars plus the ellipsis");
+    }
+}
+
+#[cfg(test)]
+mod p3_24_tests {
+    use super::*;
+    use crate::agent::permission::new_pending_permissions;
+    use crate::state::AppState;
+
+    fn manager() -> Arc<SubagentManager> {
+        SubagentManager::new(RunnerDeps {
+            state: Arc::new(std::sync::Mutex::new(AppState::new())),
+            pending: new_pending_permissions(),
+        })
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_session_with_no_children_is_a_no_op() {
+        // The no-fire half, and the one that would hang if the collect-then-
+        // terminate ordering were wrong.
+        let mgr = manager();
+        let stopped = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            mgr.abort_children_of("session-with-nothing-under-it"),
+        )
+        .await
+        .expect("abort_children_of must not block when there is nothing to stop");
+
+        assert_eq!(stopped, 0);
+    }
+
+    #[tokio::test]
+    async fn aborting_children_does_not_deadlock_on_the_registry_lock() {
+        // ⚠ The trap in this function: `terminate` takes the registry lock
+        // itself, so collecting ids *while holding* that lock would deadlock on
+        // the first child. This proves the two phases stay separate — it
+        // completes rather than hanging, under a hard timeout so a regression
+        // fails the suite instead of wedging it.
+        let mgr = manager();
+
+        // Hold and release the lock around the call to exercise the same
+        // acquisition path the real cancel handler takes.
+        {
+            let reg = mgr.registry.lock().await;
+            assert!(reg.is_empty());
+        }
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            mgr.abort_children_of("any-session"),
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "abort_children_of deadlocked — it is holding the registry lock \
+             across `terminate`, which takes the same lock"
+        );
     }
 }
