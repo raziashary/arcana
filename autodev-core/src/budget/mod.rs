@@ -136,3 +136,55 @@ pub struct DailyBudgetSummary {
     pub tasks_exceeded: u32,
     pub tasks_with_budget: u32,
 }
+
+#[cfg(test)]
+mod budget_enforcement_tests {
+    use super::*;
+
+    fn spent(tokens: u64, usd: f64, turns: u32) -> BudgetStatus {
+        BudgetStatus {
+            tokens_used: tokens,
+            cost_usd: usd,
+            turns_used: turns,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_worker_default_stops_at_fifty_cents() {
+        let b = TaskBudget::default_worker();
+        assert_eq!(b.max_usd, Some(0.50));
+        assert!(b.check(&spent(0, 0.49, 1)).is_none(), "under the cap runs");
+        assert!(
+            matches!(
+                b.check(&spent(0, 0.50, 1)),
+                Some(BudgetExceededReason::CostLimitReached)
+            ),
+            "at the cap it stops — >= not >, so the cap is a ceiling and not a \
+             suggestion"
+        );
+    }
+
+    #[test]
+    fn each_limit_stops_independently() {
+        let b = TaskBudget::default_worker();
+        assert!(matches!(
+            b.check(&spent(100_000, 0.0, 1)),
+            Some(BudgetExceededReason::TokenLimitReached)
+        ));
+        assert!(matches!(
+            b.check(&spent(0, 0.0, 20)),
+            Some(BudgetExceededReason::TurnLimitReached)
+        ));
+    }
+
+    #[test]
+    fn an_unlimited_budget_still_bounds_turns() {
+        // `unlimited` means unbounded SPEND, not an unbounded loop. A run with
+        // no turn ceiling can spin forever on a tool that always succeeds.
+        let b = TaskBudget::unlimited();
+        assert_eq!(b.max_usd, None);
+        assert!(b.check(&spent(u64::MAX, 1e9, 1)).is_none());
+        assert!(b.check(&spent(0, 0.0, 20)).is_some(), "turns are still capped");
+    }
+}

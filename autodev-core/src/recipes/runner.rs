@@ -745,7 +745,13 @@ impl RecipeRunner {
             // worker-messaging tools, claim_task's orphan detection and the
             // qc_review gate all read — previously it was None on this path.
             crate::agent::tool_trait::AgentIdentity::worker(worker_slug),
-        );
+        )
+        // P2-48. A worker runs unattended, so it runs under a ceiling. Until
+        // 2026-09-02 nothing ever called this and the guard in `engine.run`
+        // was unreachable — a worker could loop indefinitely and spend without
+        // limit. The task's own budget, when it claims one, refines this; the
+        // default is what stops an unclaimed or unbudgeted run.
+        .with_budget(crate::budget::TaskBudget::default_worker());
 
         // Run agent with recipe instructions as system prompt override
         let result = engine

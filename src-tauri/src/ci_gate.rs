@@ -867,6 +867,95 @@ let x = 1;
         assert_eq!(unwrapped_sites("// we used to tool.execute(input) here"), 0);
     }
 
+    // ── TG-P2-03 · an autonomous agent runs under a spend ceiling ─────────────
+
+    /// Every unattended `AgentEngine` must be given a budget.
+    ///
+    /// **This gate exists because the enforcement was unreachable for the whole
+    /// life of the codebase.** `with_task_budget` had zero callers — its
+    /// signature demanded a `task_id` that neither autonomous path has at
+    /// construction — so `task_budget` was permanently `None`, the guard in
+    /// `engine.run` never ran, and `escalate_budget_exceeded`,
+    /// `TaskBudget::default_worker` and `BudgetExceededReason` were all dead.
+    /// The app had **no enforced spend limit at any scope**.
+    ///
+    /// A test that only checked "the guard is correct" would have passed
+    /// throughout. This checks that the guard is **reached**.
+    #[test]
+    fn tg_p2_03_autonomous_engines_are_given_a_budget() {
+        // The two unattended paths. The interactive PA path is deliberately
+        // absent: a user-driven session is capped by the daily ceiling, not by
+        // a per-task one, and capping it at a worker's $0.50 would break it.
+        let autonomous = [
+            "autodev-core/src/recipes/runner.rs",
+            "autodev-core/src/subagent/native_runner.rs",
+        ];
+
+        let mut unbudgeted = Vec::new();
+        for rel in autonomous {
+            let text = std::fs::read_to_string(repo_root().join(rel)).expect(rel);
+            let production = text.split("#[cfg(test)]").next().unwrap_or("");
+            if !production.contains("AgentEngine::new(") {
+                continue;
+            }
+            // The builder must be applied to the engine this file constructs.
+            let has_budget = production.contains(".with_budget(")
+                || production.contains(".with_task_budget(");
+            if !has_budget {
+                unbudgeted.push(rel);
+            }
+        }
+
+        assert!(
+            unbudgeted.is_empty(),
+            "these paths build an unattended AgentEngine with no budget, so the \
+             guard in engine.run cannot fire and the run can spend without limit: \
+             {}",
+            unbudgeted.join(", ")
+        );
+    }
+
+    /// The budget builders must have callers at all.
+    ///
+    /// Guards the exact defect above from returning in a different shape: a
+    /// builder that exists, is tested, and is called by nothing.
+    #[test]
+    fn tg_p2_03_the_budget_builders_are_not_dead_code() {
+        let mut callers = 0;
+        for dir in ["autodev-core/src", "src-tauri/src"] {
+            let root = repo_root().join(dir);
+            let mut stack = vec![root];
+            while let Some(d) = stack.pop() {
+                let Ok(entries) = std::fs::read_dir(&d) else {
+                    continue;
+                };
+                for e in entries.flatten() {
+                    let p = e.path();
+                    if p.is_dir() {
+                        stack.push(p);
+                        continue;
+                    }
+                    if p.extension().and_then(|x| x.to_str()) != Some("rs") {
+                        continue;
+                    }
+                    // The definition site is not a caller.
+                    if p.ends_with("engine.rs") {
+                        continue;
+                    }
+                    let text = std::fs::read_to_string(&p).unwrap_or_default();
+                    let production = text.split("#[cfg(test)]").next().unwrap_or("");
+                    callers += production.matches(".with_budget(").count();
+                    callers += production.matches(".with_task_budget(").count();
+                }
+            }
+        }
+        assert!(
+            callers >= 2,
+            "the budget builders have {callers} production callers. They had ZERO \
+             until 2026-09-02, which is why no spend limit was ever enforced."
+        );
+    }
+
     // ── TG-P2-02 · every model the app offers can be priced ───────────────────
 
     /// A model the UI offers must be priceable, or documented as knowingly not.

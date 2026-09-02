@@ -199,7 +199,11 @@ async fn run_inner(
         deps.state.clone(),
         deps.pending.clone(),
         identity,
-    );
+    )
+    // P2-48. A subagent is autonomous and fans out — `spawn_parallel_subagents`
+    // runs several at once — so an unbounded one multiplies. Same default
+    // ceiling as a worker.
+    .with_budget(crate::budget::TaskBudget::default_worker());
 
     let working_dir = config.working_dir.clone();
     let system_prompt =

@@ -82,6 +82,26 @@ impl AgentEngine {
 
     /// Attach a task ID and spending budget so the engine enforces per-task token/cost/turn limits.
     /// Call this from the recipe runner before run() when executing a worker task.
+    /// Attach a budget with no task id.
+    ///
+    /// ⚠ **This exists because `with_task_budget` had zero callers for the
+    /// whole life of the codebase, and its signature is why.** It demands a
+    /// `task_id`, and neither autonomous path has one at construction: the
+    /// recipe runner builds the engine before the agent claims a task, and a
+    /// subagent has no task at all. So ~100 lines of enforcement — the guard,
+    /// `escalate_budget_exceeded`, `TaskBudget::default_worker`,
+    /// `BudgetExceededReason` — were unreachable, and **the app had no enforced
+    /// spend limit at any scope**.
+    ///
+    /// A budget is not a property of having a task. It is a property of running
+    /// autonomously.
+    pub fn with_budget(mut self, budget: crate::budget::TaskBudget) -> Self {
+        self.task_budget = Some(budget);
+        self
+    }
+
+    /// Attach a budget **and** the task it belongs to, so an overrun can be
+    /// escalated against that task.
     pub fn with_task_budget(mut self, task_id: i64, budget: crate::budget::TaskBudget) -> Self {
         self.task_id = Some(task_id);
         self.task_budget = Some(budget);
