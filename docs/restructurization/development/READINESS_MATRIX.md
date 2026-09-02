@@ -44,10 +44,10 @@ Cross-cutting invariants, scored **independently of the phase areas**.
 | Dial | Status | Why |
 |---|---|---|
 | **Overall readiness** | 🔴 **8.0%** | P0 and P1 complete and committed. P1: Build ✅, Smoke ✅ (`S1-01…03` proven, `S1-04` end to end). Gates ☐ — `TG1-01`'s registration clause is unmet and is not claimed. No partial credit. |
-| Security posture | 🟡 AMBER | All three P0 holes closed: the updater refuses anything unverified, the `/mcp` RCE is deleted, and no command returns key material. Still AMBER because the updater has no production key yet (so it refuses *everything*), the runtime key-path is untested, and `.env` is still read at startup. |
+| Security posture | 🟡 AMBER | All three P0 holes closed, and **P2 closed a live credential leak found in its own pre-build audit**: Google authenticated with `?key=` in the URL, and `reqwest`'s error Display includes the request URL — which was logged *and* returned as `ProviderStatus::Error` across the IPC boundary into Settings. Redaction did not save it, because `SENSITIVE_KEYS` carried `api_key` but not bare `key`. Now a header, gate-proven. `TG-P2-07` additionally proves no shipped code reads a provider key from argv or the environment. **Still AMBER:** the updater has no production key yet (so it refuses everything), and the Linux encrypted-file vault fallback has no CI job exercising a D-Bus-less runner — it is written and unit-tested, not platform-proven. |
 | Gate honesty | 🟢 GREEN | Every `continue-on-error` gone; all checks blocking. **CI is now green end to end** (run `33467890406`) — the first passing run in this repo's recent history; the three before P0 all failed on a build that was structurally incapable of passing. |
 | Cross-platform | 🔴 RED | All three build smokes now pass on PRs, and the app is verified to **start** on Windows and Linux (macOS builds but is never launched). Still RED: `platform/command.rs` exists but **nothing calls it** — `bash.rs` still rewrites pipes into PowerShell, so no fleet task can complete on Windows. Wiring is P4. |
-| Agent correctness | 🔴 RED | No caching, unbounded context, no permission gate in force. P2 + P3. |
+| Agent correctness | 🟡 AMBER | **P2 closed the provider half, and proved it live.** Caching works — Anthropic wrote 11,923 tokens and read back 11,923; OpenAI went 8,659 input to 211 + 8,448 cached — and the alarm that can detect it *not* working shipped first. Context is no longer unbounded at a hardcoded 200k: compaction reads the model's real window, which had been compacting Gemini at 16% of capacity. Truncation is now detectable on all three (it was Anthropic-only). **Still AMBER, not GREEN: the permission gate is not in force — that is P3** — and `panic = "abort"` means one panic still ends every in-process agent. |
 | Product capability | 🔴 RED | Agent output lands where the user never looks; no run step exists. P4. |
 | Data integrity | 🟡 AMBER | **P1 closed the structural half.** All 10 databases carry a `user_version` ladder (was 1); the ladder refuses a database from a newer build, applies each rung and its stamp in one transaction, and **backs up automatically before any destructive rung**. `LIVE-DB-PROVEN` on the real data root: zero row-count changes across 720 rows. AMBER not GREEN — nothing yet restores *from* a backup automatically, and `M-43` (a failed checkpoint still lets the write proceed) is open. |
 | Fault tolerance | 🔴 RED | `panic = "abort"` + in-process agents: one panic kills everything. P3. |
@@ -60,7 +60,7 @@ Cross-cutting invariants, scored **independently of the phase areas**.
 |---|---|---|---|---|---|---|---|
 | A0 | **P0 · Stop the bleeding** | 8 | ✅ | ☐ | ☐ | 33% | 2.7 |
 | A1 | **P1 · Structural** | 8 | ✅ | ✅ | ☐ | 67% | 5.3 |
-| A2 | **P2 · Providers** | 14 | ☐ | ☐ | ☐ | 0% | 0.0 |
+| A2 | **P2 · Providers** | 14 | ✅ | ✅ | ✅ | 100% | 14.0 |
 | A3 | **P3 · Runtime + memory** | 18 | ☐ | ☐ | ☐ | 0% | 0.0 |
 | A4 | **P4 · The Fleet** ← headline | **20** | ☐ | ☐ | ☐ | 0% | 0.0 |
 | A5 | **P5 · Graph** | 6 | ☐ | ☐ | ☐ | 0% | 0.0 |
@@ -68,7 +68,7 @@ Cross-cutting invariants, scored **independently of the phase areas**.
 | A7 | **P7 · Experience** | 8 | ☐ | ☐ | ☐ | 0% | 0.0 |
 | A8 | **P8 · Submodule deletion** | 4 | ☐ | ☐ | ☐ | 0% | 0.0 |
 | A9 | **P9 · Delivery** | 4 | ☐ | ☐ | ☐ | 0% | 0.0 |
-| | **Total** | **100** | | | | | **8.0** |
+| | **Total** | **100** | | | | | **22.0** |
 
 **Why P4 carries the most weight.** It is the only phase whose completion means AutoDev does what it claims: a task runs end to end on three operating systems and produces a build-verified, reversible artifact the user can run. Everything before it is a precondition; everything after it is polish, cleanup or distribution.
 
