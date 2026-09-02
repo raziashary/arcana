@@ -1106,3 +1106,75 @@ restore, which can report a false green about whether the restore happened.
 **How applied.** Every falsification after that point asserts both that the run failed
 **and** that it failed for the stated reason, and restores are verified by reading the
 file rather than by re-running the gate.
+
+---
+
+## ADR-LOG-RESTRUCT-0030 — P3 A–E's post-phase audits: nine of my own claims were false, and the fleet cannot run
+
+**Status.** DECIDED
+**Author.** Claude · **Tier.** `decided-independently` for the remediation;
+`flagged-and-proposed` for `P4-31` and the residual triage
+**When.** 2026-09-02 · after P3 A–E built green (43 tasks, 19 gates, 520 tests)
+
+**What.** Two adversarial agents were run per `§0.2a` over disjoint briefs — one to
+**refute the completion claims** (`_verify/A9-P3-claims-refutation.md`), one to hunt
+**defects nobody had fixed** (`_verify/A10-P3-gap-hunt.md`). Both were told to refute
+rather than confirm, and neither had seen the reasoning behind the work. 47 findings:
+2 critical, 16 high, 19 medium, 9 low, 1 unresolved question.
+
+**Why it matters that these were found by an audit and not by me.** Every one of the
+nine false claims below was written by someone (me) who had just read the code, run the
+tests, and watched the gates go green. Four of them had a gate specifically written to
+protect them, and the gate was green.
+
+### The nine claims of mine that were false
+
+| Task | The claim | What was true |
+|---|---|---|
+| `P3-58` | the depth boundary moved | `d >= 3` and `d + 1 > 3` are **one predicate**; the fix was a no-op and the task's premise was also wrong |
+| `P3-24` | cancellation reaches the children | `terminate` **skipped the abort** for any awaited subagent and returned `Ok` — i.e. for every in-flight one |
+| `P3-62` | a timed-out subagent reports its spend | it reported **$0.00**; `timeout` drops the future before any exit path runs |
+| `P3-64` | every tool passes exactly one gate | **two** gates, the second with a fresh call id |
+| `P3-08` | the cancel arm is wired | `with_state` had **zero callers**, so the arm could never fire |
+| `P3-68` | `probe_url` is confined to loopback | confined the **first request only**; redirects were followed |
+| `P3-05` | `GATE-PROVEN` | the named gate **did not exist**; emptying the guard's `Drop` broke no test |
+| `P3-16` | one shared helper, three consumers | **one** consumer; the others do not exist yet |
+| `P3-63` | zero means the worker default | that branch is **unreachable** (harmless: both constants are 20) |
+
+### The two live security holes neither task list named
+
+1. **A subagent inherited `Autonomous` regardless of its parent.** One `spawn_subagent`
+   call escaped `ManualApproval` entirely, with `bash` and the full registry, on the
+   user's own key. The justifying comment — *"a subagent has no user to prompt"* — was
+   contradicted two lines below by `deps.pending` being passed straight in.
+2. **`e2e_probe` spawned model-chosen shell without the credential scrub `bash` applies**,
+   so its children inherited every provider key. `bash`'s own comment records that ITS
+   first version of that fix landed in one branch only, "which is its own small lesson
+   about two-branch fixes" — this was the same lesson one tool over.
+
+### `P4-31`, which is bigger than anything in P3
+
+**Eight of the nine shipped recipes cannot run.** All are `fallback_policy: Mode2Only`
+against a Mode 2 inert since P0, so `run_recipe` logs `fallback_skipped_policy` and
+returns `Ok(())` every tick, forever. The fleet reports itself **idle rather than
+broken**. Filed rather than fixed: which recipes should be `Mode1Capable` — or whether
+`Mode2Only` should mean anything now — is a dispatch decision.
+
+**Needs Razi.** That decision, and the residual triage (33 findings, none critical,
+listed in the two `_verify` reports with severity and reproduction).
+
+### How the gates failed, which is the transferable part
+
+Four green gates sat over live defects, and the pattern is one thing: **each asserted
+the shape of the change rather than the property the change existed to establish.**
+`TG-P3-11` asserted `is_read_only` was absent — true, and silent about a second prompt.
+`TG-P3-58` asserted a predicate rewrite that was a tautology. Recorded as `L-27`, with
+the practical tell: *if the assertion would still pass after a **different** fix for the
+same defect, it is keyed to the diff.* A second shape, same entry: a gate that
+**enumerates** its subjects finds only the ones somebody already listed — `TG-P3-58`
+checked two files and missed the third guard, written in the very spelling its own
+failure message called a defect.
+
+**How proven.** Every remediation carries a test or gate, each falsified with a
+**compiling** planted defect and the failure reason read rather than assumed (`L-26`).
+534 tests, 22 `TG-P3` gates.
