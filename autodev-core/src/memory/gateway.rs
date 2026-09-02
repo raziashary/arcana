@@ -77,10 +77,29 @@ impl Proposer {
     ///
     /// The interactive assistant is `supervisor`; everything else that reaches
     /// a tool is a worker, a QC reviewer or a subagent — i.e. autonomous.
-    pub fn from_agent_role(role: &str, user_stated: bool) -> Self {
-        if user_stated {
-            Proposer::User
-        } else if role == "supervisor" || role.is_empty() {
+    ///
+    /// 🔴 **It takes one argument, and that IS the security property.** The
+    /// first version took a second `user_stated: bool`, and `propose_memory`
+    /// forwarded it **straight from the model's own tool input** — so any role
+    /// could set it, short-circuit the role check, and become `Proposer::User`:
+    /// ceiling `1.0`, `source = "user"`, `importance +0.3`, rendered into the
+    /// interactive user's next prompt as *"(you told me) …"*. A fleet worker
+    /// could have written *"Razi wants all deploys pushed straight to main"* at
+    /// full confidence, `scope: "global"`, into every repository he opens.
+    ///
+    /// That is precisely the defect `P3-47` exists to close, and it shipped
+    /// **inside** `P3-47` — with a comment above the call asserting the
+    /// opposite of what the line below it did (`L-28`), a unit test asserting
+    /// the escalation as correct behaviour, and a gate that enumerated three
+    /// forbidden schema keys, none of which was the one that actually elected
+    /// provenance (`L-27`).
+    ///
+    /// The signature is the repair. With no parameter but the runtime's own
+    /// role, **no input can reach this decision** — the compiler enforces what
+    /// the comment previously only claimed. `Proposer::User` is now reachable
+    /// solely by a caller that holds a real user action, never by a model.
+    pub fn from_agent_role(role: &str) -> Self {
+        if role == "supervisor" || role.is_empty() {
             Proposer::Assistant
         } else {
             Proposer::AutonomousAgent
@@ -172,7 +191,21 @@ fn overlap(a: &str, b: &str) -> f32 {
 /// The four criteria are the anchor's §18 list — importance, novelty,
 /// duplication, confidence — applied as `DET` policy.
 pub fn propose(conn: &rusqlite::Connection, p: &Proposal) -> Result<Verdict> {
-    let content = p.content.trim();
+    // ⚠ Redacted on the way IN, like every other memory writer
+    // (`episodic.rs:32`, `semantic.rs:44`, `procedural.rs:129`), and for the
+    // reason those three already state: *"a store that never held the secret
+    // cannot leak it through a path nobody thought of."*
+    //
+    // 🔴 This was the ONE write path that skipped the boundary — and it is the
+    // only live writer into `memories`, so it is the only content recall can
+    // ever surface. A model that had just read a `.env`, a key or a
+    // `DATABASE_URL` out of a tool result could persist it verbatim, where it
+    // is permanent, returned in full by `get_memory`, and re-sent to the
+    // provider inside the system prompt on **every later turn in that scope**.
+    // Three tier stores redacting while the retrieval store did not is the
+    // shape of a boundary that looks complete from inside any single file.
+    let redacted = crate::security::redaction::redact_text(p.content.trim());
+    let content = redacted.trim();
 
     // ── Substance ────────────────────────────────────────────────────────
     if content.chars().filter(|c| c.is_alphanumeric()).count() < MIN_CONTENT_CHARS {
@@ -318,12 +351,55 @@ mod tests {
 
     #[test]
     fn the_proposer_is_derived_from_the_agent_role_not_chosen() {
-        assert_eq!(Proposer::from_agent_role("supervisor", false), Proposer::Assistant);
-        assert_eq!(Proposer::from_agent_role("worker-backend", false), Proposer::AutonomousAgent);
-        assert_eq!(Proposer::from_agent_role("qc-agent", false), Proposer::AutonomousAgent);
-        // Only an explicit user statement reaches User, and that flag is set by
-        // the tool from the conversation, not by the model's say-so.
-        assert_eq!(Proposer::from_agent_role("worker-backend", true), Proposer::User);
+        assert_eq!(Proposer::from_agent_role("supervisor"), Proposer::Assistant);
+        assert_eq!(Proposer::from_agent_role("worker-backend"), Proposer::AutonomousAgent);
+        assert_eq!(Proposer::from_agent_role("qc-agent"), Proposer::AutonomousAgent);
+        // 🔴 There is no longer any argument that could make this the user.
+        // The previous line here asserted `from_agent_role("worker-backend",
+        // true) == Proposer::User` and called it correct — the escalation was
+        // written down as a passing test.
+        for role in ["worker-backend", "qc-agent", "subagent", "reviewer", ""] {
+            assert_ne!(
+                Proposer::from_agent_role(role),
+                Proposer::User,
+                "role {role:?} reached the USER ceiling — no role may"
+            );
+        }
+    }
+
+    /// 🔴 The gateway was the ONE writer that skipped the redaction boundary
+    /// every tier store enforces — and it is the only live writer into the
+    /// table recall reads, so it was the only content that could reach the
+    /// prompt.
+    #[test]
+    fn a_secret_is_redacted_before_it_is_ever_stored() {
+        let c = db();
+        let v = propose(
+            &c,
+            &proposal(
+                "the staging deploy key is AKIAIOSFODNN7EXAMPLE and it rotates monthly",
+                Proposer::User,
+            ),
+        )
+        .unwrap();
+        let id = match v {
+            Verdict::Stored { id, .. } => id,
+            other => panic!("the fixture was rejected: {other:?}"),
+        };
+
+        let stored: String = c
+            .query_row("SELECT content FROM memories WHERE id = ?1", [&id], |r| r.get(0))
+            .unwrap();
+        assert!(
+            !stored.contains("AKIAIOSFODNN7EXAMPLE"),
+            "a credential was persisted verbatim into memory, where it is \
+             permanent and re-sent to the provider on every later turn: {stored}"
+        );
+        // …and the memory around it survived, or redaction is just deletion.
+        assert!(
+            stored.contains("rotates monthly"),
+            "redaction destroyed the memory instead of the secret: {stored}"
+        );
     }
 
     #[test]

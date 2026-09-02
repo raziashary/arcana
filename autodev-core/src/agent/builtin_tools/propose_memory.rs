@@ -57,10 +57,6 @@ impl Tool for ProposeMemoryTool {
                     "enum": ["project", "global"],
                     "description": "'project' = this workspace only (preferred). 'global' = recalled everywhere."
                 },
-                "user_stated": {
-                    "type": "boolean",
-                    "description": "True only if the user just stated this explicitly. Governs provenance and confidence."
-                },
                 "confidence": {
                     "type": "number",
                     "description": "How sure you are, 0.0–1.0. Capped by what your role may assert; you may ask for less."
@@ -98,8 +94,15 @@ impl Tool for ProposeMemoryTool {
         // threads through `ToolContext`, never taken from the input. A model
         // that could name its own role could elect to be the user, and the
         // ceiling below would mean nothing.
-        let user_stated = input["user_stated"].as_bool().unwrap_or(false);
-        let proposer = Proposer::from_agent_role(&ctx.agent_role, user_stated);
+        //
+        // 🔴 This comment was TRUE OF NOTHING for the whole of `P3-F`. The line
+        // beneath it used to read a `user_stated` boolean out of `input` — the
+        // model's own tool call — and hand it to `from_agent_role`, which
+        // short-circuited to `Proposer::User` on it. The identity was taken
+        // from the input, three lines under a comment saying it never is.
+        // `from_agent_role` no longer accepts anything but the role, so the
+        // comment is now enforced by the signature rather than asserted by me.
+        let proposer = Proposer::from_agent_role(&ctx.agent_role);
 
         let claimed = input["confidence"].as_f64().unwrap_or(0.8) as f32;
 
@@ -171,23 +174,43 @@ mod tests {
         // runtime's own identity, so a model cannot elect to be the user.
         let schema = ProposeMemoryTool.input_schema();
         let props = schema["properties"].as_object().unwrap();
-        assert!(!props.contains_key("source"), "provenance must not be caller-supplied");
-        assert!(!props.contains_key("proposer"), "the proposer must not be caller-supplied");
-        assert!(!props.contains_key("importance"), "importance is derived, not claimed");
+
+        // 🔴 This test used to enumerate exactly these three names — and
+        // **passed while `user_stated` sat in the schema doing the very thing
+        // the three forbid**, because it was not on the list (`L-27`: an
+        // enumerating check misses the subject nobody listed).
+        for forbidden in ["source", "proposer", "importance", "user_stated"] {
+            assert!(
+                !props.contains_key(forbidden),
+                "{forbidden:?} is caller-supplied — a model must not name its own provenance"
+            );
+        }
+
+        // The list is a convenience, not the guard. This is the guard: the ONLY
+        // fields a caller may send are these, so a new provenance key cannot be
+        // added without this assertion failing — which is what would have
+        // caught `user_stated` on the day it was written.
+        let mut keys: Vec<&str> = props.keys().map(|k| k.as_str()).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["confidence", "content", "scope", "source_file", "source_line"],
+            "the input schema grew a field — if it bears on WHO is speaking, it              must not be caller-supplied"
+        );
     }
 
     #[test]
     fn a_worker_role_becomes_an_autonomous_proposer() {
         let c = ctx("worker-backend");
         assert_eq!(
-            Proposer::from_agent_role(&c.agent_role, false),
+            Proposer::from_agent_role(&c.agent_role),
             Proposer::AutonomousAgent
         );
-        // …and even claiming the user said it does not change the ROLE ceiling
-        // unless the flag is set by the tool from a real user statement.
-        assert_eq!(
-            Proposer::from_agent_role(&c.agent_role, true),
-            Proposer::User
+        // …and its ceiling is genuinely below the assistant's, or "autonomous"
+        // is a label rather than a limit.
+        assert!(
+            Proposer::from_agent_role(&c.agent_role).confidence_ceiling()
+                < Proposer::User.confidence_ceiling()
         );
     }
 

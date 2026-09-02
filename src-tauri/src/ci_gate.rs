@@ -2917,6 +2917,13 @@ let x = 1;
     /// **derived** from the runtime's identity. A schema field for `source`,
     /// `proposer` or `importance` would let a model name itself the user, and
     /// the whole control would be decorative.
+    ///
+    /// ⚠ It WAS decorative, and this gate was green over it for the whole of
+    /// `P3-F`. See the two comments in the body: the blocklist missed the one
+    /// key that mattered, and the call-site check matched a prefix. Both are
+    /// repaired here, and the load-bearing assertions are now structural —
+    /// they constrain the shape of the call and of the signature, not the
+    /// vocabulary of the schema.
     #[test]
     fn tg_p3_47_provenance_is_derived_not_declared() {
         let tool = read_source(
@@ -2929,7 +2936,23 @@ let x = 1;
             .nth(1)
             .expect("propose_memory must declare a schema");
         let schema_body = schema.split("async fn execute").next().unwrap_or(schema);
-        for forbidden in ["\"source\":", "\"proposer\":", "\"importance\":"] {
+        // 🔴 This list used to hold exactly three names, and the gate was
+        // GREEN while `"user_stated"` sat in that schema doing precisely what
+        // the three forbid: `propose_memory` read it out of the model's tool
+        // input and `from_agent_role` short-circuited to `Proposer::User` on
+        // it — ceiling 1.0, `source = "user"`, rendered to the user as
+        // "(you told me)". A fleet worker could write a global memory at the
+        // user's own authority. `L-27`: an enumerating check is blind to the
+        // subject nobody put on the list.
+        //
+        // The list stays because it is cheap, but it is no longer what makes
+        // this gate work. The two assertions below are.
+        for forbidden in [
+            "\"source\":",
+            "\"proposer\":",
+            "\"importance\":",
+            "\"user_stated\":",
+        ] {
             assert!(
                 !schema_body.contains(forbidden),
                 "propose_memory's schema exposes {forbidden} — provenance and \
@@ -2938,9 +2961,30 @@ let x = 1;
             );
         }
 
+        // ⚠ The CLOSING PAREN is the assertion.
+        //
+        // The previous version asserted `contains("...from_agent_role(&ctx.agent_role")`
+        // — a prefix, which matched happily when the call was
+        // `from_agent_role(&ctx.agent_role, user_stated)`. It inspected the
+        // receiver and ignored the argument that overrode it (`L-C6`: a check
+        // written from the claim rather than from the invariant).
+        //
+        // Requiring the call to END there means no second argument exists, so
+        // no input CAN reach the decision — whatever the schema grows next.
         assert!(
-            tool.contains("Proposer::from_agent_role(&ctx.agent_role"),
-            "the proposer must be derived from the runtime's agent role"
+            tool.contains("Proposer::from_agent_role(&ctx.agent_role)"),
+            "the proposer must be derived from the runtime's agent role ALONE — \
+             any further argument is a channel through which a model could name \
+             its own provenance"
+        );
+
+        // …and the same invariant at the definition, so a second parameter
+        // cannot be reintroduced and then merely passed a constant.
+        let gw_src = read_source(&repo_root().join("autodev-core/src/memory/gateway.rs"));
+        assert!(
+            gw_src.contains("pub fn from_agent_role(role: &str) -> Self"),
+            "from_agent_role must take the role and nothing else; its signature \
+             is what enforces that provenance is derived rather than declared"
         );
 
         // …and the ceiling itself must still discriminate.
@@ -2953,6 +2997,132 @@ let x = 1;
             gw.contains("clamp(0.0, ceiling)"),
             "the claimed confidence must be CLAMPED by the ceiling, not merely \
              compared against it"
+        );
+    }
+
+    /// Every writer into memory redacts on the way in — **discovered, not
+    /// listed**.
+    ///
+    /// 🔴 `P3-F` post-phase audit. Three tier stores called
+    /// `security::redaction` before insert, each with a comment naming the
+    /// reason: *"a store that never held the secret cannot leak it through a
+    /// path nobody thought of."* The gateway — the ONLY live writer into the
+    /// table recall actually reads — called nothing. So the single write path
+    /// that could reach the system prompt was the one that skipped the
+    /// boundary, and a `.env` or a token read out of a tool result could be
+    /// persisted verbatim, for ever, and re-sent to the provider on every
+    /// later turn in that scope.
+    ///
+    /// ⚠ This gate **finds** the writers rather than naming them. A gate
+    /// written over the fix would list `gateway.rs` and stay green while a
+    /// fifth writer arrived unredacted next phase — which is exactly the shape
+    /// that let this defect through in the first place. Any file that inserts
+    /// into a memory table must redact; adding one without redaction fails
+    /// here, with no list to remember to update.
+    #[test]
+    fn tg_p3_48_every_memory_writer_redacts_on_the_way_in() {
+        let dir = repo_root().join("autodev-core/src/memory");
+        let mut writers: Vec<(String, String)> = Vec::new();
+
+        for entry in std::fs::read_dir(&dir).expect("memory module").flatten() {
+            let p = entry.path();
+            if p.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let src = read_source(&p);
+            let name = p.file_name().unwrap().to_string_lossy().to_string();
+
+            // `db.rs` is the migration ladder: its inserts are SQL backfills of
+            // rows the tier stores already redacted on the way in, so there is
+            // no unredacted content entering there.
+            if name == "db.rs" {
+                continue;
+            }
+            // Production code only. `backend.rs` seeds `memories` directly from
+            // its own `#[cfg(test)]` fixtures, which is not a leak path — and
+            // finding it is this gate working rather than misfiring: it named a
+            // writer that no list of mine contained.
+            //
+            // Comments go too, or the gate trips on the prose explaining it,
+            // which has now happened four separate times in this file.
+            let production = src.split("#[cfg(test)]").next().unwrap_or(&src).to_string();
+            let code: String = production
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            let inserts = ["INSERT INTO memories", "INSERT INTO episodic_memories",
+                           "INSERT INTO semantic_memories", "INSERT INTO procedural_memories"];
+            if inserts.iter().any(|i| code.contains(i)) {
+                writers.push((name, code));
+            }
+        }
+
+        assert!(
+            writers.len() >= 4,
+            "expected at least the three tier stores and the gateway; found {} — \
+             this gate has stopped finding its own subject",
+            writers.len()
+        );
+
+        for (name, code) in &writers {
+            assert!(
+                code.contains("redaction::redact") || code.contains("redact_text")
+                    || code.contains("redact_json") || code.contains("redact_value_text"),
+                "{name} inserts into a memory table without redacting first — memory \
+                 is permanent and is replayed into the system prompt, so a secret \
+                 written here is a secret kept and re-sent for ever"
+            );
+        }
+    }
+
+    /// A recalled memory is **quoted** into the prompt, never allowed to author
+    /// it.
+    ///
+    /// 🔴 `P3-F` post-phase audit. Memory content is model-written and
+    /// attacker-influenceable — the model proposes memories from repository
+    /// files, tool output and subagent results, all of which a hostile repo
+    /// controls. `render` spliced that text in raw, and `engine.rs` appends the
+    /// block LAST: the highest-recency position in the system message, after
+    /// the base prompt's own prohibitions, with nothing following to re-assert
+    /// authority. A memory containing a newline and a `##` heading turned a
+    /// one-shot injection into a persistent system-prompt implant, re-injected
+    /// every turn — and with `scope: "global"`, into every other repository the
+    /// user opens.
+    #[test]
+    fn tg_p3_49_recalled_memory_cannot_author_the_prompt() {
+        let recall = read_source(&repo_root().join("autodev-core/src/memory/recall.rs"));
+        // ⚠ Production code only — `L-25`, caught by falsifying this very gate.
+        // The first version scanned the whole file, and the third assertion
+        // below passed over a planted defect because `injection_tests` asserts
+        // the same string it was looking for. A corpus that contains the claim
+        // cannot corroborate the claim.
+        let production = recall.split("#[cfg(test)]").next().unwrap_or(&recall).to_string();
+        let code: String = production
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("///") && !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            code.contains("fn flatten_for_prompt"),
+            "recall must flatten stored content before it reaches the prompt"
+        );
+        // ⚠ The invariant is that the RENDERED row is flattened, not merely
+        // that a flattener exists somewhere in the file — `L-C12`, a helper
+        // wired to nothing, which this phase has already produced once.
+        assert!(
+            code.contains("truncate(&flatten_for_prompt(&c.content)"),
+            "the rendered row does not pass through the flattener — the function \
+             exists but the prompt is still built from raw stored content"
+        );
+        // …and the block says what it is, because a model that is not told the
+        // text is data has no reason to treat it as data.
+        assert!(
+            code.contains("not instructions"),
+            "the memory block must frame its contents as data rather than as \
+             instructions from the user"
         );
     }
 
