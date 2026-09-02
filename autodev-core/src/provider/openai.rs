@@ -284,7 +284,17 @@ impl Provider for OpenAIProvider {
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(AutoDevError::Provider(format!("OpenAI {status}: {text}")));
+            // P2-67/68. Classified here, where the body is available: a 429
+            // from a spend cap and a 429 from a rate limit are the same
+            // status, and only the body separates them.
+            let class = crate::provider::usage::ErrorClass::classify(
+                "openai",
+                status.as_u16(),
+                &text,
+            );
+            return Err(AutoDevError::Provider(format!(
+                "OpenAI {status} [{class:?}]: {text}"
+            )));
         }
 
         let data: serde_json::Value = resp.json().await?;
@@ -307,8 +317,17 @@ impl Provider for OpenAIProvider {
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
+            // P2-67/68. The class is attached rather than left to be
+            // re-derived downstream: a 429 from a spend cap and a 429 from a
+            // rate limit are the same status and only the body tells them
+            // apart, so the one place that has the body is the place to decide.
+            let class = crate::provider::usage::ErrorClass::classify(
+                "openai",
+                status.as_u16(),
+                &text,
+            );
             return Err(AutoDevError::Provider(format!(
-                "OpenAI stream {status}: {text}"
+                "OpenAI stream {status} [{class:?}]: {text}"
             )));
         }
 
@@ -365,6 +384,16 @@ impl Provider for OpenAIProvider {
             }
         }
     }
+}
+
+/// Test accessor for the SSE parser.
+///
+/// The parser is private because nothing outside the adapter should be feeding
+/// it raw wire text — but it is also where the adapter'"'"'s hardest bugs lived
+/// (P2-41, P2-42), so the fixture suite needs a way in.
+#[cfg(test)]
+pub fn parse_openai_sse_line_for_test(line: &str) -> Result<Option<StreamChunk>> {
+    parse_openai_sse_line(line)
 }
 
 fn parse_openai_sse_line(line: &str) -> Result<Option<StreamChunk>> {

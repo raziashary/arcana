@@ -1150,6 +1150,62 @@ let x = 1;
         );
     }
 
+    // ── TG-P2-06 · every provider error carries a classification ──────────────
+
+    /// A failed provider response must be classified, not just stringified.
+    ///
+    /// **`ErrorClass` had no constructor at all until 2026-09-02.** It was
+    /// defined, unit-tested against itself, and produced by nothing: all three
+    /// adapters flattened failures into
+    /// `AutoDevError::Provider(format!("{status}: {text}"))`. So a spend-cap
+    /// 429 and a rate-limit 429 were the same string, and Anthropic's 529
+    /// overload was the same string as a 500.
+    ///
+    /// Nothing was looping on the wrong answer, because no retry logic exists
+    /// yet — which is exactly why this gate matters now. The first retry loop
+    /// anyone writes would otherwise have to re-derive the mapping at the one
+    /// place where getting it wrong costs money on every attempt.
+    ///
+    /// The gate keys on the response body being available: any site that reads
+    /// `resp.text()` after a non-success status is a site that can classify,
+    /// so it must.
+    #[test]
+    fn tg_p2_06_every_provider_http_error_is_classified() {
+        let dir = repo_root().join("autodev-core/src/provider");
+        let mut offenders = Vec::new();
+
+        for adapter in ["anthropic.rs", "openai.rs", "google.rs"] {
+            let text = std::fs::read_to_string(dir.join(adapter)).expect("read adapter");
+
+            // Each `if !status.is_success()` block is one error path.
+            let blocks = text.matches("if !status.is_success()").count();
+            let classified = text.matches("ErrorClass::classify").count();
+
+            if blocks == 0 {
+                offenders.push(format!(
+                    "{adapter}: no `if !status.is_success()` guard found at all — either \
+                     the adapter stopped checking status, or this gate is pointed at the \
+                     wrong shape"
+                ));
+                continue;
+            }
+
+            if classified < blocks {
+                offenders.push(format!(
+                    "{adapter}: {blocks} HTTP error path(s) but only {classified} \
+                     classified — an unclassified failure is a string, and a spend-cap \
+                     429 is indistinguishable from a rate-limit 429 in a string"
+                ));
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "provider errors must carry an ErrorClass:\n{}",
+            offenders.join("\n")
+        );
+    }
+
     // ── TG-P2-01 · a credential never enters a URL, and both log sinks redact ──
 
     /// No provider may put an API key in a request URL.

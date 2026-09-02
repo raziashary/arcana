@@ -229,6 +229,75 @@ impl ErrorClass {
     pub fn is_retryable(&self) -> bool {
         matches!(self, ErrorClass::Retryable | ErrorClass::Overloaded)
     }
+
+    /// Classify a failed provider response.
+    ///
+    /// ── Why this is a function and not a status-code match at each call site ──
+    ///
+    /// Until 2026-09-02 this enum had **no constructor at all**. It was
+    /// defined, unit-tested against itself, and never produced by anything —
+    /// every adapter flattened its failures into
+    /// `AutoDevError::Provider(format!("{status}: {body}"))`, so a spend-cap
+    /// 429 was a string indistinguishable from a rate-limit 429, and a 529 was
+    /// a string indistinguishable from a 500.
+    ///
+    /// No retry loop exists yet, so nothing was *looping* on the wrong
+    /// classification — but the first one written would have had to invent
+    /// this mapping from scratch, at the moment when getting it wrong costs
+    /// money.
+    ///
+    /// ⚠ **The 429 split is the whole point.** A rate-limit 429 succeeds on
+    /// retry; a quota or spend-cap 429 never does, and retrying it is a spend
+    /// loop against a ceiling that has already fired. The two are the same
+    /// status code and are told apart only by the body, so this reads it.
+    pub fn classify(provider: &str, status: u16, body: &str) -> Self {
+        let b = body.to_ascii_lowercase();
+
+        match status {
+            // Auth and request-shape errors never improve on retry.
+            400 | 401 | 403 | 404 | 422 => ErrorClass::Fatal,
+
+            429 => {
+                // Quota, credit and spend-cap exhaustion all present as 429
+                // and none of them recover by waiting. Anthropic and OpenAI
+                // both say so in the body; Google uses RESOURCE_EXHAUSTED for
+                // both cases, so the wording is what separates them.
+                if b.contains("quota")
+                    || b.contains("billing")
+                    || b.contains("credit balance")
+                    || b.contains("insufficient_quota")
+                    || b.contains("exceeded your current quota")
+                    || b.contains("spend")
+                {
+                    ErrorClass::QuotaExhausted
+                } else {
+                    ErrorClass::Retryable
+                }
+            }
+
+            // ⚠ 529 is Anthropic's overload code, NOT 503. Reading it as an
+            // unknown 5xx is harmless here, but it is the one status a caller
+            // is most likely to hand-roll wrongly.
+            529 => ErrorClass::Overloaded,
+            503 => ErrorClass::Overloaded,
+            500 | 502 | 504 => ErrorClass::Retryable,
+
+            // Batch/deferred processing, where the answer is not ready rather
+            // than not coming.
+            202 => ErrorClass::Deferred,
+
+            other => {
+                // An unrecognised status is Fatal, not Retryable. Guessing
+                // "retryable" for something we do not understand is how a
+                // single unknown failure becomes a billed loop.
+                tracing::warn!(
+                    "Unclassified {other} from {provider}; treating as fatal rather than \
+                     retrying something we do not understand"
+                );
+                ErrorClass::Fatal
+            }
+        }
+    }
 }
 
 /// Why the model stopped, normalised across vendors (P2-10).
@@ -625,5 +694,86 @@ mod tests {
         assert_eq!(d.input, 0);
         assert_eq!(d.cached_read, 0);
         assert_eq!(d.output, 0);
+    }
+    // ── P2-67/68 · every error class, from real response bodies ───────────
+
+    #[test]
+    fn a_spend_cap_429_is_never_confused_with_a_rate_limit_429() {
+        // The distinction this function exists for. Same status code; one
+        // recovers by waiting and one never does. Bodies are the shapes each
+        // vendor actually returns.
+        let rate_limited = ErrorClass::classify(
+            "anthropic",
+            429,
+            r#"{"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your per-minute rate limit"}}"#,
+        );
+        assert_eq!(rate_limited, ErrorClass::Retryable);
+        assert!(rate_limited.is_retryable());
+
+        let out_of_credit = ErrorClass::classify(
+            "anthropic",
+            429,
+            r#"{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the API"}}"#,
+        );
+        assert_eq!(out_of_credit, ErrorClass::QuotaExhausted);
+        assert!(
+            !out_of_credit.is_retryable(),
+            "retrying an exhausted balance is a spend loop against a ceiling that already fired"
+        );
+
+        let openai_quota = ErrorClass::classify(
+            "openai",
+            429,
+            r#"{"error":{"message":"You exceeded your current quota, please check your plan and billing details.","type":"insufficient_quota"}}"#,
+        );
+        assert_eq!(openai_quota, ErrorClass::QuotaExhausted);
+
+        let google_quota = ErrorClass::classify(
+            "google",
+            429,
+            r#"{"error":{"code":429,"message":"Quota exceeded for quota metric 'Generate Content API requests'","status":"RESOURCE_EXHAUSTED"}}"#,
+        );
+        assert_eq!(google_quota, ErrorClass::QuotaExhausted);
+    }
+
+    #[test]
+    fn anthropic_overload_is_529_not_503() {
+        // The status most likely to be hand-rolled wrongly, which is why the
+        // enum's own docstring calls it out.
+        assert_eq!(
+            ErrorClass::classify("anthropic", 529, r#"{"type":"overloaded_error"}"#),
+            ErrorClass::Overloaded
+        );
+        assert!(ErrorClass::classify("anthropic", 529, "").is_retryable());
+        // And 503 still classifies as overload for the vendors that use it.
+        assert_eq!(ErrorClass::classify("openai", 503, ""), ErrorClass::Overloaded);
+    }
+
+    #[test]
+    fn auth_and_request_errors_are_fatal_because_waiting_does_not_fix_them() {
+        for status in [400u16, 401, 403, 404, 422] {
+            let c = ErrorClass::classify("openai", status, "{}");
+            assert_eq!(c, ErrorClass::Fatal, "{status} should be fatal");
+            assert!(!c.is_retryable());
+        }
+    }
+
+    #[test]
+    fn transient_server_errors_are_retryable() {
+        for status in [500u16, 502, 504] {
+            assert!(
+                ErrorClass::classify("google", status, "").is_retryable(),
+                "{status} should be retryable"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_status_is_fatal_rather_than_optimistically_retried() {
+        // Guessing "retryable" for something unrecognised is how one unknown
+        // failure becomes a billed loop.
+        let c = ErrorClass::classify("openai", 418, "i am a teapot");
+        assert_eq!(c, ErrorClass::Fatal);
+        assert!(!c.is_retryable());
     }
 }

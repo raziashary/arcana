@@ -212,8 +212,17 @@ impl Provider for AnthropicProvider {
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
+            // P2-67/68. The class is attached rather than left to be
+            // re-derived downstream: a 429 from a spend cap and a 429 from a
+            // rate limit are the same status and only the body tells them
+            // apart, so the one place that has the body is the place to decide.
+            let class = crate::provider::usage::ErrorClass::classify(
+                "anthropic",
+                status.as_u16(),
+                &text,
+            );
             return Err(AutoDevError::Provider(format!(
-                "Anthropic {status}: {text}"
+                "Anthropic {status} [{class:?}]: {text}"
             )));
         }
 
@@ -238,8 +247,17 @@ impl Provider for AnthropicProvider {
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
+            // P2-67/68. The class is attached rather than left to be
+            // re-derived downstream: a 429 from a spend cap and a 429 from a
+            // rate limit are the same status and only the body tells them
+            // apart, so the one place that has the body is the place to decide.
+            let class = crate::provider::usage::ErrorClass::classify(
+                "anthropic",
+                status.as_u16(),
+                &text,
+            );
             return Err(AutoDevError::Provider(format!(
-                "Anthropic stream {status}: {text}"
+                "Anthropic stream {status} [{class:?}]: {text}"
             )));
         }
 

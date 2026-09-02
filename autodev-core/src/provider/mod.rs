@@ -19,3 +19,11 @@ pub use types::{CompletionRequest, CompletionResponse, ModelInfo, ProviderStatus
 #[cfg(test)]
 #[path = "conformance_tests.rs"]
 mod conformance_tests;
+
+#[cfg(test)]
+#[path = "anthropic_tests.rs"]
+mod anthropic_tests;
+
+#[cfg(test)]
+#[path = "openai_tests.rs"]
+mod openai_tests;

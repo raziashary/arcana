@@ -215,7 +215,17 @@ impl Provider for GoogleProvider {
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(AutoDevError::Provider(format!("Google {status}: {text}")));
+            // P2-67/68. Classified here, where the body is available: a 429
+            // from a spend cap and a 429 from a rate limit are the same
+            // status, and only the body separates them.
+            let class = crate::provider::usage::ErrorClass::classify(
+                "google",
+                status.as_u16(),
+                &text,
+            );
+            return Err(AutoDevError::Provider(format!(
+                "Google {status} [{class:?}]: {text}"
+            )));
         }
 
         let data: serde_json::Value = resp.json().await?;
@@ -244,8 +254,17 @@ impl Provider for GoogleProvider {
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
+            // P2-67/68. The class is attached rather than left to be
+            // re-derived downstream: a 429 from a spend cap and a 429 from a
+            // rate limit are the same status and only the body tells them
+            // apart, so the one place that has the body is the place to decide.
+            let class = crate::provider::usage::ErrorClass::classify(
+                "google",
+                status.as_u16(),
+                &text,
+            );
             return Err(AutoDevError::Provider(format!(
-                "Google stream {status}: {text}"
+                "Google stream {status} [{class:?}]: {text}"
             )));
         }
 
