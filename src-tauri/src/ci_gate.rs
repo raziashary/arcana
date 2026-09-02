@@ -2787,6 +2787,78 @@ let x = 1;
         );
     }
 
+    // ── TG-P4-31 · no shipped recipe is stranded on a mode that cannot run ────
+
+    /// While Mode 2 is inert, no shipped recipe may declare `Mode2Only`.
+    ///
+    /// 🔴 `P4-31`. Eight of the nine shipped recipes declared `Mode2Only`
+    /// against a Mode 2 that `runner.rs` hardcodes off (`orch_healthy = false`,
+    /// since P0 deleted the in-process MCP server it reached tools through).
+    /// Every tick fell to the fallback-policy check, logged
+    /// `fallback_skipped_policy`, and returned `Ok(())` — so **the fleet
+    /// reported itself idle rather than broken**, indefinitely.
+    ///
+    /// ⚠ The declarations were never updated when Mode 2 went inert, and
+    /// nothing connected the two: `runner.rs` states *"every worker therefore
+    /// runs on the in-process Rust engine (Mode 1)"* while the data said
+    /// otherwise. This gate is that connection — it fails if the two ever
+    /// disagree again.
+    ///
+    /// It is conditional on purpose: if Mode 2 is ever revived,
+    /// `orch_healthy` stops being hardcoded and `Mode2Only` becomes meaningful
+    /// again. The gate keys on the runner's actual state, not on a preference.
+    #[test]
+    fn tg_p4_31_no_recipe_is_mode2only_while_mode2_is_inert() {
+        let runner = read_source(&repo_root().join("autodev-core/src/recipes/runner.rs"));
+
+        // Is Mode 2 actually reachable? The runner discards the probe result
+        // and pins the flag.
+        let mode2_inert = runner
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .any(|l| l.contains("let orch_healthy = false"));
+
+        if !mode2_inert {
+            // Mode 2 was revived; `Mode2Only` means something again and this
+            // gate no longer applies. Deliberately not an assertion failure —
+            // but it must be a visible state change, not a silent skip.
+            panic!(
+                "`orch_healthy` is no longer pinned to false, so Mode 2 may be                  live again. Re-point TG-P4-31 deliberately rather than letting                  it pass by default."
+            );
+        }
+
+        let defaults = read_source(&repo_root().join("autodev-core/src/recipes/defaults.rs"));
+        let code: String = defaults
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("
+");
+
+        let stranded = code.matches("FallbackPolicy::Mode2Only").count();
+        let runnable = code.matches("FallbackPolicy::Mode1Capable").count();
+
+        // ⚠ The sweep floor must count BOTH policies. Keyed on `runnable`
+        // alone it was coupled to the thing being tested: stranding one recipe
+        // drops runnable to 8 AND raises stranded to 1, so this assertion fired
+        // first with "the sweep is not reaching the declarations" — a
+        // misleading reason for a real defect. Caught by reading the
+        // falsification's message instead of its exit code (`§0.16 L-26`).
+        let declared = runnable + stranded;
+        assert!(
+            declared >= 9,
+            "only {declared} fallback-policy declarations found; the sweep is \
+             not reaching them, and an empty sweep passes silently"
+        );
+        assert_eq!(
+            stranded, 0,
+            "{stranded} shipped recipe(s) declare `Mode2Only` while Mode 2 is \
+             inert. Each one logs `fallback_skipped_policy` and returns idle on \
+             every tick, forever — the fleet reports itself idle rather than \
+             broken, which is the hardest kind of dead to notice."
+        );
+    }
+
     // ── TG-P3-17 · no validator subprocess runs without a ceiling ─────────────
 
     /// Every subprocess the validator spawns must go through `run_bounded`.
