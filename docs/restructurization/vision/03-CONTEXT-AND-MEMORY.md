@@ -62,14 +62,19 @@ Precedence order — this is the substance of ADR-01-06.
 
 ### 2.2 Current state, for contrast
 
-All four layers are absent or inert (`G2a §2`):
+⚠ **Updated 2026-09-02 after P2 (§0.3).** This table described the pre-P2 codebase. Two of the
+four layers have since landed, and leaving the old text would have had P3 rebuild them.
 
 | Layer | Today |
 |---|---|
-| Cached prefix | **Zero caching anywhere.** `CompletionRequest` has no field for it; `build_body` emits none |
-| Live history | Full clone every turn |
-| `clear_tool_uses` | Not implemented |
-| Compaction | Trigger is a hardcoded `0.80 × 200_000` that ignores `ModelInfo::context_window` — ≈640 KB of JSON inside a 20-turn window, so it **effectively never fires**. And when it does, it makes an extra full-context call and **the caller reads only `updated_history.last()`, discarding the compacted history** |
+| Cached prefix | ✅ **Landed in P2.** `CachePolicy` on `CompletionRequest`, wired on all three adapters, and **proven live**: Anthropic wrote 11,923 tokens and read back 11,923; OpenAI went 8,659 input → 211 + 8,448 cached. The alarm that detects a *broken* cache (`cache::monitor`) shipped **before** the caching, per `§0.2e`. ⚠ One caveat P3 inherits: the audit found the stable/volatile split built and **not wired** — the engine passed the joined prompt, so the memory block sat inside the cached region. Fixed, and `TG-P2-11` now holds it |
+| Live history | Full clone every turn — **unchanged**, and `P3-25` owns it |
+| `clear_tool_uses` | **Still not implemented.** `P3-25`/`P3-28` own it, and `P3-28`'s tuning problem is real: clearing invalidates the prefix from the clear point and forces a cache write, so the saving must exceed that cost |
+| Compaction | ✅ **Trigger fixed in P2** (`P2-57`): reads `ModelInfo::context_window` from the shared catalogue, not a hardcoded 200,000. ⚠ **The first fix was inert** — the adapters' model lists had drifted a generation behind the picker, so the lookup found nothing for eleven of twelve shipped models and fell through to the 200k default anyway; the catalogue landed to make the lookup hit (`L-18`). The compacted history **is now used** by the caller, and compaction's own usage is folded into the turn total, which it previously discarded entirely |
+
+**What P3 still owns here:** the live-history layer, `clear_tool_uses` and its cost tuning, and
+the layered *assembly* that orders all four. The two landed layers are inputs to that work, not
+work to redo.
 
 ### 2.3 Tool-output caps
 

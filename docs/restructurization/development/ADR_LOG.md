@@ -862,6 +862,98 @@ change, or a window opens in which **nothing** gates prompting.
 
 **Links.** `TG3-26` · `TG3-37` · spec `06 §1.2`, `§5` · `G10-67` · `C-6` · `§0.2e` · `§0.2j`
 
+## ADR-LOG-RESTRUCT-0028 — P3's pre-build refutation: two headline claims false, five tasks already done, C-5 retracted
+
+**Status.** DECIDED
+**Author.** Claude · **Tier.** `decided-independently` (`§0.2m` requires the plan be corrected
+before the first line of code; none of this narrows a `§0` rule or changes a shipped contract)
+
+**What.** Three adversarial agents were dispatched against P3 A–E's load-bearing claims before
+any code, per `§0.2m` and Razi's explicit instruction. Every load-bearing result below was
+**re-verified in the main session** before it changed a row. The plan, and one standing fact in
+`§5` of this log, were wrong in the following ways.
+
+### 1. 🔴 `P3-01` was a no-op, and it hid four more
+
+`[profile.release]` lives at `src-tauri/Cargo.toml:117-122` — a **non-root workspace member**.
+Cargo discards it, and says so:
+
+> `warning: profiles for the non root package will be ignored, specify profiles at the workspace root:`
+
+The root `Cargo.toml` has **no `[profile]` block at all**. So `panic = "abort"` was **never in
+effect**; unwinding is already on; and editing that line — the phase's headline fault-isolation
+task — would have changed nothing while appearing to close `M-41`. `lto = true`,
+`codegen-units = 1`, `opt-level = "s"` and `strip = true` are inert for the same reason, so
+every release build ships un-LTO'd and unstripped.
+
+**This is the `§0.2m` rule paying for itself in a single finding.** A verification that runs
+after the build measures the build; this one measured the plan and found its headline task
+inert.
+
+### 2. 🔴 `P3-03`'s mechanism was wrong, so its fix would have been wrong
+
+The process does **not** die on a panic: every agent path is inside `tokio::spawn` and
+unwinding is live. What happens is **`Mutex<AppState>` poisoning** — **98 `.lock().unwrap()`
+sites against 5 poison-tolerant** — so one panic becomes a cascade of unrelated panics at every
+later lock: a restart-only failure presenting as something else entirely. `catch_unwind` alone
+would not have fixed it.
+
+### 3. Five tasks were already done, and one was done by me last phase
+
+`P3-23` (depth threading and caps), `P3-26` (`context_window`, done in `P2-57`), `P3-27`
+(compacted history used, and its usage folded in by `P2-66`) are struck. `P3-24` and `P3-25`
+are half-done. **A task list that says "build this" for work already shipped is not merely
+wasteful — it invites a second implementation beside the first**, which is `L-C12`'s exact
+soil.
+
+### 4. Two counts were wrong in a way that would have caused the defect they warn about
+
+`P3-05` says four silent exits; there are **three** (`engine.rs:127`, `:327`, `:627`) —
+`:578` already emits. Hunting a fourth lands there and produces a **double emission**, which
+`TG3-01` fails exactly as loudly as zero. `P3-04` says three byte-slice panics; there are
+**four** sites, they are **not identical**, and every line number in the task is wrong.
+
+### 5. 🔴 Retraction — standing fact `C-5` is false
+
+`C-5` states: *"The correct UTF-8-safe truncation **already exists** at `validate.rs:846-853`."*
+It does not. **`846-853` is pyright/mypy dispatch plumbing.** The truncation helper is at
+**`945-957`**, it truncates one character early, and it carries an `unwrap_or(MAX_CHECKER_BYTES)`
+fallback that would be the exact unsafe byte-slice if it were reachable (it is not, because the
+length guard makes `char_indices` non-empty — dead defensive code, but a trap for the next
+reader). Two **genuinely** correct helpers exist that no document mentions, duplicated verbatim
+at `memory/recall.rs:183-192` and `memory/summarizer.rs:148-157`.
+
+**How the error happened, per `§6`:** the citation was carried from a grounding report into the
+spec, into the MDP, and into this log's standing facts **without anyone opening the file** — four
+documents agreeing because they share one unchecked source. That is `L-C1`'s shape (a derived
+artifact never reconciled with its source) and it is why `§0.2L-1` requires quoting verbatim
+with `path:line`.
+
+### 6. My own P2 gate asserts on a field production never reads
+
+`catalogue.rs:377-383` — the test written to prove `P2-57`'s fix — asserts on
+`ModelCapabilities::context_window`, and production reads `ModelInfo::context_window`. **Two
+different fields**, agreeing only because both derive from the same `CatalogueEntry`. A
+regression in `models_for()` alone leaves the test green and Gemini compacting at 200k again.
+`L-C6`, sixth instance, **inside the test written to stop `L-18` recurring** — logged as
+`P3-59`.
+
+**Why.** `§0.2m`: *a verification that runs after the build measures the build; one that runs
+before it measures the plan.* Six of the twenty-two A–E claims were false as written, five were
+already satisfied, and two carried counts whose correction prevents the defect the task exists
+to fix.
+
+**When.** 2026-09-02 · phase P3, before the first line of code.
+
+**Where.** `MASTER_DEVELOPMENT_PLAN.md §9` (P3-01, 03, 04, 05, 06, 07, 08, 09, 22, 24, 25, 28,
+29 corrected; P3-23, 26, 27 struck as done; P3-57…P3-63 appended) · `§5 C-5` retracted below ·
+`_verify/P3-REFUTE-{loop,context,tools}.md`.
+
+**How.** Each corrected task carries its own evidence class. The refutation reports hold the
+verbatim quotes; this entry holds the decisions.
+
+**Links.** `ADR-LOG-RESTRUCT-0027` · `§0.2m` · `§0.2L-1` · `L-C1` · `L-C6` · `L-C12` · `C-5`
+
 # §5 · Standing entries carried from planning
 
 Not build-time decisions — but recorded here because a future session will otherwise rediscover them the hard way. Each is already ratified in vision Part 8; these are the **operational consequences** that bite during implementation.
@@ -872,7 +964,7 @@ Not build-time decisions — but recorded here because a future session will oth
 | C-2 | ACP sender identity is set in **exactly one place** — the MCP adapter deleted in P0 | `ToolContext.agent_role` must be truthful **before** P4 relies on messaging, or a preserved capability dies silently. |
 | C-3 | ~~`graph/` migration head **v5 is a broken statement**~~ → **RESOLVED in `P1-11`.** v5's six dead statements were removed and `migration_v6` added; the live graph store is at v6. ⚠ And the *premise* was wrong: the columns were never missing — `CREATE_NODES` declared them from v1, so v6 is **defensive**, not corrective (`ADR-LOG-RESTRUCT-0017`). | Historical. |
 | C-4 | Four of seven surviving MCP items live inside **sidecar-named files** | They must be relocated **by address**, or sidecar code survives P8 by filename alone. |
-| C-5 | The correct UTF-8-safe truncation **already exists** at `validate.rs:846-853` | Three sites panic on byte-slice truncation; the fix is to use the existing helper, not to write a fourth implementation. |
+| C-5 | ~~The correct UTF-8-safe truncation **already exists** at `validate.rs:846-853`~~ → 🔴 **RETRACTED 2026-09-02, `ADR-LOG-RESTRUCT-0028`.** `846-853` is pyright/mypy plumbing. The helper is at **`945-957`** and is itself flawed (off-by-one; an unreachable-but-unsafe `unwrap_or` fallback). Two genuinely correct helpers, unmentioned anywhere, are duplicated at `memory/recall.rs:183-192` and `memory/summarizer.rs:148-157`. | There are **four** panicking sites, not three, and they are **not identical** — `bash.rs:162` slices a *computed tail*, so a fix templated on `&x[..N]` leaves it panicking. The task is one shared helper replacing four sites **and** two duplicates. |
 | C-6 | `is_read_only()` is documented as a **concurrency hint** and is currently the auto-approval key | Repurposing it back to concurrency and introducing `ToolEffect` must happen together, or a window opens where nothing gates prompting. |
 | C-7 | Three subsystems share one missing path-normalisation helper — path lock, checkpoint retention, graph DB key | Fix once, in `autodev-core`, and route all three through it. Fixing them separately guarantees they drift again. |
 
