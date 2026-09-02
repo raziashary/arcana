@@ -200,6 +200,11 @@ pub async fn send_message(
             session_id: session_id_c.clone(),
         };
 
+        // How many assistant messages existed BEFORE this turn, so only the
+        // ones this turn produced are persisted. Counted here because
+        // `history` is moved into `run`.
+        let prior_assistant_count = history.iter().filter(|m| m.role == "assistant").count();
+
         // `catch_unwind` contains a panicking tool or provider to THIS turn.
         //
         // ⚠ It is necessary and not sufficient. Unwinding is already on (see
@@ -245,16 +250,90 @@ pub async fn send_message(
 
         match result {
             Ok(updated_history) => {
-                // Extract assistant's last message from updated history
-                // (Skip first message which is the user message we already saved)
-                if let Some(last_msg) = updated_history.last() {
-                    if last_msg.role == "assistant" {
+                // ── P3-06 / P3-07 · persist the whole turn, not `.last()` ─────
+                //
+                // This read `updated_history.last()` and required it to be an
+                // assistant message. Three defects followed:
+                //
+                //   1. On the `MAX_TOOL_TURNS` and cancel exits the last entry
+                //      is a **user** message (tool results are sent as one), so
+                //      the `role == "assistant"` test failed and **nothing was
+                //      persisted at all** — the entire turn lost.
+                //   2. `assistant_msg.content = text` **overwrote** inside the
+                //      loop, so a multi-block assistant turn kept only its last
+                //      text block and silently dropped the rest.
+                //   3. `tool_use` blocks were never persisted, so a reloaded
+                //      session could not show what the agent actually did.
+                //
+                // Every assistant message produced by this turn is persisted,
+                // with its text blocks joined rather than overwritten.
+                let assistant_messages: Vec<&crate::provider::types::RequestMessage> =
+                    updated_history.iter().filter(|m| m.role == "assistant").collect();
+
+                // Only the ones this turn added. `history` was the prior
+                // conversation, so anything beyond its length is new.
+                let new_assistant: Vec<_> = assistant_messages
+                    .into_iter()
+                    .skip(prior_assistant_count)
+                    .collect();
+
+                for msg in new_assistant {
+                    {
                         let mut assistant_msg = Message::new_assistant(&session_id_c);
-                        // Extract text content from content blocks
-                        for block in &last_msg.content {
-                            if let crate::provider::types::MessageContent::Text { text } = block {
-                                assistant_msg.content = text.clone();
-                            }
+
+                        // Joined, not overwritten. A turn that reasons across
+                        // several text blocks keeps all of them.
+                        let text: String = msg
+                            .content
+                            .iter()
+                            .filter_map(|b| match b {
+                                crate::provider::types::MessageContent::Text { text } => {
+                                    Some(text.as_str())
+                                }
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("");
+
+                        // The tool calls this turn made, recorded so a reloaded
+                        // session shows the work rather than only the prose.
+                        let tool_names: Vec<String> = msg
+                            .content
+                            .iter()
+                            .filter_map(|b| match b {
+                                crate::provider::types::MessageContent::ToolUse {
+                                    name, ..
+                                } => Some(name.clone()),
+                                _ => None,
+                            })
+                            .collect();
+
+                        // ⚠ P3-07. An assistant row with empty content is not
+                        // written. `build_history` rebuilds every stored row as
+                        // a content block, so an empty one becomes
+                        // `{"type":"text","text":""}` on **every later send in
+                        // that session, forever** — and providers reject an
+                        // empty content block.
+                        //
+                        // A turn that produced only tool calls is not empty:
+                        // its record is the calls, so it is kept with a
+                        // synthesised summary rather than dropped.
+                        if text.trim().is_empty() && tool_names.is_empty() {
+                            tracing::debug!(
+                                "skipping an empty assistant message for session \
+                                 {session_id_c} — persisting it would poison every later \
+                                 send in this session"
+                            );
+                            continue;
+                        }
+
+                        assistant_msg.content = if text.trim().is_empty() {
+                            format!("[called {}]", tool_names.join(", "))
+                        } else {
+                            text
+                        };
+                        if !tool_names.is_empty() {
+                            assistant_msg.tool_name = Some(tool_names.join(","));
                         }
                         // Phase 4.1 — store agent response to episodic memory.
                         let agent_text = assistant_msg.content.clone();

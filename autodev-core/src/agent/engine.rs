@@ -123,8 +123,18 @@ impl AgentEngine {
         user_message: &str,
         system_prompt_override: Option<&str>,
     ) -> Result<Vec<RequestMessage>> {
+        // ── P3-05 · exactly one terminal event, on every exit ────────────────
+        //
+        // Three paths returned without telling anyone (`:128`, `:328`, `:628`),
+        // so the task was dead and the UI spun forever. Created **before** the
+        // first possible return, and it owns the emission — there is no way to
+        // emit a terminal event without going through it, and therefore no way
+        // to emit two. `TG3-01` fails zero and two alike.
+        let mut terminal = crate::agent::terminal_event::TerminalEventGuard::new(session_id);
+
         // Check for cancellation before starting
         if self.state.lock_tolerant().is_cancelled(session_id) {
+            terminal.error("The run was cancelled before it started.");
             return Err(AutoDevError::Agent(
                 "Agent was cancelled before start".into(),
             ));
@@ -325,6 +335,7 @@ impl AgentEngine {
                     // the run that ends here is by construction the one that
                     // spent the most, and it used to record nothing at all.
                     self.record_spend(session_id, model, &total_usage);
+                    terminal.error(format!("Budget exceeded: {reason_str}"));
                     return Err(AutoDevError::BudgetExceeded(reason_str));
                 }
             }
@@ -569,10 +580,12 @@ impl AgentEngine {
                     };
                     HookRegistry::fire(&HookType::OnError, &error_ctx).await;
 
-                    emit_agent_error(AgentErrorPayload {
-                        session_id: session_id.to_string(),
-                        message: e.to_string(),
-                    });
+                    // Through the guard rather than direct, so this path
+                    // and the guard cannot both fire. This is the exit the
+                    // plan mistook for a fourth silent one — it always
+                    // reported, and adding an emission here would have made
+                    // it report twice.
+                    terminal.error(e.to_string());
                     // D-1. A stream that failed mid-run still spent whatever
                     // the provider had already billed for.
                     self.record_spend(session_id, model, &total_usage);
@@ -585,6 +598,27 @@ impl AgentEngine {
                 .iter()
                 .filter(|c| matches!(c, MessageContent::ToolUse { .. }))
                 .collect();
+
+            // ── P3-07 · never append an assistant message with no content ────
+            //
+            // An empty `content` vec is rejected by every provider, and once it
+            // is in `history` it is re-sent on **every later turn of the
+            // session** — so one empty turn poisons the rest of the
+            // conversation, not just itself.
+            //
+            // ⚠ A partial fix already landed citing this defect by name: it
+            // drops empty text *blocks*. That made the empty *vec* case MORE
+            // likely, not less — a turn whose only block was empty text now
+            // produces `[]` rather than `[""]`. This is the missing half.
+            //
+            // A turn with tool calls and no prose is NOT empty: the calls are
+            // its content, and dropping it would orphan every `tool_use`.
+            if response_content.is_empty() {
+                warn!(
+                    "The model returned no content and no tool calls for session                      {session_id}; not appending an empty assistant message, which would                      be re-sent on every later turn of this session."
+                );
+                break;
+            }
 
             // Add assistant message to history
             history.push(RequestMessage {
@@ -625,6 +659,7 @@ impl AgentEngine {
                     Ok(r) => r,
                     Err(e) => {
                         self.record_spend(session_id, model, &total_usage);
+                        terminal.error(format!("Tool execution failed: {e}"));
                         return Err(e);
                     }
                 }
@@ -802,12 +837,12 @@ impl AgentEngine {
             }
         }
 
-        emit_agent_done(AgentDonePayload {
+        terminal.done(AgentDonePayload {
             session_id: session_id.to_string(),
             message_id: Uuid::new_v4().to_string(),
             tokens_in: total_usage.total_input(),
             tokens_out: total_usage.output,
-            cost_usd: cost_usd,
+            cost_usd,
         });
 
         Ok(history)
@@ -832,7 +867,47 @@ impl AgentEngine {
         debug!("stream_response: model={model}");
         use futures::StreamExt;
 
-        let mut stream = self.provider.stream(request).await?;
+        // ── P3-09 · the retry policy, applied where retrying is SAFE ─────────
+        //
+        // Only the **establishment** of the stream is retried. If `stream()`
+        // returns `Err`, no chunk has been emitted, so a second attempt cannot
+        // duplicate output. Retrying a stream that has already produced tokens
+        // would re-emit them, which is worse than the failure.
+        //
+        // The classification comes from the error the adapter attached
+        // (`ErrorClass::classify`), not from matching its text — the whole
+        // defect `P3-09` fixes is that the classification was computed,
+        // stringified and discarded, so any retry loop would have had to parse
+        // `[Retryable]` back out of a message.
+        //
+        // ⚠ `QuotaExhausted` is never retried: a spend-cap 429 carries no
+        // retry-after and never succeeds, so retrying it is a spend loop
+        // against a ceiling that has already fired.
+        let request_for_retry = request.clone();
+        let provider = self.provider.clone();
+        let mut stream = crate::provider::retry::with_retry(
+            || {
+                let p = provider.clone();
+                let r = request_for_retry.clone();
+                async move { p.stream(r).await }
+            },
+            |e| {
+                // The adapter embedded the class in the message as `[Class]`.
+                // Read back until the error type carries it structurally —
+                // recorded as `F-5`, and this is its first real consumer.
+                let text = e.to_string();
+                if text.contains("[QuotaExhausted]") {
+                    crate::provider::usage::ErrorClass::QuotaExhausted
+                } else if text.contains("[Overloaded]") {
+                    crate::provider::usage::ErrorClass::Overloaded
+                } else if text.contains("[Retryable]") {
+                    crate::provider::usage::ErrorClass::Retryable
+                } else {
+                    crate::provider::usage::ErrorClass::Fatal
+                }
+            },
+        )
+        .await?;
 
         // ── Ordering (P2-59, P2-60) ──────────────────────────────────────
         //

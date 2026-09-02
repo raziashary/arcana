@@ -11,6 +11,7 @@ pub mod engine;
 pub mod permission;
 pub mod tool_executor;
 pub mod tool_registry;
+pub mod terminal_event;
 pub mod tool_effect;
 pub mod tool_trait;
 

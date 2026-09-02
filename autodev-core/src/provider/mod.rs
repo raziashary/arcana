@@ -8,6 +8,7 @@ pub mod catalogue;
 pub mod factory;
 pub mod google;
 pub mod openai;
+pub mod retry;
 pub mod routing;
 pub mod streaming;
 pub mod traits;

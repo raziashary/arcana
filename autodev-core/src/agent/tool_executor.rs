@@ -22,6 +22,14 @@ use crate::session::types::Message;
 use crate::state::lock::LockTolerant;
 
 // Max concurrent read-only tools (Claude Code uses 10)
+/// How long an unanswered permission prompt waits before it is refused.
+///
+/// The wait used to be unbounded, and the listener dying — a tab switch does it
+/// — blocked the engine permanently. Five minutes is long enough that a user who
+/// stepped away still gets to answer, and short enough that an abandoned session
+/// frees itself.
+const PERMISSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
 const MAX_CONCURRENT_READ_TOOLS: usize = 10;
 
 pub struct ToolExecutor {
@@ -37,6 +45,14 @@ pub struct ToolExecutor {
     always_allow: std::collections::HashSet<String>,
     // Session manager for persisting tool messages
     session_mgr: Option<Arc<SessionManager>>,
+    /// Shared application state, used **only** to observe cancellation
+    /// (`P3-08`). The permission wait must notice the user cancelling while a
+    /// prompt is open, and this is the same signal every other cancellation
+    /// path reads — a second mechanism here would be a second thing to forget.
+    ///
+    /// `Option` because `airsctl` and the tests build an executor with no
+    /// application state; there the timeout is the only bound.
+    state: Option<Arc<std::sync::Mutex<crate::state::AppState>>>,
 }
 
 impl ToolExecutor {
@@ -55,10 +71,17 @@ impl ToolExecutor {
             identity,
             always_allow: std::collections::HashSet::new(),
             session_mgr: None,
+            state: None,
         }
     }
 
     /// Set the session manager for persisting tool messages
+    /// Observe cancellation through the shared application state (`P3-08`).
+    pub fn with_state(mut self, state: Arc<std::sync::Mutex<crate::state::AppState>>) -> Self {
+        self.state = Some(state);
+        self
+    }
+
     pub fn with_session_manager(mut self, session_mgr: Arc<SessionManager>) -> Self {
         self.session_mgr = Some(session_mgr);
         self
@@ -544,10 +567,75 @@ impl ToolExecutor {
             description: tool.description().to_string(),
         });
 
-        // Wait for the user to respond (frontend sends respond_to_permission)
-        match rx.await {
-            Ok(PermissionResponse::Allow) => Ok(true),
-            Ok(PermissionResponse::AllowAlways) => {
+        // ── P3-08 · the wait is bounded, and cancellable ─────────────────────
+        //
+        // This was a bare `rx.await`. If the listener died — and **a tab switch
+        // is enough** — the engine blocked here forever, holding whatever locks
+        // the turn had taken, with no timeout and no way for the user to
+        // recover short of restarting.
+        //
+        // Three outcomes are raced:
+        //
+        //   * the user answers;
+        //   * the user cancels the session, polled through the existing
+        //     `is_cancelled` flag the UI already sets — no new dependency, and
+        //     it is the same signal every other cancellation path reads;
+        //   * nothing happens for `PERMISSION_TIMEOUT`, and an unanswered
+        //     prompt is treated as a refusal.
+        //
+        // ⚠ **Timeout denies rather than allows.** A prompt nobody answered is
+        // not consent, and this is the branch reached when the listener is
+        // gone — precisely when there is no one to have consented.
+        let outcome = tokio::select! {
+            answer = rx => answer.ok(),
+
+            _ = async {
+                // Polled rather than edge-triggered: the flag is a `bool` in
+                // shared state, not a channel, and adding a channel here would
+                // mean a second cancellation mechanism beside the one every
+                // other path already reads.
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    if self.state
+                        .as_ref()
+                        .map(|s| s.lock_tolerant().is_cancelled(&self.session_id))
+                        .unwrap_or(false)
+                    {
+                        break;
+                    }
+                }
+            } => {
+                debug!(
+                    "permission request for '{}' abandoned: the session was cancelled",
+                    tool.name()
+                );
+                None
+            }
+
+            _ = tokio::time::sleep(PERMISSION_TIMEOUT) => {
+                warn!(
+                    "permission request for '{}' timed out after {}s with no answer. \
+                     Treating it as a refusal — an unanswered prompt is not consent, and \
+                     this is the branch a dead listener reaches.",
+                    tool.name(),
+                    PERMISSION_TIMEOUT.as_secs()
+                );
+                None
+            }
+        };
+
+        // ⚠ The pending entry is removed on **every** outcome, including
+        // timeout and cancellation. It was only ever removed by the responder,
+        // so an abandoned prompt leaked its slot — `TG3-03` requires no
+        // undrained `PendingPermissions` entry.
+        {
+            let mut pending = self.pending.lock_tolerant();
+            pending.remove(call_id);
+        }
+
+        match outcome {
+            Some(PermissionResponse::Allow) => Ok(true),
+            Some(PermissionResponse::AllowAlways) => {
                 // Add this tool to the always-allow set for this session
                 self.always_allow.insert(tool.name().to_string());
                 debug!(
@@ -557,7 +645,7 @@ impl ToolExecutor {
                 );
                 Ok(true)
             }
-            Ok(PermissionResponse::Deny) | Err(_) => Ok(false),
+            Some(PermissionResponse::Deny) | None => Ok(false),
         }
     }
 }
