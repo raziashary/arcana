@@ -34,9 +34,9 @@ impl Tool for RememberThisTool {
          persists across sessions. Use this when the user explicitly asks you to remember \
          something, or when you learn a critical project/user preference that should \
          influence all future interactions.\n\n\
-         ⚠ Stored facts are injected only into sessions that carry a session \
-         id. Recipe-mode runs, subagents and the MCP server have none, so a \
-         fact stored there is persisted but will NOT appear in those prompts."
+         ⚠ A stored fact is NOT injected into a run that uses a custom system \
+         prompt. Recipe runs and subagents both pass one, so a fact stored \
+         there is persisted but will not appear in those prompts."
     }
 
     fn input_schema(&self) -> serde_json::Value {

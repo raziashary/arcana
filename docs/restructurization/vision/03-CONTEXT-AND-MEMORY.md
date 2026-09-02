@@ -149,6 +149,8 @@ with a **14-day half-life recency decay** (`exp(−ln2/14 · age_days)`) and sev
 
 **These are listed in the spec so the port has an explicit fix-list, not so the port has an excuse.**
 
+🔴 **Corrected 2026-09-02 by the `P3-F` pre-build verification (`§0.2m`).** The sentence above — *"`G4c §5.4` — each of these is in the code being ported"* — **is false for the Rust that ships.** The list cites Python line numbers (`procedural.py:278-290`, `yaml:38`). In the Rust module there is **no cache at all** (`grep -rni cache autodev-core/src/memory/` → zero hits across nine files), and defects **2, 6 and 7 all presuppose one**; `learn_hitl_pattern` (3) and the `agent_id` parameter (5) do not exist in Rust either. **What is real is worse than defect 1 as written:** `agent/context.rs` passes the **empty-string literal** as the query at the only call site, and `recall_facts` takes no query *by signature* — so **all three tiers are query-independent** and the injected block is byte-identical every turn. `P3-43` is re-scoped accordingly: fix what ships, do not port a list written against a deleted codebase.
+
 ### 4.4 Storage and retrieval — as decided
 
 `~/.autodev/memory.db` already has the four tables and is **already Rust-owned** — the sidecar's memory service is a *client* of it and says so in its own source (`G4b §C.3`). There is nothing to migrate; there is a Python wrapper to delete.
@@ -203,7 +205,9 @@ This is the doctrine boundary from `00 §Part 2` in its clearest form:
 
 **Anchor Phases 1–3 plus provenance** (ADR-05-05). In: store/search/get/list; hybrid retrieval with reranking; quality (importance, confidence, recency, dedup); provenance. Out, with a named follow-up: consolidation, contradiction resolution, autonomous memory creation, knowledge graphs, multi-hop retrieval.
 
-Composes with ADR-01-08 — simple per-tier budgeting ships first; the anchor's §10 reranker (which *is* the competitive model) arrives in Phase 2.
+Composes with ADR-01-08 — simple per-tier budgeting ships first; the anchor's §10 reranker arrives in Phase 2.
+
+🔴 **Corrected 2026-09-02.** This line said the anchor's §10 reranker *"**is** the competitive model"*. **It is not**, and the MDP's `P3-42` was right to say so. Both primary sources were read side by side: exactly **two** terms overlap (`relevance`, `recency`) and **six of the anchor's eight are absent** from the competitive model — `lexical_relevance`, `importance`, `access_frequency`, `scope_match`, `task_similarity`, `confidence` — while the competitive model carries seven the anchor does not (`authority`, `type_bonus`, `priority`, `correction`, `session_anchor`, `procedural_fit`, `length_penalty`). **Consequence:** the reranker needs columns that do not exist today, which is why it is its own work item with its own schema rather than a port.
 
 ### 4.7 What not to port
 

@@ -1178,3 +1178,102 @@ failure message called a defect.
 **How proven.** Every remediation carries a test or gate, each falsified with a
 **compiling** planted defect and the failure reason read rather than assumed (`L-26`).
 534 tests, 22 `TG-P3` gates.
+
+---
+
+## ADR-LOG-RESTRUCT-0031 — P3-F's pre-build refutation: the architecture held, the dependency story did not, and three defects had no task
+
+**Status.** DECIDED
+**Author.** Claude · **Tier.** `decided-independently` for the plan corrections
+(`§0.2m` requires the plan be corrected before the first line of code);
+**`razi-ruled`** for the platform boundary
+**When.** 2026-09-02 · before any P3-F code
+
+**What.** Two adversarial agents were dispatched against P3-F's load-bearing
+claims per `§0.2m` — one against the **external dependencies**, one against the
+**state of this repository** — both briefed to refute and to default to
+"refuted" on ambiguity. **Every load-bearing result was re-verified in the main
+session before it changed a row**, and two of the agents' own claims did not
+survive that.
+
+### 1. The architecture held — and it was tested, not read
+
+`sqlite-vec`'s entire `[dependencies]` is `cc`. It does **not** depend on
+`libsqlite3-sys`, so there is nothing to conflict with our pinned
+`rusqlite 0.31`; `loadable_extension` never enters the picture, so it never
+meets `bundled`. A scratch crate on the repo's exact pins built on Windows MSVC.
+**FTS5 is already present** in the bundled SQLite 3.45.0 — measured here by
+creating a virtual table and matching against it.
+
+**`vec0` partition keys are a genuine pre-filter**, proven with a *discriminating*
+fixture: `k=2 AND scope='a'` surfaced a row at distance 1.4142 that a post-filter
+over a global top-k could never return. Limits measured rather than assumed:
+**at most 4 partition columns, TEXT/INTEGER only**.
+
+*A refutation brief that only ever confirms is a rubber stamp. This one confirmed
+the part that mattered and broke the part nobody had checked.*
+
+### 2. The dependency story was wrong in a way that would have shipped as a fix
+
+**`P3-33` prescribed disabling `ort`'s default features.** `fastembed` already
+depends on `ort` with `default-features = false`, and `ort` is not a direct
+dependency of ours — **so the prescribed fix would have changed nothing while
+looking like a fix.** The download flag lives on `fastembed`, not `ort`. This is
+the `L-C12` shape one level out: not a helper wired to nothing, but a *mitigation*
+applied to the wrong crate.
+
+**`P3-34` was understated.** `with_cache_dir` is not authoritative — `HF_HOME`
+overrides it, so any machine with Python ML tooling installed silently relocates
+the 133 MB model outside the app data root, which is the exact INV-5 violation the
+task exists to close.
+
+### 3. razi-ruled — the platform boundary
+
+Our macOS DMG is a **universal binary** and CI targets both Apple architectures.
+**Microsoft publishes no x86_64 macOS ONNX Runtime in any release from v1.25.0 to
+v1.29.0** — verified across eight releases, `osx-arm64` only. A universal binary
+needs both slices to link, so adding `fastembed` unconditionally **fails the macOS
+DMG outright**, and vendoring cannot supply what upstream does not publish.
+
+**Ruling: the embedding backend sits behind a Cargo feature that is OFF for
+macOS.** Windows and Linux get semantic recall; macOS gets FTS5/BM25 and reports
+itself degraded — which is the architecture `03 §4.4` already specifies
+("degradation, not failure"), not a workaround. No platform is dropped.
+
+### 4. Three defects with no task — now `P3-45`, `P3-46`, `P3-47`
+
+* **`P3-45`** — `system_prompt_override` returns an empty *volatile* half, and the
+  memory block lives there. It is a user-facing settings field: **any user who
+  customises their system prompt loses all recall, silently.**
+* **`P3-46`** — recipes/subagents/MCP get no memory, and the **recorded cause is
+  wrong**: recipes *do* carry session ids. The override is the mechanism. ⚠ I
+  propagated that wrong cause into a **user-facing tool description** in `P3-20`.
+  `L-C3`, and the source was a comment (`L-22`).
+* **`P3-47`** — a fleet worker can write into the user's memory at
+  **`confidence = 1.0`, `source_type = "user_explicit"`**, and `recall_facts` has
+  **no scope predicate**, so it lands at the *top* of the user's "what I know
+  about you" block. ⚠ **Dormant until `P4-31` made the fleet run — earlier the
+  same day, by me, after the audit that would have caught it.**
+
+### 5. Two agent claims that did NOT survive re-verification
+
+* *"The Python sidecar is still present and wired — 323 `.py` files."* **13,665**
+  files, and `git ls-files "*.py"` returns **0** — every one is untracked, the P8
+  deletion backlog. `MEMORY_URL` is a constant plus one `/health` probe; **the
+  memory path is pure Rust and never traverses it.** OVERSTATED.
+* *"0 of the 7 defects exist."* True of the list as literally worded, and it
+  buries the finding: the operative defect — query-independent recall — **does
+  ship**, in all three tiers, and is worse than the list describes.
+
+### 6. Live data, before anything
+
+`~/.autodev/memory.db`: `user_version 1`, integrity ok, **39 episodic rows**.
+Backed up with `VACUUM INTO` (WAL-consistent, the mechanism `db/backup.rs` uses)
+and **read back before being trusted** — 39/0/0/0 rows and the version verified
+from the copy, not the source:
+`~/.autodev/backups/memory.db.pre-P3F.20260902-200211.bak`.
+
+**How proven.** `_verify/` will carry both raw reports at closeout. The plan,
+spec `03 §4.3` and `§4.6`, `context.rs`'s comment and `remember_this`'s
+description were all corrected **before** the first line of code, which is what
+`§0.2m` is for.

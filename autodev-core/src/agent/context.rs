@@ -126,7 +126,22 @@ impl ContextBuilder {
         }
 
         // Phase 4.4 — Memory injection: recall relevant memories from all 3 tiers.
-        // Skipped when no session_id is set (e.g. MCP server, subagent, recipe mode).
+        //
+        // ⚠ This comment used to read: "Skipped when no session_id is set (e.g.
+        // MCP server, subagent, recipe mode)." **That names the wrong cause,
+        // and it was believed for long enough to reach a user-facing tool
+        // description** (`remember_this`, via P3-20 — corrected in P3-46).
+        //
+        // Recipes DO have a session id: `recipes/runner.rs` builds
+        // `recipe-{worker_slug}-{uuid}`. What actually removes their memory is
+        // the **system-prompt override** — `engine.rs` returns
+        // `(override_str, String::new())` for `Some(_)`, and the memory block
+        // lives in that empty VOLATILE half. `runner.rs` passes
+        // `Some(&recipe.instructions)`; `native_runner.rs` passes
+        // `system_prompt.as_deref()`. See `P3-45`.
+        //
+        // The conclusion was right and the mechanism was wrong, which is the
+        // more dangerous combination: it looks verified.
         //
         // P2-14. This goes into the VOLATILE half, not into `parts`. It is
         // rebuilt from the episodic and semantic stores on every call, so a
