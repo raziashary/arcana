@@ -745,7 +745,8 @@ stamp its run id. Sequence a phase after its data producer. Put the capstone las
 **Spec anchors.** `02` (all), ADR-01-04, ADR-01-05, ADR-02-05, ADR-03-01, ADR-03-05, G-04, G-06, G-10.
 
 ### P2-A · The trait
-- [ ] **P2-01** `ModelProvider` trait v2 with `Item::Opaque` and six-field `Usage` **from day one** (retrofitting means touching every adapter twice). → `UNIT-PROVEN`
+- [x] **P2-01** `ModelProvider` trait v2 with `Item::Opaque` and six-field `Usage` **from day one** (retrofitting means touching every adapter twice). → `UNIT-PROVEN`
+      ✅ **2026-09-02** — six-field `Usage` with the adapter-owned normalisation invariant, `CachePolicy` (four variants), `ErrorClass`, `ModelCapabilities`. `CompletionResponse` and `StreamChunk::MessageDelta` carry `Usage`. **10 unit tests, falsified** — removing the normalisation subtraction fails two, naming the invariant.
 - [ ] **P2-02** `CachePolicy` keeps its **four variants** — `Off` · `Automatic { affinity_key }` · `Explicit { breakpoints, ttl }` · `Handle { id }`. → `UNIT-PROVEN`
       ⚠ **My own edit of 2026-09-01 was wrong and is corrected here (§0.13 dual-anchor).** When xAI was struck I rewrote this as *"three variants — Anthropic explicit, OpenAI automatic, Google differs"*, mapping variants one-to-one onto providers. Spec `02 §2` does not do that: the variants are **policy shapes**, and several providers can share one. Striking xAI removes a *user* of `Automatic`, not the variant — and OpenAI's caching is automatic too, so `Automatic` survives on its own merits. `Handle` covers server-side state where it genuinely saves. Collapsing shapes to a per-provider count is exactly the *"collapsing this to a boolean"* the spec warns against.
 - [ ] **P2-03** `capabilities()` keyed by **model**, not provider. → `UNIT-PROVEN`
@@ -756,7 +757,8 @@ stamp its run id. Sequence a phase after its data producer. Put the capstone las
 - [ ] **P2-08** Honour `max_tokens` on OpenAI and Google (silently dropped today). → `UNIT-PROVEN`
 - [ ] **P2-09** Parallel tool calls on all three; Anthropic needs **all** results in one user message. → `GATE-PROVEN`
 - [ ] **P2-10** `StopReason::MaxTokens` distinguishable on all three. → `GATE-PROVEN`
-- [ ] **P2-11** Delete `ollama.rs` (506 LOC), 10 sites in 8 files, drop `ollama-rs`, and the 8 frontend doc references. → `CODE-PRESENT`
+- [x] **P2-11** Delete `ollama.rs` (506 LOC), 10 sites in 8 files, drop `ollama-rs`, and the 8 frontend doc references. → `CODE-PRESENT`
+      ✅ **2026-09-02** — 537 LOC deleted, 31 references across 10 files, `ollama-rs` dropped from **both** manifests, shipped UI copy corrected. `TG2-14`'s scope includes shipped copy, not only Rust.
 
 ### P2-B · Caching — alarm before cache
 - [ ] **P2-12** **Build the cache-hit alarm first.** Non-zero `cached_read` from request 2 is the invariant; zero means a silent invalidator. → `GATE-PROVEN`
@@ -766,12 +768,18 @@ stamp its run id. Sequence a phase after its data producer. Put the capstone las
 - [ ] **P2-16** Wire caching on all three. → `BENCH-PROVEN`
 
 ### P2-C · Cost and spend
-- [ ] **P2-17** Handle `message_start` in streaming — **input tokens are 0 for all three cloud providers today**. → `UNIT-PROVEN`
-- [ ] **P2-18** Per-model price table with **no silent fallback** — an unknown model is an explicit error. *(The `_ => (1.0, 3.0)` fallback catches 7 of 11 models.)* → `UNIT-PROVEN`
-- [ ] **P2-19** Provider-neutral usage normalisation — **Anthropic excludes cached tokens from `input`; OpenAI and Gemini include them.** → `UNIT-PROVEN`
-- [ ] **P2-20** Handle the 200k price cliff (Google Pro). *(The xAI half went with `P2-07`.)* → `UNIT-PROVEN`
-- [ ] **P2-21** **M-42 — daily spend ceiling in the provider layer**, the one place every call passes. → `GATE-PROVEN`
-- [ ] **P2-22** **M-42 — global kill switch**; exceeding the cap **pauses the fleet and surfaces it**. → `SMOKE-PROVEN`
+- [x] **P2-17** Handle `message_start` in streaming — **input tokens are 0 for all three cloud providers today**. → `UNIT-PROVEN`
+      ✅ **2026-09-02** — `message_start` is handled in `streaming.rs` — it was falling through `_ => Ok(None)`, and it is the frame carrying Anthropic's `input_tokens` **and** `cache_read_input_tokens`.
+- [x] **P2-18** Per-model price table with **no silent fallback** — an unknown model is an explicit error. *(The `_ => (1.0, 3.0)` fallback catches 7 of 11 models.)* → `UNIT-PROVEN`
+      ✅ **2026-09-02** — `cost::pricing` with exact-id matching. An unknown model is an **error**; the `_ => (1.0, 3.0)` table is deleted. `TG-P2-02` keeps the table and the model picker in step, **falsified**.
+- [x] **P2-19** Provider-neutral usage normalisation — **Anthropic excludes cached tokens from `input`; OpenAI and Gemini include them.** → `UNIT-PROVEN`
+      ✅ **2026-09-02** — Per-provider: Anthropic's counts are used as reported (it already excludes cached); OpenAI and Google go through `from_inclusive_input`. Uniform handling would double-bill cached tokens at the uncached rate.
+- [x] **P2-20** Handle the 200k price cliff (Google Pro). *(The xAI half went with `P2-07`.)* → `UNIT-PROVEN`
+      ✅ **2026-09-02** — `PriceTier` on `gemini-3.1-pro` — 2× input, 1.5× output **and** 2× cached read above 200k. The cached tier was a gap in my own first draft; a long context is mostly cached tokens.
+- [x] **P2-21** **M-42 — daily spend ceiling in the provider layer**, the one place every call passes. → `GATE-PROVEN`
+      ✅ **2026-09-02** — `CappedProvider` decorates `Provider`, so the ceiling sits where every call passes rather than in the loop, which three other call sites bypass. `TG-P2-04`, **falsified**.
+- [x] **P2-22** **M-42 — global kill switch**; exceeding the cap **pauses the fleet and surfaces it**. → `SMOKE-PROVEN`
+      ✅ **2026-09-02** — Exceeding pauses the fleet via `budget::daily::pause_fleet` — workers move to `paused`, which the scheduler already honours. Refusing without pausing would hand the same work to the next worker a moment later.
 
 ### P2-D · BYOK
 - [ ] **P2-23** Key entry → **live validation** (models-list or token-count call) → keychain. → `SMOKE-PROVEN`
@@ -789,9 +797,11 @@ them undermine tasks already written, which is why they are here rather than in 
 phase. This is `L-C3` — *a source's conclusion adopted without checking its load-bearing
 detail* — caught before the build rather than by an auditor after it.
 
-- [ ] **P2-29** **`cost_today_usd` is never reset**, so *"today"* means *"since process start"* (`G3c IN-50`). → `UNIT-PROVEN`
+- [x] **P2-29** **`cost_today_usd` is never reset**, so *"today"* means *"since process start"* (`G3c IN-50`). → `UNIT-PROVEN`
+      ✅ **2026-09-02** — `cost_today_usd` carries its local date and rolls at midnight; every reader goes through `cost_today()`. **4 tests**, including a backwards clock.
       🔴 **This invalidates `P2-21` as written.** A daily ceiling built on a counter that resets when the app restarts is not a daily ceiling — it is a per-process one, and a user who restarts twice spends three times the cap. The ceiling cannot be built until the counter means what its name says.
-- [ ] **P2-30** **The daily rollup sleeps an hour before its first run and aggregates only *yesterday*** (`G3c IN-56`), so a desktop app used in sub-hour sessions **never completes a single rollup**. → `UNIT-PROVEN`
+- [x] **P2-30** **The daily rollup sleeps an hour before its first run and aggregates only *yesterday*** (`G3c IN-56`), so a desktop app used in sub-hour sessions **never completes a single rollup**. → `UNIT-PROVEN`
+      ✅ **2026-09-02** — The rollup runs immediately, then hourly — it slept an hour **before** its first run, so sub-hour sessions never completed one. `eprintln!` → `tracing::error!`, which also brings it inside the redactor.
       Same dependency as `P2-29`: the ceiling reads what the rollup writes.
 - [ ] **P2-31** **18 hardcoded model strings**, and `analyze_diff_tool.rs:219-222` bypasses model selection entirely — via env vars set nowhere, falling back to a hardcoded `claude-sonnet-4-6`, **an id in no provider catalogue** (`G2a §3`). → `GATE-PROVEN`
       A hardcoded id that no catalogue contains cannot route; with `P2-18`'s no-silent-fallback rule it becomes a hard error rather than a mystery bill.
@@ -806,34 +816,47 @@ detail* — caught before the build rather than by an auditor after it.
 agents (`§0.2m`) returned ~30 defects beyond the written tasks. All are absorbed here rather
 than deferred. Sources: `_verify/P2-REFUTE-{caching,cost,byok-adapters}.md`.
 
-- [ ] **P2-34** **Google's streaming tool calls carry no arguments.** `google.rs:341` computes `_args` and drops them, and **no `ToolInputDelta` is ever emitted**, so the engine assembles from an empty accumulator and substitutes `{}`. 🔴 **Every Gemini tool call runs with empty input — not only parallel ones — and Gemini is the primary provider.** → `GATE-PROVEN`
-- [ ] **P2-35** Google streaming returns on the **first** matching part (`google.rs:326-350`), so parallel `functionCall` parts are dropped. → `GATE-PROVEN`
-- [ ] **P2-36** `google.rs:347` hardcodes `block_index: 0` (two calls collide in `index_to_id`) and `:345` builds `id: format!("gemini-{}", name)` (collides when one tool is called twice). → `UNIT-PROVEN`
+- [x] **P2-34** **Google's streaming tool calls carry no arguments.** `google.rs:341` computes `_args` and drops them, and **no `ToolInputDelta` is ever emitted**, so the engine assembles from an empty accumulator and substitutes `{}`. 🔴 **Every Gemini tool call runs with empty input — not only parallel ones — and Gemini is the primary provider.** → `GATE-PROVEN`
+      ✅ **2026-09-02** — 🔴 **Every** Gemini tool call ran with empty input, not only parallel ones. The parser emits `ToolInputDelta` carrying the arguments. **Falsified** — restoring the discard fails two tests.
+- [x] **P2-35** Google streaming returns on the **first** matching part (`google.rs:326-350`), so parallel `functionCall` parts are dropped. → `GATE-PROVEN`
+      ✅ **2026-09-02** — The parser returns `Vec<StreamChunk>` and walks every part, so parallel `functionCall` parts all survive.
+- [x] **P2-36** `google.rs:347` hardcodes `block_index: 0` (two calls collide in `index_to_id`) and `:345` builds `id: format!("gemini-{}", name)` (collides when one tool is called twice). → `UNIT-PROVEN`
+      ✅ **2026-09-02** — Block index from the part position, id includes it — two calls to one tool no longer collide.
 - [ ] **P2-37** `google.rs:93` sends a **tool-use id** where `functionResponse.name` expects a tool **name** — the round trip sends `"gemini-read_file"` for `"read_file"`. → `UNIT-PROVEN`
 - [ ] **P2-38** **Tool errors are invisible on OpenAI and Google** — `openai.rs:97-101` and `google.rs:87-91` destructure `is_error: _`. A failed tool is indistinguishable from a successful one on two of three providers; Anthropic passes it (`anthropic.rs:112`). → `GATE-PROVEN`
 - [ ] **P2-39** `openai.rs:94-109` **drops text that shares a message with tool results** — the `else` producing the text block is skipped entirely. → `UNIT-PROVEN`
 - [ ] **P2-40** **Unrecognised roles vanish on OpenAI** (`openai.rs:85-163`, no `else`) while Google coerces them to `"user"` (`google.rs:70-74`). Two adapters, two silent and different behaviours. → `UNIT-PROVEN`
 - [ ] **P2-41** `openai.rs:389` compares `finish_reason != "null"` against the four-character **string**; JSON `null` yields `None` from `as_str()` and never reaches the line. An inert comparison. → `UNIT-PROVEN`
 - [ ] **P2-42** **`stream_options: {include_usage: true}` is sent nowhere**, so `openai.rs:391`'s usage guard can never fire — and separately `openai.rs:342-344` discards the usage frame on empty `choices`. **Two edits, not one.** → `UNIT-PROVEN`
-- [ ] **P2-43** **`message_start` is unhandled** (`streaming.rs:85-86` falls through `_ => Ok(None)`) — the frame carrying Anthropic's `input_tokens` **and** `cache_read_input_tokens`. `P2-12`'s instrument does not exist without it. → `UNIT-PROVEN`
-- [ ] **P2-44** Google's usage handler (`google.rs:353-366`) is unreachable — blocked by `:321-324` (no `parts` → `None`) and `:326-332` (first text part returns). → `UNIT-PROVEN`
+- [x] **P2-43** **`message_start` is unhandled** (`streaming.rs:85-86` falls through `_ => Ok(None)`) — the frame carrying Anthropic's `input_tokens` **and** `cache_read_input_tokens`. `P2-12`'s instrument does not exist without it. → `UNIT-PROVEN`
+      ✅ **2026-09-02** — See `P2-17`. Anthropic's input side arrives on `message_start` and nowhere else.
+- [x] **P2-44** Google's usage handler (`google.rs:353-366`) is unreachable — blocked by `:321-324` (no `parts` → `None`) and `:326-332` (first text part returns). → `UNIT-PROVEN`
+      ✅ **2026-09-02** — Google's usage handler is reachable: both early returns are gone, and usage is emitted even when every count is absent so the stop reason survives.
 - [ ] **P2-45** `maxOutputTokens` is sent nowhere; `max_tokens` is read only at `anthropic.rs:134`. Extends `P2-08` with the measured shape. → `UNIT-PROVEN`
-- [ ] **P2-46** `stop_reason` is **written by four sites and read by none** — `engine.rs:474-481` discards it with `..`, so a `max_tokens` truncation and a clean `end_turn` are the same code path. *(There is no `StopReason` enum; the plan named a type that does not exist.)* → `GATE-PROVEN`
+- [x] **P2-46** `stop_reason` is **written by four sites and read by none** — `engine.rs:474-481` discards it with `..`, so a `max_tokens` truncation and a clean `end_turn` are the same code path. *(There is no `StopReason` enum; the plan named a type that does not exist.)* → `GATE-PROVEN`
+      ✅ **2026-09-02** — `stop_reason` is recorded rather than discarded by `..`, and truncation warns. A `max_tokens` cut and a clean finish were literally the same code path.
 
 ### P2-G · Cost and analytics integrity
 
-- [ ] **P2-47** `engine.rs:237` `let _ = db.update_task_budget_usage(...)` — the only persistence of running budget consumption, silently discarded, in a function that logs loudly for every other DB failure. → `UNIT-PROVEN`
-- [ ] **P2-48** 🔴 **Wire `with_task_budget`.** Zero callers, so `engine.rs:164-180`, `escalate_budget_exceeded`, `TaskBudget::default_worker` and `BudgetExceededReason` are all unreachable — **~100 lines of enforcement with no entry point.** `P2-21` cannot precede this. → `GATE-PROVEN`
+- [x] **P2-47** `engine.rs:237` `let _ = db.update_task_budget_usage(...)` — the only persistence of running budget consumption, silently discarded, in a function that logs loudly for every other DB failure. → `UNIT-PROVEN`
+      ✅ **2026-09-02** — The only persistence of running budget consumption no longer uses `let _ =`, in a function that logs loudly for every other DB failure.
+- [x] **P2-48** 🔴 **Wire `with_task_budget`.** Zero callers, so `engine.rs:164-180`, `escalate_budget_exceeded`, `TaskBudget::default_worker` and `BudgetExceededReason` are all unreachable — **~100 lines of enforcement with no entry point.** `P2-21` cannot precede this. → `GATE-PROVEN`
+      ✅ **2026-09-02** — 🔴 `with_task_budget` had **zero callers** — its signature demanded a `task_id` neither autonomous path has at construction. `with_budget` added; both paths run under `default_worker()`. `TG-P2-03` gates both the wiring and that the builders have callers at all, **falsified**.
 - [ ] **P2-49** `emit_cost_update` has **one** caller (`runner.rs:481`, Mode 2). The Mode 1 agent path emits `emit_agent_done`, so **Mode 1 spend is invisible to the only budget warning that exists**. → `GATE-PROVEN`
 - [ ] **P2-50** `dailyBudget` is unsettable — `dashboardStore.ts:173` and `CostMeter.tsx:20` hardcode 50, and `setDailyBudget` has no caller. → `UNIT-PROVEN`
-- [ ] **P2-51** 🔴 **Unreachable price arm** — `tracker.rs:58-59` tests `contains("gpt-4o")` before `contains("gpt-4o-mini")`. Latent today, but **`gpt-5.4` and `gpt-5.4-mini` are both offered**: the trap is armed. Ordering must be longest-prefix-first, gated. → `GATE-PROVEN`
+- [x] **P2-51** 🔴 **Unreachable price arm** — `tracker.rs:58-59` tests `contains("gpt-4o")` before `contains("gpt-4o-mini")`. Latent today, but **`gpt-5.4` and `gpt-5.4-mini` are both offered**: the trap is armed. Ordering must be longest-prefix-first, gated. → `GATE-PROVEN`
+      ✅ **2026-09-02** — Exact-id matching makes the `gpt-4o` before `gpt-4o-mini` ordering trap unrepresentable. It was armed for `gpt-5.4`/`gpt-5.4-mini`, both offered.
 - [ ] **P2-52** `.unwrap_or(0)` guards all eight usage extractions. A provider schema change degrades to "this call was free" with no log line — and with `P2-48` unfixed, to unbounded silent spend. → `UNIT-PROVEN`
 - [ ] **P2-53** Provider inference by substring is duplicated (`engine.rs:379-387`, `runner.rs:441-452`) and `o4-mini` matches none, filing under `"unknown"` and corrupting `aggregator.rs:62-64`. One shared helper. → `UNIT-PROVEN`
-- [ ] **P2-54** `runner.rs:516-517` passes `1, 0` as literals, so `collector.rs:130-134` always computes `success_rate = 100.0` from that path. → `UNIT-PROVEN`
-- [ ] **P2-55** `analytics/aggregator.rs:20-23` — the hourly rollup is a stub returning `Ok(())` on a schedule. Logs no error, looks healthy, produces nothing. → `UNIT-PROVEN`
-- [ ] **P2-56** Gemini **thinking tokens are never counted** — `google.rs:357` reads only `candidatesTokenCount`; `thoughtsTokenCount` is never read and `thinking_tokens` is hard-passed `None` although `collector.rs:27` accepts it. → `UNIT-PROVEN`
+- [x] **P2-54** `runner.rs:516-517` passes `1, 0` as literals, so `collector.rs:130-134` always computes `success_rate = 100.0` from that path. → `UNIT-PROVEN`
+      ✅ **2026-09-02** — Mode 2 records its failures. ⚠ The audit reported this as universal; **Mode 1 already recorded both branches** — only Mode 2 was one-sided. Verified before fixing.
+- [x] **P2-55** `analytics/aggregator.rs:20-23` — the hourly rollup is a stub returning `Ok(())` on a schedule. Logs no error, looks healthy, produces nothing. → `UNIT-PROVEN`
+      ✅ **2026-09-02** — The stub was **deleted, not implemented**: it aggregated into `hourly_costs`, a table nothing creates, and nothing reads hourly buckets. Implementing it would have been a writer with no reader, built deliberately.
+- [x] **P2-56** Gemini **thinking tokens are never counted** — `google.rs:357` reads only `candidatesTokenCount`; `thoughtsTokenCount` is never read and `thinking_tokens` is hard-passed `None` although `collector.rs:27` accepts it. → `UNIT-PROVEN`
+      ✅ **2026-09-02** — Gemini `thoughtsTokenCount` is read and billed at the output rate.
 - [ ] **P2-57** `engine.rs:188` hardcodes `let model_context = 200_000u32;`, **ignoring `ModelInfo::context_window`** — so Gemini's 1M window compacts at 20%. → `UNIT-PROVEN`
-- [ ] **P2-58** `engine.rs:422` `_model: &str` is a dead parameter passed live at `:223`; per-model streaming cannot be implemented without a signature change. → `CODE-PRESENT`
+- [x] **P2-58** `engine.rs:422` `_model: &str` is a dead parameter passed live at `:223`; per-model streaming cannot be implemented without a signature change. → `CODE-PRESENT`
+      ✅ **2026-09-02** — `_model` is read; it sat exactly where per-model streaming behaviour belongs.
 
 ### P2-H · Caching prerequisites — ordering and prompt structure
 
@@ -841,8 +864,10 @@ than deferred. Sources: `_verify/P2-REFUTE-{caching,cost,byok-adapters}.md`.
 `P2-B`: a messages-level invalidator looks exactly like *"caching doesn't work"* while the
 prefix is perfectly stable — the hardest possible bug to attribute.
 
-- [ ] **P2-59** 🔴 **`engine.rs:490` iterates a `HashMap`**, so with two or more parallel tool calls the block order written into `history` is arbitrary **and differs between processes** — then replayed on every later turn. `block_index` is already carried on `ToolUseStart` (`types.rs:92-96`); use it and an ordered container. → `GATE-PROVEN`
-- [ ] **P2-60** `engine.rs:487` pushes `text_buffer` unconditionally **first**, inverting any text the model emitted after a tool call. → `UNIT-PROVEN`
+- [x] **P2-59** 🔴 **`engine.rs:490` iterates a `HashMap`**, so with two or more parallel tool calls the block order written into `history` is arbitrary **and differs between processes** — then replayed on every later turn. `block_index` is already carried on `ToolUseStart` (`types.rs:92-96`); use it and an ordered container. → `GATE-PROVEN`
+      ✅ **2026-09-02** — 🔴 Parallel tool calls were ordered by `HashMap` iteration — arbitrary, **differing between runs of the same binary**, and replayed every turn. Both accumulators are `BTreeMap`s keyed by the wire's block index. **5 tests**, one asserting ten assemblies agree.
+- [x] **P2-60** `engine.rs:487` pushes `text_buffer` unconditionally **first**, inverting any text the model emitted after a tool call. → `UNIT-PROVEN`
+      ✅ **2026-09-02** — Text no longer jumps ahead of tool calls; `TextDelta` carries `block_index`, which Anthropic already sent and we discarded.
 - [ ] **P2-61** `engine.rs:320-340` emits unknown-tool errors before batch results, so the result order does not parallel the call order. → `UNIT-PROVEN`
 - [ ] **P2-62** **Delete the dead divergent builder** `context.rs:37 build_system_prompt` — zero callers, reads AUTODEV.md only, never queries `AutodevInstructionsDb`, never injects memory. It would emit a *different* prefix, and it is a trap for whoever wires the cache. → `CODE-PRESENT`
 - [ ] **P2-63** `anthropic.rs` sends `system` as a **bare string**, so there is no block to hang a breakpoint on. Converting to a content-block array is a prerequisite for `Explicit` caching, not part of it. → `UNIT-PROVEN`
@@ -862,8 +887,10 @@ lines of adapter code with zero `#[test]` of any kind** — `anthropic.rs`, `ope
 - [ ] **P2-70** `vault_commands.rs:38` decrypts a secret into process memory on every `list_providers` purely to compute a boolean, then drops it unzeroized. Use a presence probe. → `UNIT-PROVEN`
 - [ ] **P2-71** The credential store in use is **never disclosed** — `VaultEntryStatus` carries no backend identity, while `docsMore.ts:160` claims behaviour the code does not implement. → `UNIT-PROVEN`
 - [ ] **P2-72** `Settings.tsx:1082-1092` **promotes an unvalidated key to active** and clears the prior test result. Validation belongs on the save path (`P2-23`). → `SMOKE-PROVEN`
-- [ ] **P2-73** Remove the **unused** `ollama-rs` from `src-tauri/Cargo.toml:89` — `ollama_rs::` is imported by one file, reached through the `autodev_core` re-export. Removable today with no code change. → `CODE-PRESENT`
-- [ ] **P2-74** ⚠ **`P2-11`'s framing is wrong and its numbers are wrong.** Measured: **537** LOC (not 506), **31** Rust references across **10** files (not "10 sites in 8 files"), `ollama-rs` in **two** manifests. And it is **not dead weight** — `settings_commands.rs:28-33` enumerates it as a live provider, `Settings.tsx:67-68` renders it, and **five** provider-construction switches route to it. Deletion is a **user-visible feature removal**, which Razi has ruled, but it is not a cleanup. → `CODE-PRESENT`
+- [x] **P2-73** Remove the **unused** `ollama-rs` from `src-tauri/Cargo.toml:89` — `ollama_rs::` is imported by one file, reached through the `autodev_core` re-export. Removable today with no code change. → `CODE-PRESENT`
+      ✅ **2026-09-02** — `ollama-rs` removed from `src-tauri/Cargo.toml` — it was imported by one file, reached through the `autodev_core` re-export.
+- [x] **P2-74** ⚠ **`P2-11`'s framing is wrong and its numbers are wrong.** Measured: **537** LOC (not 506), **31** Rust references across **10** files (not "10 sites in 8 files"), `ollama-rs` in **two** manifests. And it is **not dead weight** — `settings_commands.rs:28-33` enumerates it as a live provider, `Settings.tsx:67-68` renders it, and **five** provider-construction switches route to it. Deletion is a **user-visible feature removal**, which Razi has ruled, but it is not a cleanup. → `CODE-PRESENT`
+      ✅ **2026-09-02** — Measured and recorded: 537 LOC not 506, 31 references not 10, 10 files not 8, and it was a **live** provider with five dispatch switches — a user-visible removal, not a cleanup.
 - [ ] **P2-75** The tree contradicts itself about Ollama: `PROBED_PROVIDERS` marks it retired and `is_supported_provider` excludes it (so a stored key reports `orphaned`), while `settings_commands.rs:32` presents it as live on the same screen. **Half of this contradiction was introduced 2026-09-01 and must not outlive `P2-11`.** → `GATE-PROVEN`
 
 ### Smoke — S2
