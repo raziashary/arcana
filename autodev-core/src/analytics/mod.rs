@@ -79,17 +79,26 @@ impl AnalyticsManager {
         Some(self.db.path().to_path_buf())
     }
 
-    /// Start background aggregation job (hourly and daily rollups)
+    /// Start the background daily rollup.
+    ///
+    /// ⚠ **Runs once immediately, then hourly (P2-30).** It used to sleep an
+    /// hour *before* its first run, so a desktop app used in sub-hour sessions
+    /// — which is most of them — **never completed a single rollup**. The job
+    /// existed, was scheduled, logged nothing, and produced nothing.
+    ///
+    /// The hourly rollup is gone entirely; see `aggregator.rs` for why it was
+    /// deleted rather than implemented.
     pub fn start_aggregation_job(&self) {
         let aggregator = self.aggregator.clone();
         std::thread::spawn(move || loop {
-            std::thread::sleep(std::time::Duration::from_secs(3600));
-            if let Err(e) = aggregator.run_hourly_rollup() {
-                eprintln!("Hourly aggregation failed: {}", e);
-            }
+            // Before the sleep, not after.
             if let Err(e) = aggregator.run_daily_rollup() {
-                eprintln!("Daily aggregation failed: {}", e);
+                // `tracing`, not `eprintln!`: stderr bypasses the log layer
+                // entirely, so this never reached the log file and — until
+                // 2026-09-02 — never passed the redactor either.
+                tracing::error!("Daily aggregation failed: {e}");
             }
+            std::thread::sleep(std::time::Duration::from_secs(3600));
         });
     }
 }

@@ -591,6 +591,25 @@ impl RecipeRunner {
                                 if worker_slug.starts_with("worker-") {
                                     Self::reconcile_stranded_task(worker_slug);
                                 }
+                                // P2-54. The success branch records (1, 0) and this
+                                // branch recorded no worker stats at all, so
+                                // `collector.rs` computed success_rate = 100.0 for
+                                // every Mode 2 worker regardless of how often it
+                                // failed. A leaderboard that can only report success
+                                // is not a measurement.
+                                if let Err(e) =
+                                    crate::analytics::global().collector().record_worker_stats(
+                                        worker_slug.to_string(),
+                                        0, // tasks_completed
+                                        1, // tasks_failed
+                                        0,
+                                        0.0,
+                                        0,
+                                    )
+                                {
+                                    warn!("[Mode2] record_worker_stats (failure) failed for '{worker_slug}': {e}");
+                                }
+
                                 // Phase 7.7 — record the invoke error as a system event.
                                 let _ = crate::analytics::global().collector().record_system_event(
                                     "runner".to_string(),

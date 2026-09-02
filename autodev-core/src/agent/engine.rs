@@ -273,12 +273,24 @@ impl AgentEngine {
                 }
                 if let Some(tid) = self.task_id {
                     if let Ok(db) = crate::db::tasks::TasksDb::open() {
-                        let _ = db.update_task_budget_usage(
+                        // P2-47. This was `let _ =`, in a function that logs
+                        // loudly for every other DB failure. It is the ONLY
+                        // persistence of running budget consumption, so a
+                        // silent failure means a task's spend is invisible to
+                        // the next process — and the per-task ceiling then
+                        // enforces against a figure that stopped updating.
+                        if let Err(e) = db.update_task_budget_usage(
                             tid,
                             budget_status.tokens_used,
                             budget_status.cost_usd,
                             budget_status.turns_used,
-                        );
+                        ) {
+                            error!(
+                                "Failed to persist budget usage for task #{tid}: {e}. \
+                                 The ceiling for this task is now enforcing against a \
+                                 stale figure."
+                            );
+                        }
                     }
                 }
             }
