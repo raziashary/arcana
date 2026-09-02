@@ -158,8 +158,39 @@ pub fn backup_database_in(
     // Prove the snapshot is a readable database before telling the caller it is
     // safe to proceed. An unopenable backup that reports success is worse than
     // no backup, because it is acted upon.
+    //
+    // 🔴 **Opened read-WRITE, and it has to be.** `PRAGMA integrity_check`
+    // validates an FTS5 table's inverted index by writing to a scratch area,
+    // so on a read-only handle it does not return `"ok"` — it returns
+    // *"unable to validate the inverted index for FTS5 table …: attempt to
+    // write a readonly database"*, and this function rejects its own perfectly
+    // good backup.
+    //
+    // That is not hypothetical. `memory.db` v2 introduced `memories_fts`, and
+    // the very next destructive migration — v3 — was refused on every database
+    // that had ever reached v2, including the live one, with the safety
+    // mechanism reporting a corrupt backup. The guard would have blocked the
+    // app at launch, and the message would have sent whoever read it looking
+    // for disk corruption that was not there.
+    //
+    // Writing to the SNAPSHOT is safe by construction: it is a file this
+    // function created seconds ago, at a path nothing else holds, and the
+    // source database is not opened here at all.
+    //
+    // ⚠ Explicit flags rather than `db::open_tuned`, which `TG-P1-05` would
+    // otherwise ask for. `open_tuned` sets `journal_mode = WAL`, and this file
+    // is an archive: rewriting the header of a snapshot as a side effect of
+    // *verifying* it is the wrong shape, and the pragma buys nothing here —
+    // there is exactly one connection, no concurrency, and it lives for one
+    // statement. `SQLITE_OPEN_CREATE` is deliberately absent, so a snapshot
+    // that vanished between `VACUUM INTO` and this line fails rather than
+    // being silently re-created empty and pronounced sound.
     {
-        let check = Connection::open_with_flags(&dest, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        let check = Connection::open_with_flags(
+            &dest,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+                | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
             .map_err(|e| AutoDevError::Agent(format!("Backup is not readable: {e}")))?;
         let ok: String = check
             .query_row("PRAGMA integrity_check", [], |r| r.get(0))
@@ -221,6 +252,62 @@ mod tests {
             .expect("open backup");
         conn.query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
             .expect("count")
+    }
+
+    /// 🔴 A database containing an FTS5 table can be backed up **and verified**.
+    ///
+    /// This was broken from the moment `memory.db` v2 introduced
+    /// `memories_fts`, and nothing noticed for a phase and a half, because the
+    /// verification only runs on the path to a *destructive* migration and v2
+    /// was purely additive. The first destructive rung after it — v3 — was
+    /// refused on every database that had ever reached v2, the live one
+    /// included, with this function reporting its own good backup as corrupt:
+    ///
+    /// > `unable to validate the inverted index for FTS5 table main.memories_fts:
+    /// >  attempt to write a readonly database`
+    ///
+    /// The app would have declined to migrate at launch, and the message points
+    /// at disk corruption rather than at the read-only handle that caused it.
+    ///
+    /// ⚠ The plain table in `seed` cannot catch this — `integrity_check` needs
+    /// no write access for ordinary b-trees, so every existing test here passes
+    /// on a read-only connection. The fixture has to carry a virtual table, or
+    /// it is testing the case that was never broken.
+    #[test]
+    fn a_database_with_an_fts5_index_can_be_backed_up_and_verified() {
+        let dir = temp_dir("fts5");
+        let db = dir.join("source.db");
+        let conn = seed(&db, 3);
+        conn.execute_batch(
+            "CREATE VIRTUAL TABLE notes_fts USING fts5(content);
+             INSERT INTO notes_fts(content) VALUES ('the deploy key rotates monthly');",
+        )
+        .expect("fts5 must be available in the bundled SQLite");
+        drop(conn);
+
+        let backup = backup_database_in(&dir, &db, "unit-test", "20260101-000000").expect(
+            "a database with an FTS5 table was rejected by its own backup \
+             verification — this is the shape that blocked migration v3",
+        );
+        assert!(backup.path.exists());
+        assert_eq!(count(&backup.path), 3);
+
+        // …and the snapshot's own FTS5 index survived and is searchable, so
+        // "verified" means the data is really there rather than merely that a
+        // file opened.
+        let restored = Connection::open_with_flags(
+            &backup.path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .expect("open backup");
+        let hits: i64 = restored
+            .query_row(
+                "SELECT count(*) FROM notes_fts WHERE notes_fts MATCH 'deploy'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("search the backup");
+        assert_eq!(hits, 1, "the backup's FTS5 index did not survive the copy");
     }
 
     #[test]

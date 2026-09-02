@@ -158,7 +158,14 @@ impl MemoryDb {
     // The tier tables keep their tier-specific payload (episodic keeps cost and
     // tokens, semantic keeps category and tags, procedural keeps topic). This
     // table carries only what RETRIEVAL needs, and `ref_id` points back.
-    // Everything is written through one seam so the two cannot diverge.
+    //
+    // 🔴 This comment claimed "everything is written through one seam so the
+    // two cannot diverge". **That was false when written.** Only the gateway
+    // wrote here; `episodic.rs` and `procedural.rs` wrote to their own tables
+    // and nothing else, so every NEW turn and topic was invisible to recall —
+    // the index was frozen at whatever the v2 backfill captured. Closed by v3,
+    // which makes the indexing a database trigger rather than a convention the
+    // write paths have to remember.
     Migration {
         version: 2,
         name: "memory-retrieval-index",
@@ -302,6 +309,204 @@ impl MemoryDb {
                 p.updated_at
             FROM procedural_memories p;
         "#,
+    },
+    // ═════════════════════════════════════════════════════════════════════
+    // v3 — keep the retrieval index in step with the tier tables
+    // ═════════════════════════════════════════════════════════════════════
+    //
+    // 🔴 v2 backfilled the existing rows and stopped there. New episodic turns
+    // and new procedural topics went into their own tables and **nowhere else**,
+    // so the retrieval index was frozen at migration time: every conversation
+    // after the upgrade was unrecallable, silently, with no error and nothing to
+    // notice but recall that felt oddly stale.
+    //
+    // ⚠ Triggers rather than calls in the write paths, for the same reason the
+    // FTS5 index uses them: a convention the write path must remember is one a
+    // new write path will forget, and there are already four of them across
+    // three files. The database enforces this now.
+    //
+    // The scope and source expressions mirror v2's backfill exactly, so a row
+    // written today and the same row backfilled yesterday land identically.
+    Migration {
+        version: 3,
+        name: "memory-index-triggers",
+        sql: r#"
+            -- Episodic: one row per turn.
+            CREATE TRIGGER IF NOT EXISTS episodic_index_ai
+            AFTER INSERT ON episodic_memories
+            WHEN NEW.content IS NOT NULL AND NEW.content <> ''
+            BEGIN
+                INSERT OR IGNORE INTO memories (
+                    id, tier, scope, scope_ref, scope_key, content,
+                    source, importance, confidence, ref_id, created_at, updated_at
+                ) VALUES (
+                    'epi-' || NEW.id,
+                    'episodic',
+                    CASE WHEN COALESCE(NEW.working_dir,'') = '' THEN 'global' ELSE 'project' END,
+                    COALESCE(NEW.working_dir,''),
+                    CASE WHEN COALESCE(NEW.working_dir,'') = '' THEN 'global'
+                         ELSE 'project:' || NEW.working_dir END,
+                    NEW.content,
+                    CASE WHEN NEW.role = 'user' THEN 'user' ELSE 'agent_observation' END,
+                    0.5, 0.7, NEW.id, NEW.created_at, NEW.created_at
+                );
+            END;
+
+            -- Semantic: the legacy direct-write path. The gateway writes to
+            -- `memories` itself, so this covers anything that still writes a
+            -- fact the old way rather than leaving it unindexed.
+            CREATE TRIGGER IF NOT EXISTS semantic_index_ai
+            AFTER INSERT ON semantic_memories
+            WHEN NEW.is_active = 1
+            BEGIN
+                INSERT OR IGNORE INTO memories (
+                    id, tier, scope, scope_ref, scope_key, content,
+                    source, importance, confidence, ref_id, created_at, updated_at
+                ) VALUES (
+                    'sem-' || NEW.id,
+                    'semantic',
+                    CASE WHEN COALESCE(NEW.working_dir,'') = '' THEN 'global' ELSE 'project' END,
+                    COALESCE(NEW.working_dir,''),
+                    CASE WHEN COALESCE(NEW.working_dir,'') = '' THEN 'global'
+                         ELSE 'project:' || NEW.working_dir END,
+                    NEW.fact_text,
+                    CASE WHEN NEW.source_type = 'user_explicit' THEN 'user'
+                         ELSE 'agent_observation' END,
+                    0.5, NEW.confidence, NEW.id, NEW.created_at, NEW.updated_at
+                );
+            END;
+
+            -- Procedural: `save_topic` upserts on the UNIQUE topic, so the
+            -- index has to follow BOTH halves or an edited topic keeps its old
+            -- text in search forever.
+            CREATE TRIGGER IF NOT EXISTS procedural_index_ai
+            AFTER INSERT ON procedural_memories
+            BEGIN
+                INSERT OR IGNORE INTO memories (
+                    id, tier, scope, scope_ref, scope_key, content,
+                    source, importance, confidence, ref_id, created_at, updated_at
+                ) VALUES (
+                    'prc-' || NEW.id, 'procedural', 'global', '', 'global',
+                    NEW.title || ': ' || NEW.content,
+                    'agent_observation', 0.5, 0.7, NEW.id, NEW.created_at, NEW.updated_at
+                );
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS procedural_index_au
+            AFTER UPDATE ON procedural_memories
+            BEGIN
+                UPDATE memories
+                   SET content    = NEW.title || ': ' || NEW.content,
+                       updated_at = NEW.updated_at
+                 WHERE tier = 'procedural' AND ref_id = NEW.id;
+            END;
+
+            -- ── Edits and removals ───────────────────────────────────
+            --
+            -- 🔴 Insert triggers alone leave two defects standing, and the
+            -- second is the serious one:
+            --
+            --   1. an EDITED fact serves its pre-edit text from the index for
+            --      ever, so the contradiction-resolution machinery updates a
+            --      column nothing reads back; and
+            --   2. **"forget this" does not forget.** `deactivate_fact` sets
+            --      `is_active = 0` and `delete_topic` removes the row, but the
+            --      index copy is untouched, still in scope, and still selected
+            --      by `LexicalBackend::search` — so a memory the user asked to
+            --      remove keeps being injected into the system prompt on every
+            --      turn, permanently, with no surface anywhere that admits it
+            --      is still there.
+            --
+            -- A deletion path that silently retains the data is worse than
+            -- having no deletion path at all, because the user is told it
+            -- worked.
+
+            CREATE TRIGGER IF NOT EXISTS semantic_index_au
+            AFTER UPDATE ON semantic_memories
+            WHEN NEW.is_active = 1
+            BEGIN
+                -- OR IGNORE first, so a fact REACTIVATED after a deactivation
+                -- comes back rather than updating a row that is no longer
+                -- there. The UPDATE then carries the current text either way,
+                -- and `access_count` survives the common edit path.
+                INSERT OR IGNORE INTO memories (
+                    id, tier, scope, scope_ref, scope_key, content,
+                    source, importance, confidence, ref_id, created_at, updated_at
+                ) VALUES (
+                    'sem-' || NEW.id,
+                    'semantic',
+                    CASE WHEN COALESCE(NEW.working_dir,'') = '' THEN 'global' ELSE 'project' END,
+                    COALESCE(NEW.working_dir,''),
+                    CASE WHEN COALESCE(NEW.working_dir,'') = '' THEN 'global'
+                         ELSE 'project:' || NEW.working_dir END,
+                    NEW.fact_text,
+                    CASE WHEN NEW.source_type = 'user_explicit' THEN 'user'
+                         ELSE 'agent_observation' END,
+                    0.5, NEW.confidence, NEW.id, NEW.created_at, NEW.updated_at
+                );
+                UPDATE memories
+                   SET content    = NEW.fact_text,
+                       confidence = NEW.confidence,
+                       updated_at = NEW.updated_at
+                 WHERE tier = 'semantic' AND ref_id = NEW.id;
+            END;
+
+            -- Deactivation IS deletion, as far as retrieval is concerned.
+            CREATE TRIGGER IF NOT EXISTS semantic_index_deactivate
+            AFTER UPDATE ON semantic_memories
+            WHEN NEW.is_active = 0
+            BEGIN
+                DELETE FROM memories WHERE tier = 'semantic' AND ref_id = NEW.id;
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS semantic_index_ad
+            AFTER DELETE ON semantic_memories
+            BEGIN
+                DELETE FROM memories WHERE tier = 'semantic' AND ref_id = OLD.id;
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS episodic_index_ad
+            AFTER DELETE ON episodic_memories
+            BEGIN
+                DELETE FROM memories WHERE tier = 'episodic' AND ref_id = OLD.id;
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS procedural_index_ad
+            AFTER DELETE ON procedural_memories
+            BEGIN
+                DELETE FROM memories WHERE tier = 'procedural' AND ref_id = OLD.id;
+            END;
+
+            -- ⚠ Nothing extra is needed to keep `memories_fts` in step: v2's
+            -- `memories_fts_ad` / `_au` already fire on `memories` itself, so
+            -- these deletes propagate. That is the point of indexing ONE table
+            -- rather than three.
+
+            -- Catch up anything written between v2 and v3.
+            INSERT OR IGNORE INTO memories (
+                id, tier, scope, scope_ref, scope_key, content,
+                source, importance, confidence, ref_id, created_at, updated_at
+            )
+            SELECT 'epi-' || e.id, 'episodic',
+                   CASE WHEN COALESCE(e.working_dir,'') = '' THEN 'global' ELSE 'project' END,
+                   COALESCE(e.working_dir,''),
+                   CASE WHEN COALESCE(e.working_dir,'') = '' THEN 'global'
+                        ELSE 'project:' || e.working_dir END,
+                   e.content,
+                   CASE WHEN e.role = 'user' THEN 'user' ELSE 'agent_observation' END,
+                   0.5, 0.7, e.id, e.created_at, e.created_at
+            FROM episodic_memories e
+            WHERE e.content IS NOT NULL AND e.content <> '';
+
+            -- ⚠ And drop index rows whose subject was deactivated while the
+            -- database sat at v2 — the window during which `deactivate_fact`
+            -- was a no-op against retrieval. Catching up must include the
+            -- removals, or the upgrade re-serves exactly the memories the user
+            -- had already asked to forget.
+            DELETE FROM memories
+             WHERE tier = 'semantic'
+               AND ref_id IN (SELECT id FROM semantic_memories WHERE is_active = 0);
+        "#,
     }];
 
     fn migrate(&self) -> Result<()> {
@@ -349,7 +554,10 @@ mod p3_30_tests {
     #[test]
     fn a_fresh_database_reaches_v2_with_all_three_legs() {
         let c = laddered();
-        assert_eq!(crate::db::migrate::user_version(&c).unwrap(), 2);
+        // The ladder's HEAD, not a literal — a rung added later must not make
+        // this test fail for a reason that has nothing to do with what it checks.
+        let head = MemoryDb::LADDER.last().unwrap().version;
+        assert_eq!(crate::db::migrate::user_version(&c).unwrap(), head);
 
         // The relational leg.
         let cols: Vec<String> = c
@@ -434,7 +642,10 @@ mod p3_30_tests {
         .unwrap();
 
         crate::db::migrate::run_ladder(&c, "memory.db(test)", MemoryDb::LADDER).unwrap();
-        assert_eq!(crate::db::migrate::user_version(&c).unwrap(), 2);
+        // The ladder's HEAD, not a literal — a rung added later must not make
+        // this test fail for a reason that has nothing to do with what it checks.
+        let head = MemoryDb::LADDER.last().unwrap().version;
+        assert_eq!(crate::db::migrate::user_version(&c).unwrap(), head);
 
         // Pre-existing rows are indexed, not stranded.
         let n: i64 = c
@@ -476,6 +687,324 @@ mod p3_30_tests {
         .unwrap();
         crate::db::migrate::run_ladder(&c, "memory.db(test)", MemoryDb::LADDER).unwrap();
         crate::db::migrate::run_ladder(&c, "memory.db(test)", MemoryDb::LADDER).unwrap();
+        // The ladder's HEAD, not a literal — a rung added later must not make
+        // this test fail for a reason that has nothing to do with what it checks.
+        let head = MemoryDb::LADDER.last().unwrap().version;
+        assert_eq!(crate::db::migrate::user_version(&c).unwrap(), head);
+    }
+}
+
+#[cfg(test)]
+mod p3_30_v3_tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn laddered() -> Connection {
+        crate::memory::vector::register_once();
+        let c = Connection::open_in_memory().unwrap();
+        crate::db::migrate::run_ladder(&c, "memory.db(test)", MemoryDb::LADDER).unwrap();
+        c
+    }
+
+    /// 🔴 The defect v3 closes, and it was mine.
+    ///
+    /// v2 backfilled the existing rows and stopped. New episodic turns went to
+    /// `episodic_memories` and **nowhere else**, so the retrieval index was
+    /// frozen at migration time — every conversation after the upgrade was
+    /// unrecallable, silently. My own v2 comment claimed the opposite
+    /// ("written through one seam so the two cannot diverge"), which is the
+    /// `L-28` shape: a claim that looks verified.
+    #[test]
+    fn a_new_episodic_turn_is_indexed_for_retrieval() {
+        let c = laddered();
+        c.execute(
+            "INSERT INTO episodic_memories(id,session_id,turn_index,role,content,working_dir,created_at)
+             VALUES ('e-new','s1',1,'user','the release key lives in the ops vault','/proj','t1')",
+            [],
+        )
+        .unwrap();
+
+        let n: i64 = c
+            .query_row(
+                "SELECT count(*) FROM memories WHERE ref_id='e-new' AND tier='episodic'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            n, 1,
+            "a new turn was not indexed — recall would be frozen at whatever the \
+             migration backfilled"
+        );
+
+        // …and it is searchable, so the FTS5 trigger fired on the trigger's own
+        // insert. A chain of triggers that stops halfway is worse than none.
+        let hits: i64 = c
+            .query_row(
+                "SELECT count(*) FROM memories_fts WHERE memories_fts MATCH 'vault'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits, 1, "the indexed row is not lexically searchable");
+
+        // …and scoped from its working_dir, not dumped into global.
+        let scope: String = c
+            .query_row("SELECT scope_key FROM memories WHERE ref_id='e-new'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(scope, "project:/proj");
+    }
+
+    #[test]
+    fn a_new_procedural_topic_is_indexed_and_an_edit_follows_it() {
+        let c = laddered();
+        c.execute(
+            "INSERT INTO procedural_memories(id,topic,title,content,tags,created_at,updated_at)
+             VALUES ('p1','deploys','Deploy runbook','run make deploy','[]','t1','t1')",
+            [],
+        )
+        .unwrap();
+        let hits: i64 = c
+            .query_row(
+                "SELECT count(*) FROM memories_fts WHERE memories_fts MATCH 'runbook'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits, 1, "a new topic was not indexed");
+
+        // `save_topic` UPSERTs on the unique topic. If the index does not
+        // follow the update, an edited topic keeps its OLD text in search
+        // forever — stale in exactly the way that is hardest to notice.
+        c.execute(
+            "UPDATE procedural_memories SET title='Deploy guide',
+                    content='run just deploy', updated_at='t2' WHERE id='p1'",
+            [],
+        )
+        .unwrap();
+
+        let stale: i64 = c
+            .query_row(
+                "SELECT count(*) FROM memories_fts WHERE memories_fts MATCH 'runbook'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stale, 0, "the index kept the topic's OLD text after an edit");
+        let fresh: i64 = c
+            .query_row(
+                "SELECT count(*) FROM memories_fts WHERE memories_fts MATCH 'guide'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(fresh, 1, "the edit did not reach the index");
+    }
+
+    #[test]
+    fn a_legacy_direct_semantic_write_is_still_indexed() {
+        // The gateway writes to `memories` itself. This covers anything that
+        // still writes a fact the old way rather than leaving it invisible.
+        let c = laddered();
+        c.execute(
+            "INSERT INTO semantic_memories(id,fact_text,category,confidence,source_type,
+                                           working_dir,tags,is_active,created_at,updated_at)
+             VALUES ('s1','the api listens on 8080','preference',0.9,'extracted',
+                     '/proj','[]',1,'t1','t1')",
+            [],
+        )
+        .unwrap();
+        let n: i64 = c
+            .query_row("SELECT count(*) FROM memories WHERE ref_id='s1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1, "a direct semantic write was not indexed");
+    }
+
+    fn add_fact(c: &Connection, id: &str, text: &str) {
+        c.execute(
+            "INSERT INTO semantic_memories(id,fact_text,category,confidence,source_type,
+                                           working_dir,tags,is_active,created_at,updated_at)
+             VALUES (?1,?2,'preference',0.9,'user_explicit','/proj','[]',1,'t1','t1')",
+            rusqlite::params![id, text],
+        )
+        .unwrap();
+    }
+
+    fn indexed(c: &Connection, ref_id: &str) -> i64 {
+        c.query_row(
+            "SELECT count(*) FROM memories WHERE ref_id = ?1",
+            [ref_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// 🔴 **"Forget this" did not forget.**
+    ///
+    /// `deactivate_fact` sets `is_active = 0`, and the tier table honours it.
+    /// The index copy has no `is_active` column, was never updated, and is
+    /// still selected by `LexicalBackend::search` — so a fact the user asked to
+    /// remove kept being injected into the system prompt on every turn, for
+    /// ever, while every surface reported the removal as done.
+    ///
+    /// A deletion path that silently retains the data is worse than no deletion
+    /// path, because the user is told it worked.
+    #[test]
+    fn deactivating_a_fact_removes_it_from_retrieval() {
+        let c = laddered();
+        add_fact(&c, "s1", "the staging password is in the ops vault");
+        assert_eq!(indexed(&c, "s1"), 1, "the fixture must start indexed");
+
+        c.execute(
+            "UPDATE semantic_memories SET is_active = 0, updated_at = 't2' WHERE id = 's1'",
+            [],
+        )
+        .unwrap();
+
+        assert_eq!(
+            indexed(&c, "s1"),
+            0,
+            "a deactivated fact is STILL retrievable — the user asked to forget it"
+        );
+        let hits: i64 = c
+            .query_row(
+                "SELECT count(*) FROM memories_fts WHERE memories_fts MATCH 'vault'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits, 0, "it is gone from `memories` but still in the search index");
+    }
+
+    /// The other direction, or the trigger above is just breaking recall.
+    #[test]
+    fn reactivating_a_fact_brings_it_back() {
+        let c = laddered();
+        add_fact(&c, "s1", "the api gateway listens on port 8080");
+        c.execute("UPDATE semantic_memories SET is_active = 0 WHERE id = 's1'", [])
+            .unwrap();
+        assert_eq!(indexed(&c, "s1"), 0);
+
+        c.execute("UPDATE semantic_memories SET is_active = 1 WHERE id = 's1'", [])
+            .unwrap();
+        assert_eq!(
+            indexed(&c, "s1"),
+            1,
+            "reactivation left the fact unretrievable — the UPDATE had no row to hit"
+        );
+    }
+
+    #[test]
+    fn an_edited_fact_does_not_serve_its_old_text() {
+        let c = laddered();
+        add_fact(&c, "s1", "the deploy key rotates every quarter");
+        c.execute(
+            "UPDATE semantic_memories SET fact_text = 'the deploy key rotates every fortnight',
+                    updated_at = 't2' WHERE id = 's1'",
+            [],
+        )
+        .unwrap();
+
+        let content: String = c
+            .query_row("SELECT content FROM memories WHERE ref_id = 's1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            content, "the deploy key rotates every fortnight",
+            "the index served the PRE-EDIT sentence; contradiction resolution \
+             would be updating a column nothing reads back"
+        );
+    }
+
+    #[test]
+    fn deleting_a_row_from_any_tier_removes_its_index_entry() {
+        let c = laddered();
+        add_fact(&c, "s1", "a semantic fact worth deleting later");
+        c.execute(
+            "INSERT INTO episodic_memories(id,session_id,turn_index,role,content,created_at)
+             VALUES ('e1','s1',1,'user','an episodic turn worth deleting later','t1')",
+            [],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO procedural_memories(id,topic,title,content,tags,created_at,updated_at)
+             VALUES ('p1','t','A topic','worth deleting later','[]','t1','t1')",
+            [],
+        )
+        .unwrap();
+        for r in ["s1", "e1", "p1"] {
+            assert_eq!(indexed(&c, r), 1, "{r} was not indexed to begin with");
+        }
+
+        c.execute("DELETE FROM semantic_memories WHERE id = 's1'", []).unwrap();
+        c.execute("DELETE FROM episodic_memories WHERE id = 'e1'", []).unwrap();
+        c.execute("DELETE FROM procedural_memories WHERE id = 'p1'", []).unwrap();
+
+        for r in ["s1", "e1", "p1"] {
+            assert_eq!(indexed(&c, r), 0, "{r} outlived its own row in the index");
+        }
+    }
+
+    /// The upgrade must not resurrect what was already forgotten.
+    ///
+    /// A fact deactivated while the database sat at v2 — the window in which
+    /// `deactivate_fact` was a no-op against retrieval — is still `is_active=0`
+    /// in the tier table when v3 lands. If the catch-up only inserted, the
+    /// upgrade would re-serve exactly the memories the user had removed.
+    #[test]
+    fn the_v3_catch_up_does_not_resurrect_a_deactivated_fact() {
+        crate::memory::vector::register_once();
+        let c = Connection::open_in_memory().unwrap();
+        crate::db::migrate::run_ladder(&c, "memory.db(test)", &MemoryDb::LADDER[..2]).unwrap();
+        add_fact(&c, "s1", "a fact the user asked to forget while at v2");
+        // v2's own backfill ran before this row existed, so put it in the index
+        // the way the v2 backfill would have, then deactivate it.
+        c.execute(
+            "INSERT INTO memories (id,tier,scope,scope_ref,scope_key,content,source,
+                                   importance,confidence,ref_id,created_at,updated_at)
+             VALUES ('sem-s1','semantic','project','/proj','project:/proj',
+                     'a fact the user asked to forget while at v2','user',
+                     0.5,0.9,'s1','t1','t1')",
+            [],
+        )
+        .unwrap();
+        c.execute("UPDATE semantic_memories SET is_active = 0 WHERE id = 's1'", [])
+            .unwrap();
+        assert_eq!(indexed(&c, "s1"), 1, "the v2 window is the point of this fixture");
+
+        crate::db::migrate::run_ladder(&c, "memory.db(test)", MemoryDb::LADDER).unwrap();
+        assert_eq!(
+            indexed(&c, "s1"),
+            0,
+            "the upgrade re-served a memory the user had already forgotten"
+        );
+    }
+
+    #[test]
+    fn v3_catches_up_rows_written_between_v2_and_v3() {
+        // A database that ran v2, accumulated turns, then upgraded must not
+        // leave that window unindexed — `L-C13`'s shape one rung along.
+        crate::memory::vector::register_once();
+        let c = Connection::open_in_memory().unwrap();
+        crate::db::migrate::run_ladder(&c, "memory.db(test)", &MemoryDb::LADDER[..2]).unwrap();
+        // Deliberately stopped at v2 — this test is about the window BETWEEN
+        // rungs, so here the literal is the point rather than a hazard.
         assert_eq!(crate::db::migrate::user_version(&c).unwrap(), 2);
+
+        c.execute(
+            "INSERT INTO episodic_memories(id,session_id,turn_index,role,content,created_at)
+             VALUES ('gap','s1',1,'user','written in the gap between rungs','t1')",
+            [],
+        )
+        .unwrap();
+        let before: i64 = c
+            .query_row("SELECT count(*) FROM memories WHERE ref_id='gap'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(before, 0, "the fixture must actually be unindexed at v2");
+
+        crate::db::migrate::run_ladder(&c, "memory.db(test)", MemoryDb::LADDER).unwrap();
+        let after: i64 = c
+            .query_row("SELECT count(*) FROM memories WHERE ref_id='gap'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(after, 1, "v3 did not catch up rows written under v2");
     }
 }
