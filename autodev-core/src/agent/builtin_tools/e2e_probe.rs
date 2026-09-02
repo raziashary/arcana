@@ -393,6 +393,23 @@ async fn run_probe(
             c.args(["-c", cmd_str]);
             c
         };
+        // 🔴 G-8 (post-phase gap hunt). `bash` strips credentials from the
+        // child's environment — "a single missed variable here is a readable
+        // secret, not a degraded feature", as its own comment puts it — and
+        // this tool, which spawns the SAME `sh -c` / `cmd /C` with commands the
+        // model chose, did not. Its children inherited every provider key in
+        // the process.
+        //
+        // ⚠ `bash`'s comment records that its first version landed in the
+        // Windows branch only, "which is its own small lesson about two-branch
+        // fixes". This is the same lesson one tool over: the fix was applied
+        // where the defect was found rather than everywhere it existed.
+        for (key, _) in std::env::vars() {
+            if crate::security::env_scrub::looks_like_a_credential(&key) {
+                builder.env_remove(&key);
+            }
+        }
+
         let child = builder
             .current_dir(&working_dir)
             .stdout(Stdio::piped())

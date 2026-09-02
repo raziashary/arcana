@@ -2635,6 +2635,158 @@ let x = 1;
         );
     }
 
+    // ── TG-P3-G8 · every tool that spawns a shell scrubs credentials ──────────
+
+    /// A tool that runs a model-chosen shell command must not hand it the
+    /// process's credentials.
+    ///
+    /// 🔴 `G-8` (post-phase gap hunt). `bash` strips credentials from the
+    /// child environment; `e2e_probe`, which spawns the same `sh -c` /
+    /// `cmd /C` with commands the model wrote, did not — so its children
+    /// inherited every provider key. `echo $ANTHROPIC_API_KEY` needs no
+    /// vulnerability beyond an inherited environment.
+    ///
+    /// ⚠ `bash`'s own comment records that its first version of this landed in
+    /// the Windows branch only, "which is its own small lesson about two-branch
+    /// fixes". G-8 is the same lesson one tool over. This gate is keyed on
+    /// *"spawns a shell"* rather than on the two tools that do it today, so the
+    /// third one fails the build instead of repeating the lesson a third time.
+    #[test]
+    fn tg_p3_g8_every_shell_spawning_tool_scrubs_credentials() {
+        let dir = repo_root().join("autodev-core/src/agent/builtin_tools");
+        let mut offenders = Vec::new();
+        let mut spawners = 0usize;
+
+        for entry in std::fs::read_dir(&dir).expect("builtin_tools").flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let text = read_source(&path);
+            let name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("?");
+
+            // Does it hand a command string to a shell?
+            let spawns_shell = (text.contains("Command::new(\"sh\")")
+                || text.contains("Command::new(\"cmd\")"))
+                && (text.contains("\"-c\"") || text.contains("\"/C\""));
+            if !spawns_shell {
+                continue;
+            }
+            spawners += 1;
+
+            if !text.contains("env_scrub::looks_like_a_credential") {
+                offenders.push(name.to_string());
+            }
+        }
+
+        assert!(
+            spawners >= 2,
+            "only {spawners} shell-spawning tools found — the sweep is not              reaching them, and an empty sweep passes silently"
+        );
+        assert!(
+            offenders.is_empty(),
+            "these tools spawn a shell with a model-chosen command and do NOT              strip credentials from the child's environment: {:?}",
+            offenders
+        );
+    }
+
+    // ── TG-P3-F8 · a gate id cited in code must be a gate that exists ─────────
+
+    /// Shipped code may not cite a gate that does not exist.
+    ///
+    /// 🔴 `F-8` (post-phase claims audit). Eight `TG3-xx` ids were cited in
+    /// production comments as though they were live; six of them are still
+    /// unchecked, and `TG3-01` — cited **nine times**, including as `P3-05`'s
+    /// entire `GATE-PROVEN` evidence — had no implementation at all.
+    ///
+    /// ⚠ A citation is load-bearing here in a way it usually is not. These
+    /// comments are how the next reader decides a behaviour is already
+    /// protected, so a dangling id does not merely mislead — it stops the
+    /// protection ever being written. The repo has logged this once before, for
+    /// `TG-P2-05`.
+    ///
+    /// This asserts EXISTENCE, not checkedness: citing a planned gate is
+    /// legitimate ("this is what TG3-27 will assert"), citing a fiction is not.
+    #[test]
+    fn tg_p3_f8_every_cited_gate_id_exists_in_the_register() {
+        let register = read_source(
+            &repo_root().join("docs/restructurization/development/TESTING_GATES.md"),
+        );
+
+        let mut cited: std::collections::BTreeSet<String> = Default::default();
+        let mut scanned = 0usize;
+
+        let mut stack = vec![
+            repo_root().join("autodev-core/src"),
+            repo_root().join("src-tauri/src"),
+        ];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                let path = e.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|x| x.to_str()) != Some("rs") {
+                    continue;
+                }
+                scanned += 1;
+                let text = read_source(&path);
+                // `TG3-07`, `TG-P3-11`, `TG4-18` … capture the whole token.
+                let bytes: Vec<char> = text.chars().collect();
+                let mut i = 0;
+                while i + 3 < bytes.len() {
+                    if bytes[i] == 'T' && bytes[i + 1] == 'G' {
+                        let mut j = i + 2;
+                        let mut tok = String::from("TG");
+                        while j < bytes.len()
+                            && (bytes[j].is_ascii_alphanumeric() || bytes[j] == '-')
+                        {
+                            tok.push(bytes[j]);
+                            j += 1;
+                        }
+                        // `TG3-xx` and friends are placeholders in prose, not
+                        // citations. A real id ends in digits.
+                        let is_placeholder = !tok
+                            .chars()
+                            .last()
+                            .map(|c| c.is_ascii_digit())
+                            .unwrap_or(false);
+                        if tok.len() > 4
+                            && tok.contains('-')
+                            && tok.chars().any(|c| c.is_ascii_digit())
+                            && !is_placeholder
+                        {
+                            cited.insert(tok.trim_end_matches('-').to_string());
+                        }
+                        i = j;
+                        continue;
+                    }
+                    i += 1;
+                }
+            }
+        }
+
+        assert!(
+            scanned > 50,
+            "only {scanned} source files scanned — the sweep is not reaching the tree"
+        );
+
+        // `TG-P3-*` are this repo's implementation gates and live in ci_gate.rs
+        // itself; the register tracks the SPEC gates (`TG<phase>-<nn>`).
+        let dangling: Vec<&String> = cited
+            .iter()
+            .filter(|id| !id.starts_with("TG-P"))
+            .filter(|id| !register.contains(id.as_str()))
+            .collect();
+
+        assert!(
+            dangling.is_empty(),
+            "these gate ids are cited in shipped code and appear nowhere in              TESTING_GATES.md. A reader takes such a citation as proof the              behaviour is already protected, so a dangling one does not merely              mislead — it stops the protection ever being written: {:?}",
+            dangling
+        );
+    }
+
     // ── TG-P3-17 · no validator subprocess runs without a ceiling ─────────────
 
     /// Every subprocess the validator spawns must go through `run_bounded`.

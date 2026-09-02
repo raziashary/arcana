@@ -288,7 +288,17 @@ async fn run_inner(
         // then never read by anything: a caller setting a turn bound on a
         // subagent got the worker default regardless. `TaskBudget` already
         // carries `max_turns` and the engine already enforces it — the field
-        // simply was not connected to it.
+        // simply was not connected to it. An explicit value now reaches the
+        // enforcer, which is the fix.
+        //
+        // ⚠ F-27 (post-phase claims audit): the `> 0` test is **always true**.
+        // `manager.rs:122` replaces a zero with `DEFAULT_MAX_TURNS` before the
+        // config is cloned, so the else-branch is unreachable — the same dead
+        // `is_empty()`/`== 0` shape as `P3-61`, which I identified and fixed in
+        // that very commit and then reproduced here. It is harmless only by
+        // coincidence: `DEFAULT_MAX_TURNS` and `default_worker().max_turns` are
+        // both 20. The guard is kept because it states the intended contract
+        // and stops being coincidental the moment either constant moves.
         let mut budget = crate::budget::TaskBudget::default_worker();
         if config.max_turns > 0 {
             budget.max_turns = Some(config.max_turns);

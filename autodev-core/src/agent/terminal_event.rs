@@ -175,3 +175,58 @@ mod tests {
         // fallback. No assertion on the bus here — that is TG3-01's job.
     }
 }
+
+#[cfg(test)]
+mod f5_tests {
+    use super::*;
+
+    /// The `Drop` fallback is the whole point of the guard, and nothing tested
+    /// it.
+    ///
+    /// 🔴 F-5 (post-phase claims audit). `P3-05` is marked `GATE-PROVEN`
+    /// against `TG3-01`, which **does not exist** — it is still `- [ ]` /
+    /// `Evidence: _pending_` in `TESTING_GATES.md` while being cited as live in
+    /// eight production comments. The auditor's demonstration was exact:
+    /// emptying `impl Drop for TerminalEventGuard` broke no test in the tree.
+    ///
+    /// These assert the state machine the emission depends on. They cannot
+    /// observe the emitted event (it goes to a global Tauri bus), so they check
+    /// the one thing that decides whether Drop emits — and a comment states
+    /// plainly what is still unproven, rather than a badge implying otherwise.
+    #[test]
+    fn an_unreported_exit_leaves_the_guard_unfired_so_drop_will_emit() {
+        // The defect P3-05 exists for: three paths returned without telling
+        // anyone, the task stayed "running", and the UI spun forever.
+        let g = TerminalEventGuard::new("s-dropped");
+        assert!(
+            !g.has_fired(),
+            "a guard that has not reported must be unfired, or Drop's early \
+             return swallows the fallback and the UI spins forever"
+        );
+        drop(g); // emits, by the branch asserted above
+    }
+
+    #[test]
+    fn a_reported_exit_leaves_the_guard_fired_so_drop_is_silent() {
+        // The other half, and the one that makes "exactly one" true rather
+        // than "at least one": Drop must NOT emit a second event.
+        let mut g = TerminalEventGuard::new("s-done");
+        g.error("reported");
+        assert!(
+            g.has_fired(),
+            "a guard that reported must be fired, or Drop emits a SECOND \
+             terminal event and the consumer sees the run end twice"
+        );
+        drop(g); // silent, by the branch asserted above
+    }
+
+    #[test]
+    fn reporting_twice_still_leaves_exactly_one_emission() {
+        let mut g = TerminalEventGuard::new("s-twice");
+        g.error("first");
+        assert!(g.has_fired());
+        // A second report must be a no-op rather than a second event.
+        g.error("second");
+        assert!(g.has_fired());
+    }
+}
