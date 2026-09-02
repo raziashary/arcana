@@ -32,38 +32,18 @@ impl AnthropicProvider {
         }
     }
 
+    /// The models this provider serves.
+    ///
+    /// ⚠ This used to be a hand-written list here, and by 2026-09-02 all three
+    /// adapters' lists had drifted a full generation behind `src/data/models.ts`
+    /// — the list the user actually picks from. The overlap between the two was
+    /// one model. Four entries here were retired in February 2026.
+    ///
+    /// Reads the shared catalogue now, so a lookup by model id cannot come back
+    /// empty for a model the app offers. See `provider/catalogue.rs`.
     fn models_static() -> Vec<ModelInfo> {
-        vec![
-            ModelInfo {
-                id: "claude-opus-4-5".into(),
-                name: "Claude Opus 4.5".into(),
-                context_window: 200_000,
-                supports_vision: true,
-                supports_thinking: true,
-                cost_in_per_1m: 15.0,
-                cost_out_per_1m: 75.0,
-            },
-            ModelInfo {
-                id: "claude-sonnet-4-5".into(),
-                name: "Claude Sonnet 4.5".into(),
-                context_window: 200_000,
-                supports_vision: true,
-                supports_thinking: true,
-                cost_in_per_1m: 3.0,
-                cost_out_per_1m: 15.0,
-            },
-            ModelInfo {
-                id: "claude-haiku-4-5".into(),
-                name: "Claude Haiku 4.5".into(),
-                context_window: 200_000,
-                supports_vision: true,
-                supports_thinking: false,
-                cost_in_per_1m: 0.25,
-                cost_out_per_1m: 1.25,
-            },
-        ]
+        crate::provider::catalogue::models_for("anthropic")
     }
-
     /// The request body, for conformance tests.
     ///
     /// Exposes the real builder rather than letting a test reimplement it —

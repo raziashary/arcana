@@ -242,3 +242,185 @@ fn every_adapter_sends_the_tool_definitions() {
         );
     }
 }
+
+// ── P2-09 · parallel tool results: one engine shape, three wire shapes ──────
+//
+// The engine collects every tool result for a turn into ONE user message
+// (`engine.rs`, "Add tool results as user message"). Anthropic REQUIRES that —
+// results split across several user messages are rejected. The other two want
+// it flattened differently: OpenAI into one `tool` message per result, Google
+// into one `functionResponse` part per result.
+//
+// So one engine shape has to become three wire shapes, and nothing asserted
+// that it did. This is the PARALLEL case specifically: a single tool call is
+// the shape that works by accident under all three encodings.
+
+/// A three-call / three-result turn, as the engine actually assembles it.
+fn parallel_tool_turn() -> CompletionRequest {
+    let mut r = req();
+    r.messages = vec![
+        RequestMessage {
+            role: "user".to_string(),
+            content: vec![MessageContent::Text {
+                text: "read three files".to_string(),
+            }],
+        },
+        RequestMessage {
+            role: "assistant".to_string(),
+            content: vec![
+                MessageContent::ToolUse {
+                    id: "call_a".to_string(),
+                    name: "read_file".to_string(),
+                    input: serde_json::json!({"path": "a.rs"}),
+                },
+                MessageContent::ToolUse {
+                    id: "call_b".to_string(),
+                    name: "read_file".to_string(),
+                    input: serde_json::json!({"path": "b.rs"}),
+                },
+                MessageContent::ToolUse {
+                    id: "call_c".to_string(),
+                    name: "grep".to_string(),
+                    input: serde_json::json!({"pattern": "fn main"}),
+                },
+            ],
+        },
+        // All three results in ONE user message — the engine's shape.
+        RequestMessage {
+            role: "user".to_string(),
+            content: vec![
+                MessageContent::ToolResult {
+                    tool_use_id: "call_a".to_string(),
+                    name: "read_file".to_string(),
+                    content: "contents of a".to_string(),
+                    is_error: false,
+                },
+                MessageContent::ToolResult {
+                    tool_use_id: "call_b".to_string(),
+                    name: "read_file".to_string(),
+                    content: "contents of b".to_string(),
+                    is_error: false,
+                },
+                MessageContent::ToolResult {
+                    tool_use_id: "call_c".to_string(),
+                    name: "grep".to_string(),
+                    content: "no matches".to_string(),
+                    is_error: true,
+                },
+            ],
+        },
+    ];
+    r
+}
+
+#[test]
+fn anthropic_keeps_parallel_results_in_one_user_message() {
+    let body = AnthropicProvider::new(String::new()).build_body_for_test(&parallel_tool_turn(), false);
+    let msgs = body["messages"].as_array().expect("messages");
+
+    // Anthropic rejects results split across messages, so the count of user
+    // messages CARRYING results is the invariant, not just the result count.
+    let carrying = msgs
+        .iter()
+        .filter(|m| {
+            m["role"] == "user"
+                && m["content"]
+                    .as_array()
+                    .is_some_and(|cs| cs.iter().any(|c| c["type"] == "tool_result"))
+        })
+        .count();
+    assert_eq!(carrying, 1, "anthropic requires every result for a turn in ONE user message");
+
+    let results: Vec<serde_json::Value> = msgs
+        .iter()
+        .filter(|m| m["role"] == "user")
+        .flat_map(|m| m["content"].as_array().cloned().unwrap_or_default())
+        .filter(|c| c["type"] == "tool_result")
+        .collect();
+    assert_eq!(results.len(), 3, "anthropic dropped a parallel tool result");
+    for (i, id) in ["call_a", "call_b", "call_c"].iter().enumerate() {
+        assert_eq!(results[i]["tool_use_id"], serde_json::json!(id), "results reordered");
+    }
+    assert_eq!(
+        results[2]["is_error"],
+        serde_json::json!(true),
+        "the failing tool lost its error flag"
+    );
+}
+
+#[test]
+fn openai_flattens_parallel_results_into_one_tool_message_each_in_call_order() {
+    let body = OpenAIProvider::new(String::new()).build_body_for_test(&parallel_tool_turn(), false);
+    let msgs = body["messages"].as_array().expect("messages");
+
+    let tool_msgs: Vec<&serde_json::Value> =
+        msgs.iter().filter(|m| m["role"] == "tool").collect();
+    assert_eq!(tool_msgs.len(), 3, "openai dropped a parallel tool result");
+    for (i, id) in ["call_a", "call_b", "call_c"].iter().enumerate() {
+        assert_eq!(
+            tool_msgs[i]["tool_call_id"],
+            serde_json::json!(id),
+            "openai pairs results with calls BY POSITION — a reorder mispairs them (P2-61)"
+        );
+    }
+
+    // The assistant turn must carry all three calls, or those ids dangle and
+    // the request is rejected.
+    let calls = msgs
+        .iter()
+        .find(|m| m["role"] == "assistant" && m["tool_calls"].is_array())
+        .and_then(|m| m["tool_calls"].as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    assert_eq!(calls, 3, "openai lost a parallel tool CALL");
+}
+
+#[test]
+fn google_emits_one_function_response_part_per_parallel_result() {
+    let body = GoogleProvider::new(String::new()).build_body_for_test(&parallel_tool_turn(), false);
+    let contents = body["contents"].as_array().expect("contents");
+
+    let parts: Vec<serde_json::Value> = contents
+        .iter()
+        .flat_map(|c| c["parts"].as_array().cloned().unwrap_or_default())
+        .collect();
+
+    let responses: Vec<&serde_json::Value> = parts
+        .iter()
+        .filter(|p| p.get("functionResponse").is_some())
+        .collect();
+    assert_eq!(responses.len(), 3, "google dropped a parallel tool result");
+
+    // P2-37: the NAME, not the id. Two of these deliberately share a name —
+    // that is the case that makes a name-keyed protocol ambiguous, and it is
+    // still what the wire format requires.
+    let names: Vec<&str> = responses
+        .iter()
+        .filter_map(|p| p["functionResponse"]["name"].as_str())
+        .collect();
+    assert_eq!(names, vec!["read_file", "read_file", "grep"]);
+
+    let calls: Vec<&serde_json::Value> = parts
+        .iter()
+        .filter(|p| p.get("functionCall").is_some())
+        .collect();
+    assert_eq!(calls.len(), 3, "google lost a parallel tool CALL");
+    // Arguments survive — P2-06 was the same defect on the response side.
+    assert_eq!(calls[0]["functionCall"]["args"]["path"], serde_json::json!("a.rs"));
+    assert_eq!(calls[2]["functionCall"]["args"]["pattern"], serde_json::json!("fn main"));
+}
+
+#[test]
+fn every_shipped_model_that_claims_parallel_tools_actually_gets_them() {
+    // `capabilities()` is only worth having if it answers for the models we
+    // ship. Before the catalogue landed it answered for none of them: the
+    // adapters listed a previous generation, so a lookup by id found nothing
+    // and every model fell to the conservative default — which reports
+    // `parallel_tools: false`. The agent would have serialised calls the model
+    // was perfectly capable of running at once.
+    for e in crate::provider::catalogue::CATALOGUE {
+        let caps = crate::provider::catalogue::capabilities_for(e.id);
+        assert!(caps.parallel_tools, "{} does not report parallel tool support", e.id);
+        assert!(caps.tools && caps.streaming, "{} lost a base capability", e.id);
+    }
+}

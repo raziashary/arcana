@@ -83,7 +83,17 @@ pub struct CompletionRequest {
 pub struct CompletionResponse {
     pub message_id: String,
     pub content: Vec<MessageContent>,
-    pub stop_reason: String, // "end_turn" | "tool_use" | "max_tokens"
+    /// The **raw** wire value, kept verbatim per provider.
+    ///
+    /// ⚠ This is NOT a normalised vocabulary. It said
+    /// `"end_turn" | "tool_use" | "max_tokens"` until 2026-09-02 — Anthropic's
+    /// three values, written as though every provider used them. OpenAI sends
+    /// `stop` / `tool_calls` / `length`; Google sends `STOP` / `MAX_TOKENS` and
+    /// several safety values. A caller that believed the old comment read an
+    /// OpenAI truncation as a clean finish, and one did (`engine.rs`, P2-46).
+    ///
+    /// Classify with `StopReason::parse` rather than comparing to a literal.
+    pub stop_reason: String,
     /// Six-field provider-reported usage. Replaced `tokens_in`/`tokens_out`
     /// in P2-01: two fields cannot price a cached call, and cache_read is the
     /// only instrument that can tell whether caching works at all.

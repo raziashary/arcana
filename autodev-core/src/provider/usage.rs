@@ -186,6 +186,83 @@ impl ErrorClass {
     }
 }
 
+/// Why the model stopped, normalised across vendors (P2-10).
+///
+/// ── Why this type exists ─────────────────────────────────────────────────────
+///
+/// `CompletionResponse::stop_reason` is a raw `String` carrying whatever the
+/// vendor put on the wire, and the three vendors do not agree on any of it:
+///
+/// | meaning | Anthropic | OpenAI | Google |
+/// |---|---|---|---|
+/// | ran out of output budget | `max_tokens` | `length` | `MAX_TOKENS` |
+/// | finished normally | `end_turn` | `stop` | `STOP` |
+/// | wants to call a tool | `tool_use` | `tool_calls` | *(absent)* |
+/// | cut by a safety filter | *(absent)* | `content_filter` | `SAFETY`, `RECITATION`, … |
+///
+/// The docstring on that field claimed the vocabulary was
+/// `"end_turn" | "tool_use" | "max_tokens"` — Anthropic's three values,
+/// presented as if they were universal. Any caller that believed it read an
+/// OpenAI or Google truncation as a normal completion.
+///
+/// **Truncation is the case that matters.** A `max_tokens` stop means the
+/// assistant message is cut mid-sentence — and possibly mid-`tool_use`, with
+/// arguments that will not parse. Continuing the loop on a truncated turn feeds
+/// a malformed message back to the model. The raw string is kept alongside this
+/// enum, because `Other` has to stay diagnosable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StopReason {
+    /// The model finished on its own.
+    EndTurn,
+    /// Output budget exhausted — **the content is truncated**.
+    MaxTokens,
+    /// The model is asking for one or more tools.
+    ToolUse,
+    /// A caller-supplied stop sequence matched.
+    StopSequence,
+    /// A safety or policy filter cut the response.
+    ContentFilter,
+    /// Anything else, kept verbatim so it stays diagnosable.
+    Other(String),
+}
+
+impl StopReason {
+    /// Classify a raw wire value. `provider` is carried into `Other` so an
+    /// unrecognised value stays attributable in a log line.
+    ///
+    /// Matching is case-insensitive: Google SCREAMING_CASEs its values while
+    /// the other two use lower_snake.
+    pub fn parse(provider: &str, raw: &str) -> Self {
+        match raw.to_ascii_lowercase().as_str() {
+            // Truncation. Three spellings, one meaning.
+            "max_tokens" | "length" | "max_output_tokens" => StopReason::MaxTokens,
+            "end_turn" | "stop" => StopReason::EndTurn,
+            "tool_use" | "tool_calls" | "function_call" => StopReason::ToolUse,
+            "stop_sequence" => StopReason::StopSequence,
+            "content_filter" | "safety" | "recitation" | "prohibited_content"
+            | "blocklist" | "spii" => StopReason::ContentFilter,
+            // Gemini emits this when it tried to call a tool and produced
+            // arguments that do not parse. It is a tool intent that FAILED, not
+            // a clean end — mapping it to `EndTurn` would end the loop as
+            // though the model were satisfied, and mapping it to `ToolUse`
+            // would send the loop looking for a call it cannot run.
+            "malformed_function_call" => StopReason::Other(format!("{provider}:{raw}")),
+            "" => StopReason::Other(format!("{provider}:<empty>")),
+            _ => StopReason::Other(format!("{provider}:{raw}")),
+        }
+    }
+
+    /// Whether the content that arrived with this stop is **incomplete**.
+    pub fn is_truncated(&self) -> bool {
+        matches!(self, StopReason::MaxTokens)
+    }
+
+    /// Whether the loop should continue because the model wants a tool.
+    pub fn wants_tools(&self) -> bool {
+        matches!(self, StopReason::ToolUse)
+    }
+}
+
 /// What one **model** can do. Keyed by model, not provider (P2-03): capability
 /// varies per model within a vendor, so a provider-level answer is wrong for
 /// most of them.
@@ -208,8 +285,15 @@ pub struct ModelCapabilities {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CacheSupport {
     None,
-    /// The vendor caches automatically; there is no minimum to respect.
-    Automatic,
+    /// The vendor caches on its own — there is no breakpoint for us to place.
+    ///
+    /// It still has a **minimum**. Gemini's implicit cache and OpenAI's
+    /// automatic caching both decline to engage below a prefix length, and
+    /// both do it silently, exactly as Anthropic does. `Automatic` originally
+    /// carried no minimum on the belief that "the vendor handles it"; that
+    /// made a short OpenAI prefix report as fully cacheable when nothing
+    /// would ever cache.
+    Automatic { min_tokens: u32 },
     /// We mark breakpoints, and **below `min_tokens` nothing caches and no
     /// error is returned** (spec `02 §4.3`). The prefix builder warns when the
     /// assembled prefix falls short, because the provider will not.
@@ -220,8 +304,13 @@ impl ModelCapabilities {
     /// The cache minimum for this model, if it has one.
     pub fn cache_minimum(&self) -> Option<u32> {
         match self.cache {
-            CacheSupport::Explicit { min_tokens } => Some(min_tokens),
-            _ => None,
+            // Both shapes have a minimum and both fail silently below it. The
+            // difference between them is who places the breakpoint, not
+            // whether a short prefix caches.
+            CacheSupport::Explicit { min_tokens } | CacheSupport::Automatic { min_tokens } => {
+                Some(min_tokens)
+            }
+            CacheSupport::None => None,
         }
     }
 }
@@ -345,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_minimum_exists_only_for_explicit_caching() {
+    fn a_cache_minimum_is_reported_for_every_shape_that_has_one() {
         let explicit = ModelCapabilities {
             streaming: true,
             tools: true,
@@ -358,11 +447,21 @@ mod tests {
         };
         assert_eq!(explicit.cache_minimum(), Some(2048));
 
+        // ⚠ This asserted `None` until 2026-09-02, on the belief that a vendor
+        // that caches automatically has no threshold to respect. It has one —
+        // OpenAI declines below ~1,024 tokens and Gemini below its own figure,
+        // both silently. Under the old semantic a 300-token OpenAI prefix
+        // reported as having no minimum to fall short of, so the P2-15 warning
+        // could never fire for two of the three providers.
         let automatic = ModelCapabilities {
-            cache: CacheSupport::Automatic,
+            cache: CacheSupport::Automatic { min_tokens: 1_024 },
             ..explicit.clone()
         };
-        assert_eq!(automatic.cache_minimum(), None);
+        assert_eq!(
+            automatic.cache_minimum(),
+            Some(1_024),
+            "an automatic cache still has a floor, and still fails silently below it"
+        );
 
         let none = ModelCapabilities {
             cache: CacheSupport::None,
@@ -376,5 +475,64 @@ mod tests {
         // A default that caches would send cache_control to a provider the
         // caller never asked to cache on.
         assert_eq!(CachePolicy::default(), CachePolicy::Off);
+    }
+    // ── P2-10 · truncation is detectable on all three vendors ─────────────
+
+    #[test]
+    fn every_vendors_truncation_spelling_maps_to_max_tokens() {
+        // The whole point: three wire values, one meaning. If any regresses to
+        // `Other`, a truncated turn is fed back to the model as complete.
+        assert_eq!(StopReason::parse("anthropic", "max_tokens"), StopReason::MaxTokens);
+        assert_eq!(StopReason::parse("openai", "length"), StopReason::MaxTokens);
+        assert_eq!(StopReason::parse("google", "MAX_TOKENS"), StopReason::MaxTokens);
+        assert!(StopReason::parse("openai", "length").is_truncated());
+        assert!(StopReason::parse("google", "MAX_TOKENS").is_truncated());
+    }
+
+    #[test]
+    fn every_vendors_clean_finish_maps_to_end_turn() {
+        assert_eq!(StopReason::parse("anthropic", "end_turn"), StopReason::EndTurn);
+        assert_eq!(StopReason::parse("openai", "stop"), StopReason::EndTurn);
+        assert_eq!(StopReason::parse("google", "STOP"), StopReason::EndTurn);
+        assert!(!StopReason::parse("openai", "stop").is_truncated());
+    }
+
+    #[test]
+    fn tool_intent_maps_across_the_two_vendors_that_signal_it() {
+        assert_eq!(StopReason::parse("anthropic", "tool_use"), StopReason::ToolUse);
+        assert_eq!(StopReason::parse("openai", "tool_calls"), StopReason::ToolUse);
+        assert!(StopReason::parse("openai", "tool_calls").wants_tools());
+        assert!(!StopReason::parse("openai", "stop").wants_tools());
+    }
+
+    #[test]
+    fn google_safety_stops_are_a_filter_not_a_clean_end() {
+        // Google has several of these and OpenAI one. Treating any as `EndTurn`
+        // reports a blocked response as a satisfied one.
+        for raw in ["SAFETY", "RECITATION", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII"] {
+            assert_eq!(
+                StopReason::parse("google", raw),
+                StopReason::ContentFilter,
+                "{raw} must classify as a filter stop"
+            );
+        }
+        assert_eq!(StopReason::parse("openai", "content_filter"), StopReason::ContentFilter);
+    }
+
+    #[test]
+    fn a_malformed_tool_call_is_neither_a_clean_end_nor_a_runnable_call() {
+        let r = StopReason::parse("google", "MALFORMED_FUNCTION_CALL");
+        assert!(!matches!(r, StopReason::EndTurn), "must not end the loop cleanly");
+        assert!(!r.wants_tools(), "there is no parseable call to run");
+    }
+
+    #[test]
+    fn an_unknown_value_stays_diagnosable_and_carries_its_provider() {
+        let r = StopReason::parse("openai", "some_new_reason_2027");
+        assert_eq!(r, StopReason::Other("openai:some_new_reason_2027".into()));
+        assert!(!r.is_truncated());
+        assert!(!r.wants_tools());
+        // An absent finish_reason stays distinguishable from a present unknown.
+        assert_eq!(StopReason::parse("google", ""), StopReason::Other("google:<empty>".into()));
     }
 }

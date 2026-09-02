@@ -30,47 +30,18 @@ impl OpenAIProvider {
         }
     }
 
+    /// The models this provider serves.
+    ///
+    /// ⚠ This used to be a hand-written list here, and by 2026-09-02 all three
+    /// adapters' lists had drifted a full generation behind `src/data/models.ts`
+    /// — the list the user actually picks from. The overlap between the two was
+    /// one model. Four entries here were retired in February 2026.
+    ///
+    /// Reads the shared catalogue now, so a lookup by model id cannot come back
+    /// empty for a model the app offers. See `provider/catalogue.rs`.
     fn models_static() -> Vec<ModelInfo> {
-        vec![
-            ModelInfo {
-                id: "gpt-4.1".into(),
-                name: "GPT-4.1".into(),
-                context_window: 1_000_000,
-                supports_vision: true,
-                supports_thinking: false,
-                cost_in_per_1m: 5.0,
-                cost_out_per_1m: 15.0,
-            },
-            ModelInfo {
-                id: "gpt-4.1-mini".into(),
-                name: "GPT-4.1 Mini".into(),
-                context_window: 1_000_000,
-                supports_vision: true,
-                supports_thinking: false,
-                cost_in_per_1m: 1.0,
-                cost_out_per_1m: 3.0,
-            },
-            ModelInfo {
-                id: "gpt-4o".into(),
-                name: "GPT-4o".into(),
-                context_window: 128_000,
-                supports_vision: true,
-                supports_thinking: false,
-                cost_in_per_1m: 2.50,
-                cost_out_per_1m: 10.0,
-            },
-            ModelInfo {
-                id: "o4-mini".into(),
-                name: "o4-mini".into(),
-                context_window: 200_000,
-                supports_vision: false,
-                supports_thinking: true,
-                cost_in_per_1m: 1.10,
-                cost_out_per_1m: 4.40,
-            },
-        ]
+        crate::provider::catalogue::models_for("openai")
     }
-
     /// The request body, for conformance tests.
     ///
     /// Exposes the real builder rather than letting a test reimplement it —

@@ -26,7 +26,7 @@ use crate::provider::traits::Provider;
 use crate::provider::types::{CompletionRequest, MessageContent, RequestMessage, StreamChunk};
 use crate::session::manager::SessionManager;
 use crate::state::AppState;
-use crate::provider::usage::Usage;
+use crate::provider::usage::{StopReason, Usage};
 
 const MAX_TOOL_TURNS: usize = 20;
 
@@ -109,7 +109,10 @@ impl AgentEngine {
 
     /// Run the full agentic loop for a single user message.
     /// Streams tokens and tool events to the frontend via Tauri events.
-    /// Returns after the LLM stops tool use (stop_reason = "end_turn").
+    /// Returns once the model stops asking for tools — i.e. when the turn's
+    /// stop reason classifies as anything other than `StopReason::ToolUse`.
+    /// Stated by classification rather than by the literal `"end_turn"`, which
+    /// is only Anthropic's spelling for it.
     pub async fn run(
         &self,
         session_id: &str,
@@ -266,10 +269,35 @@ impl AgentEngine {
             // P2-46. A turn cut short by the token ceiling is not a finished
             // turn, and continuing the loop over a truncated assistant message
             // silently corrupts the conversation.
-            if turn_stop_reason.as_deref() == Some("max_tokens") {
+            //
+            // P2-10. This compared the raw wire string against `"max_tokens"`,
+            // which is **Anthropic's** spelling. OpenAI sends `length` and
+            // Google sends `MAX_TOKENS`, so on two of the three providers a
+            // truncated turn matched nothing and the loop continued over a cut
+            // assistant message without a word — including over a `tool_use`
+            // block whose arguments were sliced mid-JSON.
+            //
+            // The check now runs on the normalised classification, so it holds
+            // for every provider and for any spelling a vendor adds later.
+            let reason = turn_stop_reason
+                .as_deref()
+                .map(|raw| StopReason::parse(self.provider.id(), raw));
+
+            if reason.as_ref().is_some_and(StopReason::is_truncated) {
                 warn!(
-                    "Turn truncated by max_tokens (model={model}); the response is incomplete"
+                    "Turn truncated by the output ceiling (model={model}, provider={}, \
+                     wire reason={:?}); the response is incomplete",
+                    self.provider.id(),
+                    turn_stop_reason.as_deref().unwrap_or("<none>")
                 );
+            }
+
+            // An unrecognised stop reason is reported rather than treated as a
+            // clean end. Gemini's `MALFORMED_FUNCTION_CALL` lands here: the
+            // model tried to call a tool and produced arguments that do not
+            // parse, which reads as neither "finished" nor "wants a tool".
+            if let Some(StopReason::Other(ref raw)) = reason {
+                warn!("Unrecognised stop reason {raw} (model={model}) — treated as end of turn");
             }
 
             // Ruflo Feature 4 — accumulate token usage into budget_status after each LLM response
