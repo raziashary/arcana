@@ -84,38 +84,51 @@ Fifteen phases. Every one has an explicit slot — nothing is parked.
 
 | # | Phase | Delivers | Tasks | Est. |
 |---|---|---|---|---|
-| ✅ | **P0** Stop the bleeding | The security holes closed; CI can fail | 12 | done |
+| ✅ | **P0** Stop the bleeding | The security holes closed; CI can fail | 27 | done |
 | ✅ | **P1** Structural | Everything shipped is compiled; one owner per database; redaction live | 22 | done |
 | ✅ | **P2** Providers | Three providers conform; **Gemini primary**; cost honest; spend capped — proven against the live APIs, not only against fixtures | 74 | done |
-| ✅ | **P3 A–E** Runtime | One tool path with a real permission gate; a panic cannot kill the app — **and four ways the model could reach past both, closed** | 43 | done |
+| ✅ | **P3 A–E** Runtime | One tool path with a real permission gate; a panic cannot kill the app — **and four ways the model could reach past both, closed** | 39 | done |
 | ✅ | **P3-F** Memory | Memory that works, is scoped to its project, and cannot be written to by an agent claiming to be you | 18 | done |
-| 3 | **P8** Sidecar removal | The retired Python subsystem deleted entirely | 24 | ~6 h |
-| 🤝 | **Handover** | **The AutoDesign team can begin wiring** | — | **~6 h away** |
-| 5 | **PD1** Ingestion | PSD **and** PDF → one representation | 14 | ~6 h |
-| 6 | **PD2** Fidelity | Faithfulness measured and refined | 14 | ~7.5 h |
-| 7 | **PD3** Export | Webpage · PDF · PSD | 15 | ~7 h |
-| 8 | **PD4** Adaptation | Reformat to any target size | 13 | ~7 h |
-| 9 | **PD5** Changes | Text, image, position, colour, shape | 13 | ~5.5 h |
-| 10 | **PD6** Brand guideline | Ingest a brand guide and apply it | 9 | ~3.5 h |
-| 11 | **P4** Fleet | A task runs end to end and lands a verified artifact | 30 | ~12.5 h |
-| — | **PD0** Contract | The integration surface, published early | 6 | ~2 h |
+| 1 | **P8** Sidecar removal | The retired Python subsystem deleted entirely | 24 | **~4 h** |
+| 🤝 | **Handover** | **The AutoDesign team can begin wiring** | — | **~5 h away** |
+| 3 | **PD1** Ingestion | PSD **and** PDF → one representation | 14 | **~2.5 h** |
+| 4 | **PD2** Fidelity | Faithfulness measured and refined | 14 | **~2.5 h** ⚠ |
+| 5 | **PD3** Export | Webpage · PDF · PSD | 15 | **~2.5 h** |
+| 6 | **PD4** Adaptation | Reformat to any target size | 13 | **~2 h** |
+| 7 | **PD5** Changes | Text, image, position, colour, shape | 13 | **~2 h** |
+| 8 | **PD6** Brand guideline | Ingest a brand guide and apply it | 9 | **~1.5 h** |
+| 9 | **P4** Fleet | A task runs end to end and lands a verified artifact | 31 | **~5 h** |
+| 2 | **PD0** Contract | The integration surface, published early | 6 | **~1 h** |
 
 ### Rollout 2
 
 | # | Phase | Delivers | Tasks | Est. |
 |---|---|---|---|---|
-| 12 | **P5** Graph | A compiled code graph, read for context | 21 | ~9 h |
-| 13 | **P6** UI | AutoDev's own interface | 28 | ~10 h |
-| 14 | **P7** Experience | A new user reaches a working turn without documentation | 18 | ~5.5 h |
-| 15 | **P9** Delivery | Signed installers, three platforms | 16 | ~7 h |
+| 10 | **P5** Graph | A compiled code graph, read for context | 21 | **~3.5 h** |
+| 11 | **P6** UI | AutoDev's own interface | 28 | **~4.5 h** ⚠ |
+| 12 | **P7** Experience | A new user reaches a working turn without documentation | 18 | **~3 h** ⚠ |
+| 13 | **P9** Delivery | Signed installers, three platforms | 16 | **~2.5 h** ⚠ |
 
-**Totals.** 208 tasks and roughly **92 hours** to complete Rollout 1; 83 tasks and roughly
-**35 hours** for Rollout 2. **292 open tasks** across the programme, each written out and each
-carrying the kind of evidence required to call it done.
+**Totals.** 140 tasks and roughly **23.5 hours** to complete Rollout 1; 83 tasks and
+roughly **14 hours** for Rollout 2. **223 open tasks** across the programme, each written out
+and each carrying the kind of evidence required to call it done.
+
+The phase rows account for 222 of those 223. The remaining one is P0's end-to-end test
+harness, blocked by tooling rather than by effort — the Windows driver is not installed
+locally, and the Linux/macOS driver has no engine for the framework AutoDev uses. It is counted
+in the totals and left out of the estimates, because an hour figure would imply the wait is
+ours to shorten.
+
+⚠ **These figures are three times smaller than the ones this document carried yesterday, and
+the reason is measurement rather than optimism** — see §5. The rows marked ⚠ are the ones the
+measurement does not cover: `P6` and `P7` are frontend work and every measured hour so far is
+Rust; `PD2` is a research loop rather than a task list; and `P9` waits on a signing key only
+Razi can generate and on installer builds across three platforms.
 
 ### The handover point
 
-The AutoDesign team can start after phase 4, roughly **37 working hours in**. They receive:
+The AutoDesign team can start once `P8` and `PD0` are done — 30 tasks, roughly **5 working
+hours** from here. They receive:
 
 1. A codebase with the retired subsystem **fully removed** — no dead dependency to inherit.
 2. A **published integration contract**, written to AutoDesign's own versioned format.
@@ -192,9 +205,24 @@ by the code and **never actually created**, so semantic search would fail if swi
 is off by default and nothing is broken today, but the honest score reflects it. An earlier
 draft of this figure said 40% and was corrected the same hour.
 
-**Estimates are calibrated on measured throughput, not on judgement.** P1 built 22 tasks in
-2 h 50 m; its audit and the resulting fixes took a further 3 h 30 m. The figures in §4 carry
-that audit cost rather than omitting it.
+**The estimates were wrong by about 3×, and every phase came in early — which is exactly
+why nobody noticed.** This document said P2 would take ~11 hours; it took 5 h 32 m including its
+audit. P3 A–E: ~12 hours estimated, 4 h 50 m actual. P3-F: ~7.5 hours estimated, 1 h 58 m actual.
+An estimate that is always beaten never gets challenged, so the figure stayed wrong for three
+phases while looking like good news.
+
+They have now been rebuilt from commit timestamps rather than judgement. **P0 through P3-F is
+183 tasks in 21 h 23 m of working time, across roughly 49 hours of calendar** — 8.6 tasks an
+hour, counting build, tests, gates, the independent audits, the remediation those audits caused,
+and the trackers. The figures in §4 plan at a deliberately slower **6 tasks an hour**, because a
+phase's task list *grows* when it is checked before building: P2 was written as 27 tasks and
+became 74, P3 A–E 28 became 43, P3-F 15 became 18. The slower rate carries that growth, and it
+reproduces the three phases above to within about half an hour each.
+
+Two honest caveats. The measured work is **all Rust and documentation**, so the two interface
+phases have no measured throughput behind them at all. And the audit overhead — 46% on top of
+build time — has fallen every phase as the plan improved; the estimates assume it stays low,
+which is an assumption rather than a measurement.
 
 ---
 

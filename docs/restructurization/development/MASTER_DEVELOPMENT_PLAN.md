@@ -719,6 +719,114 @@ stamp its run id. Sequence a phase after its data producer. Put the capstone las
 | **P7** | R2 | A new user reaches a working agent turn without documentation | P6 |
 | **P9** | R2 | Signed, verified installers for Windows, Linux and macOS | P7 |
 
+## §5.6 · Measured throughput — what the phases actually cost
+
+⚠ **This section exists because the estimates lived nowhere near the plan.**
+Until now the only per-phase hour figures in the programme were in the
+*public brief*, which is a condensation and has no business being the sole home
+of a planning number. It went stale unchallenged for three phases. The numbers
+belong here, next to the tasks they are derived from, and the brief renders
+them like everything else.
+
+### Method, stated so the figures can be argued with
+
+Both columns come from commit timestamps — nothing is recalled or estimated.
+
+* **Span** — first commit of a phase window to its last. What a calendar shows.
+* **Active** — the same, minus every gap longer than **45 minutes**. The
+  threshold is stated rather than tuned: in dense stretches the commit cadence
+  here is 10–20 minutes, so a multi-hour gap is a break, not silent work.
+
+Active is a **lower bound on effort**: any real work that produced no commit
+for 45 minutes is discarded by this method. It is the right bias — an estimate
+built from a number that flatters the estimator is worthless.
+
+Task counts are the **MDP's own checkbox counts**, not the brief's table, which
+was stale for three completed phases (it still recorded P0 at 12 tasks; P0 grew
+to 27 during its own pre-build refutation).
+
+### Measured, `P0` → `P3-F`
+
+| Window | Tasks | Span | Active |
+|---|---|---|---|
+| Anchor set (planning) | — | 0h 03m | 0h 03m |
+| **P0** build + closeout + audit | 26 | 11h 35m | **4h 43m** |
+| **P1** build + audit + rulings | 22 | 6h 19m | **3h 57m** |
+| AutoDesign sizing + the layer IR | 4 *(PD1)* | 0h 20m | 0h 20m |
+| **P2** re-cut + build + audit | 74 | 14h 15m | **5h 32m** |
+| **P3 A–E** build + audit | 39 | 5h 51m | **4h 50m** |
+| **P3-F** build + audit + closeout | 18 | 2h 54m | **1h 58m** |
+| **Total** | **183** | **≈49h calendar** | **21h 23m** |
+
+**8.6 tasks/hour, all-in** — build, smoke, gates, audits, remediation, trackers
+and commits included. Two days of calendar; twenty-one and a half hours of work.
+
+### The planning rate is deliberately lower than the measured one
+
+A phase's task count **grows during its own pre-build refutation**, and the
+estimate has to be against the count as *written*, because that is the only
+number available when the estimate is made. Observed growth: `P2` **27 → 74**
+(×2.7), `P3 A–E` **28 → 43** (×1.5), `P3-F` **15 → 18** (×1.2). The trend is
+downward — the plan gets better as more of the codebase is known — but it is
+not 1.0 and will not be.
+
+So the figure to plan with is **6 tasks/hour against the written count**
+(≈10 minutes per written task), which carries the growth, the audit and the
+closeout inside it. Checked against the three phases that had both a written
+count and an outcome:
+
+| Phase | Written | Old estimate | This model | Actual |
+|---|---|---|---|---|
+| `P2` | 27 | ~11 h | 4.5 h | **5h 32m** |
+| `P3 A–E` | 28 | ~12 h | 4.7 h | **4h 50m** |
+| `P3-F` | 15 | ~7.5 h | 2.5 h | **1h 58m** |
+
+Two within 35 minutes, one conservative by an hour. The **old** estimates were
+built on an unstated ~2.3 tasks/hour and were wrong by 2.5–3.8×, in the
+direction that matters least for trust and most for planning: everything landed
+early, so nothing was ever caught, and the figure quietly stayed wrong.
+
+### Recalibrated remainder — 223 open tasks
+
+| Phase | Open | Old | **New** | Confidence |
+|---|---|---|---|---|
+| `P0-21` e2e harness | 1 | — | *blocked* | Environment, not throughput — `msedgedriver` absent locally and `tauri-driver` has no WKWebView backend, so macOS can never run it |
+| **P8** Sidecar removal | 24 | ~6 h | **~4 h** | High — deletion against a known inventory |
+| **PD0** Contract | 6 | ~2 h | **~1 h** | High |
+| **PD1** Ingestion | 14 | ~6 h | **~2.5 h** | ⚠ Medium — 4 of 18 done, new domain |
+| **PD2** Fidelity | 14 | ~7.5 h | **~2.5 h** | ⚠ Low — *measured* fidelity is a research loop, not a task list |
+| **PD3** Export | 15 | ~7 h | **~2.5 h** | ⚠ Medium |
+| **PD4** Adaptation | 13 | ~7 h | **~2 h** | ⚠ Medium |
+| **PD5** Changes | 13 | ~5.5 h | **~2 h** | ⚠ Medium |
+| **PD6** Brand guideline | 9 | ~3.5 h | **~1.5 h** | ⚠ Medium |
+| **P4** Fleet | 31 | ~12.5 h | **~5 h** | High — Rust, and the shape is known |
+| **Rollout 1** | **140** | **~92 h** | **≈23.5 h** | |
+| **P5** Graph | 21 | ~9 h | **~3.5 h** | High |
+| **P6** UI | 28 | ~10 h | **~4.5 h** | ⚠ **Low — no measured frontend throughput exists.** Every hour above is Rust |
+| **P7** Experience | 18 | ~5.5 h | **~3 h** | ⚠ Low — same reason |
+| **P9** Delivery | 16 | ~7 h | **~2.5 h** | ⚠ **Not throughput-bound.** Gated on Razi generating the signing keypair, and on real CI runs across three platforms |
+| **Rollout 2** | **83** | **~35 h** | **≈14 h** | |
+| **Programme** | **223** | **~127 h** | **≈37.5 h** | |
+
+**Handover to AutoDesign is `P8` + `PD0` — 30 tasks, ≈5 hours.**
+
+### Where this model should NOT be trusted
+
+Stated rather than buried, because a recalibration that is confident everywhere
+is just the old error with a new number:
+
+1. **All 183 measured tasks are Rust and documentation.** `P6` and `P7` are 46
+   tasks of frontend work with **zero** measured throughput behind them.
+2. **`PD2` is a research loop.** "Fidelity is measured and refined until it
+   passes" does not decompose into 14 units of equal cost, and no phase so far
+   has had that shape.
+3. **`P9` waits on things that are not me** — a keypair only Razi can generate,
+   and installer builds on three platforms.
+4. **The audit overhead is 46% on top of build time and is included above.**
+   It has fallen every phase (P0 3h 36m → P3-F 19m) as the plan improved, and
+   it is assumed to stay low. If a phase's audits start finding what P3-F's
+   did, that assumption goes.
+
 # §6 · Phase P0 — Stop the bleeding
 
 **Goal.** Close the three exploitable surfaces, make gates capable of failing, and put all three platforms in CI — so everything after this is provable.
