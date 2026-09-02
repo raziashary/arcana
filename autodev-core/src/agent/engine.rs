@@ -18,9 +18,13 @@ use super::tool_trait::Tool;
 use crate::cost::tracker::CostTracker;
 use crate::errors::{AutoDevError, Result};
 use crate::events::{
-    emit_agent_done, emit_agent_error, emit_thinking, emit_token, AgentDonePayload,
-    AgentErrorPayload, ThinkingPayload, TokenPayload,
+    emit_thinking, emit_token, AgentDonePayload, ThinkingPayload, TokenPayload,
 };
+// ⚠ P3-05. `emit_agent_done` / `emit_agent_error` / `AgentErrorPayload` are
+// deliberately NOT imported here. `TerminalEventGuard` owns terminal emission
+// outright — there is no way to emit one without going through it, and
+// therefore no way to emit two. Re-importing them here is how that guarantee
+// gets quietly undone.
 use crate::hooks::{HookContext, HookRegistry, HookType};
 use crate::provider::traits::Provider;
 use crate::provider::types::{CompletionRequest, MessageContent, RequestMessage, StreamChunk};

@@ -23,7 +23,6 @@ use crate::db::tasks::TasksDb;
 use crate::recipes::defaults::qc_reviewer_system_prompt;
 use crate::subagent::pool::QC_DISPATCHER_SLUG;
 use crate::subagent::{self, SubagentConfig, SubagentStatus};
-use crate::state::lock::LockTolerant;
 
 pub struct SpawnQcReviewTool;
 

@@ -980,3 +980,129 @@ Not build-time decisions — but recorded here because a future session will oth
 | Date | Rev | Change |
 |---|---|---|
 | 2026-08-31 | 1.0 | Created. Register relationships, namespaced ID scheme (`ADR-LOG-RESTRUCT-NNNN`), tiering, entry template. Zero entries — build not started. Seven standing facts carried from planning that would otherwise be rediscovered destructively. |
+
+---
+
+## ADR-LOG-RESTRUCT-0029 — P3 A–E build-time decisions: two Razi rulings, four judgement calls, two gates left red
+
+**Status.** DECIDED
+**Author.** Claude · **Tier.** mixed — two `razi-ruled`, four `decided-independently`,
+two `flagged-and-proposed` (recorded here and surfaced in chat, since Razi is reading
+from a phone and cannot open files)
+
+**When.** 2026-09-02 · Phase P3 A–E · triggered by tasks `P3-16` … `P3-68`
+
+---
+
+### razi-ruled · 1. A checker that could not run is not a tool error (`P3-18`)
+
+**What.** `check_file` returns SUCCESS when a validator binary is missing or times
+out, carrying a prominent `NOT CHECKED` line, rather than returning an error.
+
+**Why.** The task text says a missing binary "is an **error**". Taken literally that
+turns a missing *optional* dependency into a failed tool call the model cannot repair
+by retrying — on a machine without `tsc`, every `.ts` check would fail forever. The
+defect being fixed is the **false claim**, not the absent tool: `is_clean()` returned
+`true` for a file nothing had examined, and `check_file` printed `✓ No syntax errors.`
+Razi ruled for the narrower reading.
+
+**Where.** `autodev-core/src/agent/builtin_tools/check_file.rs`,
+`…/validate.rs` (`SEVERITY_UNAVAILABLE`, `LintResult::ran`)
+
+**How proven.** `p3_17_18_tests` (7), `TG-P3-18`, falsified.
+
+---
+
+### razi-ruled · 2. Wire `permission_mode`, and flip the cron recipes (`P3-65`)
+
+**What.** `runner.rs` builds the engine from `PermissionMode::from(&recipe.permission_mode)`;
+`worker-platform`, `qc-agent` and `qc-dispatcher` now declare `Autonomous`;
+`fleet-smoke` keeps `Supervised` and now genuinely receives it.
+
+**Why.** The field was written by nine recipes and read by nothing. Honouring it
+naively would stall the fleet — three of the four `Supervised` recipes run on cron
+with nobody present to answer a 300s prompt. Razi chose to honour the field *and*
+correct the declarations, over deleting the control or leaving it decorative.
+
+**Where.** `autodev-core/src/recipes/{runner,types,defaults}.rs`
+
+**How proven.** `TG-P3-65` (falsified three ways) + 6 unit tests.
+
+---
+
+### decided-independently · 3. `scheduled + supervised` is refused, not downgraded
+
+**What.** `run_recipe` returns an error naming the recipe, its schedule and the fix,
+rather than silently running Autonomous or blocking on a prompt.
+
+**Why.** `TG-P3-65` covers the nine shipped recipes; **users author their own**, and
+`RecipeEditor.tsx` puts `permission_mode` and `schedule` on the same form — the
+invalid pair is two clicks away where no source gate can reach. Downgrading silently
+would re-create the exact `P3-65` defect as a "convenience"; honouring it would block
+every Execute/Network/Board tool for 300s and then deny. Both do something other than
+what was asked. This says so instead.
+
+**How proven.** `p3_65_runner_tests` (3), including both no-fire halves.
+
+---
+
+### decided-independently · 4. `P3-61` fixed at the chokepoint, not per caller
+
+**What.** `pick_servable_model` lives in `native_runner`, which every subagent passes
+through, rather than being repeated at `spawn_subagent`, `spawn_parallel_subagents`
+and `spawn_qc_review`.
+
+**Why.** The task names two callers with the defect. A per-caller fix leaves the
+*next* caller broken, and this defect has already appeared twice independently. A test
+covers the QC id explicitly so the second case is not merely assumed to be covered.
+
+---
+
+### decided-independently · 5. `A3` stays at 0% in the readiness matrix
+
+**What.** P3 A–E is complete — 53 of 68 tasks, 19 gates, 520 tests — and the scored
+area does not move.
+
+**Why.** `A3` is scored per *phase* and `P3-F · Memory` is 15 tasks untouched, so the
+Build row is genuinely unmet. `§0` says no partial credit. Recording A–E against a row
+spanning A–G is the arithmetic dishonesty that rule exists to prevent. The **safety
+overlay** is where the change was recorded instead, because that is where the signal
+actually is.
+
+---
+
+### flagged-and-proposed · 6. `TG3-08` and `TG3-10` left RED with the gap stated
+
+**What.** Two spec gates in `TESTING_GATES.md` are annotated and left unchecked.
+
+**Why.** `TG3-08` wants a regression slope over turns 10–30 against a recorded
+baseline, asserted as a number; `S3-01` proves the *ordering* that bounds growth,
+which is weaker, and checking a gate against a property it merely resembles is how a
+green row stops meaning anything. **`TG3-10`'s premise is refuted by measurement**: it
+requires clearing to fire only when the saving exceeds "the forced cache re-write it
+causes", and there is no such cost — `anthropic.rs` sets a breakpoint on the system
+block only, so nothing in the message region is cached. The gate must be re-pointed,
+or the premise restored by adding a message-region breakpoint, before it can pass.
+
+**Needs Razi.** Whether to re-point `TG3-10` or to add a message-region cache
+breakpoint (which would make the original trade-off real, and require re-deriving
+`CLEAR_TRIGGER_FRACTION`).
+
+---
+
+### flagged-and-proposed · 7. Two of my own gates were green and wrong
+
+**What.** Recorded as `L-25` and `L-26` in the MDP `§0.16` register; `L-C9` incremented
+to 9.
+
+**Why it is here and not only there.** Both were caught by falsification, not by
+review, and both came from *fixing* something: `TG-P3-20` went blind because I widened
+its search to silence a false positive, and `TG-P3-55`'s falsification proved nothing
+because two of three planted defects did not compile — `cargo test` exited 101 on a
+**build error** that looked exactly like a gate firing. A third variant: `shutil.copy2`
+preserves mtime, so cargo can reuse the artifact built from a planted file *after* the
+restore, which can report a false green about whether the restore happened.
+
+**How applied.** Every falsification after that point asserts both that the run failed
+**and** that it failed for the stated reason, and restores are verified by reading the
+file rather than by re-running the gate.
