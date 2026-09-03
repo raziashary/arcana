@@ -29,8 +29,32 @@ import { EXIT, readAll, runInvocation, type SidecarIo } from './sidecar'
  * is in the path the tests drive. The suite injects its own `SidecarIo`.
  */
 const processIo: SidecarIo = {
-  writeOut: (line) => process.stdout.write(`${line}\n`),
-  writeErr: (line) => process.stderr.write(`${line}\n`),
+  writeOut: (line) => void process.stdout.write(`${line}\n`),
+  writeErr: (line) => void process.stderr.write(`${line}\n`),
+}
+
+/**
+ * A parent that stops reading is not an error on our side.
+ *
+ * 🔴 `A-23`: neither stream had an `'error'` listener. When the caller reads
+ * the settled event and closes the pipe — a perfectly clean cancellation, and
+ * the documented way to stop us — the next write raises `EPIPE` on a stream
+ * with no listener, which Node throws as an **uncaught exception**. That puts
+ * a stack trace on stderr, which the contract reserves for protocol errors, and
+ * exits with a code the contract does not define. The tidiest possible caller
+ * behaviour produced the ugliest possible failure.
+ *
+ * Any other stream error is real and must not be swallowed, so only `EPIPE`
+ * is treated as the parent having finished with us.
+ */
+function ignoreBrokenPipe(stream: NodeJS.WriteStream, onBroken: () => void): void {
+  stream.on('error', (error: NodeJS.ErrnoException) => {
+    if (error.code === 'EPIPE') {
+      onBroken()
+      return
+    }
+    throw error
+  })
 }
 
 /**
@@ -68,6 +92,16 @@ async function main(): Promise<void> {
     })
   }
 
+  // The parent closing the pipe ends the invocation; it does not fail it.
+  // `EXIT.SETTLED` is only kept if a terminal event was already written.
+  let pipeBroken = false
+  ignoreBrokenPipe(process.stdout, () => {
+    pipeBroken = true
+  })
+  ignoreBrokenPipe(process.stderr, () => {
+    pipeBroken = true
+  })
+
   let raw: string
   try {
     raw = await readAll(process.stdin)
@@ -82,7 +116,10 @@ async function main(): Promise<void> {
 
   const code = await runInvocation(raw, processIo)
   settled = code === EXIT.SETTLED
-  process.exitCode = code
+  // A broken pipe before settling means the caller will never see a terminal
+  // event, whatever we computed — reporting `0` would claim they received
+  // something they did not.
+  process.exitCode = pipeBroken && !settled ? EXIT.UNSETTLED : code
 }
 
 void main().catch((error: unknown) => {

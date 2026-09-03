@@ -14,7 +14,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:e2e": "wdio run e2e/wdio.conf.ts"
+    "test:e2e": "wdio run e2e/wdio.conf.ts",
+    "smoke:design": "npm run build:sidecar && node scripts/smoke-design-sidecar.mjs"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

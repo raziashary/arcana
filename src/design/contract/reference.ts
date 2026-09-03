@@ -85,6 +85,126 @@ const NOT_IMPLEMENTED = (operation: Operation): Diagnostic => ({
     'but the conversion behind it lands in PD1.',
 })
 
+// ── Reading `input`, and why two more outcomes now have producers ────────────
+//
+// 🔴 Work-audit `W-7` and area-audit `A-7`, which are the same defect seen from
+// two sides. `types.ts` said `input` was *"constrained per operation by the
+// reference implementation"* — and the reference never read it. Meanwhile of
+// the three outcomes the contract freezes, exactly **one** had a producer:
+// both settle branches hard-coded `partial`, so `complete` and `held` were
+// shapes a partner could write a branch for and never once receive. Worse, the
+// published exit-code table promised `held` exits `0`, while every refusal the
+// sidecar could actually reach happened before any event and exited `2` — so
+// the documented state was not merely unproduced, it was **unreachable**.
+//
+// `PD0-04`'s own amendment is the rule being applied here: *"`ErrorClass` sat
+// for months defined, unit-tested against itself, and never produced by
+// anything. Every variant here needs a producer or it should not exist."*
+//
+// So `input` is now read, per operation, and the reading produces the two
+// outcomes the reference can honestly reach:
+//
+//   · `held`     — the request decoded, we accepted it, and we will not serve
+//                  it. A refusal after acceptance, which is exactly the state
+//                  exit `0` + `held` exists to express.
+//   · `complete` — the work asked for was genuinely finished with nothing
+//                  lost. A `change` with an empty instruction list is a real
+//                  no-op: the design comes back unchanged and no fidelity
+//                  question arises.
+//   · `partial`  — everything else, because the conversion lands in `PD1`.
+//
+// What still has no producer is written down rather than manufactured: see
+// `§6.1` of the partner document.
+
+/** Formats `export` will serialize today. `PD2` adds the rendered ones. */
+export const SUPPORTED_EXPORT_FORMATS = ['json'] as const
+
+const held = (code: string, category: Diagnostic['category'], message: string): Diagnostic => ({
+  code,
+  category,
+  severity: 'failure',
+  retryable: false,
+  safeMessage: message,
+})
+
+/**
+ * Decide the outcome from the request, before any work is attributed to it.
+ *
+ * Returns a diagnostic to hold on, or `null` to proceed. Kept separate from
+ * `settle` so the rule is readable on its own and testable without a stream.
+ */
+export function holdReason(request: ContractRequest): Diagnostic | null {
+  const input = request.input
+
+  if (request.operation === 'ingest') {
+    if (typeof input.source !== 'string' || input.source.length === 0) {
+      return held(
+        'INGEST_SOURCE_REQUIRED',
+        'validation',
+        'ingest requires input.source — a reference to the bytes to read. ' +
+          'Nothing was read and nothing was produced.',
+      )
+    }
+    return null
+  }
+
+  if (request.operation === 'adapt') {
+    const target = input.target
+    if (typeof target !== 'object' || target === null) {
+      return held(
+        'ADAPT_TARGET_REQUIRED',
+        'validation',
+        'adapt requires input.target — { width, height } in pixels. ' +
+          'Adapting to an unstated size would be guessing.',
+      )
+    }
+    const { width, height } = target as { width?: unknown; height?: unknown }
+    if (!isPositiveInt(width) || !isPositiveInt(height)) {
+      return held(
+        'ADAPT_TARGET_INVALID',
+        'validation',
+        'input.target.width and input.target.height must both be positive integers.',
+      )
+    }
+    return null
+  }
+
+  if (request.operation === 'export') {
+    const format = input.format
+    if (typeof format !== 'string' || format.length === 0) {
+      return held(
+        'EXPORT_FORMAT_REQUIRED',
+        'validation',
+        `export requires input.format — one of: ${SUPPORTED_EXPORT_FORMATS.join(', ')}.`,
+      )
+    }
+    if (!(SUPPORTED_EXPORT_FORMATS as readonly string[]).includes(format)) {
+      return held(
+        'EXPORT_FORMAT_UNSUPPORTED',
+        'admission',
+        `export format "${format}" is not served. Supported today: ` +
+          `${SUPPORTED_EXPORT_FORMATS.join(', ')}. Rendered formats arrive with PD2.`,
+      )
+    }
+    return null
+  }
+
+  // `change`
+  if (!Array.isArray(input.instructions)) {
+    return held(
+      'CHANGE_INSTRUCTIONS_REQUIRED',
+      'validation',
+      'change requires input.instructions — an array. An empty array is a ' +
+        'valid no-op and completes; a missing one is a malformed request.',
+    )
+  }
+  return null
+}
+
+function isPositiveInt(v: unknown): v is number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v > 0
+}
+
 function progress(
   request: ContractRequest,
   type: ProgressEvent['type'],
@@ -132,6 +252,43 @@ function settle(request: ContractRequest, clock: Clock): SettledEvent {
     sequence: 4,
     observedAt: clock.now(),
   } as const
+
+  // ── held · we accepted the request and will not serve it ─────────────────
+  //
+  // This is the branch that makes `exit 0 + held` reachable. It settles, so it
+  // is a successful invocation carrying an unsuccessful outcome — which is the
+  // distinction the exit-code table draws and could not previously demonstrate.
+  const hold = holdReason(request)
+  if (hold !== null) {
+    return {
+      ...base,
+      outcome: 'held',
+      design: null,
+      artifacts: [],
+      diagnostics: [hold],
+      // A held operation measured nothing, so there is nothing to report. The
+      // decoder enforces that a `held` carries no output; `null` fidelity is
+      // the honest reading of "the question did not arise".
+      fidelity: null,
+    }
+  }
+
+  // ── complete · the work asked for was finished, with nothing lost ────────
+  //
+  // A `change` with an empty instruction list is a genuine no-op: the design
+  // returns unchanged and no conversion was involved, so reporting `partial`
+  // here would be the mirror-image lie of reporting `complete` for work we did
+  // not do. It is the one path the reference can honestly complete today.
+  if (request.operation === 'change' && (request.input.instructions as unknown[]).length === 0) {
+    return {
+      ...base,
+      outcome: 'complete',
+      design: request.design ?? referenceDesign(request.operationId),
+      artifacts: [],
+      diagnostics: [],
+      fidelity: null,
+    }
+  }
 
   // `export` serializes what it was given: it produces an artifact, not a
   // design, and fidelity is not a meaningful question about it — so the field

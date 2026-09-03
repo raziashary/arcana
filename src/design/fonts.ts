@@ -107,7 +107,24 @@ const FOUNDRY_SUFFIX = /(PSMT|PST|PS|MT|Type1)$/i
  * The family name with PostScript style and foundry suffixes stripped, spaced
  * at camel-case boundaries: `GimbalExtended-Regular` → `Gimbal Extended`.
  */
+const BASE_NAME_CACHE = new Map<string, string>()
+
+/**
+ * ⚠ Memoised. `A-21`: `baseFamilyName` runs four regex passes and was called
+ * once per text layer in `toTextStyle`, then again per unique family when the
+ * fonts map is built, and twice more inside `resolveFont`/`googleFontToken`.
+ * The key space is the handful of PostScript names in one document, so the
+ * cache is bounded by the design rather than by the run.
+ */
 export function baseFamilyName(postScriptName: string): string {
+  const hit = BASE_NAME_CACHE.get(postScriptName)
+  if (hit !== undefined) return hit
+  const computed = computeBaseFamilyName(postScriptName)
+  BASE_NAME_CACHE.set(postScriptName, computed)
+  return computed
+}
+
+function computeBaseFamilyName(postScriptName: string): string {
   return postScriptName
     .replace(STYLE_SUFFIX, '')
     .replace(FOUNDRY_SUFFIX, '')

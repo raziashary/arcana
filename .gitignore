@@ -4,7 +4,15 @@ dist/
 # PD0 — the spawnable sidecar is a build output, rebuilt by `npm run build:sidecar`.
 dist-sidecar/
 target/
-scripts/
+# Contents, not the directory: git cannot re-include a file whose PARENT is
+# excluded, so `scripts/` with a trailing slash makes the negation below inert.
+scripts/*
+# ...except the design-sidecar smoke, which MUST be in version control.
+# `W-2`: SD0-01 was recorded SMOKE-PROVEN on a nine-case run that lived in a
+# scratchpad and could not be reproduced from this repository. A smoke the
+# register calls "throwaway" is still evidence, and evidence nobody can re-run
+# is an assertion. Ignoring it again would re-create the finding it fixes.
+!scripts/smoke-design-sidecar.mjs
 src-tauri/resources/sidecars/
 
 # Python

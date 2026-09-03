@@ -289,10 +289,25 @@ export type ContractEvent = ProgressEvent | SettledEvent
 /**
  * One invocation, delivered as a single JSON line on stdin.
  *
- * ⚠ `input` is deliberately unconstrained here and constrained per operation by
- * the reference implementation. The envelope's job is identity, versioning and
+ * ⚠ `input` is deliberately unconstrained *here* and constrained per operation
+ * by the implementation. The envelope's job is identity, versioning and
  * routing; smuggling operation-specific shapes into it is how an envelope
  * acquires a field that only one operation reads.
+ *
+ * 🔴 **That sentence was false when first written** (`A-7`): the reference read
+ * `input` nowhere, so the envelope carried a validated-then-ignored field and
+ * the type doc asserted a constraint that did not exist. `holdReason` in
+ * `reference.ts` is now the constraint, and the shapes it reads are:
+ *
+ * | operation | `input` |
+ * |---|---|
+ * | `ingest` | `{ source: string }` — the bytes to read |
+ * | `export` | `{ format: string }` — `'json'` today; PD2 adds rendered ones |
+ * | `adapt`  | `{ target: { width: number, height: number } }` |
+ * | `change` | `{ instructions: unknown[] }` — `[]` is a valid no-op |
+ *
+ * A request that does not carry its operation's shape is **held**, not
+ * rejected: it decoded, we accepted it, and we are declining to serve it.
  */
 export interface ContractRequest {
   contractVersion: typeof REQUEST_CONTRACT_VERSION

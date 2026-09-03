@@ -13,7 +13,13 @@ import {
   decodeArtifactRef,
 } from './decode'
 import { collect, fixedClock, referenceDesign } from './reference'
-import { formatReport, requestFor, runConformance, type ContractDriver } from './conformance'
+import {
+  formatReport,
+  requestFor,
+  requestForHold,
+  runConformance,
+  type ContractDriver,
+} from './conformance'
 import { EXIT, runInvocation, type SidecarIo } from './sidecar'
 import { OPERATIONS, RESERVED_OPERATIONS } from './types'
 import { REQUEST_CONTRACT_VERSION } from './version'
@@ -175,6 +181,118 @@ describe('outcome invariants', () => {
   })
 })
 
+// ── W-7 · the outcomes that had no producer ─────────────────────────────────
+//
+// Of the three outcomes the contract freezes, only `partial` was reachable:
+// both settle branches hard-coded it. `complete` and `held` were shapes a
+// consumer could write a branch for and never receive, and the published
+// exit-code table promised an `exit 0` + `held` state that no code path could
+// produce. PD0-04's own amendment is the rule: every variant needs a producer.
+
+describe('held — a refusal that settles', () => {
+  it('holds a request that decodes but names none of its operation input', async () => {
+    for (const operation of OPERATIONS) {
+      const events = await collect(requestForHold(operation), fixedClock())
+      const settled = decodeSettled(events[events.length - 1])
+      expect(settled.outcome, operation).toBe('held')
+      expect(settled.design, operation).toBeNull()
+      expect(settled.artifacts, operation).toEqual([])
+      expect(settled.diagnostics.some((d) => d.severity === 'failure'), operation).toBe(true)
+    }
+  })
+
+  it('distinguishes a hold from a protocol refusal by the exit code', async () => {
+    // The distinction the contract rests on: a hold is a SUCCESSFUL invocation
+    // carrying an unsuccessful outcome, and the caller reads stdout for it.
+    // A protocol refusal never decoded and writes nothing to stdout.
+    const holdIo = { out: [] as string[], err: [] as string[] }
+    const holdSink: SidecarIo = {
+      writeOut: (l) => holdIo.out.push(l),
+      writeErr: (l) => holdIo.err.push(l),
+    }
+    const heldCode = await runInvocation(
+      JSON.stringify(requestForHold('adapt')),
+      holdSink,
+      fixedClock(),
+    )
+    expect(heldCode).toBe(EXIT.SETTLED)
+    expect(holdIo.err).toEqual([])
+    expect(JSON.parse(holdIo.out[holdIo.out.length - 1]!).outcome).toBe('held')
+
+    const badIo = { out: [] as string[], err: [] as string[] }
+    const badSink: SidecarIo = {
+      writeOut: (l) => badIo.out.push(l),
+      writeErr: (l) => badIo.err.push(l),
+    }
+    const badCode = await runInvocation('{not json', badSink, fixedClock())
+    expect(badCode).toBe(EXIT.PROTOCOL)
+    expect(badIo.out).toEqual([])
+  })
+
+  it('names the field it wants, per operation, rather than a generic refusal', async () => {
+    // A refusal a caller cannot act on is only marginally better than a crash.
+    const codes = await Promise.all(
+      OPERATIONS.map(async (op) => {
+        const events = await collect(requestForHold(op), fixedClock())
+        return decodeSettled(events[events.length - 1]).diagnostics[0]!.code
+      }),
+    )
+    expect(codes).toEqual([
+      'INGEST_SOURCE_REQUIRED',
+      'EXPORT_FORMAT_REQUIRED',
+      'ADAPT_TARGET_REQUIRED',
+      'CHANGE_INSTRUCTIONS_REQUIRED',
+    ])
+  })
+
+  it('holds an unsupported export format under admission, not validation', async () => {
+    // The request is well-formed; we decline to serve it. Different category,
+    // because a caller retries these differently: one is their bug, the other
+    // is our capability.
+    const request = { ...requestFor('export'), input: { format: 'png' } }
+    const events = await collect(request, fixedClock())
+    const settled = decodeSettled(events[events.length - 1])
+    expect(settled.outcome).toBe('held')
+    expect(settled.diagnostics[0]!.code).toBe('EXPORT_FORMAT_UNSUPPORTED')
+    expect(settled.diagnostics[0]!.category).toBe('admission')
+  })
+
+  it('holds an adapt target that is not two positive integers', async () => {
+    for (const target of [{ width: 0, height: 100 }, { width: -5, height: 5 }, { width: 10.5, height: 10 }, {}]) {
+      const events = await collect({ ...requestFor('adapt'), input: { target } }, fixedClock())
+      const settled = decodeSettled(events[events.length - 1])
+      expect(settled.outcome, JSON.stringify(target)).toBe('held')
+    }
+  })
+})
+
+describe('complete — work finished with nothing lost', () => {
+  it('completes a change with an empty instruction list', async () => {
+    // A genuine no-op: the design returns unchanged, so reporting `partial`
+    // would be the mirror image of the lie PD0-04 exists to prevent.
+    const request = { ...requestFor('change'), input: { instructions: [] } }
+    const events = await collect(request, fixedClock())
+    const settled = decodeSettled(events[events.length - 1])
+    expect(settled.outcome).toBe('complete')
+    expect(settled.diagnostics).toEqual([])
+    expect(settled.design).not.toBeNull()
+  })
+
+  it('returns the design it was given, not a fresh one', async () => {
+    const request = { ...requestFor('change'), input: { instructions: [] } }
+    const events = await collect(request, fixedClock())
+    const settled = decodeSettled(events[events.length - 1])
+    expect(settled.design!.ref).toBe(request.design!.ref)
+  })
+
+  it('does not complete a change that actually asks for something', async () => {
+    // The discriminating half: if `complete` fired for every change, the check
+    // above would pass while meaning nothing.
+    const events = await collect(requestFor('change'), fixedClock())
+    expect(decodeSettled(events[events.length - 1]).outcome).toBe('partial')
+  })
+})
+
 // ── PD0-05 · asset lifetime ─────────────────────────────────────────────────
 
 describe('artifact references', () => {
@@ -255,8 +373,16 @@ describe('the sidecar invocation', () => {
 
   it('keeps contract traffic and diagnostics on separate streams', async () => {
     const { out, err, sink } = io()
-    await runInvocation(JSON.stringify(requestFor('export')), sink, fixedClock())
+    // 🔴 `A-23`: this used to discard the returned code. If `runInvocation`
+    // started returning `EXIT.PROTOCOL` for `export`, `err` would be empty and
+    // `out` would be empty — so `out.every(...)` is vacuously true and the
+    // test named "keeps traffic on separate streams" would pass while the
+    // invocation had failed outright. Asserting the code, and that stdout is
+    // non-empty, is what makes the other two assertions mean anything.
+    const code = await runInvocation(JSON.stringify(requestFor('export')), sink, fixedClock())
+    expect(code).toBe(EXIT.SETTLED)
     expect(err).toEqual([])
+    expect(out.length).toBeGreaterThan(0)
     expect(out.every((l) => l.startsWith('{'))).toBe(true)
   })
 })
