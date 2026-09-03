@@ -8,7 +8,6 @@ use crate::errors::{AutoDevError, Result};
 use crate::recipes::scheduler::RecipeScheduler;
 
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 use std::sync::Arc;
 use tauri::State;
 
@@ -120,12 +119,16 @@ pub fn update_worker_model(worker_id: i64, model: String) -> Result<()> {
     WorkersDb::open()?.update_model(worker_id, &model)
 }
 
-/// Update worker model and immediately sync to core-orchestrator.
+/// Update a worker's model and report the result to the UI.
 ///
-/// Unlike `update_worker_model` which only updates the DB, this command:
-/// 1. Updates workers.db
-/// 2. Calls core-orchestrator API to rewrite the agent YAML immediately
-/// 3. Returns a result the UI can use for toast + loading feedback
+/// ⚠ The name says `_sync` and the `UpdateModelSyncResult` shape carries a
+/// `sync_status`, because this used to push the model into the sidecar as well
+/// as the database. `P8-09` deleted that; the database write **is** the change
+/// now. Both are kept because `WorkerTable.tsx:75` invokes this command by name
+/// and renders its result — renaming them is a UI change, not a cleanup.
+///
+/// Unlike `update_worker_model`, which writes and returns nothing, this
+/// validates the worker exists first and returns a message the UI can toast.
 #[tauri::command]
 pub async fn update_worker_model_sync(
     worker_id: i64,
@@ -133,8 +136,11 @@ pub async fn update_worker_model_sync(
 ) -> Result<UpdateModelSyncResult> {
     // Step 1: Update database
     let db = WorkersDb::open()?;
-    let worker = db
-        .get_by_id(worker_id)?
+
+    // Existence guard, not a read. `update_model` on a missing id is a silent
+    // no-op in SQLite, so without this the command would report "synced" for a
+    // worker that does not exist.
+    db.get_by_id(worker_id)?
         .ok_or_else(|| AutoDevError::Agent(format!("Worker id={worker_id} not found")))?;
 
     db.update_model(worker_id, &model)?;
@@ -208,114 +214,24 @@ pub fn stop_worker_recipe(
     scheduler.stop_worker(&worker.slug)
 }
 
-// ─── YAML agent config helpers ────────────────────────────────────────────────
-
-/// Read `llm.model` from `{agents_dir}/{slug}.yaml`. Returns None if the file
-/// doesn't exist or the field is missing — caller falls back to the DB value.
-fn read_yaml_model(agents_dir: &Path, slug: &str) -> Option<String> {
-    let yaml_path = agents_dir.join(format!("{}.yaml", slug));
-    let content = std::fs::read_to_string(&yaml_path).ok()?;
-    let value: serde_yaml::Value = serde_yaml::from_str(&content).ok()?;
-    value
-        .get("llm")?
-        .get("model")?
-        .as_str()
-        .map(|s| s.to_string())
-}
-
-/// Surgically rewrite `llm.model` and `llm.provider` in `{agents_dir}/{slug}.yaml`
-/// without disturbing any other fields, comments, or metadata.
-///
-/// Line-by-line replacement: when inside the `llm:` block (detected by the top-level
-/// key) replace the `model:` and `provider:` lines.  All other lines pass through
-/// unchanged, preserving comments, ordering, and the `metadata:` section.
-fn write_yaml_model(agents_dir: &Path, slug: &str, model: &str) -> Result<()> {
-    let yaml_path = agents_dir.join(format!("{}.yaml", slug));
-    let content = std::fs::read_to_string(&yaml_path)
-        .map_err(|e| AutoDevError::Agent(format!("read YAML for '{slug}': {e}")))?;
-
-    let provider = model_to_provider(model).ok_or_else(|| {
-        AutoDevError::Agent(format!(
-            "Unknown model '{model}' — no supported provider serves it. \
-             AutoDev supports Anthropic, OpenAI and Google; see src/data/models.ts \
-             for the models on offer."
-        ))
-    })?;
-    let mut result: Vec<String> = Vec::with_capacity(content.lines().count() + 2);
-    let mut in_llm_block = false;
-    let mut model_written = false;
-    let mut provider_written = false;
-
-    for line in content.lines() {
-        let trimmed = line.trim_start();
-
-        // Detect top-level keys (no leading whitespace, ends with ':')
-        if !line.starts_with(' ') && !line.starts_with('\t') {
-            in_llm_block = trimmed.starts_with("llm:");
-            // If we're leaving the llm block and fields were not present, inject them now.
-            if !in_llm_block {
-                // No-op: if the previous block was llm and fields were missing we'd need
-                // more complex handling — for fleet YAMLs they always exist.
-            }
-        }
-
-        if in_llm_block {
-            if trimmed.starts_with("model:") && !model_written {
-                // Preserve the indentation prefix of the original line.
-                let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
-                result.push(format!("{}model: {}", indent, model));
-                model_written = true;
-                continue;
-            }
-            if trimmed.starts_with("provider:") && !provider_written {
-                let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
-                result.push(format!("{}provider: {}", indent, provider));
-                provider_written = true;
-                continue;
-            }
-        }
-        result.push(line.to_string());
-    }
-
-    let new_content = result.join("\n") + "\n";
-    std::fs::write(&yaml_path, new_content)
-        .map_err(|e| AutoDevError::Agent(format!("write YAML for '{slug}': {e}")))?;
-
-    Ok(())
-}
-
-/// Which provider serves this model.
-///
-/// Mirrors `providerForModel` in `src/data/models.ts`. The two must agree: the
-/// UI offers a model, this decides where the request and the user's key go, and
-/// a disagreement sends a credential to a vendor the user never chose.
-///
-/// ⚠ **Returns `None` for an unknown model rather than guessing.** This used to
-/// end in `_ => "openai"`, so a typo, a retired id, or a model from a provider
-/// we dropped was silently routed to OpenAI — which then failed with an
-/// authentication or unknown-model error that pointed nowhere near the cause.
-///
-/// The old prefix table also routed `llama`/`gpt-oss` to Groq, `qwen` to
-/// Dashscope and anything `-nvidia` to NVIDIA. None of those are supported
-/// providers: `is_supported_provider` accepts only these three, so no key can
-/// be stored for them and the route could never have completed.
-/// Which provider serves a model.
-///
-/// ⚠ P2-53 collapsed this substring ladder into `routing::provider_for_model`
-/// because three copies had drifted apart — `o4-mini` matched none of them and
-/// was filed under `"unknown"`, corrupting the per-provider cost breakdown.
-///
-/// This was a FIFTH copy, missed in that pass and found by `TG-P2-09` on
-/// 2026-09-02: its tests still asserted routing for `gpt-5.3-codex` and
-/// `gemini-3.5-pro`, models the app no longer offers — a copy quietly
-/// disagreeing with the registry, which is exactly the failure mode.
-fn model_to_provider(model: &str) -> Option<&'static str> {
-    autodev_core::provider::routing::provider_for_model(model)
-}
+// ─── YAML agent config helpers — DELETED (P8-09 knock-on) ─────────────────────
+//
+// 🔴 `read_yaml_model` and `write_yaml_model` read and surgically rewrote
+// `{agents_dir}/{slug}.yaml` — the sidecar's `config/agents/*.yaml`, described
+// in their own doc comments as the authoritative source an agent read on boot.
+// That directory is gone with the sidecar, so both were writing to a path that
+// cannot exist. Neither had a caller after `P8-09` removed the sync steps, and
+// both were private, so they warned rather than failing the build.
+//
+// `model_to_provider` went with them: it was a one-line delegate to
+// `provider::routing::provider_for_model` kept only so those two could call it.
+// ⚠ Its tests did NOT go with it — they assert real routing behaviour, so they
+// now call the router directly. A test that only reaches its subject through a
+// deleted wrapper is a test of nothing (`L-C12`).
 
 #[cfg(test)]
 mod model_provider_tests {
-    use super::model_to_provider;
+    use autodev_core::provider::routing::provider_for_model as model_to_provider;
 
     #[test]
     fn the_three_supported_providers_are_routed() {

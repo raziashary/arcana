@@ -221,8 +221,18 @@ impl AgentEngine {
             //
             // An override replaces the INSTRUCTIONS. It was never a request to
             // forget what the agent knows.
+            // 🔴 P8-35/P8-36. This used to be `override_str.to_string()` — the
+            // override REPLACED the stable half outright, so a fleet worker or
+            // a subagent ran on its recipe text alone: no prohibitions, no git
+            // rules, and none of the user's own `AUTODEV.md`. The agents that
+            // write files and push commits were the ones with no floor under
+            // them.
+            //
+            // ⚠ The cache split is unchanged: everything here is still the
+            // STABLE half and the memory block is still volatile and last.
+            // What changed is what the stable half contains.
             Some(override_str) => (
-                override_str.to_string(),
+                context_builder.build_agent_stable_prompt(working_dir, override_str),
                 context_builder.memory_block(working_dir, user_message),
             ),
             // 🔴 P3-43. `user_message` is the query. It used to be the empty

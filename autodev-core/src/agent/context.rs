@@ -80,21 +80,19 @@ impl ContextBuilder {
     /// out is what makes the base prompt cacheable at all: otherwise every new
     /// remembered fact throws away the multi-KB prompt in front of it, on every
     /// session, silently.
-    pub fn build_system_prompt_parts(
-        &self,
-        mode: super::PAMode,
-        repo_path: &str,
-        query: &str,
-    ) -> (String, String) {
-        let base = match mode {
-            super::PAMode::FastDevelopment => BASE_SYSTEM_PROMPT,
-            super::PAMode::Review => REVIEW_SYSTEM_PROMPT,
-            super::PAMode::Delegate => DELEGATE_SYSTEM_PROMPT,
-        };
+    /// The user's own instructions, global then per-repo, ready to append.
+    ///
+    /// 🔴 **Extracted in `P8-36` so there is exactly ONE implementation.** This
+    /// was inline in `build_system_prompt_parts`, which the override branch
+    /// skips entirely — so the file a user writes to teach AutoDev their
+    /// conventions reached the interactive assistant and **no worker**. Copying
+    /// the fetch into the override path would have made it two lists that must
+    /// agree, and the second is always the one nobody updates (`L-19`).
+    ///
+    /// SQLite is primary, the filesystem is the fallback, in that order.
+    fn autodev_md_parts(&self, repo_path: &str) -> Vec<String> {
+        let mut out = Vec::new();
 
-        let mut parts = vec![base.to_string()];
-
-        // Fetch AUTODEV.md from SQLite (primary) — fallback to filesystem
         let global_content = crate::db::autodev_instructions::AutodevInstructionsDb::open()
             .ok()
             .and_then(|db| db.get("global", None).ok())
@@ -108,9 +106,8 @@ impl ContextBuilder {
                     .filter(|s| !s.trim().is_empty())
                 })
             });
-
         if let Some(content) = global_content {
-            parts.push(format!("## Global Instructions (AUTODEV.md)\n\n{content}"));
+            out.push(format!("## Global Instructions (AUTODEV.md)\n\n{content}"));
         }
 
         let repo_content = crate::db::autodev_instructions::AutodevInstructionsDb::open()
@@ -126,10 +123,63 @@ impl ContextBuilder {
                 .ok()
                 .filter(|s| !s.trim().is_empty())
             });
-
         if let Some(content) = repo_content {
-            parts.push(format!("## Project Instructions (AUTODEV.md)\n\n{content}"));
+            out.push(format!("## Project Instructions (AUTODEV.md)\n\n{content}"));
         }
+
+        out
+    }
+
+    /// The stable prompt for an agent that brings its own instructions.
+    ///
+    /// 🔴 **`P8-35`: a recipe EXTENDS the core, it does not replace it.**
+    /// `engine.rs` treated `system_prompt_override` as a total replacement of
+    /// the stable half, so a fleet worker ran with its recipe text and nothing
+    /// else — no prohibitions, no git rules, none of the user's `AUTODEV.md`.
+    /// The agents that write files and push commits were the ones running with
+    /// no floor.
+    ///
+    /// **This is the only composer.** `build_system_prompt_parts` calls it too,
+    /// passing the PA prompt as `own_instructions` — so there is one order, one
+    /// `AUTODEV.md` fetch and one place the core is added, rather than a second
+    /// copy that drifts (`L-19`).
+    ///
+    /// Order: **core → own instructions → `AUTODEV.md`**, most general to most
+    /// specific. The core is a floor a role can build on but cannot drop by
+    /// existing; the user's own `AUTODEV.md` is last because it is the most
+    /// specific voice in the room, and because that is the relative order the
+    /// PA path already had (`P8-36` must not silently re-rank it).
+    ///
+    /// Everything here is **stable** in the caching sense (`P2-14`) — the core
+    /// is byte-identical forever, `AUTODEV.md` changes rarely, a recipe's text
+    /// changes only when the recipe does. Memory is volatile, stays last, and
+    /// is not built here.
+    pub fn build_agent_stable_prompt(&self, repo_path: &str, own_instructions: &str) -> String {
+        let mut parts = vec![INVARIANT_CORE.to_string()];
+        if !own_instructions.trim().is_empty() {
+            parts.push(own_instructions.to_string());
+        }
+        parts.extend(self.autodev_md_parts(repo_path));
+        parts.join("\n\n---\n\n")
+    }
+
+    pub fn build_system_prompt_parts(
+        &self,
+        mode: super::PAMode,
+        repo_path: &str,
+        query: &str,
+    ) -> (String, String) {
+        let base = match mode {
+            super::PAMode::FastDevelopment => BASE_SYSTEM_PROMPT,
+            super::PAMode::Review => REVIEW_SYSTEM_PROMPT,
+            super::PAMode::Delegate => DELEGATE_SYSTEM_PROMPT,
+        };
+
+        // 🔴 `P8-35`. This used to assemble its own `parts` vector starting at
+        // `base`, which meant the PA was the one agent that never received the
+        // invariant core — and that the `AUTODEV.md` fetch existed only here,
+        // on the branch every worker skips (`P8-36`).
+        let stable = self.build_agent_stable_prompt(repo_path, base);
 
         // Phase 4.4 — Memory injection: recall relevant memories from all 3 tiers.
         //
@@ -153,7 +203,7 @@ impl ContextBuilder {
         // rebuilt from the episodic and semantic stores on every call, so a
         // single new fact changes these bytes — and anything sharing a cache
         // region with it is invalidated along with it.
-        (parts.join("\n\n---\n\n"), self.memory_block(repo_path, query))
+        (stable, self.memory_block(repo_path, query))
     }
 
     /// The memory block for this session, scoped to `repo_path` and searched
@@ -192,6 +242,51 @@ fn home_dir() -> Option<std::path::PathBuf> {
         .ok()
         .map(std::path::PathBuf::from)
 }
+
+/// The floor every agent stands on — PA, fleet worker, subagent, QC.
+///
+/// 🔴 **`P8-34`. Before this, nothing was universal.** A recipe's
+/// `instructions` are passed as `system_prompt_override`, and `engine.rs`
+/// treats an override as a **total replacement** of the stable half. So the
+/// prohibitions below, and the user's own `AUTODEV.md`, reached the
+/// interactive assistant and **none of the agents that do the work** — the
+/// agents that actually write files, run commands and push commits.
+///
+/// ⚠ **Deliberately small.** Everything PA-specific stays in
+/// `BASE_SYSTEM_PROMPT`; everything role-specific stays in the recipe. A core
+/// that grows becomes a second place to look for a worker's behaviour, and the
+/// recipe keeps full control of its own role, protocol and rejection criteria
+/// (`P8-35`).
+///
+/// ⚠ **It is STABLE**, in the prompt-caching sense: it is byte-identical
+/// across turns and sits ahead of the volatile memory block, so adding it does
+/// not cost a cache write per turn (`P2-14`).
+pub const INVARIANT_CORE: &str = r#"You are AIRS AutoDev, an autonomous software engineering agent built by AIRS Foundry.
+
+You may be running as the interactive assistant, as a fleet worker on a task, or as a subagent spawned by another agent. Your specific role, protocol and acceptance criteria come from the instructions that follow this section. What is below applies to you whatever your role.
+
+## What you must never do
+
+- Never commit secrets, API keys, credentials, or a `.env` file. Scan a diff before committing.
+- Never modify files outside the scope you were given.
+- Never mark work complete without running the project's own tests, and never make a failing test pass by deleting, skipping or weakening it. Fix the cause.
+- Never report success for work you did not verify. If you could not check something, say so.
+
+## Version control
+
+These are the house rules, and they apply to every agent equally:
+
+- **Create a branch before your first commit.** Never commit straight onto `main` or `master`.
+- **Stage deliberately** — name the paths you mean. Never `git add -A` or `git add .`: a blind stage sweeps in build output, scratch files and anything an ignore rule did not anticipate.
+- **Never force-push, and never rewrite published history** — no `--force`, no amending or rebasing a commit that is already pushed.
+- **Never push to `main`, open a pull request, or merge one** without the user's explicit approval. Prepare the change and say it is ready.
+- **Never delete** a branch, a stash, a remote ref, or files via `git clean` without being asked.
+
+## Coordination
+
+Work is coordinated through the **SQLite task board** in this application — not through GitHub Issues, and not through files on disk.
+
+Do **not** write filesystem lockfiles (`current_tasks/*.lock`) and do not call `git worktree add` / `git worktree remove`. A previous multi-machine fleet used those primitives; this one uses the task board plus a PID-based orphan detector, so a lockfile here is an artifact nothing reads."#;
 
 const BASE_SYSTEM_PROMPT: &str = r#"You are AIRS AutoDev, an autonomous AI software engineering agent built by AIRS Foundry. You operate as part of a multi-agent development pipeline alongside a Supervisor Agent, other Worker Agents, and a QC Agent — all coordinated through GitHub Issues on the AIRS-Foundry organization.
 

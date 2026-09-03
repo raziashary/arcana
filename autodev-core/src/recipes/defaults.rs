@@ -71,6 +71,89 @@ pub fn ensure_default_recipes(recipes_dir: &Path) -> Result<()> {
 // have complete instructions regardless of what language the project uses.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// The commit procedure every worker follows. `P8-38`.
+///
+/// 🔴 **All five worker recipes ran `git add -A && git commit` with no branch
+/// created.** Every fleet commit therefore landed on whatever the user had
+/// checked out — in practice `main` — staged blindly, and was never scanned
+/// for a credential.
+///
+/// ⚠ **One branch for the whole fleet, not one per task.** `runner.rs:247`
+/// gives every worker the *same* `working_dir` (the configured workspace, which
+/// the PA shares too). A per-task `git checkout -b` would therefore have one
+/// worker switching the shared checkout out from under another mid-edit. The
+/// two ways to give each worker its own checkout are both closed by design:
+/// `git worktree` is forbidden (`P8-34`'s core), and a lockfile is the very
+/// primitive the sidecar fleet used and this one replaced.
+///
+/// The `switch -c || switch` pair is deliberately convergent: whoever arrives
+/// first creates the branch, everyone after joins it, and neither needs a lock.
+fn commit_protocol() -> &'static str {
+    r#"
+---
+
+## Commit Protocol (UNIVERSAL — every worker, every task)
+
+You are committing to a real repository that belongs to the user. These steps
+are not a style preference, and none of them is optional.
+
+### Step C1 — Never commit onto `main`
+
+Check where you are, and move to the fleet branch if you are on a trunk:
+
+```
+bash('git rev-parse --abbrev-ref HEAD')
+```
+
+If that prints `main` or `master`, run:
+
+```
+bash('git switch -c autodev/fleet 2>/dev/null || git switch autodev/fleet')
+```
+
+This is safe to run concurrently with the other workers: the first form creates
+the branch, and if a peer created it a moment earlier the second form joins it.
+All workers share one checkout, so `autodev/fleet` is a **shared** branch — do
+not create a branch of your own, and do not switch branches again later in the
+task.
+
+### Step C2 — Stage the paths you actually changed
+
+```
+bash('git status --porcelain')
+bash('git add <path> <path> ...')
+```
+
+Name the paths. **Never `git add -A`, and never `git add .`** — a blind stage
+sweeps in build output, dependency directories, editor scratch files and
+anything an ignore rule did not anticipate. `git status --porcelain` tells you
+what is present; stage what you meant to write, and nothing else.
+
+### Step C3 — Read the staged diff before committing
+
+```
+bash('git diff --cached')
+```
+
+If it contains an API key, a token, a password, a `.env` file or any other
+credential, **do not commit**. Unstage it with
+`bash('git restore --staged <path>')` and say so on the task.
+
+### Step C4 — Commit
+
+```
+bash('git commit -m "<type>(<scope>): <one-line task summary>"')
+```
+
+Conventional-commit types: feat / fix / refactor / test / docs / chore.
+
+### Step C5 — Stop at the commit
+
+Do **not** push, do **not** open a pull request, and do **not** merge one. Do
+not delete or rewrite anything. The branch is your deliverable; the user
+decides what happens to it."#
+}
+
 fn universal_env_bootstrap() -> &'static str {
     r#"
 ---
@@ -405,7 +488,7 @@ fn worker_backend_recipe() -> Recipe {
         // *"Every worker therefore runs on the in-process Rust engine (Mode 1),
         // which needs no sidecar and no Python."*
         instructions: format!(
-            "{}{}",
+            "{}{}{}",
             r#"You are the AIRS Backend Worker Agent. You implement backend tasks assigned to you.
 
 ## Execution Protocol
@@ -457,8 +540,9 @@ When INTERFACE.md already exists, call `write_interface_spec` with
 `mode='merge'` so your additions append without clobbering peer routes.
 
 e. On validation pass: commit.
-   bash('git add -A && git commit -m "feat(<scope>): <one-line task summary>"')
-   Use conventional commit prefixes: feat / fix / refactor / test / docs / chore.
+   Follow the **Commit Protocol** section below in full — branch first, stage the
+   paths you changed by name, read the staged diff, then commit with
+   `feat(<scope>): <one-line task summary>`.
 f. update_task_status(id, 'qc_review', 'worker-backend')
 
 ### Step 4 — No work available
@@ -638,6 +722,7 @@ NEVER spawn for: single-file edits, tasks already in progress, pure code generat
 where the target file is already known.
 When spawning: pass a precise system_prompt and task_description. Wait for result.
 Your nesting depth is tracked by AutoDev itself — you do not pass it."#,
+            commit_protocol(),
             universal_env_bootstrap()
         ),
     }
@@ -673,7 +758,7 @@ fn worker_frontend_recipe() -> Recipe {
         // *"Every worker therefore runs on the in-process Rust engine (Mode 1),
         // which needs no sidecar and no Python."*
         instructions: format!(
-            "{}{}",
+            "{}{}{}",
             r#"You are the AIRS Frontend Worker Agent. You implement React/TypeScript frontend tasks.
 
 ## Execution Protocol
@@ -715,7 +800,8 @@ c. Discovery budget: at most 3 read-only calls to locate target files.
 d. Write the full component/change with ONE write_file or edit_file call.
 e. Run Build Validation (section below). MANDATORY.
 f. On validation pass:
-   bash('git add -A && git commit -m "feat(ui): <one-line task summary>"')
+   Follow the **Commit Protocol** section below in full. Commit message:
+   `feat(ui): <one-line task summary>`.
    update_task_status(id, 'qc_review', 'worker-frontend')
 
 ### Step 4 — No work available
@@ -869,6 +955,7 @@ Planning:   planner — YAML DSL for multi-step plans. Key actions for workers:
 Spawn ONLY when: >3 files to read before writing, cross-domain work, or parallel verification.
 NEVER for: single-component edits, tasks already in progress, known target files.
 Your nesting depth is tracked by AutoDev itself — you do not pass it."#,
+            commit_protocol(),
             universal_env_bootstrap()
         ),
     }
@@ -911,7 +998,7 @@ fn worker_platform_recipe() -> Recipe {
         // *"Every worker therefore runs on the in-process Rust engine (Mode 1),
         // which needs no sidecar and no Python."*
         instructions: format!(
-            "{}{}",
+            "{}{}{}",
             r#"You are the AIRS Platform Worker Agent. You handle infrastructure, CI/CD, Docker, and deployment tasks.
 You operate in supervised mode — destructive or irreversible actions require explicit confirmation before proceeding.
 
@@ -946,7 +1033,8 @@ c. Lint configs before applying:
 d. Write the change with ONE write_file or edit_file call.
 e. Run Build Validation (section below). MANDATORY.
 f. On validation pass:
-   bash('git add -A && git commit -m "chore(infra): <one-line task summary>"')
+   Follow the **Commit Protocol** section below in full. Commit message:
+   `chore(infra): <one-line task summary>`.
    update_task_status(id, 'done', 'worker-platform')
    Note: Platform tasks go directly to done (no QC review) — infra is self-validating via the build pipeline.
 
@@ -1001,6 +1089,7 @@ Planning:   planner — claimItem · createSubplan · updateStep · submitForQC 
 Spawn ONLY when: multi-file infra audit across >3 files, or parallel validation.
 NEVER for: single-file config edits.
 Your nesting depth is tracked by AutoDev itself — you do not pass it."#,
+            commit_protocol(),
             universal_env_bootstrap()
         ),
     }
@@ -1037,7 +1126,7 @@ fn worker_mcp_recipe() -> Recipe {
         // *"Every worker therefore runs on the in-process Rust engine (Mode 1),
         // which needs no sidecar and no Python."*
         instructions: format!(
-            "{}{}",
+            "{}{}{}",
             r#"You are the AIRS MCP Worker Agent. You build and maintain MCP server extensions.
 You are the authoritative implementer of the MCP 2025-11-05 specification within this fleet.
 
@@ -1065,7 +1154,8 @@ d. Write the full server/tool implementation with ONE write_file or edit_file ca
 e. Run Tool Roundtrip Validation (section below). MANDATORY.
 f. Run Build Validation (section below). MANDATORY.
 g. On all validations pass:
-   bash('git add -A && git commit -m "feat(mcp): <tool-name> implementation"')
+   Follow the **Commit Protocol** section below in full. Commit message:
+   `feat(mcp): <tool-name> implementation`.
    update_task_status(id, 'qc_review', 'worker-mcp')
 
 ### Step 4 — No work available
@@ -1187,6 +1277,7 @@ Planning:   planner — claimItem · createSubplan · updateStep · submitForQC 
 Spawn ONLY when: >3 files to read before writing, or parallel roundtrip testing of multiple tools.
 NEVER for: single-tool additions with a clear target file.
 Your nesting depth is tracked by AutoDev itself — you do not pass it."#,
+            commit_protocol(),
             universal_env_bootstrap()
         ),
     }
@@ -1219,7 +1310,7 @@ fn worker_cleanup_recipe() -> Recipe {
         // configured. Other recipes (worker-backend / frontend / qc-agent)
         // are MCP-tool-heavy and stay Mode2Only.
         instructions: format!(
-            "{}{}",
+            "{}{}{}",
             r#"You are the AIRS Cleanup Worker Agent. You handle code quality — lint fixes, dead code removal, and housekeeping.
 
 Fundamental constraint: you MUST NOT change functionality.
@@ -1244,19 +1335,28 @@ c. Use grep/glob to confirm each item before removing it.
 d. Batch all changes to the same file into ONE edit_file call.
 e. Run Build Validation (section below). MANDATORY.
 f. On validation pass:
-   bash('git add -A && git commit -m "chore(cleanup): <what was removed>"')
+   Follow the **Commit Protocol** section below in full. Commit message:
+   `chore(cleanup): <what was removed>`.
 
 ### Phase 5 — Functionality Preservation Check (run after commit, before marking done)
 
 Cleanup's #1 rule is MUST NOT change functionality. Verify this automatically:
 
-1. Get the current branch:
-   bash('git rev-parse --abbrev-ref HEAD')
+1. Confirm you actually committed something. Your commit from Step 3f must be
+   the tip:
+   bash('git log --oneline -1')
 
-2. Call `analyze_diff` with:
+2. Call `analyze_diff` on YOUR OWN commit:
    - repo_path: root of the repository you modified
-   - base_branch: "main"
-   - head_branch: current branch from step 1
+   - base_branch: "HEAD~1"
+   - head_branch: "HEAD"
+
+   ⚠ Those two parameters accept any git revision, not only branch names —
+   `analyze_diff` resolves them with `revparse_single`. Use `HEAD~1..HEAD`
+   deliberately: `autodev/fleet` is shared with the other workers, so diffing
+   the branch against `main` would put THEIR feature work in front of a check
+   that rejects anything classified as a logic change, and your task would be
+   rejected for someone else's commit.
 
 3. Inspect the result:
    - risk_level "critical" or "high" → STOP. You introduced a functionality change.
@@ -1351,6 +1451,7 @@ Planning:   planner — claimItem · updateStep · submitForQC · getPlan
 Spawn ONLY when: scanning >3 large files for dead code simultaneously (parallel grep).
 NEVER for: single-file lint fixes or import removal.
 Your nesting depth is tracked by AutoDev itself — you do not pass it."#,
+            commit_protocol(),
             universal_env_bootstrap()
         ),
     }

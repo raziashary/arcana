@@ -1596,6 +1596,119 @@ probe of mine said it was not.
 
 ---
 
+## ADR-LOG-RESTRUCT-0040 — One fleet branch, not one per task; and the agent that had no floor was the assistant
+
+**Status.** DECIDED
+**Author.** Claude · **Tier.** **`flagged-and-proposed`** (the first ruling narrows nothing but *departs from the obvious reading of `P8-38`*; the second corrects a premise in `P8-35`’s own framing. Both are reported to Razi in the `P8` close-out rather than held.)
+**When.** 2026-09-04 · `P8-E`, tasks `P8-35` and `P8-38`
+
+---
+
+### Decision 1 — the fleet commits to ONE shared branch
+
+**What.** `P8-38` says the five worker recipes commit *"with no branch
+created"*. The obvious fix is a branch per task. **Ruled: one shared
+`autodev/fleet` branch**, entered with a convergent one-liner:
+
+```
+git switch -c autodev/fleet 2>/dev/null || git switch autodev/fleet
+```
+
+**Why.** `recipes/runner.rs:247` gives every worker the **same**
+`working_dir` — the configured workspace folder, which the Personal Assistant
+shares as well. There is one checkout, not one per worker. A per-task
+`git checkout -b` would therefore have had `worker-backend` switching the
+shared checkout out from under `worker-frontend` mid-edit, which is a worse
+failure than the one being fixed: a lost working tree rather than a
+badly-placed commit.
+
+The two ways to give each worker its own checkout are both closed **by this
+programme’s own design**, not by convenience:
+
+- `git worktree add` / `remove` is forbidden by the invariant core written one
+  task earlier (`P8-34`), because it was the multi-machine sidecar fleet’s
+  primitive.
+- A filesystem lockfile is the *other* primitive that fleet used, replaced here
+  by the SQLite task board plus a PID-based orphan detector. Reintroducing one
+  to serialise branch creation would undo `P8`’s premise.
+
+So the branch step has to be safe under concurrency **without** a lock, which
+is what the `-c ... || switch` pair buys: the first arrival creates the branch,
+every later arrival joins it, and neither outcome is an error. `S8-05` runs C1
+**twice** against a real repository for exactly this reason — a second arrival
+is the normal case here, not the edge case.
+
+**⚠ The knock-on repair is NOT the one `P8-38` describes.** The task says
+`worker-cleanup`’s mandatory functionality-preservation check *"diffs `main`
+against itself"* because nothing creates a branch — true, and giving it a
+branch **does not fix it**. On a *shared* branch, `analyze_diff(main,
+autodev/fleet)` puts every other worker’s feature commit in front of a check
+whose whole job is to reject anything classified as a logic change, so the
+cleanup task would be rejected for someone else’s work. It now diffs
+`HEAD~1..HEAD` — its own commit. That is available because
+`git/diff.rs:116-125` resolves both parameters with `revparse_single`, so they
+accept any revision despite being named `base_branch` / `head_branch`.
+
+**Where.** `autodev-core/src/recipes/defaults.rs` — new `commit_protocol()`
+fragment, appended to all five worker recipes the way `universal_env_bootstrap()`
+already was; `worker-cleanup`’s Phase 5 re-based.
+
+**How proven.** `TG8-06` over the recipes **as written to disk** (what the fleet
+loads), and `S8-05` against a throwaway repository and the real `git` binary,
+carrying its own counterfactual so it measures the defect as well as the fix.
+
+---
+
+### Decision 2 — one composer, and the order within it
+
+**What.** A single `ContextBuilder::build_agent_stable_prompt(repo_path,
+own_instructions)` composes **core → own instructions → `AUTODEV.md`**, and
+*both* arms of `engine.rs`’s `match system_prompt_override` go through it — the
+override arm directly, the `None` arm via `build_system_prompt_parts`, which now
+delegates instead of assembling its own vector.
+
+**Why the order.** Most general to most specific. The core is a floor a role can
+build on but cannot drop by existing; the user’s own `AUTODEV.md` is last
+because it is the most specific voice in the room — **and because that is the
+relative order the PA path already had.** Putting `AUTODEV.md` before the role
+text would have silently re-ranked the user’s file below a built-in prompt,
+which `P8-36` does not ask for and nobody would have noticed.
+
+**🔴 Why it is one function and not two.** `P8-36` describes the
+`AUTODEV.md` fetch as living in `build_system_prompt_parts`, *"which the
+override branch skips entirely"*. The fix that matches that sentence is to copy
+the fetch into the override branch. That would have produced two lists that must
+agree, and the second is always the one nobody updates when a third instruction
+source is added (`L-19`, which this register has recorded at every scale from a
+match arm to a provider table). It was **extracted** instead.
+
+**🔴 And a premise in the task list is wrong.** `P8-35` reads *"Every
+agent — PA, fleet worker, subagent — receives core + its own instructions,"*
+which implies the PA already had the core and the workers did not. The opposite
+was closer to true: **the PA was the one agent kind that would still have had no
+core after the obvious fix**, because `build_system_prompt_parts` started its
+vector at `BASE_SYSTEM_PROMPT` and never referenced the new const. Fixing only
+the override arm — the arm the task points at — would have left the
+interactive assistant as the sole agent without the floor, and every gate
+written from the task’s wording would have passed.
+
+**Where.** `autodev-core/src/agent/context.rs` (`INVARIANT_CORE`,
+`autodev_md_parts`, `build_agent_stable_prompt`, `build_system_prompt_parts`) ·
+`autodev-core/src/agent/engine.rs:224-238`.
+
+**How proven.** `TG8-03` runs the composer over the real default recipes, every
+`PAMode`, a user-set custom prompt and a subagent prompt; `TG8-04` asserts
+structurally that no engine path bypasses it and that the core is emitted first.
+Both falsified, each red for the mechanism it names (`L-37`). Pre-existing
+`TG-P2-11` (the cache prefix excludes the volatile half) and `TG-P3-44/45`
+(memory reaches the override path) both still pass unchanged, which is the
+evidence that the cache split survived.
+
+**Links.** `ADR-LOG-RESTRUCT-0039` · `§0.16 L-19`, `L-C6`, `L-C7`, `L-C12`,
+`L-37` · `TG8-03`…`TG8-06` · `S8-05` · `P8-34`…`P8-39`
+
+---
+
 ## ADR-LOG-RESTRUCT-0039 — An empty `tools` list means INHERIT, and three defects whose stated cause was wrong
 
 **Status.** DECIDED

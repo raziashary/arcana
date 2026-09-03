@@ -4561,4 +4561,364 @@ let x = 1;
             );
         }
     }
+
+    // ── TG8-03/04 · no agent runs without the invariant core ──────────────────
+
+    /// Every agent kind receives `INVARIANT_CORE`, asserted by RUNNING the
+    /// composer each kind's own call site uses.
+    ///
+    /// 🔴 `P8-34`/`P8-35`/`P8-36`. `engine.rs` treated a system-prompt override
+    /// as a **total replacement** of the stable half. A recipe's `instructions`
+    /// are passed as that override (`recipes/runner.rs`), and so is a
+    /// subagent's `system_prompt` (`subagent/native_runner.rs`) — so the
+    /// prohibitions, the git house rules and the user's own `AUTODEV.md`
+    /// reached the interactive assistant and **none of the agents that write
+    /// files, run commands and commit**.
+    ///
+    /// ⚠ This calls the real composer with the real recipe text rather than
+    /// searching a source file for a phrase. `L-C7`: a source-scanning
+    /// assertion can match its own source, and this gate's own explanation
+    /// names every string it would look for.
+    ///
+    /// ⚠ The worker list comes from `FLEET_WORKERS`, not from a list retyped
+    /// here. Two lists that must agree is `L-19`, and the second one is always
+    /// the one nobody updates when a worker is added.
+    #[test]
+    fn tg8_03_every_agent_kind_receives_the_invariant_core() {
+        use autodev_core::agent::context::{ContextBuilder, INVARIANT_CORE};
+        use autodev_core::agent::PAMode;
+        use autodev_core::recipes::defaults::{ensure_default_recipes, FLEET_WORKERS};
+        use autodev_core::recipes::parser::load_all_recipes;
+
+        // One sandbox for this test alone. `L-30`: three P4 tests shared a temp
+        // dir, each called `remove_dir_all`, and they passed alone and failed
+        // in the full suite.
+        let sandbox = std::env::temp_dir().join(format!(
+            "autodev-tg8-03-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&sandbox).expect("sandbox");
+
+        let ctx = ContextBuilder::new(sandbox.to_string_lossy().to_string());
+        let repo = sandbox.to_string_lossy().to_string();
+
+        // ── the PA, on every mode it can be in ───────────────────────────────
+        // `agent_commands.rs` passes `None` when the user has set no custom
+        // prompt, which lands on the `build_system_prompt_parts` arm.
+        for mode in [PAMode::FastDevelopment, PAMode::Review, PAMode::Delegate] {
+            let (stable, _volatile) = ctx.build_system_prompt_parts(mode, &repo, "q");
+            assert!(
+                stable.starts_with(INVARIANT_CORE),
+                "the PA in {mode:?} does not open with the invariant core"
+            );
+        }
+
+        // ── the PA with a user-set custom prompt ─────────────────────────────
+        // `agent_commands.rs` passes `Some(settings.system_prompt_override)`.
+        // A user customising their prompt is not a user opting out of the
+        // prohibitions.
+        let custom = ctx.build_agent_stable_prompt(&repo, "Answer only in haiku.");
+        assert!(
+            custom.starts_with(INVARIANT_CORE),
+            "a user-set system prompt drops the invariant core"
+        );
+        assert!(
+            custom.contains("Answer only in haiku."),
+            "the core swallowed the user's own instructions — it must EXTEND \
+             them, not replace them"
+        );
+
+        // ── every fleet worker, from its real recipe ─────────────────────────
+        ensure_default_recipes(&sandbox).expect("write default recipes");
+        let (recipes, errors) = load_all_recipes(&sandbox);
+        assert!(
+            errors.is_empty(),
+            "the default recipes do not parse: {errors:?}"
+        );
+        assert!(
+            !recipes.is_empty(),
+            "no recipes were written, so this gate checked nothing"
+        );
+
+        for slug in FLEET_WORKERS {
+            let recipe = recipes
+                .iter()
+                .find(|r| r.agent_role.as_deref() == Some(slug))
+                .unwrap_or_else(|| {
+                    panic!("no default recipe for fleet worker {slug} — either the \
+                            worker has no recipe, or `agent_role` no longer carries \
+                            the slug this gate matches on")
+                });
+
+            // Exactly what `recipes/runner.rs` passes as the override.
+            let stable = ctx.build_agent_stable_prompt(&repo, &recipe.instructions);
+            assert!(
+                stable.starts_with(INVARIANT_CORE),
+                "fleet worker {slug} runs without the invariant core"
+            );
+            assert!(
+                stable.contains(&recipe.instructions),
+                "fleet worker {slug} lost its own recipe instructions"
+            );
+        }
+
+        // ── a subagent ───────────────────────────────────────────────────────
+        // `subagent/native_runner.rs` passes `config.system_prompt` when it is
+        // non-empty, and `None` when it is not — both arms are covered above,
+        // but a spawned subagent is the agent kind with the least oversight and
+        // is asserted explicitly.
+        let sub = ctx.build_agent_stable_prompt(&repo, "You review one diff and report.");
+        assert!(
+            sub.starts_with(INVARIANT_CORE),
+            "a spawned subagent runs without the invariant core"
+        );
+
+        let _ = std::fs::remove_dir_all(&sandbox);
+    }
+
+    /// The engine has exactly ONE place a stable prompt is produced, and every
+    /// arm of it composes.
+    ///
+    /// ⚠ `TG8-03` proves the composer is correct. It cannot prove that a new
+    /// agent kind will *use* it — a fourth branch returning `override_str`
+    /// directly would leave `TG8-03` green. This is the structural half, over
+    /// the chokepoint every agent kind actually passes through.
+    #[test]
+    fn tg8_04_no_engine_path_bypasses_the_composer() {
+        let engine = read_source(&repo_root().join("autodev-core/src/agent/engine.rs"));
+
+        // Comments stripped FIRST. This gate's own explanation contains the
+        // string it searches for — the recorded sub-pattern of `L-27` that has
+        // now caught three gates in this file.
+        let code: String = engine
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let branch = code
+            .split("match system_prompt_override")
+            .nth(1)
+            .expect("the override match must exist")
+            .split("};")
+            .next()
+            .expect("the match must terminate")
+            .to_string();
+
+        assert!(
+            branch.contains("build_agent_stable_prompt"),
+            "the override arm does not compose the invariant core:\n{branch}"
+        );
+        assert!(
+            branch.contains("build_system_prompt_parts"),
+            "the no-override arm no longer uses the PA builder:\n{branch}"
+        );
+        assert!(
+            !branch.contains("override_str.to_string()"),
+            "the override arm returns the override verbatim again, which drops \
+             the invariant core and the user's AUTODEV.md:\n{branch}"
+        );
+
+        // And the PA builder must delegate rather than re-assemble, or there
+        // are two composers and one of them will drift (`L-19`).
+        let ctx = read_source(&repo_root().join("autodev-core/src/agent/context.rs"));
+        let ctx_code: String = ctx
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let pa = ctx_code
+            .split("pub fn build_system_prompt_parts")
+            .nth(1)
+            .expect("build_system_prompt_parts must exist")
+            .split("\n    /// ")
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            pa.contains("build_agent_stable_prompt"),
+            "build_system_prompt_parts assembles its own prompt instead of \
+             delegating, so the PA and the workers have two different \
+             composers:\n{pa}"
+        );
+
+        // The core must be the first thing the composer emits, structurally —
+        // not merely present somewhere in it.
+        // The BODY, not the signature. The first cut of this assertion sliced
+        // from the function NAME, and went red because `own_instructions`
+        // appears in the parameter list before `INVARIANT_CORE` appears in the
+        // body. The code was correct and the check was wrong — an assertion
+        // written from the claim ("the core comes first") rather than from the
+        // invariant it stands for (`L-C6`), failing for a mechanism it did not
+        // name (`L-37`).
+        let composer = ctx_code
+            .split("pub fn build_agent_stable_prompt")
+            .nth(1)
+            .expect("build_agent_stable_prompt must exist")
+            .split_once("-> String {")
+            .expect("the composer signature must terminate")
+            .1
+            .split("\n    }")
+            .next()
+            .expect("the composer body must terminate")
+            .to_string();
+        let core_at = composer
+            .find("INVARIANT_CORE")
+            .expect("the composer must reference the core");
+        let own_at = composer
+            .find("own_instructions")
+            .expect("the composer must reference the caller's instructions");
+        assert!(
+            core_at < own_at,
+            "the composer no longer puts the invariant core first:\n{composer}"
+        );
+    }
+
+    // ── TG8-05 · the core's git rules are the house rules ─────────────────────
+
+    /// `P8-37`. The five house rules are present in the core, each asserted by
+    /// the behaviour it forbids rather than by a slogan.
+    ///
+    /// ⚠ Asserted against the CONST at runtime, not by scanning the source
+    /// file. The source file also contains this gate's own doc comment naming
+    /// every rule, and a gate that reads source finds the rule in its own
+    /// explanation (`L-C7`, and the `L-27` sub-pattern this file has recorded
+    /// three times).
+    #[test]
+    fn tg8_05_the_core_carries_the_house_git_rules() {
+        use autodev_core::agent::context::INVARIANT_CORE;
+
+        // (rule, the substring that can only appear if the rule is stated)
+        let rules: &[(&str, &[&str])] = &[
+            ("branch before the first commit", &["branch before your first commit"]),
+            ("stage deliberately, never a blind add", &["git add -A", "Stage deliberately"]),
+            ("never commit secrets or .env", &["secrets", ".env"]),
+            ("never force-push or rewrite published history", &["force-push", "published history"]),
+            (
+                "never push to main / open / merge a PR unapproved",
+                &["push to `main`", "pull request"],
+            ),
+            ("never delete branches, stashes, refs", &["Never delete"]),
+        ];
+
+        let core_lc = INVARIANT_CORE.to_lowercase();
+        let mut missing: Vec<&str> = Vec::new();
+        for (rule, needles) in rules {
+            if !needles.iter().all(|n| core_lc.contains(&n.to_lowercase())) {
+                missing.push(rule);
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "the invariant core no longer states these house rules: {missing:?}\n\
+             They are taken from the project's own CLAUDE.md and are the rules \
+             every agent that touches version control must be given."
+        );
+
+        // The core is a floor, not a manual. If it grows past a page it becomes
+        // a second place to look for a worker's behaviour, which `P8-34`
+        // explicitly refuses.
+        assert!(
+            INVARIANT_CORE.len() < 4_000,
+            "the invariant core has grown to {} bytes. It is prepended to EVERY \
+             agent's prompt; keep role-specific text in the recipe.",
+            INVARIANT_CORE.len()
+        );
+    }
+
+    // ── TG8-06 · no recipe commits blind, and none commits onto main ──────────
+
+    /// `P8-38`. Every default recipe that commits does so through the shared
+    /// protocol: branch first, stage named paths, scan the diff, stop at the
+    /// commit.
+    ///
+    /// 🔴 All five worker recipes ran `bash('git add -A && git commit …')` with
+    /// no branch created, so every fleet commit landed on the user's checked-out
+    /// trunk, staged blindly and unscanned. The knock-on was worse: the cleanup
+    /// worker's **mandatory** functionality-preservation check diffed `main`
+    /// against the current branch, and since nothing created a branch it diffed
+    /// `main` against itself — the one hard safety gate in that worker was
+    /// judging an empty patch and passing everything.
+    ///
+    /// ⚠ Asserted over the recipes as WRITTEN TO DISK, which is what the fleet
+    /// loads and what the model is actually given.
+    #[test]
+    fn tg8_06_no_default_recipe_commits_blind_or_onto_a_trunk() {
+        use autodev_core::recipes::defaults::{ensure_default_recipes, FLEET_WORKERS};
+        use autodev_core::recipes::parser::load_all_recipes;
+
+        let sandbox = std::env::temp_dir().join(format!(
+            "autodev-tg8-06-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&sandbox).expect("sandbox");
+        ensure_default_recipes(&sandbox).expect("write default recipes");
+        let (recipes, errors) = load_all_recipes(&sandbox);
+        assert!(errors.is_empty(), "default recipes do not parse: {errors:?}");
+        assert!(!recipes.is_empty(), "no recipes written — this gate checked nothing");
+
+        for r in &recipes {
+            // A blind stage, as an INSTRUCTION rather than as the prohibition.
+            // The protocol names `git add -A` in order to forbid it, so match
+            // the executable form: inside a `bash(` call.
+            for bad in ["bash('git add -A", "bash(\"git add -A", "bash('git add .", "bash(\"git add ."] {
+                assert!(
+                    !r.instructions.contains(bad),
+                    "recipe `{}` still tells the agent to stage blindly: {bad}",
+                    r.id
+                );
+            }
+        }
+
+        // Every worker that commits must carry the protocol, and the protocol
+        // must be the one that branches.
+        for slug in FLEET_WORKERS {
+            let r = recipes
+                .iter()
+                .find(|r| r.agent_role.as_deref() == Some(slug))
+                .unwrap_or_else(|| panic!("no default recipe for fleet worker {slug}"));
+
+            assert!(
+                r.instructions.contains("## Commit Protocol"),
+                "recipe for {slug} has no Commit Protocol section"
+            );
+            assert!(
+                r.instructions.contains("git switch -c autodev/fleet"),
+                "recipe for {slug} never creates a branch, so its commits land on \
+                 whatever the user had checked out"
+            );
+            assert!(
+                r.instructions.contains("git diff --cached"),
+                "recipe for {slug} commits without reading the staged diff, so a \
+                 credential in the working tree is committed unseen"
+            );
+        }
+
+        // The cleanup worker's safety check must judge its own commit.
+        let cleanup = recipes
+            .iter()
+            .find(|r| r.agent_role.as_deref() == Some("worker-cleanup"))
+            .expect("worker-cleanup recipe");
+        assert!(
+            !cleanup.instructions.contains("base_branch: \"main\""),
+            "worker-cleanup still diffs against `main`. On a shared fleet branch \
+             that puts other workers' feature commits in front of a check that \
+             rejects anything classified as a logic change."
+        );
+        assert!(
+            cleanup.instructions.contains("base_branch: \"HEAD~1\""),
+            "worker-cleanup's functionality-preservation check no longer diffs \
+             its own commit, so it is not judging the change it made"
+        );
+
+        let _ = std::fs::remove_dir_all(&sandbox);
+    }
 }

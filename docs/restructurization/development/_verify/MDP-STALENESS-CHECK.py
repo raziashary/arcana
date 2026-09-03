@@ -88,9 +88,18 @@ CHECKS = [
                  for t in ('P0-13b', 'P0-28', 'P0-29', 'P0-30', 'P0-31', 'P0-32', 'P0-33'))),
 
     # ── claims about the tree, re-measured rather than re-read ─────────────
+    # \U0001F534 This check used to hardcode **254** in BOTH halves, so it
+    # asserted the document matched a constant rather than matching the tree.
+    # `P8-B`/`P8-C` deleted 16 commands and it went red naming neither number.
+    # It now reads the figure OUT of the document and compares it to the tree,
+    # which is the invariant; the constant was a second place to update, and
+    # a check that needs updating when the code changes is not a check
+    # (`L-C1`, `L-C6`).
     ('S-6', 'the Tauri command count matches the tree',
-     lambda: (present('**254** Tauri commands') and
-              count_matches(rust_files('src-tauri/src'), r'^\s*#\[tauri::command\]') == 254)),
+     lambda: (lambda stated, actual: stated is not None and stated == actual)(
+         (lambda m: int(m.group(1)) if m else None)(
+             re.search(r'\*\*(\d+)\*\* Tauri commands', TEXT)),
+         count_matches(rust_files('src-tauri/src'), r'^\s*#\[tauri::command\]'))),
     ('S-7', 'the module tree shows mcp/, and mcp_server/ is gone from disk',
      lambda: present('[P0 DONE — `mcp_server/` deleted (705 LOC),') and
              subprocess.run('test -d src-tauri/src/mcp_server', shell=True).returncode != 0),

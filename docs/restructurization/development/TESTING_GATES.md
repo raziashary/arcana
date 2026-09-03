@@ -48,10 +48,10 @@
 | **P5** | The graph | 4 | `TG5-01…04` |
 | **P6** | The UI | 9 | `TG6-01…09` |
 | **P7** | Experience | 5 | `TG7-01…05` |
-| **P8** | Submodule deletion | 2 | `TG8-01…02` |
+| **P8** | Submodule deletion **+ the prompt floor** | 6 | `TG8-01…06` |
 | **P9** | Delivery | 5 | `TG9-01…05` |
 | **PD0** | The design capability contract | 10 | `TGD0-01…10` |
-| | **Total** | **125** | |
+| | **Total** | **129** | |
 
 ---
 
@@ -587,7 +587,9 @@
 **Entry gate (Part 6, strengthened by review fix 9):** every ported capability passes its tests with the sidecar **absent — not merely stopped**.
 **Exit gate:** the tree contains no Python; the installer contains no `.py`; the app is fully functional on all three platforms.
 
-> **P8 has only two gates of its own, and that is correct.** A deletion phase proves itself by **re-running the entire standing gate set (`TG0-01…TG7-05`) under the sidecar-absent condition**. Any gate that regresses here identifies a coupling that was not enumerated — which is exactly `R-6`. P8's exit dependency on the no-`.py` clause of `TG9-02` is noted there.
+> **P8's deletion half has only two gates of its own, and that is correct.** A deletion phase proves itself by **re-running the entire standing gate set (`TG0-01…TG7-05`) under the sidecar-absent condition**. Any gate that regresses here identifies a coupling that was not enumerated — which is exactly `R-6`. P8's exit dependency on the no-`.py` clause of `TG9-02` is noted there.
+>
+> 🔴 **Amended 2026-09-04, during `P8-E`.** That sentence was written when P8 was deletion only. It is not: `P8-E` **builds** a prompt floor every agent stands on, and `P8-F`/`P8-I` build further. New behaviour needs new gates, and the standing set cannot cover it — no gate in `TG0…TG7` could fail because a fleet worker runs without the prohibitions, since before `P8-E` none of them did. `TG8-03…06` are those gates.
 
 - [ ] **TG8-01** `[seam]` — The **full suite** passes with the sidecar **absent** — the directory renamed or deleted, not the process stopped. "Not running" is too weak: persona YAML still reads `{orch}/config/agents/*.yaml`, so a stopped-but-present sidecar can still satisfy a file read. The corrected ported-capability list is the population; the P4-era "10 provider families" and the P7-era startup FSM (deleted by **OQ-3**) are excluded from it.
       Source: spec `01 §8 G-NOSIDECAR` + spec `09 §6 G-NOSIDECAR` (merged — both specs asked for the same P8 entry gate) · Catches: any residual coupling; `R1 B-08`'s finding that the original entry gate was unmeetable as written · Proves: **INV-1** (as restated by **G-02**) · Covers: **R-6** · Evidence: _pending_
@@ -595,6 +597,20 @@
 - [ ] **TG8-02** `[governance]` — **NEW (plan-mandated by correction #1; covers R-6).** The deletion phase **cannot complete while any capability grounding marked `PORT` remains unported.** The gate reads the grounding reports' PORT verdicts as its checklist and asserts a named, tested destination in the Rust tree for each — the ported-capability count is **ten, not nine**, and the tenth is `M-40` redaction (`TG3-38`).
       → **The tenth PORT entry is now supplied.** `M-40` redaction was ported in `P1-20`/`P1-21` — both Python redactors, wired at the tool-result funnel and all four memory writes, proven end to end by `S1-04`. This gate's checklist can therefore be satisfied for that row at P8; the other nine remain its job.
       Source: **NEW** — `00 §Part 1B` M-40's closing note: *"adds a P8 gate: the deletion phase cannot complete while a capability grounding marked PORT remains unported. That is the check which would have caught this without a review."* No spec turned that mandate into a named gate · Catches: the failure mode that actually occurred — `G4b §A.14` ruled redaction **PORT** and the plan dropped it, undetected until an adversarial review · Covers: **R-6** · Evidence: _pending_
+
+
+- [x] **TG8-03** `[security]` — **NEW (`P8-39`).** **No agent kind runs without the invariant core.** Asserted by *running* the composer each call site uses, over the real default recipes loaded from disk, for every `PAMode`, for a user-set custom prompt, and for a subagent prompt — not by searching a source file for a phrase (`L-C7`). The worker population is `FLEET_WORKERS`, never a list retyped in the gate (`L-19`).
+      Source: **NEW** — `P8-34`/`P8-35`/`P8-36` · Catches: the defect as found — `engine.rs` treated a system-prompt override as a **total replacement** of the stable half, and a recipe's `instructions` and a subagent's `system_prompt` are both passed as that override, so the prohibitions, the git house rules and the user's own `AUTODEV.md` reached the interactive assistant and **none of the agents that write files, run commands and commit** · Falsified: composer returns `Vec::new()` instead of the core → red, naming the agent kind · Evidence: `GATE-PROVEN` — `ci_gate::tests::tg8_03_every_agent_kind_receives_the_invariant_core`
+
+- [x] **TG8-04** `[security]` — **NEW (`P8-39`).** **No engine path bypasses the composer.** The structural half: every arm of `match system_prompt_override` composes, `build_system_prompt_parts` delegates rather than re-assembling, and the core is emitted **first**. ⚠ `TG8-03` proves the composer is correct; it cannot prove a new agent kind will *use* it — a fourth branch returning the override verbatim would leave `TG8-03` green.
+      Source: **NEW** — `P8-35` · Catches: a re-introduced bypass, and a second composer drifting from the first (`L-19`) · Falsified: override arm restored to `override_str.to_string()` → red, naming the override arm · Evidence: `GATE-PROVEN` — `ci_gate::tests::tg8_04_no_engine_path_bypasses_the_composer`
+
+- [x] **TG8-05** `[policy]` — **NEW (`P8-37`).** **The core's git rules are the house rules**, taken from the project's own `CLAUDE.md`: branch before the first commit; stage deliberately, never a blind `git add -A`; never commit secrets or `.env`; never force-push or rewrite published history; never push to `main` or open/merge a PR unapproved; never delete branches, stashes or refs. Also bounds the core's size — it is prepended to **every** agent's prompt, and a core that grows becomes a second place to look for a worker's behaviour.
+      Source: **NEW** — `P8-37` · Catches: a rule silently dropped from the floor · Asserted against the `const` at runtime, not the source file · Evidence: `GATE-PROVEN` — `ci_gate::tests::tg8_05_the_core_carries_the_house_git_rules`
+
+- [x] **TG8-06** `[security]` — **NEW (`P8-38`).** **No default recipe commits blind, and none commits onto a trunk.** Asserted over the recipes **as written to disk**, which is what the fleet loads. Covers the knock-on too: `worker-cleanup`'s mandatory functionality-preservation check must diff its **own commit** (`HEAD~1..HEAD`), not `main` against a branch.
+      Source: **NEW** — `P8-38` · Catches: the defect as found — all five worker recipes ran `bash('git add -A && git commit …')` with **no branch created**, so every fleet commit landed on the user's checked-out trunk, staged blindly and unscanned; and the cleanup worker's one hard safety gate diffed `main` against itself, judging an empty patch and passing everything · Evidence: `GATE-PROVEN` — `ci_gate::tests::tg8_06_no_default_recipe_commits_blind_or_onto_a_trunk`
+
 
 ---
 
@@ -692,7 +708,7 @@ Gates are only as honest as what they run against. Every corpus below is **check
 | `08-DATA-MODEL…` | `§4 Test gates` | 10 | `TG1-02…TG1-06`; `TG2-15`; `TG4-19…TG4-22` | **P1** (5), **P2** (1), **P4** (4) |
 | `09-DELIVERY` | `§6 Test gates` | 10 | `TG0-01`, `TG0-02`; `TG4-17`, `TG4-18`; `TG8-01`; `TG9-01…TG9-05` | **P0** (2), **P4** (2), **P8** (1), **P9** (5) |
 | `10-PROOF` | *(no gate table — by design)* | 0 gates; contributes the evidence classes (`§1`), the headline acceptance test (`TG7-02` + `TG9-01`), the CI blocking table (`TG0-02`) and the ten test families (`§17`) | — | — |
-| **NEW** | *(this document)* | 8 | `TG0-04`, `TG0-05`, `TG2-16`, `TG2-17`, `TG3-38`, `TG3-39`, `TG4-23`, `TG8-02` | P0 (2), P2 (2), P3 (2), P4 (1), P8 (1) |
+| **NEW** | *(this document)* | 12 | `TG0-04`, `TG0-05`, `TG2-16`, `TG2-17`, `TG3-38`, `TG3-39`, `TG4-23`, `TG8-02`, `TG8-03`, `TG8-04`, `TG8-05`, `TG8-06` | P0 (2), P2 (2), P3 (2), P4 (1), P8 (5) |
 
 **Spec gate totals:** 115 named in the specs − 8 merged = **107 surviving** + **8 NEW** = **115**, **+ 10 `TGD0`** added by `PD0` and its audit remediation = **125**.
 
@@ -756,6 +772,7 @@ Gates are only as honest as what they run against. Every corpus below is **check
 | **Anchor conformance** | `TG6-01`, `TG6-02`, `TG6-09` | 3 |
 | **Migration** | `TG1-02`, `TG1-03`, `TG1-04` | 3 |
 | **No-sidecar** | `TG8-01`, `TG8-02` | 2 |
+| **One prompt floor** | `TG8-03`, `TG8-04`, `TG8-05`, `TG8-06` | 4 |
 
 **Thinnest families, flagged rather than padded:** *Destructive safety* (3) and *No-sidecar* (2). Both are thin for structural reasons — destructive safety is largely an enumeration inside `TG7-05` and `TG4-23`, and the no-sidecar family's real weight is that **P8 re-runs all 125 gates** under the sidecar-absent condition rather than adding gates of its own. Neither is a coverage gap; both are recorded so a later reader does not mistake thinness for oversight.
 
