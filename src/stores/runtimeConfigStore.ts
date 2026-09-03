@@ -4,16 +4,16 @@
 // localStorage (which is only readable from the webview, AFTER the webview
 // has loaded — too late for the sidecar spawn task).
 //
-// Today the only flag is `skip_sidecars` (Demo Mode). Changing the flag does
-// NOT take effect until the next app launch, because the sidecar auto-start
-// task only runs once during the Tauri `setup()` hook. The Settings UI shows
-// an inline "restart required" notice when the value is changed.
+// It holds the default worker budgets the recipe runner reads without a
+// round-trip to the webview.
+//
+// ⚠ It also carried `skip_sidecars` (Demo Mode) and a `setSkipSidecars`
+// action that invoked a command deleted in `P8-53`. Both are gone (`P8-61`).
 
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 
 export interface RuntimeConfig {
-  skip_sidecars: boolean;
   // Ruflo Feature 4 — Default Worker Budget settings
   default_worker_budget_tokens: number;
   default_worker_budget_usd:    number;
@@ -30,11 +30,10 @@ interface RuntimeConfigState {
   error: string | null;
 
   load:                   () => Promise<void>;
-  setSkipSidecars:        (skip: boolean) => Promise<void>;
   setDefaultWorkerBudget: (maxTokens: number, maxUsd: number, maxTurns: number, warnPct: number) => Promise<void>;
 }
 
-export const useRuntimeConfigStore = create<RuntimeConfigState>((set, get) => ({
+export const useRuntimeConfigStore = create<RuntimeConfigState>((set) => ({
   config: null,
   dirty: false,
   isLoading: false,
@@ -47,16 +46,6 @@ export const useRuntimeConfigStore = create<RuntimeConfigState>((set, get) => ({
       set({ config: cfg, dirty: false, isLoading: false });
     } catch (err) {
       set({ error: String(err), isLoading: false });
-    }
-  },
-
-  setSkipSidecars: async (skip: boolean) => {
-    const prev = get().config;
-    try {
-      const cfg = await invoke<RuntimeConfig>("set_skip_sidecars", { skip });
-      set({ config: cfg, dirty: prev?.skip_sidecars !== skip || get().dirty });
-    } catch (err) {
-      set({ error: String(err) });
     }
   },
 

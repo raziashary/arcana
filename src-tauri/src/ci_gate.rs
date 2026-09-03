@@ -5321,4 +5321,99 @@ let x = 1;
              unemitted. Strike them from KNOWN_UNEMITTED: {resurrected:?}"
         );
     }
+
+    // ── TG8-09 · the vocabulary gate — P8's exit criterion ────────────────────
+
+    /// No shipped source names the deleted subsystem, in code **or** in a
+    /// comment.
+    ///
+    /// `P8-65`. The task specifies two stages — "first outside comments, then
+    /// including them once `P8-56`…`P8-62` land". Those tasks have landed, so
+    /// this is the second stage: the whole file, prose included.
+    ///
+    /// ⚠ **Comments are in scope on purpose, and that is the harder half.**
+    /// Code naming a deleted module fails to compile; a comment describing a
+    /// deleted architecture compiles forever and is what the next reader
+    /// believes. Every serious defect this phase found sat under prose that
+    /// still described the old design — a start-up overlay whose emitter was
+    /// gone, a spend ceiling guarding on a status nothing writes, a prompt
+    /// teaching parameter names that fail validation.
+    ///
+    /// ⚠ **This file is excluded from its own scan.** It has to name the
+    /// forbidden words in order to look for them, and a gate that reads itself
+    /// finds the defect in its own definition. `L-C7`, the fifth instance
+    /// recorded in this register.
+    ///
+    /// ⚠ The word "sidecar" is deliberately **not** in the forbidden set.
+    /// `PD0` gave it a second meaning — AutoDev as a sidecar *of AutoDesign* —
+    /// and `P8-21` records that four files using it in that sense must
+    /// survive. A gate written against the token rather than the thing would
+    /// have deleted a published seam.
+    #[test]
+    fn tg8_09_no_shipped_source_names_the_deleted_subsystem() {
+        const FORBIDDEN: &[&str] = &[
+            "core-orchestrator",
+            "memory-mcp-server",
+            "LivingAgent",
+            "Mode 2",
+        ];
+
+        let roots = [
+            "autodev-core/src",
+            "src-tauri/src",
+            "src-cli/src",
+            "src-shared/src",
+            "src",
+        ];
+
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        for r in roots {
+            let dir = repo_root().join(r);
+            collect_rs(&dir, &mut files);
+            collect_ext(&dir, "ts", &mut files);
+            collect_ext(&dir, "tsx", &mut files);
+        }
+        files.sort();
+        files.dedup();
+        // See the doc comment.
+        files.retain(|p| !p.ends_with("ci_gate.rs"));
+
+        assert!(
+            files.len() > 100,
+            "only {} source file(s) walked — the discovery is broken and this \
+             gate would pass over an empty set, which is how an exit criterion \
+             becomes a formality (`L-C9`)",
+            files.len()
+        );
+
+        let mut hits: Vec<String> = Vec::new();
+        for p in &files {
+            let src = read_source(p);
+            if src.is_empty() {
+                continue;
+            }
+            for (n, line) in src.lines().enumerate() {
+                for word in FORBIDDEN {
+                    if line.contains(word) {
+                        let rel = p
+                            .strip_prefix(repo_root())
+                            .unwrap_or(p)
+                            .to_string_lossy()
+                            .replace('\\', "/");
+                        hits.push(format!("{rel}:{}: {word} — {}", n + 1, line.trim()));
+                    }
+                }
+            }
+        }
+
+        assert!(
+            hits.is_empty(),
+            "{} line(s) in shipped source still name the deleted subsystem. \
+             Comments count: code that names a deleted module fails to \
+             compile, and prose that describes a deleted architecture is \
+             believed instead.\n{}",
+            hits.len(),
+            hits.join("\n")
+        );
+    }
 }

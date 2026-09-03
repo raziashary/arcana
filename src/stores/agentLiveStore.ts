@@ -326,11 +326,10 @@ export const useAgentLiveStore = create<AgentLiveStore>((set, get) => ({
         e => store.handleError(e.payload))
     )
 
-    // Mode 2 (LivingAgent via core-orchestrator) doesn't emit the agent:*
-    // events above — those are emitted by the in-process Rust AgentEngine
-    // (Mode 1 / PA chat). Without bridging Mode 2 worker activity into the
-    // same store, the Live Monitor sat at "IDLE" forever even though
-    // workers were clearly running per the Agent Roster.
+    // Fleet workers do not emit the agent:* events above — those come from
+    // the interactive chat path. Without bridging worker activity into the
+    // same store, the Live Monitor sat at "IDLE" forever even though the
+    // Agent Roster clearly showed workers running.
     //
     // Map Rust's worker:tick-start / worker:tick-end / worker:status
     // events onto the same handleStatusChange path so workers light up
@@ -411,12 +410,12 @@ export const useAgentLiveStore = create<AgentLiveStore>((set, get) => ({
       )
     )
 
-    // Subagent SSE events — Mode 2 LivingAgent ticks that explicitly spawn
-    // subagents (via spawn_subagent / spawn_parallel_subagents) get full
-    // per-tool streaming through `SubagentManager::pump_events` →
-    // `emit_subagent_event_global` → `subagent:event` channel. The payload
-    // shape is `{ subagent_id, event: { kind: "tool_start"|"tool_end"|... } }`
-    // (tagged enum from src-tauri/src/subagent/types.rs:159).
+    // Subagent events — a tick that spawns subagents (via spawn_subagent /
+    // spawn_parallel_subagents) gets full per-tool streaming through
+    // `SubagentManager::pump_events` → `emit_subagent_event_global` → the
+    // `subagent:event` channel. The payload shape is
+    // `{ subagent_id, event: { kind: "tool_start"|"tool_end"|... } }`
+    // (tagged enum from autodev-core/src/subagent/types.rs).
     //
     // Translate `tool_start` / `tool_end` here so the Live Monitor card for
     // each subagent fills in tool names and timings. The agent_id is the
@@ -424,10 +423,9 @@ export const useAgentLiveStore = create<AgentLiveStore>((set, get) => ({
     // now auto-creates the agent record on first event — so we don't need
     // to pre-register the subagent slugs anywhere.
     //
-    // Note: this does NOT cover Mode 2 *main worker* tool activity. The main
-    // workers invoke via OrchestratorClient::invoke_worker which currently
-    // returns only the final response — adding per-tool streaming there is
-    // a separate, larger change. Subagent-level visibility is the cheap
+    // ⚠ This covers SUBAGENT tool activity, not a worker's own. A worker's
+    // per-tool stream is a separate, larger change. Subagent visibility is
+    // the cheap
     // win available right now and matches doc 01 Phase 2's recommended scope.
     unlisteners.push(
       listen<{ subagent_id: string; event: any }>(

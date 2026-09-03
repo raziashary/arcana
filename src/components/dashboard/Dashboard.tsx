@@ -85,7 +85,7 @@ const Dashboard: React.FC = () => {
   const [showExportDialog, setShowExportDialog] = useState(false);
 
   // Mount once: load data, start realtime listeners, and add a 60s polling
-  // fallback for Mode 2 LivingAgent ticks that don't emit agent:done.
+  // fallback for work that finishes without emitting agent:done.
   useEffect(() => {
     refreshDashboard();
     // P2-50. The ceiling that actually enforces, rather than the hardcoded 50

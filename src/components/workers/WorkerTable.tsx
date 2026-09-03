@@ -66,7 +66,8 @@ function WorkerRow({
   const handleModelChange = async (model: string) => {
     setSavingModel(true)
     try {
-      // Use sync version that immediately pushes to core-orchestrator
+      // The _sync variant validates the worker exists and returns a message
+      // the UI can toast; the plain one writes and returns nothing.
       const result = await invoke<{
         db_updated: boolean
         sync_status: string

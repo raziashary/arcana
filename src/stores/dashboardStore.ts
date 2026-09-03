@@ -413,7 +413,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         get().refreshDashboard();
       });
 
-      // Refresh dashboard when a Mode 2 LivingAgent tick completes
+      // Refresh the dashboard when a worker tick completes
       const tickUnlistener = await listen<{ kind: string }>('task:changed', (event) => {
         if (event.payload.kind === 'worker_tick_complete') {
           get().refreshDashboard();
@@ -421,9 +421,9 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       });
 
       // Index Phase 2: subscribe directly to `worker:tick-end` for live
-      // Dashboard refresh after Mode 2 ticks. Rust emits this event
-      // unconditionally on every successful and failed Mode 2 worker tick
-      // (see src-tauri/src/recipes/runner.rs `emit_worker_tick_end`),
+      // Dashboard refresh after a tick. Rust emits this event
+      // unconditionally on every successful and failed worker tick
+      // (see autodev-core/src/recipes/runner.rs `emit_worker_tick_end`),
       // independent of the `task:changed` channel above. Without this
       // subscription the DB-backed widgets (cost trend, leaderboard,
       // failures) wait up to 60s for the polling fallback before showing

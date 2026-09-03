@@ -24,15 +24,15 @@ export const A_SECTIONS: DocSection[] = [
       { t: 'h2', text: 'Key Features' },
       { t: 'list', items: [
         'Model-agnostic: Google Gemini, Anthropic, or OpenAI',
-        'Advanced memory system: 3-tier (episodic/semantic/procedural) with context scoring, compression, staleness tracking',
-        'Agent orchestration: 21 finite state machines governing lifecycle + A2A protocol',
-        'AUTODEV.md system: SQLite-backed, editable from UI, no manual file editing required',
-        'MCP native: Connect to GitHub, Slack, Adobe, and custom MCP servers',
-        'Skills & Recipes: Reusable YAML workflows with cron scheduling for fleet orchestration',
-        'Single installer: No Python, Redis, or Docker setup required for end users',
-        'Dual-mode execution: PA mode (Rust-native for speed) + Worker mode (orchestrated via core-orchestrator)',
-        'Git integration: Structured git operations via git2-rs with worktree isolation per task',
-        'Cost tracking: Real-time token spend per session with per-agent, per-task reporting',
+        'Memory across sessions: episodic, semantic and procedural stores with relevance ranking and compaction',
+        'A worker fleet: supervisor, five workers and QC, coordinated through a SQLite task board',
+        'AUTODEV.md: your own instructions, global and per-repository, edited in the app and given to every agent',
+        'MCP client: connect to GitHub, Slack, Adobe and your own MCP servers',
+        'Skills & Recipes: reusable YAML workflows with cron scheduling',
+        'One installer, no services to run: no Python, no Docker, no database to stand up',
+        'One engine: the assistant, every fleet worker and every subagent run on the same in-process Rust engine',
+        'Git integration: structured git operations via git2-rs',
+        'Cost tracking: real-time token spend per session, with per-agent and per-task reporting',
       ]},
       { t: 'h2', text: 'Tech Stack' },
       { t: 'table', headers: ['Layer', 'Technology', 'Purpose'], rows: [
@@ -44,9 +44,8 @@ export const A_SECTIONS: DocSection[] = [
         ['Provider Layer', 'Anthropic, OpenAI, Google', 'Multi-provider LLM abstraction'],
         ['MCP Health', 'reqwest', 'Liveness probes for user-configured external MCP servers'],
         ['Git Integration', 'git2-rs (libgit2)', 'Structured git operations, worktrees'],
-        ['Orchestrator', 'Python 3.13 + FastAPI + litellm', 'Agent lifecycle, FSMs, A2A protocol'],
-        ['Memory', 'Python 3.13 + mem0', 'Context storage, scoring, synopsis evolution'],
-        ['Cache', 'Redis 7+', 'Warm-tier memory caching'],
+        ['Agent engine', 'Rust (autodev-core)', 'The tool loop every agent runs on — assistant, worker and subagent'],
+        ['Memory', 'Rust + SQLite', 'Episodic, semantic and procedural stores with relevance ranking'],
         ['Keychain', 'keyring crate', 'OS keychain integration for API keys'],
         ['Database', 'SQLite (rusqlite)', 'Session persistence, task board, worker registry'],
       ]},
@@ -56,40 +55,42 @@ export const A_SECTIONS: DocSection[] = [
   /* ── 02: Core Architecture ─────────────────────────────────────── */
   {
     id: 'arch', num: '02', title: 'Core Architecture', category: 'Overview', icon: 'topology-star',
-    lead: 'AutoDev is built on Tauri v2 (Rust + React) and bundles two Python sidecars as git submodules. It operates in dual mode: PA (Rust-native) and Worker (Python core-orchestrator).',
-    anchors: ['High-Level Diagram', 'Mode 1: PA', 'Mode 2: Worker', 'Tech Stack'],
+    lead: 'AutoDev is a Tauri v2 desktop application — a Rust backend and a React front end, in one process. Every agent it runs, from the interactive assistant to a fleet worker, runs on the same engine inside that process. There are no services to start and nothing to keep alive alongside it.',
+    anchors: ['High-Level Diagram', 'The engine', 'The fleet', 'What runs where'],
     blocks: [
       { t: 'h2', text: 'High-Level Architecture Diagram' },
-      { t: 'code', lang: 'text', code: `┌─────────────────────────────────────────────────────────────────┐
-│                     AutoDev Desktop App                         │
-├──────────────────────┬──────────────────────────────────────────┤
-│   React/TS Frontend  │         Tauri v2 Rust Backend            │
-│   (src/)             │         (src-tauri/)                     │
+      { t: 'code', lang: 'text', code: `┌──────────────────────────────────────────────────────────────┐
+│                        AutoDev — one process                     │
+├─────────────────────┬──────────────────────────────────────────┤
+│  React + TypeScript  │            Rust (Tauri v2)               │
+│  src/                │            src-tauri/ + autodev-core/    │
 │                      │                                          │
-│   ┌─────────────┐    │    ┌──────────────────────────────────┐  │
-│   │ Zustand      │◄──invoke──►│ Tauri Commands              │  │
-│   │ Store        │    │    │  ├── agent::*                    │  │
-│   ├─────────────┤    │    │  ├── provider::*                 │  │
-│   │ Tab Views    │    │    │  ├── vault::*  ├── settings::*  │  │
-│   │ ├── Chat     │    │    │  └── sidecar::*                 │  │
-│   │ ├── AutoDev  │    │    ├──────────────────────────────────┤  │
-│   │ ├── IDE      │    │    │ Core Modules                    │  │
-│   │ ├── Recipes  │    │    │  ├── agent/   (tool exec loop)  │  │
-│   │ ├── Graph    │    │    │  ├── mcp/     (MCP client)       │  │
-│   │ └── Settings │    │    │  ├── recipes/ (YAML + cron)     │  │
-│   └─────────────┘    │    │  ├── git/     (git2-rs)         │  │
-│                      │    │  ├── graph/   (knowledge graph) │  │
-│                      │    │  └── db/      (SQLite CRUD)      │  │
-│                      │    └──────────────────────────────────┘  │
-│                      │    ┌──────────────────────────────────┐  │
-│                      │    │     Sidecar Manager               │  │
-│                      │    │  core-orchestrator (Python :4000) │  │
-│                      │    │  memory-mcp-server (Python :5000) │  │
-│                      │    │  Redis (standalone binary  :6379) │  │
-│                      │    └──────────────────────────────────┘  │
-└──────────────────────┴──────────────────────────────────────────┘` },
-      { t: 'h2', text: 'Mode 1: PA (Personal Assistant) — Rust-Native' },
-      { t: 'prose', text: 'Used by: Razi, team members, developers using the desktop app interactively.' },
+│  Chat                │   Tauri commands                         │
+│  AutoDev panel       │    agent · provider · vault · settings     │
+│  IDE                 │    tasks · workers · recipes · mcp         │
+│  Recipes             │                                          │
+│  Graph               │   AgentEngine                            │
+│  Docs                │    the tool loop every agent runs on      │
+│  Settings            │    assistant · fleet worker · subagent    │
+│                      │                                          │
+│  Zustand stores      │   agent/    tools, prompts, permissions   │
+│    ↕ invoke          │   recipes/  YAML + cron scheduler        │
+│    ↕ events          │   memory/   episodic, semantic, proc.    │
+│                      │   provider/ Anthropic · OpenAI · Google   │
+│                      │   mcp/      client for your MCP servers   │
+│                      │   git/      git2-rs                       │
+│                      │   graph/    knowledge graph               │
+│                      │   db/       SQLite                        │
+│                      │                                          │
+│                      │   ~/.autodev/  — SQLite on your disk      │
+│                      │    tasks · workers · sessions · memory     │
+│                      │    analytics · recipes · instructions     │
+└─────────────────────┴──────────────────────────────────────────┘
+
+The only things outside this process are the LLM provider you chose and any
+MCP servers you connected yourself.` },
+      { t: 'h2', text: 'The engine' },
+      { t: 'prose', text: 'One loop, in this process, for every agent. You talking to the assistant and a fleet worker running its recipe at 3am take the same path.' },
       { t: 'code', lang: 'text', code: `User → Tauri (Rust) → Direct LLM API (Anthropic/OpenAI/etc.)
                     ↓
               Built-in tools (read_file, write_file, bash, git2-rs)
@@ -97,44 +98,40 @@ export const A_SECTIONS: DocSection[] = [
               External MCP servers — configured and health-checked, not yet called
                     ↓
               Response → UI` },
-      { t: 'h3', text: 'Why NOT delegate to core-orchestrator for PA:' },
+      { t: 'h3', text: 'What that buys you' },
       { t: 'list', items: [
-        'Lower latency — no HTTP round-trip (100–500ms saved per turn)',
-        'Simpler deployment — works even if Python sidecars fail to start',
-        'Settings UI — test provider API keys without starting core-orchestrator',
-        'Headless CLI — airsctl -p "..." runs standalone, no Python dependency',
+        'No round-trip — a turn is a function call, not an HTTP request to something else on your machine',
+        'Nothing to start — the app works the moment it opens; there is no service that can fail to come up',
+        'One place to look — an agent that misbehaves is debugged in one process, with one log',
+        'Headless too — airsctl -p "..." runs the same engine from a terminal',
         'Local-first — sessions, memory and the task board are all on-device',
       ]},
-      { t: 'callout', text: 'Limitations: No A2A, no mem0 semantic memory, no 21 FSMs, no context scoring — intentionally kept simple.' },
-      { t: 'h2', text: 'Mode 2: Worker Agent — Orchestrated via Core Orchestrator' },
-      { t: 'prose', text: 'Used by: AutoDev worker agents (backend, frontend, cleanup, etc.), Supervisor, QC agent running recipes.' },
-      { t: 'code', lang: 'text', code: `Recipe trigger → Tauri → HTTP POST /api/v1/agent/invoke → core-orchestrator
-                                                         ↓
-                                                   LivingAgent (21 FSMs)
-                                                         ↓
-                                                   litellm provider
-                                                         ↓
-                                                   airs_mcp client → external MCPs
-                                                         ↓
-                                                   mem0 memory → Redis
-                                                         ↓
-                                                   A2A protocol → SSE stream → UI` },
-      { t: 'h3', text: 'Why delegate to core-orchestrator for workers:' },
+      { t: 'h2', text: 'The fleet' },
+      { t: 'prose', text: 'A supervisor, five workers (backend, frontend, platform, MCP, cleanup) and QC. Each runs its own recipe on a cron schedule and coordinates through the task board — not through files on disk, and not through GitHub.' },
+      { t: 'code', lang: 'text', code: `Cron tick → RecipeRunner → AgentEngine (same process)
+                                        ↓
+                             task board: claim → in_progress
+                                        ↓
+                             tools: read/write/edit/bash/grep
+                                        ↓
+                             task board: qc_review → QC → done
+                                        ↓
+                             events → Live Monitor` },
+      { t: 'h3', text: 'How a worker gets its instructions' },
       { t: 'list', items: [
-        'A2A protocol — supervisor ↔ workers coordination',
-        'mem0 semantic memory — long-term context, retrieval-augmented generation',
-        '21 FSMs — agent lifecycle, tool execution tracking, memory management',
-        'Context scoring — relevance ranking, smart compaction',
-        'Feedback-driven synopsis — conversation evolution',
-        'Too complex to reimplement in Rust; Python ecosystem advantage',
+        'An invariant core every agent receives — the prohibitions, the git rules, and how work is coordinated',
+        'Your AUTODEV.md, global and per-repository',
+        'Its own recipe: role, protocol and what counts as done',
+        'Its memory, rebuilt each turn from what it has learned',
       ]},
+      { t: 'callout', variant: 'info', text: 'A worker can only do what its recipe and the shared core allow. It commits to a branch, stages the paths it named, and stops there — it never pushes, opens a pull request or merges one.' },
     ],
   },
 
   /* ── 03: Personal Assistant (PA) Mode ─────────────────────────── */
   {
     id: 'pa-mode', num: '03', title: 'Personal Assistant (PA) Mode', category: 'Agent Modes', icon: 'robot',
-    lead: 'The PA is the primary interface for interactive AI-assisted development. Runs in Mode 1 (Rust-Native) for low-latency, direct LLM API access. Three sub-modes control tool availability and system prompt behavior.',
+    lead: 'The assistant is the interactive half of AutoDev — the one you talk to. It runs on the same engine as everything else, with direct access to your chosen provider. Three modes change what it can reach and how it works.',
     anchors: ['Mode Toggle', 'Fast Development', 'Review Mode', 'Delegate Mode', 'Interaction Flow', 'Switching Modes'],
     blocks: [
       { t: 'h2', text: 'Mode Toggle' },
@@ -169,14 +166,16 @@ export const A_SECTIONS: DocSection[] = [
         'NO direct code execution whatsoever',
       ]},
       { t: 'h2', text: 'Delegate Mode Interaction Flow' },
-      { t: 'code', lang: 'text', code: `1. User: "Add /health endpoint to orchestrator"
-2. PA (Delegate Mode): Understands intent → decomposes → creates task #142
-3. PA confirms: "Task #142 created. Supervisor will assign to Worker Backend on next poll."
-4. Supervisor recipe (every 2 min): Sees task #142, assigns to Worker Backend
-5. Worker Backend recipe: Executes via core-orchestrator, implements endpoint, opens PR
-6. QC Agent recipe: Reviews PR, updates task status to "qc-approved"
-7. Supervisor: Sees QC approval, instructs worker to merge, closes task #142
-8. PA (if monitoring AutoDev Panel): Shows task completion notification` },
+      { t: 'code', lang: 'text', code: `1. You: "add a CSV export to the sessions list"
+2. Assistant (Delegate): understands the intent, decomposes it, files task #142
+   with acceptance criteria a reviewer could check
+3. Assistant: "Task #142 is on the board. The Supervisor picks it up on its
+   next tick."
+4. Supervisor (every 2 min): sees #142 ready, assigns it to Worker Frontend
+5. Worker Frontend: claims it, implements it, runs the project's tests,
+   commits to the fleet branch, moves it to qc_review
+6. QC: reviews the change and either marks it done or rejects it with a reason
+7. AutoDev panel: shows each transition as it happens` },
       { t: 'h2', text: 'Switching PA Modes' },
       { t: 'prose', text: 'Location: Chat header dropdown (3-button segmented control). State Management: settingsStore.ts persists paMode to localStorage. Effect: Changes tool registry and system prompt for the next message sent. Persistence: Mode preference saved across sessions.' },
     ],
@@ -202,8 +201,8 @@ export const A_SECTIONS: DocSection[] = [
        └──→ QC Agent Recipe         (polls every 2 min)` },
       { t: 'h2', text: 'Worker Types' },
       { t: 'table', headers: ['Worker', 'Schedule', 'Responsibility'], rows: [
-        ['Supervisor', '*/2 * * * *', 'Poll task board, break down epics, assign workers, review QC reports, merge PRs'],
-        ['Worker Backend', '*/2 * * * *', 'Backend development (Python, Rust, Go)'],
+        ['Supervisor', '*/2 * * * *', 'Poll the task board, break down epics, assign workers, review what comes back'],
+        ['Worker Backend', '*/2 * * * *', 'Backend work — Rust, services, schema, APIs'],
         ['Worker Frontend', '*/2 * * * *', 'Frontend development (React, TypeScript)'],
         ['Worker Platform', '*/5 * * * *', 'Platform/infra work (Docker, CI/CD, deployment)'],
         ['Worker MCP', '*/5 * * * *', 'MCP server development and testing'],

@@ -48,10 +48,10 @@
 | **P5** | The graph | 4 | `TG5-01…04` |
 | **P6** | The UI | 9 | `TG6-01…09` |
 | **P7** | Experience | 5 | `TG7-01…05` |
-| **P8** | Submodule deletion **+ the prompt floor** | 8 | `TG8-01…08` |
+| **P8** | Submodule deletion **+ the prompt floor** | 9 | `TG8-01…09` |
 | **P9** | Delivery | 5 | `TG9-01…05` |
 | **PD0** | The design capability contract | 10 | `TGD0-01…10` |
-| | **Total** | **131** | |
+| | **Total** | **132** | |
 
 ---
 
@@ -624,6 +624,14 @@
 
       🔴 **The gate found ten more of the same, and they are a standing finding rather than a `P8` task.** None names a deleted subsystem — they are ordinary readers with no writer — so they are listed in `KNOWN_UNEMITTED` and reported, not rewired: the Live Monitor's stage changes and token sparkline subscribe to **five** events Rust never emits (`agent:stage-change`, `agent:status-change`, `agent:token-update`, `agent:tool-call-start`, `agent:tool-call-result`), and the **entire plan store** subscribes to five more (`plan:created`, `plan:updated`, `plan:item_claimed`, `plan:step_completed`, `plan:subplan_created`) while Rust emits only `plan:changed`, which nothing listens for — the two sides were named independently and have never once agreed. The list is a **ratchet**: a new unemitted listener fails the gate, and an entry that gains an emitter must be struck or the gate fails the other way.
 
+
+- [x] **TG8-09** `[governance]` — **NEW (`P8-65`). P8's exit criterion.** No file under `autodev-core/src`, `src-tauri/src`, `src-cli/src`, `src-shared/src` or `src/` contains `core-orchestrator`, `memory-mcp-server`, `LivingAgent` or `Mode 2` — **in code or in a comment**. The task specifies two stages; `P8-56`…`P8-62` have landed, so this is the second.
+      Source: **NEW** — `P8-65` · Catches: prose that outlives the thing it describes · Falsified with a **comment-only** plant: it compiles, the gate goes red, and the message names the word and the file · Evidence: `GATE-PROVEN` — `ci_gate::tests::tg8_09_no_shipped_source_names_the_deleted_subsystem`
+
+      ⚠ **Comments are in scope on purpose, and that is the harder half.** Code naming a deleted module fails to compile; a comment describing a deleted architecture compiles forever and is what the next reader believes. **Every serious defect this phase found sat under prose that still described the old design** — a start-up overlay whose emitter was gone (`TG8-08`), a spend ceiling guarding on a status nothing writes (`TG8-07`), a prompt teaching the model parameter names that fail validation (`P8-56`). The sweep is not tidying; it is how those were found.
+
+      ⚠ Two exclusions, both deliberate. `ci_gate.rs` is **excluded from its own scan** — it must name the forbidden words in order to look for them, and a gate that reads itself finds the defect in its own definition (`L-C7`, the fifth instance in this register). And the word **"sidecar" is not in the forbidden set**: `PD0` gave it a second meaning — AutoDev as a sidecar *of AutoDesign* — and `P8-21` records four files using it in that sense that must survive. A gate written against the token rather than the thing it stands for would have deleted a published seam.
+
 ---
 
 ## 12. P9 — Delivery
@@ -720,7 +728,7 @@ Gates are only as honest as what they run against. Every corpus below is **check
 | `08-DATA-MODEL…` | `§4 Test gates` | 10 | `TG1-02…TG1-06`; `TG2-15`; `TG4-19…TG4-22` | **P1** (5), **P2** (1), **P4** (4) |
 | `09-DELIVERY` | `§6 Test gates` | 10 | `TG0-01`, `TG0-02`; `TG4-17`, `TG4-18`; `TG8-01`; `TG9-01…TG9-05` | **P0** (2), **P4** (2), **P8** (1), **P9** (5) |
 | `10-PROOF` | *(no gate table — by design)* | 0 gates; contributes the evidence classes (`§1`), the headline acceptance test (`TG7-02` + `TG9-01`), the CI blocking table (`TG0-02`) and the ten test families (`§17`) | — | — |
-| **NEW** | *(this document)* | 14 | `TG0-04`, `TG0-05`, `TG2-16`, `TG2-17`, `TG3-38`, `TG3-39`, `TG4-23`, `TG8-02`…`TG8-08` | P0 (2), P2 (2), P3 (2), P4 (1), P8 (7) |
+| **NEW** | *(this document)* | 15 | `TG0-04`, `TG0-05`, `TG2-16`, `TG2-17`, `TG3-38`, `TG3-39`, `TG4-23`, `TG8-02`…`TG8-09` | P0 (2), P2 (2), P3 (2), P4 (1), P8 (8) |
 
 **Spec gate totals:** 115 named in the specs − 8 merged = **107 surviving** + **8 NEW** = **115**, **+ 10 `TGD0`** added by `PD0` and its audit remediation = **125**.
 
@@ -783,7 +791,7 @@ Gates are only as honest as what they run against. Every corpus below is **check
 | **Destructive safety** | `TG3-36`, `TG4-23`, `TG7-05` | 3 |
 | **Anchor conformance** | `TG6-01`, `TG6-02`, `TG6-09` | 3 |
 | **Migration** | `TG1-02`, `TG1-03`, `TG1-04` | 3 |
-| **No-sidecar** | `TG8-01`, `TG8-02` | 2 |
+| **No-sidecar** | `TG8-01`, `TG8-02`, `TG8-09` | 3 |
 | **One prompt floor** | `TG8-03`, `TG8-04`, `TG8-05`, `TG8-06` | 4 |
 | **No reader without a writer** | `TG8-07`, `TG8-08` | 2 |
 

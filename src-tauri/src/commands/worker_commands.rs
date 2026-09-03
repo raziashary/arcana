@@ -48,8 +48,8 @@ pub struct UpdateModelSyncResult {
 pub async fn list_workers() -> Result<Vec<Worker>> {
     // P8-09 — `workers.db` is the source of truth for a worker's model.
     //
-    // 🔴 This used to prefer the live core-orchestrator over HTTP and then fall
-    // back to reading `config/agents/*.yaml` out of the sidecar's own
+    // 🔴 This used to prefer a second process over HTTP and then fall back
+    // to reading `config/agents/*.yaml` out of that process's own
     // directory. Both sources are deleted with it, and neither was ever the
     // authority: `P4-30` states the shape this now has — **the DB owns
     // identity and state, the recipe owns the prompt**. The two extra sources
@@ -147,8 +147,8 @@ pub async fn update_worker_model_sync(
 
     // P8-09 — steps 2 and 3 are DELETED. Both wrote into the sidecar.
     //
-    // 🔴 Step 2 pushed the model to `core-orchestrator` over HTTP; step 3
-    // wrote it into `config/agents/*.yaml` inside the sidecar's own
+    // 🔴 Step 2 pushed the model to a second process over HTTP; step 3
+    // wrote it into `config/agents/*.yaml` inside that process's own
     // directory, described there as *"the authoritative source the agent
     // reads on boot"*. Neither destination exists. The database write above
     // IS the change now, and it takes effect on the next tick because the

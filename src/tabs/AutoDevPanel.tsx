@@ -157,9 +157,8 @@ function AgentRoster({ tasks }: { tasks: Task[] }) {
         // `current_tick_mode` comes from the tick-start payload, which
         // `runner.rs` now sets to `"native"`, so both live branches were
         // unreachable and every successful tick fell through to
-        // `lastOutcome === 'success'` — painting a green **"LA — Mode 2
-        // LivingAgent (last tick)"** badge for work the deleted subsystem
-        // could not have done.
+        // `lastOutcome === 'success'` — painting a green badge naming the
+        // deleted second engine for work it could not have done.
         //
         // It is now a tick-activity badge, which is the one thing here that is
         // still true and still useful: is this worker mid-tick, and how did its

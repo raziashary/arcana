@@ -37,9 +37,6 @@ export default function SettingsTab() {
         <SectionHeader title="Workspace" />
         <WorkspaceCard />
 
-        <SectionHeader title="Demo Mode" />
-        <DemoModeCard />
-
         <SectionHeader title="Credential Storage" />
         <VaultBackendCard />
 
@@ -49,9 +46,9 @@ export default function SettingsTab() {
         <SectionHeader title="Default Worker Budget" />
         <DefaultWorkerBudgetCard />
 
-        <SectionHeader title="Services" />
-
-        <SectionHeader title="Submodules" />
+        {/* P8-61. "Services" and "Submodules" were section headings with
+            nothing under them: P8-54 deleted the panels and left the headers,
+            so Settings rendered two empty sections. */}
 
         <SectionHeader title="MCP Tools" />
         <McpToolBrowser />
@@ -212,105 +209,12 @@ function WorkspaceCard() {
   )
 }
 
-// ─── Demo Mode (skip Python sidecars) ────────────────────────────────────────
-//
-// Toggles `runtime_config.json::skip_sidecars` on disk. When ON:
-//   - memory-mcp-server and core-orchestrator are NOT spawned at next launch
-//   - the StartupProgress FSM fast-forwards through every phase to "ready"
-//   - Chat + Worker recipes still work via the native Rust AgentEngine
-//   - LivingAgent / mem0 features are unavailable
-// The change requires an app restart to take effect (sidecar spawn happens
-// once, in the Tauri setup hook).
+// 🔴 `P8-53` retired Demo Mode and recorded the settings section as removed.
+// The **card was still rendered**, and its toggle invoked
+// `set_skip_sidecars`, a Tauri command that exists only inside a comment
+// since that task deleted it — so clicking it rejected silently. Deleted
+// here, with the header above it (`P8-61`).
 
-function DemoModeCard() {
-  const cfg = useRuntimeConfigStore()
-
-  useEffect(() => {
-    cfg.load()
-  }, [])
-
-  const skip   = cfg.config?.skip_sidecars ?? false
-  const dirty  = cfg.dirty
-  const dotBg  = skip ? 'var(--warning)' : 'var(--aqua)'
-  const badgeBg     = skip ? '#FFCB8B15' : 'var(--accent-muted)'
-  const badgeBorder = skip ? '#FFCB8B40' : 'var(--accent-border)'
-  const badgeColor  = skip ? 'var(--warning)' : 'var(--accent)'
-
-  const onToggle = () => {
-    cfg.setSkipSidecars(!skip)
-  }
-
-  return (
-    <div
-      className="rounded-sm p-4 space-y-3"
-      style={{ background: 'var(--bg-card)', border: '1px solid var(--border-1)' }}
-    >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span
-            className="w-1.5 h-1.5 rounded-full shrink-0"
-            style={{ background: dotBg }}
-          />
-          <span className="font-mono text-xs" style={{ color: 'var(--text-1)' }}>
-            Skip Python Sidecars
-          </span>
-          <span
-            className="font-mono px-1.5 py-0.5"
-            style={{
-              fontSize: '10px', background: badgeBg,
-              border: `1px solid ${badgeBorder}`, color: badgeColor, borderRadius: '2px',
-            }}
-          >
-            {skip ? 'ON' : 'OFF'}
-          </span>
-        </div>
-        <button
-          onClick={onToggle}
-          disabled={cfg.isLoading}
-          className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40"
-          style={{
-            background: skip ? 'var(--bg-2)' : 'var(--accent-muted)',
-            border: `1px solid ${skip ? 'var(--border-1)' : 'var(--accent-border)'}`,
-            color: skip ? 'var(--text-1)' : 'var(--accent)',
-          }}
-        >
-          {skip ? 'Disable Demo Mode' : 'Enable Demo Mode'}
-        </button>
-      </div>
-
-      <div className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
-        When <span style={{ color: 'var(--accent)' }}>ON</span>, AutoDev launches without spawning
-        memory-mcp-server or core-orchestrator. Chat and Worker recipes still run via the
-        native Rust <span style={{ color: 'var(--accent)' }}>AgentEngine</span> (calls the LLM
-        provider directly). Use this when the sidecars are under maintenance or for fast demos.
-      </div>
-
-      <div className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
-        <span style={{ color: 'var(--text-2)' }}>Disabled features in Demo Mode:</span>{' '}
-        LivingAgent memory persistence, mem0 vector search, A2A protocol endpoints,
-        agent CRUD via core-orchestrator API.
-      </div>
-
-      {dirty && (
-        <div
-          className="font-mono text-xs px-2 py-1.5 rounded-sm flex items-center gap-2"
-          style={{
-            background: '#FFCB8B15', border: '1px solid #FFCB8B40', color: 'var(--warning)',
-          }}
-        >
-          <RotateCcw size={11} />
-          Restart AutoDev for this change to take effect.
-        </div>
-      )}
-
-      {cfg.error && (
-        <div className="font-mono text-xs" style={{ color: 'var(--danger)' }}>
-          {cfg.error}
-        </div>
-      )}
-    </div>
-  )
-}
 
 // ─── Credential Storage (P2-24/P2-33/P2-71, wired F-14) ─────────────────────
 //
@@ -876,7 +780,7 @@ function GitHubMCPCard() {
       <div className="space-y-2">
         <div className="font-mono text-xs" style={{ color: 'var(--text-3)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Allowed Repos (one per line, empty = all)</div>
         <textarea
-          placeholder="autodev&#10;core-orchestrator"
+          placeholder="autodev&#10;my-other-repo"
           value={repoInput}
           onChange={e => setRepoInput(e.target.value)}
           rows={3}
