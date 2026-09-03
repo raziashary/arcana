@@ -1608,6 +1608,24 @@ operation set, which is decided.
 
 **Exit.** `SD0` → `TG-PD0` → matrix → progress → no-stale → commit.
 
+⚠ **Closed on the second attempt, 2026-09-03.** The first closure ran five of
+those six steps and skipped `§0.2a`'s two auditors entirely, which is a `§0.2b`
+violation on its own; Razi caught it. The audits returned **45 findings**, three
+of which should have blocked the closure. Razi's ruling put all 45 in-phase:
+*"we fix all of the findings found by the audit … findings found by the audit is
+also part of the phase, so it is a part of `PD0`."*
+
+🔴 **The claim "all 45 are closed" is checked, not asserted** —
+`_verify/PD0-FINDINGS-LEDGER.py` runs one check per finding and **parses the
+finding ids out of the two audit reports** rather than listing them, so a
+finding I forgot fails the ledger the same way a finding I broke does. Both
+failure modes were falsified. `python docs/restructurization/development/_verify/PD0-FINDINGS-LEDGER.py`
+→ `45 findings, 0 open — ALL CLOSED`, exit `0`.
+
+**Final state:** 10 gates (`TGD0-01…10`, 6 falsified) · 118 JS tests · 611 Rust
+tests · `SD0-01` re-runnable as `npm run smoke:design`, 14 spawned cases ·
+`tsc` and `eslint` clean · `ADR-LOG-RESTRUCT-0035` · `§0.16 L-35`…`L-38`.
+
 ⚠ **PD0 had no exit line, no gate section and no matrix row** until 2026-09-03 —
 none of the design phases did, which is why `§0.5`'s *"smoke-then-gates is
 mandatory"* was pointing at nothing for a whole rollout. `PD1`–`PD6` owe theirs.
