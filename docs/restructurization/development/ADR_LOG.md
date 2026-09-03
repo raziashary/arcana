@@ -1648,18 +1648,44 @@ tree"*. Measured before asking, per `§0.8` and Rule 13:
   225 MB figure belongs to `src-tauri/resources/sidecars/` (`P8-17`): the wrong
   number on the wrong path, in the task whose whole job is *back up before
   destroying*.
-* 🔴 **Three commits absent from `origin/main` in both repositories** —
+* ~~🔴 **Three commits absent from `origin/main` in both repositories** —
   `69acba1f`, `075b98e5` (core-orchestrator) and `54fde0e`
   (memory-mcp-server), all *"changes for autodev"*, May–June 2026. Deleting
   `submodules/` **and** `.git/modules/submodules/` — which `P8-15` requires,
   because the object store is the *"survives by address"* failure — destroys
-  them permanently. The struck `P8-13` text did not mention them.
+  them permanently.~~ 🔴 **RETRACTED the same day — see the retraction below.
+  All three are on `origin/autodev`. Nothing is lost.**
 
 **Razi's ruling, verbatim:** *"look that submodule/sidecar is already dead since
 the new core and memory mcp server is being used elsewhere, so delete it all you
 have my authorization."*
 
-**So the three commits are superseded, not lost.** The live core-orchestrator
+### 🔴 Retraction — the data-loss half of finding 2 was mine and it was wrong
+
+Razi, in the next message: *"those submodules/sidecar is on a branch called
+`autodev`, so do not touch the GitHub one, delete it from autodev only."*
+
+Checked, and he is right. Both working trees are on a branch named **`autodev`**;
+`origin/autodev` exists in both repositories; `git merge-base --is-ancestor`
+returns true for all three commits against it; the local and remote tips are
+**identical** (`69acba1f`, `54fde0e`); `git log origin/autodev..autodev` is empty
+in both. **Nothing is lost by deleting this tree.**
+
+**Mechanism, which is the part worth keeping.** I ran `git log origin/main..HEAD`.
+`.gitmodules` declares `branch = main` for both submodules — so I took the
+*configuration's* claim about which branch was in use and compared against that.
+`git branch --show-current` says `autodev` in both, and one run of it would have
+settled the question. This is `L-C11` — *a claim about **state** inferred from
+code rather than checked against the state* — **now 4**, and it is the class I
+have a standing rule for. The config was stale; my check inherited its staleness
+and produced a false data-loss alarm.
+
+**What it changes and what it does not.** The deletion was already authorised; it
+is now authorised *and* costless. It does **not** vindicate skipping `§0.8` —
+measuring before destroying is what produced both the wrong answer and then the
+right one, and a phase that had simply deleted would have learned neither.
+
+**So the three commits are superseded, and also safely on their own remote.** The live core-orchestrator
 and memory-mcp-server are maintained elsewhere; this tree is a stale copy of a
 retired subsystem. `P8-13` is **struck** rather than rewritten, and the ruling
 sits in its place — the deletion is irreversible, and `§0.8` requires the
@@ -1679,8 +1705,18 @@ phase's exit. `P8-13` becomes a `DOC-GATE` carrying the ruling. Neither is
 built yet; both are corrected before the phase opens, which is what `§0.2m`
 asks for.
 
+### The boundary Razi set in the same message, binding on all of `P8-C`
+
+*"Do not touch the GitHub one, delete it from autodev only."* The deletion is
+**local to this repository**. `P8` must not push to, delete branches on, or
+otherwise modify `AIRS-Foundry/core-orchestrator` or
+`AIRS-Foundry/memory-mcp-server` — including their `autodev` branches, which are
+where this content lives and stays. Removing `submodules/`,
+`.git/modules/submodules/` and the two `.gitmodules` stanzas touches nothing on
+those remotes, which is precisely why it is safe.
+
 **Links.** `ADR-LOG-RESTRUCT-0035` · `§0.2c` · `§0.2m` · `§0.8` · `L-C1`,
-`L-C6` · `TG8-01`, `TG8-02` · `PD0-08`, `SD0-01`
+`L-C6`, `L-C11` · `TG8-01`, `TG8-02` · `PD0-08`, `SD0-01`
 
 ---
 
