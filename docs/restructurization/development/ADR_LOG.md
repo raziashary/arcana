@@ -1594,3 +1594,123 @@ probe of mine said it was not.
 **Links.** `ADR-LOG-RESTRUCT-0032` · `§0.16 L-31`, `L-32` · `R-14` · `R-15` ·
 `P4-11` (the `platform/command.rs` wiring `D10` depends on)
 
+---
+
+## ADR-LOG-RESTRUCT-0034 — PD0's pre-build refutation: there was no transport, and the IR was never versioned
+
+**Status.** DECIDED
+**Author.** Claude (refutation) · **Razi** (both rulings) · **Tier.**
+**`razi-ruled`** for the transport and the canonical type; `decided-independently`
+for the four plan corrections, which `§0.2m` requires be made before any code
+**When.** 2026-09-03 · before the first line of PD0
+
+**What.** `§0.2m` requires every phase's load-bearing claims to be attacked
+before it is built. Two refutation agents were dispatched — one against
+AutoDesign's actual contract package, one against AutoDev's own state — and the
+main session established the load-bearing findings directly, as that rule
+requires. Two of PD0's seven tasks did not survive contact.
+
+### 1. 🔴 `PD0-06` assumed a transport that does not exist
+
+The task read: *"A **live stub** answers every operation."* Answers **over
+what**? Searched — not sampled (`§0.2L-3`) — across `autodev-core/src`,
+`src-tauri/src` and `src-cli/src` for `axum`, `actix`, `warp`, `hyper::server`,
+`TcpListener::bind` and `HttpServer`. **Zero hits**, and neither manifest
+carries a server dependency.
+
+AutoDev has **no surface an external process can reach**. Tauri commands are
+in-process. The `/mcp` server was deleted in `P0` precisely because it accepted
+unauthenticated remote execution. The Python sidecar's loopback dies in `P8`.
+`airsctl` is a CLI, not a service.
+
+**Razi's ruling — AutoDev becomes a sidecar of AutoDesign:**
+
+> *"AutoDesign does not have any opening point and AutoDev itself is a local
+> application, so if we create an HTTP process it will be unnecessary; and if we
+> make it an MCP server, AutoDesign does not have an MCP client and building one
+> will take time. So we will use AutoDev as a sidecar in AutoDesign essentially
+> — an executable contract, and a single markdown document in docs public-facing
+> so the AutoDesign team knows what to do."*
+
+**Why this is the right shape and not merely the cheap one.** AutoDesign
+**already spawns a sidecar of its own**, so this reuses a pattern that team
+already operates instead of asking them to build a client they do not have. It
+adds no listening socket, which matters in a codebase whose last one was an RCE.
+And it does not wait on `integration.invoke`, which is at **G6, deferred** on
+their roadmap.
+
+`PD0-06` is re-pointed to an **executable contract** — a reference
+implementation plus a conformance suite both teams can run. `PD0-08` defines the
+invocation model; `PD0-09` is the public document.
+
+### 2. 🔴 The IR is not versioned, and `PD0-02` is the task that says it is
+
+`src/design/ir.ts:155`:
+
+```ts
+export interface DesignDocument {
+  width: number; height: number; sourceName: string
+  layers: DesignLayer[]; fonts: FontRequirement[]; assetIds: string[]
+}
+```
+
+No `version`, no `schemaVersion`. `PD0-02` reads *"published as a **versioned**
+type"* — the type exists; the versioning does not. That is now the task's actual
+content, together with a check that **refuses** an unknown version rather than
+parsing it optimistically.
+
+### 3. The IR lives in the frontend, and ownership needed a ruling
+
+`src/design/` is TypeScript, in the Tauri frontend; nothing in `autodev-core`
+mirrors it. **Razi's ruling: TypeScript is canonical**, and `PD1` mirrors it
+into Rust behind a conformance test pinning the two.
+
+⚠ The drift risk is not hypothetical — `P1` deleted `src-shared`'s mirrored
+`tasks`/`workers`/`plans` tables because two definitions of one schema had
+diverged, with 22, 19 and 23 write statements between them. The pinning test is
+what stops that shape recurring, and it is `PD1`'s to write.
+
+### 4. Three corrections that did not need a ruling
+
+- **`PD0-03`'s job semantics** are re-expressed for a child process: a
+  long-running invocation streaming progress and terminal status over stdout,
+  not an HTTP job resource that is polled. The statuses are unchanged; the
+  carrier is. ⚠ Its *"25–35 s on a 30–45 MB input"* is inherited from the spike
+  and I have not re-measured it; the async decision holds regardless, because a
+  30–45 MB PSD parse is not a request-response shape at any plausible number.
+- **`SD0-01` was sharpened so it can fail.** *"Receives well-formed responses"*
+  is satisfiable by a function returning a constant — `L-C9`. It now also
+  requires a malformed request to be **refused**, an unknown schema version to
+  be **rejected rather than parsed**, and a killed child to leave **no partial
+  output claiming success**.
+- **`PD0-10` opens the `NOVELTY_LEDGER` row.** The register holds six rows and
+  **none for the design programme**, though `PD0` adopts an external contract
+  shape, `PD1` is grounded in an external converter, and `PD2`/`PD4` now carry
+  ~33 tasks derived from an external adaptation engine. The anchor-set rule is
+  that no externally-inspired mechanic becomes product truth without a row.
+
+### What the refutation did NOT overturn
+
+**Razi's 2026-09-01 ownership ruling holds and answers the obvious objection.**
+AutoDesign's `integration.invoke` sits at G6, deferred — so they cannot call
+AutoDev today. That does not block PD0, because the contract is *the*
+deliverable: *"without it the parallel build has nothing to agree on"*
+(`AUTODESIGN-INTEGRATION-RESEARCH §7.2`). What it does correct is the milestone
+wording I wrote on 2026-09-03, which said AutoDesign *"can wire and test against
+the stub"*. They cannot. M1 delivers **an agreed, exercisable seam**.
+
+**Why.** `§0.2m` exists because this plan's own pre-GO review found six errors
+in it. This pass found two more before they became code — a task that could not
+be built as written, and a task whose stated deliverable did not exist.
+
+**Where.** `MASTER_DEVELOPMENT_PLAN.md §10.5.0` (banner, `PD0-02`/`03`/`06`
+amended, `PD0-08`/`09`/`10` added, `SD0-01` sharpened) ·
+`_verify/PD0-CORRECTIONS.md`
+
+**How proven.** Every finding above was established in the main session by
+reading the code and searching for strings, per `§0.2m`'s re-verification
+requirement — not adopted from an agent.
+
+**Links.** `ADR-LOG-RESTRUCT-0033` · `§0.2m` · `§0.2L-3` · `L-C9` · `L-C12` ·
+`AUTODESIGN-INTEGRATION-RESEARCH §3`, `§7.2`
+
