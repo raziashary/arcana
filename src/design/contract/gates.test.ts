@@ -14,7 +14,13 @@ import { describe, expect, it } from 'vitest'
 
 import { decodeRequest, decodeSettled } from './decode'
 import { collect, fixedClock, referenceDesign } from './reference'
-import { requestFor, runConformance, formatReport, type ContractDriver } from './conformance'
+import {
+  requestFor,
+  requestForHold,
+  runConformance,
+  formatReport,
+  type ContractDriver,
+} from './conformance'
 import { OPERATIONS, OUTCOMES, RESERVED_OPERATIONS } from './types'
 import { REQUEST_CONTRACT_VERSION } from './version'
 
@@ -99,6 +105,24 @@ describe('TG-PD0 · the capability contract', () => {
     expect(() =>
       decodeSettled({ ...base, fidelity: { score: null, method: 'unmeasured', losses: [] } }),
     ).not.toThrow()
+
+    // 🔴 `W-14`: the register entry for this gate reads "**any other method
+    // must carry a real one**", and the gate did not assert it — the clause
+    // lived only in a unit test, which this section's own preamble says may be
+    // rewritten freely. A register that promises more than its gate asserts is
+    // the same defect as a docstring that promises more than its code does.
+    expect(() =>
+      decodeSettled({
+        ...base,
+        fidelity: { score: null, method: 'rendered-comparison', losses: [] },
+      }),
+    ).toThrow(/must report a score/)
+    expect(() =>
+      decodeSettled({
+        ...base,
+        fidelity: { score: 0.82, method: 'rendered-comparison', losses: [] },
+      }),
+    ).not.toThrow()
   })
 
   // ── TGD0-05 [correctness] ─────────────────────────────────────────────────
@@ -117,6 +141,27 @@ describe('TG-PD0 · the capability contract', () => {
     expect(() => decodeSettled({ ...base, outcome: 'partial', diagnostics: [] })).toThrow(
       /evidenced/,
     )
+
+    // 🔴 `W-14`: this gate had NO positive control — a decoder that refused
+    // every `partial` would have passed it, which is the failure mode the
+    // whole gate exists to prevent applied to the gate itself. It is the only
+    // one of the eight that lacked the discrimination half TGD0-03 and
+    // TGD0-04 both carry deliberately.
+    expect(() =>
+      decodeSettled({
+        ...base,
+        outcome: 'partial',
+        diagnostics: [
+          {
+            code: 'FONT_UNRESOLVED',
+            category: 'dependency',
+            severity: 'warning',
+            retryable: false,
+            safeMessage: 'A typeface could not be supplied.',
+          },
+        ],
+      }),
+    ).not.toThrow()
   })
 
   // ── TGD0-06 [seam] ────────────────────────────────────────────────────────
@@ -187,6 +232,49 @@ describe('TG-PD0 · the capability contract', () => {
     for (const code of ['**0**', '**1**', '**2**', '**130**']) {
       expect(doc, `the document does not document exit code ${code}`).toContain(code)
     }
+  })
+
+  // ── TGD0-09 [correctness] ─────────────────────────────────────────────────
+  it('TGD0-09 · every frozen outcome has a producer', async () => {
+    // 🔴 `W-7`. The contract freezes three outcomes and, at closeout, exactly
+    // one of them could be produced: both settle branches hard-coded
+    // `partial`. A consumer's `held` branch was untestable and the documented
+    // `exit 0` + `held` state was unreachable. `PD0-04`'s own amendment is the
+    // rule this gate enforces — *"every variant here needs a producer or it
+    // should not exist"* — and it is a GATE rather than a unit test because
+    // the thing it protects is a promise made to another team.
+    const produced = new Set<string>()
+    const runs = [
+      requestForHold('adapt'),
+      { ...requestFor('change'), input: { instructions: [] } },
+      requestFor('ingest'),
+    ]
+    for (const request of runs) {
+      const events = await collect(request, fixedClock())
+      produced.add(decodeSettled(events[events.length - 1]).outcome)
+    }
+    // Compare the SET, not the count: a count passes when one outcome is
+    // swapped for another, and `L-27` is on record for exactly that.
+    expect([...produced].sort()).toEqual([...OUTCOMES].sort())
+  })
+
+  // ── TGD0-10 [seam] ────────────────────────────────────────────────────────
+  it('TGD0-10 · a refusal settles and exits 0, across a real process boundary', () => {
+    // The distinction the whole exit-code table rests on: a hold is a
+    // SUCCESSFUL invocation carrying an unsuccessful outcome. If this ever
+    // exits 2, `held` has collapsed into "error" and the partner's two
+    // branches have become one. In-process assertions cannot prove it —
+    // the exit code only exists at the boundary.
+    expect(existsSync(SIDECAR), `${SIDECAR} is missing — run npm run build:sidecar`).toBe(true)
+    const request = JSON.stringify(requestForHold('export'))
+    const stdout = execFileSync(process.execPath, [SIDECAR], { input: request, encoding: 'utf8' })
+    const lines = stdout.trim().split('\n').filter(Boolean)
+    const settled = decodeSettled(JSON.parse(lines[lines.length - 1]!))
+    expect(settled.outcome).toBe('held')
+    expect(settled.diagnostics.some((d) => d.severity === 'failure')).toBe(true)
+    // execFileSync throws on a non-zero exit, so reaching this line IS the
+    // exit-0 assertion — stated because a reader should not have to know that.
+    expect(settled.design).toBeNull()
   })
 
   // ── TGD0-08 [seam] ────────────────────────────────────────────────────────
