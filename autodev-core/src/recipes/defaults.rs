@@ -229,7 +229,6 @@ fn supervisor_recipe() -> Recipe {
         // `runner.rs`'s own comment already states the intent this now matches:
         // *"Every worker therefore runs on the in-process Rust engine (Mode 1),
         // which needs no sidecar and no Python."*
-        fallback_policy: super::types::FallbackPolicy::Mode1Capable,
         instructions:    r#"You are the AIRS Supervisor Agent. Your sole job is task routing and board health — you never write code.
 
 ## Tick Protocol (execute every run in this exact order)
@@ -405,7 +404,6 @@ fn worker_backend_recipe() -> Recipe {
         // `runner.rs`'s own comment already states the intent this now matches:
         // *"Every worker therefore runs on the in-process Rust engine (Mode 1),
         // which needs no sidecar and no Python."*
-        fallback_policy: super::types::FallbackPolicy::Mode1Capable,
         instructions: format!(
             "{}{}",
             r#"You are the AIRS Backend Worker Agent. You implement backend tasks assigned to you.
@@ -674,7 +672,6 @@ fn worker_frontend_recipe() -> Recipe {
         // `runner.rs`'s own comment already states the intent this now matches:
         // *"Every worker therefore runs on the in-process Rust engine (Mode 1),
         // which needs no sidecar and no Python."*
-        fallback_policy: super::types::FallbackPolicy::Mode1Capable,
         instructions: format!(
             "{}{}",
             r#"You are the AIRS Frontend Worker Agent. You implement React/TypeScript frontend tasks.
@@ -913,7 +910,6 @@ fn worker_platform_recipe() -> Recipe {
         // `runner.rs`'s own comment already states the intent this now matches:
         // *"Every worker therefore runs on the in-process Rust engine (Mode 1),
         // which needs no sidecar and no Python."*
-        fallback_policy: super::types::FallbackPolicy::Mode1Capable,
         instructions: format!(
             "{}{}",
             r#"You are the AIRS Platform Worker Agent. You handle infrastructure, CI/CD, Docker, and deployment tasks.
@@ -1040,7 +1036,6 @@ fn worker_mcp_recipe() -> Recipe {
         // `runner.rs`'s own comment already states the intent this now matches:
         // *"Every worker therefore runs on the in-process Rust engine (Mode 1),
         // which needs no sidecar and no Python."*
-        fallback_policy: super::types::FallbackPolicy::Mode1Capable,
         instructions: format!(
             "{}{}",
             r#"You are the AIRS MCP Worker Agent. You build and maintain MCP server extensions.
@@ -1223,7 +1218,6 @@ fn worker_cleanup_recipe() -> Recipe {
         // that the Rust AgentEngine can execute when the LLM provider is
         // configured. Other recipes (worker-backend / frontend / qc-agent)
         // are MCP-tool-heavy and stay Mode2Only.
-        fallback_policy: super::types::FallbackPolicy::Mode1Capable,
         instructions: format!(
             "{}{}",
             r#"You are the AIRS Cleanup Worker Agent. You handle code quality — lint fixes, dead code removal, and housekeeping.
@@ -1396,7 +1390,6 @@ fn qc_agent_recipe() -> Recipe {
         // `runner.rs`'s own comment already states the intent this now matches:
         // *"Every worker therefore runs on the in-process Rust engine (Mode 1),
         // which needs no sidecar and no Python."*
-        fallback_policy: super::types::FallbackPolicy::Mode1Capable,
         instructions:    r#"You are the AIRS QC Agent. You review worker output and make the final gate decision.
 Your decision is binary: done (all criteria met, build passes, security clear) or rejected (specific failure with actionable fix).
 
@@ -1968,7 +1961,6 @@ fn qc_dispatcher_recipe() -> Recipe {
         // `runner.rs`'s own comment already states the intent this now matches:
         // *"Every worker therefore runs on the in-process Rust engine (Mode 1),
         // which needs no sidecar and no Python."*
-        fallback_policy: super::types::FallbackPolicy::Mode1Capable,
         instructions:    r#"You are the AIRS QC Dispatcher.
 
 Your only job is to fan out QC reviews. You do NOT review code yourself — you spawn one ephemeral `qc-reviewer` subagent per task in `qc_review`. Each reviewer runs in parallel under the SubagentPool cap (max 6 concurrent QC reviewers).
@@ -2061,7 +2053,6 @@ fn fleet_smoke_recipe() -> Recipe {
         // `runner.rs`'s own comment already states the intent this now matches:
         // *"Every worker therefore runs on the in-process Rust engine (Mode 1),
         // which needs no sidecar and no Python."*
-        fallback_policy: super::types::FallbackPolicy::Mode1Capable,
         instructions:    r#"You are the AIRS Fleet Smoke agent.
 
 Your job is to assemble what the backend and frontend workers built and

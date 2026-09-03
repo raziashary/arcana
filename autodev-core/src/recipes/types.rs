@@ -49,26 +49,6 @@ impl From<&RecipePermissionMode> for crate::agent::permission::PermissionMode {
     }
 }
 
-/// Doc 05 Phase 3 — fallback policy declaration.
-///
-/// Controls what the recipe runner does when Mode 2 (core-orchestrator
-/// LivingAgent) is unavailable:
-///   • `Mode2Only` (default) — refuse to run the tick. Logs an explicit
-///     "fallback skipped per policy" line so the log stream makes the
-///     decision auditable. Appropriate for recipes that depend on MCP
-///     tools (most worker recipes).
-///   • `Mode1Capable` — fall through to the Rust `AgentEngine` provider.
-///     Only suitable for recipes whose work fits the Mode 1 capabilities
-///     (no MCP tools, file ops only). The on-disk recipe declares this
-///     when it has been verified to behave under Mode 1.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum FallbackPolicy {
-    #[default]
-    Mode2Only,
-    Mode1Capable,
-}
-
 /// A single Recipe — stored as YAML in ~/.autodev/recipes/
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Recipe {
@@ -82,10 +62,23 @@ pub struct Recipe {
     pub agent_role: Option<String>, // "supervisor" | "worker-backend" | "qc"
     pub model: Option<String>,      // model override (default from settings)
     pub is_system: bool,            // system recipes cannot be deleted by users
-    // Doc 05 Phase 3 — per-recipe fallback policy. `serde(default)` so
-    // existing on-disk YAML without the field deserializes as Mode2Only.
-    #[serde(default)]
-    pub fallback_policy: FallbackPolicy,
+    // P8-25/P8-47 — `fallback_policy` DELETED.
+    //
+    // 🔴 It defaulted to `Mode2Only`, and `runner.rs` refused to run any
+    // recipe carrying that policy. `orch_healthy` has been pinned `false`
+    // since P0, so the guard was UNCONDITIONAL: `Mode2Only` did not mean
+    // "needs Mode 2", it meant **never runs**. And it was the serde
+    // default, so every recipe the UI saved -- `RecipeEditor.tsx`'s
+    // `buildRecipe()` omits the key -- deserialised as stranded and then
+    // sat reporting `fallback_idle` forever. The fleet reported itself
+    // idle rather than broken, which is the hardest kind of dead to see.
+    //
+    // ⚠ Deleting the field is what makes this a real fix. Flipping the
+    // default would have left every `fallback_policy: mode2_only` already
+    // written to `~/.autodev/recipes/*.yaml` still stranded, because
+    // `#[serde(default)]` only fills a key that is MISSING. Nothing here
+    // sets `deny_unknown_fields`, so that stale key is now ignored and old
+    // YAML keeps parsing -- see `p8_25_tests`.
 }
 
 /// Execution state of a recipe run
@@ -165,5 +158,92 @@ mod p3_65_66_tests {
         // a guard that could not fire. This mapping is where it is built.
         let built = PermissionMode::from(&RecipePermissionMode::Supervised);
         assert!(matches!(built, PermissionMode::SmartApprove));
+    }
+}
+
+#[cfg(test)]
+mod p8_25_tests {
+    //! `P8-25` — every recipe saved in the UI was silently stranded.
+    //!
+    //! `FallbackPolicy` defaulted to `Mode2Only`; `RecipeEditor.tsx`'s
+    //! `buildRecipe()` omits the key, so `#[serde(default)]` filled in the
+    //! stranding value; and `runner.rs` refused to run any recipe carrying it.
+    //! `orch_healthy` has been pinned `false` since `P0`, so that guard was
+    //! **unconditional** — the recipe never ran and never errored. It reported
+    //! `fallback_idle`, so the fleet looked idle rather than broken.
+
+    use super::*;
+
+    /// 🔴 **The test that decides whether this is a fix at all.**
+    ///
+    /// Flipping the default to `Mode1Capable` would have fixed new recipes and
+    /// left every `fallback_policy: mode2_only` ALREADY WRITTEN to
+    /// `~/.autodev/recipes/*.yaml` still stranded, because `#[serde(default)]`
+    /// only fills a key that is **missing** — an explicitly-written value
+    /// survives any change to the Rust default. Deleting the field is what
+    /// reaches those files, and this asserts the deletion is backwards
+    /// compatible rather than a parse error on next launch.
+    #[test]
+    fn a_recipe_yaml_still_carrying_the_deleted_key_still_parses() {
+        let yaml = r#"
+version: "1.0.0"
+id: worker-legacy
+title: A recipe written before P8
+description: null
+schedule: null
+permission_mode: supervised
+instructions: "do the thing"
+agent_role: null
+model: null
+is_system: false
+fallback_policy: mode2_only
+"#;
+        let recipe: Recipe = serde_yaml::from_str(yaml)
+            .expect("a recipe carrying the deleted key must still deserialise");
+        assert_eq!(recipe.id, "worker-legacy");
+        assert_eq!(recipe.title, "A recipe written before P8");
+    }
+
+    #[test]
+    fn a_recipe_yaml_without_the_key_parses_too() {
+        // The shape every recipe written after this phase has.
+        let yaml = r#"
+version: "1.0.0"
+id: worker-new
+title: A recipe written after P8
+description: null
+schedule: null
+permission_mode: supervised
+instructions: "do the thing"
+agent_role: null
+model: null
+is_system: false
+"#;
+        let recipe: Recipe = serde_yaml::from_str(yaml).expect("must deserialise");
+        assert_eq!(recipe.id, "worker-new");
+    }
+
+    #[test]
+    fn a_serialised_recipe_no_longer_emits_the_key() {
+        // Round-tripping an old recipe must not write the stranding key back.
+        let yaml = r#"
+version: "1.0.0"
+id: r
+title: t
+description: null
+schedule: null
+permission_mode: supervised
+instructions: "do the thing"
+agent_role: null
+model: null
+is_system: false
+fallback_policy: mode2_only
+"#;
+        let recipe: Recipe = serde_yaml::from_str(yaml).expect("parse");
+        let out = serde_yaml::to_string(&recipe).expect("serialise");
+        assert!(
+            !out.contains("fallback_policy"),
+            "the stranding key was written back out: {out}"
+        );
     }
 }

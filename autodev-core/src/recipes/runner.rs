@@ -708,33 +708,13 @@ impl RecipeRunner {
             );
         }
 
-        // Doc 05 Phase 3 — honour the recipe's fallback policy. Mode2Only
-        // recipes refuse to fall through to Mode 1 even if a provider is
-        // configured; Mode1Capable recipes proceed to the AgentEngine path
-        // below. This is enforced AFTER the Mode 2 attempt so a transient
-        // orch hiccup doesn't downgrade a Mode2Only recipe to a buggy
-        // Mode 1 run.
-        if matches!(
-            recipe.fallback_policy,
-            crate::recipes::types::FallbackPolicy::Mode2Only
-        ) {
-            info!(
-                "[RecipeRunner] Worker '{}' Mode 1 fallback skipped per policy \
-                 (recipe.fallback_policy = mode2_only) — staying idle until \
-                 core-orchestrator is reachable.",
-                worker_slug
-            );
-            emit_worker_tick_end(WorkerTickEndPayload {
-                slug: worker_slug.to_string(),
-                outcome: "fallback_skipped_policy".to_string(),
-                timestamp: chrono::Utc::now().to_rfc3339(),
-            });
-            // Doc 05 Phase 2 — distinct status "fallback_idle" so the Live
-            // Monitor can render a different visual state for "fallback
-            // engaged but skipped per policy" vs ordinary idle.
-            self.set_worker_status(worker_slug, "fallback_idle");
-            return Ok(());
-        }
+        // P8-25/P8-47 — the `Mode2Only` guard is DELETED.
+        //
+        // It returned `fallback_idle` for any recipe whose policy was
+        // `Mode2Only`, which was the serde DEFAULT, and `orch_healthy` has
+        // been pinned `false` since P0 — so this branch was unconditional
+        // and such a recipe never ran at all. Every worker now proceeds to
+        // the Mode 1 engine below, which is the only engine there is.
 
         // ── Mode 1: Rust AgentEngine (fallback / standalone) ─────────────────
         // Provider + API key are resolved here (only when Mode 2 is unavailable)
@@ -1113,7 +1093,6 @@ mod p3_65_runner_tests {
             agent_role: None,
             model: None,
             is_system: false,
-            fallback_policy: Default::default(),
         }
     }
 
