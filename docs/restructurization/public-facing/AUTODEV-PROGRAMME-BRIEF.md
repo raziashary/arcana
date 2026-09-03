@@ -102,40 +102,6 @@ Fifteen phases. Every one has an explicit slot — nothing is parked.
 | 🤝 | **M3 · Full Rollout 1** | **Every design capability live** | — | **~32 h in** |
 | 9 | **P4** Fleet | A task runs end to end and lands a verified artifact | 44 | **~7.5 h** |
 
-### Rollout 2 — *"The entire application is ready for usage"*
-
-AutoDev standing on its own: its own interface, a compiled code graph for context, a
-first-run experience, and signed installers for Windows, Linux and macOS.
-
-**R1 is not R2 with pieces missing.** It is a complete product with a different consumer.
-That distinction is what allows interface work to sit in R2 without crippling R1.
-
----
-
-## 4 · The plan
-
-Fifteen phases. Every one has an explicit slot — nothing is parked.
-
-### Rollout 1
-
-| # | Phase | Delivers | Tasks | Est. |
-|---|---|---|---|---|
-| ✅ | **P0** Stop the bleeding | The security holes closed; CI can fail | 27 | done |
-| ✅ | **P1** Structural | Everything shipped is compiled; one owner per database; redaction live | 22 | done |
-| ✅ | **P2** Providers | Three providers conform; **Gemini primary**; cost honest; spend capped — proven against the live APIs, not only against fixtures | 74 | done |
-| ✅ | **P3 A–E** Runtime | One tool path with a real permission gate; a panic cannot kill the app — **and four ways the model could reach past both, closed** | 39 | done |
-| ✅ | **P3-F** Memory | Memory that works, is scoped to its project, and cannot be written to by an agent claiming to be you | 18 | done |
-| 1 | **P8** Sidecar removal | The retired Python subsystem deleted entirely | 24 | **~4 h** |
-| 🤝 | **Handover** | **The AutoDesign team can begin wiring** | — | **~5 h away** |
-| 3 | **PD1** Ingestion | PSD **and** PDF → one representation | 14 | **~2.5 h** |
-| 4 | **PD2** Fidelity | Faithfulness measured and refined | 14 | **~2.5 h** ⚠ |
-| 5 | **PD3** Export | Webpage · PDF · PSD | 15 | **~2.5 h** |
-| 6 | **PD4** Adaptation | Reformat to any target size | 13 | **~2 h** |
-| 7 | **PD5** Changes | Text, image, position, colour, shape | 13 | **~2 h** |
-| 8 | **PD6** Brand guideline | Ingest a brand guide and apply it | 9 | **~1.5 h** |
-| 9 | **P4** Fleet | A task runs end to end and lands a verified artifact | 31 | **~5 h** |
-| 2 | **PD0** Contract | The integration surface, published early | 6 | **~1 h** |
-
 ### Rollout 2
 
 | # | Phase | Delivers | Tasks | Est. |

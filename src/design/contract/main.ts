@@ -33,19 +33,56 @@ const processIo: SidecarIo = {
   writeErr: (line) => process.stderr.write(`${line}\n`),
 }
 
+/**
+ * Set once a terminal event has been written.
+ *
+ * 🔴 Without it the signal handler races the normal exit. `process.stdout` is
+ * asynchronous for a pipe, so after `runInvocation` returns, the process is
+ * still draining queued writes — and `process.exit()` **discards** them. A
+ * signal arriving in that window produced exit `130` ("no terminal event was
+ * emitted") *together with* a stdout stream truncated mid-line, which the
+ * partner document explicitly promises cannot happen. Both halves of the
+ * contract wrong, for the same invocation.
+ */
+let settled = false
+
 async function main(): Promise<void> {
   // Cancellation is "the parent kills the child" (`PD0-08`). On a signal we
   // exit **without** a terminal event: a `settled` for work that did not finish
   // is worse than silence, because the caller would believe it.
+  //
+  // ⚠ On Windows Node never delivers `SIGTERM`, and a parent's `child.kill()`
+  // is `TerminateProcess`, which runs no handler at all — so on the platform
+  // this product ships on, cancellation surfaces as an abrupt death rather than
+  // exit 130. That is stated in the partner document rather than papered over:
+  // a handler that cannot run is not a guarantee.
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.on(signal, () => {
+      if (settled) {
+        // The work finished and we are only draining. Let the stream flush and
+        // keep the exit code the invocation earned.
+        return
+      }
       process.stderr.write(`INTERRUPTED: ${signal} received before settling\n`)
       process.exit(EXIT.INTERRUPTED)
     })
   }
 
-  const raw = await readAll(process.stdin)
-  process.exitCode = await runInvocation(raw, processIo)
+  let raw: string
+  try {
+    raw = await readAll(process.stdin)
+  } catch (error) {
+    // A request too large never reached the contract, so it is a protocol
+    // refusal — not "accepted, then failed", which is what an unbounded read
+    // would have reported for an out-of-memory crash.
+    process.stderr.write(`PROTOCOL: ${error instanceof Error ? error.message : String(error)}\n`)
+    process.exitCode = EXIT.PROTOCOL
+    return
+  }
+
+  const code = await runInvocation(raw, processIo)
+  settled = code === EXIT.SETTLED
+  process.exitCode = code
 }
 
 void main().catch((error: unknown) => {

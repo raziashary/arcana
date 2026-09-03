@@ -1683,7 +1683,8 @@ what stops that shape recurring, and it is `PD1`'s to write.
   requires a malformed request to be **refused**, an unknown schema version to
   be **rejected rather than parsed**, and a killed child to leave **no partial
   output claiming success**.
-- **`PD0-10` opens the `NOVELTY_LEDGER` row.** The register holds six rows and
+- **`PD0-10` opens the `NOVELTY_LEDGER` row.** The register holds **twenty** rows and — ⚠ this entry first said *six*, corrected
+2026-09-03 by the work audit —
   **none for the design programme**, though `PD0` adopts an external contract
   shape, `PD1` is grounded in an external converter, and `PD2`/`PD4` now carry
   ~33 tasks derived from an external adaptation engine. The anchor-set rule is

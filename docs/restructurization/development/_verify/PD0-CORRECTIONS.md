@@ -86,7 +86,7 @@ or consumes**. Every PD0 task needs a reachability proof, not a presence proof.
 
 ## M-5 · The design programme has **no novelty-ledger rows** · FINDING
 
-`NOVELTY_LEDGER.md` holds 6 rows; none covers design. Yet `PD0` adopts an
+`NOVELTY_LEDGER.md` holds **20** rows; none covers design. ⚠ This line originally said 6 — a `grep -c "^| "` counting table rows inside entries rather than entries — and the wrong figure propagated into the plan and the ADR before the work audit caught it. Yet `PD0` adopts an
 external contract shape, `PD1` is grounded in an external converter
 (`apps/psdconversions`), and `PD4`/`PD2` now carry ~33 tasks derived from an
 external adaptation engine (the AAE post-mortem, folded in 2026-09-03).

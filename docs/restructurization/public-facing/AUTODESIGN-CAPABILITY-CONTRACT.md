@@ -17,9 +17,17 @@ hear about it.
 ## 1 · Why a sidecar, and not a service
 
 You have no MCP client, and building one costs you time you should not spend on
-us. AutoDev has no HTTP server, and adding one would put a listening socket in a
-local desktop application — the last one it had was an unauthenticated endpoint
-that was removed for being local remote-code-execution.
+us. AutoDev has **no inbound surface an external process can reach**, and adding
+one would put a listening socket in a local desktop application — the last one
+it had was an unauthenticated endpoint removed for being local
+remote-code-execution.
+
+⚠ To be exact, because you are sizing the security posture of a process you are
+about to spawn: AutoDev today *starts and dials* two loopback services of its
+own — a Python orchestrator on `127.0.0.1:4000` and a memory service on `:8000`
+— both of which are deleted in our next phase. Neither accepts traffic from
+anything but AutoDev. What does not exist, and what we are declining to build,
+is a port **you** would connect to.
 
 So: **you spawn us, we answer on stdout, we exit.** No port to configure, no
 credential to provision, no daemon to supervise, nothing to leave running. It is
@@ -112,6 +120,33 @@ and your manifest marks the gradient load-bearing with
 erases that distinction on our side of the pipe. **Approval stays yours to
 enforce, before you spawn us.** We do not re-implement it and we do not pretend
 the difference is ours to erase.
+
+---
+
+## 3.5 · Who executes, on our side
+
+Stated because the contract is otherwise silent on it, and silence would leave
+you to infer it.
+
+**In Rollout 1 the work is done by AutoDev's personal assistant** — the
+interactive agent — not by its worker fleet. That is a deliberate choice by our
+owner rather than a limitation: routing design work through a multi-agent fleet
+now would, in his words, be *"pretty confusing and hard to debug"* while the
+conversion itself is still being refined. **The fleet becomes an additional
+consumer of this same contract in Rollout 2.** Nothing you build against this
+document changes when that happens.
+
+Two consequences worth having in writing:
+
+- **`adapt` is deterministic.** No model call happens inside it — that is
+  enforced on our side by a gate, not by convention. Given the same design and
+  the same target it returns the same result.
+- **Judgement lives at the edges.** Choosing a target size, adjudicating a
+  `partial` outcome, deciding whether a substituted font is acceptable — those
+  are agent decisions, and in Rollout 1 they are the assistant's.
+
+**Approval is yours.** We do not re-implement your approval gradient and we do
+not evaluate it. You decide whether an operation may run, before you spawn us.
 
 ---
 
@@ -208,8 +243,8 @@ carries a score.
 
 ## 7 · Assets
 
-Bytes move by reference, and the field set **mirrors your
-`artifactReferenceSchema`** so a decoder you already have can read ours:
+Bytes move by reference, and the field set **follows your
+`artifactReferenceSchema`** so the shape is familiar rather than novel:
 
 ```json
 {
@@ -228,6 +263,13 @@ Bytes move by reference, and the field set **mirrors your
 **Who owns the lifetime: the producer, until `expiresAt`.** `null` means never
 expires — not "unknown". We enforce your refinement too: expiry must be strictly
 after creation.
+
+⚠ **It is not drop-in, and an earlier draft of this page wrongly said it was.**
+Ours adds `contractVersion` and `artifactKind`, and your schemas are `.strict()`
+— so your decoder will *reject* our payload on the two undeclared keys, and
+`artifactKind` is free-form here against a closed five-member enum there. The
+field names and semantics match so a mapping is mechanical; the decoder is not
+shared. We would rather you learn that here than from a failing `.parse()`.
 
 ⚠ **Timestamps must carry an explicit UTC offset.** We refuse ones that do not,
 and that is not pedantry — this codebase shipped the offset-less-timestamp defect
@@ -299,12 +341,21 @@ const report = await runConformance({ run: (request) => yourImplementation(reque
 console.log(formatReport(report))
 ```
 
-It imports no test framework. It checks that every operation settles exactly
-once and last, that events echo your `operationId`, that sequence numbers
-increase — and, in the half that matters, that an implementation **cannot**
-claim a fidelity score it never measured, emit an unevidenced `partial`, return
-output on a `held`, parse an unknown schema version, or silently ignore a field
-it does not know.
+It imports no test framework.
+
+**What it drives against your implementation:** that every operation settles
+exactly once and last, that the settled event's `operation` is the one you
+asked for, that events echo your `operationId`, that sequence numbers increase,
+and — the one that carries the invariants — that your terminal event **decodes**
+through the same `decodeSettled` we use, which is where the outcome rules live.
+
+**What it checks about the contract itself, not about you:** that a fidelity
+score cannot be claimed without a method, that an unevidenced `partial` is
+refused, that a `held` cannot carry output, that an unknown schema version is
+rejected and an undeclared field is not ignored. These run our decoder against
+fixtures. ⚠ An earlier draft of this page described them as testing *your*
+implementation; they do not, and the distinction matters when you read a green
+report.
 
 ---
 

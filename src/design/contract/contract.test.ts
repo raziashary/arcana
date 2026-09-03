@@ -102,7 +102,10 @@ describe('schema versioning', () => {
   it('rejects an unknown contract version on the envelope', () => {
     expect(() =>
       decodeRequest({ ...requestFor('ingest'), contractVersion: 'autodev-design-request/0.9.9' }),
-    ).toThrow(/expected "autodev-design-request\/0\.1\.0"/)
+      // The message now enumerates every version this build accepts, because
+      // `SUPPORTED_VERSIONS` is the decoder's actual source (audit A-11) — a
+      // consumer negotiating a version needs the list, not just the mismatch.
+    ).toThrow(/expected one of autodev-design-request\/0\.1\.0/)
   })
 })
 

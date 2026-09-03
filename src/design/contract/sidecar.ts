@@ -107,11 +107,61 @@ export async function runInvocation(
   return settled ? EXIT.SETTLED : EXIT.UNSETTLED
 }
 
-/** Read the whole of a stream as UTF-8. Exported for the entry point. */
+/**
+ * The largest request we will read.
+ *
+ * ⚠ Same order as AutoDesign's own 16 KiB input envelope, with room to spare.
+ * The wire carries references, not documents, so anything approaching this is
+ * a caller sending the payload we asked them not to send — and telling them so
+ * is more useful than an out-of-memory crash.
+ */
+export const MAX_REQUEST_BYTES = 1024 * 1024
+
+/**
+ * Read the whole of a stream as UTF-8.
+ *
+ * 🔴 **The first version decoded each chunk with its own `TextDecoder` and no
+ * `{ stream: true }`.** Node splits stdin at arbitrary *byte* offsets, so a
+ * multi-byte character straddling two chunks was decoded as two invalid
+ * fragments and replaced with `U+FFFD` — and the result was still valid JSON,
+ * so nothing downstream noticed. Reproduced: an `operationId` of
+ * `"日本語のデザイン"` split at byte 20 became `"日\uFFFD\uFFFD\uFFFD語のデザイン"`,
+ * `JSON.parse` succeeded, `decodeRequest` accepted it, and every event echoed
+ * the mangled id — so the caller could not correlate the response with the
+ * request it sent. The same mechanism silently rewrites `design.ref`, so a
+ * later phase would resolve a reference that does not exist.
+ *
+ * One decoder, streaming, with a final flush. And a byte cap, because an
+ * unbounded read turns a hostile or mistaken 2 GB stdin into an OOM whose exit
+ * code claims the work was "accepted, then failed".
+ */
 export async function readAll(stream: AsyncIterable<Uint8Array | string>): Promise<string> {
-  const chunks: string[] = []
+  const decoder = new TextDecoder('utf-8', { fatal: false })
+  const parts: string[] = []
+  let bytes = 0
   for await (const chunk of stream) {
-    chunks.push(typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk))
+    if (typeof chunk === 'string') {
+      bytes += Buffer.byteLength(chunk, 'utf8')
+      parts.push(chunk)
+    } else {
+      bytes += chunk.byteLength
+      parts.push(decoder.decode(chunk, { stream: true }))
+    }
+    if (bytes > MAX_REQUEST_BYTES) {
+      throw new RequestTooLarge(bytes)
+    }
   }
-  return chunks.join('')
+  parts.push(decoder.decode())
+  return parts.join('')
+}
+
+/** Thrown by `readAll`, so the entry point can report it as a protocol error. */
+export class RequestTooLarge extends Error {
+  constructor(readonly bytes: number) {
+    super(
+      `the request exceeded ${MAX_REQUEST_BYTES} bytes (read ${bytes}). ` +
+        'The wire carries a reference to a design, never the design itself.',
+    )
+    this.name = 'RequestTooLarge'
+  }
 }

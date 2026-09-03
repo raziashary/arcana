@@ -28,15 +28,11 @@ import {
   type Diagnostic,
   type FidelityReport,
   type Operation,
+  type ContractEvent,
+  type ProgressEvent,
   type SettledEvent,
 } from './types'
-import {
-  ARTIFACT_REF_CONTRACT_VERSION,
-  DESIGN_REF_CONTRACT_VERSION,
-  EVENT_CONTRACT_VERSION,
-  IR_SCHEMA_VERSION,
-  REQUEST_CONTRACT_VERSION,
-} from './version'
+import { SUPPORTED_VERSIONS } from './version'
 
 /**
  * Why a payload was refused.
@@ -66,6 +62,28 @@ const isObject = (v: unknown): v is Record<string, unknown> =>
 
 function obj(v: unknown, path: string): Record<string, unknown> {
   return isObject(v) ? v : fail(path, 'expected an object')
+}
+
+/**
+ * Read a field that the contract declares as nullable.
+ *
+ * 🔴 `o.design === null ? null : decode(...)` treats **absent** as
+ * **present-but-wrong**. A caller omitting the null field — the idiomatic thing
+ * to do — got `request.design: expected an object`, read that as "ingest needs
+ * a design", supplied one, and was then told `ingest produces a design and must
+ * not be given one`. Two contradictory errors for one honest request.
+ *
+ * Absent and `null` mean the same thing for a nullable field, and this says so
+ * once instead of at each of the three sites that got it wrong.
+ */
+function nullable<T>(
+  o: Record<string, unknown>,
+  key: string,
+  path: string,
+  decode: (v: unknown, p: string) => T,
+): T | null {
+  const v = o[key]
+  return v === null || v === undefined ? null : decode(v, `${path}.${key}`)
 }
 
 function str(v: unknown, path: string): string {
@@ -104,10 +122,21 @@ function sha256(v: unknown, path: string): string {
  * and inflated every age by the machine's UTC offset. A contract that accepts
  * an offset-less timestamp is inviting both.
  */
+const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
+
 function timestamp(v: unknown, path: string): string {
   const s = str(v, path)
-  if (!/(?:Z|[+-]\d{2}:\d{2})$/.test(s) || Number.isNaN(Date.parse(s))) {
-    return fail(path, 'expected an ISO-8601 timestamp with an explicit UTC offset')
+  // 🔴 The first version tested only the SUFFIX — `/(Z|[+-]\d{2}:\d{2})$/` plus
+  // `Date.parse`. `Date.parse` falls back to V8's legacy parser, so it accepted
+  // `"12/25/2026 GMT+01:00"` (month/day order is V8-specific) and
+  // `"2026-09-03Z"` (a date with no time, silently becoming midnight). We would
+  // have certified those to a partner whose zod, chrono and Python decoders all
+  // reject them — the seam breaking on their side, on a payload we blessed.
+  //
+  // So the format is anchored, and `Date.parse` stays only as a sanity check on
+  // values the shape already accepts (it rejects month 13, day 32).
+  if (!RFC3339.test(s) || Number.isNaN(Date.parse(s))) {
+    return fail(path, 'expected an RFC3339 timestamp with an explicit UTC offset')
   }
   return s
 }
@@ -130,6 +159,28 @@ function literal<T extends string>(v: unknown, expected: T, path: string): T {
   return s === expected ? (s as T) : fail(path, `expected "${expected}", received "${s}"`)
 }
 
+/**
+ * Accept any version this build understands, from the published list.
+ *
+ * 🔴 `SUPPORTED_VERSIONS` was exported with a comment claiming it existed *"so
+ * a decoder cannot drift from the list"* — and every decoder hand-coded its own
+ * constant instead, so nothing read it. That is `L-C12` with a docstring
+ * asserting the opposite, in a file written the same day. It is the actual
+ * source now: adding a version to the list is what makes a decoder accept it,
+ * and the negotiation surface we publish cannot disagree with what we decode.
+ */
+function versioned<K extends keyof typeof SUPPORTED_VERSIONS>(
+  v: unknown,
+  family: K,
+  path: string,
+): (typeof SUPPORTED_VERSIONS)[K][number] {
+  const s = str(v, path)
+  const accepted = SUPPORTED_VERSIONS[family] as readonly string[]
+  return accepted.includes(s)
+    ? (s as (typeof SUPPORTED_VERSIONS)[K][number])
+    : fail(path, `expected one of ${accepted.join(' | ')}, received "${s}"`)
+}
+
 function member<T extends string>(v: unknown, set: readonly T[], path: string): T {
   const s = str(v, path)
   return (set as readonly string[]).includes(s)
@@ -149,10 +200,10 @@ export function decodeDesignRef(value: unknown, path = 'design'): DesignRef {
   const o = obj(value, path)
   noExtraKeys(o, DESIGN_REF_KEYS, path)
   return {
-    contractVersion: literal(o.contractVersion, DESIGN_REF_CONTRACT_VERSION, `${path}.contractVersion`),
+    contractVersion: versioned(o.contractVersion, 'designRef', `${path}.contractVersion`),
     // 🔴 This is the check `PD0-02` exists for. The IR had no version at all;
     // refusing an unknown one is what makes adding a version worth anything.
-    schemaVersion: literal(o.schemaVersion, IR_SCHEMA_VERSION, `${path}.schemaVersion`),
+    schemaVersion: versioned(o.schemaVersion, 'ir', `${path}.schemaVersion`),
     ref: str(o.ref, `${path}.ref`),
     sha256: sha256(o.sha256, `${path}.sha256`),
     byteLength: nonNegativeInt(o.byteLength, `${path}.byteLength`),
@@ -167,8 +218,10 @@ const ARTIFACT_KEYS = [
 export function decodeArtifactRef(value: unknown, path: string): ArtifactRef {
   const o = obj(value, path)
   noExtraKeys(o, ARTIFACT_KEYS, path)
+  // Version first, for the same reason as `decodeSettled`.
+  const contractVersion = versioned(o.contractVersion, 'artifactRef', `${path}.contractVersion`)
   const createdAt = timestamp(o.createdAt, `${path}.createdAt`)
-  const expiresAt = o.expiresAt === null ? null : timestamp(o.expiresAt, `${path}.expiresAt`)
+  const expiresAt = nullable(o, 'expiresAt', path, timestamp)
   // Mirrors AutoDesign's own refinement — an artifact that expires before it
   // exists is a bug in the producer, and saying so here is cheaper than a
   // consumer discovering it as a cache that never fills.
@@ -176,7 +229,7 @@ export function decodeArtifactRef(value: unknown, path: string): ArtifactRef {
     fail(`${path}.expiresAt`, 'expiry must be strictly after creation')
   }
   return {
-    contractVersion: literal(o.contractVersion, ARTIFACT_REF_CONTRACT_VERSION, `${path}.contractVersion`),
+    contractVersion,
     artifactId: str(o.artifactId, `${path}.artifactId`),
     artifactKind: str(o.artifactKind, `${path}.artifactKind`),
     mediaType: str(o.mediaType, `${path}.mediaType`),
@@ -249,7 +302,7 @@ export function decodeRequest(value: unknown, path = 'request'): ContractRequest
     )
   }
   const operation = member(operationRaw, OPERATIONS, `${path}.operation`) as Operation
-  const design = o.design === null ? null : decodeDesignRef(o.design, `${path}.design`)
+  const design = nullable(o, 'design', path, decodeDesignRef)
   // `ingest` produces a design; every other operation acts on one. Stating it
   // here means a caller cannot get a confusing failure three steps later.
   if (operation === 'ingest' && design !== null) {
@@ -259,7 +312,7 @@ export function decodeRequest(value: unknown, path = 'request'): ContractRequest
     fail(`${path}.design`, `${operation} acts on a design and requires one`)
   }
   return {
-    contractVersion: literal(o.contractVersion, REQUEST_CONTRACT_VERSION, `${path}.contractVersion`),
+    contractVersion: versioned(o.contractVersion, 'request', `${path}.contractVersion`),
     operationId: str(o.operationId, `${path}.operationId`),
     operation,
     design,
@@ -277,8 +330,17 @@ const SETTLED_KEYS = [
 export function decodeSettled(value: unknown, path = 'event'): SettledEvent {
   const o = obj(value, path)
   noExtraKeys(o, SETTLED_KEYS, path)
+  // 🔴 The version is checked FIRST, before any invariant.
+  //
+  // It used to be checked last, inside the returned object, so a payload from a
+  // future version whose rules had changed failed on an *invariant* instead:
+  // a consumer would be told "a complete outcome must carry a design" and go
+  // hunting for a producer bug that did not exist, when the real answer is
+  // "this is 0.2.0 and you speak 0.1.0". Reporting the version mismatch is the
+  // entire reason the field is pinned.
+  const contractVersion = versioned(o.contractVersion, 'event', `${path}.contractVersion`)
   const outcome = member(o.outcome, OUTCOMES, `${path}.outcome`)
-  const design = o.design === null ? null : decodeDesignRef(o.design, `${path}.design`)
+  const design = nullable(o, 'design', path, decodeDesignRef)
   const artifacts = array(o.artifacts, `${path}.artifacts`).map((a, i) =>
     decodeArtifactRef(a, `${path}.artifacts[${i}]`),
   )
@@ -313,7 +375,7 @@ export function decodeSettled(value: unknown, path = 'event'): SettledEvent {
   }
 
   return {
-    contractVersion: literal(o.contractVersion, EVENT_CONTRACT_VERSION, `${path}.contractVersion`),
+    contractVersion,
     type: literal(o.type, 'settled', `${path}.type`),
     operationId: str(o.operationId, `${path}.operationId`),
     operation: member(o.operation, OPERATIONS, `${path}.operation`),
@@ -323,6 +385,62 @@ export function decodeSettled(value: unknown, path = 'event'): SettledEvent {
     design,
     artifacts,
     diagnostics,
-    fidelity: o.fidelity === null ? null : decodeFidelity(o.fidelity, `${path}.fidelity`),
+    fidelity: nullable(o, 'fidelity', path, decodeFidelity),
   }
+}
+
+// ── A progress event, which had no decoder at all ───────────────────────────
+
+const PROGRESS_KEYS = [
+  'contractVersion', 'type', 'operationId', 'operation', 'sequence', 'observedAt', 'progress',
+] as const
+
+/**
+ * 🔴 Added after the PD0 area audit. `ProgressEvent` was declared, emitted, and
+ * documented as stdout traffic — and had **no decoder**, so a consumer parsing
+ * the stream line-by-line as our own document instructs could validate one line
+ * in four. Calling `decodeSettled` on a progress event returns
+ * *"unknown field(s): progress"*: an error naming a field that is required on
+ * the event they actually received.
+ *
+ * Their only outs were to hand-roll a decoder — defeating the zero-dependency
+ * premise of this file — or to skip validation on 75% of the stream.
+ */
+export function decodeProgress(value: unknown, path = 'event'): ProgressEvent {
+  const o = obj(value, path)
+  noExtraKeys(o, PROGRESS_KEYS, path)
+  const contractVersion = versioned(o.contractVersion, 'event', `${path}.contractVersion`)
+  const type = member(
+    o.type,
+    ['accepted', 'started', 'progressed'] as const,
+    `${path}.type`,
+  )
+  const progress = nullable(o, 'progress', path, (v, p) => {
+    const d = obj(v, p)
+    noExtraKeys(d, ['stage', 'completed', 'total'] as const, p)
+    const completed = d.completed === null ? null : nonNegativeInt(d.completed, `${p}.completed`)
+    const total = d.total === null ? null : nonNegativeInt(d.total, `${p}.total`)
+    // The one invariant worth having here: a count cannot exceed its own total.
+    // `null` means genuinely unknown — never a guess — so a completed with no
+    // total is legal, and a completed past a stated total is not.
+    if (completed !== null && total !== null && completed > total) {
+      fail(`${p}.completed`, `completed (${completed}) exceeds total (${total})`)
+    }
+    return { stage: str(d.stage, `${p}.stage`), completed, total }
+  })
+  return {
+    contractVersion,
+    type,
+    operationId: str(o.operationId, `${path}.operationId`),
+    operation: member(o.operation, OPERATIONS, `${path}.operation`),
+    sequence: nonNegativeInt(o.sequence, `${path}.sequence`),
+    observedAt: timestamp(o.observedAt, `${path}.observedAt`),
+    progress,
+  }
+}
+
+/** Decode any event off the stream, dispatching on `type`. */
+export function decodeEvent(value: unknown, path = 'event'): ContractEvent {
+  const o = obj(value, path)
+  return o.type === 'settled' ? decodeSettled(o, path) : decodeProgress(o, path)
 }

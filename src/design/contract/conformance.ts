@@ -18,9 +18,14 @@
 // `L-C12` — a helper built, unit-proven, and wired to nothing — has eight
 // recorded instances in this programme, one of them an error taxonomy that sat
 // for months *"defined, unit-tested against itself, and never produced by
-// anything"*. A contract is the easiest possible place to repeat it. So every
-// check below drives a real implementation and reads what it produced; none of
-// them assert that a type exists.
+// anything"*. A contract is the easiest possible place to repeat it.
+//
+// ⚠ **This header used to claim "every check below drives a real implementation
+// and reads what it produced". That was false when written**, and the area
+// audit caught it: the five invariant checks at the bottom never touch the
+// driver — they run our decoder against fixtures. The file is now split under
+// two headings that say which is which, because a comment asserting the
+// opposite of the code is the defect this programme has recorded most often.
 
 import { decodeSettled, ContractError } from './decode'
 import { OPERATIONS, type ContractEvent, type ContractRequest, type Operation } from './types'
@@ -94,6 +99,22 @@ export async function runConformance(driver: ContractDriver): Promise<Conformanc
       return `${events.length} events, terminal last`
     })
 
+    await check(results, `${operation}: the settled event reports the operation asked for`, async () => {
+      // 🔴 Added after the area audit. Without it, a stand-in that ignores
+      // `request.operation` and always returns the `ingest` sequence with the
+      // caller's id substituted passes every other check and is reported
+      // CONFORMANT — so a team could ship against a seam they had implemented
+      // for exactly one of the four verbs.
+      const events = await driver.run(requestFor(operation))
+      const settled = events.find((e) => e.type === 'settled')
+      assert(settled !== undefined, 'no settled event')
+      assert(
+        settled!.operation === operation,
+        `asked for "${operation}", the settled event reported "${settled!.operation}"`,
+      )
+      return `echoed ${operation}`
+    })
+
     await check(results, `${operation}: the terminal event decodes`, async () => {
       const events = await driver.run(requestFor(operation))
       const settled = events.find((e) => e.type === 'settled')
@@ -125,11 +146,15 @@ export async function runConformance(driver: ContractDriver): Promise<Conformanc
     })
   }
 
-  // ── the no-fire half ─────────────────────────────────────────────────────
+  // ── the contract's own invariants ────────────────────────────────────────
   //
-  // ⚠ Without these, every check above is satisfiable by an implementation that
-  // returns a fixed valid response to anything — which is `L-C9`, a check whose
-  // shape cannot express failure.
+  // ⚠ **These do NOT drive your implementation.** They run our decoder against
+  // fixtures, to demonstrate that the rules the contract states are actually
+  // enforced by the decoder we ship — which is what your terminal event is put
+  // through by the `decodes` check above. An earlier version of this file
+  // claimed they tested the driver; they never did, and a report that mixes the
+  // two invites over-trust in a green result. The checks that exercise *you*
+  // are the four per-operation ones above.
 
   await check(results, 'a fidelity report cannot claim a score it did not measure', () => {
     let refused = false
