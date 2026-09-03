@@ -9,7 +9,7 @@
 | **Owner** | Razi (Programming Lead, AIRS Foundry) |
 | **Branch** | `main` (Razi authorised working directly on it; `sidecar-backup` holds the pre-restructure state) |
 | **Rev** | **2.2** — created 2026-08-31, current 2026-09-03. `§16` is authoritative for the history |
-| **Status** | 🟢 **BUILDING.** GO given 2026-09-01. Complete: `P0` · `P1` · `P2` · `P3 A–E` · `P3-F` · `PD0`. **Next: `P8`.** 312 of 506 tasks open |
+| **Status** | 🟢 **BUILDING.** GO given 2026-09-01. Complete: `P0` · `P1` · `P2` · `P3 A–E` · `P3-F` · `PD0`. **Next: `P8`.** 316 of 517 tasks open |
 
 ⚠ **This header read `Rev 1.0` and `⛔ AWAITING GO. No code, no migrations, no
 deletions.` until 2026-09-03** — through seven completed phases, hundreds of
@@ -815,13 +815,21 @@ goes to ask *what is left*.
 | 9 | **PD5** Changes | Reverses the PSD **construction** the source pipeline already performs. Needs PD3's writer | 13 |
 | 10 | **PD6** Brand guideline | Consumes PD5's change primitives — a rebrand *is* a batch of changes driven by a guide | 10 |
 | — | 🤝 **M3 · Every design capability live** | Fidelity, export, adapt, change and brand guideline all real. **`PD2`–`PD6`**, ≈30.5 h from now | — |
-| 11 | **P4** Fleet | *"including the fleet."* Last in R1 because a fleet multiplies whatever the tools already do; multiplying unproven tools only multiplies the debugging | 45 |
+| 11 | **P4** Fleet | *"including the fleet."* Last in R1 because a fleet multiplies whatever the tools already do; multiplying unproven tools only multiplies the debugging. ⚠ **+4 on 2026-09-03** — `P4-G`, the one-fleet ruling (`ADR-LOG-RESTRUCT-0037`) | 49 |
 | 12 | **R1 close** | Integration, post-phase audit (`§0.2a`), contract v1. ≈38 h from now | — |
 
-**Open R1 tasks: 229.** Completed R1 tasks: **197** (`P0`–`P3-F` and `PD0`, plus
-4 of `PD1`'s and 1 of `P4`'s taken early). Programme total **513**, of which
-**312 open** — the open figure is unchanged by `S-39`, since all seven recovered
-`P0` tasks are complete. Hours are `§5.6`'s measured model, not estimates.
+**Open R1 tasks: 233.** Completed R1 tasks: **201** (`P0`–`P3-F` and `PD0`, plus
+4 of `PD1`'s and 1 of `P4`'s taken early). Programme total **517**, of which
+**316 open**. Hours are `§5.6`'s measured model, not estimates.
+
+⚠ **Recounted 2026-09-03 by walking the checkboxes, and three of the four
+figures here were wrong before `P4-G` was added.** The header said *"312 of
+**506**"* while this paragraph said *"programme total **513**"* — two derived
+totals, in one document, disagreeing by seven. Measured: **517** rows, **201**
+done, **316** open, no duplicate ids. `P4-G`'s four account for the last of the
+gap; the rest was `L-C1` residue that no count-walking check had ever been
+pointed at the *totals*, only at the per-phase table. `_verify/MDP-COUNTS-CHECK.py`
+now has a companion question to answer.
 
 ## §5.2 · The R2 ordering
 
@@ -1720,6 +1728,43 @@ carried into `PD1-A` with their evidence rather than re-proven.
 - [ ] **P4-43** **An empty board stops costing money.** `supervisor` invokes the LLM every 60 s and `qc-agent` every 30 s against an empty board, replying "Board clean — idle". The `worker-*` short-circuit has no counterpart for either, and the QC queue's own skip lives inside the dead Mode 2 branch. → `BENCH-PROVEN`
 - [ ] **P4-44** **Procedural memory is wired for workers** *(razi-ruled, `D5` — `P8-40`/`P8-41` build the seam, this turns it on)*. A worker that has run this build before is the beneficiary. Scoped to the tools the model actually invoked, inside the existing turn budget, and off by default until the equivalence gate in `P8-41` is green. → `SMOKE-PROVEN`
 
+### P4-G · One fleet, two definitions of done *(razi-ruled, `ADR-LOG-RESTRUCT-0037`)*
+
+> 🔴 **The question and the ruling.** Razi asked whether the `PD-X` design work
+> should get its **own fleet** — a main designer, a QC reviewer, a brief
+> analyst — since the existing one is shaped for programming. **Ruled: one
+> fleet.** A design worker is a **recipe**, because `P4-30` already says *"DB
+> owns identity/state, recipe owns the prompt"*. A second fleet would duplicate
+> dispatch, atomic claiming, budgets, ACP messaging and affinity — **each of
+> which has an open defect in the four groups above** — and the second copy is
+> the one nobody runs.
+>
+> ⚠ **What actually differs is not the roster; it is the definition of done.**
+> `P4-11`…`P4-15` hardcode verification as *build evidence*: an ecosystem-
+> detected command, a real exit code, a persisted row `qc_review` reads. Design
+> work has no compiler, and a QC worker that cannot fail objectively is
+> theatre (`L-C9`). The oracle already exists in this plan — **`PD2` is a
+> pixel-level fidelity measure** — so the seam is built here and its second
+> implementation lands with `PD2`.
+>
+> ⚠ **And the framing correction that made this cheap:** `PD1`–`PD5` are not
+> creative-design tasks. Read `§5.1`: ingestion, fidelity, export, *"a
+> deterministic geometry tool"*, change primitives. That is a **pipeline**, and
+> building it is programming work the existing worker shape already fits.
+
+- [ ] **P4-45** A **`Verification` trait** with `BuildEvidence` as its first implementation; `qc_review` consults the trait rather than the concrete type. ⚠ Sequenced **after** `P4-14`, which is what makes `qc_review` read the persisted table at all — a seam over a guard that still reads the in-memory map would abstract the wrong thing. → `UNIT-PROVEN`
+- [ ] **P4-46** The task type carries **which verification it requires**, and an unknown value is a **loud refusal**, never a default pass. ⚠ Same rule as `P4-02`'s `FromStr`, for the same reason: a silent default here means a design task is graded by a compiler that never ran, and reports green. → `LIVE-DB-PROVEN`
+- [ ] **P4-47** A **`FidelityEvidence`** implementation backed by `PD2`'s measure. ⚠ **Lands with `PD2`, not here** — this row exists so the second implementation has an owner and cannot be forgotten, which is `L-C12`'s remedy applied in advance. Until `PD2`, a design task's verification is `Unsupported` and refuses, per `P4-46`. → `GATE-PROVEN`
+- [ ] **P4-48** Two design **recipes** — `designer` and `design-qc` — extending `P8-34`'s invariant core like every other agent. **No new dispatch code, no second scheduler, no second claim path.** Gate: a design task is dispatched, claimed and QC'd through the *same* code path as a build task, differing only in its recipe and its verification. → `SMOKE-PROVEN`
+
+> ⚠ **Explicitly not created: a *brief analyst* worker.** It is a phase of a
+> task rather than an agent, and the capability it names — read the brief,
+> gather references, return a typed summary — is what the **intelligence
+> layer** (`AIRS-Foundry/intelligence-layer`, `M1`) already does. A worker for
+> it would be a second implementation of a shipped capability. If `PD6`'s brand
+> guideline work shows a standing need, a *guideline interpreter* recipe is
+> added then, on its own evidence — not now, on anticipation.
+
 
 
 
@@ -2263,7 +2308,7 @@ here**, because there are no gitlinks in the index or in history to operate on.
 
   **Razi's ruling, verbatim, 2026-09-03:** *"look that submodule/sidecar is already dead since the new core and memory mcp server is being used elsewhere, so delete it all you have my authorization."*
 
-  🔴 **And its boundary, ruled in the same message and binding on every task in `P8-C`:** *"do not touch the GitHub one, delete it from autodev only."* The deletion is **local to this repository**. `P8` must not push to, delete branches on, or otherwise modify `AIRS-Foundry/core-orchestrator` or `AIRS-Foundry/memory-mcp-server` — including their `autodev` branches, which are where this content lives and stays. Removing `submodules/`, `.git/modules/submodules/` and the `.gitmodules` stanzas touches nothing on those remotes; that is exactly why it is safe. → `DOC-GATE`SENT`
+  🔴 **And its boundary, ruled in the same message and binding on every task in `P8-C`:** *"do not touch the GitHub one, delete it from autodev only."* The deletion is **local to this repository**. `P8` must not push to, delete branches on, or otherwise modify `AIRS-Foundry/core-orchestrator` or `AIRS-Foundry/memory-mcp-server` — including their `autodev` branches, which are where this content lives and stays. Removing `submodules/`, `.git/modules/submodules/` and the `.gitmodules` stanzas touches nothing on those remotes; that is exactly why it is safe. → `DOC-GATE`
 - [ ] **P8-14** Delete both stanzas from **`.gitmodules`** — the only *tracked* artifact, so a normal file edit and a normal commit. → `CODE-PRESENT`
 - [ ] **P8-15** Delete **`.git/modules/submodules/`** — both object stores. ⚠ **Skipping this is the "survives by address" failure**: the working tree goes and the repository still carries the sidecar's git objects. → `CODE-PRESENT`
 - [ ] **P8-16** Delete the **`submodules/`** working tree. → `CODE-PRESENT`

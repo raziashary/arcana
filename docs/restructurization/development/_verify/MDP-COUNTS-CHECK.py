@@ -17,6 +17,17 @@ Exit 0 when the table matches the checkboxes, 1 otherwise.
 """
 import collections
 import io
+
+# 🔴 Windows' console codec is cp1252 and cannot encode the markers below, so
+# this script CRASHED the moment its output was redirected to a file or a pipe
+# -- which is exactly how CI runs it. The exit code was then 1 for the crash
+# rather than 1 for the verdict, and `L-37` says red is only a falsification
+# when it is red for the STATED reason. Reconfigure stdout before anything
+# prints.
+import sys as _sys
+if hasattr(_sys.stdout, 'reconfigure'):
+    _sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    _sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 import re
 import sys
 
@@ -88,6 +99,61 @@ def table_counts(text):
     return out
 
 
+TOTALS_PATTERNS = (
+    # (label, regex with ONE capturing group, what it should equal)
+    ('header "N of M tasks open" — open',   r'(\d+) of \d+ tasks open', 'open'),
+    ('header "N of M tasks open" — total',  r'\d+ of (\d+) tasks open', 'total'),
+    ('§5.1 Open R1 tasks',                  r'\*\*Open R1 tasks: (\d+)\.\*\*', 'r1_open'),
+    ('§5.1 Completed R1 tasks',             r'Completed R1 tasks: \*\*(\d+)\*\*', 'r1_done'),
+    ('§5.1 Programme total',                r'Programme total \*\*(\d+)\*\*', 'total'),
+    ('§5.1 of which open',                  r'\*\*(\d+) open\*\*', 'open'),
+)
+
+# Phases belonging to Rollout 2. Everything else is R1.
+R2_PREFIXES = ('P5', 'P6', 'P7', 'P9')
+
+
+def measured_totals(text):
+    """Walk every task checkbox once and return the four figures the prose states.
+
+    🔴 **This exists because the two stated totals disagreed with each other.**
+    The header said "312 of 506" while §5.1 said "programme total 513" — and the
+    per-phase check above was green through all of it, because it had only ever
+    been pointed at the TABLE. A derived figure with no check is `L-C1`, and the
+    remedy for `L-C1` is a check rather than a note (`L-21`).
+    """
+    rows = re.findall(r'^- \[([ x])\] \*\*((?:P|PD)\d+[A-Za-z]?)-\d+[a-z]?\*\*',
+                      text, re.M)
+    t = {'total': len(rows), 'open': 0, 'r1_open': 0, 'r1_done': 0}
+    for mark, phase in rows:
+        is_open = mark == ' '
+        t['open'] += is_open
+        if phase not in R2_PREFIXES:
+            t['r1_open' if is_open else 'r1_done'] += 1
+    return t
+
+
+def check_totals(text):
+    """Returns a list of complaints; empty means every stated total is right."""
+    actual = measured_totals(text)
+    print('\nDerived TOTALS vs the same checkboxes\n' + '-' * 60)
+    bad = []
+    for label, pattern, key in TOTALS_PATTERNS:
+        m = re.search(pattern, text)
+        if not m:
+            # A figure that has moved or been reworded is a finding, not a pass.
+            print('%-38s %8s %8d   🔴 NOT FOUND' % (label, '-', actual[key]))
+            bad.append('%s: the check could not find this figure at all' % label)
+            continue
+        stated = int(m.group(1))
+        ok = stated == actual[key]
+        print('%-38s %8d %8d   %s' % (label, stated, actual[key],
+                                      'ok' if ok else '🔴 STALE'))
+        if not ok:
+            bad.append('%s: says %d, checkboxes say %d' % (label, stated, actual[key]))
+    return bad
+
+
 def main():
     text = io.open(MDP, encoding='utf-8').read()
     found = checkbox_counts(text)
@@ -108,8 +174,12 @@ def main():
     if bad:
         for b in bad:
             print('🔴 ' + b)
-    print('%d rows, %d stale — %s' % (len(ROW_TO_PREFIX), len(bad),
-                                      'IN SYNC' if not bad else 'STALE'))
+    bad += check_totals(text)
+
+    print('-' * 60)
+    print('%d phase rows + %d totals, %d stale — %s'
+          % (len(ROW_TO_PREFIX), len(TOTALS_PATTERNS), len(bad),
+             'IN SYNC' if not bad else 'STALE'))
     sys.exit(1 if bad else 0)
 
 

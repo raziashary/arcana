@@ -1596,6 +1596,90 @@ probe of mine said it was not.
 
 ---
 
+## ADR-LOG-RESTRUCT-0037 — No second fleet for design: a role is a recipe, and verification becomes pluggable
+
+**Status.** DECIDED
+**Author.** Claude (analysis and proposal) · **Razi** (ruling) · **Tier.** **`razi-ruled`**
+**When.** 2026-09-03 · before `P8`, applying to `P4`
+
+**What.** Razi asked whether the `PD-X` design work should get its **own
+fleet** — a main designer, a QC reviewer, a brief analyst — on the reasoning
+that the existing fleet is shaped for programming rather than design. **Ruled:
+one fleet, not two.** A design worker is a **recipe**, not a second dispatch
+subsystem. Separately, and this is the half that needs building: `P4`'s
+**definition of done becomes pluggable**, because that — not the roster — is
+what actually differs between code work and design work.
+
+**Why.** Two grounding facts, both checked against the tree rather than
+recalled:
+
+1. **There is no working fleet to fork.** `P4` is **45 unbuilt tasks**,
+   sequenced *after* `P8`. Today's fleet is documented dead in named ways in
+   this plan: `P4-22` (*"without this, worker messaging is silently dead"*),
+   `P4-07` (*"task theft is possible today"*), `P4-29` (`with_task_budget` has
+   zero callers), plus `BUG-COMPILE` and `BUG-ASSIGN` in `§1`. So the question
+   is not *"build a second fleet beside the working one"* — it is *"decide
+   `P4`'s shape before building it"*, which is the cheap moment to ask and is
+   why the answer is being recorded now rather than at `P4`.
+
+2. **`P4-30` already makes a role a recipe.** Its own words: *"DB owns
+   identity/state, recipe owns the prompt."* A designer is therefore a row and
+   a prompt, not a subsystem. A second fleet would duplicate dispatch, atomic
+   claiming, budget enforcement, ACP messaging and affinity routing — **every
+   one of which has an open defect in `P4`'s own list right now.** Two fleets
+   means two copies of those five defects, and they will diverge, because the
+   second copy is the one nobody runs.
+
+**And the correction that changes the framing.** `PD1`–`PD6` are largely
+**not** creative-design tasks. Read from `§5.1`: ingestion (PSD/PDF → IR),
+fidelity (*pixel by pixel*), export, *"deterministic geometry tool"*, change
+primitives, brand guideline. That is a **pipeline**, and building it is
+programming work the existing worker shape already fits. The design judgement
+lives in `PD6` and in AutoDesign's own product, not in `PD1`–`PD5`.
+
+**The half that IS real, and is now a task group.** `P4-11`…`P4-15` hardcode
+verification as **build evidence** — an ecosystem-detected build command, a
+real exit code, a persisted `build_evidence` row that `qc_review` reads. Design
+work has no compiler, and a QC worker that cannot fail objectively is theatre
+(`L-C9`: *a verification whose shape cannot express failure*). But the oracle
+already exists in the plan: **`PD2` is a pixel-level fidelity measure.** So the
+correct generalisation is one seam with two implementations — build evidence
+for code, a fidelity score for design — rather than one fleet with two copies.
+
+**Where.** `§10` `P4-45`…`P4-48` (new, appended — `§0`'s never-renumber rule)
+· `§10`'s `P4-C` preamble gains the pointer · this entry.
+
+**How.** Four tasks, each with a named proof:
+
+| | |
+|---|---|
+| `P4-45` | A `Verification` trait with `BuildEvidence` as its first implementation. `qc_review` consults the trait, not the concrete type. → `UNIT-PROVEN` |
+| `P4-46` | The worker row carries which verification its task type requires; an unknown one is a **loud refusal**, never a default pass (`L-C9`, and `P4-02`'s own rule for `FromStr`). → `LIVE-DB-PROVEN` |
+| `P4-47` | A `FidelityEvidence` implementation backed by `PD2`'s measure, landing **when `PD2` lands** — the seam is built here, the second implementation is built there. → `GATE-PROVEN` |
+| `P4-48` | Design recipes: `designer` and `design-qc`, extending `P8-34`'s invariant core like every other agent. **No new dispatch code.** → `SMOKE-PROVEN` |
+
+**What was explicitly NOT adopted, and why it is recorded.** Razi's proposed
+*brief analyst* role is **not** created as a worker. It is a phase of a task
+rather than an agent, and the capability it names — read the brief, gather the
+references, return a typed summary — is what the **intelligence layer**
+(`AIRS-Foundry/intelligence-layer`, `M1`) already does. Creating a worker for
+it would be a second implementation of a shipped capability. ⚠ If `PD6`'s brand
+guideline work shows a standing need, a **guideline interpreter** recipe is
+added then, on its own evidence — not now, on anticipation.
+
+**One boundary named rather than assumed.** `§5.3` records that AutoDesign's
+capability id set is a **closed 18-member enum** naming AutoDesign as its only
+legal author, so a conforming AutoDev manifest is impossible by construction
+(`ADR-LOG-RESTRUCT-0034`). *Who executes design* is therefore a contract
+question, not a staffing one, and it is not settled by this entry.
+
+**Links.** `P4-30` (recipe owns the prompt) · `P4-11`…`P4-15` (the hardcoded
+build oracle) · `§10.5.2` `PD2` (the fidelity measure) · `P8-34`/`P8-35` (the
+invariant prompt core every recipe extends) · `ADR-LOG-RESTRUCT-0034` (the
+closed capability enum) · `§0.16 L-C9`, `L-C12`
+
+---
+
 ## ADR-LOG-RESTRUCT-0036 — Two blockers found before P8: an unsatisfiable exit assertion, and three commits that only exist here
 
 **Status.** DECIDED
