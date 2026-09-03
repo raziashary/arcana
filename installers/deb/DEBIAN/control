@@ -4,7 +4,7 @@ Architecture: amd64
 Maintainer: AIRS Foundry <support@airs.dev>
 Installed-Size: @INSTALLED_SIZE@
 Depends: libwebkit2gtk-4.1-0 (>= 2.40.0), libgtk-3-0 (>= 3.24.0), libayatana-appindicator3-1 | libappindicator3-1, libssl3 | libssl1.1, ca-certificates
-Recommends: python3 (>= 3.11), git
+Recommends: git
 Section: devel
 Priority: optional
 Homepage: https://airs.dev/autodev

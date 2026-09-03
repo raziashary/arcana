@@ -18,7 +18,6 @@ Requires:       webkit2gtk4.1 >= 2.40.0
 Requires:       gtk3 >= 3.24.0
 Requires:       openssl
 Requires:       ca-certificates
-Recommends:     python3 >= 3.11
 Recommends:     git
 
 %description

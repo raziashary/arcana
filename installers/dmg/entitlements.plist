@@ -37,7 +37,13 @@
     <key>com.apple.security.files.all</key>
     <true/>
 
-    <!-- subprocess: allow spawning child processes (Python sidecars) -->
+    <!-- subprocess: the `bash` tool runs commands the model chooses, so the
+         app must be able to spawn children.
+
+         ⚠ P8-63 revisited this and KEPT it. The comment named the deleted
+         sidecars, but the entitlement was never for them: removing it because
+         its comment went stale would disable the tool it was actually
+         protecting. -->
     <key>com.apple.security.inherit</key>
     <true/>
 </dict>

@@ -19,21 +19,21 @@ AutoDev is a downloadable desktop application that combines the best capabilitie
 
 **Key Features:**
 - 🤖 **Model-agnostic:** Use any LLM (Anthropic, OpenAI, Gemini, Ollama, Azure, Bedrock)
-- 🧠 **Advanced memory system:** 3-tier architecture (episodic/semantic/procedural) with context scoring, compression, staleness tracking
-- 🎯 **Agent orchestration:** 21 finite state machines governing lifecycle + A2A protocol
+- 🧠 **Memory across sessions:** episodic, semantic and procedural stores with relevance ranking, compaction and staleness tracking
+- 🎯 **A worker fleet:** supervisor, five workers and QC, coordinated through a SQLite task board
 - 📝 **AUTODEV.md system:** SQLite-backed instruction system, editable from UI, no manual file editing required
 - 🔌 **MCP servers:** External MCP servers can be registered and are health-checked in Settings. AutoDev does not yet call them, and it does not host one — the in-app MCP server was removed because it was an unauthenticated local endpoint exposing `bash`, `write_file` and `spawn_subagent`.
 - 🛠️ **Skills & Recipes:** Reusable YAML workflows with cron scheduling for fleet orchestration
-- 🚀 **Single installer:** No Python, Redis, or Docker setup required for end users
-- 🎭 **Dual-mode execution:** PA mode (Rust-native for speed) + Worker mode (orchestrated via core-orchestrator with real-time SSE streaming back into the UI)
-- 🔄 **Git integration:** Structured git operations via git2-rs. The git module exposes worktree create/list/remove as a first-class capability, but worktrees are not (yet) created automatically per task — Workers currently share the configured workspace
+- 🚀 **One installer, nothing to run alongside it:** no interpreters, no cache server, no Docker
+- 🎭 **One engine:** the assistant, every fleet worker and every subagent run on the same in-process Rust engine, with the same tools and the same permission policy
+- 🔄 **Git integration:** structured git operations via git2-rs. Workers share the configured workspace and commit to a shared branch; no worktree is created per task
 - 📊 **Cost tracking:** Real-time token spend per session with per-agent, per-task reporting
 - 🛡️ **Workspace path-jail:** Every writing tool enforces that file paths and shell working directories stay inside the user's configured workspace
 - 🧯 **Budget circuit breaker:** Per-task token / USD / turn caps, pre-emptively halting runaway loops and escalating to the Supervisor
 - 🧪 **Build evidence gate:** Workers can't push tasks to QC review without a recent successful build on record
 - 👥 **Headless QC dispatcher:** A fleet of short-lived reviewer subagents reviews completed work in parallel with a concurrency cap and a rolling cost guard
 - 🧭 **Semantic task routing:** Supervisor learns which Worker performs best for which task type from historical outcomes
-- 🩺 **MCP & sidecar health monitors:** Per-server liveness pings, TCP-alive checks, auto-reconnect, and a sidecar crash banner with one-click "Copy crash report"
+- 🩺 **MCP health monitor:** per-server liveness pings, TCP-alive checks and auto-reconnect for the MCP servers you connect
 - 🪦 **PID-based orphan detection:** Tasks abandoned by a crashed Worker are released within the next Supervisor poll (~2 min) instead of waiting 4 hours
 - 📐 **Backend↔Frontend contract:** INTERFACE.md authored by the Supervisor and validated against both sides, with structured drift detection in diff analysis
 - 🗺️ **Phase-based decomposition:** Epics broken into ordered phases with blockers, milestones, and a live Epic Phase View
@@ -43,151 +43,134 @@ AutoDev is a downloadable desktop application that combines the best capabilitie
 
 ## Architecture
 
-AutoDev is built on **Tauri v2** (Rust + React) and bundles two powerful Python sidecars as git submodules:
+AutoDev is a **Tauri v2** desktop application — a Rust backend and a React front
+end, in one process. Every agent it runs, from the assistant you chat with to a
+fleet worker on a cron beat, runs on the same engine inside that process. There
+is nothing to install alongside it and no service that has to be healthy first.
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     AutoDev Desktop App                         │
-├──────────────────────┬──────────────────────────────────────────┤
-│   React/TS Frontend  │         Tauri v2 Rust Backend            │
-│   (src/)             │         (src-tauri/)                     │
+┌──────────────────────────────────────────────────────────────┐
+│                        AutoDev — one process                     │
+├─────────────────────┬──────────────────────────────────────────┤
+│  React + TypeScript  │            Rust                          │
+│  src/                │            src-tauri/ + autodev-core/    │
 │                      │                                          │
-│   ┌─────────────┐    │    ┌──────────────────────────────────┐  │
-│   │ Zustand      │◄──invoke──►│ Tauri Commands              │  │
-│   │ Store        │    │    │  ├── agent::*                    │  │
-│   ├─────────────┤    │    │  ├── provider::*                 │  │
-│   │ Tab Views    │    │    │  ├── vault::*                    │  │
-│   │ ├── Chat     │    │    │  ├── settings::*                │  │
-│   │ ├── AutoDev  │    │    │  └── sidecar::*                 │  │
-│   │ ├── IDE      │    │    ├──────────────────────────────────┤  │
-│   │ ├── Recipes  │    │    │ Core Modules                    │  │
-│   │ ├── Logs     │    │    │  ├── agent/   (tool exec loop)  │  │
-│   │ └── Settings │    │    │  ├── mcp/     (MCP client)       │  │
-│   ├─────────────┤    │    │  ├── recipes/ (YAML + cron)     │  │
-│   │ Components   │    │    │  ├── vault/  (OS keychain)      │  │
-│   │ └── etc.     │    │    │  ├── git/    (git2-rs)          │  │
-│   └─────────────┘    │    │  ├── github/ (Issues + PRs)     │  │
-│                      │    │  └── autodev/(dispatch, locks)  │  │
-│                      │    └──────────────────────────────────┘  │
-│                      │                  │                        │
-│                      │    ┌─────────────┴─────────────┐         │
-│                      │    │     Sidecar Manager        │         │
-│                      │    │  ┌─────────┐ ┌──────────┐ │         │
-│                      │    │  │ Core    │ │ Memory   │ │         │
-│                      │    │  │ Orch.   │ │ MCP Srv  │ │         │
-│                      │    │  │ (Python)│ │ (Python) │ │         │
-│                      │    │  └────┬────┘ └────┬─────┘ │         │
-│                      │    │       │           │       │         │
-│                      │    │  ┌────┴───────────┴────┐  │         │
-│                      │    │  │       Redis          │  │         │
-│                      │    │  │   (standalone bin)   │  │         │
-│                      │    │  └─────────────────────┘  │         │
-│                      │    └───────────────────────────┘         │
-└──────────────────────┴──────────────────────────────────────────┘
+│  Chat                │   Tauri commands                         │
+│  AutoDev panel       │    agent · provider · vault · settings     │
+│  IDE                 │    tasks · workers · recipes · mcp         │
+│  Recipes             │                                          │
+│  Graph               │   AgentEngine                            │
+│  Docs                │    the tool loop every agent runs on      │
+│  Settings            │    assistant · fleet worker · subagent    │
+│                      │                                          │
+│  Zustand stores      │   agent/    tools, prompts, permissions   │
+│    ↕ invoke          │   recipes/  YAML + cron scheduler        │
+│    ↕ events          │   memory/   episodic, semantic, proc.    │
+│                      │   provider/ Anthropic · OpenAI · Google   │
+│                      │   mcp/      client for your MCP servers   │
+│                      │   git/      git2-rs                       │
+│                      │   graph/    knowledge graph               │
+│                      │   db/       SQLite                        │
+│                      │                                          │
+│                      │   ~/.autodev/  — SQLite on your disk      │
+│                      │    tasks · workers · sessions · memory     │
+│                      │    analytics · recipes · instructions     │
+└─────────────────────┴──────────────────────────────────────────┘
 ```
 
-### Dual-Mode Architecture
+The only things outside this process are the LLM provider you chose and any MCP
+servers you connected yourself.
 
-AutoDev operates in **TWO modes** with different execution paths:
+### One engine
 
-#### Mode 1: PA (Personal Assistant) — Rust-Native Execution
+The assistant and the fleet take the same path. A turn is a function call, not
+an HTTP request to something else on your machine.
 
-**Used by:** Razi, team members, developers using the desktop app interactively
-
-**Execution Path:**
 ```
-User → Tauri (Rust) → Direct LLM API (Anthropic/OpenAI/etc.)
-                    ↓
-              Built-in tools (read_file, write_file, bash, git2-rs)
-                    ↓
-              External MCP servers — registered and health-checked, not yet called
-                    ↓
-              Response → UI
-```
-
-**Why NOT delegate to core-orchestrator:**
-- **Lower latency** — no HTTP round-trip (100-500ms saved per turn)
-- **Simpler deployment** — works even if Python sidecars fail to start
-- **Settings UI** — test provider API keys without starting core-orchestrator
-- **Headless CLI** — `airsctl -p "..."` runs standalone, no Python dependency
-- **Offline-first** — PA mode + Ollama works without internet
-
-**Limitations:** No A2A, no mem0 semantic memory, no 21 FSMs, no context scoring — intentionally kept simple.
-
-#### Mode 2: Worker Agent — Orchestrated via core-orchestrator
-
-**Used by:** AutoDev worker agents (backend, frontend, cleanup, etc.), Supervisor, QC agent running recipes
-
-**Execution Path:**
-```
-Recipe trigger → Tauri → HTTP POST /api/v1/agent/invoke → core-orchestrator
-                                                         ↓
-                                                   LivingAgent (21 FSMs)
-                                                         ↓
-                                                   litellm provider
-                                                         ↓
-                                                   airs_mcp client → external MCPs
-                                                         ↓
-                                                   mem0 memory → Redis
-                                                         ↓
-                                                   A2A protocol
-                                                         ↓
-                                                   SSE stream → Tauri → UI
+You / a cron beat
+      ↓
+AgentEngine — builds the prompt, calls the provider, runs the tools
+      ↓
+built-in tools: read_file, write_file, edit_file, bash, grep, glob, …
+      ↓
+the task board, memory, git — all SQLite and git2-rs, in-process
+      ↓
+events → the UI
 ```
 
-**Why delegate to core-orchestrator:**
-- **A2A protocol** — supervisor ↔ workers coordination
-- **mem0 semantic memory** — long-term context, retrieval-augmented generation
-- **21 FSMs** — agent lifecycle, tool execution tracking, memory management, etc.
-- **Context scoring** — relevance ranking, smart compaction
-- **Feedback-driven synopsis** — conversation evolution
-- Too complex to reimplement in Rust; Python ecosystem advantage
+**What that buys:**
 
-**Live visibility:** Mode 2 invocations stream tool calls, tool results, and intermediate model output back into the desktop app via SSE (`invoke_worker_streaming`), so the Live Monitor and Worker Requests panel show what the LivingAgent is doing in real time — not just whether it is "idle" or "working."
+- **No round-trip** — nothing to serialise, nothing to wait on.
+- **Nothing to start** — the app works the moment it opens.
+- **One place to look** — a misbehaving agent is one process and one log.
+- **Headless too** — `airsctl -p "..."` runs the same engine from a terminal.
+- **Local-first** — sessions, memory and the task board are all on your disk.
 
-**Smart fallback:** A two-probe watchdog (HTTP `/health` + raw TCP probe) keeps the fleet on Mode 2 when the orchestrator is busy-but-alive and only declares it dead when both probes fail. Each recipe declares a `FallbackPolicy` (`Mode2Only` or `Mode1Capable`); recipes that depend on MCP/memory/A2A pause gracefully when Mode 2 is unreachable rather than running on a degraded engine.
+### What every agent is given
 
-### PA Mode Toggle
+An agent's prompt is assembled in one place, in this order:
 
-Within **Mode 1: PA**, the ChatHeader provides a dropdown to switch between three sub-modes:
+1. **The invariant core** — the prohibitions, the git house rules, and the fact
+   that work is coordinated through the task board. Every agent gets this,
+   whatever its role, and a role cannot drop it.
+2. **Its own instructions** — the assistant's prompt, or a worker's recipe:
+   role, protocol and what counts as done.
+3. **Your `AUTODEV.md`** — global and per-repository. The most specific voice in
+   the room, so it outranks the defaults above it.
+4. **Memory** — rebuilt each turn from what this agent has learned.
 
-| Mode | Enum Variant | Tool Registry | System Prompt Source | Use Case |
-|------|---------------|---------------|---------------------|----------|
-| 🔧 Fast Development | `PAMode::FastDevelopment` | All builtin_tools (read_file, write_file, edit_file, bash, grep, glob, git) + All MCP tools | `BASE_SYSTEM_PROMPT` | Razi coding directly, quick fixes |
-| ✋ Review Mode | `PAMode::Review` | All builtin_tools + permission_check wrapper + All MCP tools | `REVIEW_SYSTEM_PROMPT` + caution instructions | Reviewing changes, cautious editing |
-| 📋 Delegate Mode | `PAMode::Delegate` | Only `create_task` tool + **MCP tools (read-only)** | `DELEGATE_SYSTEM_PROMPT` | Workers are live, PA delegates work |
+The first three are stable across a turn and are what the provider's prompt
+cache holds; memory is volatile and comes last, so a new fact does not
+invalidate the rest.
 
-**Delegate Mode Interaction Flow:**
-1. User: "Add /health endpoint to orchestrator"
-2. PA creates task on **internal AutoDev board** (SQLite) via `create_task` tool
-3. PA confirms: "Task #142 created on board. Supervisor will assign to Worker Backend on next poll."
-4. **Supervisor recipe** (polls `~/.autodev/tasks.db` every 2 min): Sees task #142, assigns to Worker Backend
-5. **Worker Backend recipe**: Executes via core-orchestrator, implements endpoint, opens PR on GitHub
-6. **QC Agent recipe**: Reviews PR, updates task status to "qc-approved"
-7. **Supervisor**: Sees QC approval, instructs worker to merge, closes task #142
-8. PA (if monitoring AutoDev Panel): Shows task completion notification
+### The fleet
 
-### Sidecars (bundled as git submodules)
+A supervisor, five workers (backend, frontend, platform, MCP, cleanup) and QC.
+Each has a recipe and a cron schedule, and they coordinate through the **SQLite
+task board** — not GitHub Issues, and not lockfiles on disk.
 
-**Core Orchestrator** (`submodules/core-orchestrator/`):
-- FastAPI-based agent runtime with LivingAgent (2425 lines)
-- 21 finite state machines for lifecycle management
-- MemoryCore with 3-tier memory (episodic/semantic/procedural)
-- MCP client system for external MCP servers
-- A2A protocol for agent-to-agent communication
-- SSE streaming for real-time updates
-- Runtime: Python 3.13+ / FastAPI / uvicorn on port 4000
+```
+Supervisor tick → reads the board → assigns work
+                                        ↓
+Worker tick → claims a task → implements → runs the project's tests
+                                        ↓
+                    commits to the fleet branch, moves it to qc_review
+                                        ↓
+QC → reviews → done, or rejected with a reason
+```
 
-**Memory MCP Server** (`submodules/memory-mcp-server/`):
-- FastMCP-based server exposing 6 memory tools
-- Multi-provider support (mem0, Redis, MongoDB, ChromaDB, Vertex AI)
-- Circuit breaker pattern with automatic failover
-- Runtime: Python 3.13+ / FastMCP / Starlette on port 5000
+Workers commit to a shared `autodev/fleet` branch, staging the paths they named
+and reading the diff before committing. **They never push, open a pull request
+or merge one** — that stays with you.
 
-**Redis:**
-- Standalone binary for warm-tier memory caching
-- In-memory cache with persistence option
-- Port: 6379
+### Three assistant modes
+
+The chat header switches the assistant between three modes.
+
+| Mode | Tools | Prompt | Use it when |
+|------|-------|--------|-------------|
+| 🔧 Fast Development | Every built-in tool | `BASE_SYSTEM_PROMPT` | You are coding and want it to keep up |
+| ✋ Review | **The same tools** | `REVIEW_SYSTEM_PROMPT` | You want deliberation over speed |
+| 📋 Delegate | `create_task`, `planner`, memory — no file or shell access | `DELEGATE_SYSTEM_PROMPT` | The fleet should do the work |
+
+⚠ **Review does not give you a permission checkpoint that Fast Development
+lacks.** The assistant already asks before anything that is not a pure read, in
+both modes — `ManualApproval` is a literal, not a per-mode setting. What Review
+changes is posture: explore read-only first, say what you are about to do before
+doing it, one change at a time, and report what you could not verify. The README
+claimed the checkpoint was the difference for a long time; it never was.
+
+**Delegate mode, end to end:**
+
+1. You: *"add a CSV export to the sessions list"*
+2. The assistant decomposes it and files task #142 on the board, with acceptance
+   criteria a reviewer could check without asking you
+3. Supervisor (every 2 min): sees #142 `ready`, assigns it to Worker Frontend
+4. Worker Frontend: claims it, implements it, runs the project's tests, commits
+   to the fleet branch, moves it to `qc_review`
+5. QC: reviews and either marks it `done` or rejects it with a reason
+6. The AutoDev panel shows each transition as it happens
+
 
 ---
 
@@ -202,10 +185,9 @@ Within **Mode 1: PA**, the ChatHeader provides a dropdown to switch between thre
 | **Backend** | Rust (Tauri commands) | Code editing tools, file I/O, command execution |
 | **Provider Layer** | Anthropic, OpenAI, Gemini, Ollama, Azure | Multi-provider LLM abstraction |
 | **MCP health** | reqwest | Liveness probes for external MCP servers (no client yet) |
-| **Git Integration** | git2-rs (libgit2) | Structured git operations, worktrees |
-| **Orchestrator** | Python 3.13 + FastAPI + litellm | Agent lifecycle, FSMs, A2A protocol |
-| **Memory** | Python 3.13 + mem0 | Context storage, scoring, synopsis evolution |
-| **Cache** | Redis 7+ | Warm-tier memory caching |
+| **Git Integration** | git2-rs (libgit2) | Structured git operations |
+| **Agent engine** | Rust (`autodev-core`) | The tool loop every agent runs on |
+| **Memory** | Rust + SQLite | Episodic, semantic and procedural stores with relevance ranking |
 | **Keychain** | keyring crate | OS keychain integration for API keys |
 | **Database** | SQLite (rusqlite) | Session persistence, task board, worker registry |
 
@@ -215,257 +197,77 @@ Within **Mode 1: PA**, the ChatHeader provides a dropdown to switch between thre
 
 ```
 autodev/
-├── README.md                      # This file
-├── package.json                   # Node.js dependencies (Tauri v2, React 19, Vite 8, Tailwind 3)
-├── .gitmodules                    # Submodule config
-├── .gitignore
+├── src/                        React + TypeScript front end
+│   ├── tabs/                   Chat, AutoDev, IDE, Recipes, Graph, Docs, Settings
+│   ├── components/             UI, grouped by feature
+│   ├── stores/                 Zustand state
+│   ├── data/                   Docs-tab content, model registry
+│   └── types/                  Shared TypeScript types
 │
-├── src/                           # React frontend
-│   ├── main.tsx                   # React root + Zustand provider
-│   ├── App.tsx                    # Tab router + layout shell
-│   ├── stores/                    # Zustand stores
-│   │   ├── agentStore.ts          # Agent state: messages, status, streaming
-│   │   ├── sessionStore.ts        # Session list, active session
-│   │   ├── settingsStore.ts       # Provider config, theme, autodev settings
-│   │   ├── costStore.ts           # Cost tracking state
-│   │   ├── sidecarStore.ts        # Sidecar status
-│   │   ├── autodevMdStore.ts      # AUTODEV.md instruction system
-│   │   ├── taskStore.ts           # Task board state
-│   │   ├── workerStore.ts         # Worker registry state
-│   │   ├── workspaceStore.ts      # Workspace folder state
-│   │   ├── modelConfigStore.ts    # Model configuration (temp, top-p, thinking)
-│   │   ├── recipeStore.ts         # Recipe management
-│   │   ├── gitStore.ts            # Git integration state
-│   │   └── skillStore.ts          # Skills system
-│   ├── tabs/                      # Top-level tab views
-│   │   ├── Chat.tsx               # Main chat interface with session bar
-│   │   ├── AutoDevPanel.tsx       # Agent roster + task board
-│   │   ├── IDE.tsx                # File tree + code viewer + git panel
-│   │   ├── Recipes.tsx            # Recipe browser + editor
-│   │   ├── Logs.tsx               # Log viewer with filtering
-│   │   └── Settings.tsx           # Provider + model router + AutoDev config
-│   ├── components/                # Shared UI components
-│   │   ├── layout/                # TitleBar, TabBar, StatusBar, Sidebar
-│   │   ├── chat/                  # MessageBubble, ToolCallDisplay, InputArea, PermissionDialog
-│   │   ├── settings/              # ProviderCard, ModelSelector, KeyInput, AutoDevConfig
-│   │   ├── git/                   # GitPanel, DiffViewer, BranchManager, StashManager
-│   │   ├── autodev/               # AutodevMdCard, AutodevMdEditor, WorkerRequestsWidget
-│   │   ├── workers/               # WorkerTable, WorkerCreateModal
-│   │   ├── recipes/               # RecipeEditor, RecipeCard
-│   │   └── common/                # Button, Card, Badge, Spinner, Icon
-│   ├── hooks/                     # Custom React hooks
-│   │   ├── useTauriEvent.ts       # Listen to Tauri events
-│   │   ├── useTauriInvoke.ts      # Invoke Tauri commands
-│   │   └── useAgent.ts            # Agent interaction hook
-│   ├── lib/                       # Utilities
-│   │   ├── tauri.ts               # Tauri API wrappers
-│   │   ├── format.ts              # Text formatting (markdown, code highlight)
-│   │   └── cost.ts                # Cost calculation helpers
-│   ├── types/                     # TypeScript type definitions
-│   │   ├── agent.ts               # AgentStatus, Message, ToolCall types
-│   │   ├── provider.ts            # Provider, Model types
-│   │   ├── session.ts             # Session types
-│   │   └── events.ts              # Event payload types
-│   └── styles/
-│       ├── globals.css            # Tailwind base + custom tokens
-│       └── theme.ts               # Design system constants
-│
-├── src-tauri/                     # Rust backend
-│   ├── Cargo.toml                 # Rust dependencies (Tauri v2, anyhow, tokio, rusqlite, git2, reqwest)
-│   ├── tauri.conf.json            # Window config (1200×800, min 1000×700), dark theme, CSP
-│   ├── build.rs                   # Tauri build script
+├── autodev-core/               The engine. Everything an agent does lives here.
 │   └── src/
-│       ├── main.rs                # Tauri entry point, app setup, plugin registration
-│       ├── lib.rs                 # Re-exports all modules
-│       ├── commands/              # #[tauri::command] functions (thin wrappers)
-│       │   ├── mod.rs
-│       │   ├── agent_commands.rs   # send_message, cancel, get_history
-│       │   ├── provider_commands.rs # test_connection, list_providers, set_active
-│       │   ├── settings_commands.rs # get_settings, update_settings
-│       │   ├── vault_commands.rs    # store_key, get_key, delete_key
-│       │   ├── sidecar_commands.rs  # start_sidecar, stop_sidecar, sidecar_status
-│       │   ├── session_commands.rs  # list_sessions, get_session, delete_session
-│       │   ├── task_commands.rs     # list_tasks, update_task_status, assign_task, create_task
-│       │   ├── worker_commands.rs   # list_workers, create_worker, update_worker_status
-│       │   ├── autodev_instructions_commands.rs # AUTODEV.md CRUD
-│       │   ├── github_mcp_commands.rs # GitHub MCP config
-│       │   ├── model_config_commands.rs # Model config CRUD
-│       │   ├── recipe_commands.rs  # list_recipes, save_recipe, delete_recipe, generate_recipe_yaml
-│       │   ├── git_commands.rs     # 29 git commands (clone, status, diff, commit, push, pull, worktree, etc.)
-│       │   ├── log_commands.rs     # list_log_files, read_log_file
-│       │   └── file_commands.rs    # pick_workspace_dir, @-mention file picker
-│       ├── agent/                   # Core agent engine
-│       │   ├── mod.rs
-│       │   ├── engine.rs            # AgentEngine: the main agentic loop
-│       │   ├── context.rs           # Conversation context builder (system prompt, AUTODEV.md, history)
-│       │   ├── tool_registry.rs     # ToolRegistry: register, find, list tools
-│       │   ├── tool_executor.rs     # Execute tools with permission checks, concurrency control
-│       │   ├── tool_trait.rs        # The Tool trait definition
-│       │   ├── builtin_tools/       # Built-in tool implementations
-│       │   │   ├── mod.rs
-│       │   │   ├── read_file.rs
-│       │   │   ├── write_file.rs
-│       │   │   ├── edit_file.rs
-│       │   │   ├── bash.rs
-│       │   │   ├── list_directory.rs
-│       │   │   ├── glob.rs
-│       │   │   ├── grep.rs
-│       │   │   ├── create_task.rs
-│       │   │   ├── list_tasks_tool.rs
-│       │   │   ├── update_task_status_tool.rs
-│       │   │   └── request_supervisor_action.rs
-│       │   ├── permission.rs        # Permission system (ManualApproval, Autonomous, SmartApprove)
-│       │   └── compaction.rs        # Conversation compaction when context fills
-│       ├── provider/                # LLM provider abstraction (PA mode only)
-│       │   ├── mod.rs
-│       │   ├── traits.rs            # Provider trait: complete(), stream(), models()
-│       │   ├── anthropic.rs         # Anthropic API client
-│       │   ├── openai.rs            # OpenAI API client
-│       │   ├── gemini.rs            # Google Gemini API client
-│       │   ├── ollama.rs            # Ollama local API client
-│       │   ├── azure.rs             # Azure OpenAI API client
-│       │   ├── model_router.rs      # Route agent roles to specific models
-│       │   └── streaming.rs         # Unified streaming response parser
-│       ├── mcp/                     # MCP client (PA mode)
-│       │   ├── mod.rs
-│       │   └── health.rs            # Liveness probes for external MCP servers
-│       ├── vault/                   # OS keychain integration
-│       │   ├── mod.rs
-│       │   └── keychain.rs          # Store/retrieve API keys securely
-│       ├── session/                 # Session persistence
-│       │   ├── mod.rs
-│       │   ├── manager.rs           # SessionManager (CRUD, list)
-│       │   ├── storage.rs           # SQLite storage backend
-│       │   └── types.rs             # Session, Conversation, Message types
-│       ├── recipes/                 # Recipe engine
-│       │   ├── mod.rs
-│       │   ├── parser.rs            # YAML recipe parser
-│       │   ├── runner.rs            # Recipe execution engine
-│       │   ├── scheduler.rs         # Cron scheduler for recurring recipes
-│       │   └── defaults.rs          # Default system recipes (supervisor, workers)
-│       ├── git/                     # Git integration
-│       │   ├── mod.rs
-│       │   ├── worktree.rs          # Worktree creation/removal/listing
-│       │   ├── repo_manager.rs      # Multi-repo management
-│       │   ├── diff.rs              # Diff computation for IDE tab + file history
-│       │   ├── status.rs            # Working tree status
-│       │   ├── branch.rs            # Branch operations
-│       │   ├── remote.rs            # Push, pull, fetch operations
-│       │   ├── commit.rs            # Commit operations
-│       │   ├── history.rs           # Git log, blame
-│       │   ├── stash.rs             # Stash operations
-│       │   ├── checkpoint.rs        # File checkpointing per message (undo support)
-│       │   └── types.rs             # GitRepo, GitStatus, GitDiff types
-│       ├── db/                      # Internal databases
-│       │   ├── mod.rs
-│       │   ├── tasks.rs             # Task CRUD operations via rusqlite
-│       │   ├── workers.rs           # Worker CRUD operations via rusqlite
-│       │   ├── autodev_instructions.rs # AUTODEV.md SQLite storage
-│       │   ├── model_configs.rs     # Model configuration storage
-│       │   └── schema.rs            # SQLite schema definitions + migrations
-│       ├── github/                  # GitHub integration
-│       │   ├── mod.rs
-│       │   ├── issues.rs            # GitHub Issues API
-│       │   └── labels.rs            # Label management
-│       ├── autodev/                 # AutoDev-specific logic
-│       │   ├── mod.rs
-│       │   ├── dispatch.rs          # Dispatch signal handling
-│       │   ├── lockfiles.rs         # Task lock file management
-│       │   └── heartbeat.rs         # Agent heartbeat reporting
-│       ├── sidecar/                 # Sidecar process management
-│       │   ├── mod.rs
-│       │   ├── manager.rs           # Start/stop/monitor sidecars (core-orchestrator, memory-mcp)
-│       │   ├── client.rs            # OrchestratorClient for health checks and invocation
-│       │   └── health.rs            # Health check endpoints
-│       ├── skills/                  # Skills system
-│       │   ├── mod.rs
-│       │   ├── types.rs
-│       │   ├── loader.rs            # Skill loading from ~/.autodev/skills/
-│       │   ├── engine.rs            # Skill execution with parameter substitution
-│       │   └── registry.rs          # Skill registry with category organization
-│       ├── cost/                    # Cost tracking
-│       │   ├── mod.rs
-│       │   └── tracker.rs           # Token counting + cost calculation per session
-│       ├── state/                   # Application state
-│       │   ├── mod.rs
-│       │   └── app_state.rs         # Shared mutable state (Arc<Mutex<AppState>>)
-│       ├── events.rs                # Tauri event emission helpers
-│       ├── errors.rs                # Unified error types (thiserror)
-│       └── logging.rs               # tracing subscriber setup
+│       ├── agent/              Tool loop, built-in tools, prompts, permissions
+│       ├── recipes/            YAML recipes, cron scheduler, the worker runner
+│       ├── subagent/           In-process subagents, pool and nesting limits
+│       ├── memory/             Episodic, semantic and procedural stores
+│       ├── provider/           Anthropic, OpenAI, Google; routing and retry
+│       ├── db/                 SQLite: tasks, workers, sessions, plans, settings
+│       ├── git/                git2-rs operations and diffing
+│       ├── graph/              Knowledge graph
+│       ├── budget/             Per-task budgets and the daily spend ceiling
+│       ├── security/           Redaction, environment scrubbing
+│       └── …                   analytics, cache, hooks, plan, plugin, vault …
 │
-├── docs/                          # Documentation
-│   ├── autodev-vision/
-│   │   └── autodev-master-plan.md   # Living product spec (single source of truth)
-│   ├── development/
-│   │   └── DEVELOPMENT_PLAN.md     # Master development plan with phases
-│   ├── submodules-management/
-│   │   └── SUBMODULE_SETUP_GUIDE.md # Git submodule workflow guide
-│   └── ENVIRONMENT_SETUP.md       # Installation guide
+├── src-tauri/                  The desktop shell
+│   └── src/
+│       ├── commands/           Tauri commands — the front end's whole API surface
+│       ├── mcp/                MCP client and health
+│       ├── updater/            Signed auto-update
+│       ├── ci_gate.rs          Spec-invariant gates, run by `cargo test`
+│       └── main.rs / lib.rs    Start-up and command registration
 │
-├── submodules/                    # Git submodules (Python projects)
-│   ├── core-orchestrator/         # Agent orchestration engine (tracked via git submodule)
-│   │   ├── src/airs/agent/living_agent.py  # LivingAgent (2425 lines)
-│   │   ├── src/airs/memory/memory_core.py  # MemoryCore (2654 lines)
-│   │   ├── src/airs/state/        # 21 finite state machines
-│   │   ├── src/airs/bridges/     # Unified tool handler, MCP bridge, memory compiler
-│   │   ├── src/airs/mcp/          # MCP client system
-│   │   └── mcp_config.yaml         # MCP server configuration
-│   └── memory-mcp-server/         # Memory system (tracked via git submodule)
-│       ├── src/mcp_server/server.py  # FastMCP-based server (1093 lines)
-│       ├── src/memory_providers/     # Multi-provider memory manager
-│       └── main.py
+├── src-cli/                    `airsctl` — the same engine, headless
+├── src-shared/                 Types and config shared by the app and the CLI
 │
-├── build/                         # Build scripts
-│   ├── bundle-core.ps1            # PyInstaller for core-orchestrator
-│   ├── bundle-memory-mcp.ps1      # PyInstaller for memory-mcp-server
-│   └── fetch-redis.ps1            # Download Redis binary
-│
-└── sidecars/                      # Build output (gitignored)
-    ├── core-orchestrator.exe
-    ├── memory-mcp-server.exe
-    └── redis-server.exe
+├── installers/                 msi / dmg / deb / rpm packaging
+├── scripts/                    Build and smoke scripts
+├── e2e/                        End-to-end tests
+└── docs/                       Specifications, plans and decision records
 ```
 
----
+Runtime state lives outside the repository, in `~/.autodev/`: the task board,
+the worker registry, sessions, memory, analytics, recipes and your
+`AUTODEV.md`. Nothing an agent produces is written inside the app's own
+install.
 
 ## Quick Start
 
 ### Prerequisites
 
-- **Python 3.13+**
-- **uv** (Python package manager)
-- **Rust** (stable via rustup)
-- **Node.js 20+** & npm (pinned to v22.1.0 for compatibility)
+- **Rust 1.90+** — `rustup` toolchain
+- **Node.js 20+** and npm
 - **Git**
 
-**Check your installation:**
-```powershell
-python --version  # 3.13+
-uv --version
-rustc --version
-node --version    # v20+
-```
+That is the whole list. AutoDev bundles no runtimes and starts no services.
 
-See [`docs/ENVIRONMENT_SETUP.md`](docs/ENVIRONMENT_SETUP.md) for detailed installation instructions.
+```bash
+rustc --version   # 1.90+
+node --version    # 20+
+```
 
 ### Installation
 
-```powershell
-# Clone the repo with submodules
-git clone --recurse-submodules https://github.com/AIRS-Foundry/autodev.git
+```bash
+git clone https://github.com/AIRS-Foundry/autodev.git
 cd autodev
 
-# If you cloned without --recurse-submodules, initialize manually:
-git submodule update --init --recursive
-
-# Install npm dependencies
 npm install
-
-# Run development server
 npm run tauri dev
 ```
 
-**Note:** The sidecars (core-orchestrator and memory-mcp-server) will auto-start on app launch. No manual Python setup required for development.
+Open **Settings → Providers**, add a key for Anthropic, OpenAI or Google, and
+pick a model. Keys go to your OS keychain — never to a config file, and never
+into the process environment.
 
 ---
 
@@ -473,78 +275,39 @@ npm run tauri dev
 
 ### Running Locally
 
-```powershell
-# Terminal 1: Start Tauri dev server (auto-starts sidecars)
+```bash
 npm run tauri dev
-
-# Terminal 2 (optional): Test core-orchestrator independently
-cd submodules/core-orchestrator
-uv venv && .venv\Scripts\activate && uv sync
-python src/main.py
 ```
 
-**Important:** Do NOT run `uv sync` in the main autodev repo. AutoDev is a Tauri app (Rust + Node.js), not a Python project. Only run `uv sync` inside submodules when developing them locally.
+That is the whole loop. There is no second terminal and no service to start
+first.
+
+⚠ **Do not run `uv sync` here.** AutoDev is a Tauri app — Rust and Node. It has
+no Python and no `pyproject.toml`.
 
 ### Building for Production
 
-```powershell
-# Build all sidecars (Windows PowerShell)
-.\build\bundle-core.ps1
-.\build\bundle-memory-mcp.ps1
-.\build\fetch-redis.ps1
-
-# Build Tauri app
+```bash
 npm run tauri build
 ```
 
-The build process will:
-1. Bundle Python submodules into standalone executables using PyInstaller
-2. Download Redis binary
-3. Build the Tauri app with all sidecars embedded
-4. Produce platform-specific installers (.msi for Windows, .AppImage for Linux, .dmg for macOS)
+The installer lands in `src-tauri/target/release/bundle/`. It contains the app
+and nothing else — no bundled interpreters, no downloaded binaries, no
+post-install steps.
 
-### Working with Submodules
-
-Core Orchestrator and Memory MCP Server are tracked as **git submodules** (commit references, not copied code). To edit:
-
-1. Navigate into the submodule:
-   ```powershell
-   cd submodules/core-orchestrator
-   ```
-
-2. Work as a normal git repo:
-   ```powershell
-   git checkout main
-   git pull origin main
-   git checkout -b fix/your-feature
-   # Make changes
-   git add .
-   git commit -m "fix: your changes"
-   git push origin fix/your-feature
-   ```
-
-3. Update the pointer in the main autodev repo:
-   ```powershell
-   cd ../..  # back to autodev root
-   git add submodules/core-orchestrator
-   git commit -m "chore: bump core-orchestrator (fix included)"
-   ```
-
-See [`docs/submodules-management/SUBMODULE_SETUP_GUIDE.md`](docs/submodules-management/SUBMODULE_SETUP_GUIDE.md) for detailed submodule workflow instructions.
-
-### Updating Submodules
+### Checks
 
 ```bash
-# Update all submodules to their latest main branch
-git submodule update --remote --merge
-
-# Or update a specific submodule
-cd submodules/core-orchestrator
-git pull origin main
-cd ../..
-git add submodules/core-orchestrator
-git commit -m "chore: update core-orchestrator to latest"
+cargo check --workspace     # compiles
+cargo test  --workspace     # unit tests + the CI gates
+npx tsc --noEmit            # frontend types
+npx vitest run              # frontend tests
 ```
+
+The `ci_gate` tests are spec invariants, not unit tests: they assert properties
+the codebase must keep holding — that no agent runs without the invariant core,
+that every frontend event listener has a Rust emitter, that no shipped source
+names a deleted subsystem. They run with `cargo test`.
 
 ---
 
@@ -554,60 +317,54 @@ git commit -m "chore: update core-orchestrator to latest"
 |----------|-------------|
 | [`docs/autodev-vision/autodev-master-plan.md`](docs/autodev-vision/autodev-master-plan.md) | **Living product spec** - single source of truth for vision, features, architecture, UI/UX |
 | [`docs/development/DEVELOPMENT_PLAN.md`](docs/development/DEVELOPMENT_PLAN.md) | **Master development plan** - phased build plan, module breakdown, coding conventions |
-| [`docs/submodules-management/SUBMODULE_SETUP_GUIDE.md`](docs/submodules-management/SUBMODULE_SETUP_GUIDE.md) | Git submodule workflow guide - how to work with core-orchestrator and memory-mcp-server |
 | [`docs/ENVIRONMENT_SETUP.md`](docs/ENVIRONMENT_SETUP.md) | Complete environment setup guide |
 
 ---
 
 ## Key Concepts
 
-### Dual-Mode Execution
+### One engine, three assistant modes
 
-AutoDev operates in two distinct modes:
+There is one execution path. The assistant, every fleet worker and every
+subagent run on the same in-process Rust engine, with the same tool registry
+and the same permission policy. What differs between them is their
+instructions, not their machinery — see **Architecture** above.
 
-**PA Mode (Personal Assistant) - Rust-Native:**
-- Used by Razi, team members, developers using the desktop app interactively
-- Direct LLM API calls (no HTTP round-trip to Python)
-- Built-in tools execute natively in Rust for speed
-- Lower latency (~100-500ms saved per turn)
-- Works offline with Ollama
-- Simpler deployment (works even if Python sidecars fail)
+Within the assistant, three modes change what it can reach: **Fast
+Development** (everything), **Review** (the same tools, a more deliberate
+posture) and **Delegate** (no file or shell access at all — it files work on
+the board instead).
 
-**Worker Mode - Orchestrated via Core Orchestrator:**
-- Used by AutoDev worker agents (backend, frontend, cleanup, etc.), Supervisor, QC agent
-- Delegates to Python sidecars via HTTP (FastAPI endpoints)
-- Full LivingAgent capabilities (21 FSMs, A2A protocol, mem0 semantic memory)
-- Context scoring, smart compaction, feedback-driven synopsis
-- Complex agent orchestration requiring Python ecosystem advantages
+### The task board, not GitHub Issues
 
-### PA Mode Toggle
+Every agent coordinates through SQLite at `~/.autodev/tasks.db`.
 
-Within PA mode, three sub-modes control tool availability:
+- **Why:** one app, no external service to be reachable, no API rate limit
+  between a worker and its next task. It works offline and you own the data.
+- **Flow:** a task is filed → the Supervisor assigns it → a worker claims and
+  implements it → QC reviews → `done`, or `rejected` with a reason.
+- **Statuses:** `ready`, `assigned`, `in_progress`, `qc_review`, `done`,
+  `rejected`, `failed`, `build_failed`, `needs_info`, `cancelled`.
+- Agents do **not** write lockfiles and do **not** create git worktrees. An
+  earlier multi-machine fleet used both; this one uses the board plus a
+  PID-based orphan detector, so a lockfile here would be an artifact nothing
+  reads.
 
-| Mode | Tools Available | System Prompt | Use Case |
-|------|----------------|---------------|----------|
-| 🔧 Fast Development | All builtin_tools + MCP tools | BASE_SYSTEM_PROMPT | Direct coding, quick fixes |
-| ✋ Review Mode | All tools + permission prompts | REVIEW_SYSTEM_PROMPT | Cautious editing, code review |
-| 📋 Delegate Mode | Only `create_task` tool | DELEGATE_SYSTEM_PROMPT | Workers are live, PA delegates work |
+### What the fleet may do to your repository
 
-### Internal Task Board (Not GitHub Issues)
+Workers are held to the same git rules you would hold a contractor to, and the
+rules are part of the invariant core every agent receives:
 
-AutoDev uses an internal SQLite task board (`~/.autodev/tasks.db`) for task assignment:
-- **Why:** Single app = no external coordination needed. Faster, offline support, full control.
-- **Flow:** PA creates task → Supervisor assigns to workers → Workers execute → QC reviews → Supervisor merges
-- **GitHub still used:** Workers create PRs on GitHub repos, but task assignment happens internally
-
-### Submodules
-
-Core Orchestrator and Memory MCP Server are tracked as **git submodules** (commit references, not copied code):
-- Submodules are separate git repos with their own history
-- To edit: work inside `submodules/{repo}` as a normal git repo
-- Commit and push changes to the submodule's remote
-- Update the pointer in the main autodev repo
-- **Do NOT run `uv sync` in the main repo** - AutoDev is a Tauri app (Rust + Node.js), not a Python project
-- Only run `uv sync` inside submodules when developing them locally
-
-See [`docs/submodules-management/SUBMODULE_SETUP_GUIDE.md`](docs/submodules-management/SUBMODULE_SETUP_GUIDE.md) for detailed submodule workflow.
+- **Branch before the first commit** — they share `autodev/fleet` and never
+  commit onto `main` or `master`.
+- **Stage the paths they named** — never `git add -A`, which sweeps in build
+  output and anything your ignore rules did not anticipate.
+- **Read the staged diff before committing**, and refuse it if it carries a
+  credential.
+- **Never push, open a pull request, or merge one.** The branch is the
+  deliverable; what happens to it is your decision.
+- **Never force-push, rewrite published history, or delete a branch, a stash or
+  a remote ref.**
 
 ### Tool Routing
 
@@ -700,7 +457,7 @@ The Supervisor authors `INTERFACE.md` via the `write_interface_spec` tool, captu
 - **Rejected-Task Feedback Loop:** `rejection_reason` + `retry_count` columns; Supervisor re-dispatches rejected tasks back to the originating Worker
 - **Semantic Task Routing:** Worker affinity learning from `routing_history` (static pattern fast-path + historical scoring) + Worker Affinity Stats panel
 - **Phase-Based Decomposition:** Epics → ordered phases with blockers, milestones, automatic unblock-on-completion, dedicated Epic Phase View + Epics tab
-- **Live Monitor:** Mode 2 tool calls streamed via SSE in real time; lazy slug registration so events never get dropped
+- **Live Monitor:** worker and subagent tool calls streamed in real time; lazy slug registration so events are never dropped
 
 **Safety & Reliability**
 - **Workspace Path-Jail:** `write_file` / `edit_file` / `append_file` / `bash` (cwd + redirect targets) all enforce that paths stay inside the configured workspace
@@ -712,7 +469,6 @@ The Supervisor authors `INTERFACE.md` via the `write_interface_spec` tool, captu
 - **Fleet Smoke Recipe + `e2e_probe`:** Scheduled end-to-end check that boots the app and confirms it serves an expected response
 
 **Visibility & Diagnostics**
-- **Sidecar Crash Banner:** Captured stderr tail + "Copy crash report" markdown bundle
 - **Workspace Mismatch Banner:** Startup check comparing app cwd vs. configured workspace
 - **Stray Files Banner:** Startup scan for worker-generated artifacts in unexpected places
 - **MCP Connection Health Monitor:** 30-second ping loop, Connected / Degraded / Disconnected / Reconnecting states, auto-reconnect with exponential backoff, status-bar `⚠️ MCP` indicator
@@ -733,12 +489,20 @@ The Supervisor authors `INTERFACE.md` via the `write_interface_spec` tool, captu
 - **Workspace Folder:** Native OS folder picker, @-mention path resolution
 - **Git Panel:** Full git integration with Changes, History, Branches, Stash, Undo tabs
 - **File Checkpointing:** Auto-checkpoint before writes, undo/redo support, file history
-- **Sidecar Management:** Start Python sidecars, health checks, log routing. AutoDev does **not** start Redis — it probes for one and runs without it (the warm memory tier is simply disabled).
+- **MCP Tools:** browse the servers you have connected, the tools each exposes, and their liveness
 - **Browser-Test Skill:** Playwright-driven visual regression and E2E checks invoked by the QC agent on frontend PRs
 
 ---
 
 ## Development Phases
+
+> **These are delivery records, not a description of the app as it stands.** A
+> phase below may name something that was built at the time and has since been
+> removed — most notably the two bundled Python services, deleted in Phase 8.
+> For what AutoDev is today, read **Architecture** above; this section is kept
+> because a changelog that is edited to match the present is no longer a
+> changelog.
+
 
 AutoDev follows a phased development approach:
 
@@ -837,12 +601,9 @@ AutoDev follows a phased development approach:
 - ✅ Phase 7: INTERFACE.md contract, fleet smoke recipe + `e2e_probe`, tier 2.5/2.6 validation
 
 **Environment verified:**
-- ✅ Python 3.13+
-- ✅ uv package manager
 - ✅ Rust stable (via rustup)
 - ✅ Node.js v22.1.0 / npm 10.7.0
 - ✅ Git 2.45.0+
-- ✅ Submodules initialized (core-orchestrator, memory-mcp-server)
 - ✅ npm packages installed (React 19, Vite 8, TypeScript, Tailwind 3, Tauri CLI)
 
 ---
@@ -895,8 +656,8 @@ Proprietary - AIRS Foundry © 2026
 
 ## FAQ
 
-**Q: Do I need Docker?**  
-A: No. Redis is optional and externally managed — AutoDev probes for one and runs without it. No Docker required for development or production.
+**Q: What do I need installed?**  
+A: Rust, Node and Git. That is the whole list — no Docker, no Python, no cache server, and nothing that has to be running before you open the app.
 
 **Q: Can I use different LLM providers?**  
 A: Yes. AutoDev supports Anthropic, OpenAI, Gemini, Ollama, Azure OpenAI, and Google Bedrock via the provider abstraction layer.
@@ -904,23 +665,20 @@ A: Yes. AutoDev supports Anthropic, OpenAI, Gemini, Ollama, Azure OpenAI, and Go
 **Q: Is this compatible with my existing CLAUDE.md files?**  
 A: Yes. AutoDev has an AUTODEV.md system (SQLite-backed) that is separate from CLAUDE.md. For migration, you can import CLAUDE.md content into AUTODEV.md via the UI.
 
-**Q: How do I update the submodules?**  
-A: `git submodule update --remote --merge` to update all submodules to their latest main branch. See [`docs/submodules-management/SUBMODULE_SETUP_GUIDE.md`](docs/submodules-management/SUBMODULE_SETUP_GUIDE.md) for detailed instructions.
-
 **Q: Why Node v22.1.0?**  
 A: Vite 8 prefers v22.12+, but v22.1.0 works fine. Warnings can be ignored. The version is pinned for compatibility.
 
-**Q: Do I need to run `uv sync` in the main repo?**  
-A: No. AutoDev is a Tauri app (Rust + Node.js), not a Python project. Only run `uv sync` inside submodules when developing them locally.
+**Q: Do I need to run `uv sync`?**  
+A: No. AutoDev is a Tauri app — Rust and Node. There is no Python in it and no `pyproject.toml`.
 
-**Q: How do the sidecars work?**  
-A: The sidecars (core-orchestrator and memory-mcp-server) are Python projects tracked as git submodules. They auto-start on app launch via the SidecarManager, which spawns them as subprocesses and monitors their health. Logs are routed to the AutoDev Logs tab.
+**Q: What is the difference between the assistant and a worker?**  
+A: Their instructions, not their machinery. Both run the same engine in the same process, with the same tools and the same permission policy. The assistant is interactive and takes its prompt from the mode you chose; a worker runs on a cron beat and takes its prompt from its recipe. Both also receive the invariant core and your `AUTODEV.md`.
 
-**Q: What's the difference between PA mode and Worker mode?**  
-A: PA mode uses Rust-native execution for speed and lower latency (direct LLM API calls). Worker mode delegates to Python sidecars for complex agent orchestration with full LivingAgent capabilities (21 FSMs, mem0 semantic memory, A2A protocol).
+**Q: Will the fleet push to my repository?**  
+A: No. Workers commit to a shared `autodev/fleet` branch, staging only the paths they named and reading the diff first. They never push, open a pull request, or merge one — and they never force-push or delete anything. Those rules are in the invariant core every agent receives, so a recipe cannot opt out of them.
 
 **Q: How does the internal task board work?**  
-A: AutoDev uses an internal SQLite task board (`~/.autodev/tasks.db`) for task assignment instead of GitHub Issues. This enables faster, offline-capable coordination. Workers still create PRs on GitHub repos, but task assignment happens internally via the Supervisor recipe.
+A: AutoDev uses an internal SQLite task board (`~/.autodev/tasks.db`) instead of GitHub Issues — faster, offline-capable, and yours. A task moves `ready` → `assigned` → `in_progress` → `qc_review` → `done`, and can land in `rejected`, `failed`, `build_failed`, `needs_info` or `cancelled` instead.
 
 **Q: How do I create a custom worker?**  
 A: Go to Settings → Workers tab, click "Create Worker", fill in the worker details (name, type, primary repos, model, polling interval), and bind a recipe. The worker will auto-launch on app startup.
@@ -946,11 +704,11 @@ A: A lightweight `qc-dispatcher` recipe spawns one ephemeral reviewer subagent p
 **Q: What happens if a Worker process crashes mid-task?**
 A: PID-based orphan detection. Workers record their OS PID + hostname when they claim a task. The orphan detector runs on the Supervisor's poll cadence (~2 minutes), checks each claimed task's PID via the `sysinfo` crate, and releases any task whose host process is no longer alive — back to the `ready` queue, with an Orphan Alert toast on the AutoDev panel.
 
-**Q: What does the orchestrator falling over actually look like in the UI?**
-A: A two-probe watchdog (HTTP `/health` + raw TCP) distinguishes "busy but alive" from "actually dead." When it does declare the orchestrator dead and the breaker opens, a Sidecar Crash banner appears with the captured stderr tail and a one-click "Copy crash report" button. Each recipe's `FallbackPolicy` decides whether it can keep running on Mode 1 or should pause gracefully as `fallback_idle`.
+**Q: What happens if my provider is unreachable, or I have not set a key?**
+A: The tick fails cleanly and says why. With no provider configured at all, the worker reports `idle_no_provider` rather than `error` — nothing is broken, you have simply not finished setting up — and the Live Monitor paints it amber rather than as ordinary idle, so "needs me" is distinguishable from "fine". It is scheduled again on its next beat, so adding a key is enough to bring it back.
 
 **Q: How does the Supervisor decide who gets a task?**
-A: Two layers. First a small set of hand-written static patterns (keywords like "fastapi", "react", "docker" → worker-backend/-frontend/-platform); if those are ambiguous or disagree with history, the Supervisor calls the `suggest_worker` MCP tool which scores Workers by historical success rate × duration ranking for that task type (`routing_history` table). A Worker Affinity Stats panel exposes the per-Worker per-type success rates.
+A: Two layers. First a small set of hand-written static patterns (keywords like "fastapi", "react", "docker" → worker-backend/-frontend/-platform); if those are ambiguous or disagree with history, the Supervisor calls the `suggest_worker` tool, which scores Workers by historical success rate × duration ranking for that task type (`routing_history` table). A Worker Affinity Stats panel exposes the per-Worker per-type success rates.
 
 ---
 

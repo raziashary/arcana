@@ -120,11 +120,10 @@ try {
 }
 Pop-Location
 
-# ─── Bundle submodules for installer ──────────────────────────────────────────
-
-Write-Step "Bundling submodules for installer"
-
-powershell -ExecutionPolicy Bypass -File $PSScriptRoot\bundle-sidecars.ps1
+# P8-63 — the bundling step is gone. It copied two Python trees into
+# `src-tauri/resources/sidecars` before the Tauri bundler ran, and would now
+# fail at its own existence check: the directories it copied from were deleted
+# in `P8-C`.
 
 # ─── Build Tauri app ─────────────────────────────────────────────────────────
 
