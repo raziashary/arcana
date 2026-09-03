@@ -4,9 +4,9 @@
 
 | | |
 |---|---|
-| **Prepared** | 2026-09-02 |
+| **Prepared** | 2026-09-04 |
 | **Owner** | Razi Ashary — Programming Lead, AIRS Foundry |
-| **Status** | P0–P3 and **PD0 (the contract)** complete — PD0 re-closed 3 Sep after its post-phase audits · **P8 next** · overall readiness **34%** · 312 open tasks |
+| **Status** | P0–P3, **PD0 (the contract)** and **P8 (the conversion)** complete · **PD1 next** · overall readiness **36.7%** · 251 open tasks of 525 |
 | **Source documents** | `docs/restructurization/vision/00-AUTODEV-RESTRUCTURE-MASTER-PLAN.md` (why) · `docs/restructurization/development/MASTER_DEVELOPMENT_PLAN.md` (what and when) |
 
 This brief condenses both. Where it is terse, those documents are authoritative.
@@ -91,7 +91,7 @@ Fifteen phases. Every one has an explicit slot — nothing is parked.
 | ✅ | **P3-F** Memory | Memory that works, is scoped to its project, and cannot be written to by an agent claiming to be you | 18 | done |
 | ✅ | **PD0** Contract | The four operations, the wire payload, the outcome triple, and a sidecar that answers them — **[published](AUTODESIGN-CAPABILITY-CONTRACT.md)**. 10 gates, 14 spawned smoke cases, 45 audit findings closed | 10 | done |
 | 🤝 | **M1 · Contract** | ✅ **Reached.** The seam is agreed, exercised and published | — | **done** |
-| 1 | **P8** Conversion | The Python subsystem deleted entirely — **and every live defect closed with it** | 65 | **~11 h** ⚠ |
+| 1 | ~~**P8** Conversion~~ **✅ DONE 4 Sep** | The Python subsystem deleted entirely — **and every live defect closed with it** | 67 | **done** |
 | 3 | **PD1** Ingestion | PSD **and** PDF → one representation | 21 | **~3.5 h** ⚠ |
 | 🤝 | **M2 · First capability** | **A real file becomes a real design — the reference implementation starts returning true results** | — | **~15 h in** |
 | 4 | **PD2** Fidelity | Faithfulness **rendered and measured**, then refined | 27 | **~4.5 h** ⚠ |
@@ -112,7 +112,7 @@ Fifteen phases. Every one has an explicit slot — nothing is parked.
 | 13 | **P9** Delivery | Signed installers, three platforms | 16 | **~2.5 h** ⚠ |
 
 **Totals.** 229 tasks and roughly **38 hours** to complete Rollout 1; 83 tasks and
-roughly **14 hours** for Rollout 2. **312 open tasks** across the programme.
+roughly **14 hours** for Rollout 2. **251 open tasks** across the programme, of 525.
 
 The phase rows account for 311 of those 312. The remaining one is P0's end-to-end test
 harness, blocked by tooling rather than by effort — the Windows driver is not installed
@@ -237,6 +237,51 @@ the reasoning behind the code. The largest remaining item: the vector-search tab
 by the code and **never actually created**, so semantic search would fail if switched on. It
 is off by default and nothing is broken today, but the honest score reflects it. An earlier
 draft of this figure said 40% and was corrected the same hour.
+
+
+**P8 — the conversion — closed on 2026-09-04.** 67 tasks, 11 automated gates, 656 Rust
+tests and 126 front-end tests green. The Python subsystem is gone: 1,140 MB off a
+developer checkout, no submodule step in a clean clone, no interpreter spawned for
+AutoDev's own operation, and no shipped source — **including comments** — naming it.
+
+Three of the phase's most serious findings were **not on its task list**, and each was
+found by writing a gate rather than by reading the plan:
+
+- **The application was booting into a modal that could not be dismissed.** An earlier
+  task deleted the start-up progress reporter but left the overlay that listens for it
+  mounted. The overlay hides itself only when it hears "ready"; nothing could say it. A
+  full-screen panel covered the entire interface on every launch. That task had been
+  recorded complete, with a passing smoke test.
+- **The daily spend ceiling was not holding.** When it tripped, it paused workers whose
+  status was `running` — a value nothing in the application writes. Only *idle* workers
+  were paused; a worker that was mid-task kept working, kept spending, and was started
+  again on its next turn. The cap failed in precisely the case it exists for.
+- **A worker configured before its API key was never started again**, even after the key
+  was added, because the scheduler did not recognise the state it had parked itself in.
+  The only escape was to stop and restart it, which nobody would think to try.
+
+The common thread is that both halves of each defect were correct on their own. The
+gates added here read *across* those seams — between Rust and the interface, between what
+one component writes and what another expects — which is why they found what review had
+not. One of them, checking that every interface event has something to send it, found
+**ten more** the moment it existed; all ten are now wired.
+
+The phase also rewrote what the application tells its own model. The prompt sent on every
+turn had been describing a system that no longer existed — coordination through GitHub
+issues, a Python test command, and a rule about lock files that the same prompt
+contradicted sixty-five lines later. Every agent now receives one invariant core: what it
+must never do, the version-control rules it works under, and where work is coordinated.
+Fleet workers had been committing with `git add -A` onto whatever branch the user had open;
+they now branch first, stage only what they named, read the diff before committing, and
+stop — they never push, open a pull request, or merge one.
+
+**Readiness rose 34% → 36.7%.** Build and gates are green; the smoke row is deliberately
+**not** marked, because one of its five checks — starting the application and completing a
+real agent turn — needs an API key and a desktop session, and the register allows no partial
+credit. Four of five pass. ⚠ One task was **struck rather than completed**: it asked for the
+installer to be measured before and after, and the measurement does not exist — the 225 MB
+was never inside any installer. It lived only on a developer machine, and the one commit that
+ever tried to bundle it made clean builds fail.
 
 **The estimates were wrong by about 3×, and every phase came in early — which is exactly
 why nobody noticed.** This document said P2 would take ~11 hours; it took 5 h 32 m including its

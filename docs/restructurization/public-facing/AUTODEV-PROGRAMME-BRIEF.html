@@ -335,13 +335,13 @@
 <div class="wrap">
 
   <header class="masthead">
-    <p class="eyebrow">AIRS Foundry · Programme Brief · 3 September 2026</p>
+    <p class="eyebrow">AIRS Foundry · Programme Brief · 4 September 2026</p>
     <h1>AutoDev</h1>
     <p class="standfirst">A desktop application in which a team of AI agents handles a programming task end to end. This is a condensed view of the restructure, for readers who are not in the code daily.</p>
 
     <dl class="strip">
-      <div class="stat"><dt>Readiness</dt><dd>34%<small>P0&ndash;P3 closed</small></dd></div>
-      <div class="stat"><dt>Open tasks</dt><dd>312<small>All written out</small></dd></div>
+      <div class="stat"><dt>Readiness</dt><dd>36.7%<small>P0&ndash;P3, PD0, P8 closed</small></dd></div>
+      <div class="stat"><dt>Open tasks</dt><dd>251<small>of 525, all written out</small></dd></div>
       <div class="stat"><dt>Contract</dt><dd>Ready<small>Published &amp; exercised</small></dd></div>
       <div class="stat"><dt>Rollout 1</dt><dd>~38h<small>229 tasks</small></dd></div>
       <div class="stat"><dt>Rollout 2</dt><dd>~14h<small>83 tasks</small></dd></div>
@@ -401,8 +401,8 @@
           <tr class="is-done"><td class="phase">Memory<span class="code">P3-F</span></td><td>Memory that works, is scoped to its project, and cannot be written to by an agent claiming to be you</td><td class="n">18</td><td class="n">&mdash;</td><td><span class="chip done">Done</span></td></tr>
           <tr class="is-done"><td class="phase">Contract<span class="code">PD0</span></td><td>The four operations, the wire payload, the outcome triple, and a sidecar that answers them &mdash; published for the AutoDesign team. 10 gates, 14 spawned smoke cases, 45 audit findings closed</td><td class="n">10</td><td class="n">&mdash;</td><td><span class="chip done">Done</span></td></tr>
           <tr class="handover"><td colspan="5">✅ &nbsp;M1 REACHED &mdash; the seam is agreed, exercised across a real process, and published</td></tr>
-          <tr class="is-now"><td class="phase">Conversion<span class="code">P8</span></td><td>The Python subsystem deleted entirely &mdash; and every live defect closed with it</td><td class="n">65</td><td class="n">~11h &#9888;</td><td><span class="chip now">Next</span></td></tr>
-          <tr><td class="phase">Ingestion<span class="code">PD1</span></td><td>PSD and PDF become one representation</td><td class="n">21</td><td class="n">~3.5h &#9888;</td><td><span class="chip queued">Queued</span></td></tr>
+          <tr class="is-done"><td class="phase">Conversion<span class="code">P8</span></td><td>The Python subsystem deleted entirely &mdash; and every live defect closed with it, plus three more the gates found that were not on the list</td><td class="n">67</td><td class="n">&mdash;</td><td><span class="chip done">Done</span></td></tr>
+          <tr class="is-now"><td class="phase">Ingestion<span class="code">PD1</span></td><td>PSD and PDF become one representation</td><td class="n">21</td><td class="n">~3.5h &#9888;</td><td><span class="chip now">Next</span></td></tr>
           <tr class="handover"><td colspan="5">↓ &nbsp;M2 &mdash; a real file becomes a real design; the reference implementation starts returning true results. ~15 hours in</td></tr>
           <tr><td class="phase">Fidelity<span class="code">PD2</span></td><td>Faithfulness rendered and measured, then refined</td><td class="n">27</td><td class="n">~4.5h &#9888;</td><td><span class="chip queued">Queued</span></td></tr>
           <tr><td class="phase">Export<span class="code">PD3</span></td><td>Webpage · PDF · PSD</td><td class="n">15</td><td class="n">~2.5h &#9888;</td><td><span class="chip queued">Queued</span></td></tr>
@@ -416,8 +416,8 @@
     </div>
 
     <div class="col">
-      <p style="font-size:.9rem;color:var(--muted);margin-top:4px">The rows above account for
-      222 of the 223 open tasks. The remaining one is P0&rsquo;s end-to-end test harness, which
+      <p style="font-size:.9rem;color:var(--muted);margin-top:4px">One open task sits outside
+      the rows above: P0&rsquo;s end-to-end test harness, which
       is blocked by tooling rather than by effort &mdash; the Windows driver is not installed
       locally, and the Linux/macOS driver has no engine for the framework AutoDev uses. It is
       counted in the totals and excluded from the estimates, because an hour figure would imply
@@ -477,7 +477,7 @@
 
   <section class="col">
     <h2><span class="num">04</span> Where we are</h2>
-    <p>P0, P1, P2 and all of P3 are complete. Delivered so far: the security holes closed and gated; an <code>autodev-core</code> crate extracted with zero dependency on the UI framework, letting the desktop app and the command-line tool share one implementation; migration ladders on all ten databases, applied to live data with zero rows lost; secret redaction on the production path; the intermediate representation that everything in Rollout 1 is built on; and now a provider layer that has been tested against the real APIs rather than only against itself.</p>
+    <p>P0, P1, P2, all of P3, the contract (PD0) and the conversion (P8) are complete. Delivered so far: the security holes closed and gated; an <code>autodev-core</code> crate extracted with zero dependency on the UI framework, letting the desktop app and the command-line tool share one implementation; migration ladders on all ten databases, applied to live data with zero rows lost; secret redaction on the production path; the intermediate representation that everything in Rollout 1 is built on; and now a provider layer that has been tested against the real APIs rather than only against itself.</p>
 
     <h3>The estimates were wrong by about 3&times;, and every phase came in early</h3>
     <p>Which is exactly why nobody noticed. This page said P2 would take about eleven hours; it
@@ -566,7 +566,55 @@
     <p>All are fixed, each with a test that was <strong>deliberately broken first</strong> to
     prove it can fail.</p>
 
-    <h3>Why readiness is 34% and not 40%</h3>
+    <h3>P8 &mdash; the conversion &mdash; closed 4 September</h3>
+    <p>67 tasks, 11 automated gates, 656 Rust tests and 126 front-end tests green. The Python
+    subsystem is gone: 1,140&nbsp;MB off a developer checkout, no submodule step in a clean
+    clone, no interpreter started for AutoDev&rsquo;s own operation, and no shipped source
+    &mdash; <strong>including comments</strong> &mdash; naming it.</p>
+
+    <p>Three of the phase&rsquo;s most serious findings were <strong>not on its task
+    list</strong>. Each was found by writing a gate rather than by reading the plan:</p>
+    <ul>
+      <li><strong>The application was booting into a modal that could not be dismissed.</strong>
+      An earlier task deleted the start-up progress reporter but left the overlay that listens
+      for it mounted. The overlay hides itself only when it hears &ldquo;ready&rdquo;; nothing
+      could say it. A full-screen panel covered the entire interface on every launch &mdash;
+      and that task had been recorded complete, with a passing smoke test.</li>
+      <li><strong>The daily spend ceiling was not holding.</strong> When it tripped it paused
+      workers whose status was <code>running</code>, a value nothing in the application writes.
+      Only <em>idle</em> workers were paused; one that was mid-task kept working, kept spending,
+      and was started again on its next turn. The cap failed in precisely the case it exists
+      for.</li>
+      <li><strong>A worker configured before its API key was never started again</strong>, even
+      after the key was added, because the scheduler did not recognise the state it had parked
+      itself in. The only escape was to stop and restart it, which nobody would think to
+      try.</li>
+    </ul>
+    <p>The common thread is that both halves of each defect were correct on their own. The
+    gates added here read <em>across</em> those seams &mdash; between Rust and the interface,
+    between what one component writes and what another expects &mdash; which is why they found
+    what review had not. One of them, checking that every interface event has something to send
+    it, found <strong>ten more</strong> the moment it existed; all ten are now wired.</p>
+
+    <p>The phase also rewrote what the application tells its own model. The prompt sent on every
+    turn had been describing a system that no longer existed &mdash; coordination through GitHub
+    issues, a Python test command, and a rule about lock files that the same prompt contradicted
+    sixty-five lines later. Every agent now receives one invariant core: what it must never do,
+    the version-control rules it works under, and where work is coordinated. Fleet workers had
+    been committing with <code>git add -A</code> onto whatever branch the user had open; they now
+    branch first, stage only what they named, read the diff before committing, and stop &mdash;
+    they never push, open a pull request, or merge one.</p>
+
+    <p><strong>Readiness rose 34% &rarr; 36.7%.</strong> Build and gates are green; the smoke row
+    is deliberately <strong>not</strong> marked, because one of its five checks &mdash; starting
+    the application and completing a real agent turn &mdash; needs an API key and a desktop
+    session, and the register allows no partial credit. Four of five pass. One task was
+    <strong>struck rather than completed</strong>: it asked for the installer to be measured
+    before and after, and that measurement does not exist &mdash; the 225&nbsp;MB was never
+    inside any installer. It lived only on a developer machine, and the one commit that ever
+    tried to bundle it made clean builds fail.</p>
+
+    <h3>Why readiness was 34% and not 40% at P3&rsquo;s close</h3>
     <p>The phase is built and its smoke tests pass, but the specification&rsquo;s own gate
     register is not fully satisfied: five of the eight memory gates are not met and three are
     partly met, verified by an independent reviewer that had not seen any of the reasoning
@@ -645,7 +693,7 @@
 
   <section class="col">
     <h2><span class="num">07</span> In one paragraph</h2>
-    <p class="lede">AutoDev is being rebuilt to a standard where every claim is backed by a test that can fail. Four phases are complete and independently audited, including the runtime phase that closed four ways the agent could reach past its own guards. The next milestone is a working backend that turns designs into faithful, editable, adaptable code — handed to the AutoDesign team roughly 37 working hours from now, with a published contract and a spawnable reference implementation so they can build in parallel. Full capability follows at roughly 92 hours, and the standalone application at roughly 127.</p>
+    <p class="lede">AutoDev is being rebuilt to a standard where every claim is backed by a test that can fail. Six phases are complete and independently audited &mdash; the runtime phase that closed four ways the agent could reach past its own guards, and now the conversion, which deleted the Python subsystem entirely and, in the process, found three live defects nobody had listed: an application booting into a modal that could not be dismissed, a spend ceiling that did not hold, and a worker that could never be restarted after its key arrived. Each was two correct halves that disagreed across a seam, and each was caught by a check written to read across it. The next milestone is a working backend that turns designs into faithful, editable, adaptable code, handed to the AutoDesign team with a published contract and a spawnable reference implementation so they can build in parallel.</p>
   </section>
 
   <footer>
