@@ -5,7 +5,9 @@
 > **Companion documents:** `MASTER_DEVELOPMENT_PLAN.md` (the build sequence and its inline smoke checks) · `READINESS_MATRIX.md` (phase readiness) · `ADR_LOG.md` (runtime decisions) · `NOVELTY_LEDGER.md`.
 > **Cross-checked against the MDP** on 2026-08-31. Phase names and the `TG<p>-<nn>` scheme agree. Three assignments where the MDP builds a capability **earlier** than Part 6 implies are annotated on the gate line (`TG1-05`, `TG3-38`, `TG4-18`); IDs were **not** renumbered, per `§1`.
 
-**115 gates across P0–P9.** This document is the definition of done for the programme.
+**125 gates across P0–P9 and PD0.** This document is the definition of done for the programme.
+
+⚠ **The count was stale from `2026-09-03` until the PD0 work audit (`W-8`) caught it.** PD0 added eight gates to `§6.5` and updated **none** of this document's own registers — not the headline, not the phase index, not `§14`'s traceability arithmetic, not `§17`'s families, not `§20`. The one register whose job is to be the definition of done was stale about its own contents, which is `§0.3` in the document `§0.3` is enforced through. The two gates the audit remediation itself added (`TGD0-09`, `TGD0-10`) are included here.
 
 ---
 
@@ -48,7 +50,8 @@
 | **P7** | Experience | 5 | `TG7-01…05` |
 | **P8** | Submodule deletion | 2 | `TG8-01…02` |
 | **P9** | Delivery | 5 | `TG9-01…05` |
-| | **Total** | **115** | |
+| **PD0** | The design capability contract | 10 | `TGD0-01…10` |
+| | **Total** | **125** | |
 
 ---
 
@@ -211,7 +214,7 @@
 **Slice:** context strategy (M-05) · one tool path (M-08) · truthful `ToolContext` + a live permission gate (M-09) · in-process subagents (M-02) · memory in-house (M-10).
 **Exit gate (Part 6):** a long session's context stays bounded and measurably cached; the recursion guard, ACP identity and build-evidence gate all demonstrably fire; subagents run with no sidecar.
 
-> **P3 is the largest gate block in the programme (39 of 115).** That is not an accident of assignment: M-09 alone is *"one fix, three capabilities"* (spec `04 §1`) — it is the single change that makes the recursion guard, ACP sender identity and the `qc_review` build-evidence gate stop being inert, and every gate that proves a guard fires depends on it.
+> **P3 is the largest gate block in the programme (39 of 125).** That is not an accident of assignment: M-09 alone is *"one fix, three capabilities"* (spec `04 §1`) — it is the single change that makes the recursion guard, ACP sender identity and the `qc_review` build-evidence gate stop being inert, and every gate that proves a guard fires depends on it.
 
 ### 6.1 The loop (spec `01`)
 
@@ -393,12 +396,23 @@
 - [x] **TGD0-05** `[correctness]` — **A `partial` outcome must be evidenced.** An unevidenced partial is refused.
       Source: `PD0-04` · Catches: the old converter's behaviour of reporting loss as success, which is the case `PD0-04` exists for · **Evidence: `GATE-PROVEN` 2026-09-03**
 - [x] **TGD0-06** `[seam]` — **The sidecar is spawnable and settles as a real child process.** `execFileSync('node', [main.js])`, stdin request, NDJSON parsed off stdout, terminal event decoded through the same invariants as ours. ⚠ It **fails rather than skips** when the build is absent: a seam that is not built is not proven, and a skipping gate is not green (`§0.5`).
-      Source: `PD0-06`, `PD0-08` · Catches: `L-C12` at contract scale — a beautifully typed surface nothing has ever spoken across a process boundary · **Evidence: `GATE-PROVEN`, falsified** by suppressing the terminal event — fails naming *"settled"*
+      Source: `PD0-06`, `PD0-08` · Catches: `L-C12` at contract scale — a beautifully typed surface nothing has ever spoken across a process boundary · **Evidence: `GATE-PROVEN` 2026-09-03, falsified** by suppressing the terminal event — fails naming *"settled"*
+      ⚠ **The class was written ahead of its proof, and the work audit (`W-15`) is right about it.** `GATE-PROVEN` is defined here as *"a blocking CI job that can fail is green"* — and at the moment this was recorded, CI had no `build:sidecar` step, so the job would have been **red on every run** from the commit that introduced the gate. It was corrected in the next commit (`a03d7ed`), which is the right outcome and the wrong order. Two consequences now closed: `pretest` runs `build:sidecar`, so the gate can no longer pass against pre-edit bytes locally (`A-22`), and `npm run smoke:design` is committed, so the seam is reproducible from the repository rather than from a scratchpad (`W-2`).
 - [x] **TGD0-07** `[governance]` — **The published document still describes the shipped contract.** Parses the operations table out of `AUTODESIGN-CAPABILITY-CONTRACT.md` and compares the **set** against `OPERATIONS`; also requires every outcome, the reserved verb and all four exit codes to appear.
       ⚠ **The first version of this gate was blind and falsification proved it.** It used `toContain` over the whole document, so deleting an operation's table row left a stray mention in the mapping section and the gate stayed green over a document that no longer described a shipped operation — `L-C9`, in a gate written to prevent staleness. Re-pointed to the set.
       Source: `PD0-09`, `§0.3` · Catches: a partner team reading a document that no longer matches what they are calling · **Evidence: `GATE-PROVEN`, falsified** by swapping a documented verb — fails naming *"not the shipped ones"*
 - [x] **TGD0-08** `[seam]` — **The conformance suite can fail.** Driven against a deliberately broken implementation it reports NOT CONFORMANT, and against the reference it passes — so the failure is discrimination rather than a suite that rejects everything.
-      Source: `PD0-06` · Catches: `L-C9` in the deliverable a partner team will trust most · **Evidence: `GATE-PROVEN` 2026-09-03**
+      Source: `PD0-06` · Catches: `L-C9` in the deliverable a partner team will trust most · **Evidence: `GATE-PROVEN` 2026-09-03** — gate-proven, **not** falsified.
+
+- [x] **TGD0-09** `[correctness]` — **Every frozen outcome has a producer.** Drives the reference across a hold, a no-op `change` and an ordinary operation, and compares the **set** of outcomes produced against `OUTCOMES`.
+      ⚠ Set, not count: `L-27` is on record for a count check passing when one member is swapped for another.
+      Source: `PD0-04`, work-audit `W-7` · Catches: the defect this phase shipped — at closeout only `partial` had a producer, so a consumer's `held` branch was untestable and the documented `exit 0` + `held` state was **unreachable** · **Evidence: `GATE-PROVEN` 2026-09-03, falsified** by making the hold branch unreachable with a fall-through that still decodes — fails `expected [ 'complete', 'partial' ] to deeply equal [ 'complete', 'held', 'partial' ]`
+
+- [x] **TGD0-10** `[seam]` — **A refusal settles and exits `0`, across a real process boundary.** Spawns the sidecar with a request it must decline; the terminal event decodes as `held` carrying a `failure` diagnostic, and the process exits `0`.
+      ⚠ Only the boundary can prove this: the exit code does not exist in-process.
+      Source: `PD0-08`, work-audit `W-7` · Catches: `held` collapsing into "error", which silently merges the partner's two branches into one · **Evidence: `GATE-PROVEN` 2026-09-03, falsified** by the same plant — fails `expected 'partial' to be 'held'`
+
+⚠ **The first falsification attempt on both of these did not count, and is recorded rather than quietly replaced.** Planting `outcome: 'partial'` on the hold branch turned both gates red — with `ContractError: a partial outcome must carry the output it partially produced`. That is the **decoder** rejecting the plant before either gate's own assertion ran. Red for the wrong reason is not a falsification, and accepting it would have recorded two gates as proven when neither had shown it could detect the thing it claims.
 
 ## 7. P4 — The fleet
 
@@ -678,7 +692,9 @@ Gates are only as honest as what they run against. Every corpus below is **check
 | `10-PROOF` | *(no gate table — by design)* | 0 gates; contributes the evidence classes (`§1`), the headline acceptance test (`TG7-02` + `TG9-01`), the CI blocking table (`TG0-02`) and the ten test families (`§17`) | — | — |
 | **NEW** | *(this document)* | 8 | `TG0-04`, `TG0-05`, `TG2-16`, `TG2-17`, `TG3-38`, `TG3-39`, `TG4-23`, `TG8-02` | P0 (2), P2 (2), P3 (2), P4 (1), P8 (1) |
 
-**Spec gate totals:** 115 named in the specs − 8 merged = **107 surviving** + **8 NEW** = **115**.
+**Spec gate totals:** 115 named in the specs − 8 merged = **107 surviving** + **8 NEW** = **115**, **+ 10 `TGD0`** added by `PD0` and its audit remediation = **125**.
+
+⚠ The `TGD0` family is **not** spec-derived: the design programme post-dates the vision suite, so its gates trace to the capability contract (`PD0-01…09`) and to the two audit findings that produced the last pair, not to a `§`-numbered spec. Recorded explicitly rather than folded into the arithmetic, because a gate with no spec anchor that *looks* spec-anchored is worse than one openly marked as new.
 
 ---
 
@@ -686,7 +702,7 @@ Gates are only as honest as what they run against. Every corpus below is **check
 
 | Risk | Covering gates | Verdict |
 |---|---|---|
-| **R-1** — the bug register swallows the restructure (~415 defects) | **none** | ⚠️ **UNCOVERED, and correctly so.** This is a programme-management risk, not a system property; its mitigation is *"slices are gated on outcomes, not defect counts — a defect not on a slice's path is logged, not fixed."* No test can assert that. **This document is its control surface**: 115 gates and no more is the outcome-gating in practice. Recorded here so the absence is a decision, not an oversight |
+| **R-1** — the bug register swallows the restructure (~415 defects) | **none** | ⚠️ **UNCOVERED, and correctly so.** This is a programme-management risk, not a system property; its mitigation is *"slices are gated on outcomes, not defect counts — a defect not on a slice's path is logged, not fixed."* No test can assert that. **This document is its control surface**: 125 gates and no more is the outcome-gating in practice. Recorded here so the absence is a decision, not an oversight |
 | **R-2** — caching is adopted and silently does nothing | `TG2-05` (non-zero cache read from turn 2, provider-neutral) · `TG2-06` (byte-stable prefix) · `TG2-07` (the alarm, which ADR-01-05 ships **before** the cache) · `TG3-08` (bounded context) | ✅ covered, and in the mandated order |
 | **R-3** — the port reproduces the sidecar's own defects | `TG3-12` (defects 1, 2, 6, 7) · `TG3-13` (defects 4-partial, 5) · `TG3-14` (defect 3) · `TG3-17` (defect 4, the unused breaker) | ✅ covered — **all seven** of spec `03 §4.3`'s fix-don't-reproduce defects, but **only after the sharpening recorded in `§18`**: as the specs stood, defects 4-partial, 6 and 7 had no gate |
 | **R-4** — macOS verified last and blocks release | `TG0-05` **(NEW)** · `TG9-03` | ✅ covered **only by a NEW gate**. The mitigation ("macOS enters CI in P0") was a mandate no spec turned into an assertion |
@@ -722,6 +738,8 @@ Gates are only as honest as what they run against. Every corpus below is **check
 
 ## 17. Test-family coverage — master plan `§7.4` / spec `10 §4`
 
+⚠ **The `TGD0` family (PD0, 10 gates) is listed here from `2026-09-03`.** The table below was written against the P0–P9 set and the work audit (`W-8`) found no `TGD0` id anywhere in it. By family: `[governance]` 2 (`TGD0-01`, `TGD0-07`) · `[seam]` 4 (`TGD0-02`, `TGD0-06`, `TGD0-08`, `TGD0-10`) · `[correctness]` 3 (`TGD0-03`, `TGD0-05`, `TGD0-09`) · `[data]` 1 (`TGD0-04`).
+
 **All ten families are represented. No family has zero gates.**
 
 | Family | Gates | Count |
@@ -737,7 +755,7 @@ Gates are only as honest as what they run against. Every corpus below is **check
 | **Migration** | `TG1-02`, `TG1-03`, `TG1-04` | 3 |
 | **No-sidecar** | `TG8-01`, `TG8-02` | 2 |
 
-**Thinnest families, flagged rather than padded:** *Destructive safety* (3) and *No-sidecar* (2). Both are thin for structural reasons — destructive safety is largely an enumeration inside `TG7-05` and `TG4-23`, and the no-sidecar family's real weight is that **P8 re-runs all 115 gates** under the sidecar-absent condition rather than adding gates of its own. Neither is a coverage gap; both are recorded so a later reader does not mistake thinness for oversight.
+**Thinnest families, flagged rather than padded:** *Destructive safety* (3) and *No-sidecar* (2). Both are thin for structural reasons — destructive safety is largely an enumeration inside `TG7-05` and `TG4-23`, and the no-sidecar family's real weight is that **P8 re-runs all 125 gates** under the sidecar-absent condition rather than adding gates of its own. Neither is a coverage gap; both are recorded so a later reader does not mistake thinness for oversight.
 
 ---
 
@@ -790,5 +808,6 @@ Findings are numbered and are **not** formatting notes. Each is something a read
 
 | Date | Change |
 |---|---|
+| 2026-09-03 | **PD0 + audit remediation.** Ten `TGD0` gates registered (eight written in-phase, `TGD0-09`/`TGD0-10` added by the post-phase audit remediation). Totals corrected 115 → **125** across the headline, `§2`, `§14`, `§15` and `§17` — every one of which the phase left stale, which is what work-audit `W-8` found. `TGD0-04` gained the second clause its register entry already promised; `TGD0-05` gained the positive control it never had; `TGD0-06`'s evidence line now records that its class was written before CI could be green (`W-15`). |
 | 2026-08-31 | Created from vision suite rev 0.9. 115 gates: 115 named across specs `01`–`09`, 8 merged (`§18`), 8 added as NEW (`§14`). All 12 invariants covered; all 10 test families represented; 9 of 10 risks covered by gates, `R-1` recorded as intentionally ungateable. Eight findings raised (`§19`), of which **F-3 is a Rule-4 stop requiring the owner's decision**. |
 | 2026-08-31 | Cross-checked against `MASTER_DEVELOPMENT_PLAN.md`, authored in parallel. Phase names and the ID scheme agree. **F-2 struck — resolved:** the MDP schedules the core-crate extraction at P1-B, the phase this document had independently assigned `TG1-05` to. **F-3 sharpened:** the MDP acknowledges the ACP/MCP collision at `P4-22` but resolves it by build order alone (option (c)) rather than by decision — the stop stands. Three gates annotated as runnable **earlier** than assigned, because the MDP builds their capability sooner (`TG1-05` P1, `TG3-38` P1, `TG4-18` P0); **no ID renumbered**, per `§1`. |

@@ -286,12 +286,31 @@ for Rollout 1 — the PSD arrives at ours — but it will matter at export.
 
 ---
 
-## 8 · A worked example
+## 8 · Worked examples — one per operation
+
+### 8.0 · What `input` must carry
+
+`input` is the only part of the envelope that differs by operation. A request
+that does not carry its operation's shape is **held**, not rejected: it decoded,
+we accepted it, and we are declining to serve it. That distinction is the whole
+reason `held` exists, and `§8.5` shows what it looks like on the wire.
+
+| operation | `design` | `input` |
+|---|---|---|
+| `ingest` | `null` — it produces one | `{"source": "<a reference to the bytes>"}` |
+| `export` | required | `{"format": "json"}` — the only format served today |
+| `adapt` | required | `{"target": {"width": 1080, "height": 1920}}` — both positive integers |
+| `change` | required | `{"instructions": [ … ]}` — an array; `[]` is a valid no-op |
+
+The envelope stays the same for all four: `contractVersion`, `operationId`,
+`operation`, `design`, `input`. No other key is accepted.
+
+### 8.1 · `adapt` — the common case
 
 **Request** (one line on stdin):
 
 ```json
-{"contractVersion":"autodev-design-request/0.1.0","operationId":"op-42","operation":"adapt","design":{"contractVersion":"autodev-design-ref/0.1.0","schemaVersion":"autodev-design-ir/0.1.0","ref":"autodev-design:src","sha256":"0000000000000000000000000000000000000000000000000000000000000000","byteLength":1024},"input":{}}
+{"contractVersion":"autodev-design-request/0.1.0","operationId":"op-42","operation":"adapt","design":{"contractVersion":"autodev-design-ref/0.1.0","schemaVersion":"autodev-design-ir/0.1.0","ref":"autodev-design:src","sha256":"0000000000000000000000000000000000000000000000000000000000000000","byteLength":1024},"input":{"target":{"width":1080,"height":1920}}}
 ```
 
 **Response** (stdout, one JSON object per line, abridged):
@@ -305,17 +324,113 @@ for Rollout 1 — the PSD arrives at ours — but it will matter at export.
 
 Exit code `0`.
 
+### 8.2 · `export` — the only shape carrying `artifacts`
+
+Worth its own example because it is the one settled event that carries
+`artifacts` and a **null** `fidelity`. Fidelity is not a meaningful question
+about a serialization, so the field is `null` rather than a fabricated `1.0`.
+
+**Request:**
+
+```json
+{"contractVersion":"autodev-design-request/0.1.0","operationId":"op-43","operation":"export","design":{…},"input":{"format":"json"}}
+```
+
+**Terminal event:**
+
+```
+{…,"type":"settled","operation":"export","sequence":4,"outcome":"partial","design":null,"artifacts":[{"contractVersion":"autodev-artifact-ref/0.1.0","artifactId":"op-43-export","artifactKind":"export_reference","mediaType":"application/json","byteLength":2,"sha256":"0000…","storageRef":"autodev-artifact:op-43","createdAt":"2026-09-03T12:00:00.000Z","expiresAt":null}],"diagnostics":[{"code":"REFERENCE_IMPLEMENTATION_ONLY",…}],"fidelity":null}
+```
+
+Exit code `0`. Note `design: null` — an export produces an artifact, not a
+design, and the decoder enforces that a `partial` carries **one** of the two.
+
+### 8.3 · `ingest` — no design in, a design out
+
+```json
+{"contractVersion":"autodev-design-request/0.1.0","operationId":"op-44","operation":"ingest","design":null,"input":{"source":"autodev-source:campaign.psd"}}
+```
+
+Supplying a `design` here is refused at decode with
+`request.design: ingest produces a design and must not be given one` — exit `2`,
+nothing on stdout. Every other operation requires one.
+
+### 8.4 · `change` — and the only `complete` you will see today
+
+```json
+{"contractVersion":"autodev-design-request/0.1.0","operationId":"op-45","operation":"change","design":{…},"input":{"instructions":[]}}
+```
+
+**Terminal event:**
+
+```
+{…,"type":"settled","operation":"change","sequence":4,"outcome":"complete","design":{…},"artifacts":[],"diagnostics":[],"fidelity":null}
+```
+
+An empty instruction list is a genuine no-op: your design comes back unchanged,
+nothing was lost, and the honest outcome is `complete` with no diagnostics. A
+non-empty list settles `partial` today, because the conversion behind it lands
+in our next phase.
+
+### 8.5 · A hold — exit `0`, and the answer is no
+
+The case most worth writing a branch for, because it is the one that proves
+`0` does not mean "it converted".
+
+**Request** — well-formed, decodable, and missing the input `adapt` needs:
+
+```json
+{"contractVersion":"autodev-design-request/0.1.0","operationId":"op-46","operation":"adapt","design":{…},"input":{}}
+```
+
+**Terminal event:**
+
+```
+{…,"type":"settled","operation":"adapt","sequence":4,"outcome":"held","design":null,"artifacts":[],"diagnostics":[{"code":"ADAPT_TARGET_REQUIRED","category":"validation","severity":"failure","retryable":false,"safeMessage":"adapt requires input.target — { width, height } in pixels. Adapting to an unstated size would be guessing."}],"fidelity":null}
+```
+
+**Exit code `0`.** The invocation succeeded; the answer was no. Compare with a
+request that never decoded — an unknown verb, an undeclared field — which exits
+`2` with **nothing** on stdout. Those are different failures and you will want
+to handle them differently: a hold is ours to explain, a protocol error is
+yours to fix.
+
 ⚠ **What you are talking to today is the reference implementation.** It answers
 the contract correctly and honestly reports `partial` with
-`REFERENCE_IMPLEMENTATION_ONLY`, because the conversion behind it lands in our
-next phase. It will not claim `complete` for work it did not do. Build against
-it; the shapes will not move under you.
+`REFERENCE_IMPLEMENTATION_ONLY` where real conversion would happen, because that
+conversion lands in our next phase. It will not claim `complete` for work it did
+not do. Build against it; the shapes will not move under you.
 
 ---
 
 ## 9 · What is not settled yet
 
 Stated rather than discovered later:
+
+### 9.0 · What has a producer today, and what does not
+
+Read this before you write a branch. Our own rule is *every variant needs a
+producer or it should not exist* — and at first publication this document listed
+three outcomes of which exactly **one** could actually be produced. You would
+have written a `held` branch that never fired, and an `exit 0` + `held` state
+that no code path could reach. That is fixed; the table is what makes it stay
+fixed.
+
+| | Produced today | Notes |
+|---|---|---|
+| `outcome: partial` | ✅ | every operation that does real work |
+| `outcome: held` | ✅ | missing or unserviceable `input` — see `§8.5` |
+| `outcome: complete` | ✅ | a `change` with an empty instruction list |
+| `severity: warning` / `failure` | ✅ | both |
+| `category: validation` / `admission` / `dependency` | ✅ | three of nine |
+| the other six categories | ❌ | declared, no producer yet. `authorization`, `conflict`, `capacity`, `timeout`, `cancelled`, `internal` arrive with real conversion (our next phase) and real concurrency |
+| `retryable: true` | ❌ | nothing we do today is worth retrying. When something is, it will say so |
+| `fidelity.method: rendered-comparison` | ❌ | needs the renderer, which is two phases out. Until then every fidelity is `unmeasured` with a `null` score, and the decoder **refuses** any other combination |
+| exit `1` (accepted, then failed) | ❌ | reachable only through a crash or a broken pipe; we have no path that reaches it deliberately |
+| exit `130` | POSIX only | Node never delivers `SIGTERM` on Windows, and `child.kill()` there is `TerminateProcess`, which runs no handler at all — so on Windows a cancelled child dies abruptly rather than exiting `130`. Verified, not assumed. What holds on **every** platform is that a killed child leaves no output claiming success |
+
+A ❌ means the shape is declared and validated but nothing emits it yet. Decode
+defensively, by all means — but do not build UI for a state we cannot produce.
 
 - **Real conversion.** Our PSD reader is currently browser-bound — its asset
   store holds live canvas objects — so a spawned process needs a native canvas

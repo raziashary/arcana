@@ -232,6 +232,41 @@ describe('TG-PD0 · the capability contract', () => {
     for (const code of ['**0**', '**1**', '**2**', '**130**']) {
       expect(doc, `the document does not document exit code ${code}`).toContain(code)
     }
+
+    // 🔴 `W-17`: `PD0-09` owes "a worked example **per operation**" and the
+    // phase shipped one, for `adapt`. Nothing detected it — this gate parsed
+    // only the operations table. The gap that mattered was `export`, the one
+    // operation whose settled event carries `artifacts` and a null fidelity,
+    // i.e. the single shape the one example could not show.
+    //
+    // Matching on a fenced request naming the operation, so the check is that
+    // an EXAMPLE exists rather than that a word appears somewhere.
+    //
+    // ⚠ Built with `String.raw`, not a plain template literal. The first
+    // version passed `` `"operation"\s*:\s*"${operation}"` `` to `new RegExp`,
+    // and the template literal ate the backslashes — so the pattern was
+    // `"operation"s*:s*"export"`, which matched only because this document
+    // happens to write the JSON with no spaces. A check that works by accident
+    // of formatting is `L-C9`: change the document's whitespace and it stops
+    // detecting the thing it exists to detect, silently.
+    for (const operation of OPERATIONS) {
+      const example = new RegExp(String.raw`"operation"\s*:\s*"${operation}"`)
+      expect(
+        doc,
+        `the document has no worked example whose request names "${operation}"`,
+      ).toMatch(example)
+      // The pattern must tolerate the whitespace it claims to tolerate, or the
+      // comment above is the next false claim in this file.
+      expect(example.test(`"operation" : "${operation}"`), 'the pattern is whitespace-blind').toBe(
+        true,
+      )
+    }
+    // And a hold example, because `exit 0 + held` is the state a consumer is
+    // most likely to get wrong and the one this phase could not produce at all
+    // until the audit (`W-7`).
+    expect(doc, 'the document shows no held outcome on the wire').toMatch(
+      /"outcome"\s*:\s*"held"/,
+    )
   })
 
   // ── TGD0-09 [correctness] ─────────────────────────────────────────────────
