@@ -25,7 +25,11 @@ pub mod recipe_commands;
 pub mod routing_commands;
 pub mod session_commands;
 pub mod settings_commands;
-pub mod sidecar_commands;
+// P8-51/P8-06 — `sidecar_commands` is deleted. Its three MCP-CLIENT
+// commands (`list_mcp_tools`, `get_mcp_health`, `force_reconnect_mcp`)
+// moved to `mcp_commands`, keeping their names, because they serve a live
+// feature and were only ever neighbours of the sidecar code.
+pub mod mcp_commands;
 pub mod skill_commands;
 pub mod startup_commands;
 pub mod subagent_commands;

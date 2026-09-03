@@ -19,7 +19,6 @@ import {
   workerStatusColor,
   WORKER_TYPE_LABELS,
 } from '../stores/workerStore'
-import { useSidecarStore } from '../stores/sidecarStore'
 import { SubagentMonitor } from '../components/subagent/SubagentMonitor'
 import { LiveMonitorSection } from '../components/autodev/LiveMonitorSection'
 import { FleetChat }          from '../components/autodev/FleetChat'
@@ -1005,7 +1004,6 @@ export default function AutoDevTab() {
     workerRequests, loadWorkerRequests, resolveWorkerRequest,
   } = useTaskStore()
   const workerStore = useWorkerStore()
-  const { status: sidecarStatus, isConnected: sidecarConnected } = useSidecarStore()
   const [costUsd,      setCostUsd]      = useState<number | null>(null)
   const [tokensIn,     setTokensIn]     = useState<number | null>(null)
   const [tokensOut,    setTokensOut]    = useState<number | null>(null)
@@ -1135,22 +1133,7 @@ export default function AutoDevTab() {
           Agent Roster
         </span>
         <div className="flex items-center gap-3">
-          {/* core-orchestrator sidecar status badge */}
-          <div
-            className="flex items-center gap-1"
-            title={`core-orchestrator: ${sidecarStatus}`}
-            style={{ fontSize: '9px', color: sidecarConnected ? 'var(--accent)' : 'var(--text-2)', letterSpacing: '0.05em' }}
-          >
-            <span style={{
-              width: 5, height: 5, borderRadius: '50%', display: 'inline-block',
-              background: sidecarConnected ? 'var(--accent)'
-                : sidecarStatus === 'starting' ? 'var(--warning)'
-                : 'var(--text-4)',
-              boxShadow: sidecarConnected ? '0 0 4px var(--accent)' : 'none',
-            }} />
-            <span>{sidecarConnected ? 'LivingAgent' : 'Mode 1'}</span>
-          </div>
-        <div className="flex gap-2">
+<div className="flex gap-2">
           <div className="flex items-center gap-2">
             {lastRefreshed && (
               <span style={{ fontSize: '9px', color: 'var(--text-4)', fontFamily: 'monospace' }}>

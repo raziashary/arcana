@@ -10,9 +10,8 @@
 //   ⬜ Not Monitored (stdio)
 
 import { useEffect, useState } from 'react'
-import { invoke } from '@tauri-apps/api/core'
 import { RefreshCw, RotateCcw } from 'lucide-react'
-import { useSidecarStore, type McpServerHealth, type McpConnectionState } from '../../stores/sidecarStore'
+import { useMcpHealthStore, type McpServerHealth, type McpConnectionState } from '../../stores/mcpHealthStore'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -154,7 +153,7 @@ function ServerRow({ health, onReconnect }: {
 // ─── Main panel ──────────────────────────────────────────────────────────────
 
 export function McpHealthPanel() {
-  const { mcpServerHealth, loadMcpHealth } = useSidecarStore()
+  const { servers: mcpServerHealth, load: loadMcpHealth } = useMcpHealthStore()
   const [loading, setLoading] = useState(false)
 
   // Load on mount
@@ -168,7 +167,7 @@ export function McpHealthPanel() {
   }
 
   const handleReconnect = async (serverName: string) => {
-    await invoke('force_reconnect_mcp', { serverName })
+    await useMcpHealthStore.getState().reconnect(serverName)
     // Reload after a short delay to pick up the new state
     setTimeout(() => loadMcpHealth(), 1500)
   }

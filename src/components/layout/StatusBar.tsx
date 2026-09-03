@@ -3,7 +3,7 @@
 
 import { useCostStore }     from '../../stores/costStore'
 import { useSettingsStore } from '../../stores/settingsStore'
-import { useSidecarStore }  from '../../stores/sidecarStore'
+import { useMcpHealthStore, disconnectedServers } from '../../stores/mcpHealthStore'
 
 const PA_MODE_LABELS: Record<string, string> = {
   fast:     'Fast Dev',
@@ -25,8 +25,9 @@ function fmtTokens(n: number): string {
 
 export default function StatusBar() {
   const paMode          = useSettingsStore(s => s.paMode)
-  const sidecarStatus   = useSidecarStore(s => s.status)
-  const mcpDisconnected = useSidecarStore(s => s.mcpDisconnected)
+  // P8-55 — the orchestrator light is gone with the orchestrator. The MCP
+  // warning below is live and stays.
+  const mcpDisconnected = disconnectedServers(useMcpHealthStore(s => s.servers))
   const tokensIn        = useCostStore(s => s.tokensInToday)
   const tokensOut       = useCostStore(s => s.tokensOutToday)
   const totalTokens     = tokensIn + tokensOut
@@ -34,13 +35,7 @@ export default function StatusBar() {
   const modeColor = PA_MODE_COLORS[paMode] ?? 'var(--text-3)'
   const modeLabel = PA_MODE_LABELS[paMode]  ?? paMode
 
-  const orchColor = sidecarStatus === 'running'
-    ? 'var(--accent)'
-    : sidecarStatus === 'starting'
-      ? 'var(--warning)'
-      : sidecarStatus.startsWith('error')
-        ? 'var(--danger)'
-        : '#1A1A1A'
+  // P8-55 — the orchestrator light is gone; the MCP warning below stays.
 
   return (
     <div
@@ -69,14 +64,6 @@ export default function StatusBar() {
 
       {/* Middle: sidecar / MCP status */}
       <div className="flex items-center gap-2">
-        <span
-          style={{
-            width: 5, height: 5, borderRadius: '50%',
-            background: orchColor, display: 'inline-block',
-          }}
-        />
-        <span style={{ color: 'var(--text-3)' }}>core-orch</span>
-        <span style={{ color: 'var(--text-4)' }}>·</span>
         <span style={{ color: 'var(--text-4)' }}>autodev</span>
 
         {/* Ruflo Feature 6 — MCP disconnected warning */}

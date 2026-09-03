@@ -23,7 +23,6 @@ import { useCostStore }     from './stores/costStore'
 import { useUiStore }       from './stores/uiStore'
 import { useWorkerStore }   from './stores/workerStore'
 import { useTaskStore }     from './stores/taskStore'
-import { useSidecarStore }  from './stores/sidecarStore'
 import { useUpdateStore }   from './stores/updateStore'
 import { useWorkerChatStore } from './stores/workerChatStore'
 import { UpdateToast }      from './components/update/UpdateToast'
@@ -32,7 +31,6 @@ import { ErrorBoundary }    from './components/ErrorBoundary'
 // Doc 07 Phase 3/4 — startup banners for stray files + workspace mismatch.
 import { WorkspaceMismatchBanner, StrayFilesBanner } from './components/WorkspaceMismatchBanner'
 // Doc 05 Phase 1 — sidecar crash banner with stderr tail + copy report.
-import { SidecarCrashBanner } from './components/SidecarCrashBanner'
 
 export type TabId = 'chat' | 'autodev' | 'ide' | 'recipes' | 'graph' | 'dashboard' | 'settings' | 'logs' | 'docs'
 
@@ -55,7 +53,6 @@ export default function App() {
   const { loadFromBackend } = useCostStore()
   const initWorkerEvents  = useWorkerStore(s => s.initEventListeners)
   const initTaskEvents    = useTaskStore(s => s.initEventListeners)
-  const initSidecarEvents = useSidecarStore(s => s.initEventListeners)
   const initUpdater       = useUpdateStore(s => s.init)
   const cleanupUpdater    = useUpdateStore(s => s.cleanup)
   const hydrateWorkerChat = useWorkerChatStore(s => s.hydrate)
@@ -69,7 +66,6 @@ export default function App() {
     // flags) so React StrictMode's double-mount is safe.
     void initWorkerEvents()
     void initTaskEvents()
-    void initSidecarEvents()
     // AutoDev Communication Protocol — seed Fleet Chat from SQLite + subscribe
     // to the live worker:message stream. Idempotent.
     void hydrateWorkerChat()
@@ -96,9 +92,6 @@ export default function App() {
       </ErrorBoundary>
       <ErrorBoundary label="Stray Files Banner" inline>
         <StrayFilesBanner />
-      </ErrorBoundary>
-      <ErrorBoundary label="Sidecar Crash Banner" inline>
-        <SidecarCrashBanner />
       </ErrorBoundary>
 
       <div className="app-body">

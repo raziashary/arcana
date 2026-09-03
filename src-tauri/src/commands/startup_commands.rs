@@ -1,52 +1,28 @@
-// startup_commands.rs — Tauri commands for the startup overlay + Demo Mode.
+// startup_commands.rs — reading the on-disk runtime config.
 //
-// These two concerns are colocated because they both pertain to app-launch
-// behaviour and both hook into the StartupProgress FSM:
+// 🔴 **`P8-52`/`P8-53` emptied this file of everything else.**
 //
-//   get_startup_phase  — frontend pull-on-mount fallback for events emitted
-//                        before the React tree subscribed (Tauri does NOT
-//                        replay missed events).
-//   get_runtime_config — read on-disk demo flags.
-//   set_skip_sidecars  — write the demo flag (requires app restart to apply).
-
-use std::sync::Arc;
+// `get_startup_phase` returned the `StartupProgress` FSM's current phase so
+// the overlay could recover transitions emitted before React subscribed. That
+// FSM lived in `src-tauri/src/sidecar/startup_progress.rs` and **8 of its 13
+// phases narrated Python boot** — polling `:8000`, waiting on the
+// orchestrator. With the sidecar gone the overlay had nothing left to narrate,
+// so the command, the FSM and the overlay go together (`P8-52`). Deleting the
+// FSM alone would have left a spinner that never advances.
+//
+// `set_skip_sidecars` wrote Demo Mode's flag: "do not spawn the sidecars".
+// There are none (`P8-53`).
+//
+// ⚠ `get_runtime_config` STAYS. `runtime_config.json` still holds the default
+// worker budgets, which is why the file it reads was not deleted with the
+// flag — see the header of `runtime_config.rs`.
 
 use crate::runtime_config::{self, RuntimeConfig};
-use crate::sidecar::startup_progress::{StartupProgress, StartupProgressPayload};
-
-// ── Startup phase snapshot ───────────────────────────────────────────────────
-
-/// Return the current StartupProgress phase as a plain payload.
-///
-/// The `StartupOverlay` calls this on mount, immediately after registering
-/// its `startup:progress` event listener, to recover any phase transitions
-/// the listener missed (Tauri events emitted before listen() is registered
-/// are dropped).
-#[tauri::command]
-pub fn get_startup_phase(
-    progress: tauri::State<'_, Arc<StartupProgress>>,
-) -> StartupProgressPayload {
-    progress.snapshot()
-}
-
-// ── Runtime config (Demo Mode) ───────────────────────────────────────────────
 
 /// Read the on-disk runtime config.
-/// Used by Settings UI to render the current state of the toggles.
+///
+/// Used by the Settings UI to render the current budget defaults.
 #[tauri::command]
 pub fn get_runtime_config() -> RuntimeConfig {
     runtime_config::read()
-}
-
-/// Persist the `skip_sidecars` flag and return the new full config.
-///
-/// The change does NOT take effect until the next app launch — the sidecar
-/// auto-start task only runs once during `setup()`. The Settings UI surfaces
-/// this with an inline notice asking the user to restart.
-#[tauri::command]
-pub fn set_skip_sidecars(skip: bool) -> Result<RuntimeConfig, String> {
-    let mut cfg = runtime_config::read();
-    cfg.skip_sidecars = skip;
-    runtime_config::write(&cfg).map_err(|e| e.to_string())?;
-    Ok(cfg)
 }

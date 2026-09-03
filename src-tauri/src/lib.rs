@@ -19,7 +19,7 @@ pub mod provider;
 pub mod recipes;
 pub mod runtime_config;
 pub mod session;
-pub mod sidecar;
+
 pub mod skills;
 pub mod state;
 pub mod vault;
@@ -131,33 +131,14 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
             get_active_provider, get_cost_today, get_default_system_prompt, get_system_prompt,
             list_providers, set_active_provider, set_system_prompt, test_provider_connection,
         },
-        sidecar_commands::{
-            check_sidecar_connectivity,
-            force_reconnect_mcp,
-            get_full_sidecar_status,
-            // Ruflo Feature 6 — MCP Connection Health Monitor
-            get_mcp_health,
-            get_resource_usage,
-            get_sidecar_status,
-            get_sidecar_stderr_tail,
-            // Phase 5.3 — installer bundling
-            get_submodule_paths,
-            list_mcp_tools,
-            read_sidecar_log,
-            restart_sidecar,
-            // Phase 3.4b — per-service lifecycle + resource + log viewer
-            start_memory_mcp,
-            start_orchestrator,
-            start_sidecar,
-            stop_memory_mcp,
-            stop_orchestrator,
-            stop_sidecar,
-        },
+        // P8-51 — the three MCP-client commands, kept. The other fourteen
+        // were sidecar lifecycle and are deleted with it (`P8-06`).
+        mcp_commands::{force_reconnect_mcp, get_mcp_health, list_mcp_tools},
         skill_commands::{
             execute_skill, get_skill, import_skill, list_skills, reload_skills, search_skills,
             skills_by_category, validate_skill_parameters,
         },
-        startup_commands::{get_runtime_config, get_startup_phase, set_skip_sidecars},
+        startup_commands::get_runtime_config,
         subagent_commands::{
             abort_subagent, execute_subtask, get_qc_reviewer_stats, get_subagent_status,
             list_active_subagents, spawn_subagent, terminate_subagent,
@@ -297,25 +278,10 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         read_log_file_full,
         export_log_file,
         clear_log_files,
-        // Sidecar lifecycle (core-orchestrator)
-        get_sidecar_status,
-        check_sidecar_connectivity,
-        start_sidecar,
-        stop_sidecar,
-        get_full_sidecar_status,
-        get_sidecar_stderr_tail,
+        // P8-06/P8-07 — the fourteen sidecar-lifecycle commands are gone.
+        // A registration surviving its command is a compile error, which is
+        // the point: this handler is the one place that cannot keep a corpse.
         list_mcp_tools,
-        // Phase 3.4b
-        start_memory_mcp,
-        stop_memory_mcp,
-        start_orchestrator,
-        stop_orchestrator,
-        restart_sidecar,
-        get_resource_usage,
-        read_sidecar_log,
-        // Phase 5.3 — installer bundling
-        get_submodule_paths,
-        // Ruflo Feature 6 — MCP Connection Health Monitor
         get_mcp_health,
         force_reconnect_mcp,
         // Skills system (Phase 3.1)
@@ -390,9 +356,7 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         delete_checkpoint,
         compare_checkpoints,
         // Startup overlay + Demo Mode (Phase 3.3.1)
-        get_startup_phase,
         get_runtime_config,
-        set_skip_sidecars,
         // Subagent System (Phase 4.9)
         spawn_subagent,
         execute_subtask,

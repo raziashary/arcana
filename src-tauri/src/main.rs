@@ -7,9 +7,6 @@ use autodev_lib::mcp::health::McpHealthMonitor;
 use autodev_lib::recipes::runner::RecipeRunner;
 use autodev_lib::recipes::scheduler::RecipeScheduler;
 use autodev_lib::session::manager::SessionManager;
-use autodev_lib::sidecar::client::OrchestratorClient;
-use autodev_lib::sidecar::startup_progress::{StartupPhase, StartupProgress};
-use autodev_lib::sidecar::{start_watchdog, SidecarManager};
 use autodev_lib::skills::SkillRegistry;
 use autodev_lib::state::AppState;
 use autodev_lib::updater::{start_background_check, UpdateChannel, UpdaterState};
@@ -182,10 +179,6 @@ fn main() {
     // Used by AgentEngine (tool executor) and respond_to_permission command.
     let pending_permissions = new_pending_permissions();
 
-    // Sidecar: core-orchestrator lifecycle manager + HTTP client.
-    // Both are Arc-wrapped so they can be cloned across threads.
-    let sidecar_mgr = Arc::new(SidecarManager::new());
-    let orch_client = Arc::new(OrchestratorClient::new());
 
     // Subagent registry. Subagents run in-process on a nested AgentEngine, so
     // the manager needs app state and the permission channel rather than an
@@ -229,8 +222,6 @@ fn main() {
     let app_state_for_setup = app_state.clone();
     let session_mgr_for_setup = session_mgr.clone();
     let pending_for_setup = pending_permissions.clone();
-    let orch_client_for_setup = orch_client.clone();
-    let sidecar_mgr_for_setup = sidecar_mgr.clone();
     let subagent_mgr_for_setup = subagent_mgr.clone();
     let updater_state_for_setup = updater_state.clone();
     let mcp_health_for_setup = mcp_health_monitor.clone();
@@ -244,8 +235,6 @@ fn main() {
             .manage(app_state)
             .manage(session_mgr)
             .manage(pending_permissions)
-            .manage(sidecar_mgr)
-            .manage(orch_client)
             .manage(subagent_mgr)
             .manage(skill_registry_managed)
             .manage(mcp_registry.clone())   // Phase 3.4b — exposed so list_mcp_tools can iterate
@@ -334,33 +323,22 @@ fn main() {
                     });
                 }
 
-                let progress = Arc::new(StartupProgress::new(app.handle().clone()));
-                progress.advance(StartupPhase::Init);
-                // Skills were already loaded synchronously above — emit now that
-                // the AppHandle is available.
-                progress.advance(StartupPhase::Skills);
-                sidecar_mgr_for_setup.set_progress(progress.clone());
-                // Expose progress as Tauri state so `get_startup_phase` can
-                // serve a snapshot on demand. This is the recovery path for
-                // events emitted before the React listener registered (Tauri
-                // does NOT replay missed events).
-                app.manage(progress.clone());
-
-                // Read the on-disk Demo Mode flag once. Used to decide
-                // whether to spawn the Python sidecars below.
-                let runtime_cfg = autodev_lib::runtime_config::read();
-                if runtime_cfg.skip_sidecars {
-                    eprintln!("[AutoDev] Demo Mode active — sidecars will NOT be started.");
-                    eprintln!("[AutoDev] Chat + Worker fleet still work via the native AgentEngine.");
-                    eprintln!("[AutoDev] To re-enable sidecars: Settings → Demo Mode → off, then restart.");
-                }
+                // P8-08/P8-52 — the `StartupProgress` FSM is gone with the
+                // sidecar. Eight of its thirteen phases narrated Python boot
+                // (`MemoryStarting`, `VectorDb`, `MemoryReady`, `OrchStarting`,
+                // `Routers`, `Agents`, `LivingAgents`, `OrchReady`), so what
+                // remained could not describe a startup that no longer happens.
+                // The overlay goes with it — a spinner that never advances is
+                // worse than no spinner.
+                //
+                // P8-53 — Demo Mode's flag is gone too: it existed to NOT spawn
+                // the sidecars, and there are none.
 
                 // Build RecipeRunner + RecipeScheduler now that we have AppHandle
                 let runner = Arc::new(RecipeRunner::new(
                     app_state_for_setup,
                     session_mgr_for_setup,
                     pending_for_setup,
-                    orch_client_for_setup.clone(),
                 ));
                 let scheduler = Arc::new(RecipeScheduler::new(runner));
 
@@ -370,155 +348,32 @@ fn main() {
                 // needing Tauri `State<>` access.
                 autodev_lib::recipes::scheduler::install_global(scheduler.clone());
 
-                // Phase 3.4B — start sidecar watchdog (auto-restart with exponential backoff).
-                // The watchdog waits 90s before monitoring so the initial startup can complete.
-                // Uses clones — the originals are consumed by the sidecar auto-start block below.
-                start_watchdog(sidecar_mgr_for_setup.clone(), orch_client_for_setup.clone());
-
-                // Auto-start the sidecar fleet on app launch.
-                // Non-blocking — fires and forgets on a background task.
-                // Skipped entirely in Demo Mode; in that case we fast-forward
-                // the StartupProgress FSM straight to Ready so the loading
-                // overlay dismisses cleanly.
-                let orch_probe        = orch_client_for_setup;
-                let sidecar_ref       = sidecar_mgr_for_setup;
-                let skip_sidecars     = runtime_cfg.skip_sidecars;
-                let progress_for_demo = progress.clone();
+                // P8-08 — the sidecar auto-start block is DELETED: the
+                // watchdog, both spawn paths, the health polling, and the
+                // thirteen-phase startup narration that went with them.
+                //
+                // 🔴 **One thing inside it was NOT sidecar work and is kept
+                // below.** `subagent_mgr.cleanup_orphans()` sweeps ephemeral
+                // subagents that outlived a previous AutoDev process (Phase
+                // 4.9). It sat inside the fleet-ready branch only because that
+                // was the point in the boot where "everything is up" was known
+                // — not because it had anything to do with Python. Deleting
+                // the block wholesale would have taken it silently, and
+                // nothing would have failed to compile.
+                //
+                // ⚠ That is the THIRD time in this phase that live code was
+                // found nested inside something being deleted for an unrelated
+                // reason (`P8-09`'s updater `.sig` client, `P8-53`'s worker
+                // budgets, this). The tell each time was the same: the task
+                // named a container, not a behaviour.
+                let subagent_mgr_for_cleanup = subagent_mgr_for_setup.clone();
                 tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-
-                    if skip_sidecars {
-                        // Demo Mode: walk the FSM through every "would have"
-                        // phase so the UI shows a quick scripted boot rather
-                        // than jumping straight to Ready. Each step is < 200ms
-                        // so total perceived boot time is ~1.4s.
-                        for phase in [
-                            StartupPhase::MemoryStarting,
-                            StartupPhase::VectorDb,
-                            StartupPhase::MemoryReady,
-                            StartupPhase::OrchStarting,
-                            StartupPhase::Routers,
-                            StartupPhase::Agents,
-                            StartupPhase::LivingAgents,
-                            StartupPhase::OrchReady,
-                            StartupPhase::Workers,
-                            StartupPhase::FleetReady,
-                            StartupPhase::Ready,
-                        ] {
-                            progress_for_demo.advance(phase);
-                            tokio::time::sleep(std::time::Duration::from_millis(140)).await;
-                        }
-                        eprintln!("[AutoDev] Demo Mode boot complete (sidecars skipped).");
-                        return;
-                    }
-
-                    // ── Phase 1: Check if sidecars are already running externally ──────────
-                    // Use the STRICT health probe here so a previous-instance
-                    // ghost socket or a grace-window optimistic check doesn't
-                    // make us think a dead orchestrator is running — that
-                    // caused workers to queue auth-login calls against a port
-                    // that never accepted them, with no path to recovery.
-                    let mem_already_up = orch_probe.is_memory_healthy().await;
-                    let orch_already_up = orch_probe.is_healthy_strict().await;
-
-                    if mem_already_up {
-                        sidecar_ref.mark_memory_running();
-                        eprintln!("[AutoDev] memory-mcp-server already running on :8000");
-                    }
-                    if orch_already_up {
-                        sidecar_ref.mark_running();
-                        eprintln!("[AutoDev] core-orchestrator already running on :4000 — Mode 2 active");
-                    }
-
-                    // ── Phase 2: If not already running, auto-start the fleet ──────────────
-                    if !mem_already_up || !orch_already_up {
-                        eprintln!("[AutoDev] Auto-starting sidecar fleet...");
-
-                        // Start memory-mcp-server first
-                        if !mem_already_up {
-                            if let Ok(mem_cwd) = autodev_lib::sidecar::resolve_memory_path(None) {
-                                if let Err(e) = sidecar_ref.start_memory(&mem_cwd) {
-                                    eprintln!("[AutoDev] Failed to start memory-mcp-server: {e}");
-                                } else {
-                                    // Poll memory health: up to 20 × 1s attempts
-                                    for attempt in 1..=20u32 {
-                                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                                        if orch_probe.is_memory_healthy().await {
-                                            sidecar_ref.mark_memory_running();
-                                            eprintln!("[AutoDev] memory-mcp-server ready after {attempt}s");
-                                            break;
-                                        }
-                                    }
-                                }
-                            } else {
-                                eprintln!("[AutoDev] Could not resolve memory-mcp-server path; set AUTODEV_MEMORY_PATH");
-                            }
-                        }
-
-                        // Start core-orchestrator after memory is ready
-                        if !orch_already_up {
-                            if let Ok(orch_cwd) = autodev_lib::sidecar::resolve_orchestrator_path(None) {
-                                if let Err(e) = sidecar_ref.start(&orch_cwd) {
-                                    eprintln!("[AutoDev] Failed to start core-orchestrator: {e}");
-                                } else {
-                                    // Poll orchestrator health: up to 30 × 1s attempts
-                                    for attempt in 1..=30u32 {
-                                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                                        if orch_probe.is_healthy().await {
-                                            sidecar_ref.mark_running();
-                                            orch_probe.clear_cache();
-                                            eprintln!("[AutoDev] core-orchestrator ready after {attempt}s (Mode 2 is inert — see ADR-LOG-RESTRUCT-0008)");
-                                            break;
-                                        }
-                                    }
-                                }
-                            } else {
-                                eprintln!("[AutoDev] Could not resolve core-orchestrator path; set AUTODEV_SIDECAR_PATH");
-                            }
-                        }
-
-                        // ── Phase 3: Fleet verification ─────────────────────────────────────────
-                        // After both sidecars are healthy, wait for RecipeScheduler to start
-                        // workers and then verify all 7 fleet agents are registered.
-                        let progress_fleet = progress.clone();
-                        let orch_client_fleet = orch_probe.clone();
-                        let subagent_mgr_for_cleanup = subagent_mgr_for_setup.clone();
-                        tauri::async_runtime::spawn(async move {
-                            // Give RecipeScheduler time to start workers (+3s after orch ready)
-                            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                            progress_fleet.advance(StartupPhase::Workers);
-
-                            // Poll fleet verification for up to 60 seconds
-                            let mut verified = false;
-                            for attempt in 1..=60u32 {
-                                let (ready, missing) = orch_client_fleet.verify_fleet_ready().await;
-                                if ready {
-                                    verified = true;
-                                    eprintln!("[AutoDev] Fleet verification complete — all 7 agents registered after {attempt}s");
-                                    break;
-                                }
-                                if attempt % 10 == 0 {
-                                    eprintln!("[AutoDev] Fleet verification waiting — missing: {:?}", missing);
-                                }
-                                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                            }
-
-                            if !verified {
-                                let (_, missing) = orch_client_fleet.verify_fleet_ready().await;
-                                eprintln!("[AutoDev] Fleet verification timeout — proceeding with missing agents: {:?}", missing);
-                            }
-
-                            progress_fleet.advance(StartupPhase::FleetReady);
-
-                            // Phase 4.9 — sweep ephemeral subagents that
-                            // outlived a previous AutoDev process. Best-effort;
-                            // failures are logged inside the manager.
-                            subagent_mgr_for_cleanup.cleanup_orphans().await;
-
-                            progress_fleet.advance(StartupPhase::Ready);
-                        });
-                    }
+                    // Runs on its own now. It used to wait for the fleet to be
+                    // healthy; there is no fleet to wait for, and an orphan
+                    // from a previous process is stale the moment we start.
+                    subagent_mgr_for_cleanup.cleanup_orphans().await;
                 });
+
 
                 // Auto-start every worker that has a recipe bound and is not paused/deleted.
                 // Deferred via async_runtime::spawn to ensure the Tokio runtime is active.

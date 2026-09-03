@@ -1,23 +1,26 @@
 // runtime_config.rs — Tiny on-disk JSON file read at app startup.
 //
-// Holds flags that need to be known *before* Tauri state and sidecar spawn
-// are wired up — i.e. things that can't live in localStorage (which is only
-// readable from the webview, after the webview has loaded).
+// Holds settings the Rust side needs without a round-trip to the webview —
+// i.e. things that cannot live in localStorage, which is only readable after
+// the webview has loaded.
 //
-// Today the only flag is `skip_sidecars`, which puts AutoDev into Demo Mode:
-//   - memory-mcp-server and core-orchestrator are NOT spawned at startup
-//   - the StartupProgress FSM fast-forwards to `Ready`
-//   - the Chat tab and Worker recipe scheduler continue to function via the
-//     pure-Rust `agent::engine::AgentEngine` path (which calls the LLM
-//     provider HTTP API directly and never touches the Python sidecars).
+// Today that is the **default worker budgets** (Ruflo Feature 4), applied when
+// a Supervisor assigns a task without an explicit budget. `budget_commands.rs`
+// writes them; the recipe runner reads them.
 //
 // Storage path: ~/.autodev/runtime_config.json
-// Schema:       {"skip_sidecars": false}
+// The file is created lazily on first write; a missing file returns defaults.
 //
-// The file is created lazily on first write; missing-file returns defaults.
-// Settings UI writes via `set_skip_sidecars` and the user must restart the
-// app for the change to take effect (because sidecar spawn happens once at
-// startup).
+// 🔴 **`skip_sidecars` was removed in `P8-11`/`P8-53`.** It was Demo Mode: a
+// flag that stopped the Python sidecars spawning. With no sidecars to skip,
+// the feature had nothing left to mean.
+//
+// ⚠ **This file was itself nearly deleted.** `P8-53` said its *"only field is
+// `skip_sidecars`"* and prescribed deleting it. There were six, and five are
+// the live budgets above — removing them would have taken the Supervisor's
+// default budgets with it, silently. Removing one field is backwards
+// compatible: every field carries `#[serde(default)]` and serde ignores the
+// now-unknown key, so an existing config file still parses.
 
 use std::fs;
 use std::io::Write;
@@ -36,13 +39,6 @@ const FILE_NAME: &str = "runtime_config.json";
 /// compatible with old config files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeConfig {
-    /// When true, AutoDev runs in Demo Mode:
-    /// - sidecars are not spawned on launch
-    /// - the loading overlay fast-forwards to Ready
-    /// - LivingAgent / mem0 features are unavailable, but Chat + Workers work
-    #[serde(default)]
-    pub skip_sidecars: bool,
-
     // Ruflo Feature 4 — Default budgets applied when Supervisor assigns a task
     // without an explicit budget. Stored here (not localStorage) so the Rust
     // recipe runner can read them without a round-trip to the webview.
@@ -72,7 +68,6 @@ fn default_budget_warn_pct() -> u8 {
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
-            skip_sidecars: false,
             default_worker_budget_tokens: default_budget_tokens(),
             default_worker_budget_usd: default_budget_usd(),
             default_worker_budget_turns: default_budget_turns(),

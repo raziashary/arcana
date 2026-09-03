@@ -3,7 +3,6 @@
 // See: DEVELOPMENT_PLAN.md Phase 2.1 — Recipes System
 
 pub mod defaults;
-pub mod orchestrator;
 pub mod parser;
 pub mod runner;
 pub mod scheduler;

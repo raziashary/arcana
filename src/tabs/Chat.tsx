@@ -16,7 +16,6 @@ import { useSessionStore }  from '../stores/sessionStore'
 import { useSettingsStore, PA_MODES, type PAMode } from '../stores/settingsStore'
 import { useCostStore }     from '../stores/costStore'
 import { useAutodevMdStore } from '../stores/autodevMdStore'
-import { useSidecarStore }   from '../stores/sidecarStore'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 import SkillsPalette from '../components/skills/SkillsPalette'
 import SkillSlashPicker from '../components/skills/SkillSlashPicker'
@@ -101,7 +100,6 @@ interface ChatHeaderProps { localDir: string; setLocalDir: (d: string) => void }
 function ChatHeader({ localDir, setLocalDir }: ChatHeaderProps) {
   const paMode        = useSettingsStore(s => s.paMode)
   const setPAMode     = useSettingsStore(s => s.setPAMode)
-  const sidecarStatus = useSidecarStore(s => s.status)
   const byCategory    = useSkillStore(s => s.byCategory)
   const globalContent = useAutodevMdStore(s => s.globalContent)
   const loadGlobal    = useAutodevMdStore(s => s.loadGlobal)
@@ -122,7 +120,9 @@ function ChatHeader({ localDir, setLocalDir }: ChatHeaderProps) {
 
   const currentMode = PA_MODES.find(m => m.value === paMode) ?? PA_MODES[0]
   const allSkills   = Object.values(byCategory).flat()
-  const orcCount    = sidecarStatus === 'running' ? 2 : sidecarStatus === 'starting' ? 1 : 0
+  // P8-55 - the "N MCP" counter is gone. It counted the two PYTHON
+  // sidecar processes, not MCP servers: 2 when the orchestrator was
+  // running, 1 while starting. External MCP servers have their own panel.
   const autodevOk   = globalContent.trim().length > 0
 
   return (
@@ -170,7 +170,6 @@ function ChatHeader({ localDir, setLocalDir }: ChatHeaderProps) {
 
       {/* Right: live stats */}
       <div className="flex items-center gap-2 font-mono" style={{ fontSize: '10px', color: 'var(--text-3)' }}>
-        {orcCount > 0 && <span style={{ color: 'var(--info)' }}>{orcCount} MCP</span>}
         {allSkills.length > 0 && (
           <>
             <span style={{ color: 'var(--text-4)' }}>&#183;</span>

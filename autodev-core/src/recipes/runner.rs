@@ -41,7 +41,6 @@ use crate::provider::anthropic::AnthropicProvider;
 use crate::provider::google::GoogleProvider;
 use crate::provider::openai::OpenAIProvider;
 use crate::provider::traits::Provider;
-use crate::recipes::orchestrator::OrchestratorProbe;
 use crate::recipes::types::Recipe;
 use crate::session::manager::SessionManager;
 use crate::state::AppState;
@@ -85,7 +84,6 @@ pub struct RecipeRunner {
     state: Arc<Mutex<AppState>>,
     _session_mgr: Arc<SessionManager>, // retained for future SSE bridging (not attached to recipe sessions)
     pending: PendingPermissions,
-    orch_client: Arc<dyn OrchestratorProbe>, // Mode 2: see recipes::orchestrator
 }
 
 impl RecipeRunner {
@@ -93,21 +91,14 @@ impl RecipeRunner {
         state: Arc<Mutex<AppState>>,
         session_mgr: Arc<SessionManager>,
         pending: PendingPermissions,
-        orch_client: Arc<dyn OrchestratorProbe>,
     ) -> Self {
         Self {
             state,
             _session_mgr: session_mgr,
             pending,
-            orch_client,
         }
     }
 
-    /// Returns true when the core-orchestrator is reachable and ready.
-    /// Used by RecipeScheduler to gate the first tick (T5.1 — E-04 fix).
-    pub async fn is_orchestrator_ready(&self) -> bool {
-        self.orch_client.is_healthy().await
-    }
 
     /// Execute a recipe for the given worker slug.
     /// Updates worker status in DB: idle → working → idle/error.
@@ -170,16 +161,13 @@ impl RecipeRunner {
         // control flow in the same commit that removes the MCP server.
         //
         // ADR-LOG-RESTRUCT-0008.
-        let _orch_reachable = self.orch_client.is_healthy().await;
-        let orch_healthy = false;
+        // P8-48 — the awaited health probe whose result was DISCARDED on
+        // every worker tick, and the `orch_healthy = false` pin beneath it,
+        // are both gone. The probe cost a round-trip per tick to fill a
+        // variable named `_orch_reachable` that nothing ever read.
         info!(
-            "[RecipeRunner] tick dispatch — worker='{}' core-orchestrator={}",
-            worker_slug,
-            if orch_healthy {
-                "reachable → Mode 2 (LivingAgent)"
-            } else {
-                "unreachable → Mode 1 (Rust Engine)"
-            },
+            "[RecipeRunner] tick dispatch — worker='{}' (native engine)",
+            worker_slug
         );
 
         // ── Deterministic no-op short-circuit ──────────────────────────────────
@@ -203,7 +191,9 @@ impl RecipeRunner {
         // Without this exception, workers with no tasks never reach
         // ensure_agent(), so their YAMLs are never created and they appear
         // "missing" from the fleet even though they're scheduled.
-        if !orch_healthy && worker_slug.starts_with("worker-") {
+        // P8-48 — `!orch_healthy` was ALWAYS true (the pin was `false`), so
+        // this reads as what it always did: every `worker-*` slug.
+        if worker_slug.starts_with("worker-") {
             if !Self::has_runnable_task(worker_slug) {
                 info!(
                     "[RecipeRunner] worker '{}' has no assigned/in_progress tasks — skipping tick (Mode 1)",
@@ -270,443 +260,18 @@ impl RecipeRunner {
                 })
         };
 
-        // ── Mode 2: core-orchestrator LivingAgent (primary path) ───────────────
-        // Use the pre-checked health result from earlier in the function.
-        // If reachable, dispatch through LivingAgent for FSMs + mem0 + A2A.
-        if orch_healthy {
-            info!(
-                "[RecipeRunner] core-orchestrator reachable — dispatching '{}' via LivingAgent",
-                worker_slug
-            );
-            self.set_worker_status(worker_slug, "working");
-
-            // D.1 — Record tick start and notify the frontend. Both the start
-            // timestamp and the Instant are captured here so we can compute
-            // tick_duration_ms for the WorkerStatusPayload on completion.
-            let tick_start = Instant::now();
-            emit_worker_tick_start(WorkerTickStartPayload {
-                slug: worker_slug.to_string(),
-                mode: "mode2".to_string(),
-                timestamp: chrono::Utc::now().to_rfc3339(),
-            });
-
-            match self.orch_client.ensure_agent(worker_slug, &model).await {
-                Ok(agent_id) => {
-                    // BUG-002b — pre-flight: if the MCP server is unreachable, the
-                    // LivingAgent will have zero tools and burn tokens doing nothing.
-                    // Force an immediate Mode 1 fallback rather than discovering this
-                    // inside the expensive invoke_worker call.
-                    let mcp_up = false; // see ADR-LOG-RESTRUCT-0008 — the MCP server is gone
-                                        // ── qc-agent gate (AFTER ensure_agent so YAML is always created) ─────────
-                                        // ensure_agent() above already created/registered the YAML config.
-                                        // Now skip the LLM invocation if there are no reviewable tasks.
-                    let mut qc_trigger_override: Option<String> = None;
-                    if worker_slug == "qc-agent" {
-                        if let Ok(db) = crate::db::tasks::TasksDb::open() {
-                            if let Ok(tasks) = db.list(Some("qc_review")) {
-                                if tasks.is_empty() {
-                                    info!("[RecipeRunner] No qc_review tasks in DB — skipping qc-agent tick");
-                                    // Doc 06 Phase 3 — leave a visible breadcrumb on the QC card so
-                                    // "intentionally idle" doesn't look like "stuck idle".
-                                    emit_worker_log_line(WorkerLogLinePayload {
-                                        slug: worker_slug.to_string(),
-                                        text: "idle — no qc_review tasks".to_string(),
-                                        timestamp: chrono::Utc::now().to_rfc3339(),
-                                    });
-                                    emit_worker_tick_end(WorkerTickEndPayload {
-                                        slug: worker_slug.to_string(),
-                                        outcome: "idle".to_string(),
-                                        timestamp: chrono::Utc::now().to_rfc3339(),
-                                    });
-                                    self.set_worker_status(worker_slug, "idle");
-                                    return Ok(());
-                                }
-                                // E.3 — Filter out build_failed tasks that leaked into qc_review.
-                                let reviewable: Vec<_> = tasks
-                                    .iter()
-                                    .filter(|t| {
-                                        !matches!(
-                                            t.status,
-                                            crate::db::tasks::TaskStatus::BuildFailed
-                                        )
-                                    })
-                                    .collect();
-                                if reviewable.is_empty() {
-                                    info!(
-                                        "[RecipeRunner] Only build_failed tasks in qc_review — \
-                                         skipping qc-agent LLM invocation"
-                                    );
-                                    // Doc 06 Phase 3 — distinct breadcrumb from the
-                                    // "no qc_review tasks" case so the user can tell
-                                    // why the QC agent is parked.
-                                    emit_worker_log_line(WorkerLogLinePayload {
-                                        slug: worker_slug.to_string(),
-                                        text: "idle — only build_failed tasks awaiting QC"
-                                            .to_string(),
-                                        timestamp: chrono::Utc::now().to_rfc3339(),
-                                    });
-                                    emit_worker_tick_end(WorkerTickEndPayload {
-                                        slug: worker_slug.to_string(),
-                                        outcome: "idle".to_string(),
-                                        timestamp: chrono::Utc::now().to_rfc3339(),
-                                    });
-                                    self.set_worker_status(worker_slug, "idle");
-                                    return Ok(());
-                                }
-                                let titles: Vec<String> = reviewable
-                                    .iter()
-                                    .map(|t| format!("#{}: {}", t.id, t.title))
-                                    .collect();
-                                qc_trigger_override = Some(format!(
-                                    "{RECIPE_TRIGGER}\n\n[BOARD STATE] {} task(s) awaiting QC review:\n{}",
-                                    reviewable.len(),
-                                    titles.join("\n")
-                                ));
-                            }
-                        }
-                    }
-
-                    // I.1 — Pre-flight task count check for worker-* agents (Mode 2).
-                    // ensure_agent() above already created the YAML config (the main goal).
-                    // Now skip the expensive LLM invocation if there are no actionable tasks.
-                    // This must happen AFTER ensure_agent so agent YAMLs are always created.
-                    if worker_slug.starts_with("worker-") {
-                        let has_work = crate::db::tasks::TasksDb::open().ok().map_or(true, |db| {
-                            let assigned = db
-                                .list_tasks_by_status_and_worker("assigned", worker_slug)
-                                .unwrap_or_default();
-                            let in_prog = db
-                                .list_tasks_by_status_and_worker("in_progress", worker_slug)
-                                .unwrap_or_default();
-                            let rejected = db
-                                .list_tasks_by_status_and_worker("rejected", worker_slug)
-                                .unwrap_or_default();
-                            !assigned.is_empty() || !in_prog.is_empty() || !rejected.is_empty()
-                        });
-                        if !has_work {
-                            info!(
-                                "[RecipeRunner] {} has no actionable tasks — skipping LLM invocation (Mode 2)",
-                                worker_slug
-                            );
-                            emit_worker_tick_end(WorkerTickEndPayload {
-                                slug: worker_slug.to_string(),
-                                outcome: "idle".to_string(),
-                                timestamp: chrono::Utc::now().to_rfc3339(),
-                            });
-                            self.set_worker_status(worker_slug, "idle");
-                            return Ok(());
-                        }
-                    }
-
-                    if !mcp_up {
-                        // The AutoDev MCP server is an in-process Tokio task in the same
-                        // Tauri binary. If the port isn't responding, the server has
-                        // either crashed or hasn't finished binding yet. Either way, Mode 1
-                        // would run without ANY tools and is strictly worse. Abort this tick
-                        // and wait for the next cron cycle — the in-process server will
-                        // almost certainly recover on its own.
-                        let mcp_port = 0;
-                        warn!(
-                            "[RecipeRunner] MCP server unreachable for '{}' (port :{} not responding). \
-                             Aborting tick — will retry next scheduled interval. \
-                             NOT falling back to Mode 1 (tool-less Mode 1 is worse than skipping).",
-                            worker_slug, mcp_port
-                        );
-                        emit_worker_tick_end(WorkerTickEndPayload {
-                            slug: worker_slug.to_string(),
-                            outcome: "mcp_unavailable".to_string(),
-                            timestamp: chrono::Utc::now().to_rfc3339(),
-                        });
-                        self.set_worker_status(worker_slug, "idle");
-                        return Ok(());
-                    }
-
-                    info!(
-                        "[RecipeRunner] MCP server healthy for '{}' — \
-                         LivingAgent will have tools via :{}, proceeding Mode 2",
-                        worker_slug, 0
-                    );
-                    {
-                        // Prepend the active workspace dir to the instructions so the
-                        // LivingAgent's file tools resolve paths against the same root
-                        // the Personal Assistant uses. Without this, Mode 2 workers
-                        // operate on whatever cwd core-orchestrator was launched in
-                        // and ignore the user's configured workspace.
-                        let instructions_with_ws = format!(
-                            "[AUTODEV WORKSPACE]\nworking_dir: {working_dir}\n\
-                             All file operations (read_file, write_file, bash, glob, grep) \
-                             MUST be resolved relative to this absolute path unless the user \
-                             provides another absolute path.\n\n{}",
-                            recipe.instructions
-                        );
-                        info!(
-                            "[RecipeRunner] worker '{}' workspace={}",
-                            worker_slug, working_dir
-                        );
-                        let trigger = qc_trigger_override.as_deref().unwrap_or(RECIPE_TRIGGER);
-                        // Doc 01 Phase 3+ / Doc 06 Phase 3 follow-up: use the
-                        // streaming variant so per-tool SSE frames from the
-                        // LivingAgent re-emit on subagent:event keyed by the
-                        // worker slug. The Live Monitor card's body now
-                        // shows the actual tools being called instead of
-                        // staying empty during the multi-minute tick.
-                        match self
-                            .orch_client
-                            .invoke_worker_streaming(
-                                &agent_id,
-                                &instructions_with_ws,
-                                trigger,
-                                worker_slug,
-                            )
-                            .await
-                        {
-                            Ok(result) => {
-                                let elapsed_ms = tick_start.elapsed().as_millis() as u64;
-                                let response = result.content.clone();
-                                info!(
-                                "[RecipeRunner] LivingAgent tick complete for '{}' in {}ms: {:.200}",
-                                worker_slug,
-                                elapsed_ms,
-                                response.trim()
-                            );
-
-                                // Phase 8.2 — Mode 2 cost tracking.
-                                // core-orchestrator returns approximate tokens in
-                                // response.metadata.tokens_used; the client falls
-                                // back to a char/4 estimate when that field is
-                                // unpopulated. Either way we now have non-zero
-                                // numbers to bill against the worker's model.
-                                let tokens_in = result.tokens_in;
-                                let tokens_out = result.tokens_out;
-                                // This is a Mode 2 (sidecar) path whose token
-                                // counts are already approximate; an unpriced
-                                // model on top of that is logged, not invented.
-                                let usage = crate::provider::usage::Usage {
-                                    input: tokens_in,
-                                    output: tokens_out,
-                                    ..Default::default()
-                                };
-                                let cost_usd =
-                                    match crate::cost::tracker::CostTracker::calculate(&model, &usage) {
-                                        Ok(c) => c.cost_usd,
-                                        Err(e) => {
-                                            error!("Cost unavailable for worker model '{model}': {e}");
-                                            0.0
-                                        }
-                                    };
-                                // Roll into the in-process AppState so the
-                                // StatusBar / Sidebar / TabBar cost meter (which
-                                // reads `cost_today_usd`) reflects Mode 2 spend
-                                // alongside Mode 1 PA spend.
-                                {
-                                    let mut s = self.state.lock_tolerant();
-                                    s.add_cost(cost_usd, tokens_in, tokens_out);
-                                }
-                                // Persist into the analytics DB so the Dashboard's
-                                // get_dashboard_summary picks it up across restarts.
-                                // P2-53. This substring ladder was written out here AND in the other
-                            // runtime path, and they did not agree: `o4-mini`
-                            // matched neither and was filed as "unknown",
-                            // attributing real spend to a vendor that does not
-                            // exist. One shared function now answers.
-                            let analytics_provider =
-                                crate::provider::routing::provider_for_analytics(&model);
-                                // Phase 1 of docs/endtoendrun/14may2026/02 — fail
-                                // loudly. The previous `let _ = ...` silently
-                                // swallowed every analytics write for the entire
-                                // session and was the reason the Dashboard
-                                // showed zeros for days.
-                                if let Err(e) =
-                                    crate::analytics::global().collector().record_token_usage(
-                                        format!(
-                                            "mode2-{}-{}",
-                                            worker_slug,
-                                            chrono::Utc::now().timestamp_millis()
-                                        ),
-                                        "mode2_worker".to_string(),
-                                        analytics_provider.to_string(),
-                                        model.clone(),
-                                        tokens_in as i32,
-                                        tokens_out as i32,
-                                        None,
-                                        cost_usd,
-                                        format!("worker_tick:{}", worker_slug),
-                                    )
-                                {
-                                    warn!("[Mode2] record_token_usage failed for '{worker_slug}': {e}");
-                                }
-                                // Live-broadcast a cost:update so the Dashboard
-                                // and any other cost listeners refresh immediately
-                                // rather than waiting for the 60s polling fallback.
-                                // Through cost_today(), not the field: a direct read returns
-                                // yesterday's figure on the first look after midnight.
-                                let total_today = self.state.lock_tolerant().cost_today();
-                                crate::events::emit_cost_update(crate::events::CostUpdatePayload {
-                                    session_id: format!("mode2:{}", worker_slug),
-                                    tokens_in,
-                                    tokens_out,
-                                    cost_usd: cost_usd,
-                                    total_today,
-                                });
-                                // D.1 — emit tick-end before transitioning to idle
-                                emit_worker_tick_end(WorkerTickEndPayload {
-                                    slug: worker_slug.to_string(),
-                                    outcome: "success".to_string(),
-                                    timestamp: chrono::Utc::now().to_rfc3339(),
-                                });
-                                // D.2 — include timing in the idle status event
-                                self.set_worker_status_ex(
-                                    worker_slug,
-                                    "idle",
-                                    Some(elapsed_ms),
-                                    Some("success".to_string()),
-                                );
-                                // Phase 7.5 — Record successful Mode 2 tick in analytics DB.
-                                //
-                                // Doc 02 Phase 2 task 2.2: populate with real values so the
-                                // worker leaderboard widget shows actual per-worker spend
-                                // and timing instead of zeros. `cost_usd` and
-                                // `elapsed_ms` are already computed above; we just had
-                                // to stop hard-coding 0.0 / 0 here.
-                                //
-                                // `time_spent_minutes` uses ceiling division by 60_000 so a
-                                // sub-minute tick records 1, not 0 (zero-min ticks would
-                                // make the leaderboard's "avg duration" stat misleading).
-                                let time_spent_min = ((elapsed_ms + 59_999) / 60_000) as i32;
-                                if let Err(e) =
-                                    crate::analytics::global().collector().record_worker_stats(
-                                        worker_slug.to_string(),
-                                        1,              // tasks_completed (1 successful tick)
-                                        0,              // tasks_failed
-                                        time_spent_min, // time_spent_minutes (real)
-                                        cost_usd,  // cost (real, from CostTracker above)
-                                        time_spent_min, // avg_task_duration_minutes
-                                    )
-                                {
-                                    warn!("[Mode2] record_worker_stats failed for '{worker_slug}': {e}");
-                                }
-                                // Same stranded-task safety net as the Mode 1 path —
-                                // see the long comment at the reconcile call below.
-                                // Without this, a Mode 2 LivingAgent that finishes
-                                // its tick without moving the task past `in_progress`
-                                // would leave the task stranded forever.
-                                // Run reconciliation BEFORE guard_and_validate so a
-                                // stranded task is promoted to qc_review instead of
-                                // being incorrectly marked build_failed by the sentinel.
-                                if worker_slug.starts_with("worker-") {
-                                    Self::reconcile_stranded_task(worker_slug);
-                                }
-                                // Fix 8c: sentinel-file guard after successful tick.
-                                Self::guard_and_validate(
-                                    worker_slug,
-                                    std::path::Path::new(&working_dir),
-                                );
-                                // C.4 — Notify the frontend dashboard that a Mode 2 tick
-                                // completed so it can refresh metrics without waiting for
-                                // the 60-second polling fallback.
-                                crate::events::emit(
-                                    "task:changed",
-                                    serde_json::json!({
-                                        "task_id":        null,
-                                        "kind":           "worker_tick_complete",
-                                        "status":         null,
-                                        "assigned_worker": worker_slug,
-                                    }),
-                                );
-                                return Ok(());
-                            }
-                            Err(e) => {
-                                // invoke_worker failed — the LivingAgent may have partially
-                                // executed this task (it could be in_progress). Do NOT fall
-                                // back to Mode 1: that risks double-execution and leaves the
-                                // task in an inconsistent state (Mode 1 and Mode 2 wrote
-                                // different things to the same files). Instead:
-                                //   1. Reconcile any stranded in_progress task → qc_review
-                                //   2. Mark worker error so the UI signals the failure
-                                //   3. Return Err so the scheduler logs it; next cron tick
-                                //      will retry via Mode 2.
-                                warn!(
-                                "[RecipeRunner] LivingAgent invoke failed for '{}': {e}. \
-                                 Aborting tick (NOT falling back to Mode 1 — risk of double-execution). \
-                                 Next scheduled tick will retry Mode 2.",
-                                worker_slug
-                            );
-                                emit_worker_tick_end(WorkerTickEndPayload {
-                                    slug: worker_slug.to_string(),
-                                    outcome: "invoke_error".to_string(),
-                                    timestamp: chrono::Utc::now().to_rfc3339(),
-                                });
-                                // Reconcile any task the LivingAgent left stranded in_progress.
-                                if worker_slug.starts_with("worker-") {
-                                    Self::reconcile_stranded_task(worker_slug);
-                                }
-                                // P2-54. The success branch records (1, 0) and this
-                                // branch recorded no worker stats at all, so
-                                // `collector.rs` computed success_rate = 100.0 for
-                                // every Mode 2 worker regardless of how often it
-                                // failed. A leaderboard that can only report success
-                                // is not a measurement.
-                                if let Err(e) =
-                                    crate::analytics::global().collector().record_worker_stats(
-                                        worker_slug.to_string(),
-                                        0, // tasks_completed
-                                        1, // tasks_failed
-                                        0,
-                                        0.0,
-                                        0,
-                                    )
-                                {
-                                    warn!("[Mode2] record_worker_stats (failure) failed for '{worker_slug}': {e}");
-                                }
-
-                                // Phase 7.7 — record the invoke error as a system event.
-                                let _ = crate::analytics::global().collector().record_system_event(
-                                    "runner".to_string(),
-                                    "mode2_invoke_error".to_string(),
-                                    format!(
-                                        "Worker '{}' Mode 2 invoke failed (tick aborted): {e}",
-                                        worker_slug
-                                    ),
-                                    "warning".to_string(),
-                                    Some(serde_json::json!({ "worker": worker_slug }).to_string()),
-                                );
-                                self.set_worker_status(worker_slug, "error");
-                                return Err(AutoDevError::Agent(format!(
-                                    "LivingAgent invoke failed for '{worker_slug}': {e}"
-                                )));
-                            }
-                        } // closes invoke_worker match body
-                    } // closes MCP-healthy block
-                } // closes Ok(agent_id) arm
-                Err(e) => {
-                    // ensure_agent failed — typically a transient condition:
-                    // auth token refresh race, orchestrator still warming up,
-                    // or a brief network hiccup. The orchestrator passed is_healthy()
-                    // earlier in this function, so it IS reachable — this is not
-                    // the "genuinely unreachable" case that justifies Mode 1.
-                    // Abort the tick; the next cron cycle will retry Mode 2.
-                    warn!(
-                        "[RecipeRunner] ensure_agent failed for '{}': {e}. \
-                         Aborting tick (NOT falling back to Mode 1 — orchestrator was healthy). \
-                         Next scheduled tick will retry Mode 2.",
-                        worker_slug
-                    );
-                    emit_worker_tick_end(WorkerTickEndPayload {
-                        slug: worker_slug.to_string(),
-                        outcome: "ensure_agent_error".to_string(),
-                        timestamp: chrono::Utc::now().to_rfc3339(),
-                    });
-                    self.set_worker_status(worker_slug, "idle");
-                    return Ok(());
-                }
-            }
-        } else {
-            info!(
-                "[RecipeRunner] core-orchestrator not reachable — \
-                 attempting Mode 1 (Rust AgentEngine) fallback for '{}'",
-                worker_slug
-            );
-        }
+        // P8-48 — the Mode 2 branch is DELETED.
+        //
+        // 🔴 It was gated on `orch_healthy`, pinned `false` since P0
+        // (`ADR-LOG-RESTRUCT-0008`), so it was unreachable BY CONSTRUCTION
+        // and the `else` arm ran on every tick of every worker. What it
+        // guarded was dispatch into a Python process that no longer exists.
+        //
+        // ⚠ It also held EVERY `worker:tick-start` / `worker:tick-end`
+        // emitter in this file, which is why the Live Monitor has been
+        // permanently blank rather than merely stale. `P8-42` puts them on
+        // the native path in this same change — deleting this without that
+        // would have made the breakage structural.
 
         // P8-25/P8-47 — the `Mode2Only` guard is DELETED.
         //
@@ -818,6 +383,29 @@ impl RecipeRunner {
         // default is what stops an unclaimed or unbudgeted run.
         .with_budget(crate::budget::TaskBudget::default_worker());
 
+        // P8-42 — the Live Monitor's tick events, emitted around the NATIVE run.
+        //
+        // 🔴 Every `worker:tick-start` / `worker:tick-end` emitter used to live
+        // inside the Mode 2 branch, which `orch_healthy = false` made
+        // unreachable in `P0`. So the Live Monitor has shown nothing for every
+        // worker since then — not stale data, **no data** — and `P8-48`
+        // deleting that branch would have turned an accident into a structural
+        // impossibility. This is the half that keeps the capability.
+        //
+        // ⚠ `tick_duration_ms` is measured from an `Instant` taken here, not
+        // computed from the two timestamps: the timestamps are RFC3339 strings
+        // for the UI, and deriving a duration from them would inherit
+        // `P8-31`'s parsing problem.
+        let tick_started = std::time::Instant::now();
+        emit_worker_tick_start(WorkerTickStartPayload {
+            slug: worker_slug.to_string(),
+            // One engine left, so one mode. The field stays because the
+            // payload is a published event shape; `agentLiveStore.ts` types it
+            // and does not read it.
+            mode: "native".to_string(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        });
+
         // Run agent with recipe instructions as system prompt override
         let result = engine
             .run(
@@ -829,6 +417,25 @@ impl RecipeRunner {
                 Some(&recipe.instructions),
             )
             .await;
+
+        // P8-42 — one end event per tick, whatever the outcome. `last_outcome`
+        // is what the Live Monitor renders, so it carries the real result
+        // rather than a constant: a monitor that always says "ok" is a reader
+        // with no writer (`W-7`).
+        emit_worker_tick_end(WorkerTickEndPayload {
+            slug: worker_slug.to_string(),
+            outcome: match &result {
+                Ok(_) => "completed".to_string(),
+                // ⚠ The prefix is load-bearing. `agentLiveStore.ts:349` maps a
+                // tick to the error state with `outcome.startsWith('error')`,
+                // so "failed: ..." would have rendered every failed tick as
+                // IDLE -- a green monitor over a broken worker, which is the
+                // exact failure this task exists to end.
+                Err(e) => format!("error: {e}"),
+            },
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        });
+        let _tick_duration_ms = tick_started.elapsed().as_millis() as u64;
 
         // Update worker status based on outcome
         match &result {

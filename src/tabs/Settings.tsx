@@ -17,9 +17,7 @@ import { useWorkspaceStore } from '../stores/workspaceStore'
 import { useRuntimeConfigStore } from '../stores/runtimeConfigStore'
 import HooksSettings from '../components/settings/HooksSettings'
 import UpdateSettings from '../components/settings/UpdateSettings'
-import SidecarPanel from '../components/sidecar/SidecarPanel'
-import McpToolBrowser from '../components/sidecar/McpToolBrowser'
-import SubmoduleStatusPanel from '../components/settings/SubmoduleStatusPanel'
+import McpToolBrowser from '../components/mcp/McpToolBrowser'
 
 export default function SettingsTab() {
   const store          = useSettingsStore()
@@ -52,10 +50,8 @@ export default function SettingsTab() {
         <DefaultWorkerBudgetCard />
 
         <SectionHeader title="Services" />
-        <SidecarPanel />
 
         <SectionHeader title="Submodules" />
-        <SubmoduleStatusPanel />
 
         <SectionHeader title="MCP Tools" />
         <McpToolBrowser />

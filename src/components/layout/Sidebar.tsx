@@ -4,7 +4,6 @@
 
 import { useEffect }           from 'react'
 import { useAutodevMdStore }   from '../../stores/autodevMdStore'
-import { useSidecarStore }     from '../../stores/sidecarStore'
 import { useSkillStore }       from '../../stores/skillStore'
 import { useHookStore }        from '../../stores/hookStore'
 import { useCostStore }        from '../../stores/costStore'
@@ -19,7 +18,6 @@ function fmtN(n: number): string {
 export default function Sidebar() {
   const globalContent = useAutodevMdStore(s => s.globalContent)
   const loadGlobal    = useAutodevMdStore(s => s.loadGlobal)
-  const sidecarStatus = useSidecarStore(s => s.status)
   const byCategory    = useSkillStore(s => s.byCategory)
   const hooks         = useHookStore(s => s.hooks)
   const loadHooks     = useHookStore(s => s.loadHooks)
@@ -32,8 +30,7 @@ export default function Sidebar() {
     loadHooks()
   }, [])
 
-  const orcRunning    = sidecarStatus === 'running'
-  const orcError      = sidecarStatus.startsWith('error')
+  // P8-55 — the orchestrator indicator is gone with the orchestrator.
   const autodevLoaded = globalContent.trim().length > 0
   const allSkills     = Object.values(byCategory).flat()
   const enabledHooks  = hooks.filter(h => h.enabled)
@@ -58,12 +55,10 @@ export default function Sidebar() {
         <Dot label=".autodevhints" active={false} />
       </Section>
 
-      {/* ── MCP ACTIVE ───────────────────────────────────── */}
-      <Section title="MCP ACTIVE">
-        <Dot label="core-orch"  active={orcRunning} error={orcError} />
-        <Dot label="memory-mcp" active={orcRunning} />
-        <Dot label="github"     active={false} />
-      </Section>
+      {/* P8-55 — the "MCP ACTIVE" section is removed. All three dots reported
+          the Python sidecar: core-orch and memory-mcp were its two processes,
+          and github was hardcoded inactive, a light that could never turn on.
+          External MCP health has its own panel, backed by real data. */}
 
       {/* ── SKILLS — only rendered when skills are loaded ── */}
       {allSkills.length > 0 && (

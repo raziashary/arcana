@@ -6,8 +6,7 @@
 use crate::db::workers::{slugify, Worker, WorkersDb};
 use crate::errors::{AutoDevError, Result};
 use crate::recipes::scheduler::RecipeScheduler;
-use crate::sidecar::client::OrchestratorClient;
-use crate::sidecar::resolve_orchestrator_path;
+
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
@@ -47,36 +46,17 @@ pub struct UpdateModelSyncResult {
 // ─── Commands ─────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn list_workers(orch_client: State<'_, Arc<OrchestratorClient>>) -> Result<Vec<Worker>> {
-    let mut workers = WorkersDb::open()?.list()?;
-
-    // Source 1 (preferred): query the live core-orchestrator over HTTP. This is
-    // the most reliable source — it reflects any PUT /config writes immediately
-    // and bypasses all file-path resolution.
-    if orch_client.is_healthy().await {
-        let api_models = orch_client.fetch_agent_models().await;
-        if !api_models.is_empty() {
-            for worker in &mut workers {
-                if let Some(model) = api_models.get(&worker.slug) {
-                    worker.model = model.clone();
-                }
-            }
-            return Ok(workers);
-        }
-    }
-
-    // Source 2 (fallback): read llm.model directly from the agent YAML files.
-    // Used when the orchestrator is offline (e.g. Demo Mode, or first launch
-    // before the sidecar is up).
-    if let Ok(orch_dir) = resolve_orchestrator_path(None) {
-        let agents_dir = orch_dir.join("config").join("agents");
-        for worker in &mut workers {
-            if let Some(model) = read_yaml_model(&agents_dir, &worker.slug) {
-                worker.model = model;
-            }
-        }
-    }
-    Ok(workers)
+pub async fn list_workers() -> Result<Vec<Worker>> {
+    // P8-09 — `workers.db` is the source of truth for a worker's model.
+    //
+    // 🔴 This used to prefer the live core-orchestrator over HTTP and then fall
+    // back to reading `config/agents/*.yaml` out of the sidecar's own
+    // directory. Both sources are deleted with it, and neither was ever the
+    // authority: `P4-30` states the shape this now has — **the DB owns
+    // identity and state, the recipe owns the prompt**. The two extra sources
+    // were a way for a Python process's opinion to overwrite the row a user
+    // had just edited.
+    Ok(WorkersDb::open()?.list()?)
 }
 
 #[tauri::command]
@@ -150,7 +130,6 @@ pub fn update_worker_model(worker_id: i64, model: String) -> Result<()> {
 pub async fn update_worker_model_sync(
     worker_id: i64,
     model: String,
-    orch_client: State<'_, Arc<OrchestratorClient>>,
 ) -> Result<UpdateModelSyncResult> {
     // Step 1: Update database
     let db = WorkersDb::open()?;
@@ -160,60 +139,24 @@ pub async fn update_worker_model_sync(
 
     db.update_model(worker_id, &model)?;
 
-    // Step 2: Try to sync to core-orchestrator immediately
-    let sync_result = if orch_client.is_healthy().await {
-        match orch_client
-            .update_agent_model_by_slug(&worker.slug, &model)
-            .await
-        {
-            Ok(true) => (
-                "synced",
-                format!("Model updated to {} — change active immediately", model),
-            ),
-            Ok(false) => (
-                "pending",
-                format!(
-                    "Model updated to {} — will take effect on next agent run",
-                    model
-                ),
-            ),
-            Err(e) => {
-                tracing::warn!("[update_worker_model_sync] orchestrator sync failed: {e}");
-                (
-                    "failed",
-                    format!("Model saved, but sync failed: {e}. Will retry on next tick."),
-                )
-            }
-        }
-    } else {
-        (
-            "pending",
-            format!(
-                "Model updated to {} — will sync when core-orchestrator is online",
-                model
-            ),
-        )
-    };
-
-    // Step 3: Write directly to YAML so the file stays in sync regardless of
-    // whether core-orchestrator is running. This is the authoritative source the
-    // agent reads on boot — without this step a "pending" orchestrator sync would
-    // leave the YAML stale until the next tick.
-    if let Ok(orch_dir) = resolve_orchestrator_path(None) {
-        let agents_dir = orch_dir.join("config").join("agents");
-        if let Err(e) = write_yaml_model(&agents_dir, &worker.slug, &model) {
-            tracing::warn!(
-                "[update_worker_model_sync] YAML write failed for '{}': {e}",
-                worker.slug
-            );
-        } else {
-            tracing::info!(
-                "[update_worker_model_sync] YAML updated for '{}' → '{}'",
-                worker.slug,
-                model
-            );
-        }
-    }
+    // P8-09 — steps 2 and 3 are DELETED. Both wrote into the sidecar.
+    //
+    // 🔴 Step 2 pushed the model to `core-orchestrator` over HTTP; step 3
+    // wrote it into `config/agents/*.yaml` inside the sidecar's own
+    // directory, described there as *"the authoritative source the agent
+    // reads on boot"*. Neither destination exists. The database write above
+    // IS the change now, and it takes effect on the next tick because the
+    // engine reads the row rather than a file a Python process owned.
+    //
+    // ⚠ The command, its name and its return SHAPE are unchanged —
+    // `WorkerTable.tsx:75` invokes it and renders the toast. What changes is
+    // that `sync_status` can no longer be `"pending"` or `"failed"`: there
+    // is nothing left to be pending on. Reporting "pending" forever would
+    // be a status with no producer, which is the defect `W-7` names.
+    let sync_result = (
+        "synced",
+        format!("Model updated to {model} — active on the next tick"),
+    );
 
     Ok(UpdateModelSyncResult {
         db_updated: true,

@@ -158,12 +158,11 @@ pub const EVT_QC_DECISION: &str = "qc:decision";
 pub const EVT_WORKSPACE_STRAYS: &str = "workspace:strays-detected";
 pub const EVT_WORKSPACE_MISMATCH: &str = "workspace:mismatch";
 
-// Doc 05 Phase 1 — sidecar circuit-breaker open. The watchdog gives up on
-// restart attempts after N crashes in a sliding window; this event
-// surfaces the captured stderr tail to the frontend so the user can copy
-// a triage report without opening the log file.
-pub const EVT_SIDECAR_CRASH: &str = "sidecar:crash";
-
+// P8-10 — `sidecar:crash` is DELETED with the watchdog that emitted it.
+// Its only producer was the sidecar circuit-breaker; the UI banner that
+// consumed it goes in the same change (`P8-54`), because an event with
+// no producer and a listener with no event are the same defect seen
+// from two sides.
 // AutoDev Communication Protocol (ACP) — structured worker↔worker message.
 // Fires once per insert into `worker_messages`. Powers the Fleet Chat panel
 // and the per-worker "N unread" badge on AgentLiveCard.
@@ -341,18 +340,7 @@ pub fn emit_workspace_mismatch(payload: WorkspaceMismatchPayload) {
     emit_serialized(EVT_WORKSPACE_MISMATCH, &payload);
 }
 
-#[derive(Debug, Serialize, Clone)]
-pub struct SidecarCrashPayload {
-    pub sidecar_id: String, // "core-orchestrator" / "memory-mcp-server"
-    pub restart_count: u32,
-    pub window_secs: u64,
-    pub stderr_tail: Vec<String>,
-    pub timestamp: String,
-}
 
-pub fn emit_sidecar_crash(payload: SidecarCrashPayload) {
-    emit_serialized(EVT_SIDECAR_CRASH, &payload);
-}
 
 // ── Worker Request payloads + emit helpers ───────────────────────────────────
 
