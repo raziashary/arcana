@@ -669,8 +669,27 @@ impl TasksDb {
             self.conn
                 .execute(&sql, params![status, worker, rejection_reason, id])?;
         } else {
+            // P8-29 — `None` UNASSIGNS. It used to omit the column entirely.
+            //
+            // 🔴 The tool's own description tells the model *"Pass null to
+            // unassign"* (`update_task_status_tool.rs:48`), and a comment
+            // twenty lines below it said *"null or absent → leave
+            // unassigned"* — two different meanings for one argument, and the
+            // SQL implemented the second. So `update_status(id, "ready", None)`
+            // moved the task to `ready` while it stayed tagged with its
+            // worker: half-assigned, claimable by nobody, and invisible to any
+            // query that reads `assigned_worker` to decide who owns it.
+            //
+            // ⚠ The claim fields go with it. `release_orphaned_task` (below)
+            // already clears `assigned_worker`, `claimed_by_pid` and
+            // `claim_host` as one unit, because a task with no worker cannot
+            // have a live claim — leaving a PID behind makes it an orphan
+            // candidate on the next sweep. This makes THIS path internally
+            // consistent; the broader "clear them on every non-claim write" is
+            // `P4-40`'s job and is not done here.
             let sql = format!(
-                "UPDATE tasks SET status = ?1, rejection_reason = ?2, \
+                "UPDATE tasks SET status = ?1, assigned_worker = NULL, \
+                 claimed_by_pid = NULL, claim_host = NULL, rejection_reason = ?2, \
                  updated_at = datetime('now'), completed_at = {completed_at_sql} WHERE id = ?3"
             );
             self.conn
@@ -1862,6 +1881,65 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("mkdir");
         dir.join("tasks.db")
+    }
+
+
+    /// `P8-29` — passing `None` must actually unassign.
+    ///
+    /// 🔴 The tool description promises *"Pass null to unassign"*
+    /// (`update_task_status_tool.rs:48`) and the SQL omitted the column
+    /// entirely, so the task moved to `ready` while still tagged with its
+    /// worker: half-assigned, owned by nobody, and wrong to every query that
+    /// reads `assigned_worker` to decide who holds it.
+    ///
+    /// ⚠ Asserts the FIELD IS CLEARED rather than "the update succeeded" —
+    /// the old code returned `Ok(())` while leaving the stale value, so a
+    /// test on the return value would have passed over the defect (`L-C14`'s
+    /// shape: check that the thing is gone, not that something happened).
+    #[test]
+    fn p8_29_passing_none_unassigns_rather_than_leaving_the_worker_tag() {
+        let path = sandbox("p8-29-unassign");
+        let db = TasksDb::open_at(&path).expect("open");
+        let task = ready_task(&db, "a task that will be handed back");
+
+        db.update_status(task.id, "assigned", Some("worker-backend"))
+            .expect("assign");
+        let assigned = db.get_by_id(task.id).expect("fetch").expect("row");
+        assert_eq!(
+            assigned.assigned_worker.as_deref(),
+            Some("worker-backend"),
+            "the fixture must actually assign, or the unassign below proves nothing"
+        );
+
+        db.update_status(task.id, "ready", None).expect("unassign");
+        let after = db.get_by_id(task.id).expect("fetch").expect("row");
+
+        assert_eq!(after.status, TaskStatus::Ready);
+        assert_eq!(
+            after.assigned_worker, None,
+            "the task is `ready` but still tagged with {:?} — half-assigned",
+            after.assigned_worker
+        );
+
+        let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
+    }
+
+    /// The falsification's other half: an explicit worker must still be set.
+    ///
+    /// Without this, "always write NULL" would satisfy the test above while
+    /// destroying assignment entirely.
+    #[test]
+    fn p8_29_passing_a_worker_still_assigns() {
+        let path = sandbox("p8-29-assign");
+        let db = TasksDb::open_at(&path).expect("open");
+        let task = ready_task(&db, "a task that will be assigned");
+
+        db.update_status(task.id, "assigned", Some("worker-frontend"))
+            .expect("assign");
+        let after = db.get_by_id(task.id).expect("fetch").expect("row");
+        assert_eq!(after.assigned_worker.as_deref(), Some("worker-frontend"));
+
+        let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
     }
 
     /// A-22 · eight workers race for twelve tasks and no task is claimed twice.

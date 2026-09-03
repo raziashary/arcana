@@ -1,6 +1,7 @@
 import React from 'react';
 import { Plan, PlanScope, PlanStatus } from '../../stores/planStore';
 import './PlanCard.css';
+import { parseDbTimestamp } from "../../utils/dbTime"
 
 interface PlanCardProps {
   plan: Plan;
@@ -44,7 +45,7 @@ const agentBadgeColor = (agent?: string): string => {
 };
 
 export const PlanCard: React.FC<PlanCardProps> = ({ plan, onClick }) => {
-  const createdDate = new Date(plan.created_at);
+  const createdDate = parseDbTimestamp(plan.created_at) ?? new Date(0);
   const now = new Date();
   const diffMs = now.getTime() - createdDate.getTime();
   const diffMins = Math.floor(diffMs / 60000);

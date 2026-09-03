@@ -134,9 +134,22 @@ pub fn get_qc_queue() -> Result<Vec<(Task, i64)>> {
     let queue: Vec<(Task, i64)> = tasks
         .into_iter()
         .map(|t| {
-            let age = t
-                .updated_at
-                .parse::<chrono::DateTime<chrono::Utc>>()
+            // P8-31 — parse through the shared helper, not `str::parse`.
+            //
+            // 🔴 `updated_at` is written by SQLite's `datetime('now')`, which
+            // emits `"2026-09-01 06:23:58"`: a SPACE separator and **no
+            // offset**. `DateTime<Utc>`'s `FromStr` wants RFC 3339, so it
+            // failed on every row and `.unwrap_or(0)` turned the failure into
+            // an age of **zero seconds** — so every review looked brand new and
+            // the stalled-review alert could never fire. A silent wrong answer,
+            // not an error.
+            //
+            // ⚠ `parse_db_timestamp` was built in `P1-13` for exactly this and
+            // this call site was never wired to it (`L-C12`). `P1-13`'s sweep
+            // searched for the string `parse_from_rfc3339`, which this line
+            // does not contain — which is why the gate for this must be
+            // behavioural rather than a grep.
+            let age = autodev_core::db::timestamps::parse_db_timestamp(&t.updated_at)
                 .map(|dt| now - dt.timestamp())
                 .unwrap_or(0);
             (t, age)

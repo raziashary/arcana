@@ -96,6 +96,57 @@ pub fn now_rfc3339() -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// `P8-31` — the exact string SQLite writes, against both parsers.
+    ///
+    /// 🔴 `get_qc_queue` used `updated_at.parse::<DateTime<Utc>>()`, whose
+    /// `FromStr` requires RFC 3339. `datetime('now')` emits a **space**
+    /// separator and **no offset**, so the parse failed on every row and
+    /// `.unwrap_or(0)` turned that into an age of **zero seconds** — every
+    /// review looked brand new and the stalled-review alert could never fire.
+    /// A silent wrong answer, not an error.
+    ///
+    /// ⚠ Asserts the CONTRAST, not just that the helper works: the second
+    /// assertion is what proves the old call site was broken, and it is the
+    /// reason this is a behavioural test rather than a grep. The previous
+    /// sweep for this class (`P1-13`) searched for the string
+    /// `parse_from_rfc3339`, which the broken line did not contain.
+    #[test]
+    fn p8_31_the_sqlite_form_parses_here_and_fails_the_rfc3339_parser() {
+        let sqlite_wrote = "2026-09-01 06:23:58";
+
+        let ours = parse_db_timestamp(sqlite_wrote).expect("the helper must accept it");
+        // Asserted as the instant it denotes, not as an epoch integer I
+        // computed by hand -- the first version of this line was off by
+        // exactly two hours, which is the same class of error the test is
+        // about.
+        assert_eq!(ours.to_rfc3339(), "2026-09-01T06:23:58+00:00");
+
+        // The call site's old expression, verbatim.
+        let theirs = sqlite_wrote.parse::<DateTime<Utc>>();
+        assert!(
+            theirs.is_err(),
+            "if this now succeeds the defect's mechanism has changed and the \
+             comment above is stale"
+        );
+    }
+
+    /// The age arithmetic the call site performs, end to end.
+    #[test]
+    fn p8_31_an_hour_old_row_reports_about_an_hour() {
+        let an_hour_ago = Utc::now() - chrono::Duration::hours(1);
+        let as_sqlite_writes_it = an_hour_ago.format("%Y-%m-%d %H:%M:%S").to_string();
+
+        let parsed = parse_db_timestamp(&as_sqlite_writes_it).expect("parse");
+        let age = Utc::now().timestamp() - parsed.timestamp();
+
+        // Range, not equality — the clock moves between the two calls.
+        assert!(
+            (3_590..=3_610).contains(&age),
+            "age was {age}s; the old code reported 0 here, forever"
+        );
+    }
+
     use super::*;
 
     #[test]

@@ -123,3 +123,55 @@ mod p3_60_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod p8_30_tests {
+    //! `P8-30` — `spawn_subagent` misdescribed its own tool grant.
+    //!
+    //! Its schema told the model *"Empty = MCP tools only"* — the most
+    //! restrictive reading available — while `restrict_to` returns early on an
+    //! empty list and the child keeps **everything**. A model reading its own
+    //! documentation granted more than it intended, and MCP had already been
+    //! deleted in `P0`, so the promised restriction named a subsystem that no
+    //! longer existed.
+    //!
+    //! Ruled (`P8-30` leaves the choice open): **empty means INHERIT**. It is
+    //! the shipped behaviour, three spawn tools and a Tauri command write this
+    //! field, and flipping it to "none" would silently disarm every caller
+    //! that omits it. The description now says so.
+
+    use super::*;
+
+    #[test]
+    fn an_empty_subset_is_not_a_restriction() {
+        // 🔴 The behaviour the description denied. Asserted directly so that
+        // anyone who later "fixes" `restrict_to` to mean "none" has to come
+        // through this test and update the description in the same step.
+        let mut reg = ToolRegistry::new();
+        crate::agent::builtin_tools::register_for_mode(&mut reg, crate::agent::PAMode::FastDevelopment);
+        let before = reg.to_definitions().len();
+        assert!(before > 1, "fixture needs a populated registry, got {before}");
+        reg.restrict_to(&[]);
+        assert_eq!(
+            reg.to_definitions().len(),
+            before,
+            "an empty subset must inherit, not restrict"
+        );
+    }
+
+    #[test]
+    fn a_named_subset_removes_everything_else() {
+        let mut reg = ToolRegistry::new();
+        crate::agent::builtin_tools::register_for_mode(&mut reg, crate::agent::PAMode::FastDevelopment);
+        let all = reg.to_definitions();
+        if all.len() < 2 {
+            // A registry this small cannot demonstrate narrowing; say so
+            // rather than passing vacuously (`L-C9`).
+            panic!("the default registry has {} tools; the fixture needs 2+", all.len());
+        }
+        let keep = all[0].name.clone();
+        reg.restrict_to(&[keep.clone()]);
+        let names: Vec<String> = reg.to_definitions().into_iter().map(|d| d.name).collect();
+        assert_eq!(names, vec![keep]);
+    }
+}

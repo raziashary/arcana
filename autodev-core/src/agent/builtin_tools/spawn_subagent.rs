@@ -52,7 +52,7 @@ impl Tool for SpawnSubagentTool {
                 "tools": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Tool subset (e.g. [\"read_file\", \"grep\"]). Empty = MCP tools only."
+                    "description": "Tool subset the subagent may use, e.g. [\"read_file\", \"grep\"]. OMIT OR LEAVE EMPTY TO INHERIT every tool you currently hold -- an empty list is NOT a restriction. Narrowing can only remove tools you already have; it can never widen access."
                 },
                 "model": {
                     "type": "string",

@@ -3,6 +3,7 @@ import { formatDistanceToNow } from "date-fns";
 import { useSessionStore } from "../../stores/sessionStore";
 import { useWorkspaceStore } from "../../stores/workspaceStore";
 import { useSettingsStore } from "../../stores/settingsStore";
+import { parseDbTimestamp } from "../../utils/dbTime"
 
 export function SessionBar() {
   const { sessions, activeSessionId, createSession, switchSession, deleteSession, renameSession } = useSessionStore();
@@ -81,7 +82,7 @@ export function SessionBar() {
       <div className="flex-1 overflow-y-auto">
         {sessions.map((session) => {
           const isActive = session.id === activeSessionId;
-          const relativeTime = formatDistanceToNow(new Date(session.created_at), {
+          const relativeTime = formatDistanceToNow(parseDbTimestamp(session.created_at) ?? new Date(0), {
             addSuffix: true,
           });
 

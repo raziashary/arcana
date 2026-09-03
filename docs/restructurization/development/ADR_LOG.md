@@ -1596,6 +1596,78 @@ probe of mine said it was not.
 
 ---
 
+## ADR-LOG-RESTRUCT-0039 — An empty `tools` list means INHERIT, and three defects whose stated cause was wrong
+
+**Status.** DECIDED
+**Author.** Claude · **Tier.** **`decided-independently`** (clear codebase precedent; `P8-30` explicitly leaves the choice to the builder)
+**When.** 2026-09-03 · `P8-0`, tasks `P8-29`…`P8-31`
+
+**What.** `P8-30` says *"Fix the description **and** decide whether empty
+should mean 'inherit' or 'none'."* **Ruled: empty means INHERIT**, and the
+schema now says so in those words.
+
+**Why.** Three reasons, in order of weight:
+
+1. **It is the shipped behaviour.** `ToolRegistry::restrict_to` opens with `if
+   names.is_empty() { return; }` — an empty subset is not a restriction, it is
+   the absence of one.
+2. **"None" would silently disarm every existing caller.** Three spawn tools
+   and a Tauri command write `SubagentConfig.tools`, and any of them that omits
+   it would hand its child a registry of zero tools. A subagent that can call
+   nothing does not fail loudly; it produces a useless answer.
+3. **Inherit is already bounded.** `native_runner.rs:315` applies
+   `with_tool_subset` **after** `register_for_mode`, so a subset can only
+   REMOVE what the PA mode already granted and can never widen access. So
+   "inherit" means "inherit the parent's already-narrowed grant", not
+   "unrestricted".
+
+⚠ **What was actually wrong was the sentence, not the semantics.** The schema
+told the model *"Empty = MCP tools only"* — the most restrictive reading
+available — while the code did the opposite, and MCP itself was deleted in
+`P0`, so the promised restriction named a subsystem that no longer existed. **A
+model reading its own documentation granted more than it intended.** That is
+the same class as `P8-29` below: a description and its implementation
+disagreeing, with the description being the thing users and models trust.
+
+---
+
+### And three stated causes that were wrong, recorded because the pattern is the finding
+
+`§0.2m` exists to catch false claims before they are built. These three were
+caught while building, which is later than it should be, and all three share a
+shape: **the defect was real and the reason given for it was not.**
+
+| Task | The defect | What the plan said, and what was true |
+|---|---|---|
+| `P8-25` | Every UI-saved recipe was permanently idle | The plan implied the guard fired *because Mode 2 was down*. `orch_healthy` has been pinned `false` since `P0`, so it was **unconditional** — `Mode2Only` did not mean "needs Mode 2", it meant "never runs". The defect is **stronger** than stated. Its last clause was **overstated** in the other direction: a *shipped* recipe is repaired at next launch by `ensure_default_recipes`, so only a **user-created** recipe was stranded permanently. |
+| `P8-45` | `TG-P4-31` would break during `P8` | The plan predicted the break on *"the first commit of `P8-B`"*. `P8-B` touches **neither** file that gate reads. The real first failure was `P8-47` taking the `Mode1Capable` count to zero and tripping the gate's own `declared >= 9` floor — a builder trusting the justification would have hunted the break in the wrong commit and concluded the gate was fine. |
+| `P8-29` | Unassigning left a task half-assigned | The plan cited *"the guard twelve lines above it"*. **There is no such guard.** What exists is `release_orphaned_task`, which clears `assigned_worker`, `claimed_by_pid` and `claim_host` as one unit — and that is better evidence for the invariant than a guard would have been, because it is a second call site doing it correctly. |
+
+**The rule this yields**, and it is not one the register held in this form:
+***a task's defect and a task's explanation are two claims, and the second one
+is cheaper to get wrong.*** The defect is usually found by running something;
+the explanation is usually written from reading. All three were confirmed
+defects with refuted reasoning, and in two of the three the reasoning would
+have sent the work to the wrong place. `§0.2m`'s brief already says to attack
+*"the mechanism"* and *"the prescribed fix"* — it should attack the
+**justification** as a third, separately-scored item. Filed as `L-40`.
+
+**Where.** `spawn_subagent.rs:55` · `tool_registry.rs` (`p8_30_tests`) ·
+`db/tasks.rs` · `db/timestamps.rs` (`p8_31_*`) ·
+`src/utils/dbTime.ts` (new) · `src/test/dbTime.test.ts` (new)
+
+**How.** `UNIT-PROVEN` throughout, each with its falsification named in the
+task's evidence line. `P8-31` is deliberately **behavioural rather than a
+grep**: `P1-13` marked this class closed after sweeping for the string
+`parse_from_rfc3339`, and the site that broke did not contain it.
+
+**Links.** `P8-25` · `P8-29`…`P8-31` · `P8-45` · `P8-47` ·
+`ADR-LOG-RESTRUCT-0008` (the `orch_healthy` pin) · `P1-13` (the timestamp
+sweep that missed a site) · `§0.16 L-C12`, `L-C6`, `L-C7`, `L-26`, `L-37`,
+`L-40`
+
+---
+
 ## ADR-LOG-RESTRUCT-0038 — P8's pre-build refutation: a task that ordered a security regression, and a remedy that could not be built
 
 **Status.** DECIDED

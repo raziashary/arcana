@@ -66,7 +66,11 @@ impl Tool for UpdateTaskStatusTool {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => return ToolResult::error("'status' is required"),
         };
-        // null or absent → leave unassigned; string → set assigned_worker
+        // P8-29 — null or absent → UNASSIGN (clears assigned_worker and the
+        // claim fields); string → set assigned_worker. This comment used to say
+        // "leave unassigned", which contradicted the tool description twenty
+        // lines above it ("Pass null to unassign") and matched the SQL rather
+        // than the promise. The SQL is what changed.
         let assigned_worker = input["assigned_worker"].as_str().map(|s| s.to_string());
         let rejection_reason = input["rejection_reason"].as_str().map(|s| s.to_string());
 

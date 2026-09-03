@@ -33,6 +33,7 @@ import { DiffAnalysisCard } from '../components/dashboard/DiffAnalysisCard'
 import { EpicsSection } from '../components/dashboard/EpicPhaseView'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import '../components/autodev/LiveMonitor.css'
+import { parseDbTimestamp } from "../utils/dbTime"
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -380,7 +381,7 @@ function TaskCard({
             </div>
           )}
           <div style={{ color: 'var(--text-4)', fontSize: '9px', marginTop: 6 }}>
-            created {new Date(task.created_at).toLocaleString()} by {task.created_by}
+            created {parseDbTimestamp(task.created_at)?.toLocaleString() ?? "unknown"} by {task.created_by}
           </div>
         </div>
       )}
