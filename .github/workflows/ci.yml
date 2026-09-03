@@ -140,6 +140,18 @@ jobs:
       - name: ESLint
         run: npm run lint
 
+      # PD0 — `TGD0-06` spawns the sidecar as a real child process, which is the
+      # only gate that proves the SEAM rather than the shapes. It deliberately
+      # FAILS rather than skips when the build is absent (`§0.5`: a gate skipped
+      # in CI is not green), so the build has to happen before the tests.
+      #
+      # 🔴 Caught by reading this file, not by a run: the gate was written and
+      # committed while CI had no build step, so it would have failed every run
+      # from the moment it landed — and the pressure would then have been to
+      # mute the gate rather than add the step.
+      - name: Build the design sidecar
+        run: npm run build:sidecar
+
       - name: Unit tests
         run: npm test
 
