@@ -6,7 +6,7 @@
 |---|---|
 | **Prepared** | 2026-09-02 |
 | **Owner** | Razi Ashary — Programming Lead, AIRS Foundry |
-| **Status** | P0–P3 complete · **PD0 (the contract) next** · overall readiness **34%** · 319 open tasks |
+| **Status** | P0–P3 and **PD0 (the contract)** complete · **P8 next** · overall readiness **34%** · 312 open tasks |
 | **Source documents** | `docs/restructurization/vision/00-AUTODEV-RESTRUCTURE-MASTER-PLAN.md` (why) · `docs/restructurization/development/MASTER_DEVELOPMENT_PLAN.md` (what and when) |
 
 This brief condenses both. Where it is terse, those documents are authoritative.
@@ -89,9 +89,9 @@ Fifteen phases. Every one has an explicit slot — nothing is parked.
 | ✅ | **P2** Providers | Three providers conform; **Gemini primary**; cost honest; spend capped — proven against the live APIs, not only against fixtures | 74 | done |
 | ✅ | **P3 A–E** Runtime | One tool path with a real permission gate; a panic cannot kill the app — **and four ways the model could reach past both, closed** | 39 | done |
 | ✅ | **P3-F** Memory | Memory that works, is scoped to its project, and cannot be written to by an agent claiming to be you | 18 | done |
-| 1 | **PD0** Contract | The four verbs, the wire payload, and a live stub that answers them | 7 | **~1 h** |
-| 🤝 | **M1 · Contract** | **AutoDesign can wire and test against the stub** | — | **~1 h away** |
-| 2 | **P8** Conversion | The Python subsystem deleted entirely — **and every live defect closed with it** | 65 | **~11 h** ⚠ |
+| ✅ | **PD0** Contract | The four operations, the wire payload, the outcome triple, and a sidecar that answers them — **[published](AUTODESIGN-CAPABILITY-CONTRACT.md)** | 10 | done |
+| 🤝 | **M1 · Contract** | ✅ **Reached.** The seam is agreed, exercised and published | — | **done** |
+| 1 | **P8** Conversion | The Python subsystem deleted entirely — **and every live defect closed with it** | 65 | **~11 h** ⚠ |
 | 3 | **PD1** Ingestion | PSD **and** PDF → one representation | 21 | **~3.5 h** ⚠ |
 | 🤝 | **M2 · First capability** | **A real file becomes a real design; the stub stops being a stub** | — | **~15 h in** |
 | 4 | **PD2** Fidelity | Faithfulness **rendered and measured**, then refined | 27 | **~4.5 h** ⚠ |
@@ -145,10 +145,10 @@ Fifteen phases. Every one has an explicit slot — nothing is parked.
 | 12 | **P7** Experience | A new user reaches a working turn without documentation | 18 | **~3 h** ⚠ |
 | 13 | **P9** Delivery | Signed installers, three platforms | 16 | **~2.5 h** ⚠ |
 
-**Totals.** 236 tasks and roughly **39.5 hours** to complete Rollout 1; 83 tasks and
-roughly **14 hours** for Rollout 2. **319 open tasks** across the programme.
+**Totals.** 229 tasks and roughly **38 hours** to complete Rollout 1; 83 tasks and
+roughly **14 hours** for Rollout 2. **312 open tasks** across the programme.
 
-The phase rows account for 318 of those 319. The remaining one is P0's end-to-end test
+The phase rows account for 311 of those 312. The remaining one is P0's end-to-end test
 harness, blocked by tooling rather than by effort — the Windows driver is not installed
 locally, and the Linux/macOS driver has no engine for the framework AutoDev uses. It is
 counted in the totals and left out of the estimates, because an hour figure would imply
@@ -167,7 +167,7 @@ The single "handover" this document used to describe was overstated, and the pha
 table above used to list the contract **last**, which read as it arriving at the very
 end. Both are corrected.
 
-**M1 · The contract — about an hour away, and blocked by nothing.** `PD0` freezes the
+**M1 · The contract — ✅ reached on 3 September.** `PD0` freezes the
 four operations, publishes the representation that crosses the wire, defines the job
 and error semantics, and stands up a **live stub that answers all four**. That is
 enough for the AutoDesign team to build and test their entire side of the integration
