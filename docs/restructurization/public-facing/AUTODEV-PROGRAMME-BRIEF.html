@@ -399,7 +399,7 @@
           <tr class="is-done"><td class="phase">Providers<span class="code">P2</span></td><td>Three providers conform; Gemini primary; cost honest; spend capped</td><td class="n">74</td><td class="n">&mdash;</td><td><span class="chip done">Done</span></td></tr>
           <tr class="is-done"><td class="phase">Runtime<span class="code">P3 A–E</span></td><td>One tool path with a real permission gate; a panic cannot kill the app</td><td class="n">39</td><td class="n">&mdash;</td><td><span class="chip done">Done</span></td></tr>
           <tr class="is-done"><td class="phase">Memory<span class="code">P3-F</span></td><td>Memory that works, is scoped to its project, and cannot be written to by an agent claiming to be you</td><td class="n">18</td><td class="n">&mdash;</td><td><span class="chip done">Done</span></td></tr>
-          <tr class="is-done"><td class="phase">Contract<span class="code">PD0</span></td><td>The four operations, the wire payload, the outcome triple, and a sidecar that answers them &mdash; published for the AutoDesign team</td><td class="n">10</td><td class="n">&mdash;</td><td><span class="chip done">Done</span></td></tr>
+          <tr class="is-done"><td class="phase">Contract<span class="code">PD0</span></td><td>The four operations, the wire payload, the outcome triple, and a sidecar that answers them &mdash; published for the AutoDesign team. 10 gates, 14 spawned smoke cases, 45 audit findings closed</td><td class="n">10</td><td class="n">&mdash;</td><td><span class="chip done">Done</span></td></tr>
           <tr class="handover"><td colspan="5">✅ &nbsp;M1 REACHED &mdash; the seam is agreed, exercised across a real process, and published</td></tr>
           <tr class="is-now"><td class="phase">Conversion<span class="code">P8</span></td><td>The Python subsystem deleted entirely &mdash; and every live defect closed with it</td><td class="n">65</td><td class="n">~11h &#9888;</td><td><span class="chip now">Next</span></td></tr>
           <tr><td class="phase">Ingestion<span class="code">PD1</span></td><td>PSD and PDF become one representation</td><td class="n">21</td><td class="n">~3.5h &#9888;</td><td><span class="chip queued">Queued</span></td></tr>
@@ -442,12 +442,24 @@
     <div class="col">
       <div class="note">
         <h4>Three handovers, not one</h4>
-        <p><strong>M1 &mdash; the contract, about an hour away and blocked by nothing.</strong>
+        <p><strong>M1 &mdash; the contract. &#10003; Reached on 3 September.</strong>
         PD0 freezes the four operations, publishes the representation that crosses the wire,
-        defines the job and error semantics, and stands up a <strong>live stub that answers
-        all four</strong>. That is enough for the AutoDesign team to build and test their
-        entire side while the capability behind it is still being built. It does not wait on
+        defines the job and error semantics, and ships an <strong>executable reference
+        implementation</strong> the AutoDesign team spawns as a child process, plus a
+        conformance suite either side can run. That is enough for them to build and test their
+        entire side while the capability behind it is still being built. It did not wait on
         the Python removal or on any design phase.</p>
+        <p class="note"><strong>It was closed twice, and the second time is the one that
+        counts.</strong> The first closure skipped the two mandatory post-phase audits. When
+        they ran they returned <strong>45 findings</strong>, three of which should have blocked
+        it: a task ticked with no deliverable at all, a claim of eight test falsifications
+        against four actually run, and a count off by more than 3&times; that had already been
+        copied into three governance documents. All 45 were fixed inside the phase rather than
+        deferred. The one that mattered most to the partner team &mdash; of the three outcomes
+        the contract freezes, only <em>one</em> could actually be produced, so a consumer could
+        have written a refusal branch that never fired against a documented state no code path
+        could reach. All three have real producers now, proven across a real process boundary,
+        with two new gates to keep it that way.</p>
         <p><strong>M2 &mdash; the first real capability, about fifteen hours in.</strong>
         After P8 and PD1 a real PSD or PDF becomes a real representation, and the stub starts
         returning true results. The codebase with the Python subsystem fully removed arrives
@@ -633,7 +645,7 @@
 
   <section class="col">
     <h2><span class="num">07</span> In one paragraph</h2>
-    <p class="lede">AutoDev is being rebuilt to a standard where every claim is backed by a test that can fail. Four phases are complete and independently audited, including the runtime phase that closed four ways the agent could reach past its own guards. The next milestone is a working backend that turns designs into faithful, editable, adaptable code — handed to the AutoDesign team roughly 37 working hours from now, with a published contract and live stubs so they can build in parallel. Full capability follows at roughly 92 hours, and the standalone application at roughly 127.</p>
+    <p class="lede">AutoDev is being rebuilt to a standard where every claim is backed by a test that can fail. Four phases are complete and independently audited, including the runtime phase that closed four ways the agent could reach past its own guards. The next milestone is a working backend that turns designs into faithful, editable, adaptable code — handed to the AutoDesign team roughly 37 working hours from now, with a published contract and a spawnable reference implementation so they can build in parallel. Full capability follows at roughly 92 hours, and the standalone application at roughly 127.</p>
   </section>
 
   <footer>

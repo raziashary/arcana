@@ -6,7 +6,7 @@
 |---|---|
 | **Prepared** | 2026-09-02 |
 | **Owner** | Razi Ashary — Programming Lead, AIRS Foundry |
-| **Status** | P0–P3 and **PD0 (the contract)** complete · **P8 next** · overall readiness **34%** · 312 open tasks |
+| **Status** | P0–P3 and **PD0 (the contract)** complete — PD0 re-closed 3 Sep after its post-phase audits · **P8 next** · overall readiness **34%** · 312 open tasks |
 | **Source documents** | `docs/restructurization/vision/00-AUTODEV-RESTRUCTURE-MASTER-PLAN.md` (why) · `docs/restructurization/development/MASTER_DEVELOPMENT_PLAN.md` (what and when) |
 
 This brief condenses both. Where it is terse, those documents are authoritative.
@@ -89,7 +89,7 @@ Fifteen phases. Every one has an explicit slot — nothing is parked.
 | ✅ | **P2** Providers | Three providers conform; **Gemini primary**; cost honest; spend capped — proven against the live APIs, not only against fixtures | 74 | done |
 | ✅ | **P3 A–E** Runtime | One tool path with a real permission gate; a panic cannot kill the app — **and four ways the model could reach past both, closed** | 39 | done |
 | ✅ | **P3-F** Memory | Memory that works, is scoped to its project, and cannot be written to by an agent claiming to be you | 18 | done |
-| ✅ | **PD0** Contract | The four operations, the wire payload, the outcome triple, and a sidecar that answers them — **[published](AUTODESIGN-CAPABILITY-CONTRACT.md)** | 10 | done |
+| ✅ | **PD0** Contract | The four operations, the wire payload, the outcome triple, and a sidecar that answers them — **[published](AUTODESIGN-CAPABILITY-CONTRACT.md)**. 10 gates, 14 spawned smoke cases, 45 audit findings closed | 10 | done |
 | 🤝 | **M1 · Contract** | ✅ **Reached.** The seam is agreed, exercised and published | — | **done** |
 | 1 | **P8** Conversion | The Python subsystem deleted entirely — **and every live defect closed with it** | 65 | **~11 h** ⚠ |
 | 3 | **PD1** Ingestion | PSD **and** PDF → one representation | 21 | **~3.5 h** ⚠ |
@@ -135,10 +135,23 @@ end. Both are corrected.
 
 **M1 · The contract — ✅ reached on 3 September.** `PD0` freezes the
 four operations, publishes the representation that crosses the wire, defines the job
-and error semantics, and stands up a **live stub that answers all four**. That is
-enough for the AutoDesign team to build and test their entire side of the integration
+and error semantics, and ships an **executable reference implementation** the
+AutoDesign team spawns as a child process, plus a conformance suite either side can
+run. That is enough for them to build and test their entire side of the integration
 while the capability behind it is still being built. It does not depend on the Python
 removal, and it does not depend on any design phase.
+
+⚠ **It was closed twice, and the second time is the one that counts.** The first
+closure skipped the two mandatory post-phase audits. When they ran they returned
+**45 findings**, three of which should have blocked it — a task ticked with no
+deliverable at all, a claim of eight test falsifications against four actually run,
+and a count off by more than 3× that had been copied into three governance documents.
+All 45 were fixed inside the phase rather than deferred, on Razi's ruling that an
+audit's findings *are* the phase's work. The one that mattered most to the partner
+team: of the three outcomes the contract freezes, only **one** could actually be
+produced — so a consumer could have written a refusal branch that never fired, against
+a documented state no code path could reach. All three have real producers now, proven
+across a real process boundary, and two new gates exist to keep it that way.
 
 **M2 · The first real capability — about fifteen hours in.** After `P8` and `PD1`, a
 real PSD or PDF becomes a real representation. The stub stops being a stub and the
@@ -293,7 +306,7 @@ AutoDev is being rebuilt to a standard where every claim is backed by a test tha
 Four phases are complete and independently audited, including the runtime phase that closed
 four ways the agent could reach past its own guards. The next milestone is a
 working backend that turns designs into faithful, editable, adaptable code — handed to the
-AutoDesign team roughly 37 working hours from now, with a published contract and live stubs so
-they can build in parallel. Full capability follows at roughly 92 hours, and the standalone
+AutoDesign team roughly 37 working hours from now, with a published contract and a
+spawnable reference implementation so they can build in parallel. Full capability follows at roughly 92 hours, and the standalone
 application at roughly 127. The estimates are calibrated on this team's own measured
 throughput, and they include the cost of auditing the work rather than assuming it is right.
