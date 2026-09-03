@@ -93,13 +93,13 @@ Fifteen phases. Every one has an explicit slot — nothing is parked.
 | 🤝 | **M1 · Contract** | ✅ **Reached.** The seam is agreed, exercised and published | — | **done** |
 | 1 | **P8** Conversion | The Python subsystem deleted entirely — **and every live defect closed with it** | 65 | **~11 h** ⚠ |
 | 3 | **PD1** Ingestion | PSD **and** PDF → one representation | 21 | **~3.5 h** ⚠ |
-| 🤝 | **M2 · First capability** | **A real file becomes a real design; the stub stops being a stub** | — | **~15 h in** |
+| 🤝 | **M2 · First capability** | **A real file becomes a real design — the reference implementation starts returning true results** | — | **~15 h in** |
 | 4 | **PD2** Fidelity | Faithfulness **rendered and measured**, then refined | 27 | **~4.5 h** ⚠ |
 | 5 | **PD3** Export | Webpage · PDF · PSD | 15 | **~2.5 h** ⚠ |
 | 6 | **PD4** Adaptation | Reformat to any target size | 33 | **~5.5 h** ⚠ |
 | 7 | **PD5** Changes | Text, image, position, colour, shape | 13 | **~2 h** ⚠ |
 | 8 | **PD6** Brand guideline | Ingest a brand guide and apply it | 10 | **~1.5 h** ⚠ |
-| 🤝 | **M3 · Full Rollout 1** | **Every design capability live** | — | **~32 h in** |
+| 🤝 | **M3 · Every design capability live** | **Fidelity, export, adapt, change, brand guideline** | — | **~30.5 h in** |
 | 9 | **P4** Fleet | A task runs end to end and lands a verified artifact | 44 | **~7.5 h** |
 
 ### Rollout 2
@@ -154,10 +154,10 @@ a documented state no code path could reach. All three have real producers now, 
 across a real process boundary, and two new gates exist to keep it that way.
 
 **M2 · The first real capability — about fifteen hours in.** After `P8` and `PD1`, a
-real PSD or PDF becomes a real representation. The stub stops being a stub and the
-integration starts returning true results.
+real PSD or PDF becomes a real representation. The reference implementation stops standing in for the
+work and starts returning true results.
 
-**M3 · Full Rollout 1 — about thirty-two hours in.** Fidelity, export, adaptation,
+**M3 · Every design capability live — about thirty hours in.** Fidelity, export, adaptation,
 changes and brand guidelines all live.
 
 What the AutoDesign team receives at M1:

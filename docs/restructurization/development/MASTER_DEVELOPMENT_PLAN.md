@@ -692,25 +692,51 @@ marked "deferred", it has been re-seated, not dropped.
 
 ## §5.1 · The R1 ordering, and why each phase sits where it does
 
+⚠ **Rewritten 2026-09-03.** The previous version of this table had **no `PD0`
+row at all** — the phase was built, closed and handed to a partner team while
+the ordering table that is supposed to govern the programme did not list it —
+and its task counts were stale for **nine** phases, most by more than double
+(`P0` 12 against 27, `P2` 27 against 74, `P8` 24 against 65). Both figures are
+now **derived from the document's own checkboxes**, not carried forward:
+
+```
+grep -cE '^- \[[ x]\] \*\*<PHASE>-[0-9]' MASTER_DEVELOPMENT_PLAN.md
+```
+
+`§0.3` is the rule this table broke, and it broke it in the one place a reader
+goes to ask *what is left*.
+
 | # | Phase | Why here | Tasks |
 |---|---|---|---|
-| ✅ | **P0** Stop the bleeding | done | 12 |
+| ✅ | **P0** Stop the bleeding | done — 26 of 27; `P0-21`'s e2e harness is blocked on the environment, not on throughput | 27 |
 | ✅ | **P1** Structural | done | 22 |
-| 1 | **P2** Providers | Everything downstream makes model calls. **Gemini primary** (`gemini-3.5-flash` + 3.5 flagship); OpenAI and Anthropic follow in the same phase | 27 |
-| 2 | **P3 A–E** Runtime | The loop that will execute every design tool: fault isolation, one tool path, bounded context. Conversion holds a full layer bitmap set for 25–35 s, so `panic = "abort"` must die **before** the design phases, not after | 29 |
-| 3 | **P3-F** Memory | *"the agent needs proper guidance and memory as well, so memory is a no brainer."* Placed before the design phases deliberately: memory changes context assembly, and every design tool built earlier would need re-testing against the change | 15 |
-| 4 | **P8** Sidecar deletion | **Moved into R1, before handover** — *"we dont want them to have an unused sidecar on the backend."* Now feasible: `OrchestratorProbe` already has a null implementation (`NoOrchestrator`) from P1, `skip_sidecars` already exists, and `P3-F` replaces `memory-mcp-server`, which was the last live dependency | 24 |
-| — | 🤝 **HANDOVER** | The AutoDesign team receives a codebase with **no sidecar in it** and a published contract. See `§5.3` | — |
-| 5 | **PD1** Ingestion | PSD **and** PDF → the IR. The v4.7 operator-list pipeline is the source | 18 |
-| 6 | **PD2** Fidelity | *"visually it looks okay but in reality pixel by pixel wise is not."* Ingestion is not done until something can **prove** it, so this follows PD1 immediately | 14 |
+| ✅ | **P2** Providers | Everything downstream makes model calls. **Gemini primary** (`gemini-3.5-flash` + 3.5 flagship); OpenAI and Anthropic follow in the same phase | 74 |
+| ✅ | **P3 A–E** Runtime | The loop that will execute every design tool: fault isolation, one tool path, bounded context. Conversion holds a full layer bitmap set for 25–35 s, so `panic = "abort"` must die **before** the design phases, not after | 39 |
+| ✅ | **P3-F** Memory | *"the agent needs proper guidance and memory as well, so memory is a no brainer."* Placed before the design phases deliberately: memory changes context assembly, and every design tool built earlier would need re-testing against the change | 18 |
+| ✅ | **PD0** The capability contract | **Out of numeric order deliberately, and that is the point.** Its only dependency is `P2`; it does **not** wait for `P8`. Building it early is what let the AutoDesign team start their side while everything below is still being built. Closed 2026-09-03 — on the second attempt, after the `§0.2a` audits the first closure skipped | 10 |
+| — | 🤝 **M1 · Contract reached** | ✅ 2026-09-03. An agreed, exercisable seam: the contract, a reference implementation they spawn as a child process, and a conformance suite either side can run. **`PD0` alone** — nothing else was needed for it | — |
+| **4** | **P8** Sidecar deletion + legacy conversion | ⬅ **NEXT.** **Moved into R1, before handover** — *"we dont want them to have an unused sidecar on the backend."* Feasible because `OrchestratorProbe` already has a null implementation (`NoOrchestrator`) from P1, `skip_sidecars` already exists, and `P3-F` replaced `memory-mcp-server`, the last live dependency. ⚠ **65 tasks, not 24** — after Razi's pre-P8 review it also carries the live defects, the system-prompt floor, the procedural-memory seam, the Live Monitor restoration and the `airsctl agent` retirement | 65 |
+| — | 🤝 **HANDOVER** | The AutoDesign team receives a codebase with **no sidecar in it**, and the contract they have already been building against since M1. See `§5.3` | — |
+| 5 | **PD1** Ingestion | PSD **and** PDF → the IR. The v4.7 operator-list pipeline is the source. 4 of its 25 tasks are already done (the AutoDesign sizing work and the layer IR) | 25 |
+| — | 🤝 **M2 · First real capability** | A real PSD or PDF returns a real IR — the reference implementation starts returning true results. **`P8` + `PD1`**, ≈15 h from now | — |
+| 6 | **PD2** Fidelity | *"visually it looks okay but in reality pixel by pixel wise is not."* Ingestion is not done until something can **prove** it, so this follows PD1 immediately. ⚠ Now also carries the renderer | 27 |
 | 7 | **PD3** Export | webpage · PDF · back to PSD. Needs a fidelity measure to know an export is faithful, so it follows PD2 | 15 |
-| 8 | **PD4** Adaptation | Deterministic geometry tool. Needs export to see its result and fidelity to grade it | 13 |
+| 8 | **PD4** Adaptation | Deterministic geometry tool. Needs export to see its result and fidelity to grade it. ⚠ Now carries the adaptation-engine findings folded in by the pre-P8 review | 33 |
 | 9 | **PD5** Changes | Reverses the PSD **construction** the source pipeline already performs. Needs PD3's writer | 13 |
-| 10 | **PD6** Brand guideline | Consumes PD5's change primitives — a rebrand *is* a batch of changes driven by a guide | 9 |
-| 11 | **P4** Fleet | *"including the fleet."* Last in R1 because a fleet multiplies whatever the tools already do; multiplying unproven tools only multiplies the debugging | 30 |
-| 12 | **R1 close** | Integration, post-phase audit (`§0.2a`), contract v1 | — |
+| 10 | **PD6** Brand guideline | Consumes PD5's change primitives — a rebrand *is* a batch of changes driven by a guide | 10 |
+| — | 🤝 **M3 · Every design capability live** | Fidelity, export, adapt, change and brand guideline all real. **`PD2`–`PD6`**, ≈30.5 h from now | — |
+| 11 | **P4** Fleet | *"including the fleet."* Last in R1 because a fleet multiplies whatever the tools already do; multiplying unproven tools only multiplies the debugging | 45 |
+| 12 | **R1 close** | Integration, post-phase audit (`§0.2a`), contract v1. ≈38 h from now | — |
+
+**Open R1 tasks: 229.** Completed R1 tasks: 190 (`P0`–`P3-F` and `PD0`, plus
+4 of `PD1`'s and 1 of `P4`'s taken early). Hours are `§5.6`'s measured model,
+not estimates.
 
 ## §5.2 · The R2 ordering
+
+*Counts here were re-derived on 2026-09-03 alongside `§5.1` and were already
+correct — recorded so a reader knows they were checked rather than skipped.*
+**Open R2 tasks: 83**, ≈14 h.
 
 | # | Phase | Why here | Tasks |
 |---|---|---|---|
@@ -733,15 +759,29 @@ Making them wait for PD1–PD6 would idle them for the largest stretch of the pr
 
 1. A codebase with **no sidecar** — verified by content *and* by address (`P8-21`).
 2. The **capability contract** (`PD0`), following AutoDesign's versioning and decode *conventions*. ⚠ Not written to their types: their capability id set is a closed 18-member enum and their manifest names AutoDesign as its only legal author, so a conforming AutoDev manifest is impossible by construction (`ADR-LOG-RESTRUCT-0034`).
-3. A running AutoDev that answers the contract with **stubs** — every operation
-   returns a valid, correctly-shaped response before it does the real work.
+3. A running AutoDev that answers the contract with an **executable reference
+   implementation** they spawn as a child process — every operation returns a
+   valid, correctly-shaped, decodable response before the conversion behind it
+   exists.
 
 Point 3 is what makes the parallelism honest. A contract nobody has exercised is a
 document; a contract with an executable reference implementation behind it is an
-integration they can build and
-test against on day one. `PD0` is therefore scheduled **early and separately** — its
-schema half can be written and shared at any time, because it depends only on the
-operation set, which is already decided.
+integration they can build and test against on day one.
+
+⚠ **Point 3 already happened.** `PD0` closed on 2026-09-03 and `M1` is reached,
+which changes what this handover *is*: the AutoDesign team have had the contract
+and the spawnable reference since then, so **`P8` is the only thing between here
+and the handover**, and what they receive at it is a codebase with no sidecar
+rather than a contract they are seeing for the first time. `PD0` was scheduled
+early and separately for exactly this reason — its dependency was `P2`, never
+`P8`.
+
+⚠ **And one thing they receive is honestly incomplete**, stated here because
+`§5.3` is the promise: three of the contract's declared shapes still have no
+producer — six of nine diagnostic categories, `retryable: true`, and
+`rendered-comparison` fidelity. That is published in the contract document's
+`§9.0` with the owning phase against each, rather than left for them to
+discover by writing a branch that never fires.
 
 ## §5.4 · Standing sequencing rules (unchanged)
 
@@ -885,8 +925,18 @@ and it is not "AutoDev is ready for them".
 | Milestone | What AutoDesign can actually do | Needs | Cost |
 |---|---|---|---|
 | **M1 · Contract** | ✅ **Reached.** An agreed, exercisable seam: the contract, a reference implementation spawned as a child process, and a conformance suite | **`PD0` only** | **done** |
-| **M2 · First real capability** | Send a real PSD or PDF and get a real IR back — the stub stops being a stub | `P8` + `PD1` | ≈15 h |
-| **M3 · Full Rollout 1** | Fidelity, export, adapt, change, brand guideline | `PD2`–`PD6` | ≈39.5 h |
+| **M2 · First real capability** | Send a real PSD or PDF and get a real IR back — the reference implementation starts returning true results | `P8` + `PD1` | ≈15 h |
+| **M3 · Every design capability live** | Fidelity, export, adapt, change, brand guideline | `PD2`–`PD6` | ≈30.5 h |
+| **R1 close** | The above **plus the fleet** — the point at which R1 is complete | `P4` | ≈38 h |
+
+⚠ **`M3` used to read "Full Rollout 1 … ≈39.5 h" and both halves were wrong.**
+The row's own *Needs* column says `PD2`–`PD6`, which excludes `P4` — so it was
+never "full Rollout 1", and the fleet is 7.5 h of that gap. The 39.5 h figure
+was the pre-recut R1 total carried forward after `§5.6` was recomputed to 38 h,
+which is `L-C1` again: a number restated in a second place and not regenerated
+when its source changed. Derived here from `§5.6`'s own rows:
+`P8` 11 + `PD1` 3.5 = **15 h** to `M2`; + `PD2` 4.5 + `PD3` 2.5 + `PD4` 5.5 +
+`PD5` 2 + `PD6` 1.5 = **30.5 h** to `M3`; + `P4` 7.5 = **38 h** to R1 close.
 
 ⚠ **`PD0` is not blocked by `P8`.** Its dependency is `P2`, which closed on
 2026-09-02, and `§10.5.0` already says it *"runs early and in parallel"*. The
