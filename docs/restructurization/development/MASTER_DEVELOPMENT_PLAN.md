@@ -547,7 +547,7 @@ this is the same widening, done deliberately by me rather than by `core.autocrlf
 
 | Surface | Path | Size | State |
 |---|---|---|---|
-| Tauri backend | `src-tauri/src/` | **20,534 LOC, 84 files** | **258** Tauri commands, all registered |
+| Tauri backend | `src-tauri/src/` | **20,534 LOC, 84 files** | **254** Tauri commands, all registered |
 | **Core** *(new — `P1-05`)* | `autodev-core/src/` | **63,382 LOC, 219 files** | The engine, extracted from the desktop shell. **Had no row here at all** until 2026-09-03 |
 | Frontend | `src/` | **40,088 LOC** (`.ts`/`.tsx`) | 9 tabs, **25** component dirs, **29** stores |
 | CLI | `src-cli/src/` | **4,019 LOC** | `airsctl`; agent commands are 100% sidecar HTTP *(retired in `P8`)* |
@@ -562,10 +562,19 @@ command count additionally disagreed with `§4`'s (`256` here, `255` there,
 **258** in the tree), which is `L-19` — *two lists that must agree will
 disagree* — inside the document that records `L-19`.
 
-Measured 2026-09-03, commands reproducible as:
+Measured 2026-09-03. ⚠ **The command count was corrected 258 → 254 within the
+hour, and the correction is worth more than the number.** `A18` reported 258
+from `grep -rc '#\[tauri::command\]'`, and I wrote it in without re-measuring —
+`L-C3`, *a source's conclusion adopted without checking its load-bearing
+detail*. A line-anchored count says **254**, and the four extras are a doc
+comment, two `//` comments, and **a string literal inside a test that splits
+production source on that exact token** (`vault_commands.rs:403`). That last one
+is `L-25` — *a corpus containing the claim* — which is already in this register.
+Counted by `_verify/MDP-STALENESS-CHECK.py`, which anchors the attribute to the
+start of a line:
 
-```
-grep -rc '#\[tauri::command\]' --include=*.rs src-tauri/src/ | awk -F: '{s+=$2} END {print s}'
+```python
+count_matches(rust_files('src-tauri/src'), r'^\s*#\[tauri::command\]')  # -> 254
 ```
 | Shared | `src-shared/src/` | 1,073 LOC | ~~Duplicates **four** tables by hand~~ → **resolved in `P1-09`**: `tasks`, `workers` and `plans` deleted (22/19/23 write statements); `airsctl` uses `autodev_core::db`. Only the read-only `analytics.rs` remains, which holds no `CREATE`/`INSERT`/`UPDATE`/`DELETE` and so cannot drift a schema |
 | Sidecar | `submodules/core-orchestrator` | 225 MB **on disk** — ⚠ *no longer bundled: `tauri.conf.json`'s `"resources"` is `[]`, so it ships in no installer today. It is still 225 MB in the working tree and still `P8-17`'s to delete (`A18` `S-31`)* | **DELETE (P8)** |
@@ -701,7 +710,7 @@ git2 = "0.19"; tree-sitter = "0.22"; petgraph = "0.6"; ignore; notify = "6"
                                         │
               ┌─────────────┬───────────┼───────────┬──────────────┐
               ▼             ▼           ▼           ▼              ▼
-        4 providers    ToolRegistry   Memory     Fleet         Code graph
+        3 providers    ToolRegistry   Memory     Fleet         Code graph
         (HTTP)         (in-process)   (SQLite+   (events)      (SQLite)
                                        vec+FTS5)
 ```
