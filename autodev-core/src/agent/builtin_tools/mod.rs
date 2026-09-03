@@ -83,101 +83,13 @@ pub fn register_all(registry: &mut ToolRegistry) {
     register_for_mode(registry, PAMode::FastDevelopment);
 }
 
-/// Register the restricted tool set exposed via the MCP server to fleet workers.
-/// Workers need file/execution tools, task-board read + status-update access,
-/// and subagent spawning for the Subagent Protocol documented in their recipes.
-///
-/// Excluded: assign_task, create_task, planner.
-/// - assign_task / create_task: Supervisor-only operations. Workers that bypass
-///   the task-board routing would undermine the QC gate and work-stealing prevention.
-/// - planner: plan compilation is a PA/Supervisor operation, not a per-worker concern.
-///
-/// spawn_subagent / spawn_parallel_subagents ARE included because:
-/// - All worker recipes document a Subagent Protocol that depends on them.
-/// - The SubagentPool hard caps (MAX_GLOBAL=16, MAX_PER_PARENT=10) and the
-///   depth guard (MAX_NESTING_DEPTH=3) in each tool already prevent unbounded
-///   fan-out — recipe-level "use sparingly" is a cost advisory, not the safety net.
-pub fn register_for_mcp_worker(registry: &mut ToolRegistry) {
-    // File & execution tools — workers need these for their core task
-    registry.register(Arc::new(read_file::ReadFileTool));
-    registry.register(Arc::new(write_file::WriteFileTool));
-    registry.register(Arc::new(edit_file::EditFileTool));
-    registry.register(Arc::new(bash::BashTool));
-    registry.register(Arc::new(list_directory::ListDirectoryTool));
-    registry.register(Arc::new(grep::GrepTool));
-    registry.register(Arc::new(glob::GlobTool));
-    registry.register(Arc::new(check_file::CheckFileTool));
-    registry.register(Arc::new(append_file::AppendFileTool));
-    // Task board — read + own-status updates only
-    registry.register(Arc::new(list_tasks_tool::ListTasksTool));
-    registry.register(Arc::new(get_task_tool::GetTaskTool));
-    registry.register(Arc::new(update_task_status_tool::UpdateTaskStatusTool));
-    // Worker→Supervisor communication — workers can request action without task-creation power
-    registry.register(Arc::new(
-        request_supervisor_action::RequestSupervisorActionTool,
-    ));
-    // Routing — Supervisor uses this before assign_task; safe to expose to all workers
-    registry.register(Arc::new(suggest_worker_tool::SuggestWorkerTool));
-    // Orphan detection — workers call this instead of update_task_status(in_progress)
-    registry.register(Arc::new(claim_task_tool::ClaimTaskTool));
-    // Diff analysis — QC Agent uses this to score and classify PR diffs before review
-    registry.register(Arc::new(analyze_diff_tool::AnalyzeDiffTool));
-    // Inline annotations — QC Agent (and workers) write review notes pinned to specific lines
-    registry.register(Arc::new(annotate_file_tool::AnnotateFileTool));
-    // Budget management — Supervisor uses this before assigning tasks (Ruflo Feature 4)
-    registry.register(Arc::new(set_task_budget_tool::SetTaskBudgetTool));
-    // Ruflo Feature 5 — Epic read tools exposed so workers can check phase progress
-    registry.register(Arc::new(get_epic_progress_tool::GetEpicProgressTool));
-    registry.register(Arc::new(
-        get_ready_tasks_in_phase_tool::GetReadyTasksInPhaseTool,
-    ));
-    // Subagent tools — workers document Subagent Protocols in their recipes.
-    // Pool hard caps + depth guard enforce safety; recipes provide cost-advisory guidance.
-    // Depth is threaded in Rust from the spawn tree (`AgentIdentity`), so the
-    // guard in SpawnSubagentTool cannot be defeated by a caller. It used to
-    // depend on the model sending a `__depth` meta-argument that the (now
-    // deleted) MCP tool_adapter read back.
-    registry.register(Arc::new(spawn_subagent::SpawnSubagentTool));
-    registry.register(Arc::new(
-        spawn_parallel_subagents::SpawnParallelSubagentsTool,
-    ));
-    // Doc 04 Phase 3 — QC fan-out tool, called only by qc-dispatcher recipe.
-    // Exposed at the MCP-worker layer because Mode 2 LivingAgents reach all
-    // tools through the MCP server; recipe-level "only the dispatcher" is
-    // enforced by the recipe instructions, not by the registry.
-    registry.register(Arc::new(spawn_qc_review::SpawnQcReviewTool));
-    // Doc 09 T3.1 / T4.2 — interface spec + e2e smoke probe tools.
-    registry.register(Arc::new(write_interface_spec::WriteInterfaceSpecTool));
-    registry.register(Arc::new(e2e_probe::E2eProbeTool));
-    // Task dispatch — Supervisor MUST have assign_task and create_task.
-    // Domain workers (backend, frontend, …) are instructed in their recipes to
-    // use request_supervisor_action(decompose_audit) instead of create_task directly.
-    // assign_task validates worker_slug against VALID_WORKERS and atomically
-    // sets status='assigned', so domain workers calling it would still produce valid
-    // state — the recipe instruction is the authoritatively enforced constraint.
-    registry.register(Arc::new(assign_task::AssignTaskTool));
-    registry.register(Arc::new(assign_tasks_batch::AssignTasksBatchTool));
-    registry.register(Arc::new(create_task::CreateTaskTool));
-    // Planner — designed for all fleet agents (see planner.rs comment).
-    // Supervisor: breakDownEpic, Workers: claimItem / createSubplan / submitForQC.
-    registry.register(Arc::new(planner::PlannerTool));
-    // Supervisor escalation queue — read pending requests + mark them resolved.
-    // The supervisor recipe Step 1a calls these every tick; without them the
-    // Supervisor cannot drain the queue and worker escalations pile up forever.
-    // Safe to expose to all workers — reading and resolving requests is idempotent
-    // and the resolve action requires an explicit request id.
-    registry.register(Arc::new(list_worker_requests_tool::ListWorkerRequestsTool));
-    registry.register(Arc::new(
-        resolve_worker_request_tool::ResolveWorkerRequestTool,
-    ));
-    // ACP tools — every fleet worker (including supervisor + qc-agent) can
-    // send / list / acknowledge cross-worker messages.
-    registry.register(Arc::new(send_worker_message::SendWorkerMessageTool));
-    registry.register(Arc::new(list_worker_messages::ListWorkerMessagesTool));
-    registry.register(Arc::new(
-        acknowledge_worker_message::AcknowledgeWorkerMessageTool,
-    ));
-}
+// P8-50 — `register_for_mcp_worker` is DELETED (~80 lines).
+//
+// It registered a tool subset for a fleet worker reached over MCP,
+// which was Mode 2. It had **zero callers**, and being `pub` it
+// produced no dead-code warning — so it compiled cleanly for months
+// while describing a dispatch path that no longer existed.
+
 
 /// Register tools filtered by PA mode:
 /// - FastDevelopment: all file/execution tools + task board tools + planner

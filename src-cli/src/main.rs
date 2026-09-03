@@ -7,7 +7,7 @@ mod noninteractive;
 mod output;
 mod repl;
 
-use commands::{agent, analytics, config, logs, plan, plugin, system, task, worker};
+use commands::{analytics, config, logs, plan, plugin, system, task, worker};
 use output::{OutputContext, OutputFormat};
 
 #[derive(Parser)]
@@ -61,11 +61,6 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Manage and run AI agents
-    Agent {
-        #[command(subcommand)]
-        cmd: agent::AgentCmd,
-    },
     /// Manage tasks
     Task {
         #[command(subcommand)]
@@ -194,7 +189,6 @@ async fn dispatch(
                 repl::run(ctx).await?;
             }
         }
-        Some(Commands::Agent { cmd }) => agent::run(cmd, ctx).await?,
         Some(Commands::Task { cmd }) => task::run(cmd, ctx).await?,
         Some(Commands::Worker { cmd }) => worker::run(cmd, ctx).await?,
         Some(Commands::Config { cmd }) => config::run(cmd, ctx).await?,

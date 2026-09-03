@@ -4,7 +4,7 @@
 // AgentEngine enforces per-task spending limits via the Budget Circuit Breaker.
 // Exposes the three controllable axes: max_tokens, max_usd, max_turns.
 //
-// Registered in register_for_mcp_worker() — available to Supervisor (and any
+// Registered for the Supervisor in `register_for_mode` (P8-50 deleted the MCP
 // MCP-connected agent that needs budget management). NOT available in Delegate mode.
 //
 // Ruflo Feature 4 — Budget Circuit Breaker (4.5 Supervisor Budget Assignment).

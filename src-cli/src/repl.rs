@@ -114,7 +114,6 @@ async fn dispatch(input: &str, ctx: OutputContext) -> Result<()> {
     let rest = &parts[1..];
 
     match subcommand {
-        "agent" => dispatch_agent(rest, ctx).await,
         "task" => dispatch_task(rest, ctx).await,
         "worker" => dispatch_worker(rest, ctx).await,
         "config" => dispatch_config(rest, ctx).await,
@@ -131,31 +130,9 @@ async fn dispatch(input: &str, ctx: OutputContext) -> Result<()> {
     }
 }
 
-async fn dispatch_agent(args: &[&str], ctx: OutputContext) -> Result<()> {
-    use crate::commands::agent::{AgentCmd, ListArgs, RunArgs};
-    let cmd = match args.first().copied() {
-        Some("run") => {
-            let task = args.get(1..).unwrap_or_default().join(" ");
-            AgentCmd::Run(RunArgs {
-                task: Some(task),
-                file: None,
-                session_id: None,
-                stream: true,
-                timeout: 300,
-            })
-        }
-        Some("list") => AgentCmd::List(ListArgs { limit: 20 }),
-        Some(other) => {
-            ctx.error(&format!("Unknown agent subcommand: '{other}'"));
-            return Ok(());
-        }
-        None => {
-            ctx.error("Usage: agent <run|list|status|stop|logs>");
-            return Ok(());
-        }
-    };
-    commands::agent::run(cmd, ctx).await
-}
+// P8-44 — `dispatch_agent` is deleted with the `agent` verb it drove.
+// Every one of its subcommands was HTTP to the orchestrator.
+
 
 async fn dispatch_task(args: &[&str], ctx: OutputContext) -> Result<()> {
     use crate::commands::task::{CreateArgs, GetArgs, ListArgs, TaskCmd};
@@ -290,7 +267,6 @@ async fn dispatch_system(args: &[&str], ctx: OutputContext) -> Result<()> {
     use crate::commands::system::{LogsArgs, SystemCmd};
     let cmd = match args.first().copied() {
         Some("status") => SystemCmd::Status,
-        Some("sidecars") => SystemCmd::Sidecars,
         Some("logs") => SystemCmd::Logs(LogsArgs {
             lines: 50,
             service: None,

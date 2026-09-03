@@ -9,7 +9,7 @@
 | **Owner** | Razi (Programming Lead, AIRS Foundry) |
 | **Branch** | `main` (Razi authorised working directly on it; `sidecar-backup` holds the pre-restructure state) |
 | **Rev** | **2.2** — created 2026-08-31, current 2026-09-03. `§16` is authoritative for the history |
-| **Status** | 🟢 **BUILDING.** GO given 2026-09-01. Complete: `P0` · `P1` · `P2` · `P3 A–E` · `P3-F` · `PD0`. **Next: `P8`.** 282 of 517 tasks open |
+| **Status** | 🟢 **BUILDING.** GO given 2026-09-01. Complete: `P0` · `P1` · `P2` · `P3 A–E` · `P3-F` · `PD0`. **Next: `P8`.** 274 of 517 tasks open |
 
 ⚠ **This header read `Rev 1.0` and `⛔ AWAITING GO. No code, no migrations, no
 deletions.` until 2026-09-03** — through seven completed phases, hundreds of
@@ -838,9 +838,9 @@ goes to ask *what is left*.
 | 11 | **P4** Fleet | *"including the fleet."* Last in R1 because a fleet multiplies whatever the tools already do; multiplying unproven tools only multiplies the debugging. ⚠ **+4 on 2026-09-03** — `P4-G`, the one-fleet ruling (`ADR-LOG-RESTRUCT-0037`) | 49 |
 | 12 | **R1 close** | Integration, post-phase audit (`§0.2a`), contract v1. ≈38 h from now | — |
 
-**Open R1 tasks: 199.** Completed R1 tasks: **235** (`P0`–`P3-F` and `PD0`, plus
+**Open R1 tasks: 191.** Completed R1 tasks: **243** (`P0`–`P3-F` and `PD0`, plus
 4 of `PD1`'s and 1 of `P4`'s taken early). Programme total **517**, of which
-**282 open**. Hours are `§5.6`'s measured model, not estimates.
+**274 open**. Hours are `§5.6`'s measured model, not estimates.
 
 ⚠ **Recounted 2026-09-03 by walking the checkboxes, and three of the four
 figures here were wrong before `P4-G` was added.** The header said *"312 of
@@ -2300,13 +2300,17 @@ that never starts them.
 
 ### P8-H · Retire `airsctl agent` *(razi-ruled, `D8`)*
 
-- [ ] **P8-44** **Delete the `agent` subcommand set** — `run`, `list`, `status`, `stop`, `logs` (`src-cli/src/commands/agent.rs:104-395`). All five are pure HTTP to `{orchestrator_url}/api/agents/*` and cannot succeed after P8 on any machine; one error path even tells the user to run `cargo run --bin core-orchestrator`. **Not reimplemented natively** — that would duplicate the desktop engine for a surface with no user. ⚠ `airsctl` keeps its task/DB surface, which is live and used; it is the `agent` verb specifically that is retired. Remove `system sidecars` and the orchestrator row from `system status` in the same commit. → `CODE-PRESENT`
+- [x] **P8-44** **Delete the `agent` subcommand set** — `run`, `list`, `status`, `stop`, `logs` (`src-cli/src/commands/agent.rs:104-395`). All five are pure HTTP to `{orchestrator_url}/api/agents/*` and cannot succeed after P8 on any machine; one error path even tells the user to run `cargo run --bin core-orchestrator`. **Not reimplemented natively** — that would duplicate the desktop engine for a surface with no user. ⚠ `airsctl` keeps its task/DB surface, which is live and used; it is the `agent` verb specifically that is retired. Remove `system sidecars` and the orchestrator row from `system status` in the same commit. → `CODE-PRESENT`
 
+      ✅ **2026-09-03** — `src-cli/src/commands/agent.rs` deleted (415 lines, five subcommands), with its REPL dispatcher and the `Commands::Agent` arm. All five were pure HTTP to `{orchestrator_url}/api/agents/*`; one error path told the user to run `cargo run --bin core-orchestrator`. **Not reimplemented natively** — that would duplicate the desktop engine for a surface with no user. `airsctl` keeps its task/DB surface.
 ### P8-A · Verify the entry gate
-- [ ] **P8-01** `TG8-02` runs: every capability grounding marked **PORT** has a named, tested destination in the Rust tree. → `GATE-PROVEN`
-- [ ] **P8-02** The app starts, completes a turn, and runs a design conversion with `skip_sidecars = true` — **absent, not merely stopped**. → `SMOKE-PROVEN`
-- [ ] **P8-03** Native memory (`P3-F`) serves every read that `memory-mcp-server` served. → `GATE-PROVEN`
+- [x] **P8-01** `TG8-02` runs: every capability grounding marked **PORT** has a named, tested destination in the Rust tree. → `GATE-PROVEN`
+      ✅ **2026-09-03** — `TG8-02`'s population is `G4b`'s own *PORT / DELETE SUMMARY*: 4 `PORT` + 6 `PARTIAL` = the **ten** the gate names, with `security/` (redaction) as the tenth. All ten have a named, tested destination in the Rust tree; evidence in `_verify/P8-BASELINE.md`. ⚠ The instrument was wrong twice before it was right — see that file. → `GATE-PROVEN`
+- [x] **P8-02** The app starts, completes a turn, and runs a design conversion with `skip_sidecars = true` — **absent, not merely stopped**. → `SMOKE-PROVEN`
+      ✅ **2026-09-03** — `skip_sidecars` existed, was written by `set_skip_sidecars` and branched on at `main.rs:352`, so the app had a tested path that never started them. ⚠ The flag itself is now **deleted** (`P8-11`/`P8-53`): with no sidecars to skip, *absent* is the only state there is, which is a stronger form of what this task asked for. → `SMOKE-PROVEN` by `S8-02`
+- [x] **P8-03** Native memory (`P3-F`) serves every read that `memory-mcp-server` served. → `GATE-PROVEN`
 
+      ✅ **2026-09-03** — memory recall is native (`memory/recall.rs`, `get_memory.rs`, `list_memories.rs`, `search_memory.rs`). Every `:8000` reference in the tree was **inside `src-tauri/src/sidecar/`**, the directory now deleted, plus one log line; `MEMORY_URL` was declared at `sidecar/client.rs:107` and died with it. → `GATE-PROVEN`
 ### P8-B · Excise the Rust
 - [x] **P8-04** `main.rs` binds `NoOrchestrator` in place of `OrchestratorClient`. → `CODE-PRESENT`
       ✅ **2026-09-03 — SUPERSEDED by `P8-49`, as that task predicted.** There is no probe left to bind: `OrchestratorProbe`, `NoOrchestrator` and `recipes/orchestrator.rs` are deleted. Binding a null implementation would have been a seam to nothing.
@@ -2326,14 +2330,15 @@ that never starts them.
       ✅ **2026-09-03** — `sidecar:crash`, `SidecarCrashPayload` and `emit_sidecar_crash` removed, **with their frontend listener in the same change** (`SidecarCrashBanner.tsx`, and the now-empty `ErrorBoundary` that wrapped it). An event with no producer and a listener with no event are one defect seen from two sides.
 - [x] **P8-11** Remove `skip_sidecars` from `RuntimeConfig`, migrating existing `runtime_config.json` files rather than failing to parse them. → `LIVE-DB-PROVEN`
       ✅ **2026-09-03** — `skip_sidecars` removed from `RuntimeConfig` and its `Default`. Backwards compatible without a migration: every field carries `#[serde(default)]` and serde ignores the now-unknown key, so an existing `runtime_config.json` still parses. → `LIVE-DB-PROVEN` by construction — the file is read at startup and the app boots.
-- [ ] **P8-12** Remove sidecar handling from `src-cli/src/commands/system.rs`. → `CODE-PRESENT`
+- [x] **P8-12** Remove sidecar handling from `src-cli/src/commands/system.rs`. → `CODE-PRESENT`
 
+      ✅ **2026-09-03** — `airsctl system sidecars` deleted with its probe function, and the `core-orchestrator` row dropped from `system status`. ⚠ The redis / postgres / mcp-server probes **stay**: they are services a user may run themselves and were only ever grouped under a comment that called them "sidecar ports". The REPL's `sidecars` branch went too.
 ### P8-C · Filesystem and config removal — the correct procedure for the state we are in
 
 Grounded in `§1.1a`. **The standard `git submodule deinit` → `git rm` sequence will fail
 here**, because there are no gitlinks in the index or in history to operate on.
 
-- [ ] **P8-13** ~~**Back up first** (`§0.8`). `submodules/` is 225 MB of untracked working tree with **no remote copy of any local modification** — and it has local modifications (`.port_allocations.json` is dirty).~~ **Struck 2026-09-03, razi-ruled. Delete outright, no backup.**
+- [x] **P8-13** ~~**Back up first** (`§0.8`). `submodules/` is 225 MB of untracked working tree with **no remote copy of any local modification** — and it has local modifications (`.port_allocations.json` is dirty).~~ **Struck 2026-09-03, razi-ruled. Delete outright, no backup.**
 
   🔴 **What the deletion actually costs, measured before asking rather than after deleting** (`§0.8`, Rule 13). The struck text was wrong about the size by 3.5× and silent about the part that mattered:
 
@@ -2356,6 +2361,7 @@ here**, because there are no gitlinks in the index or in history to operate on.
   **Razi's ruling, verbatim, 2026-09-03:** *"look that submodule/sidecar is already dead since the new core and memory mcp server is being used elsewhere, so delete it all you have my authorization."*
 
   🔴 **And its boundary, ruled in the same message and binding on every task in `P8-C`:** *"do not touch the GitHub one, delete it from autodev only."* The deletion is **local to this repository**. `P8` must not push to, delete branches on, or otherwise modify `AIRS-Foundry/core-orchestrator` or `AIRS-Foundry/memory-mcp-server` — including their `autodev` branches, which are where this content lives and stays. Removing `submodules/`, `.git/modules/submodules/` and the `.gitmodules` stanzas touches nothing on those remotes; that is exactly why it is safe. → `DOC-GATE`
+      ✅ **2026-09-03** — razi-ruled: delete outright, no backup. Re-verified immediately before deleting rather than trusting the struck text: both submodule trees were on branch `autodev` with **zero** commits ahead of `origin/autodev`. Measured 795 MB + 120 MB + 225 MB = **1,140 MB** removed. → `DOC-GATE`
 - [x] **P8-14** Delete both stanzas from **`.gitmodules`** — the only *tracked* artifact, so a normal file edit and a normal commit. → `CODE-PRESENT`
       ✅ **2026-09-03** — both stanzas deleted; the file is gone entirely, since it held nothing else. It was the **only tracked artifact** of the two submodules, so this is a normal edit and a normal commit.
 - [x] **P8-15** Delete **`.git/modules/submodules/`** — both object stores. ⚠ **Skipping this is the "survives by address" failure**: the working tree goes and the repository still carries the sidecar's git objects. → `CODE-PRESENT`
@@ -2381,14 +2387,16 @@ here**, because there are no gitlinks in the index or in history to operate on.
 
 - [x] **P8-45** 🔴 **Re-point `TG-P4-31` first.** `ci_gate.rs:2811-2828` reads the literal `"let orch_healthy = false"` out of `runner.rs` and calls **`panic!`** when it is absent — deliberately, so that reviving Mode 2 must be an explicit decision rather than a silent pass. It therefore **fails CI on the first commit of `P8-B`**, for a reason that looks unrelated to the change. Rewrite it as a permanent invariant, then retire it in `P8-53`. → `GATE-PROVEN`
       ✅ **2026-09-03** — `TG-P4-31` re-pointed from *"`orch_healthy` is still pinned"* to *"the enum, the field, the guard and the declarations are **gone**"*, in the shape of `tg_p3_39`. 🔴 The task's stated trigger was **wrong**: it predicted CI failing on the first commit of `P8-B`, but `P8-B` touches neither file this gate reads — the real first failure was `P8-47` taking `declared` to 0 and tripping the `declared >= 9` floor. A builder trusting the justification would have looked in the wrong commit. ⚠ The gate then **failed on itself**: `P8-25`'s fixtures contain `fallback_policy: mode2_only` as YAML, so it read its own evidence as the defect (`L-C7`). Fixed by truncating at `#[cfg(test)]`, which is `L-8`'s prescribed remedy. It also now asserts each file read is non-empty first, because `read_source` is `unwrap_or_default()` and a missing file would make every "is it gone?" assertion pass vacuously (`L-C9`). Falsified with a **compiling** plant — the first attempt did not compile, so its exit 101 was the compiler rather than the gate (`L-26`).
-- [ ] **P8-46** **Distinguish the two things that share the words "Mode 1 / Mode 2".** `PAMode` (`FastDevelopment` / `Review` / `Delegate`) is **fully live** — it selects the prompt (`context.rs:89-93`) and the tool registry (`builtin_tools/mod.rs:190-284`) on the interactive path, and `sessions.pa_mode` is its source of truth. `FallbackPolicy` is the inert half. ⚠ **Do not sweep `PAMode` up on a name match**: deleting it collapses three prompts into one and hands the PA file and bash tools in a mode advertised as having none. → `DOC-GATE`
+- [x] **P8-46** **Distinguish the two things that share the words "Mode 1 / Mode 2".** `PAMode` (`FastDevelopment` / `Review` / `Delegate`) is **fully live** — it selects the prompt (`context.rs:89-93`) and the tool registry (`builtin_tools/mod.rs:190-284`) on the interactive path, and `sessions.pa_mode` is its source of truth. `FallbackPolicy` is the inert half. ⚠ **Do not sweep `PAMode` up on a name match**: deleting it collapses three prompts into one and hands the PA file and bash tools in a mode advertised as having none. → `DOC-GATE`
+      ✅ **2026-09-03** — verified rather than assumed: `PAMode` survives intact with all three variants (`FastDevelopment` / `Review` / `Delegate`), and `sessions.pa_mode` is still its source of truth. Nothing in `P8` swept it. ⚠ The distinction earned its keep in `P8-32`, where the fix had to separate the session's ambient `pa_mode` from an explicit one-shot override — exactly the confusion this task exists to prevent. → `DOC-GATE`
 - [x] **P8-47** Delete the `FallbackPolicy` enum, `Recipe.fallback_policy`, and the `Mode2Only` guard at `runner.rs:717-737`. Sequenced after `P8-25`, which is the live half of the same defect. → `CODE-PRESENT`
       ✅ **2026-09-03** — landed with `P8-25`. All 17 references across four files removed; the compiler found a leftover `fallback_policy: Default::default()` in a `runner.rs` test fixture that a `FallbackPolicy` grep had missed, which is `P8-07`'s principle paying off early. Suite 627 passed / 0 failed.
 - [x] **P8-48** Delete `runner.rs:173-174` — the awaited `/api/system/health` probe whose result is discarded on **every worker tick**, and the `orch_healthy` pin — plus the unreachable branch it guards (lines 276-702, ~430 lines). Re-flatten the control flow. ⚠ `P8-42` must land with it, or the Live Monitor's only emitters go too. → `CODE-PRESENT`
       ✅ **2026-09-03** — **437 lines** removed (the plan estimated ~430), plus the discarded `is_healthy()` probe and the `orch_healthy` pin. ⚠ Located by **brace matching**, after a first attempt guessed the closing line by indentation and cut **693** lines, leaving the file unbalanced. Three earlier locators also missed: the file header repeats the section's own words, a second `── Mode 2` separator exists, and `if orch_healthy {` appears inside the `info!` that logs which mode was chosen. **A structural edit needs a structural locator.**
 - [x] **P8-49** Delete `recipes/orchestrator.rs` (`OrchestratorProbe`, `WorkerInvokeResult`, `NoOrchestrator`), `RecipeRunner::is_orchestrator_ready` (zero callers), and the `orch_client` field and constructor parameter. ⚠ This **supersedes `P8-04`**, which binds `NoOrchestrator` — there is no probe left to bind. → `CODE-PRESENT`
       ✅ **2026-09-03** — `recipes/orchestrator.rs` deleted (`OrchestratorProbe`, `WorkerInvokeResult`, `NoOrchestrator`), with `is_orchestrator_ready` (**zero callers**, verified by search) and the `orch_client` field and constructor parameter. Two `#[tokio::test]`s went with it — both tested `NoOrchestrator`.
-- [ ] **P8-50** Delete `register_for_mcp_worker` (`builtin_tools/mod.rs:100-180`, ~80 lines, zero callers, `pub` so no dead-code warning) and the two doc-comments that cite it as live. → `CODE-PRESENT`
+- [x] **P8-50** Delete `register_for_mcp_worker` (`builtin_tools/mod.rs:100-180`, ~80 lines, zero callers, `pub` so no dead-code warning) and the two doc-comments that cite it as live. → `CODE-PRESENT`
+      ✅ **2026-09-03** — `register_for_mcp_worker` deleted, and the two doc-comments that cited it as live corrected. ⚠ It was `pub`, so it produced **no dead-code warning** and compiled cleanly for months while describing a dispatch path that did not exist — zero callers, verified by search across the tree.
 - [x] **P8-51** ⚠ **Split `sidecar_commands.rs` before deleting it.** `list_mcp_tools`, `get_mcp_health` and `force_reconnect_mcp` are **not** sidecar functionality — they serve AutoDev's *client* connections to external MCP servers, which is a live feature with a live UI. Move them to `mcp_commands.rs` keeping the command names identical, then delete the rest. ⚠ **This narrows `P8-06`**, which says "delete all 17". `mcp/mod.rs:1-14` already records relocating a file "by address rather than deleting by association" — the same mistake in reverse. → `CODE-PRESENT`
       ✅ **2026-09-03** — the three MCP-client commands moved to a new `mcp_commands.rs` with their **names unchanged** (the frontend invokes them by string; renaming during a move is a breakage no compiler catches). Verified live before moving: `list_mcp_tools` reads the in-process `ToolRegistry`, `get_mcp_health` reads `mcp::health`, and `force_reconnect_mcp`'s own docstring says *external* MCP server.
 - [x] **P8-52** **Decide and land the startup overlay.** Deleting `startup_progress.rs` removes 8 of its 13 phases, all of which narrate Python boot. Collapse to a native FSM or remove the overlay — and update `startupStore.ts` and `StartupOverlay.tsx` in the same commit, because a mismatch shows a spinner that never advances. → `SMOKE-PROVEN`

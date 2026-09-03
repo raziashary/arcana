@@ -1,4 +1,10 @@
-pub mod agent;
+// P8-44 — the `agent` verb is retired. Its five subcommands (`run`,
+// `list`, `status`, `stop`, `logs`) were pure HTTP to
+// `{orchestrator_url}/api/agents/*` and could not succeed on any machine
+// after P8; one error path told the user to run
+// `cargo run --bin core-orchestrator`. NOT reimplemented natively --
+// that would duplicate the desktop engine for a surface with no user.
+// `airsctl` keeps its task/DB surface, which is live and used.
 pub mod analytics;
 pub mod config;
 pub mod logs;

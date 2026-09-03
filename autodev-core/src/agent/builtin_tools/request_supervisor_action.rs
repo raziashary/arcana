@@ -1,5 +1,5 @@
 // request_supervisor_action — Worker→Supervisor communication tool.
-// Available to fleet workers via MCP (register_for_mcp_worker) so that Mode 2
+// Available to fleet workers through the in-process registry (P8-50 deleted
 // LivingAgents can send structured requests to the Supervisor without needing
 // create_task or assign_task privileges.
 //

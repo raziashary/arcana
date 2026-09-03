@@ -5,10 +5,8 @@ use colored::Colorize;
 
 #[derive(Subcommand)]
 pub enum SystemCmd {
-    /// Show system and sidecar status
+    /// Show system status
     Status,
-    /// Show sidecar connectivity
-    Sidecars,
     /// Show recent log entries
     Logs(LogsArgs),
     /// Backup ~/.autodev/ to a zip archive
@@ -48,7 +46,6 @@ pub struct RestoreArgs {
 pub async fn run(cmd: SystemCmd, ctx: OutputContext) -> Result<()> {
     match cmd {
         SystemCmd::Status => status(ctx).await,
-        SystemCmd::Sidecars => sidecars(ctx).await,
         SystemCmd::Logs(args) => logs(args, ctx).await,
         SystemCmd::Backup(args) => backup(args, ctx),
         SystemCmd::Restore(args) => restore(args, ctx),
@@ -58,10 +55,12 @@ pub async fn run(cmd: SystemCmd, ctx: OutputContext) -> Result<()> {
 async fn status(ctx: OutputContext) -> Result<()> {
     ctx.info("Checking system status…");
 
-    // Probe orchestrator
-    let orchestrator_ok = probe_http(&ctx.orchestrator_url, "/health").await;
-
-    // Probe common sidecar ports
+    // P8-12 — the orchestrator probe is gone with the orchestrator.
+    //
+    // ⚠ The three below are NOT the sidecar: redis, postgres and an external
+    // MCP server are services a user may run themselves, and `system status`
+    // reporting whether they are reachable is still useful. They were only
+    // ever grouped under a comment that said "sidecar ports".
     let redis_ok = probe_tcp("127.0.0.1:6379").await;
     let postgres_ok = probe_tcp("127.0.0.1:5432").await;
     let mcp_ok = probe_tcp("127.0.0.1:3100").await;
@@ -71,11 +70,6 @@ async fn status(ctx: OutputContext) -> Result<()> {
 
     let headers = ["Service", "Status", "Details"];
     let rows = vec![
-        vec![
-            "core-orchestrator".to_string(),
-            bool_status(orchestrator_ok),
-            ctx.orchestrator_url.clone(),
-        ],
         vec![
             "redis/memurai".to_string(),
             bool_status(redis_ok),
@@ -102,25 +96,9 @@ async fn status(ctx: OutputContext) -> Result<()> {
     Ok(())
 }
 
-async fn sidecars(ctx: OutputContext) -> Result<()> {
-    ctx.info("Probing sidecar connectivity…");
+// P8-12 — `airsctl system sidecars` is deleted. It probed the two Python
+// processes and could only ever report them absent.
 
-    let checks: &[(&str, &str)] = &[
-        ("Redis/Memurai", "127.0.0.1:6379"),
-        ("Postgres", "127.0.0.1:5432"),
-        ("MCP Server", "127.0.0.1:3100"),
-        ("Orchestrator", "127.0.0.1:4000"),
-    ];
-
-    let mut rows = vec![];
-    for (name, addr) in checks {
-        let ok = probe_tcp(addr).await;
-        rows.push(vec![name.to_string(), bool_status(ok), addr.to_string()]);
-    }
-
-    ctx.print_table(&["Service", "Status", "Address"], rows);
-    Ok(())
-}
 
 async fn logs(args: LogsArgs, ctx: OutputContext) -> Result<()> {
     let log_paths = find_log_files(args.service.as_deref());
