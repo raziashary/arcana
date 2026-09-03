@@ -96,6 +96,73 @@ fn ring() -> &'static Mutex<HashMap<String, Vec<BuildEvidence>>> {
 /// possible invocations. False negatives are acceptable: the worker can
 /// invoke a recognised build form to record evidence even when the actual
 /// validation tool is bespoke.
+/// Flags that make a build command exit 0 without building anything.
+const NO_OP_FLAGS: &[&str] = &["--help", "-h", "--version", "-v", "--dry-run"];
+
+/// Split a shell command into its separate invocations.
+///
+/// `cd sub && npm run build` is two segments; the build is the second one, so
+/// the first token of the WHOLE command is not enough.
+fn segments(command: &str) -> Vec<String> {
+    command
+        .replace("||", "\n")
+        .replace("&&", "\n")
+        .replace('|', "\n")
+        .replace(';', "\n")
+        .split('\n')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// The tokens of one invocation, with leading `VAR=value` assignments dropped.
+///
+/// ⚠ Deliberately naive about quoting: it splits on whitespace, so
+/// `grep "npm run build" f` yields `["grep", "\"npm", "run", "build\"", "f"]`.
+/// That is *safe in the direction that matters* — the program is still `grep`,
+/// so the command is still not a build. A quote-aware splitter would be more
+/// correct and no more secure.
+fn invocation_tokens(segment: &str) -> Vec<String> {
+    segment
+        .split_whitespace()
+        .skip_while(|t| t.contains('=') && !t.starts_with('-'))
+        .map(|t| t.to_lowercase())
+        .collect()
+}
+
+/// Does this segment actually INVOKE `hit`?
+///
+/// 🔴 The whole point of `P8-28`. `classify` used to ask whether the command
+/// *contained* `"npm run build"` anywhere, so `echo npm run build`,
+/// `grep -rn "npm run build" package.json`, `git log --grep="npm run build"`
+/// and `sed -i 's/npm run build/pnpm build/'` all classified as **a passing
+/// Node build** and opened the `qc_review` door with nothing built.
+///
+/// ⚠ The accidental forms matter more than the deliberate ones: an agent does
+/// not have to be adversarial to run `rg "npm run build" .`. And the gate was
+/// asymmetric — aggressive about false negatives (any `|` or `;` rejects) and
+/// completely permissive about false positives, which gives a rejected agent a
+/// gradient straight toward the magic substring.
+fn segment_invokes(segment: &str, hit: &str) -> bool {
+    let tokens = invocation_tokens(segment);
+    let wanted: Vec<String> = hit.split_whitespace().map(|t| t.to_lowercase()).collect();
+    if tokens.len() < wanted.len() {
+        return false;
+    }
+    if tokens[..wanted.len()] != wanted[..] {
+        return false;
+    }
+    // `npm run build --help` exits 0 and builds nothing.
+    !tokens.iter().any(|t| NO_OP_FLAGS.contains(&t.as_str()))
+}
+
+/// True when any invocation in `command` actually runs one of `hits`.
+fn invokes_any(command: &str, hits: &[&str]) -> bool {
+    segments(command)
+        .iter()
+        .any(|seg| hits.iter().any(|h| segment_invokes(seg, h)))
+}
+
 pub fn classify(command: &str) -> Option<BuildEvidenceKind> {
     let c = command.to_lowercase();
 
@@ -129,13 +196,13 @@ pub fn classify(command: &str) -> Option<BuildEvidenceKind> {
         "tsc --noemit",
         "tsc -b",
     ];
-    if node_hits.iter().any(|h| c.contains(h)) {
+    if invokes_any(command, &node_hits) {
         return Some(BuildEvidenceKind::Node);
     }
 
     // Cargo
     let cargo_hits = ["cargo test", "cargo build", "cargo check", "cargo clippy"];
-    if cargo_hits.iter().any(|h| c.contains(h)) {
+    if invokes_any(command, &cargo_hits) {
         return Some(BuildEvidenceKind::Cargo);
     }
 
@@ -149,13 +216,19 @@ pub fn classify(command: &str) -> Option<BuildEvidenceKind> {
         "uv pip install",
         "pip install -r",
     ];
-    if py_hits.iter().any(|h| c.contains(h)) {
+    if invokes_any(command, &py_hits) {
         return Some(BuildEvidenceKind::Python);
     }
 
     // Go
+    // 4 of 4. This branch was missed on the first pass of P8-28 and the
+    // test caught it holding a SECOND defect: `c.contains("go build")` is
+    // true of `cargo build`, because "car|go build". So any cargo command
+    // that failed the cargo arm -- `cargo build --help`, say -- fell through
+    // and classified as a **Go** build. Substring matching does not merely
+    // admit impostors; it confuses one ecosystem for another.
     let go_hits = ["go test", "go build", "go mod tidy"];
-    if go_hits.iter().any(|h| c.contains(h)) {
+    if invokes_any(command, &go_hits) {
         return Some(BuildEvidenceKind::Go);
     }
 
@@ -313,5 +386,89 @@ cargo build",
         ] {
             assert!(exit_code_is_attributable(command), "{command} should count");
         }
+    }
+}
+
+#[cfg(test)]
+mod p8_28_tests {
+    //! `P8-28` — the build-evidence gate matched command TEXT.
+    //!
+    //! The gate that decides whether work may be called complete was satisfied
+    //! by any command that merely *mentioned* a build.
+
+    use super::*;
+
+    // --- the exploits, every form named in the refutation ---------------------
+
+    #[test]
+    fn mentioning_a_build_is_not_building() {
+        // 🔴 Each of these classified as a passing Node build and opened the
+        // `qc_review` door with nothing built. The first is the plan's
+        // example; the rest are the ACCIDENTAL forms, which matter more —
+        // an agent does not have to be adversarial to run `rg`.
+        for cmd in [
+            r#"grep -rn "npm run build" package.json"#,
+            "echo npm run build",
+            r#"rg "npm run build" ."#,
+            r#"git log --grep="npm run build""#,
+            r#"sed -i 's/npm run build/pnpm build/' package.json"#,
+            r#"cat README.md | grep "cargo build""#,
+            "echo 'uv run pytest'",
+        ] {
+            assert_eq!(
+                classify(cmd),
+                None,
+                "a command that only MENTIONS a build must not classify as one: {cmd}",
+            );
+        }
+    }
+
+    #[test]
+    fn a_no_op_flag_is_not_a_build() {
+        // Exits 0, builds nothing.
+        for cmd in [
+            "npm run build --help",
+            "cargo build --version",
+            "npm run build --dry-run",
+        ] {
+            assert_eq!(classify(cmd), None, "{cmd} builds nothing");
+        }
+    }
+
+    // --- and the falsification: real builds must STILL classify ---------------
+
+    #[test]
+    fn a_real_build_still_classifies() {
+        // ⚠ Without this, "reject everything" would satisfy the two tests
+        // above while destroying the feature — `L-37`'s shape at the level of
+        // a test suite rather than a single assertion.
+        assert_eq!(classify("npm run build"), Some(BuildEvidenceKind::Node));
+        assert_eq!(classify("npm run build --silent"), Some(BuildEvidenceKind::Node));
+        assert_eq!(classify("cargo build"), Some(BuildEvidenceKind::Cargo));
+        assert_eq!(classify("cargo test --all"), Some(BuildEvidenceKind::Cargo));
+        assert_eq!(classify("uv run pytest"), Some(BuildEvidenceKind::Python));
+    }
+
+    #[test]
+    fn a_build_in_a_later_segment_still_classifies() {
+        // The build is not always the first thing on the line.
+        assert_eq!(classify("cd frontend && npm run build"), Some(BuildEvidenceKind::Node));
+        assert_eq!(classify("CI=1 npm run build"), Some(BuildEvidenceKind::Node));
+        assert_eq!(
+            classify("npm install; npm run build"),
+            Some(BuildEvidenceKind::Node)
+        );
+    }
+
+    #[test]
+    fn the_asymmetry_that_made_this_severe_is_recorded() {
+        // The gate rejects any pipe as non-attributable while accepting any
+        // substring as proof of a build — aggressive about false negatives,
+        // permissive about false positives. That gradient is what pushes a
+        // rejected agent toward the magic substring.
+        assert!(!exit_code_is_attributable("npm run build | tee log"));
+        assert!(exit_code_is_attributable("npm run build"));
+        // …and the permissive half is now closed:
+        assert_eq!(classify(r#"echo "npm run build" | tee log"#), None);
     }
 }
