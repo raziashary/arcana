@@ -143,8 +143,14 @@ LEDGER = [
     ('W-12', '§5.3 "written to AutoDesign\'s own versioned shape"',
      lambda: has(MDP, 'following AutoDesign’s versioning and decode') or
              has(MDP, "following AutoDesign's versioning and decode")),
-    ('W-13', '"the register holds six rows" — it holds twenty',
-     lambda: has(MDP, 'holds **twenty** rows')),
+    ('W-13', '"the register holds six rows" — it held twenty, and now 21',
+     # â  Asserts the INVARIANT, not a sentence. The first version matched the
+     # literal 'holds **twenty** rows' and broke the moment `A18` `S-27` put
+     # that clause into the past tense, correctly â the ledger reported a
+     # regression against an improvement. What must hold is that the false
+     # figure is gone and a true one is recorded.
+     lambda: absent(MDP, 'the register currently holds six rows') and
+             ('**twenty** rows' in read(MDP) or '**21** rows' in read(MDP))),
     ('W-14', 'TGD0-04 promised a clause it did not assert; TGD0-05 had no control',
      lambda: has(C + 'gates.test.ts', "method: 'rendered-comparison'") and
              has(C + 'gates.test.ts', 'FONT_UNRESOLVED')),
