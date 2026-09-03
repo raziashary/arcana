@@ -293,32 +293,32 @@ impl RecipeRunner {
             Some(id) => id,
             None => {
                 // No local LLM provider configured — Mode 1 is not possible.
-                // Silently stay idle; Mode 2 (core-orchestrator) will handle
-                // this recipe once the orchestrator finishes starting.
-                // Do NOT set status to "error" here — this is a transient
-                // startup condition, not a permanent failure.
+                // 🔴 `P8-43`. This used to say the worker would *"stay
+                // idle; Mode 2 will handle this recipe once the orchestrator
+                // finishes starting"*, and logged *"Waiting for
+                // core-orchestrator"*. **Nothing is coming.** There is one
+                // engine, and a worker with no provider configured is not
+                // waiting for a peer to pick the task up — it is blocked until
+                // the user adds a key. Saying otherwise turned a fixable
+                // configuration gap into a wait with no end.
                 //
-                // Doc 05 Phase 2 — distinct log + status for "Mode 1 idle (no
-                // provider)" vs ordinary idle so log scans + Live Monitor can
-                // both tell which workers are actually capable of fallback work.
+                // Still not `"error"`: the user has simply not finished setting
+                // up, which is a state to report, not a failure to log.
                 info!(
-                    mode = "mode1",
-                    mode1_capable = false,
-                    "[RecipeRunner] Worker '{}' Mode 1 idle: no LLM provider configured. \
-                     Waiting for core-orchestrator (Mode 2).",
+                    "[RecipeRunner] Worker '{}' idle: no LLM provider configured. \
+                     Add a provider key in Settings — nothing else will pick this up.",
                     worker_slug
                 );
-                self.set_worker_status(worker_slug, "mode1_idle_no_provider");
+                self.set_worker_status(worker_slug, "idle_no_provider");
                 return Ok(());
             }
         };
-        // Doc 05 Phase 2 — log the positive case too so a `grep mode1_capable`
-        // across the run shows which workers actually ran on the Rust engine.
+        // ⚠ The `mode` / `mode1_capable` fields are gone with the second
+        // engine: every worker runs here, so a field that was true for all of
+        // them carried no information and a `grep` for it selected everything.
         info!(
-            mode = "mode1",
-            mode1_capable = true,
             provider = provider_id.as_str(),
-            "[RecipeRunner] Worker '{}' Mode 1 ACTIVE (provider='{}')",
+            "[RecipeRunner] Worker '{}' active (provider='{}')",
             worker_slug,
             provider_id,
         );

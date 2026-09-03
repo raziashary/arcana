@@ -392,16 +392,19 @@ export const useAgentLiveStore = create<AgentLiveStore>((set, get) => ({
         'worker:status',
         e => {
           // Rust emits status strings like "idle" / "working" / "error".
-          // Translate to AgentLiveState's enum (active / idle / error / stopped).
-          // Doc 05 Phase 2 — explicit mapping for the new fallback-mode
-          // statuses so the Live Monitor card can paint them distinctly.
+          // Translate to AgentLiveState's enum.
+          //
+          // The `mode1_idle_no_provider` arm is kept deliberately: `workers.db`
+          // stores each worker's LAST status, so a row written before `P8-43`
+          // survives an upgrade and would otherwise fall through to plain
+          // `idle` — reporting "waiting for work" for a worker that is blocked
+          // on a missing key. It is corrected on that worker's next tick.
           const mapped =
-            e.payload.status === 'working'                  ? 'active'         :
-            e.payload.status === 'error'                    ? 'error'          :
-            e.payload.status === 'stopped'                  ? 'stopped'        :
-            e.payload.status === 'mode1_idle_no_provider'   ? 'fallback_idle'  :
-            e.payload.status === 'fallback_idle'            ? 'fallback_idle'  :
-            e.payload.status === 'mode1_active'             ? 'mode1_active'   :
+            e.payload.status === 'working'                  ? 'active'      :
+            e.payload.status === 'error'                    ? 'error'       :
+            e.payload.status === 'paused'                   ? 'paused'      :
+            e.payload.status === 'idle_no_provider'         ? 'no_provider' :
+            e.payload.status === 'mode1_idle_no_provider'   ? 'no_provider' :
             'idle'
           store.handleStatusChange({ agent_id: e.payload.slug, status: mapped as any })
         }

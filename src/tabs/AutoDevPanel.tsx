@@ -61,7 +61,7 @@ function AgentStatusCell({ agentId, fallbackLabel }: { agentId: string; fallback
   const elapsedMs = agent?.elapsed_since_last_tool_ms ?? 0
   const isSlowTool = elapsedMs > 120_000
 
-  if (!agent || agent.status === 'idle' || agent.status === 'stopped') {
+  if (!agent || agent.status === 'idle' || agent.status === 'paused') {
     return <span className="status-text status-text--idle">{fallbackLabel}</span>
   }
   if (agent.status === 'error') {
@@ -152,23 +152,28 @@ function AgentRoster({ tasks }: { tasks: Task[] }) {
                   : worker.status
         const elapsed = active ? elapsedSince(active.updated_at) : '—'
 
-        // Per-worker mode badge.
-        // Priority: current_tick_mode (mid-tick, live) > last_outcome (historical).
-        // current_tick_mode is set on tick-start and cleared on tick-end.
+        // 🔴 `P8-43`. This was a per-worker ENGINE badge, and with one
+        // engine left it had become a liar rather than merely redundant.
+        // `current_tick_mode` comes from the tick-start payload, which
+        // `runner.rs` now sets to `"native"`, so both live branches were
+        // unreachable and every successful tick fell through to
+        // `lastOutcome === 'success'` — painting a green **"LA — Mode 2
+        // LivingAgent (last tick)"** badge for work the deleted subsystem
+        // could not have done.
+        //
+        // It is now a tick-activity badge, which is the one thing here that is
+        // still true and still useful: is this worker mid-tick, and how did its
+        // last one end.
         const lastOutcome    = worker.last_outcome
         const currentMode    = worker.current_tick_mode
         const modeBadge =
-          currentMode === 'mode2'
-            ? { label: 'LA', color: '#7FDBCA', title: 'Mode 2 — LivingAgent (tick in progress)', glow: true }
-          : currentMode === 'mode1'
-            ? { label: 'M1', color: '#FFCB8B', title: 'Mode 1 — Rust Engine (tick in progress)', glow: false }
+          currentMode
+            ? { label: 'RUN', color: 'var(--accent)',  title: 'Tick in progress', glow: true }
           : lastOutcome === 'success'
-            ? { label: 'LA', color: '#7FDBCA', title: 'Mode 2 — LivingAgent (last tick)', glow: false }
-          : lastOutcome === 'mode1_forced'
-            ? { label: 'M1', color: '#FFCB8B', title: 'Mode 1 — Rust Engine (MCP unreachable on pre-flight)', glow: false }
-          : lastOutcome === 'fallback'
-            ? { label: 'M1', color: '#FFCB8B', title: 'Mode 1 — Rust Engine (Mode 2 invoke failed)', glow: false }
-          :   { label: '—',  color: '#3D5A6E', title: 'No tick data yet', glow: false }
+            ? { label: 'OK',  color: 'var(--success)', title: 'Last tick completed', glow: false }
+          : lastOutcome?.startsWith('error')
+            ? { label: 'ERR', color: 'var(--danger)',  title: `Last tick failed: ${lastOutcome}`, glow: false }
+          :   { label: '—',   color: '#3D5A6E',        title: 'No tick data yet', glow: false }
         const hasModeData = !!currentMode || !!lastOutcome
 
         return (

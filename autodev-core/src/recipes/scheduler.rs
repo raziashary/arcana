@@ -221,7 +221,19 @@ impl RecipeScheduler {
                     .map(|w| w.status);
 
                 match current_status.as_deref() {
-                    Some("idle") | Some("active") | Some("error") => {
+                    // 🔴 `idle_no_provider` was NOT in this arm, and it is a
+                    // status the runner writes. It fell to the `_` arm, which
+                    // warns "unexpected status" and fires nothing — so a worker
+                    // that ticked once before a provider key was configured was
+                    // **never scheduled again, even after the user added the
+                    // key**. Nothing resets the status but a tick, and no tick
+                    // could happen; the only escape was to stop and start the
+                    // worker, which is not a thing anyone would know to try.
+                    //
+                    // Firing it is safe: with no provider the runner writes the
+                    // same status again and returns, and the cron interval
+                    // bounds the retry.
+                    Some("idle") | Some("active") | Some("error") | Some("idle_no_provider") => {
                         // Ruflo Feature 2 — run orphan detection before each Supervisor tick
                         if slug_owned == "supervisor" {
                             let released = crate::orphan::reconcile();

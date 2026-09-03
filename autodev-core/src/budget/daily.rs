@@ -146,12 +146,42 @@ pub fn pause_fleet(reason: &str) -> Result<usize> {
     let workers = db.list()?;
     let mut paused = 0;
     for w in workers {
-        // Only running workers are paused. Pausing an already-stopped worker
-        // would overwrite a state the user set, and un-pausing later would
-        // start something they had deliberately stopped.
-        if w.status.as_str() == "running" || w.status.as_str() == "idle" {
+        // 🔴 **The guard used to read `== "running" || == "idle"`, and nothing
+        // in this application writes `"running"` to a worker row.** The runner
+        // writes `"working"` (`recipes/runner.rs`); `"running"` belongs to
+        // `SubagentStatus`, a different enum entirely. So the first arm was
+        // dead and only *idle* workers were paused — a worker mid-tick when the
+        // ceiling tripped kept its tick, finished, was set back to `"idle"` by
+        // the runner rather than to `"paused"`, and was then fired again by the
+        // scheduler on its next cron beat. **The spend ceiling did not hold for
+        // any worker that was actually spending when it tripped**, which is the
+        // only case it exists for.
+        //
+        // Inverted deliberately: pause everything not already paused. `"stopped"`
+        // is not checked because nothing in this application writes it — adding
+        // it back would be another guard on a status that cannot occur, which is
+        // the defect being fixed here.
+        // An allowlist of "statuses that mean busy" is a list that must agree
+        // with the runner's, and this is the second time that disagreement has
+        // cost something here (`L-19`).
+        if w.status.as_str() != "paused" {
             db.update_status(w.id, "paused")?;
             paused += 1;
+
+            // 🔴 And it wrote the row without telling anyone. `stop_worker`
+            // emits this same event so the roster dims the row immediately;
+            // pausing the whole fleet for money did not, so the UI showed the
+            // workers as they were until something else refreshed it.
+            crate::events::emit_worker_status(crate::events::WorkerStatusPayload {
+                slug: w.slug.clone(),
+                status: "paused".to_string(),
+                previous_status: Some(w.status.clone()),
+                reason: Some(format!("Daily spend ceiling reached ({reason})")),
+                cooldown_seconds: None,
+                tick_duration_ms: None,
+                last_outcome: None,
+                timestamp: chrono::Utc::now().to_rfc3339(),
+            });
         }
     }
     tracing::error!("Daily spend ceiling reached ({reason}) — paused {paused} worker(s)");

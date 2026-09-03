@@ -47,12 +47,28 @@ export interface SparklineWindow {
   tokens:       number
 }
 
-// Doc 05 Phase 2 — `fallback_idle` is distinct from ordinary `idle` and
-// signals "Mode 1 fallback engaged but skipped per policy / no provider".
-// `mode1_active` flags workers actually running on the Rust AgentEngine.
+// `no_provider` is distinct from ordinary `idle`: the worker is not waiting
+// for work, it is blocked until an LLM provider key is configured.
+//
+// 🔴 `P8-43` removed `mode1_active`. It was documented as flagging
+// "workers actually running on the Rust AgentEngine" — which is now every
+// worker, always, so the status could not distinguish anything. **No Rust call
+// site ever wrote it**: a reader with no writer, with a colour, a union member
+// and a mapping arm all maintained for a value that could not arrive.
+//
+// `fallback_idle` became `no_provider` in the same pass: there is no fallback
+// to engage, and the condition it actually reports is a missing key.
+// 🔴 `stopped` was also a member with no writer, and `paused` was a writer
+// with no member. `stop_worker` writes `"paused"` AND emits `worker:status`
+// with it, and `pause_fleet` does now too — so a worker the user stopped, or
+// one the daily spend ceiling parked, arrived at this store and fell through
+// to plain `idle`. The Live Monitor said "waiting for work" about a worker
+// that had been deliberately halted. The Agent Roster got it right the whole
+// time, from the same event, because `workerStore` has its own vocabulary that
+// does include `paused` — two readers of one event, disagreeing.
 export type AgentLiveStatus =
-  | 'active' | 'idle' | 'error' | 'stopped' | 'starting'
-  | 'fallback_idle' | 'mode1_active'
+  | 'active' | 'idle' | 'error' | 'paused' | 'starting'
+  | 'no_provider'
 export type AgentType       = 'supervisor' | 'worker' | 'qc' | 'pa'
 
 export interface AgentLiveState {

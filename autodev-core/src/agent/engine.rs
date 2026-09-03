@@ -950,6 +950,14 @@ impl AgentEngine {
             // silently zeroing the Dashboard.
             if let Err(e) = crate::analytics::global().collector().record_token_usage(
                 session_id.to_string(),
+                // ⚠ `P8-43` deliberately does NOT rename this. It is the
+                // `agent_type` column of `token_usage`, and
+                // `aggregator.rs:78` groups the Dashboard's cost breakdown by
+                // it. Renaming would leave every historical row under the old
+                // label and every new row under the new one, so one agent
+                // would appear as two lines that never reconcile. The name is
+                // stale; splitting the user's cost history to fix a string is
+                // a worse trade.
                 "mode1_agent".to_string(),
                 analytics_provider.to_string(),
                 model.to_string(),

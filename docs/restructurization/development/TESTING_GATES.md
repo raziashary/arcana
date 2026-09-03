@@ -48,10 +48,10 @@
 | **P5** | The graph | 4 | `TG5-01…04` |
 | **P6** | The UI | 9 | `TG6-01…09` |
 | **P7** | Experience | 5 | `TG7-01…05` |
-| **P8** | Submodule deletion **+ the prompt floor** | 6 | `TG8-01…06` |
+| **P8** | Submodule deletion **+ the prompt floor** | 7 | `TG8-01…07` |
 | **P9** | Delivery | 5 | `TG9-01…05` |
 | **PD0** | The design capability contract | 10 | `TGD0-01…10` |
-| | **Total** | **129** | |
+| | **Total** | **130** | |
 
 ---
 
@@ -612,6 +612,12 @@
       Source: **NEW** — `P8-38` · Catches: the defect as found — all five worker recipes ran `bash('git add -A && git commit …')` with **no branch created**, so every fleet commit landed on the user's checked-out trunk, staged blindly and unscanned; and the cleanup worker's one hard safety gate diffed `main` against itself, judging an empty patch and passing everything · Evidence: `GATE-PROVEN` — `ci_gate::tests::tg8_06_no_default_recipe_commits_blind_or_onto_a_trunk`
 
 
+
+- [x] **TG8-07** `[conservation]` — **NEW (`P8-43`).** **The worker-status vocabulary agrees across every seam it crosses.** Three halves: everything Rust writes has a mapping arm in `agentLiveStore`; every arm corresponds to a writer (or is declared legacy with a reason); and **`recipes/scheduler.rs` recognises every status the runner writes**, because its catch-all arm fires nothing and silently parks that worker forever. The writer set is **derived** — every file that mentions `WorkersDb` and calls `update_status(` — and worker writes are told from task writes by **arity**, not by filename.
+      Source: **NEW** — `P8-43` · Catches: four defects, three of which the task did not name. `mode1_active` was a union member, a dot colour and a mapping arm maintained for a value **no Rust call site ever wrote**. `paused` was the mirror: `stop_worker` writes it *and emits it*, and the Live Monitor had no arm — so a worker the user stopped rendered as ordinary `idle`, "waiting for work". `stopped` was in the union with no writer at all, which made `LiveMonitorSection`'s `hasAnyOnline` reduce to `length > 0`. And `idle_no_provider` was missing from the scheduler's firing arm, so **a worker that ticked once before a provider key was configured was never scheduled again, even after the key was added** · Falsified three ways, each red for its own mechanism · Evidence: `GATE-PROVEN` — `ci_gate::tests::tg8_07_the_worker_status_vocabulary_agrees_across_the_seam`
+
+      🔴 **This gate's own first cut could not see the defect it was written for.** It extracted `set_worker_status(` from `runner.rs` alone, and both `paused` writers bypass that helper — so it compared a half-enumerated vocabulary and reported agreement. The falsification is what exposed it: planting the `pause_fleet` bug back left the gate **green**. `L-C9`, in the form that matters most — the check ran, passed, and was measuring the wrong population.
+
 ---
 
 ## 12. P9 — Delivery
@@ -708,7 +714,7 @@ Gates are only as honest as what they run against. Every corpus below is **check
 | `08-DATA-MODEL…` | `§4 Test gates` | 10 | `TG1-02…TG1-06`; `TG2-15`; `TG4-19…TG4-22` | **P1** (5), **P2** (1), **P4** (4) |
 | `09-DELIVERY` | `§6 Test gates` | 10 | `TG0-01`, `TG0-02`; `TG4-17`, `TG4-18`; `TG8-01`; `TG9-01…TG9-05` | **P0** (2), **P4** (2), **P8** (1), **P9** (5) |
 | `10-PROOF` | *(no gate table — by design)* | 0 gates; contributes the evidence classes (`§1`), the headline acceptance test (`TG7-02` + `TG9-01`), the CI blocking table (`TG0-02`) and the ten test families (`§17`) | — | — |
-| **NEW** | *(this document)* | 12 | `TG0-04`, `TG0-05`, `TG2-16`, `TG2-17`, `TG3-38`, `TG3-39`, `TG4-23`, `TG8-02`, `TG8-03`, `TG8-04`, `TG8-05`, `TG8-06` | P0 (2), P2 (2), P3 (2), P4 (1), P8 (5) |
+| **NEW** | *(this document)* | 13 | `TG0-04`, `TG0-05`, `TG2-16`, `TG2-17`, `TG3-38`, `TG3-39`, `TG4-23`, `TG8-02`…`TG8-07` | P0 (2), P2 (2), P3 (2), P4 (1), P8 (6) |
 
 **Spec gate totals:** 115 named in the specs − 8 merged = **107 surviving** + **8 NEW** = **115**, **+ 10 `TGD0`** added by `PD0` and its audit remediation = **125**.
 
@@ -773,6 +779,7 @@ Gates are only as honest as what they run against. Every corpus below is **check
 | **Migration** | `TG1-02`, `TG1-03`, `TG1-04` | 3 |
 | **No-sidecar** | `TG8-01`, `TG8-02` | 2 |
 | **One prompt floor** | `TG8-03`, `TG8-04`, `TG8-05`, `TG8-06` | 4 |
+| **No reader without a writer** | `TG8-07` | 1 |
 
 **Thinnest families, flagged rather than padded:** *Destructive safety* (3) and *No-sidecar* (2). Both are thin for structural reasons — destructive safety is largely an enumeration inside `TG7-05` and `TG4-23`, and the no-sidecar family's real weight is that **P8 re-runs all 125 gates** under the sidecar-absent condition rather than adding gates of its own. Neither is a coverage gap; both are recorded so a later reader does not mistake thinness for oversight.
 

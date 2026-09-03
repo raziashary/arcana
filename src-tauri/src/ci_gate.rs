@@ -23,6 +23,21 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
+/// Every `.rs` file under `dir`, recursively.
+fn collect_rs(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            collect_rs(&p, out);
+        } else if p.extension().and_then(|x| x.to_str()) == Some("rs") {
+            out.push(p);
+        }
+    }
+}
+
 fn workflow_files() -> Vec<PathBuf> {
     let dir = repo_root().join(".github").join("workflows");
     let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -4920,5 +4935,234 @@ let x = 1;
         );
 
         let _ = std::fs::remove_dir_all(&sandbox);
+    }
+
+    // ── TG8-07 · the worker-status vocabulary agrees across the seam ──────────
+
+    /// Every status Rust writes is understood by the store that renders it,
+    /// and the store understands nothing Rust cannot write.
+    ///
+    /// 🔴 `P8-43`. `AgentLiveStatus` carried `mode1_active`, documented as
+    /// flagging *"workers actually running on the Rust AgentEngine"* — which is
+    /// every worker, always — and **no Rust call site ever wrote it**. A union
+    /// member, a dot colour and a mapping arm were all maintained for a value
+    /// that could not arrive. `fallback_idle` was the mirror defect: written
+    /// under a different name (`mode1_idle_no_provider`) for a condition that
+    /// is not a fallback.
+    ///
+    /// ⚠ The mapping is a **fall-through** — anything unmatched renders as
+    /// plain `idle`. That is why a missing arm is not a visible error but a
+    /// worker reported as "waiting for work" when it is actually blocked. This
+    /// gate exists because the failure is silent in exactly the direction that
+    /// looks healthy.
+    ///
+    /// ⚠ Comments stripped from both sides first: this gate's own explanation
+    /// names every string it searches for, and so do the fixes it protects
+    /// (`L-C7`).
+    #[test]
+    fn tg8_07_the_worker_status_vocabulary_agrees_across_the_seam() {
+        // Statuses the store deliberately still accepts although Rust no longer
+        // writes them. `workers.db` stores each worker's LAST status, so a row
+        // written by an older build survives an upgrade; dropping the arm would
+        // render that worker as ordinary `idle` until its next tick.
+        const LEGACY: &[&str] = &["mode1_idle_no_provider"];
+
+        // 🔴 **The first cut of this gate read `set_worker_status(` in
+        // `runner.rs` and nothing else — and the defect was not there.**
+        // `scheduler::stop_worker` and `budget::daily::pause_fleet` write
+        // `"paused"` straight through `WorkersDb::update_status`, and
+        // `pause_fleet` guarded on `"running"`, a status nothing in this
+        // application writes. An extractor that reads one helper in one file
+        // cannot see a writer that bypasses the helper, so it reported
+        // agreement over a vocabulary it had only half enumerated.
+        //
+        // The writer set is DERIVED: every file that mentions `WorkersDb` and
+        // calls `update_status(`. Naming the files here would be the same list
+        // that must agree, one indirection later (`L-19`).
+        let core = repo_root().join("autodev-core/src");
+        let mut writer_files: Vec<std::path::PathBuf> = Vec::new();
+        collect_rs(&core, &mut writer_files);
+        let writer_files: Vec<std::path::PathBuf> = writer_files
+            .into_iter()
+            .filter(|p| {
+                let t = read_source(p);
+                t.contains("WorkersDb") && t.contains("update_status(")
+            })
+            .collect();
+        assert!(
+            writer_files.len() >= 2,
+            "only {} worker-status writer file(s) found. The runner and at least \
+             one direct writer must be present, so the discovery is broken and \
+             this gate would compare against a partial vocabulary: {writer_files:?}",
+            writer_files.len()
+        );
+
+        let mut written: Vec<String> = Vec::new();
+        for path in &writer_files {
+            let src = read_source(path);
+            assert!(
+                !src.trim().is_empty(),
+                "{path:?} did not read — `read_source` is unwrap_or_default, so \
+                 every assertion below would pass vacuously (`L-C9`)"
+            );
+            let code: String = src
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            // `set_worker_status(slug, "x")` and `update_status(id, "x")`.
+            for call in ["set_worker_status(", "update_status("] {
+                for seg in code.split(call).skip(1) {
+                    let Some(args) = seg.split(')').next() else {
+                        continue;
+                    };
+                    // ⚠ `TasksDb` has an `update_status` too, and `runner.rs`
+                    // calls both — so a file-level filter pulled `qc_review`
+                    // and `build_failed` into the worker vocabulary and the
+                    // gate went red naming task statuses. They are told apart
+                    // by **arity**, which is a property of the call rather than
+                    // of the file it sits in: `WorkersDb::update_status(id,
+                    // status)` takes two arguments, `TasksDb::update_status(id,
+                    // status, assignee)` takes three.
+                    if args.matches(',').count() != 1 {
+                        continue;
+                    }
+                    if let Some(q) = args.find('"') {
+                        if let Some(end) = args[q + 1..].find('"') {
+                            written.push(args[q + 1..q + 1 + end].to_string());
+                        }
+                    }
+                }
+            }
+        }
+        written.sort();
+        written.dedup();
+        assert!(
+            written.len() >= 4,
+            "only {} status literals found across {} writer file(s) — the \
+             extractor is not matching the call shape, so this gate is checking \
+             almost nothing: {written:?}",
+            written.len(),
+            writer_files.len()
+        );
+
+        let store = read_source(&repo_root().join("src/stores/agentLiveStore.ts"));
+        assert!(!store.trim().is_empty(), "agentLiveStore.ts did not read");
+        let store_code: String = store
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Every `e.payload.status === '<literal>'`.
+        let mut handled: Vec<String> = Vec::new();
+        for seg in store_code.split("e.payload.status === '").skip(1) {
+            if let Some(end) = seg.find('\'') {
+                handled.push(seg[..end].to_string());
+            }
+        }
+        handled.sort();
+        handled.dedup();
+        assert!(
+            !handled.is_empty(),
+            "no status arms found in agentLiveStore.ts — the extractor is not \
+             matching, so this gate is checking nothing"
+        );
+
+        // (a) Anything Rust writes other than plain `idle` must have an arm.
+        let unhandled: Vec<&String> = written
+            .iter()
+            .filter(|w| w.as_str() != "idle" && !handled.contains(w))
+            .collect();
+        assert!(
+            unhandled.is_empty(),
+            "Rust writes these worker statuses and the store has no arm for them, \
+             so they fall through and render as ordinary `idle` — a blocked or \
+             failing worker shown as waiting for work: {unhandled:?}\n\
+             written={written:?}\nhandled={handled:?}"
+        );
+
+        // (b) Every arm must correspond to something Rust can write, or be
+        //     declared legacy above. An arm with no writer is `W-7`.
+        let orphaned: Vec<&String> = handled
+            .iter()
+            .filter(|h| !written.contains(h) && !LEGACY.contains(&h.as_str()))
+            .collect();
+        assert!(
+            orphaned.is_empty(),
+            "the store maps these statuses and no Rust call site writes them — a \
+             reader with no writer. Either produce them or remove them; if one is \
+             deliberately kept for rows written by an older build, add it to \
+             LEGACY with the reason: {orphaned:?}\n\
+             written={written:?}\nhandled={handled:?}"
+        );
+
+        // (b2) The SCHEDULER must recognise every status the runner writes.
+        //
+        // 🔴 This is the assertion that was missing, and its absence is why the
+        // `pause_fleet` falsification stayed green. The store is not the only
+        // consumer of a worker status: `recipes/scheduler.rs` matches on it to
+        // decide whether to fire the next tick, and its catch-all arm logs
+        // "unexpected status" and fires nothing. So a status the runner writes
+        // and the scheduler does not list **parks that worker permanently** —
+        // no error, no failing test, and a log line that reads as a curiosity.
+        // `idle_no_provider` was in exactly that state.
+        let sched = read_source(&repo_root().join("autodev-core/src/recipes/scheduler.rs"));
+        assert!(!sched.trim().is_empty(), "scheduler.rs did not read");
+        let sched_code: String = sched
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let arms = sched_code
+            .split("match current_status.as_deref()")
+            .nth(1)
+            .expect("the scheduler must match on the worker status")
+            .split("\n            }")
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        let mut recognised: Vec<String> = Vec::new();
+        for seg in arms.split("Some(\"").skip(1) {
+            if let Some(end) = seg.find('"') {
+                recognised.push(seg[..end].to_string());
+            }
+        }
+        assert!(
+            recognised.len() >= 4,
+            "only {} status arms found in the scheduler match — the extractor is \
+             not matching, so this half checks nothing: {recognised:?}"
+            , recognised.len()
+        );
+        let unrecognised: Vec<&String> = written
+            .iter()
+            .filter(|w| !recognised.contains(w))
+            .collect();
+        assert!(
+            unrecognised.is_empty(),
+            "the runner writes these statuses and `recipes/scheduler.rs` does not \
+             list them, so they fall to its catch-all arm and NO further tick is \
+             ever fired for that worker — it is parked until someone stops and \
+             starts it: {unrecognised:?}\n\
+             written={written:?}\nrecognised={recognised:?}"
+        );
+
+        // (c) The rendered union may not carry a member the mapper cannot produce.
+        let types = read_source(&repo_root().join("src/types/live.ts"));
+        assert!(!types.trim().is_empty(), "types/live.ts did not read");
+        let union = types
+            .split("export type AgentLiveStatus =")
+            .nth(1)
+            .and_then(|r| r.split("export type").next())
+            .expect("the AgentLiveStatus union must exist")
+            .to_string();
+        for dead in ["mode1_active", "fallback_idle", "'stopped'"] {
+            assert!(
+                !union.contains(dead),
+                "`{dead}` is back in AgentLiveStatus. It names an engine \
+                 distinction that no longer exists, and nothing writes it:\n{union}"
+            );
+        }
     }
 }

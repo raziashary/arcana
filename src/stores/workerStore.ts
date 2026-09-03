@@ -32,9 +32,12 @@ export interface Worker {
   tick_ended_at:      string | undefined
   tick_duration_ms:   number | undefined
   last_outcome:       string | undefined
-  // D.4 — mode of the currently in-flight tick (cleared on tick-end).
-  // 'mode2' while LivingAgent tick is running; 'mode1' during Rust fallback.
-  // Takes precedence over last_outcome in the badge so mid-tick state is visible.
+  // Set on tick-start, cleared on tick-end — so a value here means "a tick is
+  // running right now", and that is all AutoDevPanel reads it for (`P8-43`).
+  //
+  // ⚠ The name is a leftover: it once distinguished two engines, and the
+  // emitter now always sends "native". It is kept because the tick-start
+  // payload is a published event shape.
   current_tick_mode:  string | undefined
 }
 

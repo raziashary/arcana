@@ -32,7 +32,10 @@ export function LiveMonitorSection() {
   const secondsAgo   = Math.floor((Date.now() - lastEventAt) / 1000)
   const hasActive    = agentList.some(a => a.status === 'active')
   // "online" = at least one agent is registered and not stopped (sidecars are up)
-  const hasAnyOnline = agentList.length > 0 && agentList.some(a => a.status !== 'stopped')
+  // ⚠ This was `!== 'stopped'`, and nothing ever produced that status — so the
+  // condition reduced to `agentList.length > 0` and could not distinguish an
+  // online fleet from a fully paused one (`P8-43`).
+  const hasAnyOnline = agentList.length > 0 && agentList.some(a => a.status !== 'paused')
 
   const isLive    = hasActive && secondsAgo < 30
   // STALE only when there WAS recent activity that just went quiet (not blank-slate idle)
