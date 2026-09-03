@@ -2023,7 +2023,7 @@ dependency. **Spec.** `09 §4`.
 | **Total Rust** | **3,867 LOC** |
 | `src-tauri/resources/sidecars/` | **225 MB** (`core-orchestrator`, `memory-mcp-server`) |
 | `.gitmodules` | **2** stanzas |
-| Files referencing "sidecar" | **14** |
+| Files referencing "sidecar" | ~~14~~ **63** — 41 with a code reference, 22 comment-only, excluding `src-tauri/src/sidecar/` itself. ⚠ **Ten of them are `src/design/`'s, and mean the *other* sidecar** (`P8-21`) |
 
 **Why this is now cheap.** `P1` already built the seam: `autodev-core` declares
 `OrchestratorProbe` and ships **`NoOrchestrator`**, a null implementation. The desktop's
@@ -2100,7 +2100,21 @@ that never starts them.
 Grounded in `§1.1a`. **The standard `git submodule deinit` → `git rm` sequence will fail
 here**, because there are no gitlinks in the index or in history to operate on.
 
-- [ ] **P8-13** **Back up first** (`§0.8`). `submodules/` is 225 MB of untracked working tree with **no remote copy of any local modification** — and it has local modifications (`.port_allocations.json` is dirty). → `CODE-PRESENT`
+- [ ] **P8-13** ~~**Back up first** (`§0.8`). `submodules/` is 225 MB of untracked working tree with **no remote copy of any local modification** — and it has local modifications (`.port_allocations.json` is dirty).~~ **Struck 2026-09-03, razi-ruled. Delete outright, no backup.**
+
+  🔴 **What the deletion actually costs, measured before asking rather than after deleting** (`§0.8`, Rule 13). The struck text was wrong about the size by 3.5× and silent about the part that mattered:
+
+  | | Claimed | Measured 2026-09-03 |
+  |---|---|---|
+  | `submodules/` on disk | 225 MB | **795 MB** — `core-orchestrator` 507 MB + `memory-mcp-server` 289 MB; ~556 MB of that is `.venv`, regenerable from the `uv.lock` files both repos carry |
+  | Local modifications | *"`.port_allocations.json` is dirty"* | true, plus five untracked `logs/*.log.N` |
+  | **Commits that exist only here** | *not mentioned* | 🔴 **three** — `69acba1f` and `075b98e5` in `core-orchestrator`, `54fde0e` in `memory-mcp-server`, all *"changes for autodev"*, May–June 2026, **absent from `origin/main` in both repos** |
+
+  The 225 MB figure belongs to `src-tauri/resources/sidecars/` (`P8-17`), which is exactly 225 MB — the wrong number attached to the wrong path, in the task whose entire job is *back up before destroying*.
+
+  **Razi's ruling, verbatim, 2026-09-03:** *"look that submodule/sidecar is already dead since the new core and memory mcp server is being used elsewhere, so delete it all you have my authorization."*
+
+  So the three commits are **superseded, not lost**: the live core-orchestrator and memory-mcp-server are maintained elsewhere, and this tree is a stale copy. Recorded in writing because the deletion is irreversible and `§0.8` requires the authorization to exist before the act, not after it (`ADR-LOG-RESTRUCT-0036`). → `DOC-GATE`SENT`
 - [ ] **P8-14** Delete both stanzas from **`.gitmodules`** — the only *tracked* artifact, so a normal file edit and a normal commit. → `CODE-PRESENT`
 - [ ] **P8-15** Delete **`.git/modules/submodules/`** — both object stores. ⚠ **Skipping this is the "survives by address" failure**: the working tree goes and the repository still carries the sidecar's git objects. → `CODE-PRESENT`
 - [ ] **P8-16** Delete the **`submodules/`** working tree. → `CODE-PRESENT`
@@ -2142,7 +2156,18 @@ here**, because there are no gitlinks in the index or in history to operate on.
 
 ### P8-D · Prune and prove
 - [ ] **P8-20** Drop now-unused dependencies (SSE/HTTP client paths kept only for the sidecar) from `Cargo.toml`. → `CODE-PRESENT`
-- [ ] **P8-21** **The exit assertion**: no `.py` in the tree · no `.py` in any built installer · `git ls-files | grep -i sidecar` returns nothing · `.git/modules` is gone · the binary contains no sidecar path string. → `GATE-PROVEN`
+- [ ] **P8-21** **The exit assertion**, re-pointed 2026-09-03 *(razi-ruled: "name the real subject")*. Every clause names the **Python orchestrator subsystem**, which is the thing being deleted:
+  - no `.py` anywhere in the tracked tree, and none in any built installer
+  - `src-tauri/src/sidecar/`, `src-tauri/src/commands/sidecar_commands.rs` and `src-tauri/resources/sidecars/` do not exist
+  - `submodules/` and `.git/modules/submodules/` do not exist, and `.gitmodules` is gone or empty
+  - no tracked file references `127.0.0.1:4000`, `127.0.0.1:8000`, `core-orchestrator` or `memory-mcp-server`
+  - the built binary contains no orchestrator path string
+  - the frontend has no `SidecarPanel`, `SidecarCrashBanner`, `sidecarStore` or `src/components/sidecar/`
+  → `GATE-PROVEN`
+
+  🔴 **Why this replaced a one-line grep, and why the one-liner was a blocker.** The original read *"`git ls-files | grep -i sidecar` returns nothing"*. Run today it returns **15** files — and **four of them must survive `P8`**, because `PD0` gave the word a second meaning: `src/design/contract/sidecar.ts`, `tsconfig.sidecar.json` and `scripts/smoke-design-sidecar.mjs` are **AutoDev as a sidecar of AutoDesign**, the seam we published to the partner team on 2026-09-03, and the fourth is a grounding report that is a historical record. Ten files under `src/design/` use the word in that second sense. So the assertion as written could only be satisfied by deleting `PD0`'s deliverables — and a content sweep run from it would have edited the contract.
+
+  This is `L-C6` — *a check written from the CLAIM rather than from the INVARIANT it protects* — caught **before** the phase rather than by its audit, which is what `§0.2m` exists for. The invariant is *"no Python sidecar subsystem survives"*, not *"the string `sidecar` is absent"*. ⚠ Related figure corrected in the same pass: this section's *"Files referencing sidecar: **14**"* is **63** on the current tree (41 with a code reference, 22 comment-only, excluding `src-tauri/src/sidecar/` itself).
 - [ ] **P8-22** Installer size drops by ~225 MB — **measured before and after**, because "it should be smaller" is not a measurement. → `BENCH-PROVEN`
 - [ ] **P8-23** The full suite and every smoke pass with the sidecar gone. → `GATE-PROVEN`
 - [ ] **P8-24** `TG2-14`'s sibling for the sidecar: no reference survives in Rust source, `Cargo.toml`, shipped docs, or the frontend. → `GATE-PROVEN`

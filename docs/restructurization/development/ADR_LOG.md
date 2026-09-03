@@ -1596,6 +1596,94 @@ probe of mine said it was not.
 
 ---
 
+## ADR-LOG-RESTRUCT-0036 — Two blockers found before P8: an unsatisfiable exit assertion, and three commits that only exist here
+
+**Status.** DECIDED
+**Author.** Claude (both findings) · **Razi** (both rulings) · **Tier.** **`razi-ruled`**
+**When.** 2026-09-03 · before the first line of `P8`
+
+**What.** `§0.2m` requires a phase's load-bearing claims to be attacked before
+it is built. Checking `P8`'s entry conditions against the tree found two things
+that would have gone wrong during the phase rather than before it. Both were
+put to Razi under `§0.2c`; both are his call and both are recorded verbatim.
+
+### 1. `P8-21`'s exit assertion could only be satisfied by deleting `PD0`
+
+The task read: *"`git ls-files | grep -i sidecar` returns nothing."* Run on the
+current tree it returns **15** files, and **four of them must survive `P8`**:
+
+| | |
+|---|---|
+| `src/design/contract/sidecar.ts` | the AutoDesign seam — `PD0-08` |
+| `tsconfig.sidecar.json` | its build config |
+| `scripts/smoke-design-sidecar.mjs` | `SD0-01`, committed three days ago |
+| `docs/…/G4b-sidecar-subsystems-api-infra.md` | a grounding report, historical |
+
+`PD0` gave the word a second meaning — **AutoDev as a sidecar of AutoDesign** —
+and ten files under `src/design/` use it in that sense. So the assertion was
+unsatisfiable, and worse, a content sweep driven from it would have edited the
+contract published to the partner team on 2026-09-03.
+
+**Why it matters beyond the one line:** this is `L-C6` — *a check written from
+the CLAIM rather than from the INVARIANT it protects* — which stands at **13
+instances**. The invariant is *"no Python sidecar subsystem survives"*; the
+check tested for a string. It was caught **before** the phase, which is the
+first time this class has been caught by `§0.2m` rather than by a post-phase
+audit.
+
+**Razi's ruling:** *name the real subject.* `P8-21` now enumerates the Python
+subsystem by path, plus the loopback addresses, the two repository names, the
+binary string and the four frontend surfaces. Nothing in it depends on the word.
+
+⚠ Same pass, same section: the footprint table's *"Files referencing sidecar:
+**14**"* is **63** on the current tree (41 code, 22 comment-only). `L-C1`.
+
+### 2. Three commits exist only in the working tree `P8` deletes
+
+`P8-13` said *"back up first — `submodules/` is 225 MB of untracked working
+tree"*. Measured before asking, per `§0.8` and Rule 13:
+
+* **795 MB**, not 225 — `core-orchestrator` 507 + `memory-mcp-server` 289, of
+  which ~556 MB is `.venv` and regenerable from the `uv.lock` both carry. The
+  225 MB figure belongs to `src-tauri/resources/sidecars/` (`P8-17`): the wrong
+  number on the wrong path, in the task whose whole job is *back up before
+  destroying*.
+* 🔴 **Three commits absent from `origin/main` in both repositories** —
+  `69acba1f`, `075b98e5` (core-orchestrator) and `54fde0e`
+  (memory-mcp-server), all *"changes for autodev"*, May–June 2026. Deleting
+  `submodules/` **and** `.git/modules/submodules/` — which `P8-15` requires,
+  because the object store is the *"survives by address"* failure — destroys
+  them permanently. The struck `P8-13` text did not mention them.
+
+**Razi's ruling, verbatim:** *"look that submodule/sidecar is already dead since
+the new core and memory mcp server is being used elsewhere, so delete it all you
+have my authorization."*
+
+**So the three commits are superseded, not lost.** The live core-orchestrator
+and memory-mcp-server are maintained elsewhere; this tree is a stale copy of a
+retired subsystem. `P8-13` is **struck** rather than rewritten, and the ruling
+sits in its place — the deletion is irreversible, and `§0.8` requires the
+authorization to exist **before** the act rather than as an explanation after
+it.
+
+**Why.** Both findings share one shape: **a number or a claim in the plan that
+nobody had checked against the tree since it was written.** The exit assertion
+predates `PD0`; the backup figure predates the `.venv` directories. Neither
+would have failed a review of the *reasoning* — only a measurement.
+
+**Where.** `MASTER_DEVELOPMENT_PLAN.md §11.1` — `P8-13`, `P8-21`, and the
+measured-footprint table.
+
+**How.** `P8-21` is re-pointed to named paths and will be gate-proven at the
+phase's exit. `P8-13` becomes a `DOC-GATE` carrying the ruling. Neither is
+built yet; both are corrected before the phase opens, which is what `§0.2m`
+asks for.
+
+**Links.** `ADR-LOG-RESTRUCT-0035` · `§0.2c` · `§0.2m` · `§0.8` · `L-C1`,
+`L-C6` · `TG8-01`, `TG8-02` · `PD0-08`, `SD0-01`
+
+---
+
 ## ADR-LOG-RESTRUCT-0035 — PD0's post-phase audits: the phase was closed without them, and three findings should have blocked it
 
 **Status.** DECIDED
