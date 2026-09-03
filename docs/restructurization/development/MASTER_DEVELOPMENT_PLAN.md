@@ -8,8 +8,17 @@
 | **Anchors** | `../ui-anchor.md` (UI, DOCTRINE) · `../memory-anchor.md` (memory, adopted 2026-08-31) |
 | **Owner** | Razi (Programming Lead, AIRS Foundry) |
 | **Branch** | `main` (Razi authorised working directly on it; `sidecar-backup` holds the pre-restructure state) |
-| **Rev** | 1.0 — created 2026-08-31 |
-| **Status** | ⛔ **AWAITING GO. No code, no migrations, no deletions.** |
+| **Rev** | **2.1** — created 2026-08-31, current 2026-09-03. `§16` is authoritative for the history |
+| **Status** | 🟢 **BUILDING.** GO given 2026-09-01. Complete: `P0` · `P1` · `P2` · `P3 A–E` · `P3-F` · `PD0`. **Next: `P8`.** 312 of 506 tasks open |
+
+⚠ **This header read `Rev 1.0` and `⛔ AWAITING GO. No code, no migrations, no
+deletions.` until 2026-09-03** — through seven completed phases, hundreds of
+commits, a shipped partner contract and a live migration ladder. The staleness
+sweep (`A18`, `S-1`/`S-12`) found it. It is the **first thing** any reader or
+subagent sees, it contradicted the change log four screens below it, and every
+one of the phases it forbade is recorded as done inside the same file. `§0.3`
+says a change that makes a line stale is fixed in the same step; seven phases
+of changes were made without ever looking up.
 
 ## The document family
 
@@ -29,7 +38,15 @@ A rules register, not a task list. Every rule is always-on.
 
 **§0.0 — Prime principle: the shipped codebase is the Anchor Point.** The plan bends to shipped code, never the reverse. Changing a shipped contract requires a named ADR, a migration, and live proof. This programme exists because ~415 defects accumulated behind checks that could not fail; the code is the only truth that argued back.
 
-**§0.1 — The GO gate.** No development until Razi's explicit GO. Rev 1.0 is a plan, not a mandate.
+**§0.1 — The GO gate.** ✅ **GO given by Razi on 2026-09-01.** Development is
+authorised and seven phases are complete; the gate is recorded rather than
+deleted, because *"no development until the owner's explicit GO"* is the
+standing rule and this is the evidence that it was satisfied, not a reason to
+drop it. ⚠ Until 2026-09-03 this read *"No development until Razi's explicit GO.
+Rev 1.0 is a plan, not a mandate"* — a rule stating the opposite of the truth in
+the section every session and every subagent dispatch is told to read (`A18`
+`S-2`). **A rule that is false is worse than a rule that is missing:** it
+teaches a reader that this section is decorative.
 
 **§0.2 — Additive by default.** New modules, new migrations, new tables. Every phase that touches persistence enumerates its migration range. Destructive changes require a named ADR.
 
@@ -67,7 +84,8 @@ The only legitimate stops are: the phase is complete · a §0.8 destructive oper
 
 **Every task carries an evidence class (§0.4) inline, and names the smoke check or gate that will prove it.** A task with no named proof is not done.
 
-*Adapted rather than adopted literally: the source rule requires a dedicated smoke check **and** gate per task. Here that would inflate 154 tasks into 154 gates, and it would be dishonest — the eight updater tasks in P0-A all prove one thing (`G-UPDATE-REFUSE`), and splitting that into eight gates would manufacture coverage rather than measure it.* **Gates may be shared; proof may not be absent.** A task whose proof is "it compiles" is not proven.
+*Adapted rather than adopted literally: the source rule requires a dedicated smoke check **and** gate per task. Here that would inflate the plan's tasks — **154 when this was written, 506
+today** — into as many gates, and it would be dishonest — the eight updater tasks in P0-A all prove one thing (`G-UPDATE-REFUSE`), and splitting that into eight gates would manufacture coverage rather than measure it.* **Gates may be shared; proof may not be absent.** A task whose proof is "it compiles" is not proven.
 
 ## §0.2i — Two subagents is the **floor**, not the cap
 
@@ -87,7 +105,18 @@ This is not a style preference. A rate limit destroyed four reports mid-flight d
 
 ⚠ **Escalate a *decision*, not a *fact*.** A question a search or a `path:line` can answer is not a question for the overseer. **A question only Razi's judgement can settle — a trade-off, a capability call, a policy — goes to him immediately and does not wait for the phase to end.**
 
-*Known web-answerable open items in this programme:* whether `ort`'s ONNX runtime can be vendored offline rather than fetched at build time (`P3-33`) · xAI's finish-reason taxonomy, which `G6 §5.5` records as **undocumented** and which `TG2-10` depends on · Tauri v2 capability semantics for the narrowed permission set (`P0-26`) · whether `keyring` 2.x exposes a usable fallback on headless Linux or whether the encrypted-file path must be written from scratch (`P2-24`).
+*Known web-answerable open items in this programme:* ⚠ **all four of the
+originals are now closed** — struck rather than deleted, because the list's
+value is the *worked examples*, and a list of closed questions that still
+presents itself as open is `A18` `S-4`:
+
+- ~~whether `ort`'s ONNX runtime can be vendored offline (`P3-33`)~~ — **closed in `P3-F`**; `§0.16 W-3` records the answer (*"disable `ort`'s default features, and `fastembed` already does"*) and `autodev-core/Cargo.toml` carries the razi-ruled `fastembed = "=6.0.2"` pin.
+- ~~xAI's finish-reason taxonomy, which `TG2-10` depends on~~ — **dead by a different route**: `§1.2 GAP-02` records xAI as `CLOSED-AS-WONTFIX 2026-09-01 (razi-ruled)`. Providers are three. `TG2-10`'s stated dependency is itself stale.
+- ~~Tauri v2 capability semantics for the narrowed permission set (`P0-26`)~~ — **closed in `P0`**, and `P0-26` was itself *reversed* and superseded by `P0-31`.
+- ~~whether `keyring` 2.x has a usable headless-Linux fallback (`P2-24`)~~ — **closed in `P2`**.
+
+The **rule** stands unchanged and is the point: search the codebase, then the
+web, then escalate — and escalate a *decision*, never a *fact*.
 
 ## §0.2m — 🔴 Adversarially verify every phase BEFORE building it
 
@@ -162,7 +191,9 @@ This is not a style preference. A rate limit destroyed four reports mid-flight d
 > - **`delete_file` calls `remove_dir_all`** despite a docstring saying "empty directory" (`GI-05`).
 > - **Plugin uninstall runs `rustup self uninstall -y`** — it removes the machine's Rust toolchain (`G3a SK-99`).
 > - **`ensure_default_recipes` / `ensure_default_skills` overwrite user edits on every launch** (`SK-49`, `SK-69`).
-> - **`git add -A` / `git add .` would commit 225 MB of untracked Python.** `submodules/` is untracked **and not gitignored** (§1.1a), so a blind stage pulls in the entire sidecar tree. **Always stage by explicit path.** This is §0.9's rule, restated here because this is the section every session reads.
+> - **Always stage by explicit path — never `git add -A` / `git add .`.** This is §0.9's rule, restated here because this is the section every session reads.
+>   ⚠ **Its stated justification was false and is corrected** (`A18` `S-29`). This bullet read *"`git add -A` would commit 225 MB of untracked Python — `submodules/` is untracked **and not gitignored**"*. `submodules/` **is** gitignored, by a purpose-written rule: `git check-ignore -v submodules/` → `.gitignore:113:submodules/`. And the 225 MB figure belongs to `src-tauri/resources/sidecars/`, not to `submodules/`, which is **795 MB** (`S-22b`). So the sentence named the wrong hazard, on the wrong path, at the wrong size.
+>   **The rule survives its justification, and deserves a true one:** a blind stage sweeps in build outputs, scratch files, `.env`, and anything an ignore rule has not anticipated — and this repository has already had one ignore rule silently exclude a file CI depended on (`scripts/`, `ADR-LOG-RESTRUCT-0035`). ***A rule whose stated reason is false is the fastest kind to get ignored***, which is why this is corrected rather than quietly dropped.
 > - **Deleting `submodules/` without `.git/modules/submodules/`** leaves both object stores in the repository — the sidecar surviving by address rather than by content (§1.1a, P8-C).
 > *This list is appended to as more are discovered. Removing an entry requires proof it is fixed.*
 
@@ -510,11 +541,28 @@ this is the same widening, done deliberately by me rather than by `core.autocrlf
 
 | Surface | Path | Size | State |
 |---|---|---|---|
-| Tauri backend | `src-tauri/src/` | 53,387 LOC, 32 modules | 256 Tauri commands, all registered |
-| Frontend | `src/` | 39,474 LOC | 9 tabs, 20 component dirs, 28 stores |
-| CLI | `src-cli/src/` | 3,508 LOC | `airsctl`; agent commands are 100% sidecar HTTP |
+| Tauri backend | `src-tauri/src/` | **20,534 LOC, 84 files** | **258** Tauri commands, all registered |
+| **Core** *(new — `P1-05`)* | `autodev-core/src/` | **63,382 LOC, 219 files** | The engine, extracted from the desktop shell. **Had no row here at all** until 2026-09-03 |
+| Frontend | `src/` | **40,088 LOC** (`.ts`/`.tsx`) | 9 tabs, **25** component dirs, **29** stores |
+| CLI | `src-cli/src/` | **4,019 LOC** | `airsctl`; agent commands are 100% sidecar HTTP *(retired in `P8`)* |
+
+⚠ **Every row above was measured on 2026-08-31 and none was re-measured until
+2026-09-03** (`A18` `S-5`, `S-6`). The backend row was the worst: `53,387 LOC`
+described the tree **before `P1-05` moved 182 files into `autodev-core`**, so
+the plan's own "what exists" section described a layout the plan itself had
+deleted — and the new crate, the largest single component in the programme, had
+**no row**, though the `Shared` row beneath it *was* updated for `P1-09`. The
+command count additionally disagreed with `§4`'s (`256` here, `255` there,
+**258** in the tree), which is `L-19` — *two lists that must agree will
+disagree* — inside the document that records `L-19`.
+
+Measured 2026-09-03, commands reproducible as:
+
+```
+grep -rc '#\[tauri::command\]' --include=*.rs src-tauri/src/ | awk -F: '{s+=$2} END {print s}'
+```
 | Shared | `src-shared/src/` | 1,073 LOC | ~~Duplicates **four** tables by hand~~ → **resolved in `P1-09`**: `tasks`, `workers` and `plans` deleted (22/19/23 write statements); `airsctl` uses `autodev_core::db`. Only the read-only `analytics.rs` remains, which holds no `CREATE`/`INSERT`/`UPDATE`/`DELETE` and so cannot drift a schema |
-| Sidecar | `submodules/core-orchestrator` | 225 MB bundled | **DELETE (P8)** |
+| Sidecar | `submodules/core-orchestrator` | 225 MB **on disk** — ⚠ *no longer bundled: `tauri.conf.json`'s `"resources"` is `[]`, so it ships in no installer today. It is still 225 MB in the working tree and still `P8-17`'s to delete (`A18` `S-31`)* | **DELETE (P8)** |
 | Memory MCP | `submodules/memory-mcp-server` | — | **DELETE (P8)** |
 
 ## 1.1a The submodule registration is broken — verified state
@@ -549,24 +597,33 @@ Razi flagged this, and it is verified rather than assumed (§0.0). **The two sub
 ## 1.2 What does NOT exist — `GAP`
 
 | # | Gap | Evidence |
+
+⚠ **Eight of these rows described gaps that later phases had already closed, and
+carried no annotation at all** until 2026-09-03 — `GAP-03`, `04`, `05`, `06`,
+`07`, `12`, `14`, `17` — while four neighbours in the same table (`02`, `11`,
+`15`, `16`) *did* carry closure notes, so the table looked maintained. `GAP-04`
+was the sharpest: its evidence read *"zero hits repo-wide"* for embeddings, and
+`autodev-core/src/memory/embed.rs` has existed since `P3-F`. Found by the `A18`
+staleness sweep (`S-10`). **A gap register that does not record closure is a
+list of things to build twice.**
 |---|---|---|
-| GAP-01 | Any MCP **client** — `rmcp` is compiled server-features-only and cannot dial out | `G12` |
+| GAP-01 | Any MCP **client**. ⚠ *The evidence read "`rmcp` is compiled server-features-only and cannot dial out" until 2026-09-03; `rmcp` is **not a dependency at all** — `P0-16` dropped it with `axum` (`A18` `S-11`). The gap stands: nothing implements a client. The reason changed* | `G12` |
 | GAP-02 | ~~Any **xAI/Grok** provider~~ | `G2b P-28` — **CLOSED-AS-WONTFIX 2026-09-01** (razi-ruled): the provider set is Anthropic, OpenAI, Google. A gap only matters against an intended capability, and xAI is no longer one. |
-| GAP-03 | Any **prompt caching** on any provider | `G2a T1` |
-| GAP-04 | Any **embeddings or vector search** — zero hits repo-wide | `G1 §C.4 P3` |
-| GAP-05 | Any **frontend test framework** — no vitest, jest, playwright, no `test` script | `G0 §2` |
-| GAP-06 | Any **ESLint** — `npm run lint` is `tsc --noEmit` | `G0 §2` |
-| GAP-07 | Any **macOS CI job** | `G0 §2` |
+| ~~GAP-03~~ | ~~Any **prompt caching** on any provider~~ → ✅ **CLOSED in `P2`.** `cache/mod.rs`, `cache/monitor.rs` and all three adapters carry `cache_creation_input_tokens` / `cache_read_input_tokens` / `cache_control`; `§0.16 L-16` analyses an observed cache **hit**, not a wire | `G2a T1` |
+| ~~GAP-04~~ | ~~Any **embeddings or vector search** — zero hits repo-wide~~ ✅ **CLOSED in `P3-F`.** `autodev-core/src/memory/embed.rs` exists; `Cargo.toml` carries `sqlite-vec 0.1.9` and the pinned `fastembed =6.0.2`; `P3-32` is `[x]`. ⚠ The *"zero hits repo-wide"* evidence was **false from the moment `embed.rs` landed** | `G1 §C.4 P3` |
+| ~~GAP-05~~ | ~~Any **frontend test framework** — no vitest, jest, playwright, no `test` script~~ → ✅ **CLOSED by `P0-19`.** `"test": "vitest run"`, `vitest ^4.1.11`; 118 tests today | `G0 §2` |
+| ~~GAP-06~~ | ~~Any **ESLint** — `npm run lint` is `tsc --noEmit`~~ → ✅ **CLOSED by `P0-18`.** `"lint": "eslint ."`, `eslint ^9.39.5`, `eslint.config.js` at the root | `G0 §2` |
+| ~~GAP-07~~ | ~~Any **macOS CI job**~~ → ✅ **CLOSED by `P0-20`.** `ci.yml:217` `os: macos-14`. ⚠ The **build** runs there; the e2e suite still cannot — `tauri-driver` has no WKWebView backend (`P0-21`, `R-4`) | `G0 §2` |
 | GAP-08 | Any **Rust-native compile/verify step** — all validators shell out | `G3d` |
 | GAP-09 | Any **run/launch/handoff** for produced artifacts | `G3d F-DEL` |
 | GAP-10 | Any **dynamic tool registration** — `ToolRegistry` is frozen after construction | `G12` |
 | GAP-11 | ~~Any **backup path** before destructive operations~~ → **CLOSED in `P1-19`**: `db/backup.rs` (`VACUUM INTO`, integrity-checked, refuses to overwrite), wired to `run_ladder`, `TasksDb::clear_all` and `delete_graph`. A failed backup **stops** the operation, and the refusal branch is tested | `G1 §E.3` |
-| GAP-12 | Any **retry policy** — `ErrorClass::Retryable` has no reader | `R3` |
+| ~~GAP-12~~ | ~~Any **retry policy** — `ErrorClass::Retryable` has no reader~~ → ✅ **CLOSED in `P3-09`.** `provider/retry.rs:1` opens by naming this gap; `retry.rs:157-169` exercise `decide(ErrorClass::Retryable, n)`; `usage.rs:230` matches on it | `R3` |
 | GAP-13 | Any **cadence** — `interval`/`backoff`/`max_retries` appear zero times in 13 documents | `R3` |
-| GAP-14 | Any **spend ceiling or kill switch** | `R3` |
+| ~~GAP-14~~ | ~~Any **spend ceiling or kill switch**~~ → ✅ **CLOSED in `P2`.** `budget/daily.rs`, `budget/mod.rs`, `set_task_budget_tool.rs`; `§0.16 L-21` records the ceiling being built and then **wired**, which was a separate task and a separate defect | `R3` |
 | GAP-15 | ~~Working **undo** — `db/checkpoints.rs` is not compiled into the binary~~ → **RETRACTED (`ADR-LOG-RESTRUCT-0010`).** Undo **ships**: `git/checkpoint.rs`, five registered commands, called from `gitStore.ts`, snapshot before every agent write. `db/checkpoints.rs` was deleted, not declared (`ADR-0012`). The real gap is `M-43` — a failed checkpoint is logged at `debug!` and the write proceeds anyway | `G3d F-44` (superseded) |
 | GAP-16 | ~~Any **redaction** — the module grounding ruled PORT was dropped~~ → **CLOSED in `P1-20`/`P1-21`**: both Python redactors ported (`SENSITIVE_KEYS` is **22**, not 20), wired at the tool-result funnel, all four memory writes, the log appender and analytics. ⚠ The first wiring was to a method with no production caller — see `_verify/P1-AUDIT-TRIAGE.md` `A-01` | `R3`, M-40 |
-| GAP-17 | Any **fault isolation** — `panic = "abort"` + in-process agents | `R1 B-04` |
+| ~~GAP-17~~ | ~~Any **fault isolation** — `panic = "abort"` + in-process agents~~ → ✅ **CLOSED in `P3-01`.** Workspace-root `Cargo.toml:37` is `panic = "unwind"`. ⚠ And see `§2` / `A18` `S-9`: `abort` sat in a **non-root workspace member**, where Cargo ignores it — so the risk was real and this row's description of the shipped build never was | `R1 B-04` |
 
 ## 1.3 Consume-not-build ledger — deliberate non-goals
 
@@ -606,8 +663,15 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 // Git, graph, watchers
 git2 = "0.19"; tree-sitter = "0.22"; petgraph = "0.6"; ignore; notify = "6"
 
-// Release profile — CHANGES IN P3 (M-41)
-[profile.release] panic = "abort"    // Cargo.toml:126-131  → becomes "unwind"
+// Release profile — ⚠ CORRECTED 2026-09-03 (`A18` `S-9`). This block read
+// `[profile.release] panic = "abort"  // Cargo.toml:126-131 → becomes "unwind"`,
+// which was wrong in three ways at once: the citation no longer resolves to a
+// profile block, the value is now "unwind", and — the part that matters —
+// `panic = "abort"` was **NEVER IN EFFECT**. P3-01 found the block living in a
+// non-root workspace member, where Cargo ignores `[profile.*]` and warns on
+// every invocation. The pre-GO review's finding #1 (one panic kills every
+// session) was real as a risk and false as a description of the shipped build.
+[profile.release] panic = "unwind"   // workspace-root Cargo.toml:36-37
 ```
 
 **Tauri 2.11** with **two** registered plugins (`shell`, `dialog`). ⚠ **Corrected:** the `dialog` and `fs` blocks were *not* simply dead config. Registering `tauri-plugin-dialog` in P0-E made Tauri parse the `"dialog": {}` block, whose config type is a unit — `PluginInitialization("dialog", "invalid type: map, expected unit")` — and **the application stopped starting on every platform**. The key was removed; the plugin stayed. Only the e2e job could see it, because every build smoke stops at `cargo build` (`L-C10`).
@@ -650,9 +714,14 @@ src-tauri/src/                            ← the desktop shell, host-bound only
   commands/                         [existing]  255 #[tauri::command]
   updater/ · mcp/ · skills/watcher.rs · main.rs · lib.rs
   ci_gate.rs · reachability_gate.rs  [P0]
-  sidecar/                          [P8 DELETE — 3,161 LOC]
-  mcp_server/{server,tool_adapter,port_status}.rs [P0 DELETE — 705 LOC]
-  mcp_server/health_monitor.rs      [P0 MOVE out of the sidecar-named tree]
+  sidecar/                          [P8 DELETE — **3,300 LOC** measured 2026-09-03.
+                                       `A18` `S-8`: read 3,161 here and 3,867 in
+                                       §5.3; neither matched the tree]
+  mcp/                              [P0 DONE — `mcp_server/` deleted (705 LOC),
+                                       health_monitor moved here. `A18` `S-7`:
+                                       this tree listed `mcp_server/` as PRESENT
+                                       and awaiting P0 until 2026-09-03, two days
+                                       after `P0-13`/`P0-14` deleted it]
 src/                                [P6 anchor, P7 experience]
 ```
 
@@ -708,7 +777,7 @@ goes to ask *what is left*.
 
 | # | Phase | Why here | Tasks |
 |---|---|---|---|
-| ✅ | **P0** Stop the bleeding | done — 26 of 27; `P0-21`'s e2e harness is blocked on the environment, not on throughput | 27 |
+| ✅ | **P0** Stop the bleeding | done — 33 of 34; `P0-21`'s e2e harness is blocked on the environment, not on throughput. ⚠ Was **27** here until 2026-09-03: seven completed tasks (`P0-13b`, `P0-28`…`P0-33`) had no line in `§6` and so were invisible to every count that walks it (`A18` `S-39`) | 34 |
 | ✅ | **P1** Structural | done | 22 |
 | ✅ | **P2** Providers | Everything downstream makes model calls. **Gemini primary** (`gemini-3.5-flash` + 3.5 flagship); OpenAI and Anthropic follow in the same phase | 74 |
 | ✅ | **P3 A–E** Runtime | The loop that will execute every design tool: fault isolation, one tool path, bounded context. Conversion holds a full layer bitmap set for 25–35 s, so `panic = "abort"` must die **before** the design phases, not after | 39 |
@@ -728,9 +797,10 @@ goes to ask *what is left*.
 | 11 | **P4** Fleet | *"including the fleet."* Last in R1 because a fleet multiplies whatever the tools already do; multiplying unproven tools only multiplies the debugging | 45 |
 | 12 | **R1 close** | Integration, post-phase audit (`§0.2a`), contract v1. ≈38 h from now | — |
 
-**Open R1 tasks: 229.** Completed R1 tasks: 190 (`P0`–`P3-F` and `PD0`, plus
-4 of `PD1`'s and 1 of `P4`'s taken early). Hours are `§5.6`'s measured model,
-not estimates.
+**Open R1 tasks: 229.** Completed R1 tasks: **197** (`P0`–`P3-F` and `PD0`, plus
+4 of `PD1`'s and 1 of `P4`'s taken early). Programme total **513**, of which
+**312 open** — the open figure is unchanged by `S-39`, since all seven recovered
+`P0` tasks are complete. Hours are `§5.6`'s measured model, not estimates.
 
 ## §5.2 · The R2 ordering
 
@@ -750,7 +820,9 @@ correct — recorded so a reader knows they were checked rather than skipped.*
 **When:** after **P8**, before **PD1**.
 
 **Why not earlier:** Razi's ruling — the AutoDesign team must not inherit a backend
-carrying 3,867 lines of dead sidecar, 17 dead commands and a 225 MB bundle resource.
+carrying **3,300** lines of dead sidecar, 17 dead commands and a 225 MB bundle
+resource. *(3,300 measured 2026-09-03 — `wc -l src-tauri/src/sidecar/*.rs`. This
+sentence said 3,867 and `§4` said 3,161; `A18` `S-8`.)*
 
 **Why not later:** everything after P8 is capability the contract already describes.
 Making them wait for PD1–PD6 would idle them for the largest stretch of the programme.
@@ -1032,6 +1104,34 @@ is just the old error with a new number:
 - [ ] ~~**P0-26** Remove the dead `dialog`/`fs` plugin blocks from `tauri.conf.json`.~~ → **REVERSED, superseded by `P0-31`.**
       The blocks were not dead config — they were the only evidence of a live runtime break. `Logs.tsx` calls `save()` and `writeTextFile()` at four sites; the npm packages are declared so it typechecks and CI is green, but Rust had neither plugin, registered only `tauri_plugin_shell`, and granted no `dialog:`/`fs:` capability. The Logs export failed on every click, into `console.error`. Deleting the config would have erased the evidence and left the feature broken.
 - [x] **P0-27** Delete `src-tauri/dump.rdb` (175 KB committed Redis snapshot), the Memurai starter, and both Redis setup docs. → `CODE-PRESENT`
+
+### P0-F · Added during P0's own pre-build refutation
+
+> 🔴 **These seven lines are being written on 2026-09-03, two days after the work
+> they describe was completed, committed and closed.** They were raised by `P0`'s
+> `§0.2m` refutation, built, and recorded **only** in
+> `_verify/P0-CORRECTIONS.md` — never merged back into this document. `§16`'s
+> `Rev 1.4` row has asserted their existence since 2026-09-01 (*"plus `P0-13b`
+> and six added tasks (`P0-28`…`P0-33`)"*), `P0-26` above points at `P0-31` as
+> its supersession, and **none of the seven had a task line here**. Three of them
+> (`P0-29`, `P0-30`, `P0-32`) appeared nowhere in this file at all.
+>
+> Found by the `A18` staleness sweep (`S-39`). The consequence is not
+> bookkeeping: **every count, audit or regeneration that walks `§6`'s checkboxes
+> was walking an incomplete set**, which is why `P0` read as 27 tasks in `§5.1`
+> when 34 were done. `§6`'s own preamble promised regeneration at `P0` closeout
+> and it never happened — `L-C1`, *a derived artifact was not regenerated after
+> its source changed*, in the register the artifact is derived **from**.
+>
+> Task text is reproduced from `_verify/P0-CORRECTIONS.md §B` verbatim.
+
+- [x] **P0-13b** 🔴 *razi-ruled, `ADR-LOG-RESTRUCT-0001`.* **Build the native in-process subagent runner now.** Subagents never ran on the Rust engine: `subagent/bridge.rs` drove create → invoke(SSE) → delete against the Python sidecar, and `mcp_server/` was the inbound surface those agents called back through — while the shipped recipes mandate subagents (`defaults.rs:1826,1841`). `bridge.rs` is replaced by `subagent/native_runner.rs` running a nested `AgentEngine`, with `depth` and `agent_role` becoming Rust-threaded fields rather than the **model-self-reported** `__depth` that `bridge.rs:78` admitted the guard could not see. → `UNIT-PROVEN`
+- [x] **P0-28** `download_checksum` / `download_signature` never check HTTP status (`download.rs:155,168`) — a 404 body becomes the "checksum". Status-check both. → `UNIT-PROVEN`
+- [x] **P0-29** `platform_key_from_filename` does not match what CI actually builds: `build-msi.ps1:221` emits `autodev_<v>_x64_en-US.exe` while the matcher wants `_x64.msi` / `_x64-setup.exe`, and Linux emits `_x86_64.deb` against a matcher wanting `_amd64.deb`. **Windows and Linux resolve to no asset at all**, so no end-to-end update smoke is possible until this is fixed. → `SMOKE-PROVEN`
+- [x] **P0-30** `ci.yml:72` runs `cargo test --lib`, so anything in `src-tauri/tests/` **never runs while reporting green** — every later phase's integration gate would be invisible. Changed to `cargo test --all-targets`. → `GATE-PROVEN`
+- [x] **P0-31** Register `tauri-plugin-dialog` and `tauri-plugin-fs` and grant their capabilities, so the Logs export in `Logs.tsx` actually works. **Supersedes the deletion in `P0-26`**, which would have erased the only evidence of a live runtime break. → `SMOKE-PROVEN`
+- [x] **P0-32** Fix the `sidecar/mod.rs:417-423` Redis contradiction alongside `P0-27`. → `CODE-PRESENT`
+- [x] **P0-33** `check.rs:73-77` builds a *list* endpoint for beta/nightly whose `tag_name` is null, so those channels **can never return an update**. → `UNIT-PROVEN`
 
 ### Smoke — S0
 - [ ] **S0-01** App launches on Windows, Linux and macOS from a clean build.
@@ -1557,6 +1657,42 @@ carried into `PD1-A` with their evidence rather than re-proven.
 
 ---
 
+> 🔴 **This group was physically filed inside `§10.5.6` (PD6 · Brand guideline)**
+> until 2026-09-03, between `SD6`'s smoke block and `PD6-B`. Thirteen fleet
+> tasks sat under the brand-guideline chapter, so any reader or tool that
+> derives ownership from headings attributed them to `PD6` — and `PD6`'s own
+> `PD6-10` was separated from its siblings by them. Found by the `A18`
+> staleness sweep (`S-19`). Moved here, to the end of `§10`, where every other
+> `P4-*` group lives. **No task text, id or status changed** — this is a move,
+> and the ids are stable per `§0`'s never-renumber rule.
+
+### P4-F · Assignment actually uses affinity *(from the pre-P8 fleet audit, `_verify/A15`)*
+
+> 🔴 **Razi's standing complaint, with a mechanism.** *"Work posted by the
+> supervisor did not get picked up for a long time, and was not assigned using
+> the affinity."* Both halves are real, and the affinity half is worse than
+> "the algorithm needs fixing": **no assignment path consults it at all.**
+> `assign_task` and `assign_tasks_batch` take `worker_slug` from the model's
+> tool arguments and call only `record_assignment` — they *write* history and
+> never *read* it. Repairing the scorer alone would change nothing.
+
+- [ ] **P4-32** 🔴 **Dispatch consults affinity deterministically.** Rust picks the worker when the caller supplies no slug, or the Supervisor must pass the scorer's answer together with an explicit override reason. ⚠ The spec's own determinism table (`04 §7`) classifies routing as `MATH`; the shipped mechanism is a prompt telling an LLM to prefer a hard-coded keyword table and to *skip* the scorer (`defaults.rs:269-271`). Gate: with N recorded outcomes favouring worker X for a task type, a new task of that type is assigned to X **without the model choosing**. *(Blocked on `P4-07` and `P4-25`.)* → `GATE-PROVEN`
+- [ ] **P4-33** **The static pattern layer is unreachable, and no gate covers it.** `select_worker` requires `static_conf > 0.85` (`scorer.rs:135`); the highest confidence any pattern declares is exactly `0.85` (`patterns.rs:27,46`). `0.85 > 0.85` is false, always — so the `method: "static"` the tool advertises in its own output can never be produced. Fix the comparison or the confidences, and unit-prove that at least one shipped pattern can now produce it. Covers `F-ROU-03`, which is named in spec `04 §5.1` and appears in no task and no gate. → `UNIT-PROVEN`
+- [ ] **P4-34** 🔴 **One claim path, and the recipes use it.** `P4-07` and `P4-08` harden `claim_task_with_pid`; the shipped recipes call `update_task_status(id,'in_progress',slug)` instead (`defaults.rs:431` and its four twins), which performs **no ownership check and no load guard**. So task theft is wide open on the only path the fleet actually takes, and no PID is ever recorded — degrading orphan recovery to the 4-hour TTL. The already-fixed atomic `claim_next_ready` is reached only by `airsctl` and tests. Gate: driving the **shipped recipe text**, worker B cannot move worker A's task to `in_progress`. ⚠ **This is the task that makes `P4-07`/`P4-08` mean anything** — until it lands, both harden a function the fleet never calls. → `GATE-PROVEN`
+- [ ] **P4-35** **The tick gate stops swallowing the work the kick was sent for.** `runner.rs:206-215` short-circuits the whole tick when nothing is `Assigned | InProgress` — *before the engine is built*. So a **`rejected` task never wakes its worker** (the dead Mode 2 branch counted `rejected`; the live one does not), and an **idle worker never reads its ACP inbox**, because `list_worker_messages` is never reached. Widen the gate or handle both before the short-circuit. → `SMOKE-PROVEN`
+- [ ] **P4-36** **A worker liveness watchdog.** A worker left in `working` is skipped by both the cron gate and `kick_worker`, and nothing rescues it: no tick deadline, and `WorkersDb::heartbeat` has **zero callers in the app**, so `last_seen` is never refreshed and no watchdog reads it. Write it on tick start and end; reset a worker past a stated ceiling with a system event and reconcile its task. Gate: kill a tick mid-flight, the worker ticks again without an app restart. → `SMOKE-PROVEN`
+- [ ] **P4-37** **`kick_inflight` is released on panic.** The synchronous early returns are RAII-guarded; the spawned task removes its slug on its last line, so a panic inside `run_recipe` holds the slot for the process lifetime and every later kick logs *"another kick is already in flight"*. Push dispatch for that worker is then dead while the roster still shows it scheduled. → `UNIT-PROVEN`
+- [ ] **P4-38** **Batch assignment honours worker load, or the recipe stops claiming that it does.** The Supervisor's prompt asserts *"the batch tool will refuse and report per-entry failures"* (`defaults.rs:281-283`); `assign_tasks_batch` checks the task's status and the slug and **never looks at the target's load**. A comment asserting the opposite of the code. → `UNIT-PROVEN`
+- [ ] **P4-39** **`needs_info` is not a terminal state.** Both the blocked-task path and the budget breaker park tasks there, and the Supervisor's self-heal list has no branch for it — so a phased task sits there for ever. Pairs with `P4-28`: `unblock_ready_tasks` has exactly one caller, the UI, so nothing unblocks in autonomous operation. → `SMOKE-PROVEN`
+- [ ] **P4-40** **Clear `claimed_by_pid` and `claim_host` on every non-claim status write.** `update_status_with_reason` leaves them untouched for ever, so a task carrying a PID from a previous app run is an orphan candidate — and `check_task` can release a freshly-assigned task back to `ready`, wiping `assigned_worker`. A task can bounce ready → assigned → ready across restarts. → `UNIT-PROVEN`
+- [ ] **P4-41** **Epics are reachable from the fleet's real surface.** The model, the tools, the Tauri commands and an Epics tab all exist — and **no recipe mentions `create_epic` or `create_phased_task`**, the Supervisor's tool list omits them and tells it to decompose with flat `create_task`, and no frontend caller exists. The panel is permanently empty because nothing ever creates the row. ⚠ **Extends `P4-27`, whose stated reason is now stale** — it says the tool is "PA-only and reaches tools only via MCP"; MCP is gone and the tool *is* registered on the path the Supervisor uses, so fixing registration alone would change nothing. → `SMOKE-PROVEN`
+- [ ] **P4-42** **The QC recipes read their inbox, or stop being addressable.** `qc_agent` and `qc_dispatcher` contain no `list_worker_messages`, so mail to them is never read and every broadcast leaves permanently unread rows; `kick("qc-dispatcher")` warns *worker not found*, since no such row exists. And `list_stale_worker_messages` has **zero callers**, so delivery is at-most-once against a recipe that promises "lossless". → `UNIT-PROVEN`
+- [ ] **P4-43** **An empty board stops costing money.** `supervisor` invokes the LLM every 60 s and `qc-agent` every 30 s against an empty board, replying "Board clean — idle". The `worker-*` short-circuit has no counterpart for either, and the QC queue's own skip lives inside the dead Mode 2 branch. → `BENCH-PROVEN`
+- [ ] **P4-44** **Procedural memory is wired for workers** *(razi-ruled, `D5` — `P8-40`/`P8-41` build the seam, this turns it on)*. A worker that has run this build before is the beneficiary. Scoped to the tools the model actually invoked, inside the existing turn budget, and off by default until the equivalence gate in `P8-41` is green. → `SMOKE-PROVEN`
+
+
+
+
 # §10.5 · Rollout 1 · The design phases (PD0–PD6)
 
 **Added 2026-09-01** on Razi's third-pass direction. These phases are what makes AutoDev
@@ -1645,7 +1781,7 @@ operation set, which is decided.
 - [x] **PD0-06** 🔴 **RE-POINTED.** ~~A **live stub** answers every operation over a transport~~ → **an executable contract**: a reference implementation answering all four operations, plus a **conformance suite both teams can run** against any implementation of the contract. The intent is unchanged and is the right one — *"a contract nobody has exercised is a document"* — but the original wording assumed a listening surface that does not exist and that Razi has ruled against building. ⚠ **`UNIT-PROVEN` at closeout — the work audit was right — and `SMOKE-PROVEN` from `2026-09-03`, when the thing the class describes was actually built.**
 
   The order matters and is recorded rather than smoothed over. At closeout the class on this line said `SMOKE-PROVEN` and the register defines that as *"the end-to-end smoke driving the real app"*, while `runConformance` had four call sites and every one was inside vitest. `W-3` graded that `UNIT-PROVEN`, correctly. What changed is not the grading but the evidence: `W-2`'s remediation added `scripts/smoke-design-sidecar.mjs`, which **spawns** the reference implementation as a child process across 14 cases — four operations, four holds, five malformed requests and a killed child — with nothing running in-process. That is a smoke driving the real binary, so the class is now earned rather than claimed. **A class is upgraded when the proof lands, never before it.** The register defines `SMOKE-PROVEN` as *"the end-to-end smoke driving the real app"*, and `runConformance` has four call sites, all inside vitest. The suite is not `reference.ts`'s own unit test, which is what the original note leaned on — but it is still started by one, and that is a weaker thing than the class claims. The seam itself **is** genuinely proven across a process boundary, by `TGD0-06` and `SD0-01`. `L-C12` is the failure mode here and it has eight instances in this register: a contract, a taxonomy and a stub, all beautifully typed, that nothing produces or consumes. → `SMOKE-PROVEN` *(`TGD0-08`, gate-proven — **not** falsified. A reference implementation answering all four operations, and a conformance suite that **imports no test framework** so the AutoDesign team can run it in their own harness against their own stand-in. ⚠ Its no-fire half is the half that matters: it proves an implementation *cannot* claim an unmeasured fidelity score, emit an unevidenced `partial`, return output on a `held`, parse an unknown schema version, or silently ignore an undeclared field)*
-- [x] **PD0-07** 🔴 **The contract states who executes.** *(razi-ruled 2026-09-03, `D3`.)* Across the whole of `PD1`–`PD6` the words *personal assistant*, *PA*, *fleet*, *worker* and *supervisor* appear **zero times** — the phases define capabilities and never say who drives them, which left AutoDesign to infer it. **The ruling: the PA executes design work in Rollout 1**, refined until it is ready, and **the fleet becomes an additional consumer in Rollout 2** — running it through the fleet now would be, in Razi's words, *"pretty confusing and hard to debug"*. So: `adapt` stays deterministic (`PD4-02`), the **PA** chooses parameters and adjudicates a `degraded` result, and nothing in Rollout 1 depends on a working fleet. Write it into the contract so the consumer does not have to guess. → `DOC-GATE` *(⚠ **This note claimed §1 and §3 and the document said none of it — `W-1`, the finding that should have blocked the phase's closure.** A `grep -ci` for *personal assistant*, *PA*, *fleet* and *supervisor* across the contract document AND the code returned **0**: a checkbox flipped with no deliverable of any kind, and a completion note describing work that was never done. It is now `§3.5 · Who executes, on our side`, written 2026-09-03 as part of the audit remediation. What it says, and now actually says: the PA executes design work in Rollout 1, the fleet becomes an additional consumer in Rollout 2, and approval stays AutoDesign's to enforce before they spawn us. ⚠ The document says out loud that our single `change` erases an approval gradient their manifest marks load-bearing — we do not re-implement it and we do not pretend the difference is ours to erase)*
+- [x] **PD0-07** 🔴 **The contract states who executes.** *(razi-ruled 2026-09-03, `D3`.)* Across the whole of `PD1`–`PD6` the words *personal assistant*, *PA*, *fleet*, *worker* and *supervisor* appear **zero times** — the phases define capabilities and never say who drives them, which left AutoDesign to infer it. **The ruling: the PA executes design work in Rollout 1**, refined until it is ready, and **the fleet becomes an additional consumer in Rollout 2** — running it through the fleet now would be, in Razi's words, *"pretty confusing and hard to debug"*. So: `adapt` stays deterministic (`PD4-02`), the **PA** chooses parameters and adjudicates a `partial` result, and nothing in Rollout 1 depends on a working fleet. ⚠ This note said `degraded` when written on 2026-09-03 — a paraphrase of Razi's ruling that reached for the retired vocabulary; the outcome triple `PD0-04` froze is `complete` · `partial` · `held` (`A18` `S-20`). Write it into the contract so the consumer does not have to guess. → `DOC-GATE` *(⚠ **This note claimed §1 and §3 and the document said none of it — `W-1`, the finding that should have blocked the phase's closure.** A `grep -ci` for *personal assistant*, *PA*, *fleet* and *supervisor* across the contract document AND the code returned **0**: a checkbox flipped with no deliverable of any kind, and a completion note describing work that was never done. It is now `§3.5 · Who executes, on our side`, written 2026-09-03 as part of the audit remediation. What it says, and now actually says: the PA executes design work in Rollout 1, the fleet becomes an additional consumer in Rollout 2, and approval stays AutoDesign's to enforce before they spawn us. ⚠ The document says out loud that our single `change` erases an approval gradient their manifest marks load-bearing — we do not re-implement it and we do not pretend the difference is ours to erase)*
 
 - [x] **PD0-08** 🔴 **The sidecar invocation model is defined** *(razi-ruled 2026-09-03)*. AutoDesign spawns AutoDev as a child process, the way it already spawns its own sidecar. So the contract states: **how it is invoked** (executable, argv shape), **how a request and its response cross** (stdio, one JSON object per line), **how progress and terminal status are signalled**, **how a job is cancelled** (the parent kills the child, so every operation must be safely interruptible), and **what the exit code means** independently of the payload. ⚠ No socket, no port, no listener — that is the point of the ruling. → `UNIT-PROVEN` *(`TGD0-06`, falsified. `npm run build:sidecar` emits a Node entry point; AutoDesign spawns it, writes one JSON request to stdin, reads NDJSON events off stdout. Exit codes are enumerated and mean something independent of the payload — ⚠ **`0` does not mean "it converted"**, it means "we answered", and a `held` refusal exits `0` because the invocation worked and the answer was no. Cancellation is the parent killing the child, and on a signal we exit **without** a terminal event, because a `settled` for unfinished work is worse than silence. ⚠ Its tsconfig omits the DOM lib deliberately: the existing PSD reader is browser-bound, so this build **fails** rather than emitting a file that dies at runtime)*
 - [x] **PD0-09** 🔴 **One public-facing document for the AutoDesign team** *(razi-ruled)*, in `docs/restructurization/public-facing/`: the four operations, the payload, the error taxonomy, the asset rules, the invocation model, and a worked example. ⚠ **One example, for `adapt`** — the task text said one per operation and the phase shipped one. `export` is the gap that matters, since it is the only operation whose settled event carries `artifacts` and a null fidelity. Owed by `PD1`, which is the first phase to produce a real one. Written for a reader on the other side of the seam who cannot ask us questions — they own their half and are three phases from calling us, so the document is the whole of the interface until then. Governed by `§0.17`, so it is refreshed at every later design-phase closeout rather than written once. → `DOC-GATE` *(`TGD0-07`, falsified — and the falsification found the gate blind first. `AUTODESIGN-CAPABILITY-CONTRACT.md`: the four operations, the mapping table to their vocabulary, the reference payload, the outcome triple, fidelity, assets, a worked example, and **§9 · what is not settled yet**. ⚠ That last section names the things we will not pretend about: real conversion needs a canvas backend we have not taken on, and the "25–35 s" figure is a real measurement **of the old browser converter** — the IR path's cost has never been measured, so we do not quote it as our latency)*
@@ -1771,7 +1907,7 @@ character rendering as a glyph box and two fonts silently replaced.
 - [ ] **PD2-11** **The refinement loop terminates** — bounded iterations, and it stops when a round fails to improve. An unbounded "keep fixing" loop on a 25 s conversion is an unbounded cost. → `GATE-PROVEN`
 - [ ] **PD2-12** A **regression corpus** of real designs — the `gamead` family (1080×1080, 1080×1920, 1920×1080), plus a text-heavy, an effect-heavy and a vector-heavy case. → `DOC-GATE`
 - [ ] **PD2-13** **The gate fails on a planted regression.** Falsification is the acceptance criterion for this phase, not an extra. → `GATE-PROVEN`
-- [ ] **PD2-14** **Fidelity travels with the result.** Every ingest and every export returns its score; a caller can refuse a degraded conversion. Measuring fidelity and then not returning it repeats `L-C12` — built, proven, wired to nothing. → `GATE-PROVEN`
+- [ ] **PD2-14** **Fidelity travels with the result.** Every ingest and every export returns its score; a caller can refuse a conversion whose fidelity is too low. ⚠ Said *"a degraded conversion"* until 2026-09-03: `degraded` is **not** an outcome this contract can emit — `PD0-04` froze `complete` · `partial` · `held` and retired the `refused`/`failed`/`degraded` triple, because AutoDesign's `lifecycle.ts:80-85` rejects any result carrying both output and an error (`A18` `S-20`). Measuring fidelity and then not returning it repeats `L-C12` — built, proven, wired to nothing. → `GATE-PROVEN`
 
 **Smoke — SD2**
 - [ ] **SD2-01** Every design in the corpus converts and scores above its declared thresholds.
@@ -1960,31 +2096,6 @@ compose rather than duplicating each other.
 - [ ] **SD6-02** A guide with a rule the design cannot satisfy reports it rather than approximating.
 
 ---
-
-### P4-F · Assignment actually uses affinity *(from the pre-P8 fleet audit, `_verify/A15`)*
-
-> 🔴 **Razi's standing complaint, with a mechanism.** *"Work posted by the
-> supervisor did not get picked up for a long time, and was not assigned using
-> the affinity."* Both halves are real, and the affinity half is worse than
-> "the algorithm needs fixing": **no assignment path consults it at all.**
-> `assign_task` and `assign_tasks_batch` take `worker_slug` from the model's
-> tool arguments and call only `record_assignment` — they *write* history and
-> never *read* it. Repairing the scorer alone would change nothing.
-
-- [ ] **P4-32** 🔴 **Dispatch consults affinity deterministically.** Rust picks the worker when the caller supplies no slug, or the Supervisor must pass the scorer's answer together with an explicit override reason. ⚠ The spec's own determinism table (`04 §7`) classifies routing as `MATH`; the shipped mechanism is a prompt telling an LLM to prefer a hard-coded keyword table and to *skip* the scorer (`defaults.rs:269-271`). Gate: with N recorded outcomes favouring worker X for a task type, a new task of that type is assigned to X **without the model choosing**. *(Blocked on `P4-07` and `P4-25`.)* → `GATE-PROVEN`
-- [ ] **P4-33** **The static pattern layer is unreachable, and no gate covers it.** `select_worker` requires `static_conf > 0.85` (`scorer.rs:135`); the highest confidence any pattern declares is exactly `0.85` (`patterns.rs:27,46`). `0.85 > 0.85` is false, always — so the `method: "static"` the tool advertises in its own output can never be produced. Fix the comparison or the confidences, and unit-prove that at least one shipped pattern can now produce it. Covers `F-ROU-03`, which is named in spec `04 §5.1` and appears in no task and no gate. → `UNIT-PROVEN`
-- [ ] **P4-34** 🔴 **One claim path, and the recipes use it.** `P4-07` and `P4-08` harden `claim_task_with_pid`; the shipped recipes call `update_task_status(id,'in_progress',slug)` instead (`defaults.rs:431` and its four twins), which performs **no ownership check and no load guard**. So task theft is wide open on the only path the fleet actually takes, and no PID is ever recorded — degrading orphan recovery to the 4-hour TTL. The already-fixed atomic `claim_next_ready` is reached only by `airsctl` and tests. Gate: driving the **shipped recipe text**, worker B cannot move worker A's task to `in_progress`. ⚠ **This is the task that makes `P4-07`/`P4-08` mean anything** — until it lands, both harden a function the fleet never calls. → `GATE-PROVEN`
-- [ ] **P4-35** **The tick gate stops swallowing the work the kick was sent for.** `runner.rs:206-215` short-circuits the whole tick when nothing is `Assigned | InProgress` — *before the engine is built*. So a **`rejected` task never wakes its worker** (the dead Mode 2 branch counted `rejected`; the live one does not), and an **idle worker never reads its ACP inbox**, because `list_worker_messages` is never reached. Widen the gate or handle both before the short-circuit. → `SMOKE-PROVEN`
-- [ ] **P4-36** **A worker liveness watchdog.** A worker left in `working` is skipped by both the cron gate and `kick_worker`, and nothing rescues it: no tick deadline, and `WorkersDb::heartbeat` has **zero callers in the app**, so `last_seen` is never refreshed and no watchdog reads it. Write it on tick start and end; reset a worker past a stated ceiling with a system event and reconcile its task. Gate: kill a tick mid-flight, the worker ticks again without an app restart. → `SMOKE-PROVEN`
-- [ ] **P4-37** **`kick_inflight` is released on panic.** The synchronous early returns are RAII-guarded; the spawned task removes its slug on its last line, so a panic inside `run_recipe` holds the slot for the process lifetime and every later kick logs *"another kick is already in flight"*. Push dispatch for that worker is then dead while the roster still shows it scheduled. → `UNIT-PROVEN`
-- [ ] **P4-38** **Batch assignment honours worker load, or the recipe stops claiming that it does.** The Supervisor's prompt asserts *"the batch tool will refuse and report per-entry failures"* (`defaults.rs:281-283`); `assign_tasks_batch` checks the task's status and the slug and **never looks at the target's load**. A comment asserting the opposite of the code. → `UNIT-PROVEN`
-- [ ] **P4-39** **`needs_info` is not a terminal state.** Both the blocked-task path and the budget breaker park tasks there, and the Supervisor's self-heal list has no branch for it — so a phased task sits there for ever. Pairs with `P4-28`: `unblock_ready_tasks` has exactly one caller, the UI, so nothing unblocks in autonomous operation. → `SMOKE-PROVEN`
-- [ ] **P4-40** **Clear `claimed_by_pid` and `claim_host` on every non-claim status write.** `update_status_with_reason` leaves them untouched for ever, so a task carrying a PID from a previous app run is an orphan candidate — and `check_task` can release a freshly-assigned task back to `ready`, wiping `assigned_worker`. A task can bounce ready → assigned → ready across restarts. → `UNIT-PROVEN`
-- [ ] **P4-41** **Epics are reachable from the fleet's real surface.** The model, the tools, the Tauri commands and an Epics tab all exist — and **no recipe mentions `create_epic` or `create_phased_task`**, the Supervisor's tool list omits them and tells it to decompose with flat `create_task`, and no frontend caller exists. The panel is permanently empty because nothing ever creates the row. ⚠ **Extends `P4-27`, whose stated reason is now stale** — it says the tool is "PA-only and reaches tools only via MCP"; MCP is gone and the tool *is* registered on the path the Supervisor uses, so fixing registration alone would change nothing. → `SMOKE-PROVEN`
-- [ ] **P4-42** **The QC recipes read their inbox, or stop being addressable.** `qc_agent` and `qc_dispatcher` contain no `list_worker_messages`, so mail to them is never read and every broadcast leaves permanently unread rows; `kick("qc-dispatcher")` warns *worker not found*, since no such row exists. And `list_stale_worker_messages` has **zero callers**, so delivery is at-most-once against a recipe that promises "lossless". → `UNIT-PROVEN`
-- [ ] **P4-43** **An empty board stops costing money.** `supervisor` invokes the LLM every 60 s and `qc-agent` every 30 s against an empty board, replying "Board clean — idle". The `worker-*` short-circuit has no counterpart for either, and the QC queue's own skip lives inside the dead Mode 2 branch. → `BENCH-PROVEN`
-- [ ] **P4-44** **Procedural memory is wired for workers** *(razi-ruled, `D5` — `P8-40`/`P8-41` build the seam, this turns it on)*. A worker that has run this build before is the beneficiary. Scoped to the tools the model actually invoked, inside the existing turn budget, and off by default until the equivalence gate in `P8-41` is green. → `SMOKE-PROVEN`
-
 
 ### PD6-B · The failure this phase exists to avoid *(AAE post-mortem)*
 
@@ -2315,7 +2426,8 @@ unsatisfied and was recorded as such rather than glossed. P5 is where that is cl
 - [ ] **P7-05** **Fix the two toast producers** — a two-call-site import fix, not a system to build. → `CODE-PRESENT`
 - [ ] **P7-06** Every error surfaces once, in one place, in one voice. → `GATE-PROVEN`
 - [ ] **P7-07** A provider error says what the user can do about it. → `UNIT-PROVEN`
-- [ ] **P7-08** A degraded result (`PD0-04`) is distinguishable from a failure in the UI. → `SMOKE-PROVEN`
+- [ ] **P7-08** A **`partial`** result (`PD0-04`) is distinguishable from a **`held`** one and from a crash, in the UI. → `SMOKE-PROVEN`
+      ⚠ Read *"A degraded result (`PD0-04`)"* until 2026-09-03 — and `PD0-04` is the section that **retired** `degraded`, so this task cited its own refutation as its definition (`A18` `S-20`). The distinction the UI actually owes a user is the contract's: `partial` (we did the work and lost something — the diagnostics say what), `held` (we accepted the request and declined to serve it — a `failure` diagnostic says why), and neither of those is a crash.
 
 ### P7-C · Progress
 - [ ] **P7-09** Honest progress: no bar that stalls at 90%. → `SMOKE-PROVEN`
@@ -2401,7 +2513,7 @@ Match the surrounding file. `thiserror` for typed errors — **no `let _ =` on a
 | Provider conformance | Recorded fixtures (blocking) + live nightly (`.env` harness) | PR + nightly |
 | Frontend unit | Vitest | Every commit — from P0 |
 | Lint | ESLint + clippy + `cargo fmt` | Every commit — **blocking** |
-| End-to-end | WebDriver against the built app | PR, all three platforms |
+| End-to-end | WebDriver against the built app | ⚠ **Linux CI only, and it has never executed an assertion.** This row read *"PR, all three platforms"* until 2026-09-03 (`A18` `S-18`), while `P0-21` — the only unticked `P0` task — records that `msedgedriver` is absent on the Windows dev machine and **`tauri-driver` has no WKWebView backend, so macOS can never run it at all**. `CODE-PRESENT`, not `SMOKE-PROVEN`. This table is where a reader looks for *what runs where*, so it is the worst place in the document to overstate |
 | Gates | `TESTING_GATES.md` | After build + smoke, per phase |
 
 # §14.5 · Operational cadence register
@@ -2412,7 +2524,7 @@ Required by **R-13**. The adversarial review found that `interval`, `cadence`, `
 
 | Mechanism | Trigger | Cadence | Cost per run | On failure | Phase |
 |---|---|---|---|---|---|
-| **Provider retry** *(GAP-12 — `ErrorClass::Retryable` has no reader today)* | A retryable provider error | Exponential backoff **250 ms → 8 s, max 5 attempts**; honour `Retry-After` where the provider sends one (Anthropic, OpenAI only). **`QuotaExhausted` is never retried** — a spend-cap 429 never succeeds on retry | One extra request | Surface with the provider's own reason; never silent | P2 |
+| **Provider retry** *(~~GAP-12 — `ErrorClass::Retryable` has no reader today~~ — **closed in `P3-09`**, not P2: `provider/retry.rs:1` opens by naming the gap it closes, and `retry.rs:157-169` exercise `decide(ErrorClass::Retryable, n)`)* | A retryable provider error | Exponential backoff **250 ms → 8 s, max 5 attempts**; honour `Retry-After` where the provider sends one (Anthropic, OpenAI only). **`QuotaExhausted` is never retried** — a spend-cap 429 never succeeds on retry | One extra request | Surface with the provider's own reason; never silent | P2 |
 | **Embedding drain** | A memory write enqueues | **Continuous**, one at a time, off the async runtime; backoff to 30 s on repeated failure | ~50 ms local inference | Row stays unembedded; recall degrades to FTS5 and **says so** | P3 |
 | **Embedding backfill** | Model newly installed, or dimension change | Once, batched, resumable, in the background | Minutes for a large store | Resumes from the last embedded row | P3 |
 | **Reconciliation sweep** (orphans, stranded claims) | Timer, **plus** on app start | **Every 5 min.** Dispatch is event-driven (M-11); this is the safety net, not the mechanism | One indexed query | Log + retry next tick | P4 |
@@ -2438,17 +2550,17 @@ Defaults are proposed above and adopted unless Razi says otherwise. The rest fol
 | ID | Risk | Mitigation | Owning phase |
 |---|---|---|---|
 | **R-1** | ~415 defects swallow the restructure | Slices gated on outcomes, not defect counts; the register is a map, not a backlog | All |
-| **R-2** | Caching adopted, silently does nothing | Alarm before cache (P2-12) | P2 |
-| **R-3** | The port reproduces the sidecar's own defects | Explicit fix-list (P3-43) | P3 |
-| **R-4** | macOS verified last, blocks release | macOS CI in **P0** | P0 |
+| **R-2** | Caching adopted, silently does nothing | Alarm before cache (P2-12) | P2 — ✅ **DISCHARGED 2026-09-03.** `P2-12` shipped and `§0.16 L-16` records an observed cache **hit** in `p2_16`, i.e. the alarm has a reading, not just a wire |
+| **R-3** | The port reproduces the sidecar's own defects | Explicit fix-list (P3-43) | P3 — ✅ **DISCHARGED 2026-09-03.** `P3-43` is `[x]` and P3 A–E closed |
+| **R-4** | macOS verified last, blocks release | macOS CI in **P0** | P0 — ⚠ **PARTIALLY DISCHARGED, re-seated to `P9`.** `P0-20` shipped the macOS CI job (`ci.yml:217`, `macos-14`), so the *build* is verified — but `P0-21` records that `tauri-driver` **has no WKWebView backend, so macOS can never run the e2e suite at all**, and P0's launch smoke on macOS was never executed. The residue is `P9-07`, which says *"and is **actually launched**, which P0 never did"* |
 | **R-5** | BYOK turns first-run into a wall | M-35 gated with an acceptance test | P7 |
 | **R-6** | Deleting the sidecar strands an unenumerated capability | P8 entry gate: full suite with the sidecar **absent** | P8 |
-| **R-7** | `Item::Opaque` deferred, adapters rewritten twice | Day-one trait decision (P2-01) | P2 |
+| **R-7** | `Item::Opaque` deferred, adapters rewritten twice | Day-one trait decision (P2-01) | P2 — ✅ **DISCHARGED 2026-09-03.** `P2-01` is `[x]`; the trait was decided before the adapters, and no adapter was rewritten |
 | **R-8** | Affinity trained on corrupted attributions | ✅ **CLOSED 2026-08-31.** Both operational clauses are now ordered tasks rather than prose: `P4-25` is explicitly **blocked on `P4-07`**, and `P4-24a` decides the fate of existing `routing_history` under §0.8 backup discipline. *(A sequencing constraint is a task-dependency property, not a runtime assertion — correctly not a gate.)* | P4 |
 | **R-9** | Rate limits and cost during development | Recorded fixtures; live calls nightly only | All |
 | **R-10** | Windows stays the only tested platform | `PLATFORM-TRIPLE` evidence class; P4 exit names all three | P0, P4 |
-| **R-11** | *(new, R1)* ONNX runtime downloaded at build time breaks offline/reproducible builds | Pin and vendor (P3-33) | P3 |
-| **R-12** | *(new, R1)* `autodev-core` extraction is larger than scoped — 132 `emit_*` sites, not 62 lines of `AppState` | Sized as its own group (P1-B); event sink injected | P1 |
+| **R-11** | *(new, R1)* ONNX runtime downloaded at build time breaks offline/reproducible builds | ⚠ **Half-mitigated. Pin: done (`P3-33`). Vendor: NOT done, and it is Razi's open call** — `P3-33`'s own note says *"'Vendor' is NOT done and is not deferrable by me: it needs somewhere to host a 30 MB runtime, which is a distribution decision."* | ~~P3~~ **Razi — before embeddings enter a release build (`P9`)**. ⚠ This row read *"Pin and vendor (P3-33) · P3"* until 2026-09-03, i.e. it recorded a closed phase as owning a decision that phase explicitly declined to take (`A18` `S-15`) |
+| **R-12** | *(new, R1)* `autodev-core` extraction is larger than scoped — ~~132 `emit_*` sites~~ **19 `emit_X`/`emit_X_global` pairs across 50 call sites in 21 files**, not 62 lines of `AppState` | Sized as its own group (P1-B); event sink injected | P1 — ✅ **DISCHARGED.** ⚠ The 132 figure was refuted by `P1-06`'s own completion note and never propagated here — `L-C1` in the document that keeps the `L-C1` tally (`A18` `S-16`) |
 | **R-13** | *(new, R3)* No cadence defined anywhere for 11 background mechanisms | ✅ **CLOSED 2026-08-31.** The register is written — **§14.5**, thirteen mechanisms, each answering trigger · cadence · cost · failure behaviour · phase. Includes the retry policy `ErrorClass::Retryable` had no reader for (GAP-12) | §14.5 |
 | **R-14** | *(new, P3-F)* **A test run migrated the developer's live `memory.db`.** Confirmed by artifact, not inference: the destructive-migration guard wrote two pre-v3 backups into `~/.autodev/backups/` and the live database moved v2 → v3 outside any app launch. No data was lost — 39/39/0/0 rows unchanged, integrity `ok`, backups verified — and the guard behaved exactly as designed. **The hazard is the reach, not the outcome:** `§0 Rule 13` treats a suite that can touch a live resource as a destructive suite, and this one demonstrably could. ⚠ **Which test is NOT established.** A controlled probe — a v2 fixture in a sandbox `HOME`, the whole workspace suite run against it — leaves that database at v2, so the tree as it stands does not reproduce it; the offender is either gone or conditional. Recorded open rather than asserted fixed. **Remedy:** make the reach impossible rather than hunt the caller — resolve the data root through one seam that fails loudly under `cargo test` unless a sandbox is set, so no future test can reach the real home by omission. | P3 / P4 |
 | **R-15** | *(new, pre-P8)* **The fleet advertises capabilities it does not have.** Epics have a model, tools, Tauri commands and a UI tab, and **no recipe ever creates one** — the panel is permanently empty. Worker chat works agent-to-agent only when the recipient is already busy. Per-task budget has zero production callers. Affinity is never consulted. Each is *built-but-unreached*, which reads as "working" from every surface except behaviour. ⚠ **ROI was in this class and has been removed rather than built** — razi-ruled 2026-09-03 (`D6`): *"drop ROI completely, it is confusing as well as we already have dashboard."* No model, writer, reader or task existed, so nothing was deleted; what changes is that none will be added. | P4 |
@@ -2457,11 +2569,23 @@ Defaults are proposed above and adopted unless Razi says otherwise. The rest fol
 
 *Append-only, newest first.*
 
+⚠ **Three phase closeouts had no row here at all until 2026-09-03.** The log
+jumped `1.4` (P0) straight to `1.9` (P3-F), so **`P1`, `P2` and `P3 A–E` — 135
+completed tasks between them — were unrecorded** in the register `§0.11` and
+`§0.14` rely on. The two-rollout re-cut also sat above a *later* row, breaking
+the newest-first rule stated one line above, and carried no rev cell at all.
+Found by the `A18` staleness sweep (`S-13`). Rows for `1.5`–`1.8` are
+reconstructed below **from commits**, not from memory, with the commit named in
+each so a reader can check them.
+
 | Date | Rev | Change |
 |---|---|---|
 | 2026-09-03 | 2.1 | **`PD0 · The capability contract` closed — properly, on the second attempt.** I marked it closed without running `§0.2a`'s two auditors, which is a `§0.2b` violation on its own; Razi caught it. The audits then returned **45 findings** — 24 area, 21 work — and **three should have blocked the closure**: `PD0-07` was ticked with **zero deliverable** (its note claimed an execution model "written into the contract document" that appeared nowhere in the document or the code), the notes claimed **eight gate falsifications against four actually run**, and *"the register holds six rows"* was **twenty**, from a `grep` counting table rows inside entries, copied into three governance documents unchecked. Razi's ruling: *"we fix all of the findings found by the audit … findings found by the audit is also part of the phase"* — so all 45 were fixed in-phase rather than deferred. The largest was `W-7`: of the three outcomes the contract freezes, exactly **one had a producer**, so a partner's `held` branch was untestable and the documented `exit 0` + `held` state was **unreachable**. `held` and `complete` now have real producers, proven across a process boundary. `A-1` was a silent UTF-8 corruption of any non-ASCII request that still parsed as valid JSON. Nine defects in the older `P3-46/47/48` design tier were fixed with falsified tests, including a guard (`assertNoPixels`) that could not fire on the mistake its own docstring named. Gates 8 → **10** (`TGD0-09`, `TGD0-10`); `TESTING_GATES.md` totals 115 → **125** across five registers the phase left stale (`W-8`). `SD0-01`'s smoke is committed and re-runnable (`npm run smoke:design`, 14 spawned cases) — its kill clause had **never been run**. §0.16 gained `L-35`…`L-38`. |
-| 2026-09-01 | **Re-planned around two rollouts** (`ADR-LOG-RESTRUCT-0024`). `§5` rewritten: R1 *"backend ready, wire it to AutoDesign"*, R2 *"the application is ready"*, with an explicit **handover point after P8**. Design work promoted from `P3-G` (10 tasks) to **`§10.5`, phases PD0–PD6 (88 tasks)** — ingestion (PSD **and** PDF), pixel-level fidelity with refinement tooling, export (web/PDF/PSD), adaptation as a **deterministic tool**, changes, brand guideline. **`P8` moved into R1** before handover: measured at 3,867 LOC, 17 commands, 225 MB, 2 submodule stanzas; affordable because `NoOrchestrator` already exists. **`P5`–`P9` given full task breakdowns** (107 tasks) rather than deferred to phase start. **Providers narrowed to three** with Gemini primary; `P2-07` struck. **`P3-F` memory returned to the critical path.** Total open tasks: **292**. |
 | 2026-09-02 | 1.9 | **`P3-F · Memory` built and closed out; `A3` reaches 67% and overall readiness 22.0% → 34.0%.** ⚠ I wrote 100%/40.0 first and corrected it within the hour — see `L-34`: every `TG-P3` gate being green is a fact about the gates I wrote, not about the spec register the Gates row actually tracks. A fresh-context verifier returned five NOT SATISFIED and three PARTIAL across the eight memory gates, including that **the vector leg does not exist** — `memories_vec` is selected and never created — which also qualifies `P3-31`. 18 tasks and both S3 smokes done, **608 workspace tests**, every gate falsified. The `§0.2a` audits found **four live defects in this phase's own freshly-completed code** — a provenance escalation inside the task that forbids it, a retrieval index two of three tiers never wrote to, a redaction boundary the only live writer skipped, and recalled memory able to author the system prompt — plus a fifth in shared code, a backup verifier that refused every correct backup after FTS5 landed. All closed, gated and falsified (`ADR-LOG-RESTRUCT-0032`). §0.16 gained **L-31** (a comment, a test and a gate written in one sitting are one witness quoted three times), **L-32** (a boundary enforced in N−1 places reads as complete from inside any one of them), **L-33** (falsify the guards too — nobody does, and their failure mode is refusing correct work) and **L-34** (the gates I write are downstream of my reading of the task; the register is upstream of it). `L-C6` → 11; `L-25` recurred **in a gate written the same day**. `R-14` filed open: a test run reached the live database. |
+| 2026-09-02 | 1.8 | **`P3 A–E · The runtime` built and closed out** (`1e16e92`, `c21b8c2`, `67a68d2`). 39 tasks. The fault boundary the sidecar had been providing was rebuilt in-process — the pre-GO review's finding #1, that deleting the sidecar deletes a fault boundary and `panic = "abort"` plus in-process agents means one panic kills every session. ⚠ The release-profile investigation found the block had been in a **non-root workspace member all along**, so Cargo ignored it and `panic = "abort"` was **never in effect** (`§2`, `A18 S-9`). Tool output bounded; both audit reports preserved rather than left in a transcript. |
+| 2026-09-02 | 1.7 | **`P2 · The provider layer` built and closed out** (`0fbe50b`, `414e102`, `f28ac3a`, `7d2cc67`, `1c0f2eb`). **Re-cut 32 → 74 tasks** during its own pre-build refutation (`e989846`) — the largest growth any phase has had, and the measurement behind `§5.6`'s ×2.7 growth factor. Providers narrowed to **three**; Gemini primary. The post-phase audits ran **twice** and the second round found a **2× cost bug on every Anthropic stream** and the vault's data-loss paths — 16 findings fixed, 6 recorded open. Caching proven by an observed `cache_read` hit, not by assertion (`L-16`). |
+| 2026-09-01 | 1.6 | **Re-planned around two rollouts** (`ADR-LOG-RESTRUCT-0024`). `§5` rewritten: R1 *"backend ready, wire it to AutoDesign"*, R2 *"the application is ready"*, with an explicit **handover point after P8**. Design work promoted from `P3-G` (10 tasks) to **`§10.5`, phases PD0–PD6 (88 tasks)** — ingestion (PSD **and** PDF), pixel-level fidelity with refinement tooling, export (web/PDF/PSD), adaptation as a **deterministic tool**, changes, brand guideline. **`P8` moved into R1** before handover: measured at 3,867 LOC, 17 commands, 225 MB, 2 submodule stanzas; affordable because `NoOrchestrator` already exists. **`P5`–`P9` given full task breakdowns** (107 tasks) rather than deferred to phase start. **Providers narrowed to three** with Gemini primary; `P2-07` struck. **`P3-F` memory returned to the critical path.** Total open tasks: **292**. |
+| 2026-09-01 | 1.5 | **`P1 · Make the invisible visible` built and closed out** (`fd46044`, `4b3cfce`, `0585104`). 22 tasks. `autodev-core` extracted — 182 files, and the event-sink injection that `R-12` had sized at *"132 `emit_*` sites"* turned out to be **19 pairs across 50 call sites in 21 files**. Redaction ported and **wired**, closing the pre-GO review's finding #2, that the redaction port had been dropped entirely and unredacted tool arguments would have entered permanent memory with no gate noticing. The post-phase audit found **43 area findings**, of which 26 were fixed in-phase and 28 deliberately deferred with owners. |
 | 2026-09-01 | 1.4 | **P0 built and closed out — 8 commits, `5fca2bb`…`4b17c6f`.** 26 of 28 original tasks done, plus `P0-13b` and six added tasks (`P0-28`…`P0-33`). **`P0-26` was REVERSED** — deleting the `dialog`/`fs` plugin config would have erased the only evidence of a live runtime break (the Logs export fails on every click); superseded by `P0-31`, which makes it work. **`P0-21` did not reach its evidence class**: the e2e harness exists and is wired into CI but has never executed an assertion (`msedgedriver` absent locally; `tauri-driver` has no WKWebView backend, so macOS can never run it). Readiness **0% → 2.7%**: Build ✅, Smoke and Gates ☐ under the no-partial-credit rule. Overlay: SO-4 and SO-11 → GREEN, SO-2 and SO-12 → AMBER; **SO-6 stays RED deliberately** — `platform/command.rs` is proven but has no caller, and a guard nothing calls is not a guard. Eight runtime ADRs logged (`0001`…`0008`), three of them `razi-ruled` or `flagged-and-proposed`. §0.16 gained **L-C6/L-C7/L-C8** and lessons **L-7…L-10**, and §0.2i now carries the incremental-write dispatch clause that L-C8 exists because I forgot. |
 | 2026-08-31 | 1.3 | **Razi's development rules from a sibling audit adapted into §0.** Added: **§0.2a** two mandatory post-phase auditors (work + area), with the area auditor's brief tuned to this codebase's measured defect profile — `let _ =`, dead parameters, guards that cannot fire · **§0.2b** a phase cannot close over an open finding · **§0.2c** every finding runs through Razi · **§0.2d** never stop midway, ask in-flight via `AskUserQuestion` · **§0.2e** every task names its proof · **§0.2i** two subagents is the floor · **§0.2j** search the web before escalating; escalate decisions, not facts · **§0.2m** adversarially verify each phase **before** building it · **§0.2n** every phase writes its learnings · **§0.2L-1…5** method rules. **§0.16 learnings register created and seeded from the planning phase** — five recurring classes with running counts, six lessons, and the method that worked. Two adaptations rather than literal adoptions, both stated: §0.2e allows gates to be **shared** across tasks (a 1:1 rule would manufacture coverage — the eight P0-A updater tasks prove one thing); and every example was **replaced with this repo's own evidence**, including the six errors this plan's own pre-GO review found in it. |
 | 2026-08-31 | 1.2 | **The three remaining open items closed, none of which needed an owner decision.** **R-8** — its two operational clauses become ordered tasks rather than prose: `P4-25` is explicitly blocked on `P4-07`, and new task `P4-24a` decides the fate of existing `routing_history` under §0.8 backup discipline. The gate harvest was right that a sequencing constraint is a task-dependency property, not a runtime assertion, so it is deliberately **not** a gate. **R-13** — the **operational cadence register is written (§14.5)**: thirteen mechanisms, each answering trigger · cadence · cost · failure behaviour · phase, including the retry policy that `ErrorClass::Retryable` had no reader for (GAP-12). Three values are flagged as preference rather than constraint. **R-1** — confirmed to correctly have no gate; its mitigation is outcome-gated slices, and no test can assert focus. **Razi ruled the `/mcp` deletion stays in P0**, with the P0→P4 fleet tool-access gap accepted and stated. |
