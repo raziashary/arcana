@@ -112,6 +112,25 @@ impl Tool for AnalyzeDiffTool {
             Err(e) => return ToolResult::error(format!("Failed to generate diff: {e}")),
         };
 
+        // 🔴 T-52 — bound the patch before it leaves on the user's key.
+        //
+        // `branch_diff` output went to the provider with no size check, no
+        // truncation and no filter. A branch touching a lock file, a generated
+        // bundle or a vendored tree produces megabytes, and every other tool in
+        // this directory bounds its output. The cost lands on the user's own
+        // key, so an unbounded upload is a spend defect as well as a latency
+        // one -- and the model cannot use a patch it has no context window for.
+        const MAX_PATCH_BYTES: usize = 256 * 1024;
+        if patch.len() > MAX_PATCH_BYTES {
+            return ToolResult::error(format!(
+                "the diff is {} bytes, over the {MAX_PATCH_BYTES}-byte cap for \
+                 analysis. Narrow it: analyse a subset of files, or compare \
+                 nearer commits. Sending it would spend the user's key on a \
+                 patch larger than the model's useful context.",
+                patch.len()
+            ));
+        }
+
         match analyzer.analyze(&patch).await {
             Ok(result) => {
                 let summary = format!(

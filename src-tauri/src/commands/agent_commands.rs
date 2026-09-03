@@ -15,6 +15,64 @@ use crate::session::{manager::SessionManager, types::Message};
 use crate::state::AppState;
 use crate::vault::keychain::{provider_key, VaultManager};
 
+/// The legal `pa_mode` strings, in one place.
+///
+/// ⚠ There were three string literals matching on these and no list, so a
+/// fourth mode would have been added to the enum and silently unreachable from
+/// the command boundary. `P8-32` needed to REFUSE an unknown value rather than
+/// default it, and refusing requires knowing the set.
+pub const PAMODE_VALUES: [&str; 3] = ["fast_development", "review", "delegate"];
+
+/// Which PA mode a message runs in: explicit override, then session, then the
+/// frontend's ambient value.
+///
+/// 🔴 **`P8-32`.** This was inline in `send_message`, so nothing could test it
+/// — and it was wrong. The session row is preferred whenever it is non-empty,
+/// which is **always**, because `sessions.pa_mode` is `NOT NULL DEFAULT
+/// 'fast_development'` (`session/storage.rs:67`). The `pa_mode` argument was
+/// therefore unreachable, and "Delegate to Fleet" ran in whatever mode the
+/// session already had: the button said Delegate and the PA wrote code.
+///
+/// The ordering is deliberate and each rung earns its place:
+///
+/// | Rung | Wins over | Why |
+/// |---|---|---|
+/// | `override` | everything | a human just chose it, for this one message |
+/// | `session` | ambient | a reload must not reset the PA mid-conversation |
+/// | `ambient` | nothing | it is the frontend store, and it can be stale |
+///
+/// ⚠ Honouring `ambient` instead would have re-opened the regression the
+/// session rung exists to prevent: the store sends its value on every message,
+/// so a stale one would win again. The distinction is not the value, it is
+/// whether a human just chose it — and only the caller knows that, which is
+/// why it is a separate field rather than a heuristic here.
+///
+/// ⚠ An unrecognised override is **refused**, not defaulted. A caller asking
+/// for a mode that does not exist has a bug, and serving it a different mode
+/// hides that bug behind working software.
+pub fn resolve_pa_mode(
+    override_mode: Option<&str>,
+    session_mode: &str,
+    ambient_mode: Option<&str>,
+) -> Result<crate::agent::PAMode> {
+    let chosen: &str = match override_mode {
+        Some(explicit) if PAMODE_VALUES.contains(&explicit) => explicit,
+        Some(bad) => {
+            return Err(AutoDevError::Agent(format!(
+                "unknown paModeOverride {bad:?}; expected one of {}",
+                PAMODE_VALUES.join(", ")
+            )))
+        }
+        None if !session_mode.is_empty() => session_mode,
+        None => ambient_mode.unwrap_or("fast_development"),
+    };
+    Ok(match chosen {
+        "review" => crate::agent::PAMode::Review,
+        "delegate" => crate::agent::PAMode::Delegate,
+        _ => crate::agent::PAMode::FastDevelopment,
+    })
+}
+
 /// Send a user message to the agent.
 /// Fires up the PA-mode agentic loop in a background tokio task.
 /// Streams events: agent:token, agent:tool-start, agent:tool-end, agent:done, agent:error
@@ -23,6 +81,20 @@ pub async fn send_message(
     session_id: String,
     user_message: String,
     pa_mode: Option<String>, // "fast_development" | "review" | "delegate"
+    // P8-32 — an EXPLICIT, one-shot override, distinct from `pa_mode` above.
+    //
+    // 🔴 `pa_mode` is the frontend store's AMBIENT value, sent on every
+    // message, and the session row deliberately wins over it (see below). But
+    // `pa_mode` is `NOT NULL DEFAULT 'fast_development'` in
+    // `session/storage.rs:67`, so the session value is **never empty** and the
+    // argument was unreachable — which made "Delegate to Fleet" run in
+    // whatever mode the session already had.
+    //
+    // ⚠ Honouring `pa_mode` itself would have re-opened the regression the
+    // comment below describes, because a stale store sends its value too. The
+    // difference is not the VALUE, it is whether a human just chose it, and
+    // only the caller knows that. So the caller says so, in a separate field.
+    pa_mode_override: Option<String>,
     app: AppHandle,
     state: State<'_, Arc<Mutex<AppState>>>,
     session_mgr: State<'_, Arc<SessionManager>>,
@@ -120,16 +192,11 @@ pub async fn send_message(
     // the "PA visibly switches back to Mode 1" regression where a reload
     // reset the frontend store before `send_message` fired.
     let session_mode = session.pa_mode.clone();
-    let effective_mode_str: &str = if !session_mode.is_empty() {
-        session_mode.as_str()
-    } else {
-        pa_mode.as_deref().unwrap_or("fast_development")
-    };
-    let resolved_pa_mode = match effective_mode_str {
-        "review" => crate::agent::PAMode::Review,
-        "delegate" => crate::agent::PAMode::Delegate,
-        _ => crate::agent::PAMode::FastDevelopment,
-    };
+    let resolved_pa_mode = resolve_pa_mode(
+        pa_mode_override.as_deref(),
+        &session_mode,
+        pa_mode.as_deref(),
+    )?;
 
     tokio::spawn(async move {
         // ⚠ P3-05. This `match` was a sixth copy of the provider ladder, and
@@ -440,3 +507,82 @@ fn build_history(messages: &[Message]) -> Vec<RequestMessage> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod p8_32_tests {
+    //! `P8-32` — "Delegate to Fleet" did not delegate.
+    //!
+    //! `AnnotationModal` passed `paMode: 'delegate'`, and `send_message`
+    //! preferred `session.pa_mode` whenever it was non-empty — which is
+    //! **always**, because the column is `NOT NULL DEFAULT
+    //! 'fast_development'`. The argument was unreachable, so the button ran in
+    //! whatever mode the session already had: it said Delegate and the PA
+    //! wrote code.
+
+    use super::*;
+    use crate::agent::PAMode;
+
+    /// 🔴 The defect itself. Before the fix this returned `FastDevelopment`.
+    #[test]
+    fn p8_32_an_explicit_override_beats_a_populated_session() {
+        let mode = resolve_pa_mode(Some("delegate"), "fast_development", Some("fast_development"))
+            .expect("a legal override must resolve");
+        assert_eq!(mode, PAMode::Delegate);
+    }
+
+    /// The rung that must NOT move: a reload resetting the frontend store
+    /// must not reset the PA's mode mid-conversation.
+    #[test]
+    fn p8_32_the_session_still_beats_the_ambient_store() {
+        let mode = resolve_pa_mode(None, "review", Some("fast_development"))
+            .expect("resolve");
+        assert_eq!(
+            mode,
+            PAMode::Review,
+            "the ambient store won over the session — this is the regression \
+             the session rung exists to prevent"
+        );
+    }
+
+    #[test]
+    fn p8_32_the_ambient_store_is_used_only_when_the_session_is_empty() {
+        assert_eq!(
+            resolve_pa_mode(None, "", Some("review")).expect("resolve"),
+            PAMode::Review
+        );
+    }
+
+    #[test]
+    fn p8_32_everything_absent_falls_back_to_fast_development() {
+        assert_eq!(
+            resolve_pa_mode(None, "", None).expect("resolve"),
+            PAMode::FastDevelopment
+        );
+    }
+
+    /// ⚠ Refused, not defaulted. A caller asking for a mode that does not
+    /// exist has a bug, and serving it a different mode hides that bug behind
+    /// working software.
+    #[test]
+    fn p8_32_an_unknown_override_is_refused() {
+        let err = resolve_pa_mode(Some("teleport"), "review", None)
+            .expect_err("an unknown override must be refused");
+        let msg = err.to_string();
+        assert!(msg.contains("teleport"), "the message must name the bad value: {msg}");
+        assert!(
+            msg.contains("delegate"),
+            "the message must list the legal values: {msg}"
+        );
+    }
+
+    /// The falsification of the test above: every LEGAL value must be accepted,
+    /// or "refuse everything" would satisfy it while breaking the feature.
+    #[test]
+    fn p8_32_every_legal_value_is_accepted() {
+        for value in PAMODE_VALUES {
+            resolve_pa_mode(Some(value), "", None)
+                .unwrap_or_else(|e| panic!("{value} is in PAMODE_VALUES and was refused: {e}"));
+        }
+    }
+}
+

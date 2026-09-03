@@ -139,6 +139,22 @@ impl Tool for CheckFileTool {
 
         let run_syntax = checks.iter().any(|c| c == "syntax");
         let run_imports = checks.iter().any(|c| c == "imports");
+
+        // 🔴 T-28 — refuse a request that would run NOTHING.
+        //
+        // `checks` is matched by exact string, so `["lint"]`, `["Syntax"]` or
+        // a typo selected no check at all — and the tool then returned
+        // **SUCCESS**, having executed nothing. A model asking "is this file
+        // valid?" was told yes by a function that never looked. That is the
+        // worst shape a false green can take, because the answer is
+        // indistinguishable from a real pass.
+        if !run_syntax && !run_imports {
+            return ToolResult::error(&format!(
+                "no runnable check was selected. `checks` was {checks:?}; the \
+                 recognised values are \"syntax\" and \"imports\". Nothing was \
+                 run, so nothing is being reported as passing."
+            ));
+        }
         let run_exports = checks.iter().any(|c| c == "exports");
         let run_contract = checks.iter().any(|c| c == "contract");
         let run_types = checks.iter().any(|c| c == "types");
@@ -286,5 +302,86 @@ impl Tool for CheckFileTool {
         } else {
             ToolResult::success(output)
         }
+    }
+}
+
+#[cfg(test)]
+mod p8_33_t28_tests {
+    //! `T-28` — `check_file` returned SUCCESS having run nothing.
+    //!
+    //! `checks` is matched by exact string, so `["lint"]`, `["Syntax"]` or any
+    //! typo selected no check — and the tool answered **success**. A model
+    //! asking *"is this file valid?"* was told yes by a function that never
+    //! looked, and the answer was byte-identical to a real pass.
+
+    use super::*;
+
+    // ⚠ One sandbox PER TEST, keyed by tag. All three shared a single
+    // directory and each called `remove_dir_all` on entry, so under cargo's
+    // default parallelism one test deleted the file another was reading. They
+    // passed run alone and failed in the full suite -- `L-30`: my own tests are
+    // the first concurrent users of anything process-global.
+    fn tmp_py(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("autodev-p8-33-t28-{tag}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let f = dir.join("ok.py");
+        std::fs::write(&f, "x = 1\n").expect("write");
+        f
+    }
+
+    fn ctx(dir: &std::path::Path) -> ToolContext {
+        // Built field-by-field, matching `edit_file.rs`'s own test helper --
+        // there is no `for_tests` constructor and inventing one was this
+        // test's first mistake (`L-9`: verify the API, do not assume it).
+        ToolContext {
+            session_id: "s1".into(),
+            working_dir: dir.to_string_lossy().to_string(),
+            call_id: "c1".into(),
+            permission_mode: crate::agent::permission::PermissionMode::Autonomous,
+            depth: 0,
+            agent_role: "supervisor".into(),
+        }
+    }
+
+    fn run(path: &std::path::Path, checks: serde_json::Value) -> ToolResult {
+        let tool = CheckFileTool;
+        let dir = path.parent().expect("parent").to_path_buf();
+        tokio::runtime::Runtime::new().expect("rt").block_on(tool.execute(
+            serde_json::json!({ "path": path.to_string_lossy(), "checks": checks }),
+            &ctx(&dir),
+        ))
+    }
+
+    /// 🔴 The false green.
+    #[test]
+    fn t28_an_unrecognised_check_is_refused_rather_than_passed() {
+        let f = tmp_py("unrecognised");
+        let out = run(&f, serde_json::json!(["lint"]));
+        assert!(
+            out.is_error,
+            "an unrecognised check reported SUCCESS having run nothing: {:?}",
+            out.output
+        );
+        assert!(
+            out.output.contains("syntax"),
+            "the message must name what IS recognised: {}",
+            out.output
+        );
+    }
+
+    #[test]
+    fn t28_an_empty_check_list_is_refused() {
+        let f = tmp_py("empty");
+        assert!(run(&f, serde_json::json!([])).is_error);
+    }
+
+    /// The falsification: a real check must still run, or "refuse everything"
+    /// would satisfy the two tests above while breaking the tool.
+    #[test]
+    fn t28_a_recognised_check_still_runs() {
+        let f = tmp_py("syntax");
+        let out = run(&f, serde_json::json!(["syntax"]));
+        assert!(!out.is_error, "a legal check was refused: {}", out.output);
     }
 }

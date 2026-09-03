@@ -334,14 +334,43 @@ impl Tool for GrepTool {
         // model a document it cannot read, which is worse than fewer results.
         if json_output.len() > MAX_TOTAL_BYTES {
             let mut trimmed = output;
+            // T-23 — drop whole FILE results while there is more than one...
             while trimmed.results.len() > 1
                 && serde_json::to_string(&trimmed).map(|j| j.len()).unwrap_or(0) > MAX_TOTAL_BYTES
             {
                 trimmed.results.pop();
             }
+            // 🔴 ...and then drop MATCHES inside the last one. The loop above
+            // stops at `len() > 1`, so a single file carrying thousands of
+            // matches could never be trimmed and the bound **could not bind** —
+            // exactly the case a minified bundle or a generated file produces.
+            // The cap existed and the one input that needed it was exempt.
+            while trimmed
+                .results
+                .first()
+                .map(|r| r.matches.len() > 1)
+                .unwrap_or(false)
+                && serde_json::to_string(&trimmed).map(|j| j.len()).unwrap_or(0) > MAX_TOTAL_BYTES
+            {
+                if let Some(first) = trimmed.results.first_mut() {
+                    first.matches.pop();
+                }
+            }
             trimmed.truncated = true;
-            let refit = serde_json::to_string(&trimmed)
-                .unwrap_or_else(|_| json_output[..MAX_TOTAL_BYTES.min(json_output.len())].to_string());
+            // ⚠ T-24 — the fallback used to be
+            // `json_output[..MAX_TOTAL_BYTES.min(len)]`, which slices a
+            // `String` at a RAW BYTE index and panics whenever that index
+            // lands inside a multi-byte character. Source files contain them.
+            // Re-serialising the trimmed value cannot panic, and if even that
+            // fails the honest answer is an error, not a mangled document.
+            let refit = match serde_json::to_string(&trimmed) {
+                Ok(json) => json,
+                Err(e) => {
+                    return ToolResult::error(&format!(
+                        "grep results could not be serialised after trimming: {e}"
+                    ))
+                }
+            };
             return ToolResult::success_with_hint(
                 refit,
                 format!(

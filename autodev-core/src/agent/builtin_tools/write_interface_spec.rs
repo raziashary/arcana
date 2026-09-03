@@ -162,7 +162,24 @@ impl Tool for WriteInterfaceSpecTool {
 
         // Read existing file when in merge mode.
         let existing = if mode == "merge" && path.exists() {
-            std::fs::read_to_string(&path).unwrap_or_default()
+            // 🔴 T-46 — a failed read must NOT become an overwrite.
+            //
+            // This was `.unwrap_or_default()`, so any read error — a
+            // permission, a lock, invalid UTF-8 — produced an empty `existing`,
+            // the merge branch below saw nothing to merge, and the file was
+            // silently REPLACED with just the new routes. The caller asked to
+            // merge and the tool reported success having destroyed the rest.
+            match std::fs::read_to_string(&path) {
+                Ok(text) => text,
+                Err(e) => {
+                    return ToolResult::error(format!(
+                        "merge mode could not read the existing spec at {}: {e}. \
+                         Refusing rather than overwriting it — pass \
+                         mode=\"overwrite\" if replacing it is what you meant.",
+                        path.display()
+                    ))
+                }
+            }
         } else {
             String::new()
         };

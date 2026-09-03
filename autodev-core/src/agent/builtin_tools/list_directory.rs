@@ -186,6 +186,29 @@ fn collect_entries(
         out.push(obj);
 
         if is_dir {
+            // 🔴 T-27 — do not follow a link out of the jail.
+            //
+            // `read_dir` resolves a symlinked directory transparently, so a
+            // link inside the workspace listed whatever it pointed at —
+            // anywhere on the disk — and reported it under a workspace-relative
+            // path, which concealed where the content came from. The jail was
+            // applied to the ARGUMENT and never to what the walk reached.
+            //
+            // ⚠ Canonicalise and compare, rather than testing `is_symlink`:
+            // Windows junctions report `false` for that, and a `..`
+            // component would escape without any link at all.
+            let inside = std::fs::canonicalize(&entry_path)
+                .ok()
+                .zip(std::fs::canonicalize(root).ok())
+                .map(|(child, base)| child.starts_with(&base))
+                .unwrap_or(false);
+            if !inside {
+                // The entry itself was already listed above, so the escape is
+                // recorded by NOT descending. Annotating the pushed object
+                // would mean holding it past the push; naming it in the
+                // listing is `T-27`'s follow-up if a caller needs the signal.
+                continue;
+            }
             collect_entries(root, &entry_path, depth + 1, max_depth, max_entries, out);
         }
     }

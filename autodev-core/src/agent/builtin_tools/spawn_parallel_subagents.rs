@@ -274,6 +274,26 @@ impl Tool for SpawnParallelSubagentsTool {
             String::new()
         };
 
+        // 🔴 T-32 — every subagent can fail and this still reported SUCCESS.
+        //
+        // Each per-result object carries `"status": "failed"`, but the TOOL's
+        // own `is_error` was false, so the model saw a green call and read the
+        // failures as data rather than as a failure. A fan-out where nothing
+        // succeeded is a failed fan-out.
+        //
+        // ⚠ A PARTIAL failure stays success: the payload names which index
+        // failed, and the surviving results are real work the model should
+        // use. Only "nothing succeeded" flips it.
+        let failed = response_results
+            .iter()
+            .filter(|r| r.get("status").and_then(|s| s.as_str()) == Some("failed"))
+            .count();
+        if !response_results.is_empty() && failed == response_results.len() {
+            return ToolResult::error(&format!(
+                "all {failed} subagent(s) failed; no result was produced.\n\n{combined}"
+            ));
+        }
+
         ToolResult::success(
             json!({
                 "results":             response_results,
@@ -293,3 +313,49 @@ const DEFAULT_SUBAGENT_SYSTEM_PROMPT: &str =
      as part of a parallel batch. Each batch member runs in isolation. \
      Read your task carefully and produce a structured summary the parent \
      can aggregate with the other batch members.";
+
+#[cfg(test)]
+mod p8_33_t32_tests {
+    //! `T-32` — a fan-out where EVERY subagent failed reported SUCCESS.
+    //!
+    //! Each per-result object carried `"status": "failed"`, but the tool's own
+    //! `is_error` was false, so the model read total failure as data.
+
+    use serde_json::json;
+
+    /// The predicate the fix turns on, exercised directly: it is the part that
+    /// can be got wrong, and it is pure.
+    fn all_failed(results: &[serde_json::Value]) -> bool {
+        let failed = results
+            .iter()
+            .filter(|r| r.get("status").and_then(|s| s.as_str()) == Some("failed"))
+            .count();
+        !results.is_empty() && failed == results.len()
+    }
+
+    #[test]
+    fn t32_every_subagent_failing_is_a_failure() {
+        let results = vec![
+            json!({"index": 0, "status": "failed", "error": "boom"}),
+            json!({"index": 1, "status": "failed", "error": "boom"}),
+        ];
+        assert!(all_failed(&results));
+    }
+
+    /// ⚠ A PARTIAL failure stays success — the surviving results are real work
+    /// the model should use, and the payload already names which index failed.
+    /// Without this, the fix would throw away good answers.
+    #[test]
+    fn t32_a_partial_failure_is_not_a_failure() {
+        let results = vec![
+            json!({"index": 0, "status": "failed", "error": "boom"}),
+            json!({"index": 1, "status": "ok"}),
+        ];
+        assert!(!all_failed(&results));
+    }
+
+    #[test]
+    fn t32_an_empty_fan_out_is_not_reported_as_all_failed() {
+        assert!(!all_failed(&[]));
+    }
+}

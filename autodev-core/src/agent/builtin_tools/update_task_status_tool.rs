@@ -66,6 +66,32 @@ impl Tool for UpdateTaskStatusTool {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => return ToolResult::error("'status' is required"),
         };
+        // 🔴 T-36 — validate against the enum this tool's own schema declares.
+        //
+        // `status` was accepted as any non-empty string and
+        // `update_status_with_reason` interpolates it straight into the UPDATE,
+        // so a typo like `"in-progress"` (hyphen) or `"Done"` wrote a value no
+        // reader matches. The row then sits in a state the scheduler, the QC
+        // queue and the board all skip: not an error, just permanently
+        // invisible. The schema advertised nine values and nothing checked them.
+        //
+        // ⚠ `TaskStatus::from_str` is the authority, not a list retyped here —
+        // a second list is the thing `L-19` is about ("two lists that must
+        // agree will disagree, and the second is always invisible").
+        // ⚠ A ROUND TRIP, because `TaskStatus::from_str` returns `Self` and
+        // its fallback arm is `_ => Self::Ready` -- it cannot report an
+        // unknown value, it silently becomes `Ready`. So a typo like
+        // `"in-progress"` did not make the task invisible; it put the task
+        // back on the READY queue to be assigned again. The round trip is
+        // identity exactly for the values the enum knows, and needs no
+        // second list. (`P4-02` fixes the swallowing at the DB layer; this
+        // is the tool boundary and does not wait for it.)
+        if crate::db::tasks::TaskStatus::from_str(&status).as_str() != status {
+            return ToolResult::error(format!(
+                "'{status}' is not a task status. The recognised values are the \
+                 nine this tool's schema declares; check spelling and case."
+            ));
+        }
         // P8-29 — null or absent → UNASSIGN (clears assigned_worker and the
         // claim fields); string → set assigned_worker. This comment used to say
         // "leave unassigned", which contradicted the tool description twenty

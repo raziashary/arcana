@@ -9,6 +9,14 @@ use tokio::time::timeout;
 use super::path_jail::validate_workspace_path;
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
 
+/// The floor and ceiling for a model-supplied `timeout_secs` (`T-6`).
+///
+/// A floor because `0` made every command report a timeout it never ran
+/// long enough to earn; a ceiling because an unbounded value silently
+/// removes the guard `T-5` added.
+const MIN_TIMEOUT_SECS: u64 = 1;
+const MAX_TIMEOUT_SECS: u64 = 1800;
+
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 const MAX_OUTPUT_BYTES: usize = 50_000;
 
@@ -54,9 +62,21 @@ impl Tool for BashTool {
             Some(c) => c.to_string(),
             None => return ToolResult::error("Missing required field: command"),
         };
+        // T-6 (P8-33) - clamp the model-supplied timeout into a usable range.
+        //
+        // This was a bare `unwrap_or(DEFAULT)`, so `timeout_secs: 0` was
+        // accepted and became `Duration::from_secs(0)` - every command timed
+        // out instantly, and the model saw "timed out" for a command that
+        // never ran. A huge value was accepted just as readily and removed the
+        // timeout altogether, which is the guard `T-5` exists to keep.
+        //
+        // Clamped rather than refused: a caller asking for 0 or 10^9 has made
+        // a units mistake, and the useful response is to run the command
+        // inside sane bounds, not to hand back an error it cannot act on.
         let timeout_secs = input["timeout_secs"]
             .as_u64()
-            .unwrap_or(DEFAULT_TIMEOUT_SECS);
+            .unwrap_or(DEFAULT_TIMEOUT_SECS)
+            .clamp(MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS);
 
         // ⚠ G-4 (post-phase gap hunt). This block was commented as the
         // **workspace path-jail** — "the shell cwd MUST be inside the

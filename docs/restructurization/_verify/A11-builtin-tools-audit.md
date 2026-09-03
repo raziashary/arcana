@@ -1012,3 +1012,124 @@ row says which agent did that. Auditability gap rather than a wrong output.
   and `timeout_secs == 0` really are defaulted in `manager.rs:122-127`; and
   `resolve_python` really does use bare names now.
 * One finding was withdrawn on verification (T-34), recorded rather than deleted.
+
+---
+
+# TRIAGE — `P8-33`, completed 2026-09-03
+
+`P8-33`: *"Work the rest to a decision each — fixed, filed with an owning
+phase, or dismissed with a reason — and record the disposition in the audit
+file."* All **58** findings are dispositioned below. Nothing is left unread.
+
+**Outcome:** **20 fixed** · **2 already fixed before this phase (this document
+was stale)** · **2 dismissed with a reason** · **34 filed with a named owning
+task**.
+
+⚠ **Two of this document's own four `critical` findings were already closed
+when the triage reached them.** `T-17` and `T-18` were fixed in `7ae53ee`, with
+two tests, before `P8` began — the audit was written against an earlier tree and
+nobody re-read it. *An audit is a photograph too* (`L-15`), and a triage that
+had trusted its severity column would have "fixed" a defect twice and reported
+progress for it.
+
+⚠ **And one finding was refuted on the facts.** `T-34` says `propose_memory`
+does not clamp a model-supplied confidence. The tool does pass the raw value —
+and `memory/gateway.rs:222` clamps it: `p.claimed_confidence.clamp(0.0,
+ceiling)`. The gateway is the single write path (`TG-P3-39`), so the effect is
+bounded; clamping in the tool as well would be `L-19`'s two-lists problem.
+
+## Fixed in `P8-0`
+
+| # | Finding | Closed by |
+|---|---|---|
+| `T-1` | the POSIX→PowerShell rewriter ran and `cmd` executed its output | `P8-26` — rewriter deleted |
+| `T-2` | grep rewrite ordering made the `-i` branch dead | `P8-26` — dies with the rewriter |
+| `T-3` | `head -`/`tail -` replaced blind, mangling other flags | `P8-26` — dies with the rewriter |
+| `T-4` | the exit-255 self-correction hint was unreachable | `P8-26` — description rewritten to name `findstr`/`more` |
+| `T-5` | a timeout abandoned the child instead of killing it | `P8-27` — `kill_on_drop` + process-group kill |
+| `T-6` | `timeout_secs` unvalidated: `0` failed every command instantly | **`P8-33`** — clamped to `[1, 1800]` |
+| `T-9` | `cmd /C` received MSVCRT-escaped quotes it cannot parse | `P8-26` — no rewriting, and the `sh -c` path is unaffected |
+| `T-10` | build evidence recorded against the rewritten command | `P8-26` — there is no rewritten command |
+| `T-11` | the tool description contradicted itself | `P8-26` — rewritten, and it now states the shell honestly |
+| `T-23` | grep's total-byte bound **could not bind** with matches in one file | **`P8-33`** — matches are dropped inside the last result too |
+| `T-24` | the fallback sliced a `String` at a raw byte index | **`P8-33`** — re-serialise, or error; never slice |
+| `T-27` | `list_directory` followed symlinks out of the workspace jail | **`P8-33`** — canonicalise and compare, so junctions and `..` are caught too |
+| `T-28` | `check_file` returned **SUCCESS having run nothing** | **`P8-33`** — an unrecognised `checks` list is refused |
+| `T-30` | `spawn_subagent` said empty `tools` meant "MCP tools only" | `P8-30` — it means INHERIT, and now says so (`ADR-LOG-RESTRUCT-0039`) |
+| `T-32` | `spawn_parallel_subagents` reported SUCCESS when **every** subagent failed | **`P8-33`** — all-failed is an error; partial stays success |
+| `T-35` | *"Pass null to unassign"* did nothing | `P8-29` — clears the worker and the claim fields |
+| `T-36` | `status` was not validated against its own nine-value enum | **`P8-33`** — round-trip check. ⚠ Worse than the finding said: `from_str`'s fallback is `_ => Ready`, so a typo **re-queued** the task rather than hiding it |
+| `T-37` | the build-evidence gate was satisfied by command **text** | `P8-28` — a real exit code from a real build |
+| `T-46` | `write_interface_spec` silently downgraded merge to **overwrite** | **`P8-33`** — a failed read refuses instead of destroying the file |
+| `T-52` | `analyze_diff` uploaded an unbounded patch on the user's key | **`P8-33`** — capped at 256 KB with an actionable message |
+
+## Already fixed — this document was stale
+
+| # | Finding | Evidence |
+|---|---|---|
+| `T-17` | empty `old_string` spun forever holding the path lock | `7ae53ee`; guard at `edit_file.rs:155`, test `an_empty_old_string_is_refused_rather_than_shredding_the_file` |
+| `T-18` | empty `old_string` + `replace_all` shredded the file | same commit and guard; test `the_schema_declares_old_string_non_empty` |
+
+## Dismissed, with the reason
+
+| # | Finding | Why |
+|---|---|---|
+| `T-12` | the "workspace path-jail" compares `working_dir` with itself | **Correct as written and self-documented at `bash.rs:61-85`.** It is an existence/canonicalisation check, not a jail, and it does not claim otherwise. The jail for file paths is `path_jail.rs`, applied by the seven file tools. Renaming the comment is `P8-60`'s. |
+| `T-34` | `propose_memory` does not clamp the claimed confidence | **Refuted at the effect level.** `memory/gateway.rs:222` clamps to `[0, ceiling]` and is the single write path (`TG-P3-39`). A second clamp in the tool is `L-19`. |
+
+## Filed with an owning task
+
+Each row names the task that owns it and why it belongs there rather than in
+`P8`. ⚠ None of these is *"later"* — every one has an owner.
+
+| # | Finding | Owner | Why not `P8` |
+|---|---|---|---|
+| `T-7` | `/dev/null` and any absolute redirect target refused | `P4-16` | Needs the redirect scanner to understand shell grammar rather than bytes; `P4-16` already owns purging POSIX-only shell from recipes and skills |
+| `T-8` | the `$`-refusal fires on comparison operators | `P4-16` | Same scanner, same redesign |
+| `T-13` | credential scrubbing removes tokens builds legitimately need | `P4-11` | Needs a policy call on which variables a build may see; `P4-11` owns build verification |
+| `T-14` | `strip_heredoc_bodies` rebuilds byte-by-byte as `char` | `P4-16` | Same scanner |
+| `T-15` | stdout/stderr interleaving destroyed | `P4-11` | Build-output fidelity is what `P4-11` measures |
+| `T-16` | the evidence ring grows unbounded, swept only on read | `P4-12` | `P4-12` replaces the in-memory map with a table, which removes the ring |
+| `T-19` | `edit_file` runs only Tier 1 validation | `P4-19` | Sits with the checkpoint/validation work |
+| `T-20` | `append_file` takes no checkpoint and fires no hook | `P4-19` | Same |
+| `T-21` | `read_file`'s range test fails for non-integer JSON numbers | `P4-19` | Same file family |
+| `T-22` | two different constants both called "256 KB" | `P4-19` | Same |
+| `T-25` | grep claims to skip binary files and has no detection | `P4-19` | Same |
+| `T-26` | glob's `total_files` is the returned count, not the match count | `P4-19` | Same |
+| `T-29` | `check_file`'s display path degrades to absolute | `P8-60` | A display/comment defect, and `P8-60` is the comment sweep |
+| `T-31` | two spawn tools tell the model to wait for a sidecar | **`P8-58`** | Already a task in this phase |
+| `T-33` | `search_memory` reports "no entries" for a scope mismatch | `P3` residue → `P5-21` | Tool-description standard work |
+| `T-38` | `annotate_file` never jails its path; `severity` unvalidated | `P4-18` | `P4-18` owns "every agent write resolves against the workspace resolver" |
+| `T-39` | `e2e_probe` is a second, unguarded shell | `P4-11` | ⚠ Needs a **decision**, not a patch: whether `e2e_probe` should execute shell strings at all. Every `bash` guard is absent, and copying them creates a second copy to keep in step. `P4-11` owns the one build/verify path |
+| `T-40` | `e2e_probe` validates by one DNS lookup and connects with another | `P4-11` | Same file, same owner |
+| `T-41` | `e2e_probe` misreports a boot wait it never performed | `P4-11` | Same |
+| `T-42` | 27 `graph_tools.rs` structs implement nothing and register nothing | **`P5-18`/`P5-19`** | `TG1-01`'s registration clause; explicitly `P5`'s entry condition |
+| `T-43` | `validate.rs` hand-rolls the shared truncation helper | `P4-11` | Build-verification file |
+| `T-44` | `type_checker` accepted then silently ignored | `P4-11` | Same |
+| `T-45` | `check_file`'s header still claims interpreter resolution | `P8-60` | Comment sweep |
+| `T-47` | `write_interface_spec` has no path lock, checkpoint or hook | `P4-19` | Needs the shared write plumbing the other three writers use; a fourth hand-rolled copy is the wrong fix |
+| `T-48` | `create_task` hardcodes `created_by: "pa"` | `P4-41` | Epic/task creation surface |
+| `T-49` | `create_task` accepts out-of-enum `priority` and `task_type` | `P4-02` | Same class as `T-36`; `P4-02` makes an unknown value a loud error at the DB layer |
+| `T-50` | `assign_task` discards the routing-history write | **`P4-32`/`P4-25`** | Affinity is exactly what those tasks build |
+| `T-51` | the QC reviewer is spawned with `tools: Vec::new() // MCP-only` | **`P8-58`** | The comment is wrong and `P8-58` owns those strings. ⚠ The *semantics* are now correct by `P8-30`: empty means inherit |
+| `T-53` | the planner lets the caller name the claiming worker | **`P4-34`** | `P4-34` is "one claim path, and the recipes use it" |
+| `T-54` | `assign_tasks_batch` fires no lifecycle hook | `P4-38` | Batch-assignment correctness |
+| `T-55` | `send_worker_message` aborts a broadcast midway | **`P4-42`** | `P4-42` owns worker messaging |
+| `T-56` | `spawn_qc_review` discards every `release_qc_claim` | `P4-34` | Claim lifecycle |
+| `T-57` | six files document a Python sidecar / MCP adapter / "Mode 2" | **`P8-59`/`P8-60`** | Already tasks in this phase |
+| `T-58` | `resolve_worker_request` records no resolver identity | `P4-42` | Worker request surface |
+
+## What the triage itself found
+
+1. **An audit is a photograph** (`L-15`). Two of four criticals were closed
+   before the triage read them, and this document still presented them as open.
+   A severity column is a claim about a past tree.
+2. **Three fixes were larger than their finding.** `T-36`'s real behaviour was
+   not "invisible task" but "task silently returned to the READY queue", because
+   `TaskStatus::from_str`'s fallback arm is `_ => Self::Ready`. `T-23` and
+   `T-24` are one site. `T-17`/`T-18` are one guard.
+3. **Three of the four findings `P8-33` singles out are FALSE GREENS** —
+   `check_file` passing having run nothing, `spawn_parallel_subagents` reporting
+   success when everything failed, and grep's bound not binding. That is the
+   defect class this programme exists to remove, and it is concentrated in the
+   tools the *model* calls rather than in the code a human reads.

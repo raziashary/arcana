@@ -1884,6 +1884,49 @@ mod tests {
     }
 
 
+    /// `T-36` (P8-33) — the round trip is what validates a status string.
+    ///
+    /// 🔴 `TaskStatus::from_str` returns `Self`, and its fallback arm is
+    /// `_ => Self::Ready`. It cannot report an unknown value: every typo
+    /// becomes `Ready`. So `"in-progress"` (hyphen) did not make a task
+    /// invisible — it put the task back on the READY queue to be assigned
+    /// again, which is a live behavioural defect and worse than the audit
+    /// described.
+    ///
+    /// ⚠ Asserted as a round trip rather than against a retyped list of nine
+    /// strings. A second list is `L-19`: two lists that must agree will
+    /// disagree, and the second one is always the invisible one.
+    #[test]
+    fn t36_the_round_trip_accepts_every_real_status_and_rejects_a_typo() {
+        for real in [
+            "ready", "assigned", "in_progress", "qc_review", "done",
+            "build_failed", "failed", "cancelled", "rejected", "needs_info",
+        ] {
+            assert_eq!(
+                TaskStatus::from_str(real).as_str(),
+                real,
+                "{real} is a real status and the round trip lost it"
+            );
+        }
+        for typo in ["in-progress", "Done", "qc review", "", "teleport"] {
+            assert_ne!(
+                TaskStatus::from_str(typo).as_str(),
+                typo,
+                "{typo:?} round-tripped, so the tool guard would accept it"
+            );
+        }
+    }
+
+    /// The swallowing itself, pinned so `P4-02` has a test to flip.
+    #[test]
+    fn t36_an_unknown_status_currently_becomes_ready_which_is_the_defect() {
+        assert_eq!(
+            TaskStatus::from_str("in-progress"),
+            TaskStatus::Ready,
+            "if this changes, `P4-02` has landed and the comment above is stale"
+        );
+    }
+
     /// `P8-29` — passing `None` must actually unassign.
     ///
     /// 🔴 The tool description promises *"Pass null to unassign"*

@@ -111,14 +111,25 @@ export function AnnotationModal({
 
         // 'ask' → use the current PA mode (Fast Dev / Review) so normal PA rules apply
         // 'delegate' → force paMode='delegate' so PA only uses create_task
-        const effectiveMode = intent === 'delegate' ? 'delegate' : paMode
-
-        // Fire-and-forget — streaming response appears in the Chat tab.
-        // Errors are non-fatal (annotation is already saved above).
+        // P8-32 — 'Delegate to Fleet' is an EXPLICIT one-shot choice, so it
+        // travels as `paModeOverride`, which outranks the session row.
+        //
+        // 🔴 It used to travel as `paMode`, and the backend prefers
+        // `session.pa_mode` whenever that is non-empty — which it always is,
+        // because the column is `NOT NULL DEFAULT 'fast_development'`. So the
+        // argument was unreachable and this button ran in whatever mode the
+        // session already had: the label said Delegate and the PA wrote code.
+        //
+        // ⚠ `paMode` still carries the ambient store value and still loses to
+        // the session, deliberately — that ordering is what stops a reload
+        // from resetting the PA's mode mid-conversation. The override is a
+        // separate field precisely so a stale store cannot borrow its
+        // authority.
         void invoke('send_message', {
           sessionId,
           userMessage: fullMessage,
-          paMode:      effectiveMode,
+          paMode,
+          paModeOverride: intent === 'delegate' ? 'delegate' : null,
         }).catch((e: unknown) => {
           console.error('[AnnotationModal] send_message failed:', e)
         })
