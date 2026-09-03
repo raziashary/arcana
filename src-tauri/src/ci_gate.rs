@@ -5416,4 +5416,85 @@ let x = 1;
             hits.join("\n")
         );
     }
+
+    // ── TG8-10 · the procedural seam: once per turn, off by default ───────────
+
+    /// `P8-40`/`P8-41`. Three properties the runtime tests cannot cover on
+    /// their own.
+    ///
+    /// The **once per turn** property is positional, not behavioural: the
+    /// retrieval must sit at the top of `execute_batch`, above the loop that
+    /// walks the individual calls. `engine.rs` calls `execute_batch` exactly
+    /// once per turn with the whole batch, so one retrieval there is one per
+    /// turn by construction — and one moved *into* the loop would be one per
+    /// call, multiplying the query count by the batch width and growing the
+    /// prompt with it, which `TG3-08` bounds.
+    ///
+    /// ⚠ Comments stripped first: this gate's own explanation names every
+    /// symbol it looks for (`L-C7`).
+    #[test]
+    fn tg8_10_the_procedural_seam_is_once_per_turn_and_off_by_default() {
+        let exec = read_source(&repo_root().join("autodev-core/src/agent/tool_executor.rs"));
+        assert!(!exec.trim().is_empty(), "tool_executor.rs did not read");
+        let code: String = exec
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // ── off by default ───────────────────────────────────────────────────
+        assert!(
+            code.contains("procedural_recall: false"),
+            "the procedural seam is no longer constructed disabled. It widens \
+             every agent's prompt, and `P4-44` is the task that turns it on."
+        );
+
+        // ── once per turn, positionally ──────────────────────────────────────
+        let body = code
+            .split("pub async fn execute_batch")
+            .nth(1)
+            .expect("execute_batch must exist");
+
+        let call = body
+            .find("self.retrieve_procedural(")
+            .expect("execute_batch must consult the procedural seam");
+
+        // The per-call loop. Everything from here on runs once per tool.
+        let loop_at = body
+            .find("for (idx, (tool, input, tool_use_id)) in tools.into_iter().enumerate()")
+            .expect("the per-call permission loop must exist");
+
+        assert!(
+            call < loop_at,
+            "the procedural retrieval has moved INTO the per-call loop. That \
+             makes it once per tool call rather than once per turn: the fleet \
+             makes many calls per tick, so the query count and the prompt grow \
+             with the batch width."
+        );
+        assert_eq!(
+            body.matches("self.retrieve_procedural(").count(),
+            1,
+            "there is more than one retrieval site in execute_batch"
+        );
+
+        // ── framed and flattened, by having no other route ───────────────────
+        //
+        // `P8-41`: recalled procedural text must go through `recall.rs`'s
+        // flattener and framing. The guarantee is that `flatten_for_prompt`
+        // stays PRIVATE, so a future caller cannot render procedural text any
+        // other way and reach the prompt with it.
+        let recall = read_source(&repo_root().join("autodev-core/src/memory/recall.rs"));
+        assert!(!recall.trim().is_empty(), "recall.rs did not read");
+        assert!(
+            recall.contains("fn flatten_for_prompt(") && !recall.contains("pub fn flatten_for_prompt("),
+            "`flatten_for_prompt` is public. Private is what forces every path \
+             to the prompt through this module's own rendering, which is how \
+             `P8-41` is enforced rather than merely intended."
+        );
+        assert!(
+            code.contains("crate::memory::recall::procedural_context("),
+            "the seam no longer routes through `recall.rs`, so procedural text \
+             can reach the prompt unflattened — the hole `P3-F` closed."
+        );
+    }
 }

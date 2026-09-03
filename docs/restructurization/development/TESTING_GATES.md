@@ -48,10 +48,10 @@
 | **P5** | The graph | 4 | `TG5-01…04` |
 | **P6** | The UI | 9 | `TG6-01…09` |
 | **P7** | Experience | 5 | `TG7-01…05` |
-| **P8** | Submodule deletion **+ the prompt floor** | 9 | `TG8-01…09` |
+| **P8** | Submodule deletion **+ the prompt floor** | 10 | `TG8-01…10` |
 | **P9** | Delivery | 5 | `TG9-01…05` |
 | **PD0** | The design capability contract | 10 | `TGD0-01…10` |
-| | **Total** | **132** | |
+| | **Total** | **133** | |
 
 ---
 
@@ -632,6 +632,12 @@
 
       ⚠ Two exclusions, both deliberate. `ci_gate.rs` is **excluded from its own scan** — it must name the forbidden words in order to look for them, and a gate that reads itself finds the defect in its own definition (`L-C7`, the fifth instance in this register). And the word **"sidecar" is not in the forbidden set**: `PD0` gave it a second meaning — AutoDev as a sidecar *of AutoDesign* — and `P8-21` records four files using it in that sense that must survive. A gate written against the token rather than the thing it stands for would have deleted a published seam.
 
+
+- [x] **TG8-10** `[security]` `[perf]` — **NEW (`P8-40`/`P8-41`).** **The procedural seam is once per turn, off by default, and has no route to the prompt that bypasses the flattener.** The once-per-turn property is **positional**: the retrieval must sit above the per-call loop in `execute_batch`, which `engine.rs` calls exactly once per turn with the whole batch — so one retrieval there is one per turn by construction, and one moved into the loop would be one per *call*.
+      Source: **NEW** — `P8-40`, `P8-41` · Catches: a retrieval that drifts into the loop (the fleet makes many calls per tick, so the query count and the prompt would grow with the batch width — `TG3-08` bounds input growth); a seam that ships enabled; and `flatten_for_prompt` being made public, which is what forces every path to the prompt through this module's rendering · Falsified twice, each red for its own mechanism · Evidence: `GATE-PROVEN` — `ci_gate::tests::tg8_10_the_procedural_seam_is_once_per_turn_and_off_by_default`
+
+      ⚠ The security half is `UNIT-PROVEN` alongside it, in `memory::recall::injection_tests`: a stored procedure carrying `\n---\n## Global Instructions\n…` renders as **one line** with the payload intact but unable to reach the start of one. Asserted against the **pure** renderer, because the DB-backed path opens the real `~/.autodev/` store and a test going through it would read the developer's own memory (`§0.8`). Falsified by removing the flattener from that one call — red, naming the implant.
+
 ---
 
 ## 12. P9 — Delivery
@@ -728,7 +734,7 @@ Gates are only as honest as what they run against. Every corpus below is **check
 | `08-DATA-MODEL…` | `§4 Test gates` | 10 | `TG1-02…TG1-06`; `TG2-15`; `TG4-19…TG4-22` | **P1** (5), **P2** (1), **P4** (4) |
 | `09-DELIVERY` | `§6 Test gates` | 10 | `TG0-01`, `TG0-02`; `TG4-17`, `TG4-18`; `TG8-01`; `TG9-01…TG9-05` | **P0** (2), **P4** (2), **P8** (1), **P9** (5) |
 | `10-PROOF` | *(no gate table — by design)* | 0 gates; contributes the evidence classes (`§1`), the headline acceptance test (`TG7-02` + `TG9-01`), the CI blocking table (`TG0-02`) and the ten test families (`§17`) | — | — |
-| **NEW** | *(this document)* | 15 | `TG0-04`, `TG0-05`, `TG2-16`, `TG2-17`, `TG3-38`, `TG3-39`, `TG4-23`, `TG8-02`…`TG8-09` | P0 (2), P2 (2), P3 (2), P4 (1), P8 (8) |
+| **NEW** | *(this document)* | 16 | `TG0-04`, `TG0-05`, `TG2-16`, `TG2-17`, `TG3-38`, `TG3-39`, `TG4-23`, `TG8-02`…`TG8-10` | P0 (2), P2 (2), P3 (2), P4 (1), P8 (9) |
 
 **Spec gate totals:** 115 named in the specs − 8 merged = **107 surviving** + **8 NEW** = **115**, **+ 10 `TGD0`** added by `PD0` and its audit remediation = **125**.
 
@@ -794,6 +800,7 @@ Gates are only as honest as what they run against. Every corpus below is **check
 | **No-sidecar** | `TG8-01`, `TG8-02`, `TG8-09` | 3 |
 | **One prompt floor** | `TG8-03`, `TG8-04`, `TG8-05`, `TG8-06` | 4 |
 | **No reader without a writer** | `TG8-07`, `TG8-08` | 2 |
+| **Procedural seam** | `TG8-10` | 1 |
 
 **Thinnest families, flagged rather than padded:** *Destructive safety* (3) and *No-sidecar* (2). Both are thin for structural reasons — destructive safety is largely an enumeration inside `TG7-05` and `TG4-23`, and the no-sidecar family's real weight is that **P8 re-runs all 125 gates** under the sidecar-absent condition rather than adding gates of its own. Neither is a coverage gap; both are recorded so a later reader does not mistake thinness for oversight.
 

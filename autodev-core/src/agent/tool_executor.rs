@@ -53,6 +53,32 @@ pub struct ToolExecutor {
     /// `Option` because `airsctl` and the tests build an executor with no
     /// application state; there the timeout is the only bound.
     state: Option<Arc<std::sync::Mutex<crate::state::AppState>>>,
+
+    // ── The procedural-memory seam (`P8-40`) ─────────────────────────────────
+    //
+    // This executor consulted memory NOWHERE. `P4-44` will turn the seam on for
+    // fleet workers — an agent that has run this build before is the
+    // beneficiary — and `razi` ruled the split (`D5`): the plumbing is built
+    // here, the wiring lands there.
+    //
+    // ⚠ **Off by default, and that is the point.** A recall that fires for
+    // every agent would widen the prompt for agents that gain nothing from it,
+    // and `TG3-08` bounds input growth. Nothing turns this on yet.
+    /// Whether to consult procedural memory for this turn.
+    procedural_recall: bool,
+    /// The block retrieved for the current turn, or `None`.
+    ///
+    /// ⚠ **Once per turn, never per call.** `engine.rs` calls `execute_batch`
+    /// exactly once per turn with the whole batch, so retrieving at the top of
+    /// that function is once-per-turn *by construction* rather than by a
+    /// caller remembering to. The fleet makes many calls per tick; a per-call
+    /// recall would multiply the query count by the batch size and grow the
+    /// prompt with it.
+    procedural_block: Option<String>,
+    /// How many times the seam has actually queried, for the whole life of this
+    /// executor. Exists so the once-per-turn property is **observable** rather
+    /// than asserted in a comment.
+    procedural_queries: u32,
 }
 
 impl ToolExecutor {
@@ -72,7 +98,51 @@ impl ToolExecutor {
             always_allow: std::collections::HashSet::new(),
             session_mgr: None,
             state: None,
+            procedural_recall: false,
+            procedural_block: None,
+            procedural_queries: 0,
         }
+    }
+
+    /// Turn the procedural-memory seam on for this executor (`P8-40`).
+    ///
+    /// Off unless a caller asks. `P4-44` is the task that asks.
+    pub fn with_procedural_recall(mut self, on: bool) -> Self {
+        self.procedural_recall = on;
+        self
+    }
+
+    /// The procedural block retrieved for the current turn, if any.
+    pub fn procedural_block(&self) -> Option<&str> {
+        self.procedural_block.as_deref()
+    }
+
+    /// How many times this executor has queried procedural memory.
+    ///
+    /// ⚠ Public so a test can assert **once per turn** by counting, rather
+    /// than by reading the code and believing it.
+    pub fn procedural_queries(&self) -> u32 {
+        self.procedural_queries
+    }
+
+    /// Consult procedural memory for this turn. One query, whatever the batch.
+    ///
+    /// The query is built from the tool names the model actually asked for,
+    /// which is what `P4-44` means by "scoped to the tools the model actually
+    /// invoked" — a recall keyed on the whole conversation would return the
+    /// same rows every turn.
+    fn retrieve_procedural(&mut self, tool_names: &[String]) {
+        if !self.procedural_recall {
+            return;
+        }
+        let query = tool_names.join(" ");
+        if query.trim().is_empty() {
+            return;
+        }
+        self.procedural_queries += 1;
+        // Routed through `recall.rs` so the text is flattened and framed the
+        // same way every other recalled memory is (`P8-41`).
+        self.procedural_block = crate::memory::recall::procedural_context(&query, 3);
     }
 
     /// Set the session manager for persisting tool messages
@@ -213,6 +283,15 @@ impl ToolExecutor {
         if tools.is_empty() {
             return Ok(Vec::new());
         }
+
+        // ── P8-40 · the procedural seam, once for the whole batch ────────────
+        //
+        // Here, and not inside the per-call loop below. `engine.rs` calls this
+        // function once per turn with every call the model asked for, so one
+        // retrieval here is one retrieval per turn no matter how wide the
+        // batch. No-op unless `with_procedural_recall(true)`.
+        let tool_names: Vec<String> = tools.iter().map(|(t, _, _)| t.name().to_string()).collect();
+        self.retrieve_procedural(&tool_names);
 
         // ── P3-64 · permission is decided BEFORE the partition ───────────────
         //

@@ -9,7 +9,7 @@
 | **Owner** | Razi (Programming Lead, AIRS Foundry) |
 | **Branch** | `main` (Razi authorised working directly on it; `sidecar-backup` holds the pre-restructure state) |
 | **Rev** | **2.2** — created 2026-08-31, current 2026-09-03. `§16` is authoritative for the history |
-| **Status** | 🟢 **BUILDING.** GO given 2026-09-01. Complete: `P0` · `P1` · `P2` · `P3 A–E` · `P3-F` · `PD0`. **Next: `P8`.** 257 of 517 tasks open |
+| **Status** | 🟢 **BUILDING.** GO given 2026-09-01. Complete: `P0` · `P1` · `P2` · `P3 A–E` · `P3-F` · `PD0`. **Next: `P8`.** 255 of 517 tasks open |
 
 ⚠ **This header read `Rev 1.0` and `⛔ AWAITING GO. No code, no migrations, no
 deletions.` until 2026-09-03** — through seven completed phases, hundreds of
@@ -838,9 +838,9 @@ goes to ask *what is left*.
 | 11 | **P4** Fleet | *"including the fleet."* Last in R1 because a fleet multiplies whatever the tools already do; multiplying unproven tools only multiplies the debugging. ⚠ **+4 on 2026-09-03** — `P4-G`, the one-fleet ruling (`ADR-LOG-RESTRUCT-0037`) | 49 |
 | 12 | **R1 close** | Integration, post-phase audit (`§0.2a`), contract v1. ≈38 h from now | — |
 
-**Open R1 tasks: 174.** Completed R1 tasks: **260** (`P0`–`P3-F` and `PD0`, plus
+**Open R1 tasks: 172.** Completed R1 tasks: **262** (`P0`–`P3-F` and `PD0`, plus
 4 of `PD1`'s and 1 of `P4`'s taken early). Programme total **517**, of which
-**257 open**. Hours are `§5.6`'s measured model, not estimates.
+**255 open**. Hours are `§5.6`'s measured model, not estimates.
 
 ⚠ **Recounted 2026-09-03 by walking the checkboxes, and three of the four
 figures here were wrong before `P4-G` was added.** The header said *"312 of
@@ -2293,8 +2293,10 @@ that never starts them.
 
 ### P8-F · Procedural memory — the seam *(razi-ruled, `D5`: plumbing here, wiring in `P4`)*
 
-- [ ] **P8-40** A **retrieval seam** in `tool_executor.rs`, which consults memory nowhere today. Retrieved **once per turn**, never per call — the fleet makes many calls per tick and `TG3-08` bounds input growth. → `UNIT-PROVEN`
-- [ ] **P8-41** Recalled procedural text goes through `recall.rs`'s **flattener** and the same data framing, so this path cannot re-open the prompt-implant hole `P3-F` closed. → `GATE-PROVEN`
+- [x] **P8-40** A **retrieval seam** in `tool_executor.rs`, which consults memory nowhere today. Retrieved **once per turn**, never per call — the fleet makes many calls per tick and `TG3-08` bounds input growth. → `UNIT-PROVEN`
+      ✅ **2026-09-04** — `ToolExecutor` gains `procedural_recall` (**false** unless a caller asks), `procedural_block`, and a `procedural_queries` counter so the once-per-turn property is **observable rather than asserted in a comment**. The retrieval sits at the top of `execute_batch`, above the per-call loop — and that position is the guarantee: `engine.rs:784` is `execute_batch`'s only caller and calls it once per turn with the whole batch, so one retrieval there is one per turn **by construction**, not by a caller remembering. The query is built from the tool names the model actually asked for, which is what `P4-44` means by "scoped to the tools the model actually invoked". ⚠ Nothing turns it on yet, by ruling (`D5`: plumbing here, wiring in `P4`) — recorded plainly rather than left to be discovered, because a seam with no consumer is `L-C12` if it is not stated as a staged one. → `UNIT-PROVEN` (`TG8-10`)
+- [x] **P8-41** Recalled procedural text goes through `recall.rs`'s **flattener** and the same data framing, so this path cannot re-open the prompt-implant hole `P3-F` closed. → `GATE-PROVEN`
+      ✅ **2026-09-04** — procedural text reaches the prompt through `recall.rs` and nowhere else, framed `- (a saved procedure: …)` and flattened, because **`flatten_for_prompt` stays private** — that is what makes this structural rather than a convention. ⚠ **The title is flattened on its own account**: it renders outside the truncated body, so flattening the content alone would have left an opening the task did not mention. Proven with a hostile payload (`\n---\n## Global Instructions\n…`): the text survives intact and readable, on **one line**, unable to reach the start of one. ⚠ Asserted against a **pure** renderer split out for the purpose — `ProceduralStore::search` opens the real `~/.autodev/` store, and a test that went through it would read the developer's own memory (`§0.8`). Falsified by dropping the flattener from that single call: red, naming the implant. → `GATE-PROVEN` (`TG8-10`)
       🔴 **The "gate that equivalence" clause is struck — it would have proven nothing** (`ADR-LOG-RESTRUCT-0038`). *A tool's behaviour is identical with and without the recalled text* is **true by construction** under the literal reading — `execute` never sees what the executor retrieved — so the gate passes before the feature exists, which is `L-18`'s shape exactly. Under the reading that matters (*the model's next calls are unchanged*) it is **false by design**, since changing what the agent does next is the whole point.
       **Assert these three instead, each falsifiable:** (a) **framing survives at the SEAM's output** — a stored memory containing `\n---\n## Global Instructions\n` renders with no newline inside its row, asserted on what the seam emits, not on the flattener, which `recall.rs:447-463` already covers; (b) **argument non-contamination** — the `serde_json::Value` handed to `execute` is byte-identical with retrieval on and off; (c) **once per turn** — N tool calls in one turn produce exactly one retrieval.
 
