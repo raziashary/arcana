@@ -1500,3 +1500,97 @@ has a reader that names it and nothing that produces it, which is INV-8 again),
 do) and `TG3-17` (the tool path drops the degraded state and can return an error,
 where the prompt path reports it correctly).
 
+---
+
+## ADR-LOG-RESTRUCT-0033 — Razi's ten pre-P8 rulings, and the investigation that produced them
+
+**Status.** DECIDED
+**Author.** Claude (investigation) · **Razi (every decision below)** · **Tier.**
+`razi-ruled` throughout; the one item I decided independently is marked
+**When.** 2026-09-03 · before P8 begins
+
+**What.** Razi read the code and filed seven notes. Four read-only audits and a
+direct read of the prompt path answered them; he then ruled on ten decisions.
+The investigation is archived as `_verify/A11`…`A15`; the reader's version is
+the `Pre-P8 Review` artifact.
+
+### The rulings
+
+| # | Question | Ruling |
+|---|---|---|
+| **D1** | Should anything in the prompt be universal? | **Split out a small invariant core** — identity, general knowledge, prohibitions, `AUTODEV.md` — that **every agent** receives; recipes extend it rather than replace it. → `P8-E` |
+| **D2** | How should workers use git? | Per recommendation, **plus the house rules from `CLAUDE.md`**: branch first, stage deliberately, no blind `git add -A`, no secrets, no force-push, no push to `main` or PR without approval. → `P8-37`, `P8-38` |
+| **D3** | Who executes design work? | **The PA, in Rollout 1**, refined until ready. The fleet becomes an **additional consumer in Rollout 2**. Reason, verbatim: *"if the design work is handled by the fleet it will be pretty confusing and hard to debug."* → `PD0-07` |
+| **D4** | Fleet before or after the design phases? | **After** — the existing order stands, and now for a stated reason rather than by accident. |
+| **D5** | Where does procedural-memory-at-tool-execution live? | **Split**: the seam in `P8` (`P8-40`, `P8-41`), the wiring for workers in `P4` (`P4-44`). ⚠ Razi's D5 answer said P4 and his note 12 said P8; asked, and this is the resolution. |
+| **D6** | ROI scoring? | **Dropped completely.** *"It is confusing as well as we already have dashboard."* Nothing was deleted — no model, writer, reader or task ever existed; what changes is that none will be added. → `R-15` |
+| **D7** | How much design UI does Rollout 2 need? | **A live viewer, not a canvas editor.** The design rendered on the left, the PA and the chat on the right — the Claude Design arrangement. No layer tree, no transform handles, no undo stack. → `P6-25`, `P6-28` re-scoped |
+| **D8** | What happens to `airsctl agent`? | **Retire and delete it in P8.** Asked for my view: agreed — its five subcommands are pure HTTP to the sidecar, so P8 kills them regardless, and reimplementing `run` natively would duplicate the desktop engine for a surface with no user. `airsctl` keeps its task/DB surface. → `P8-44` |
+| **D9** | Live Monitor telemetry? | **Re-emit it around the native engine run.** *"We need all functionality live."* → `P8-42`, `P8-43` |
+| **D10** | How should `bash` run a command on Windows? | Per recommendation: **stop rewriting**, route through `platform/command.rs`, prefer a real POSIX shell, fall back to PowerShell *properly* rather than to `cmd`. → `P8-26` |
+
+Plus a standing instruction: **every live defect found goes into P8 as its own
+group**, and the adaptation-engine findings go into the design phases.
+
+### What the investigation actually found
+
+Two things reframed the codebase, and both came from Razi's notes rather than
+from the plan.
+
+**The prompt architecture is inverted from the worry.** He asked whether every
+worker sharing one base prompt would make them behave identically. They do not
+— each recipe carries 5–12 KB of genuinely distinct protocol. The defect is the
+opposite: because a recipe is passed as `system_prompt_override` and
+`engine.rs:208-227` treats an override as a **total replacement**, nothing that
+should be universal is. Of the base prompt's seven prohibitions, *"never
+`git push --force`"* appears **nowhere in any recipe** — the string does not
+exist in `defaults.rs` — and *"never push directly to `main`"* reaches **none**
+of the five workers, all of which are told to `git add -A && git commit` with
+no branch created. `AUTODEV.md` reaches no worker either; I enumerated every
+injection site to be sure.
+
+**`bash.rs` is `BUG-COMPILE`, unrepaired.** The first defect in the whole
+restructure tracker. `rewrite_for_windows` emits `Select-Object -First`,
+`Select-Object -Last` and `Select-String` — **PowerShell** cmdlets — and
+`bash.rs:116` hands the result to `cmd /C`, which has none of them. A build
+succeeds, `cmd` returns the missing command's status, `build_evidence::record`
+stores it as a failure, and `update_task_status` reads that to veto
+`qc_review`. Razi named this file unprompted as *"the one that keeps failing"*.
+
+**And the fleet complaint has a mechanism.** *"Work was not assigned using the
+affinity"* — correct, and worse than "the algorithm needs fixing":
+`assign_task` and `assign_tasks_batch` take the worker slug from the model's
+tool arguments and call only `record_assignment`. They **write** history and
+never **read** it. No assignment path consults the scorer, so repairing it
+would change nothing. The scorer could not answer anyway: its static layer
+requires `confidence > 0.85` against a maximum pattern confidence of exactly
+`0.85`, and outcomes are only ever written by a human clicking in the UI.
+
+### One thing fixed without waiting
+
+**Decided independently**, under `§0 Rule 5`: `edit_file` with an empty
+`old_string` destroyed files. With `replace_all` it inserted the replacement at
+every character boundary and reported success; without it, `find("")` returned
+`Some(0)` for ever and the loop never advanced — an infinite loop holding that
+path's lock. The schema permitted it and a model meaning *"insert at the top of
+the file"* reaches for `""` naturally. Guarded, three tests that read the file
+back, falsified by removing the guard. Commit `7ae53ee`.
+
+Nothing else was changed before Razi ruled.
+
+**Where.** `MASTER_DEVELOPMENT_PLAN.md` — `P8-0`, `P8-E`…`P8-I` (41 new tasks),
+`P4-F` (13), `PD1-D` (7), `PD2-D` (13), `PD4-B`/`PD4-C` (20), `PD6-B` (1),
+`PD0-07`, `P6-25`/`P6-28` re-scoped, `R-15` filed ·
+`_verify/A11`…`A15` · `_verify/PRE-P8-REVIEW.html`
+
+**How proven.** Every load-bearing claim above was re-read in the main session
+before it reached a task: the stranding defect, the `TG-P4-31` ordering
+constraint, the affinity path, the `0.85` threshold, the git instructions in
+all five recipes, the `AUTODEV.md` injection sites, and the `bash.rs` rewriter.
+Several other agent claims were corrected or dropped — `propose_memory` does
+clamp its confidence, and `worker-cleanup` is heavily guarded where a keyword
+probe of mine said it was not.
+
+**Links.** `ADR-LOG-RESTRUCT-0032` · `§0.16 L-31`, `L-32` · `R-14` · `R-15` ·
+`P4-11` (the `platform/command.rs` wiring `D10` depends on)
+

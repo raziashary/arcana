@@ -706,7 +706,7 @@ stamp its run id. Sequence a phase after its data producer. Put the capstone las
 | **P3 A–E** | R1 | Context is bounded · one tool path with a real gate · subagents in-process · a panic cannot kill the app | P2 |
 | **P3-F** | R1 | Memory works and is **proven read** | P3 A–E |
 | **P8** | R1 | Not one line of sidecar code survives, by content **or** by address | P3-F |
-| **PD0** | R1 | The capability contract is published and answered by a live stub | P2 |
+| **PD0** | R1 | The capability contract is published and answered by a live stub | P2 — ⚠ **not P8**; runnable now, and the AutoDesign team is blocked on it |
 | **PD1** | R1 | A PSD **or** PDF becomes an IR that describes the design exactly | P8 |
 | **PD2** | R1 | Fidelity is **measured**, not asserted — and refined until it passes | PD1 |
 | **PD3** | R1 | The IR exports to webpage, PDF and PSD | PD2 |
@@ -786,29 +786,65 @@ built on an unstated ~2.3 tasks/hour and were wrong by 2.5–3.8×, in the
 direction that matters least for trust and most for planning: everything landed
 early, so nothing was ever caught, and the figure quietly stayed wrong.
 
-### Recalibrated remainder — 223 open tasks
+### Recalibrated remainder — 319 open tasks
 
-| Phase | Open | Old | **New** | Confidence |
+⚠ **Re-cut 2026-09-03**, after Razi's pre-P8 review folded the investigation's
+findings into the plan. The remainder grew from 223 tasks to **319**, and
+`P8` grew from 24 tasks to **65** — it now carries the live defects, the prompt
+floor, the procedural-memory seam, the Live Monitor restoration, the `airsctl
+agent` retirement and the complete legacy conversion, not just the sidecar's
+deletion. The rate is unchanged; only the work is.
+
+| Phase | Open | Prev. est | **New** | Confidence |
 |---|---|---|---|---|
-| `P0-21` e2e harness | 1 | — | *blocked* | Environment, not throughput — `msedgedriver` absent locally and `tauri-driver` has no WKWebView backend, so macOS can never run it |
-| **P8** Sidecar removal | 24 | ~6 h | **~4 h** | High — deletion against a known inventory |
-| **PD0** Contract | 6 | ~2 h | **~1 h** | High |
-| **PD1** Ingestion | 14 | ~6 h | **~2.5 h** | ⚠ Medium — 4 of 18 done, new domain |
-| **PD2** Fidelity | 14 | ~7.5 h | **~2.5 h** | ⚠ Low — *measured* fidelity is a research loop, not a task list |
-| **PD3** Export | 15 | ~7 h | **~2.5 h** | ⚠ Medium |
-| **PD4** Adaptation | 13 | ~7 h | **~2 h** | ⚠ Medium |
-| **PD5** Changes | 13 | ~5.5 h | **~2 h** | ⚠ Medium |
-| **PD6** Brand guideline | 9 | ~3.5 h | **~1.5 h** | ⚠ Medium |
-| **P4** Fleet | 31 | ~12.5 h | **~5 h** | High — Rust, and the shape is known |
-| **Rollout 1** | **140** | **~92 h** | **≈23.5 h** | |
-| **P5** Graph | 21 | ~9 h | **~3.5 h** | High |
-| **P6** UI | 28 | ~10 h | **~4.5 h** | ⚠ **Low — no measured frontend throughput exists.** Every hour above is Rust |
-| **P7** Experience | 18 | ~5.5 h | **~3 h** | ⚠ Low — same reason |
-| **P9** Delivery | 16 | ~7 h | **~2.5 h** | ⚠ **Not throughput-bound.** Gated on Razi generating the signing keypair, and on real CI runs across three platforms |
-| **Rollout 2** | **83** | **~35 h** | **≈14 h** | |
-| **Programme** | **223** | **~127 h** | **≈37.5 h** | |
+| `P0-21` e2e harness | 1 | *blocked* | *blocked* | Environment, not throughput |
+| **P8** Conversion + defects | 65 | ~4 h | **~11 h** | ⚠ Medium — 21 of its tasks are prose or frontend, where no throughput has been measured |
+| **PD0** Contract | 7 | ~1 h | **~1 h** | High |
+| **PD1** Ingestion | 21 | ~2.5 h | **~3.5 h** | ⚠ Medium |
+| **PD2** Fidelity | 27 | ~2.5 h | **~4.5 h** | ⚠ Low — a research loop, and now carrying the renderer |
+| **PD3** Export | 15 | ~2.5 h | **~2.5 h** | ⚠ Medium |
+| **PD4** Adaptation | 33 | ~2 h | **~5.5 h** | ⚠ Medium |
+| **PD5** Changes | 13 | ~2 h | **~2 h** | ⚠ Medium |
+| **PD6** Brand guideline | 10 | ~1.5 h | **~1.5 h** | ⚠ Medium |
+| **P4** Fleet | 44 | ~5 h | **~7.5 h** | High — Rust, and the shape is known |
+| **Rollout 1** | **236** | **≈23.5 h** | **≈39.5 h** | |
+| **P5** Graph | 21 | ~3.5 h | **~3.5 h** | High |
+| **P6** UI | 28 | ~4.5 h | **~4.5 h** | ⚠ **Low — no measured frontend throughput** |
+| **P7** Experience | 18 | ~3 h | **~3 h** | ⚠ Low — same reason |
+| **P9** Delivery | 16 | ~2.5 h | **~2.5 h** | ⚠ **Not throughput-bound** — gated on Razi's signing keypair and on CI across three platforms |
+| **Rollout 2** | **83** | **≈14 h** | **≈14 h** | |
+| **Programme** | **319** | **≈37.5 h** | **≈53 h** | |
 
-**Handover to AutoDesign is `P8` + `PD0` — 30 tasks, ≈5 hours.**
+### Handover is three milestones, not one
+
+🔴 **Corrected 2026-09-03, on Razi's challenge.** This plan and the public brief
+both carried a single row reading *"HANDOVER — the AutoDesign team can begin
+wiring"*, placed after `P8`. He asked the obvious question: how can they wire
+against a contract that does not exist yet, for capabilities built after `P8`?
+
+Both are true, and the single-milestone framing overstated it. What `PD0`
+delivers is a **contract plus a live stub** (`PD0-06`), which lets AutoDesign
+build and test *their* side against a real, versioned, exercised surface while
+the capability behind it is still being built. That is genuine parallel work —
+and it is not "AutoDev is ready for them".
+
+| Milestone | What AutoDesign can actually do | Needs | Cost |
+|---|---|---|---|
+| **M1 · Contract** | Build and test their integration against a live stub answering all four verbs | **`PD0` only** | **≈1 h** |
+| **M2 · First real capability** | Send a real PSD or PDF and get a real IR back — the stub stops being a stub | `P8` + `PD1` | ≈15 h |
+| **M3 · Full Rollout 1** | Fidelity, export, adapt, change, brand guideline | `PD2`–`PD6` | ≈39.5 h |
+
+⚠ **`PD0` is not blocked by `P8`.** Its dependency is `P2`, which closed on
+2026-09-02, and `§10.5.0` already says it *"runs early and in parallel"*. The
+public brief's phase table nonetheless listed it **last, after `P4`**, which
+reads as the contract arriving at the very end — the opposite of its intent.
+That was a presentation defect and is corrected.
+
+**Recommended order: `PD0` first, then `P8`.** One hour unblocks a partner team
+who are otherwise waiting on a document, and nothing in `PD0` depends on the
+sidecar being gone.
+
+
 
 ### Where this model should NOT be trusted
 
@@ -1451,6 +1487,7 @@ operation set, which is decided.
 - [ ] **PD0-04** An **error taxonomy** distinguishing *refused* (bad input), *failed* (we broke), and *degraded* (succeeded with loss — an unresolvable font, a rasterized blend mode). Degraded is the one that matters: it is the case the old converter reported as success. → `UNIT-PROVEN`
 - [ ] **PD0-05** **Asset transfer**: how bitmaps move between the two processes, and who owns their lifetime. → `UNIT-PROVEN`
 - [ ] **PD0-06** A **live stub** answers every operation with a valid, correctly-shaped response before any real work exists. A contract nobody has exercised is a document; a stub makes it an integration. → `SMOKE-PROVEN`
+- [ ] **PD0-07** 🔴 **The contract states who executes.** *(razi-ruled 2026-09-03, `D3`.)* Across the whole of `PD1`–`PD6` the words *personal assistant*, *PA*, *fleet*, *worker* and *supervisor* appear **zero times** — the phases define capabilities and never say who drives them, which left AutoDesign to infer it. **The ruling: the PA executes design work in Rollout 1**, refined until it is ready, and **the fleet becomes an additional consumer in Rollout 2** — running it through the fleet now would be, in Razi's words, *"pretty confusing and hard to debug"*. So: `adapt` stays deterministic (`PD4-02`), the **PA** chooses parameters and adjudicates a `degraded` result, and nothing in Rollout 1 depends on a working fleet. Write it into the contract so the consumer does not have to guess. → `DOC-GATE`
 
 **Smoke — SD0**
 - [ ] **SD0-01** A caller invokes all four operations against the stub and receives well-formed, schema-valid responses.
@@ -1494,6 +1531,35 @@ operation set, which is decided.
 
 ---
 
+
+> ### 📐 Grounded in the AAE post-mortem
+>
+> The organisation already built a design **Adaptive Adjustment Engine** —
+> `AIRS Microservices/mcp-server-adobe/src/aae` — and it reached production
+> against a real 5-PSD × 3-size matrix. Its full reading is in
+> `_verify/A12-aae-adaptation-reference.md`; the tasks below are traced to it
+> line by line, and razi-ruled into this plan on 2026-09-03.
+>
+> **The single most important thing it teaches:** the engine has **no measured
+> fidelity anywhere**. There is no rasterisation and no comparison — every
+> "score" is a penalty tally over the same boxes the engine just produced. Its
+> correctness checker is complete, correct, was marked RESOLVED in its own
+> audit, and **is imported by nothing**. Both are shapes this repo knows.
+>
+> ⚠ Its three root-level audit reports describe an engine that no longer
+> exists. The real record is `docs/AAEAuditbyRazi/` — the owner's own June run.
+
+### PD1-D · IR vocabulary the AAE post-mortem paid for
+
+- [ ] **PD1-19** `Frame` carries an **affine transform, not just an AABB**. AAE's `Box{left,top,width,height}` is right for layout maths and silently drops `rotate` — carried in the type and read by no transform. → `UNIT-PROVEN`
+- [ ] **PD1-20** A **closed `Role` enum with no aliases**, plus a versioned translation at ingest. Seven aliases caused a live bug where code branching on `'decor'` never matched `'decoration'`. → `UNIT-PROVEN`
+- [ ] **PD1-21** Role assignment is `{value, confidence, method, reasons}` — AAE already had this shape and only ever read `value`, so provenance was designed and thrown away. → `UNIT-PROVEN`
+- [ ] **PD1-22** 🔴 **Hierarchy is real: parent transforms compose onto children at parse time.** AAE's flat `[groupNode, child, child]` model is the direct cause of its **#1 production defect** — group/folder desync. → `UNIT-PROVEN`
+- [ ] **PD1-23** Text is **runs with measurable metrics** (family, size, leading, tracking, per run). AAE had a single style over a single string, which made its `TextFitResult{overflow,truncated,needsBreak}` a dead type because nothing ever measured text. → `UNIT-PROVEN`
+- [ ] **PD1-24** Asset **kind** (vector / raster / text / shape) is carried explicitly from ingest. AAE guessed "vector" as *"≤1 smartObject"* — a Photoshop proxy that does not exist here. → `UNIT-PROVEN`
+- [ ] **PD1-25** Port `UnitValue` / `SpacingSpec` / `resolveUnit` / `resolveAsFraction` **essentially verbatim**, resolving only at the policy boundary. The cleanest module in that engine, and its px-only-inside rule held up. → `UNIT-PROVEN`
+
+
 ## §10.5.2 · PD2 · Fidelity — measured, not asserted
 
 **Goal.** *"Visually it looks okay but in reality pixel by pixel wise is not, so we need a
@@ -1525,6 +1591,27 @@ character rendering as a glyph box and two fonts silently replaced.
 - [ ] **SD2-03** The refinement loop improves a failing case and terminates.
 
 ---
+
+
+### PD2-D · What "measured, not asserted" has to mean *(AAE post-mortem)*
+
+> 🔴 **AAE never measured fidelity and did not notice.** This group exists so
+> this phase's title stays true.
+
+- [ ] **PD2-15** 🔴 **Build a renderer; fidelity is a measured comparison of rendered source against rendered output.** There is no rasterisation anywhere in AAE — its pipeline audit lists PNG generation as missing — so every score it reports is a penalty tally over its own output. → `BENCH-PROVEN`
+- [ ] **PD2-16** **Normalise every before/after metric against the intended resize.** Raw-pixel comparison made *everything* read as moved and scaled; comparing centre fractions with a relative epsilon is what gave the metric signal. → `UNIT-PROVEN`
+- [ ] **PD2-17** Every invariant has a **typed identity** shared by emitter and analyser — no string matching. Three of six AAE refinement branches key on violation strings its compiler never emits, so its gap multiplier is permanently 1.0. → `UNIT-PROVEN`
+- [ ] **PD2-18** **Overlap is a real, role-aware invariant** with an IoU or occlusion measure. AAE declares `maxPrimaryOverlap` and checks it nowhere; the role-aware version lives only in the file nothing imports. → `UNIT-PROVEN`
+- [ ] **PD2-19** **Re-verify the geometry that actually ships**, after every post-hoc adjustment. AAE's safe-zone clamping runs *after* selection and *after* verification, and its residuals never enter the reported violations. → `GATE-PROVEN`
+- [ ] **PD2-20** 🔴 **The refinement loop may not mutate its own thresholds.** AAE's `adjust_constraints` lowers the minimum font and CTA sizes and raises the maximum logo crop until the same layout scores clean. Relaxation must be a caller-authorised, recorded input. → `GATE-PROVEN`
+- [ ] **PD2-21** **Select by (hard-constraint satisfaction, then a real-valued quality score)** — not by counting violations. AAE sorts on `(violationCount, errorCount, seedIndex)`, so *"logo 3% small"* and *"hero fully off-canvas"* weigh exactly the same. → `UNIT-PROVEN`
+- [ ] **PD2-22** **Keep best-so-far across refinement and never return worse than an earlier iteration.** AAE added this late, precisely because refinement returned the *last* result rather than the best. → `UNIT-PROVEN`
+- [ ] **PD2-23** **Protected sub-regions** (faces, product bounds, focal points) are modelled and crop is checked against them. Still open in AAE: *"'a character is cut' passes as long as the overall area loss is under the role threshold."* → `UNIT-PROVEN`
+- [ ] **PD2-24** **Real text shaping** — measure, line-break, detect overflow, and make `wrap` mean something. In AAE `wrap` and `preserve` are identical no-ops, so its whole text-wrap vocabulary is a lie. → `UNIT-PROVEN`
+- [ ] **PD2-25** A **legibility invariant beyond a pixel floor** — contrast against the composited backdrop, minimum rendered x-height. AAE's only legibility check is `fontSize >= 18`, applied to a size the engine itself just chose. → `UNIT-PROVEN`
+- [ ] **PD2-26** **The offline round-trip harness, built first.** Re-execute the emitted artefact under the consumer's semantics and assert it reproduces the intended layout. ⚠ AAE's equivalent is *the only check in that repo that ever caught anything*, and it needed no vendor API. → `GATE-PROVEN`
+- [ ] **PD2-27** **An end-to-end run on real assets across the full target matrix before this phase closes.** AAE's 5-PSD × 3-size run **reordered its entire defect priority list** and surfaced five findings that three prior desk audits had all missed. → `SMOKE-PROVEN`
+
 
 ## §10.5.3 · PD3 · Export — webpage, PDF, PSD
 
@@ -1582,6 +1669,34 @@ This sits on the deterministic side of the master plan's PART 2 split.
 - [ ] **SD4-03** The same input and target produce byte-identical output twice (determinism).
 
 ---
+
+
+### PD4-B · Layout intent *(AAE post-mortem)*
+
+- [ ] **PD4-14** **Centre-fraction preservation with uniform `min(sx,sy)` scale** is the baseline transform. Every other rule in AAE is a correction on top of this one. → `UNIT-PROVEN`
+- [ ] **PD4-15** `cover` with **centre-offset correction** for full-bleed elements — naive cover drifts the focal point. → `UNIT-PROVEN`
+- [ ] **PD4-16** **Nearest-source-corner detection and corner-anchored placement.** The highest-value reconstructed-intent heuristic in that engine, and the only thing keeping corner elements in their corners. → `UNIT-PROVEN`
+- [ ] **PD4-17** 🔴 **Coupling is a first-class IR relation** — *"this element's frame derives from that one's"* — used for background / overlay / pattern. AAE documented the overlay as "coupled with bg" and **never implemented the coupling**, producing a visible dark seam across all five test assets. → `UNIT-PROVEN`
+- [ ] **PD4-18** **Named groups are rigid units**: transform the unit, then expand to members. AAE's rank-1 fix; unit-first ordering took one test from 210 px of error to 0. → `UNIT-PROVEN`
+- [ ] **PD4-19** **Exclude full-bleed roles from proximity clustering** before it runs. A canvas-spanning background absorbed logos and overlays into one cluster and erased their transforms. → `UNIT-PROVEN`
+- [ ] **PD4-20** **Every layout threshold is a canvas fraction or a physical unit — bare-pixel constants are banned.** AAE's `PROXIMITY_THRESHOLD=50`, `MAX_CLUSTER_DIAMETER=500`, nudge cap `50` and `minCtaSize=120` mean entirely different things at 640×480 and at 4096×4096. → `GATE-PROVEN`
+- [ ] **PD4-21** Adopt the **canvas-relative gap scale** (tight 2% / normal 4% / loose 8%, axis-bound) — the one spacing decision in AAE that scaled correctly. → `UNIT-PROVEN`
+- [ ] **PD4-22** 🔴 **Per-ratio composition templates**: a target size resolves to named regions and roles bind to regions. Still open in AAE and the reason for its most visible failure — *"the recompose path is a handful of anchor-strategy seeds, not true per-ratio layout templates … a landscape target ends up as a rescaled square."* → `UNIT-PROVEN`
+- [ ] **PD4-23** The aspect-ratio mode selector is **direction-symmetric**. Verified in AAE: `0.5 → 1.0` selects `recompose` while `1.0 → 0.5` selects `reflow`, because the selector divides by the source ratio. → `UNIT-PROVEN`
+- [ ] **PD4-24** **Background ignores the safe zone; only foreground respects it** — stated as an explicit rule. Still open in AAE: a safe-zone guide was read as *"shrink everything"*, producing white margins instead of a full-bleed background with inset foreground. → `UNIT-PROVEN`
+
+### PD4-C · One compiler, one truth *(AAE post-mortem)*
+
+- [ ] **PD4-25** 🔴 **Exactly one `compile(plan, scene) -> Layout`**, called by the planner, the checker and the emitter alike. AAE's overlap resolver is a **second, partial geometry evaluator** that returns *source-space* boxes for six of nine transform kinds. → `GATE-PROVEN`
+- [ ] **PD4-26** **Every transform kind is total — no silent fallback to `preserve`.** Two kinds fell back for months while emitting a warning nobody actioned; an unimplemented arm should fail to compile. → `UNIT-PROVEN`
+- [ ] **PD4-27** **Uniform scale by default** when mapping a group frame onto members; anisotropic scaling is opt-in and checked. AAE applies independent `scaleX`/`scaleY`, so any non-uniform group frame stretches its children with nothing to catch it. → `UNIT-PROVEN`
+- [ ] **PD4-28** **Shrink allowances are linear ratios, never area ratios** — *"a logo at 0.9 linear is a 10% crop, not 19%"*. A bug AAE had to fix in two copies of the same function. → `UNIT-PROVEN`
+- [ ] **PD4-29** **Upscale caps are applied, not merely computed**: raster never above 1.0×, vector to an explicit cap. In AAE the caps were computed and never applied, and a raster logo was verified upscaling 4×. → `UNIT-PROVEN`
+- [ ] **PD4-30** 🔴 **A scale parameter means one thing on every code path.** AAE's `heroScale` was a *replacement* on one path and a *multiplier* on another — a verified 2× difference for the same nominal value, giving the same hero a different size at each target size. → `GATE-PROVEN`
+- [ ] **PD4-31** **Clamp non-full-bleed elements inside the canvas at the unit level**, before member expansion, and surface the clamp. AAE's rank-2 fix; took off-canvas elements from nine per test to at most one, and cured *"logo missing"*. → `UNIT-PROVEN`
+- [ ] **PD4-32** **A dead-code / unreachable-symbol gate for this subsystem.** AAE's checker is complete, correct, marked RESOLVED in its own audit, and imported by nothing; its candidate scorer is ~500 dead lines; its constraint struct has eight fields and one reader. ⚠ Same family as `L-C12`, which this repo has hit eight times. → `GATE-PROVEN`
+- [ ] **PD4-33** **No write-only fields.** If a struct field is never read, it is deleted. AAE carries at least eight, including a hardcoded `cost = 0` that its report presents as a computed figure. → `GATE-PROVEN`
+
 
 ## §10.5.5 · PD5 · Changes
 
@@ -1658,6 +1773,36 @@ compose rather than duplicating each other.
 
 ---
 
+### P4-F · Assignment actually uses affinity *(from the pre-P8 fleet audit, `_verify/A15`)*
+
+> 🔴 **Razi's standing complaint, with a mechanism.** *"Work posted by the
+> supervisor did not get picked up for a long time, and was not assigned using
+> the affinity."* Both halves are real, and the affinity half is worse than
+> "the algorithm needs fixing": **no assignment path consults it at all.**
+> `assign_task` and `assign_tasks_batch` take `worker_slug` from the model's
+> tool arguments and call only `record_assignment` — they *write* history and
+> never *read* it. Repairing the scorer alone would change nothing.
+
+- [ ] **P4-32** 🔴 **Dispatch consults affinity deterministically.** Rust picks the worker when the caller supplies no slug, or the Supervisor must pass the scorer's answer together with an explicit override reason. ⚠ The spec's own determinism table (`04 §7`) classifies routing as `MATH`; the shipped mechanism is a prompt telling an LLM to prefer a hard-coded keyword table and to *skip* the scorer (`defaults.rs:269-271`). Gate: with N recorded outcomes favouring worker X for a task type, a new task of that type is assigned to X **without the model choosing**. *(Blocked on `P4-07` and `P4-25`.)* → `GATE-PROVEN`
+- [ ] **P4-33** **The static pattern layer is unreachable, and no gate covers it.** `select_worker` requires `static_conf > 0.85` (`scorer.rs:135`); the highest confidence any pattern declares is exactly `0.85` (`patterns.rs:27,46`). `0.85 > 0.85` is false, always — so the `method: "static"` the tool advertises in its own output can never be produced. Fix the comparison or the confidences, and unit-prove that at least one shipped pattern can now produce it. Covers `F-ROU-03`, which is named in spec `04 §5.1` and appears in no task and no gate. → `UNIT-PROVEN`
+- [ ] **P4-34** 🔴 **One claim path, and the recipes use it.** `P4-07` and `P4-08` harden `claim_task_with_pid`; the shipped recipes call `update_task_status(id,'in_progress',slug)` instead (`defaults.rs:431` and its four twins), which performs **no ownership check and no load guard**. So task theft is wide open on the only path the fleet actually takes, and no PID is ever recorded — degrading orphan recovery to the 4-hour TTL. The already-fixed atomic `claim_next_ready` is reached only by `airsctl` and tests. Gate: driving the **shipped recipe text**, worker B cannot move worker A's task to `in_progress`. ⚠ **This is the task that makes `P4-07`/`P4-08` mean anything** — until it lands, both harden a function the fleet never calls. → `GATE-PROVEN`
+- [ ] **P4-35** **The tick gate stops swallowing the work the kick was sent for.** `runner.rs:206-215` short-circuits the whole tick when nothing is `Assigned | InProgress` — *before the engine is built*. So a **`rejected` task never wakes its worker** (the dead Mode 2 branch counted `rejected`; the live one does not), and an **idle worker never reads its ACP inbox**, because `list_worker_messages` is never reached. Widen the gate or handle both before the short-circuit. → `SMOKE-PROVEN`
+- [ ] **P4-36** **A worker liveness watchdog.** A worker left in `working` is skipped by both the cron gate and `kick_worker`, and nothing rescues it: no tick deadline, and `WorkersDb::heartbeat` has **zero callers in the app**, so `last_seen` is never refreshed and no watchdog reads it. Write it on tick start and end; reset a worker past a stated ceiling with a system event and reconcile its task. Gate: kill a tick mid-flight, the worker ticks again without an app restart. → `SMOKE-PROVEN`
+- [ ] **P4-37** **`kick_inflight` is released on panic.** The synchronous early returns are RAII-guarded; the spawned task removes its slug on its last line, so a panic inside `run_recipe` holds the slot for the process lifetime and every later kick logs *"another kick is already in flight"*. Push dispatch for that worker is then dead while the roster still shows it scheduled. → `UNIT-PROVEN`
+- [ ] **P4-38** **Batch assignment honours worker load, or the recipe stops claiming that it does.** The Supervisor's prompt asserts *"the batch tool will refuse and report per-entry failures"* (`defaults.rs:281-283`); `assign_tasks_batch` checks the task's status and the slug and **never looks at the target's load**. A comment asserting the opposite of the code. → `UNIT-PROVEN`
+- [ ] **P4-39** **`needs_info` is not a terminal state.** Both the blocked-task path and the budget breaker park tasks there, and the Supervisor's self-heal list has no branch for it — so a phased task sits there for ever. Pairs with `P4-28`: `unblock_ready_tasks` has exactly one caller, the UI, so nothing unblocks in autonomous operation. → `SMOKE-PROVEN`
+- [ ] **P4-40** **Clear `claimed_by_pid` and `claim_host` on every non-claim status write.** `update_status_with_reason` leaves them untouched for ever, so a task carrying a PID from a previous app run is an orphan candidate — and `check_task` can release a freshly-assigned task back to `ready`, wiping `assigned_worker`. A task can bounce ready → assigned → ready across restarts. → `UNIT-PROVEN`
+- [ ] **P4-41** **Epics are reachable from the fleet's real surface.** The model, the tools, the Tauri commands and an Epics tab all exist — and **no recipe mentions `create_epic` or `create_phased_task`**, the Supervisor's tool list omits them and tells it to decompose with flat `create_task`, and no frontend caller exists. The panel is permanently empty because nothing ever creates the row. ⚠ **Extends `P4-27`, whose stated reason is now stale** — it says the tool is "PA-only and reaches tools only via MCP"; MCP is gone and the tool *is* registered on the path the Supervisor uses, so fixing registration alone would change nothing. → `SMOKE-PROVEN`
+- [ ] **P4-42** **The QC recipes read their inbox, or stop being addressable.** `qc_agent` and `qc_dispatcher` contain no `list_worker_messages`, so mail to them is never read and every broadcast leaves permanently unread rows; `kick("qc-dispatcher")` warns *worker not found*, since no such row exists. And `list_stale_worker_messages` has **zero callers**, so delivery is at-most-once against a recipe that promises "lossless". → `UNIT-PROVEN`
+- [ ] **P4-43** **An empty board stops costing money.** `supervisor` invokes the LLM every 60 s and `qc-agent` every 30 s against an empty board, replying "Board clean — idle". The `worker-*` short-circuit has no counterpart for either, and the QC queue's own skip lives inside the dead Mode 2 branch. → `BENCH-PROVEN`
+- [ ] **P4-44** **Procedural memory is wired for workers** *(razi-ruled, `D5` — `P8-40`/`P8-41` build the seam, this turns it on)*. A worker that has run this build before is the beneficiary. Scoped to the tools the model actually invoked, inside the existing turn budget, and off by default until the equivalence gate in `P8-41` is green. → `SMOKE-PROVEN`
+
+
+### PD6-B · The failure this phase exists to avoid *(AAE post-mortem)*
+
+- [ ] **PD6-10** 🔴 **Wire the brand guideline to layout composition on day one, with a test that proves a guideline changes the output.** AAE's most severe open finding is exactly this: *"the brand guideline did not influence output."* The policy schema was written; the proof that a policy could move a logo came **a year later**. A guideline that ingests, validates, reports success and changes nothing visible is this phase failing while reporting green. → `GATE-PROVEN`
+
+
 # §11 · Phases P5–P9 — full task breakdowns
 
 **Authored 2026-09-01** on Razi's direction: *"for the phases that has no tasks, write
@@ -1698,6 +1843,54 @@ dependency. **Spec.** `09 §4`.
 port. `runtime_config.skip_sidecars` already exists, which means the app has a tested path
 that never starts them.
 
+### P8-0 · Live defects — closed before anything is deleted
+
+> ⚠ **Placed first deliberately.** Every task in this group is a defect that is
+> live in the shipped code today. A deletion phase that runs before them buries
+> them: the diff gets large, the defects get attributed to the deletion, and the
+> partner team inherits them. Found by the pre-P8 investigation
+> (`_verify/A11`, `A13`, `A14`, `A15`); razi-ruled into P8 on 2026-09-03.
+
+- [ ] **P8-25** 🔴 **Every recipe saved in the UI is silently stranded.** `FallbackPolicy` derives `#[default] Mode2Only`, `Recipe.fallback_policy` is `#[serde(default)]`, and `RecipeEditor.tsx`'s `buildRecipe()` omits the field — so a recipe created in the UI deserialises as `Mode2Only`, hits the guard at `runner.rs:717-737`, reports `fallback_idle`, and **never runs and never errors**. ⚠ `update_recipe` is a **full overwrite**, so editing a *shipped* recipe strands it too — silently undoing `P4-31`, which is the fix that flipped those eight recipes to `Mode1Capable`. Sequenced with `P8-45`: if the enum is being deleted anyway, delete it here rather than fixing the default twice. → `LIVE-DB-PROVEN`
+- [ ] **P8-26** 🔴 **`bash` rewrites POSIX pipes into PowerShell cmdlets and runs them under `cmd`.** This is **`BUG-COMPILE`**, the first defect in the whole restructure tracker, unrepaired. `rewrite_for_windows` (`bash.rs:533-545`) emits `Select-Object -First`, `Select-Object -Last` and `Select-String`; `bash.rs:116` hands the result to `cmd /C`, which has none of them. So `npm run build 2>&1 | tail -50` becomes a pipeline whose right half does not exist, `cmd` returns the last element's status, `build_evidence::record` stores a **successful build as failed**, and `update_task_status` reads that to veto `qc_review`. **razi-ruled:** stop rewriting; route through `platform/command.rs` (built in `P1`, still zero callers — this is what `P4-11` exists for), preferring a real POSIX shell where one is present and PowerShell **properly** where one is not. → `SMOKE-PROVEN`
+- [ ] **P8-27** 🔴 **`bash` never kills its child.** No `kill_on_drop`, no process-group kill, no cancel path — while `validate.rs:281` and `e2e_probe.rs:418` both set it. A timed-out `cargo build` keeps `target/.cargo-lock` and **every later build in the session times out too**. The one executor that runs model-authored commands is the only one without the guard. → `UNIT-PROVEN`
+- [ ] **P8-28** 🔴 **The build-evidence gate matches command *text*.** `bash("grep -rn \"npm run build\" package.json")` exits 0, classifies as a passing Node build, and opens the `qc_review` door with nothing built. The gate that decides whether work may be called complete is satisfied by a command that merely mentions a build. → `UNIT-PROVEN`
+- [ ] **P8-29** **Unassigning a task leaves it half-assigned.** `update_task_status`'s description says *"pass null to unassign"*, and `db/tasks.rs:671-678` omits the column entirely on `None` — so the task becomes `ready` while still tagged with its worker, which is the exact state the guard twelve lines above it exists to prevent. → `UNIT-PROVEN`
+- [ ] **P8-30** **`spawn_subagent` misdescribes its own tool grant.** The description tells the model an empty `tools` list means "MCP tools only"; empty means **unrestricted** — the child inherits the full registry. A model reading its own documentation grants more than it intends. Fix the description **and** decide whether empty should mean "inherit" or "none". → `UNIT-PROVEN`
+- [ ] **P8-31** **Two timestamp readers still lie about age, in opposite directions.** `get_qc_queue` (`task_commands.rs:137-141`) parses an offset-less `datetime('now')` string with an RFC3339 parser and `.unwrap_or(0)`s the failure, so **every review reports an age of 0 s and the stalled-review alert can never fire**. The frontend has the mirror bug: `new Date("2026-09-01 06:23:58")` is read as **local** time by V8, so at UTC+5:30 every age is **inflated by 5.5 hours** — a task assigned a minute ago reads as "6 hours ago". ⚠ `P1-13` marked this class closed; it missed this site because the sweep searched for the string `parse_from_rfc3339`, which this site does not contain. The gate must be behavioural, not a grep. → `UNIT-PROVEN`
+- [ ] **P8-32** **"Delegate to Fleet" does not delegate.** `AnnotationModal.tsx:114` passes `paMode: 'delegate'`; `agent_commands.rs:122-127` prefers `session.pa_mode`, which is `NOT NULL DEFAULT 'fast_development'` and therefore never empty — so the argument is unreachable and the button runs in whatever mode the session already had. Either honour an explicit argument or drop the parameter and have the flow call `set_session_pa_mode` first; silently ignoring a caller-supplied mode is wrong either way. → `SMOKE-PROVEN`
+- [ ] **P8-33** **Triage the remaining `builtin_tools` findings.** 58 were found (`_verify/A11-builtin-tools-audit.md`); the criticals are `P8-26`…`P8-30` above. Work the rest to a decision each — fixed, filed with an owning phase, or dismissed with a reason — and record the disposition in the audit file. Named examples that must not be lost: `grep`'s total-byte bound cannot bind when the matches are in one file; `list_directory` follows symlinks out of the workspace jail; `check_file` returns **success after running nothing** when `checks` is misspelled; `spawn_parallel_subagents` reports success when every subagent failed. → `DOC-GATE`
+
+### P8-E · One prompt floor for every agent *(razi-ruled, `D1`/`D2`)*
+
+> 🔴 **The defect this closes.** A recipe's `instructions` is passed as
+> `system_prompt_override`, and `engine.rs:208-227` treats an override as a
+> **total replacement**. Workers are therefore strongly differentiated — which
+> is correct and stays — but *nothing that should be universal is*: the seven
+> `## What You Must Never Do` rules and the user's `AUTODEV.md` reach the
+> interactive assistant and **none of the agents that do the work**.
+
+- [ ] **P8-34** Extract an **invariant core** from `BASE_SYSTEM_PROMPT`: identity, the general operating knowledge, and the prohibitions. Small, and everything PA-specific stays behind in the PA prompt. → `UNIT-PROVEN`
+- [ ] **P8-35** **A recipe extends the core, it does not replace it.** Every agent — PA, fleet worker, subagent — receives core + its own instructions. The recipe keeps full control of its own role, protocol and rejection criteria. → `UNIT-PROVEN`
+- [ ] **P8-36** **`AUTODEV.md` reaches every agent.** Global and per-repo instructions are appended in `build_system_prompt_parts`, which the override branch skips entirely — so the file the user writes to teach AutoDev their conventions is read by the assistant and by no worker. ⚠ Keep the cache split intact: the core and `AUTODEV.md` are **stable**, memory stays **volatile and last** (`P2-14`). → `UNIT-PROVEN`
+- [ ] **P8-37** **The git rules in the core are the house rules**, taken from `CLAUDE.md` rather than reinvented: branch before the first commit; stage deliberately, never a blind `git add -A`; never commit secrets or `.env`; never force-push or rewrite published history; never push to `main` or open/merge a PR without the user's approval. → `UNIT-PROVEN`
+- [ ] **P8-38** **Recipes stop committing to `main` with `git add -A`.** All five worker recipes run `bash('git add -A && git commit …')` with no branch created (`defaults.rs:462, 721, 953, 1073, 1253`). ⚠ Knock-on: `worker-cleanup`'s **mandatory** functionality check diffs `main` against the current branch, and since nothing creates a branch it diffs `main` against itself — the one hard safety gate in the cleanup worker is judging an empty patch. → `SMOKE-PROVEN`
+- [ ] **P8-39** `TG8-xx` — **no agent runs without the core.** Assert it structurally, over the path each agent kind actually takes, not by searching the prompt text for a phrase. Falsify by removing the core from one path. → `GATE-PROVEN`
+
+### P8-F · Procedural memory — the seam *(razi-ruled, `D5`: plumbing here, wiring in `P4`)*
+
+- [ ] **P8-40** A **retrieval seam** in `tool_executor.rs`, which consults memory nowhere today. Retrieved **once per turn**, never per call — the fleet makes many calls per tick and `TG3-08` bounds input growth. → `UNIT-PROVEN`
+- [ ] **P8-41** Recalled procedural text goes through `recall.rs`'s **flattener** and the same data framing, so this path cannot re-open the prompt-implant hole `P3-F` closed. It is **advisory context only** — never an input to a tool's arguments, so a tool's behaviour is identical with and without it. Gate that equivalence. → `GATE-PROVEN`
+
+### P8-G · Restore the Live Monitor *(razi-ruled, `D9` — "we need all functionality live")*
+
+- [ ] **P8-42** Re-emit `worker:tick-start` and `worker:tick-end` around the **native** engine run (`runner.rs:802-889`), with a real `tick_duration_ms` and `last_outcome`. Today their only emitters are inside the Mode 2 branch that `P8-B` deletes, so the Live Monitor is already permanently blank and deleting that branch would make the breakage structural. → `SMOKE-PROVEN`
+- [ ] **P8-43** `set_worker_status_ex` carries real values on the live path; the frontend statuses that no Rust call site ever sets (`mode1_active`) are either produced or removed. A status a store consumes and nothing writes is a reader with no writer. → `UNIT-PROVEN`
+
+### P8-H · Retire `airsctl agent` *(razi-ruled, `D8`)*
+
+- [ ] **P8-44** **Delete the `agent` subcommand set** — `run`, `list`, `status`, `stop`, `logs` (`src-cli/src/commands/agent.rs:104-395`). All five are pure HTTP to `{orchestrator_url}/api/agents/*` and cannot succeed after P8 on any machine; one error path even tells the user to run `cargo run --bin core-orchestrator`. **Not reimplemented natively** — that would duplicate the desktop engine for a surface with no user. ⚠ `airsctl` keeps its task/DB surface, which is live and used; it is the `agent` verb specifically that is retired. Remove `system sidecars` and the orchestrator row from `system status` in the same commit. → `CODE-PRESENT`
+
 ### P8-A · Verify the entry gate
 - [ ] **P8-01** `TG8-02` runs: every capability grounding marked **PORT** has a named, tested destination in the Rust tree. → `GATE-PROVEN`
 - [ ] **P8-02** The app starts, completes a turn, and runs a design conversion with `skip_sidecars = true` — **absent, not merely stopped**. → `SMOKE-PROVEN`
@@ -1726,6 +1919,38 @@ here**, because there are no gitlinks in the index or in history to operate on.
 - [ ] **P8-17** Delete **`src-tauri/resources/sidecars/`** (225 MB) and its `tauri.conf.json` `resources` entry. → `CODE-PRESENT`
 - [ ] **P8-18** Remove the `submodules/` line from `.gitignore` — an ignore rule for a path that cannot exist is a claim the reader must disprove. → `CODE-PRESENT`
 - [ ] **P8-19** **No history rewrite.** Verified: this content was never committed to this repository, so there is nothing in history to excise and no force-push to justify. → `DOC-GATE`
+
+### P8-I · The complete conversion — what *"not a single line survives"* requires
+
+> `P8-B`/`P8-C` remove the sidecar's **code and files**. This group removes the
+> **old architecture** — the dead two-mode concept, the abstractions that only
+> served it, and the shipped prose that still describes it to users and to the
+> model. Razi's standing instruction: the AutoDesign team must inherit the new
+> AutoDev, not a converted old one. Sourced from `_verify/A14`.
+
+**⚠ Ordering constraint — `P8-45` must land before any deletion in `P8-B`.**
+
+- [ ] **P8-45** 🔴 **Re-point `TG-P4-31` first.** `ci_gate.rs:2811-2828` reads the literal `"let orch_healthy = false"` out of `runner.rs` and calls **`panic!`** when it is absent — deliberately, so that reviving Mode 2 must be an explicit decision rather than a silent pass. It therefore **fails CI on the first commit of `P8-B`**, for a reason that looks unrelated to the change. Rewrite it as a permanent invariant, then retire it in `P8-53`. → `GATE-PROVEN`
+- [ ] **P8-46** **Distinguish the two things that share the words "Mode 1 / Mode 2".** `PAMode` (`FastDevelopment` / `Review` / `Delegate`) is **fully live** — it selects the prompt (`context.rs:89-93`) and the tool registry (`builtin_tools/mod.rs:190-284`) on the interactive path, and `sessions.pa_mode` is its source of truth. `FallbackPolicy` is the inert half. ⚠ **Do not sweep `PAMode` up on a name match**: deleting it collapses three prompts into one and hands the PA file and bash tools in a mode advertised as having none. → `DOC-GATE`
+- [ ] **P8-47** Delete the `FallbackPolicy` enum, `Recipe.fallback_policy`, and the `Mode2Only` guard at `runner.rs:717-737`. Sequenced after `P8-25`, which is the live half of the same defect. → `CODE-PRESENT`
+- [ ] **P8-48** Delete `runner.rs:173-174` — the awaited `/api/system/health` probe whose result is discarded on **every worker tick**, and the `orch_healthy` pin — plus the unreachable branch it guards (lines 276-702, ~430 lines). Re-flatten the control flow. ⚠ `P8-42` must land with it, or the Live Monitor's only emitters go too. → `CODE-PRESENT`
+- [ ] **P8-49** Delete `recipes/orchestrator.rs` (`OrchestratorProbe`, `WorkerInvokeResult`, `NoOrchestrator`), `RecipeRunner::is_orchestrator_ready` (zero callers), and the `orch_client` field and constructor parameter. ⚠ This **supersedes `P8-04`**, which binds `NoOrchestrator` — there is no probe left to bind. → `CODE-PRESENT`
+- [ ] **P8-50** Delete `register_for_mcp_worker` (`builtin_tools/mod.rs:100-180`, ~80 lines, zero callers, `pub` so no dead-code warning) and the two doc-comments that cite it as live. → `CODE-PRESENT`
+- [ ] **P8-51** ⚠ **Split `sidecar_commands.rs` before deleting it.** `list_mcp_tools`, `get_mcp_health` and `force_reconnect_mcp` are **not** sidecar functionality — they serve AutoDev's *client* connections to external MCP servers, which is a live feature with a live UI. Move them to `mcp_commands.rs` keeping the command names identical, then delete the rest. ⚠ **This narrows `P8-06`**, which says "delete all 17". `mcp/mod.rs:1-14` already records relocating a file "by address rather than deleting by association" — the same mistake in reverse. → `CODE-PRESENT`
+- [ ] **P8-52** **Decide and land the startup overlay.** Deleting `startup_progress.rs` removes 8 of its 13 phases, all of which narrate Python boot. Collapse to a native FSM or remove the overlay — and update `startupStore.ts` and `StartupOverlay.tsx` in the same commit, because a mismatch shows a spinner that never advances. → `SMOKE-PROVEN`
+- [ ] **P8-53** **Decide Demo Mode's fate.** `runtime_config.rs`'s only field is `skip_sidecars`; with no sidecars the feature means nothing. Delete it and its store, command and settings section, or repurpose the file deliberately. Retire the rewritten `TG-P4-31` here. → `CODE-PRESENT`
+- [ ] **P8-54** Delete the sidecar-only frontend: `SidecarPanel.tsx`, `SubmoduleStatusPanel.tsx`, `SidecarCrashBanner.tsx` and their mounts. ⚠ Also `SystemHealth.tsx` — **no importer**, and its content is a hardcoded mock reporting "Core Orchestrator — healthy — 99.8% uptime" for a service being deleted. → `CODE-PRESENT`
+- [ ] **P8-55** ⚠ **Split `sidecarStore.ts`.** It carries two unrelated concerns: dead sidecar status and **live** external-MCP health (`McpServerHealth`, `loadMcpHealth`, the `startup:progress` listener). Extract `mcpHealthStore.ts`, delete the rest, and update `StatusBar`, `Sidebar`, `Chat` and `AutoDevPanel`. → `CODE-PRESENT`
+- [ ] **P8-56** 🔴 **Rewrite `BASE_SYSTEM_PROMPT` — it contradicts itself and describes a system that does not exist.** Rule 8 says *"Lock files are sacred — write `current_tasks/issue-N.lock`"*; sixty-five lines later the same prompt says *"Do NOT write filesystem lockfiles … they would just be dead artifacts."* It also describes coordination "through GitHub Issues", `worker/<role>/<issue-number>` branches, and a *"Python backend (core-orchestrator): run `uv run pytest` and `uv run mypy src/` before opening any PR"*. This is sent to the model on every turn. Sequenced with `P8-34`, which decides what stays in the core. → `UNIT-PROVEN`
+- [ ] **P8-57** Rewrite `DELEGATE_SYSTEM_PROMPT`, whose worked example teaches the PA to create a task against the deleted sidecar (*"Add GET /health endpoint to orchestrator API"*), and reconcile `REVIEW_SYSTEM_PROMPT` with the fact that Review and FastDevelopment share both the registry arm and `ManualApproval` — so the "explicit permission checkpoint" it promises is not distinctive. → `UNIT-PROVEN`
+- [ ] **P8-58** Fix the two model-facing error strings that tell it to *"wait for sidecar startup"* — `spawn_subagent.rs:112`, `spawn_qc_review.rs:93`. Subagents are in-process; the real cause is `SubagentManager` not being installed, and the model is being told to wait for an event that will never occur. → `UNIT-PROVEN`
+- [ ] **P8-59** Clean the shipped recipe instructions — they become worker system prompts. `defaults.rs:292` routes "core-orchestrator, sidecars" to `worker-backend`; `:611` tells that worker to *"modify ONLY … Python/Rust in core-orchestrator, src-tauri, sidecars"*; `:321` and `:1083` name LivingAgent ticks and "local sidecar tools"; `:1225` says a recipe *"stays Mode2Only"* directly above `fallback_policy: Mode1Capable`. Plus eight duplicated `P4-31` comment blocks. → `UNIT-PROVEN`
+- [ ] **P8-60** Clean ~20 stale rationale comments that justify live guards by naming deleted mechanisms — `builtin_tools/mod.rs`, `path_lock.rs`, `path_jail.rs`, `write_file.rs`, `edit_file.rs`, `claim_task_tool.rs`, `request_supervisor_action.rs`, `build_evidence.rs`, `tool_effect.rs`, `engine.rs`, `scheduler.rs`. ⚠ **The guards stay** — only the comments are wrong. → `CODE-PRESENT`
+- [ ] **P8-61** 🔴 **Rewrite the in-app Docs tab.** ~106 legacy lines across six `src/data/*.ts` files — a capability table listing *"Agent orchestration | 21 FSMs + A2A protocol via core-orchestrator | live"*, an architecture diagram with `core-orchestrator (Python FastAPI, port 4000)`, and `docsAllD.ts:24-57`, which documents three mechanisms **explicitly removed in P0**. This is shipped product documentation; it needs an author, not a find-and-replace. → `DOC-GATE`
+- [ ] **P8-62** Rewrite the README's dual-mode, Mode 2, architecture, submodule and FAQ sections (~12 sections), and remove references to `build/bundle-core.ps1` and `build/bundle-memory-mcp.ps1` — `build/` is an empty directory. → `DOC-GATE`
+- [ ] **P8-63** Remove the sidecar from packaging: `installers/wix/bundle-sidecars.ps1` and its call in `build-msi.ps1`; `Recommends: python3` from the deb control file and the rpm spec; revisit the dmg entitlement whose comment cites "Python sidecars". → `CODE-PRESENT`
+- [ ] **P8-64** Remove `orchestrator_url` and `auto_start_sidecars` from the CLI config schema, and delete `dotenvy` loading from `main.rs`. ⚠ **Keep `scrub_process_env()`** — removing the dotenv load makes it *more* defensible, not redundant: it protects every child process `bash` spawns. Cross-check `security/env_scrub.rs` so the scrub does not quietly become a no-op guard. → `CODE-PRESENT`
+- [ ] **P8-65** **The vocabulary gate.** No file under `autodev-core/src`, `src-tauri/src`, `src-cli/src` or `src/` may contain `Mode 2`, `LivingAgent`, `core-orchestrator` or `memory-mcp-server` — first outside comments, then including them once `P8-56`…`P8-62` land. ⚠ Strip comments before scanning, as `ci_gate.rs` already does elsewhere: this repo has tripped its own checks on explanatory prose four separate times. This is P8's exit criterion. → `GATE-PROVEN`
 
 ### P8-D · Prune and prove
 - [ ] **P8-20** Drop now-unused dependencies (SSE/HTTP client paths kept only for the sidecar) from `Cargo.toml`. → `CODE-PRESENT`
@@ -1838,9 +2063,12 @@ unsatisfied and was recorded as such rather than glossed. P5 is where that is cl
 - [ ] **P6-23** Every route is reachable by navigation from a cold start. → `GATE-PROVEN`
 - [ ] **P6-24** The frontend's own reachability gate, mirroring `reachability_gate.rs`. → `GATE-PROVEN`
 - [ ] **P6-25** The design surfaces (`PD1`–`PD6`) get UI — the standalone product needs what AutoDesign supplied in R1. → `SMOKE-PROVEN`
+      ⚠ **Scoped 2026-09-03 (`D7`), and scoped DOWN.** The shape is a **live viewer beside the conversation**: the design rendered on the left, the PA working on it and the chat on the right — the Claude Design arrangement, which Razi pointed at directly. **Not** a Photoshop-style canvas editor: no layer tree, no transform handles, no selection model, no undo stack. Editing is what costs, and the design is edited by *asking*, which is the product's whole thesis. The viewer renders the IR and re-renders when a tool mutates it.
+      → **Under-scoped as one task and known to be.** A live IR renderer, the split-pane, and re-render on mutation are three or four tasks at this plan's granularity; sized properly at `P6`'s pre-build refutation (`§0.2m`) rather than guessed at now.
 - [ ] **P6-26** Ingestion progress is visible and cancellable for a 25–35 s conversion. → `SMOKE-PROVEN`
 - [ ] **P6-27** Fidelity scores are shown to the user, not only returned to callers. → `SMOKE-PROVEN`
 - [ ] **P6-28** Adaptation and change tools are drivable from the UI. → `SMOKE-PROVEN`
+      ⚠ Drivable **through the conversation**, with the result visible in `P6-25`'s viewer — not through a direct-manipulation surface. A target size and a ratio policy are things you say; the tool is deterministic either way (`PD4-02`).
 
 **Smoke — S6**
 - [ ] **S6-01** Graph City renders and stays interactive with the font self-hosted.
@@ -2002,6 +2230,7 @@ Defaults are proposed above and adopted unless Razi says otherwise. The rest fol
 | **R-12** | *(new, R1)* `autodev-core` extraction is larger than scoped — 132 `emit_*` sites, not 62 lines of `AppState` | Sized as its own group (P1-B); event sink injected | P1 |
 | **R-13** | *(new, R3)* No cadence defined anywhere for 11 background mechanisms | ✅ **CLOSED 2026-08-31.** The register is written — **§14.5**, thirteen mechanisms, each answering trigger · cadence · cost · failure behaviour · phase. Includes the retry policy `ErrorClass::Retryable` had no reader for (GAP-12) | §14.5 |
 | **R-14** | *(new, P3-F)* **A test run migrated the developer's live `memory.db`.** Confirmed by artifact, not inference: the destructive-migration guard wrote two pre-v3 backups into `~/.autodev/backups/` and the live database moved v2 → v3 outside any app launch. No data was lost — 39/39/0/0 rows unchanged, integrity `ok`, backups verified — and the guard behaved exactly as designed. **The hazard is the reach, not the outcome:** `§0 Rule 13` treats a suite that can touch a live resource as a destructive suite, and this one demonstrably could. ⚠ **Which test is NOT established.** A controlled probe — a v2 fixture in a sandbox `HOME`, the whole workspace suite run against it — leaves that database at v2, so the tree as it stands does not reproduce it; the offender is either gone or conditional. Recorded open rather than asserted fixed. **Remedy:** make the reach impossible rather than hunt the caller — resolve the data root through one seam that fails loudly under `cargo test` unless a sandbox is set, so no future test can reach the real home by omission. | P3 / P4 |
+| **R-15** | *(new, pre-P8)* **The fleet advertises capabilities it does not have.** Epics have a model, tools, Tauri commands and a UI tab, and **no recipe ever creates one** — the panel is permanently empty. Worker chat works agent-to-agent only when the recipient is already busy. Per-task budget has zero production callers. Affinity is never consulted. Each is *built-but-unreached*, which reads as "working" from every surface except behaviour. ⚠ **ROI was in this class and has been removed rather than built** — razi-ruled 2026-09-03 (`D6`): *"drop ROI completely, it is confusing as well as we already have dashboard."* No model, writer, reader or task existed, so nothing was deleted; what changes is that none will be added. | P4 |
 
 # §16 · Change log
 

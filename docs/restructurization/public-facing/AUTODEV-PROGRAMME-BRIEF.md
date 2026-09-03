@@ -6,7 +6,7 @@
 |---|---|
 | **Prepared** | 2026-09-02 |
 | **Owner** | Razi Ashary — Programming Lead, AIRS Foundry |
-| **Status** | P0, P1, P2 and **all of P3** complete · P8 (sidecar removal) next · overall readiness **34%** |
+| **Status** | P0–P3 complete · **PD0 (the contract) next** · overall readiness **34%** · 319 open tasks |
 | **Source documents** | `docs/restructurization/vision/00-AUTODEV-RESTRUCTURE-MASTER-PLAN.md` (why) · `docs/restructurization/development/MASTER_DEVELOPMENT_PLAN.md` (what and when) |
 
 This brief condenses both. Where it is terse, those documents are authoritative.
@@ -89,6 +89,42 @@ Fifteen phases. Every one has an explicit slot — nothing is parked.
 | ✅ | **P2** Providers | Three providers conform; **Gemini primary**; cost honest; spend capped — proven against the live APIs, not only against fixtures | 74 | done |
 | ✅ | **P3 A–E** Runtime | One tool path with a real permission gate; a panic cannot kill the app — **and four ways the model could reach past both, closed** | 39 | done |
 | ✅ | **P3-F** Memory | Memory that works, is scoped to its project, and cannot be written to by an agent claiming to be you | 18 | done |
+| 1 | **PD0** Contract | The four verbs, the wire payload, and a live stub that answers them | 7 | **~1 h** |
+| 🤝 | **M1 · Contract** | **AutoDesign can wire and test against the stub** | — | **~1 h away** |
+| 2 | **P8** Conversion | The Python subsystem deleted entirely — **and every live defect closed with it** | 65 | **~11 h** ⚠ |
+| 3 | **PD1** Ingestion | PSD **and** PDF → one representation | 21 | **~3.5 h** ⚠ |
+| 🤝 | **M2 · First capability** | **A real file becomes a real design; the stub stops being a stub** | — | **~15 h in** |
+| 4 | **PD2** Fidelity | Faithfulness **rendered and measured**, then refined | 27 | **~4.5 h** ⚠ |
+| 5 | **PD3** Export | Webpage · PDF · PSD | 15 | **~2.5 h** ⚠ |
+| 6 | **PD4** Adaptation | Reformat to any target size | 33 | **~5.5 h** ⚠ |
+| 7 | **PD5** Changes | Text, image, position, colour, shape | 13 | **~2 h** ⚠ |
+| 8 | **PD6** Brand guideline | Ingest a brand guide and apply it | 10 | **~1.5 h** ⚠ |
+| 🤝 | **M3 · Full Rollout 1** | **Every design capability live** | — | **~32 h in** |
+| 9 | **P4** Fleet | A task runs end to end and lands a verified artifact | 44 | **~7.5 h** |
+
+### Rollout 2 — *"The entire application is ready for usage"*
+
+AutoDev standing on its own: its own interface, a compiled code graph for context, a
+first-run experience, and signed installers for Windows, Linux and macOS.
+
+**R1 is not R2 with pieces missing.** It is a complete product with a different consumer.
+That distinction is what allows interface work to sit in R2 without crippling R1.
+
+---
+
+## 4 · The plan
+
+Fifteen phases. Every one has an explicit slot — nothing is parked.
+
+### Rollout 1
+
+| # | Phase | Delivers | Tasks | Est. |
+|---|---|---|---|---|
+| ✅ | **P0** Stop the bleeding | The security holes closed; CI can fail | 27 | done |
+| ✅ | **P1** Structural | Everything shipped is compiled; one owner per database; redaction live | 22 | done |
+| ✅ | **P2** Providers | Three providers conform; **Gemini primary**; cost honest; spend capped — proven against the live APIs, not only against fixtures | 74 | done |
+| ✅ | **P3 A–E** Runtime | One tool path with a real permission gate; a panic cannot kill the app — **and four ways the model could reach past both, closed** | 39 | done |
+| ✅ | **P3-F** Memory | Memory that works, is scoped to its project, and cannot be written to by an agent claiming to be you | 18 | done |
 | 1 | **P8** Sidecar removal | The retired Python subsystem deleted entirely | 24 | **~4 h** |
 | 🤝 | **Handover** | **The AutoDesign team can begin wiring** | — | **~5 h away** |
 | 3 | **PD1** Ingestion | PSD **and** PDF → one representation | 14 | **~2.5 h** |
@@ -105,38 +141,56 @@ Fifteen phases. Every one has an explicit slot — nothing is parked.
 | # | Phase | Delivers | Tasks | Est. |
 |---|---|---|---|---|
 | 10 | **P5** Graph | A compiled code graph, read for context | 21 | **~3.5 h** |
-| 11 | **P6** UI | AutoDev's own interface | 28 | **~4.5 h** ⚠ |
+| 11 | **P6** UI | AutoDev's own interface, including a **live design viewer** beside the conversation | 28 | **~4.5 h** ⚠ |
 | 12 | **P7** Experience | A new user reaches a working turn without documentation | 18 | **~3 h** ⚠ |
 | 13 | **P9** Delivery | Signed installers, three platforms | 16 | **~2.5 h** ⚠ |
 
-**Totals.** 140 tasks and roughly **23.5 hours** to complete Rollout 1; 83 tasks and
-roughly **14 hours** for Rollout 2. **223 open tasks** across the programme, each written out
-and each carrying the kind of evidence required to call it done.
+**Totals.** 236 tasks and roughly **39.5 hours** to complete Rollout 1; 83 tasks and
+roughly **14 hours** for Rollout 2. **319 open tasks** across the programme.
 
-The phase rows account for 222 of those 223. The remaining one is P0's end-to-end test
+The phase rows account for 318 of those 319. The remaining one is P0's end-to-end test
 harness, blocked by tooling rather than by effort — the Windows driver is not installed
-locally, and the Linux/macOS driver has no engine for the framework AutoDev uses. It is counted
-in the totals and left out of the estimates, because an hour figure would imply the wait is
-ours to shorten.
+locally, and the Linux/macOS driver has no engine for the framework AutoDev uses. It is
+counted in the totals and left out of the estimates, because an hour figure would imply
+the wait is ours to shorten.
 
-⚠ **These figures are three times smaller than the ones this document carried yesterday, and
-the reason is measurement rather than optimism** — see §5. The rows marked ⚠ are the ones the
-measurement does not cover: `P6` and `P7` are frontend work and every measured hour so far is
-Rust; `PD2` is a research loop rather than a task list; and `P9` waits on a signing key only
-Razi can generate and on installer builds across three platforms.
+⚠ **Rollout 1 grew from ~23.5 hours to ~39.5 on 3 September, and P8 nearly tripled.**
+That is not a re-estimate — the rate is unchanged. A pre-P8 code review found ten live
+defects in shipped code, and rather than carry them past a partner handover they were
+folded into P8 along with the prompt-architecture work and the complete legacy
+conversion. §5 says what they were. The rows marked ⚠ are the ones the throughput
+measurement does not cover.
 
-### The handover point
+### The handover point — three of them
 
-The AutoDesign team can start once `P8` and `PD0` are done — 30 tasks, roughly **5 working
-hours** from here. They receive:
+The single "handover" this document used to describe was overstated, and the phase
+table above used to list the contract **last**, which read as it arriving at the very
+end. Both are corrected.
 
-1. A codebase with the retired subsystem **fully removed** — no dead dependency to inherit.
-2. A **published integration contract**, written to AutoDesign's own versioned format.
-3. A running AutoDev that **answers that contract with working stubs**, so the integration
-   can be built and tested on day one rather than waited for.
+**M1 · The contract — about an hour away, and blocked by nothing.** `PD0` freezes the
+four operations, publishes the representation that crosses the wire, defines the job
+and error semantics, and stands up a **live stub that answers all four**. That is
+enough for the AutoDesign team to build and test their entire side of the integration
+while the capability behind it is still being built. It does not depend on the Python
+removal, and it does not depend on any design phase.
 
-The contract's schema can be shared immediately — it depends only on the four operations,
-which are already decided.
+**M2 · The first real capability — about fifteen hours in.** After `P8` and `PD1`, a
+real PSD or PDF becomes a real representation. The stub stops being a stub and the
+integration starts returning true results.
+
+**M3 · Full Rollout 1 — about thirty-two hours in.** Fidelity, export, adaptation,
+changes and brand guidelines all live.
+
+What the AutoDesign team receives at M1:
+
+1. A **published integration contract**, written to AutoDesign's own versioned format.
+2. A running AutoDev that **answers that contract with working stubs**, so the
+   integration can be built and tested on day one rather than waited for.
+3. A stated **execution model** — in Rollout 1 the personal assistant performs the
+   design work; the worker fleet becomes an additional consumer in Rollout 2. Written
+   into the contract rather than left to be inferred.
+
+The codebase with the retired Python subsystem **fully removed** arrives at M2, not M1.
 
 ---
 

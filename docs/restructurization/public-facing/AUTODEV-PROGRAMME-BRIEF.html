@@ -341,9 +341,9 @@
 
     <dl class="strip">
       <div class="stat"><dt>Readiness</dt><dd>34%<small>P0&ndash;P3 closed</small></dd></div>
-      <div class="stat"><dt>Open tasks</dt><dd>223<small>All written out</small></dd></div>
-      <div class="stat"><dt>To handover</dt><dd>~5h<small>P8 + the contract</small></dd></div>
-      <div class="stat"><dt>Rollout 1</dt><dd>~23.5h<small>140 tasks</small></dd></div>
+      <div class="stat"><dt>Open tasks</dt><dd>319<small>All written out</small></dd></div>
+      <div class="stat"><dt>Contract ready</dt><dd>~1h<small>Blocked by nothing</small></dd></div>
+      <div class="stat"><dt>Rollout 1</dt><dd>~39.5h<small>236 tasks</small></dd></div>
       <div class="stat"><dt>Rollout 2</dt><dd>~14h<small>83 tasks</small></dd></div>
     </dl>
   </header>
@@ -384,7 +384,7 @@
   <section>
     <div class="col">
       <h2><span class="num">03</span> The plan</h2>
-      <p class="lede">Fifteen phases. Every one has an explicit slot &mdash; nothing is parked. The estimates below were rebuilt on 3 September from commit timestamps, and are roughly <strong>three times smaller</strong> than the ones this page carried the day before; the reasoning is in &sect;04. They include the cost of auditing the work rather than assuming it is right. Rows marked &#9888; are the ones the measurement does not cover.</p>
+      <p class="lede">Fifteen phases. Every one has an explicit slot &mdash; nothing is parked. The hourly figures were rebuilt from commit timestamps on 3 September and the rate has not changed since; the reasoning is in &sect;04. <strong>Rollout 1 grew from ~23.5 hours to ~39.5 that same day</strong>, because a code review found ten live defects in shipped code and they were folded into P8 rather than carried past a partner handover &mdash; that is more work, not a slower estimate. Rows marked &#9888; are the ones the throughput measurement does not cover.</p>
       <h3>Rollout 1 — backend ready, wire it to AutoDesign</h3>
     </div>
 
@@ -394,21 +394,23 @@
           <tr><th>Phase</th><th>Delivers</th><th class="n">Tasks</th><th class="n">Est.</th><th>State</th></tr>
         </thead>
         <tbody>
-          <tr class="is-done"><td class="phase">Stop the bleeding<span class="code">P0</span></td><td>Security holes closed; CI can fail</td><td class="n">27</td><td class="n">—</td><td><span class="chip done">Done</span></td></tr>
-          <tr class="is-done"><td class="phase">Structural<span class="code">P1</span></td><td>Everything shipped is compiled; one owner per database; redaction live</td><td class="n">22</td><td class="n">—</td><td><span class="chip done">Done</span></td></tr>
-          <tr class="is-done"><td class="phase">Providers<span class="code">P2</span></td><td>Three providers conform; Gemini primary; cost honest; spend capped</td><td class="n">74</td><td class="n">—</td><td><span class="chip done">Done</span></td></tr>
-          <tr class="is-done"><td class="phase">Runtime<span class="code">P3 A–E</span></td><td>One tool path with a real permission gate; a panic cannot kill the app &mdash; and four ways the model could reach past both, closed</td><td class="n">39</td><td class="n">&mdash;</td><td><span class="chip done">Done</span></td></tr>
+          <tr class="is-done"><td class="phase">Stop the bleeding<span class="code">P0</span></td><td>Security holes closed; CI can fail</td><td class="n">27</td><td class="n">&mdash;</td><td><span class="chip done">Done</span></td></tr>
+          <tr class="is-done"><td class="phase">Structural<span class="code">P1</span></td><td>Everything shipped is compiled; one owner per database; redaction live</td><td class="n">22</td><td class="n">&mdash;</td><td><span class="chip done">Done</span></td></tr>
+          <tr class="is-done"><td class="phase">Providers<span class="code">P2</span></td><td>Three providers conform; Gemini primary; cost honest; spend capped</td><td class="n">74</td><td class="n">&mdash;</td><td><span class="chip done">Done</span></td></tr>
+          <tr class="is-done"><td class="phase">Runtime<span class="code">P3 A–E</span></td><td>One tool path with a real permission gate; a panic cannot kill the app</td><td class="n">39</td><td class="n">&mdash;</td><td><span class="chip done">Done</span></td></tr>
           <tr class="is-done"><td class="phase">Memory<span class="code">P3-F</span></td><td>Memory that works, is scoped to its project, and cannot be written to by an agent claiming to be you</td><td class="n">18</td><td class="n">&mdash;</td><td><span class="chip done">Done</span></td></tr>
-          <tr class="is-now"><td class="phase">Sidecar removal<span class="code">P8</span></td><td>The retired Python subsystem deleted entirely</td><td class="n">24</td><td class="n">~4h</td><td><span class="chip now">Next</span></td></tr>
-          <tr class="handover"><td colspan="5">↓ &nbsp;HANDOVER — after P8 and the contract (PD0, below), the AutoDesign team can begin wiring &mdash; ~5 hours from here</td></tr>
-          <tr><td class="phase">Ingestion<span class="code">PD1</span></td><td>PSD and PDF become one representation</td><td class="n">14</td><td class="n">~2.5h</td><td><span class="chip queued">Queued</span></td></tr>
-          <tr><td class="phase">Fidelity<span class="code">PD2</span></td><td>Faithfulness measured, and refined where it falls short</td><td class="n">14</td><td class="n">~2.5h &#9888;</td><td><span class="chip queued">Queued</span></td></tr>
-          <tr><td class="phase">Export<span class="code">PD3</span></td><td>Webpage · PDF · PSD</td><td class="n">15</td><td class="n">~2.5h</td><td><span class="chip queued">Queued</span></td></tr>
-          <tr><td class="phase">Adaptation<span class="code">PD4</span></td><td>Reformat a design to any target size</td><td class="n">13</td><td class="n">~2h</td><td><span class="chip queued">Queued</span></td></tr>
-          <tr><td class="phase">Changes<span class="code">PD5</span></td><td>Text, image, position, colour, shape</td><td class="n">13</td><td class="n">~2h</td><td><span class="chip queued">Queued</span></td></tr>
-          <tr><td class="phase">Brand guideline<span class="code">PD6</span></td><td>Ingest a brand guide and apply it</td><td class="n">9</td><td class="n">~1.5h</td><td><span class="chip queued">Queued</span></td></tr>
-          <tr><td class="phase">Fleet<span class="code">P4</span></td><td>A task runs end to end and lands a verified artifact</td><td class="n">31</td><td class="n">~5h</td><td><span class="chip queued">Queued</span></td></tr>
-          <tr><td class="phase">Contract<span class="code">PD0</span></td><td>The integration surface, published early and in parallel</td><td class="n">6</td><td class="n">~1h</td><td><span class="chip queued">Queued</span></td></tr>
+          <tr class="is-now"><td class="phase">Contract<span class="code">PD0</span></td><td>The four operations, the wire payload, and a live stub that answers them</td><td class="n">7</td><td class="n">~1h</td><td><span class="chip now">Next</span></td></tr>
+          <tr class="handover"><td colspan="5">↓ &nbsp;M1 &mdash; the AutoDesign team can wire and test against the stub. ~1 hour away, blocked by nothing</td></tr>
+          <tr><td class="phase">Conversion<span class="code">P8</span></td><td>The Python subsystem deleted entirely &mdash; and every live defect closed with it</td><td class="n">65</td><td class="n">~11h &#9888;</td><td><span class="chip queued">Queued</span></td></tr>
+          <tr><td class="phase">Ingestion<span class="code">PD1</span></td><td>PSD and PDF become one representation</td><td class="n">21</td><td class="n">~3.5h &#9888;</td><td><span class="chip queued">Queued</span></td></tr>
+          <tr class="handover"><td colspan="5">↓ &nbsp;M2 &mdash; a real file becomes a real design; the stub stops being a stub. ~15 hours in</td></tr>
+          <tr><td class="phase">Fidelity<span class="code">PD2</span></td><td>Faithfulness rendered and measured, then refined</td><td class="n">27</td><td class="n">~4.5h &#9888;</td><td><span class="chip queued">Queued</span></td></tr>
+          <tr><td class="phase">Export<span class="code">PD3</span></td><td>Webpage · PDF · PSD</td><td class="n">15</td><td class="n">~2.5h &#9888;</td><td><span class="chip queued">Queued</span></td></tr>
+          <tr><td class="phase">Adaptation<span class="code">PD4</span></td><td>Reformat a design to any target size</td><td class="n">33</td><td class="n">~5.5h &#9888;</td><td><span class="chip queued">Queued</span></td></tr>
+          <tr><td class="phase">Changes<span class="code">PD5</span></td><td>Text, image, position, colour, shape</td><td class="n">13</td><td class="n">~2h &#9888;</td><td><span class="chip queued">Queued</span></td></tr>
+          <tr><td class="phase">Brand guideline<span class="code">PD6</span></td><td>Ingest a brand guide and apply it</td><td class="n">10</td><td class="n">~1.5h &#9888;</td><td><span class="chip queued">Queued</span></td></tr>
+          <tr class="handover"><td colspan="5">↓ &nbsp;M3 &mdash; every design capability live. ~32 hours in</td></tr>
+          <tr><td class="phase">Fleet<span class="code">P4</span></td><td>A task runs end to end and lands a verified artifact</td><td class="n">44</td><td class="n">~7.5h</td><td><span class="chip queued">Queued</span></td></tr>
         </tbody>
       </table>
     </div>
@@ -430,7 +432,7 @@
         </thead>
         <tbody>
           <tr><td class="phase">Graph<span class="code">P5</span></td><td>A compiled code graph, read for context</td><td class="n">21</td><td class="n">~3.5h</td></tr>
-          <tr><td class="phase">UI<span class="code">P6</span></td><td>AutoDev's own interface</td><td class="n">28</td><td class="n">~4.5h &#9888;</td></tr>
+          <tr><td class="phase">UI<span class="code">P6</span></td><td>AutoDev's own interface, including a live design viewer beside the conversation</td><td class="n">28</td><td class="n">~4.5h &#9888;</td></tr>
           <tr><td class="phase">Experience<span class="code">P7</span></td><td>A new user reaches a working turn without documentation</td><td class="n">18</td><td class="n">~3h &#9888;</td></tr>
           <tr><td class="phase">Delivery<span class="code">P9</span></td><td>Signed installers, three platforms</td><td class="n">16</td><td class="n">~2.5h &#9888;</td></tr>
         </tbody>
@@ -439,9 +441,24 @@
 
     <div class="col">
       <div class="note">
-        <h4>What the AutoDesign team receives at handover</h4>
-        <p>A codebase with the retired subsystem <strong>fully removed</strong>, so there is no dead dependency to inherit. A <strong>published integration contract</strong>, written to AutoDesign's own versioned format. And a running AutoDev that <strong>answers that contract with working stubs</strong>, so the integration can be built and tested on day one rather than waited for.</p>
-        <p>The contract's schema can be shared immediately — it depends only on the four operations, which are already decided.</p>
+        <h4>Three handovers, not one</h4>
+        <p><strong>M1 &mdash; the contract, about an hour away and blocked by nothing.</strong>
+        PD0 freezes the four operations, publishes the representation that crosses the wire,
+        defines the job and error semantics, and stands up a <strong>live stub that answers
+        all four</strong>. That is enough for the AutoDesign team to build and test their
+        entire side while the capability behind it is still being built. It does not wait on
+        the Python removal or on any design phase.</p>
+        <p><strong>M2 &mdash; the first real capability, about fifteen hours in.</strong>
+        After P8 and PD1 a real PSD or PDF becomes a real representation, and the stub starts
+        returning true results. The codebase with the Python subsystem fully removed arrives
+        here, not at M1.</p>
+        <p><strong>M3 &mdash; full Rollout 1, about thirty-two hours in.</strong> Fidelity,
+        export, adaptation, changes and brand guidelines all live.</p>
+        <p>At M1 they receive the published contract, a running AutoDev that answers it with
+        working stubs, and a stated <strong>execution model</strong> &mdash; in Rollout 1 the
+        personal assistant performs the design work, and the worker fleet becomes an
+        additional consumer in Rollout 2. Written into the contract rather than left to be
+        inferred.</p>
       </div>
     </div>
   </section>
