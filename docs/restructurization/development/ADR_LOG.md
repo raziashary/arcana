@@ -1596,6 +1596,108 @@ probe of mine said it was not.
 
 ---
 
+## ADR-LOG-RESTRUCT-0038 — P8's pre-build refutation: a task that ordered a security regression, and a remedy that could not be built
+
+**Status.** DECIDED
+**Author.** Claude (four refutation dispatches + main-session re-verification) · **Razi** (the `P8-26` ruling) · **Tier.** **`razi-ruled`** for `P8-26`; **`flagged-and-proposed`** for the rest
+**When.** 2026-09-03 · before the first line of `P8`
+
+**What.** `§0.2m` requires a phase's load-bearing claims to be attacked before
+it is built. Four verifiers were briefed to *refute*, over disjoint task
+groups, defaulting to REFUTED on ambiguous evidence. All four were killed
+mid-flight by a session rate limit and **all four had their findings on disk**
+— `§0.2i`'s incremental-write clause, which exists because the identical
+failure destroyed both `P0` auditors with nothing recoverable (`L-C8`,
+`L-10`). This is the first time that clause has been paid back.
+
+Full detail in `_verify/P8-CORRECTIONS.md`. Four results changed a row.
+
+### 1. 🔴 `P8-09` ordered the deletion of update signature verification
+
+The task says *"Remove sidecar branches from … `updater/{check,download}.rs`"*.
+Neither file has anything to do with Python. `sidecar_client()`
+(`download.rs:211`) is an HTTPS-only client fetching the `.sig` and `.sha256`
+**sidecar assets** that gate every update; `download_signature` depends on it
+and its docstring says *"`verify_update` must never be handed a
+silently-degraded result."* Grepping both files for
+`python|orchestrator|memory-mcp|8000|4000` returns nothing.
+
+⚠ **This is the same defect class the programme caught two days ago** in
+`P8-21`'s `grep -i sidecar` exit assertion (`ADR-LOG-RESTRUCT-0036`) — `L-C6`,
+a check written from the claim rather than the invariant. Catching it once did
+not prevent it, which is `L-C8`. It is **worse** inside a task's file list than
+in an exit assertion, because a file list reads as already-triaged and the next
+reader does not re-derive it.
+
+The word *sidecar* has **four** meanings here, not the two the plan protects:
+the Python subsystem (the target), AutoDev-as-a-sidecar-of-AutoDesign
+(protected), the update `.sig`/`.sha256` assets (**was not**), and SQLite's
+`-wal` sidecar in `db/backup.rs` (**was not**).
+
+**Decided:** both updater files struck from `P8-09`; both, and `db/backup.rs`,
+named as protected in `P8-21` and `P8-65`.
+
+### 2. 🔴 `P8-26`'s mechanism, chain and remedy were each wrong
+
+The defect is real; everything the task said about it was not.
+
+**Mechanism.** The task says the build runs and its status is lost. Measured on
+this host with a passing control: when the right half of a `cmd` pipeline
+cannot be resolved, **cmd does not execute the left half either**. The build
+never runs. And the direction is inverted — `| tail -50` exits **0** (Git's
+`tail` is on PATH at `/usr/bin/tail`), while the rewriter's
+`| Select-Object -Last 50` exits **255** always. **`rewrite_for_windows`
+converts a working command into a broken one.**
+
+**Chain.** `exit_code_is_attributable` (`build_evidence.rs:54-60`) returns
+false for any command containing `|`, and the rewrite preserves the `|`. So
+every rewritten command is non-attributable and
+`update_task_status_tool.rs:158-190` matches that arm **first** — the agent is
+told *"re-run as a plain command"*, never *"the build failed"*. The rewriter is
+structurally incapable of driving the `qc_review` veto it was blamed for.
+
+**Remedy.** `platform::command::resolve(toolchain, intent)` returns fixed argv
+— `(Npm, Build) → ["run","build"]` — and cannot express an arbitrary
+model-authored string. Zero callers outside its own module, as the task said,
+but the conclusion drawn from that was wrong.
+
+> **▶ RAZI RULED, 2026-09-03**, when the impossibility was put to him: **delete
+> `rewrite_for_windows`.**
+
+This also opens a closed loop: `bash.rs:29` tells the model to avoid Unix
+utilities on Windows, and `bash.rs:211-223` then suggests `Select-Object -First
+N` on exit 255 — the exact syntax the rewriter substituted and that `cmd`
+cannot run. Deleting the rewriter makes both guides honest.
+
+### 3. `P8-41`'s equivalence gate would have proven nothing
+
+*"A tool's behaviour is identical with and without the recalled text. Gate that
+equivalence."* Under the literal reading this is true **by construction** —
+`execute` never sees what the executor retrieved — so the gate passes before
+the feature exists (`L-18`). Under the reading that matters it is **false by
+design**, since changing what the agent does next is the entire point.
+
+**Decided:** replaced with three falsifiable properties — framing survives at
+the **seam's** output (not the flattener's, which is already tested), tool
+arguments are non-contaminated, and retrieval happens once per turn.
+
+### 4. `P8-55`'s split line is backwards
+
+The premise (two unrelated concerns in `sidecarStore.ts`) holds. The partition
+does not: `startup:progress` is the **dead** half — it sets sidecar boot state
+from orchestrator phases (`sidecarStore.ts:148-157`) and `P8-52` deletes its
+emitter. Following the task literally moves a dead listener *into* the store
+meant to hold the live feature. The live half is six `mcp:*` listeners the task
+never names.
+
+**Where.** `§11.1` `P8-09`, `P8-26`, `P8-41`, `P8-55`, `P8-21`, `P8-65` ·
+`_verify/P8-CORRECTIONS.md` · `_verify/P8-R1…R4` · this entry.
+
+**Links.** `ADR-LOG-RESTRUCT-0036` (the first instance of the same class) ·
+`§0.2m` · `§0.2i` · `§0.16 L-C6`, `L-C8`, `L-18`, `W-3`
+
+---
+
 ## ADR-LOG-RESTRUCT-0037 — No second fleet for design: a role is a recipe, and verification becomes pluggable
 
 **Status.** DECIDED
