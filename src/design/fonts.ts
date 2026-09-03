@@ -49,6 +49,24 @@ const GOOGLE_FONTS: Readonly<Record<string, string>> = {
 }
 
 /**
+ * Letters and digits only, lower-cased — `PT Sans`, `PTSans` and `pt-sans` all
+ * reduce to `ptsans`. This is the key both the table and the lookup use.
+ */
+function normaliseFamily(family: string): string {
+  return family.toLowerCase().replace(/[^a-z0-9]+/g, '')
+}
+
+/**
+ * The lookup index, built once at module load rather than per call.
+ *
+ * The two lookups below each used to rebuild `Object.keys(GOOGLE_FONTS)` and
+ * recompute `baseFamilyName` separately (`A-21`), which also let them disagree.
+ */
+const GOOGLE_BY_NORMALISED: ReadonlyMap<string, string> = new Map(
+  Object.entries(GOOGLE_FONTS).map(([family, token]) => [normaliseFamily(family), token]),
+)
+
+/**
  * Families guaranteed by the operating system rather than fetched. Matching one
  * is a real resolution, not a fallback — `Arial` renders as `Arial`.
  */
@@ -73,8 +91,16 @@ const SYSTEM_STACKS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^baskerville/, 'Baskerville,serif'],
 ]
 
+// ⚠ **Longest alternative first, always.** A regex alternation is first-match,
+// not longest-match, so listing `Bold` before `ExtraBold` would strip `Bold`
+// and leave `Montserrat-Extra`. Every two-word weight name below was MISSING
+// from the first version of this list, which is area-audit finding `A-4`:
+// `Montserrat-ExtraBold` survived the strip, the camel-case splitter then made
+// it `Montserrat-Extra Bold`, and the lookup reported one of the most common
+// headline faces in ad PSDs as **unresolved** — a false loss claim in the exact
+// field `P3-48` created to stop false success claims.
 const STYLE_SUFFIX =
-  /-(BoldItalic|BoldOblique|ItalicMT|ObliqueMT|BoldMT|Regular|Bold|Italic|Light|Medium|SemiBold|Semibold|Black|Condensed|Extended|Narrow|Oblique|Roman)$/i
+  /-(ExtraBoldItalic|UltraBoldItalic|SemiBoldItalic|DemiBoldItalic|ExtraLightItalic|UltraLightItalic|BoldItalic|BoldOblique|ItalicMT|ObliqueMT|BoldMT|ExtraBlack|ExtraBold|UltraBold|ExtraLight|UltraLight|SemiBold|Semibold|DemiBold|Demibold|Hairline|Regular|Medium|Black|Heavy|Light|Thin|Book|Demi|Bold|Italic|Condensed|Extended|Narrow|Oblique|Roman)$/i
 const FOUNDRY_SUFFIX = /(PSMT|PST|PS|MT|Type1)$/i
 
 /**
@@ -111,15 +137,34 @@ export function cssFontFamily(postScriptName: string): string {
   return `'${base}',${mono ? 'monospace' : serif ? 'serif' : 'sans-serif'}`
 }
 
-/** CSS weight from the PostScript suffix. Order matters: `extrabold` before `bold`. */
+/**
+ * CSS weight from the PostScript suffix. Order matters: the compound names are
+ * tested before the simple ones they contain, or `ExtraBold` matches `bold`.
+ *
+ * 🔴 **The values were wrong, and wrong in both directions** (`A-12`).
+ * `ultrabold` sat in the `900` branch while `extrabold` sat in the `600` branch
+ * beside `semibold` — so the same physical face rendered two steps too light
+ * under one name and one step too heavy under the other, and a design using
+ * both names for one face showed a visible weight difference. `extralight` was
+ * bucketed with `thin` at `100`. The CSS scale is fixed and unambiguous:
+ * 100 Thin · 200 ExtraLight · 300 Light · 400 Regular · 500 Medium ·
+ * 600 SemiBold · 700 Bold · 800 ExtraBold · 900 Black.
+ *
+ * This value is what `psdToIr` writes into `FontRequirement.weights` and what
+ * `googleFontsHrefs` then requests, so a wrong weight fetches the wrong face
+ * as well as rendering it wrongly.
+ */
 export function cssFontWeight(postScriptName: string): string {
   if (!postScriptName) return '400'
   const n = postScriptName.toLowerCase()
-  if (/black|heavy|ultrabold|extrablack/.test(n)) return '900'
-  if (/extrabold|demibold|semibold|semi[-_]bold|demi[-_]bold/.test(n)) return '600'
+  if (/black|heavy|extrablack|ultrablack/.test(n)) return '900'
+  if (/extrabold|ultrabold|extra[-_]bold|ultra[-_]bold/.test(n)) return '800'
+  if (/demibold|semibold|semi[-_]bold|demi[-_]bold/.test(n)) return '600'
   if (/bold/.test(n)) return '700'
-  if (/thin|hairline|ultralight|extralight|extra[-_]light/.test(n)) return '100'
+  if (/extralight|ultralight|extra[-_]light|ultra[-_]light/.test(n)) return '200'
+  if (/thin|hairline/.test(n)) return '100'
   if (/light/.test(n)) return '300'
+  if (/medium/.test(n)) return '500'
   return '400'
 }
 
@@ -139,39 +184,52 @@ export type FontResolution = 'google-fonts' | 'system-stack' | 'unresolved'
 export function resolveFont(postScriptName: string): FontResolution {
   const lowered = postScriptName.toLowerCase()
   if (SYSTEM_STACKS.some(([pattern]) => pattern.test(lowered))) return 'system-stack'
-  const base = baseFamilyName(postScriptName)
-  const inGoogle = Object.keys(GOOGLE_FONTS).some(
-    (family) => family.toLowerCase() === base.toLowerCase(),
-  )
-  return inGoogle ? 'google-fonts' : 'unresolved'
-}
-
-/** The Google Fonts URL token for a family, or `undefined` if it has none. */
-export function googleFontToken(postScriptName: string): string | undefined {
-  const base = baseFamilyName(postScriptName).toLowerCase()
-  const key = Object.keys(GOOGLE_FONTS).find((family) => family.toLowerCase() === base)
-  return key ? GOOGLE_FONTS[key] : undefined
+  return googleFontToken(postScriptName) ? 'google-fonts' : 'unresolved'
 }
 
 /**
- * Build the Google Fonts stylesheet href for the families that have one.
+ * The Google Fonts URL token for a family, or `undefined` if it has none.
  *
- * Returns `undefined` when nothing is fetchable, so callers emit no `<link>`
+ * 🔴 Lookup is on the **normalised** key, not the literal string. A PostScript
+ * name carries no spaces, so `PTSans-Bold` reduces to `PTSans` while the table
+ * key is `PT Sans` — and exact equality reported both `PT Sans` and `Exo 2` as
+ * unresolved (`A-16`) although both are fetchable and both are in the table
+ * two screens up. Normalising strips everything that is not a letter or digit,
+ * which is precisely the difference PostScript drops.
+ */
+export function googleFontToken(postScriptName: string): string | undefined {
+  return GOOGLE_BY_NORMALISED.get(normaliseFamily(baseFamilyName(postScriptName)))
+}
+
+/**
+ * Build one Google Fonts stylesheet href **per family**.
+ *
+ * Returns an empty array when nothing is fetchable, so callers emit no `<link>`
  * rather than an empty one. Weights are sorted numerically because
  * `['900','700'].sort()` is lexicographic and yields `700;900` only by luck.
+ *
+ * 🔴 **Why one request per family and not one request for all of them**
+ * (`A-17`). Google Fonts answers `css2` with HTTP 400 for the *whole* request
+ * when any single `wght@` value does not exist for its family — and
+ * `psdToIr` forces `'700'` for any faux-bolded layer regardless of what the
+ * family actually ships. So a designer faux-bolding a Bebas Neue headline
+ * (Bebas Neue ships 400 only) took down the stylesheet for **every** font in
+ * the document, and `unresolvedFonts()` reported nothing, because all of them
+ * had resolved. We cannot check the axis list offline; what we can do is stop
+ * one unavailable weight from costing the other families. One bad request now
+ * loses one typeface.
  */
-export function googleFontsHref(
+export function googleFontsHrefs(
   families: ReadonlyArray<{ postScriptName: string; weights: string[] }>,
-): string | undefined {
-  const specs: string[] = []
+): string[] {
+  const hrefs: string[] = []
   const seen = new Set<string>()
   for (const { postScriptName, weights } of families) {
     const token = googleFontToken(postScriptName)
     if (!token || seen.has(token)) continue
     seen.add(token)
     const sorted = [...new Set(weights)].sort((a, b) => Number(a) - Number(b)).join(';')
-    specs.push(`${token}:wght@${sorted}`)
+    hrefs.push(`https://fonts.googleapis.com/css2?family=${token}:wght@${sorted}&display=swap`)
   }
-  if (specs.length === 0) return undefined
-  return `https://fonts.googleapis.com/css2?family=${specs.join('&family=')}&display=swap`
+  return hrefs
 }

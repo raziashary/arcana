@@ -164,13 +164,38 @@ export interface DesignDocument {
 }
 
 /**
+ * The deepest group nesting we will walk.
+ *
+ * 🔴 `A-20`: both this walk and `convertLayer` recursed with no cap and no
+ * cycle detection — and `walkLayers` even took a `depth` argument it passed to
+ * the visitor for reporting and never compared against anything. A corrupt PSD
+ * with a cyclic group tree overflowed the stack, which surfaces as an uncaught
+ * `RangeError`; behind the sidecar (PD1) that becomes `UNSETTLED: RangeError`
+ * on stderr and exit 1, with no diagnostic and no `held` outcome. The failure
+ * taxonomy the contract was built to provide is bypassed by exactly the input
+ * most likely to reach it. Photoshop's own group nesting limit is an order of
+ * magnitude below this; a file past it is malformed, not ambitious.
+ */
+export const MAX_LAYER_DEPTH = 64
+
+/**
  * Depth-first walk over every layer, groups included, parents before children.
+ *
+ * Throws `RangeError` past `MAX_LAYER_DEPTH` — deliberately, and with the path
+ * that got there, so the caller can turn it into a diagnostic rather than a
+ * stack trace.
  */
 export function walkLayers(
   layers: DesignLayer[],
   visit: (layer: DesignLayer, depth: number) => void,
   depth = 0,
 ): void {
+  if (depth > MAX_LAYER_DEPTH) {
+    throw new RangeError(
+      `Layer nesting exceeded ${MAX_LAYER_DEPTH} levels at "${layers[0]?.name ?? '?'}". ` +
+        `A PSD this deep is malformed or cyclic; refusing rather than overflowing the stack.`,
+    )
+  }
   for (const layer of layers) {
     visit(layer, depth)
     if (layer.kind === 'group') walkLayers(layer.children, visit, depth + 1)
@@ -192,16 +217,62 @@ export function countLayers(layers: DesignLayer[]): number {
  * defensive decoration: the whole point of the IR is that it is small enough to
  * reason over, and the natural mistake — attaching the layer canvas "just for
  * preview" — silently restores the 17 MB problem. Cheaper to fail loudly.
+ *
+ * 🔴 **The first version of this guard could not fire on the mistake the
+ * paragraph above names** (`A-5`). It inspected only *top-level own properties
+ * whose value was a string*, so `{ ...common, kind: 'image', assetId, canvas }`
+ * — the exact line the comment warns about — passed, because a canvas is an
+ * object. `JSON.stringify` renders a canvas as `{}`, so the payload-size test
+ * stayed green too, and a data URI one level down (`style.backgroundImage`,
+ * `styleRuns[0].preview`) was invisible because `Object.entries` is shallow.
+ * The only shape it caught was a data URI placed as a direct string property
+ * of a layer, which is the one form nobody writes by accident.
+ *
+ * It now walks the whole value tree and rejects **both** shapes: a string that
+ * looks like an embedded payload at any depth, and any non-plain object — a
+ * canvas, an `ImageData`, a `Blob`, an `ArrayBuffer` — anywhere in a layer.
+ * A guard that cannot fire is this repository's signature defect; it has four
+ * recorded instances, and `§0.2a` briefs the area auditor to hunt for it.
  */
 export function assertNoPixels(doc: DesignDocument): void {
   const offenders: string[] = []
+
+  /** A plain object or array is structure; anything else is a payload. */
+  const isPlain = (value: object): boolean => {
+    if (Array.isArray(value)) return true
+    const proto: unknown = Object.getPrototypeOf(value)
+    return proto === Object.prototype || proto === null
+  }
+
+  const inspect = (value: unknown, path: string, layer: DesignLayer, depth: number): void => {
+    if (depth > MAX_LAYER_DEPTH) return
+    if (typeof value === 'string') {
+      if (value.startsWith('data:') || value.startsWith('blob:')) {
+        offenders.push(`${layer.name} (${layer.kind}) carries an embedded payload at "${path}"`)
+      }
+      return
+    }
+    if (typeof value !== 'object' || value === null) return
+    if (!isPlain(value)) {
+      const kind = (value as object).constructor?.name ?? 'object'
+      offenders.push(`${layer.name} (${layer.kind}) carries a ${kind} at "${path}"`)
+      return
+    }
+    for (const [key, child] of Object.entries(value)) {
+      // `children` is the layer tree itself — walkLayers already visits it, and
+      // descending here would report every nested layer once per ancestor.
+      if (key === 'children') continue
+      inspect(child, path ? `${path}.${key}` : key, layer, depth + 1)
+    }
+  }
+
   walkLayers(doc.layers, (layer) => {
     for (const [key, value] of Object.entries(layer)) {
-      if (typeof value === 'string' && value.startsWith('data:')) {
-        offenders.push(`${layer.name} (${layer.kind}) carries a data URI in "${key}"`)
-      }
+      if (key === 'children') continue
+      inspect(value, key, layer, 0)
     }
   })
+
   if (offenders.length > 0) {
     throw new Error(
       `The design IR must not carry pixels — an image layer references an assetId ` +

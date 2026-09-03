@@ -1,7 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import type { Psd } from 'ag-psd'
 import { countLayers, designIrToJson, type TextLayer } from './ir'
-import { normalizeOpacity, normalizePsdText, psdToIr, unresolvedFonts } from './psdToIr'
+import {
+  createAssetStore,
+  normalizeOpacity,
+  normalizePsdText,
+  psdToIr,
+  unresolvedFonts,
+} from './psdToIr'
 
 // The fixtures below reproduce values observed in the P1 spike's debug output
 // against two real ad PSDs, not invented shapes.
@@ -186,6 +192,132 @@ describe('psdToIr', () => {
     expect(group.kind).toBe('group')
     expect(group.kind === 'group' && group.passThrough).toBe(true)
     expect(group.blendMode).toBe('normal')
+  })
+})
+
+// ── A-13 · the falsy guard re-created the bug the function exists to fix ────
+
+describe('renderedFontSizePx under a transform (A-13)', () => {
+  function textPsd(transform: number[], fontSize = 20) {
+    return {
+      width: 1080,
+      height: 1080,
+      children: [
+        {
+          id: 1,
+          name: 'Headline',
+          left: 0,
+          top: 0,
+          right: 500,
+          bottom: 200,
+          opacity: 1,
+          blendMode: 'normal',
+          text: {
+            text: 'Esport',
+            transform,
+            style: { font: { name: 'Montserrat-Bold' }, fontSize },
+          },
+        },
+      ],
+    } as unknown as Psd
+  }
+
+  function sizeOf(psd: Psd): number {
+    const { document } = psdToIr(psd, 't.psd')
+    return (document.layers[0] as TextLayer).style.fontSizePx
+  }
+
+  it('reads the scale of a plain scaled layer', () => {
+    expect(sizeOf(textPsd([6.8179, 0, 0, 6.8179, 0, 0]))).toBeCloseTo(136.358, 2)
+  })
+
+  it('reads the scale of a layer rotated 90 degrees', () => {
+    // 🔴 The defect, verbatim: for a 90° rotation yy = cos 90 = 0, and the old
+    // `base * (scaleY || 1)` converted that legitimate scale into "no scale" —
+    // reporting 20 px for text that renders at 136 px. That is the failure the
+    // function's own docstring says it was written to prevent, re-created by
+    // the guard meant to protect it.
+    expect(sizeOf(textPsd([0, 6.8179, -6.8179, 0, 31.05, 198.99]))).toBeCloseTo(136.358, 2)
+  })
+
+  it('never reports a negative size for a vertically flipped layer', () => {
+    // yy = -1 passed straight through, producing fontSizePx: -20.
+    // `font-size: -20px` is invalid CSS, so it is dropped and the glyphs
+    // silently inherit the parent size — a loss with no diagnostic.
+    const size = sizeOf(textPsd([1, 0, 0, -1, 0, 0]))
+    expect(size).toBeGreaterThan(0)
+    expect(size).toBeCloseTo(20, 5)
+  })
+
+  it('falls back to the declared size when there is no usable transform', () => {
+    expect(sizeOf(textPsd([]))).toBe(20)
+  })
+})
+
+// ── A-18 · a duplicate PSD layer id overwrote another layer's bitmap ────────
+
+describe('asset store collisions (A-18)', () => {
+  it('refuses a second put on the same id rather than replacing the bitmap', () => {
+    // Asset ids come from the PSD's own `lyid`. A merge/paste round-trip can
+    // repeat one, and a bare `map.set` then made one layer render the other
+    // layer's bitmap: `assetIds` listed the id once while two layers pointed
+    // at it, and nothing reported it — not assertNoPixels, not
+    // unresolvedFonts, not the asset-count assertion in this file.
+    const store = createAssetStore()
+    const canvasA = { width: 10, height: 10 } as HTMLCanvasElement
+    const canvasB = { width: 99, height: 99 } as HTMLCanvasElement
+    store.put('asset-42', canvasA)
+    expect(() => store.put('asset-42', canvasB)).toThrow(/Duplicate asset id "asset-42"/)
+    // The first layer's bitmap must survive the refusal.
+    expect(store.get('asset-42')).toBe(canvasA)
+    expect(store.ids()).toEqual(['asset-42'])
+  })
+})
+
+// ── A-19 · a prototype-chained lookup answered for `toString` ───────────────
+
+describe('blend mode lookup (A-19)', () => {
+  function blendPsd(blendMode: string) {
+    return {
+      width: 100,
+      height: 100,
+      children: [
+        {
+          id: 1,
+          name: 'L',
+          left: 0,
+          top: 0,
+          right: 10,
+          bottom: 10,
+          opacity: 1,
+          blendMode,
+          text: { text: 'x', style: { font: { name: 'Arial' }, fontSize: 12 } },
+        },
+      ],
+    } as unknown as Psd
+  }
+
+  it('maps a real blend mode', () => {
+    const { document } = psdToIr(blendPsd('multiply'), 't.psd')
+    expect(document.layers[0]!.blendMode).toBe('multiply')
+  })
+
+  it('returns normal for an inherited Object.prototype key, not a function', () => {
+    // `BLEND_TO_CSS[mode] ?? 'normal'` — `??` only catches null/undefined, and
+    // an object literal inherits Object.prototype, so `toString` returned an
+    // inherited FUNCTION. `blendMode` is typed `string`; a function reached the
+    // IR, JSON.stringify dropped it, and the field became undefined at runtime.
+    for (const hostile of ['toString', 'constructor', 'valueOf', 'hasOwnProperty']) {
+      const { document } = psdToIr(blendPsd(hostile), 't.psd')
+      const mode = document.layers[0]!.blendMode
+      expect(typeof mode, hostile).toBe('string')
+      expect(mode, hostile).toBe('normal')
+    }
+  })
+
+  it('returns normal for an unmapped mode', () => {
+    const { document } = psdToIr(blendPsd('not-a-mode'), 't.psd')
+    expect(document.layers[0]!.blendMode).toBe('normal')
   })
 })
 

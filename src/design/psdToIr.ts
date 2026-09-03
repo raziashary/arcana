@@ -46,7 +46,28 @@ export interface AssetStore {
 export function createAssetStore(): AssetStore {
   const map = new Map<string, HTMLCanvasElement>()
   return {
-    put: (id, canvas) => void map.set(id, canvas),
+    /**
+     * 🔴 `A-18`: this was a bare `map.set`, and asset ids are derived from the
+     * PSD's own `lyid` (`asset-${layer.id}`). A file whose layer ids repeat —
+     * which a merge/paste round-trip produces — put two image layers on one
+     * key, so the second canvas replaced the first and one layer rendered the
+     * other layer's bitmap. `assetIds` listed the id once while two layers
+     * referenced it, and nothing reported it: not `assertNoPixels`, not
+     * `unresolvedFonts`, not the asset-count assertion in the tests.
+     *
+     * Refusing is right rather than renaming: a duplicate id means the file's
+     * identifiers are not identifiers, and silently disambiguating them would
+     * hide that from the diagnostic the conversion owes the user.
+     */
+    put: (id, canvas) => {
+      if (map.has(id)) {
+        throw new Error(
+          `Duplicate asset id "${id}" — two layers claim the same PSD layer id. ` +
+            `Storing it would make one layer render the other's bitmap.`,
+        )
+      }
+      map.set(id, canvas)
+    },
     get: (id) => map.get(id),
     ids: () => [...map.keys()],
   }
@@ -152,8 +173,26 @@ type PsdText = NonNullable<Layer['text']>
 function renderedFontSizePx(text: PsdText): number {
   const base = text.style?.fontSize ?? 12
   const transform = text.transform
-  const scaleY = Array.isArray(transform) && typeof transform[3] === 'number' ? transform[3] : 1
-  return base * (scaleY || 1)
+  if (!Array.isArray(transform)) return base
+  const yx = transform[2]
+  const yy = transform[3]
+  if (typeof yx !== 'number' || typeof yy !== 'number') return base
+  // 🔴 `A-13`: this was `base * (scaleY || 1)`, reading only `transform[3]`.
+  //
+  // The transform is `[xx, xy, yx, yy, tx, ty]`, so `yy` alone is the vertical
+  // scale ONLY for an unrotated layer. Rotate a layer 90° and `yy = cos 90 = 0`
+  // — whereupon `0 || 1` converted a legitimate scale into "no scale", and a
+  // headline scaled 6.8× and rotated reported `fontSizePx: 20` while rendering
+  // at 136 px. That is verbatim the failure this function's own docstring says
+  // it was written to prevent, re-created by the falsy-guard. A vertically
+  // flipped layer (`yy = -1`) passed straight through and produced
+  // `fontSizePx: -20`; `font-size: -20px` is invalid CSS, so it is dropped and
+  // the glyphs silently inherit their size from the parent.
+  //
+  // The magnitude of the transformed unit-y vector is the scale under any
+  // rotation, and it is never negative.
+  const scale = Math.hypot(yx, yy)
+  return scale > 0 ? base * scale : base
 }
 
 function toStyleRuns(text: PsdText): StyleRun[] {
@@ -216,6 +255,27 @@ interface ConvertState {
   nextSyntheticId: number
 }
 
+/**
+ * PSD blend mode → CSS, safely.
+ *
+ * 🔴 `A-19`: the call site was `BLEND_TO_CSS[mode ?? 'normal'] ?? 'normal'`.
+ * `??` only catches `null` and `undefined`, and an object literal inherits
+ * `Object.prototype` — so a blend mode string of `toString`, `constructor`,
+ * `valueOf` or `hasOwnProperty` returned an inherited **function**, which is
+ * not nullish and so survived the fallback. `blendMode` is typed `string`;
+ * what reached the IR was a function. `JSON.stringify` drops it, so the field
+ * silently becomes `undefined` at runtime, and a non-JSON serializer would
+ * emit function source into a CSS attribute.
+ *
+ * `Object.hasOwn` removes the class rather than patching the instance.
+ */
+function blendModeToCss(mode: string | undefined): string {
+  const key = mode ?? 'normal'
+  // `Object.hasOwn` would read better; the project targets below ES2022, so
+  // this is the same check spelled in the form the target supports.
+  return Object.prototype.hasOwnProperty.call(BLEND_TO_CSS, key) ? BLEND_TO_CSS[key]! : 'normal'
+}
+
 function convertLayer(layer: Layer, state: ConvertState): DesignLayer {
   const id =
     layer.id !== undefined && layer.id !== null
@@ -226,7 +286,7 @@ function convertLayer(layer: Layer, state: ConvertState): DesignLayer {
     name: layer.name ?? 'Layer',
     bounds: toBounds(layer),
     opacity: normalizeOpacity(layer.opacity),
-    blendMode: BLEND_TO_CSS[layer.blendMode ?? 'normal'] ?? 'normal',
+    blendMode: blendModeToCss(layer.blendMode),
     hidden: Boolean(layer.hidden),
   }
 
