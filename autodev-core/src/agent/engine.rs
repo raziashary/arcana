@@ -380,6 +380,17 @@ impl AgentEngine {
             None => tool_executor,
         };
 
+        // ── P8-66 · the Live Monitor's own channel ──────────────────────────
+        //
+        // Agent-keyed, unlike the session-keyed `agent:token` stream that feeds
+        // the chat transcript. The Live Monitor asks "what is this agent doing
+        // right now", and until now nothing answered: it listened for these
+        // names and no Rust source sent them.
+        crate::events::emit_agent_status_change(crate::events::AgentStatusChangePayload {
+            agent_id: self.identity.role.clone(),
+            status: "active".to_string(),
+        });
+
         let mut turn = 0;
         let mut total_usage = Usage::default();
         // Ruflo Feature 4 — cumulative budget usage tracked across all turns
@@ -572,6 +583,17 @@ impl AgentEngine {
                     &mut turn_stop_reason,
                 )
                 .await;
+
+            // The sparkline's data. `window_tokens` is this turn's delta and
+            // `total_tokens` the running total, which is exactly the pair the
+            // card renders (`P8-66`).
+            crate::events::emit_agent_token_update(crate::events::AgentTokenUpdatePayload {
+                agent_id: self.identity.role.clone(),
+                total_tokens: (total_usage.total_input() + total_usage.output) as u32,
+                window_tokens: ((total_usage.total_input() + total_usage.output)
+                    .saturating_sub(usage_before_turn.total_input() + usage_before_turn.output))
+                    as u32,
+            });
 
             // ── P2-12 · did this request actually read from cache? ───────────
             //
@@ -1243,6 +1265,20 @@ impl AgentEngine {
     /// Safe to call with an empty `Usage`: it is a no-op then, so an early exit
     /// before any turn costs nothing and records nothing.
     fn record_spend(&self, session_id: &str, model: &str, total_usage: &Usage) -> f64 {
+        // ── P8-66 · the run is over, whatever else is true ─────────────────
+        //
+        // BEFORE the zero-usage early return, and inside this function rather
+        // than at its four call sites. This function's own docstring is that it
+        // runs on every exit path, so putting the transition here makes "the
+        // Live Monitor is told the agent stopped" true by construction — the
+        // same reasoning that places the procedural seam at the top of
+        // `execute_batch`. Four call sites would be four chances to forget, and
+        // the failure would be a card left showing ACTIVE forever.
+        crate::events::emit_agent_status_change(crate::events::AgentStatusChangePayload {
+            agent_id: self.identity.role.clone(),
+            status: "idle".to_string(),
+        });
+
         if total_usage.total() == 0 {
             return 0.0;
         }

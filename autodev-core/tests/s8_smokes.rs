@@ -209,3 +209,178 @@ fn s8_05_a_worker_commit_branches_stages_narrowly_and_spares_the_trunk() {
 
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+/// `S8-01` — a clean checkout needs no submodule initialisation.
+///
+/// Clones the repository into a sandbox with a plain `git clone` — **no
+/// `--recurse-submodules`** — and asserts the result is complete: no submodule
+/// configuration, no submodule directory, and every workspace member present.
+///
+/// ⚠ It does not compile the clone. A fresh `cargo build` there would re-fetch
+/// and rebuild the whole dependency graph for a property this already
+/// establishes; the compile half is what `cargo check --workspace` proves on
+/// this tree, and the two together are the claim. Saying so is the point —
+/// a smoke that quietly checks less than its name implies is worse than one
+/// that states its boundary.
+#[test]
+fn s8_01_a_clean_checkout_needs_no_submodule_step() {
+    assert!(
+        Command::new("git").arg("--version").output().is_ok(),
+        "git is not on PATH, so this smoke cannot report anything (`L-C9`)."
+    );
+
+    // The repository root: two levels up from `autodev-core/tests/`.
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("autodev-core always has a parent")
+        .to_path_buf();
+    assert!(
+        repo_root.join(".git").exists(),
+        "{repo_root:?} is not a git repository, so nothing below is measured"
+    );
+
+    let sandbox = std::env::temp_dir().join(format!(
+        "autodev-s8-01-{}-{:?}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let dest = sandbox.join("clone");
+    std::fs::create_dir_all(&sandbox).expect("sandbox");
+
+    // A plain clone. No `--recurse-submodules`, deliberately.
+    let out = Command::new("git")
+        .args(["clone", "--depth", "1", "--quiet"])
+        .arg(&repo_root)
+        .arg(&dest)
+        .output()
+        .expect("git clone must start");
+    assert!(
+        out.status.success(),
+        "the clone failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // ── no submodule step ────────────────────────────────────────────────────
+    assert!(
+        !dest.join(".gitmodules").exists(),
+        "`.gitmodules` is in a clean checkout, so `git submodule update --init` \
+         is back on the critical path for every new contributor"
+    );
+    assert!(
+        !dest.join("submodules").exists(),
+        "a `submodules/` directory is in a clean checkout"
+    );
+    let status = git_ok(&dest, &["submodule", "status"]);
+    assert!(
+        status.trim().is_empty(),
+        "the clean checkout declares submodules: {status}"
+    );
+
+    // ── and the checkout is COMPLETE ─────────────────────────────────────────
+    //
+    // "No submodule step" is only good news if nothing is missing as a result.
+    // Every workspace member's manifest must be present in the clone.
+    let workspace = std::fs::read_to_string(dest.join("Cargo.toml")).expect("workspace manifest");
+    let members: Vec<String> = workspace
+        .split("members")
+        .nth(1)
+        .and_then(|r| r.split(']').next())
+        .map(|list| {
+            list.split('"')
+                .filter(|p| !p.trim().is_empty() && !p.contains('[') && !p.contains(','))
+                .map(|p| p.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        members.len() >= 3,
+        "only {} workspace member(s) parsed from Cargo.toml, so this half \
+         checks almost nothing: {members:?}",
+        members.len()
+    );
+    for m in &members {
+        assert!(
+            dest.join(m).join("Cargo.toml").exists(),
+            "workspace member `{m}` has no manifest in a clean checkout"
+        );
+    }
+    assert!(
+        dest.join("package.json").exists() && dest.join("src/App.tsx").exists(),
+        "the front end is incomplete in a clean checkout"
+    );
+
+    let _ = std::fs::remove_dir_all(&sandbox);
+}
+
+/// `S8-02` (the process half) — nothing in the shipped tree spawns a Python
+/// interpreter for AutoDev's own operation.
+///
+/// ⚠ **The claim is narrower than "no Python", and that is the whole
+/// difficulty.** `agent/builtin_tools/validate.rs` runs `python3`, `mypy` and
+/// `pyright` — on the **user's** files, because AutoDev can work on a Python
+/// project. A check written against the token `python` would flag that
+/// capability as a violation and invite someone to delete it. The property is
+/// that no *start-up or agent-loop* path spawns an interpreter of its own.
+///
+/// The live half of `S8-02` — the app starts, completes an agent turn, and a
+/// process listing shows no Python — needs a provider key and a desktop
+/// session, and is not run from here.
+#[test]
+fn s8_02_no_startup_or_agent_path_spawns_an_interpreter() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("parent")
+        .to_path_buf();
+
+    // The paths that run without the user asking for anything.
+    let startup: &[&str] = &[
+        "src-tauri/src/main.rs",
+        "src-tauri/src/lib.rs",
+        "autodev-core/src/agent/engine.rs",
+        "autodev-core/src/agent/tool_executor.rs",
+        "autodev-core/src/recipes/runner.rs",
+        "autodev-core/src/recipes/scheduler.rs",
+        "autodev-core/src/subagent/native_runner.rs",
+    ];
+
+    let mut read = 0usize;
+    for rel in startup {
+        let p = root.join(rel);
+        let body = std::fs::read_to_string(&p).unwrap_or_default();
+        assert!(
+            !body.trim().is_empty(),
+            "{rel} did not read, so this smoke would pass over it silently"
+        );
+        read += 1;
+        for needle in [
+            "Command::new(\"python",
+            "Command::new(\"uv\"",
+            "Command::new(\"py\"",
+            "spawn_sidecar",
+        ] {
+            assert!(
+                !body.contains(needle),
+                "{rel} spawns an interpreter of AutoDev's own ({needle}). \
+                 Running the user's Python tooling is a capability; starting \
+                 one to run AutoDev is the thing `P8` removed."
+            );
+        }
+    }
+    assert_eq!(read, startup.len(), "not every start-up path was read");
+
+    // And the bundle carries no payload to start.
+    let conf = std::fs::read_to_string(root.join("src-tauri/tauri.conf.json"))
+        .expect("tauri.conf.json");
+    assert!(
+        conf.contains("\"resources\": []"),
+        "the bundle declares resources again. A release ships the binary and \
+         its icons; anything else here is a runtime being shipped alongside it."
+    );
+    assert!(
+        !conf.contains("externalBin"),
+        "the bundle declares an external binary"
+    );
+}

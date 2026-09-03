@@ -32,7 +32,21 @@ R2_PREFIXES = ('P5', 'P6', 'P7', 'P9')
 
 
 def measured(text):
-    rows = re.findall(r'^- \[([ x])\] \*\*((?:P|PD)\d+[A-Za-z]?)-\d+[a-z]?\*\*',
+# 🔴 The `(?:~~)?` is load-bearing, added 2026-09-04.
+#
+# A struck task is written `- [x] ~~**P2-07** …~~`, and this pattern required
+# `**` immediately after the checkbox — so **every struck task was invisible to
+# both counters for the life of this document**. Seven of them: six marked done
+# and one (`P0-26`) that was struck, left unchecked, and therefore appeared in
+# neither column. The programme totals were short by seven and nobody could see
+# which seven, because the thing that would have reported it was the thing that
+# could not see them.
+#
+# ⚠ A struck task IS a task. It was planned, it was reasoned about, and the
+# reason it will not be built is recorded — that is a resolution, not an
+# absence. Dropping it from the denominator flatters the completion figure and
+# loses the decision.
+    rows = re.findall(r'^- \[([ x])\] (?:~~)?\*\*((?:P|PD)\d+[A-Za-z]?)-\d+[a-z]?\*\*',
                       text, re.M)
     if not rows:
         raise SystemExit('found no task checkboxes at all -- the pattern has drifted')

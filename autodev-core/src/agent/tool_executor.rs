@@ -13,7 +13,10 @@ use super::permission::{PendingPermissions, PermissionMode, PermissionResponse};
 use super::tool_trait::{AgentIdentity, Tool, ToolContext, ToolResult};
 use crate::errors::Result;
 use crate::events::{
-    emit_permission_request, emit_tool_end, emit_tool_start, PermissionPayload, ToolEndPayload,
+    emit_agent_stage_change, emit_agent_tool_call_result, emit_agent_tool_call_start,
+    emit_permission_request, emit_tool_end, emit_tool_start, stage_for_tool,
+    AgentStageChangePayload, AgentToolCallResultPayload, AgentToolCallStartPayload,
+    PermissionPayload, ToolEndPayload,
     ToolStartPayload,
 };
 use crate::hooks::{HookContext, HookRegistry, HookType, ToolCallContext};
@@ -430,6 +433,25 @@ impl ToolExecutor {
                         input: reported.clone(),
                     });
 
+                    // The Live Monitor's own channel: agent-keyed, not
+                    // session-keyed (`P8-66`).
+                    emit_agent_tool_call_start(AgentToolCallStartPayload {
+                        agent_id: identity.role.clone(),
+                        tool_call_id: call_id.clone(),
+                        name: tool.name().to_string(),
+                        args: reported.to_string(),
+                    });
+                    if let Some(stage) = stage_for_tool(tool.name()) {
+                        emit_agent_stage_change(AgentStageChangePayload {
+                            agent_id: identity.role.clone(),
+                            stage: stage.to_string(),
+                            status: "current".to_string(),
+                            elapsed_ms: None,
+                            reason: None,
+                        });
+                    }
+                    let started = std::time::Instant::now();
+
                     // Execute. Permission was decided before the partition
                     // (P3-64) — this comment used to read "read-only always
                     // approved", which described the bypass rather than a
@@ -447,6 +469,24 @@ impl ToolExecutor {
                         output: result.output.clone(),
                         is_error: result.is_error,
                     });
+
+                    let elapsed_ms = started.elapsed().as_millis() as u64;
+                    emit_agent_tool_call_result(AgentToolCallResultPayload {
+                        agent_id: identity.role.clone(),
+                        tool_call_id: call_id.clone(),
+                        result: result.output.clone(),
+                        is_error: result.is_error,
+                        elapsed_ms,
+                    });
+                    if let Some(stage) = stage_for_tool(&tool_name) {
+                        emit_agent_stage_change(AgentStageChangePayload {
+                            agent_id: identity.role.clone(),
+                            stage: stage.to_string(),
+                            status: if result.is_error { "error" } else { "done" }.to_string(),
+                            elapsed_ms: Some(elapsed_ms),
+                            reason: None,
+                        });
+                    }
 
                     (
                         original_idx,
@@ -524,6 +564,23 @@ impl ToolExecutor {
                     tool_name: tool.name().to_string(),
                     input: reported.clone(),
                 });
+
+                emit_agent_tool_call_start(AgentToolCallStartPayload {
+                    agent_id: self.identity.role.clone(),
+                    tool_call_id: call_id.clone(),
+                    name: tool.name().to_string(),
+                    args: reported.to_string(),
+                });
+                if let Some(stage) = stage_for_tool(tool.name()) {
+                    emit_agent_stage_change(AgentStageChangePayload {
+                        agent_id: self.identity.role.clone(),
+                        stage: stage.to_string(),
+                        status: "current".to_string(),
+                        elapsed_ms: None,
+                        reason: None,
+                    });
+                }
+                let started = std::time::Instant::now();
 
                 // 🔴 G-1 (P3 post-phase gap hunt). A **second** permission
                 // check stood here, and it directly contradicted this
@@ -626,6 +683,24 @@ impl ToolExecutor {
                     output: result.output.clone(),
                     is_error: result.is_error,
                 });
+
+                let elapsed_ms = started.elapsed().as_millis() as u64;
+                emit_agent_tool_call_result(AgentToolCallResultPayload {
+                    agent_id: self.identity.role.clone(),
+                    tool_call_id: call_id.clone(),
+                    result: result.output.clone(),
+                    is_error: result.is_error,
+                    elapsed_ms,
+                });
+                if let Some(stage) = stage_for_tool(tool.name()) {
+                    emit_agent_stage_change(AgentStageChangePayload {
+                        agent_id: self.identity.role.clone(),
+                        stage: stage.to_string(),
+                        status: if result.is_error { "error" } else { "done" }.to_string(),
+                        elapsed_ms: Some(elapsed_ms),
+                        reason: None,
+                    });
+                }
 
                 results[original_idx] = (tool_use_id, result);
             }

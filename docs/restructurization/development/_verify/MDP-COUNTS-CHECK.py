@@ -61,7 +61,10 @@ ROW_TO_PREFIX = {
 def checkbox_counts(text):
     """{prefix: {number: 'x'|' '}} from the task checkbox lines."""
     found = collections.defaultdict(dict)
-    for m in re.finditer(r'^- \[( |x)\] \*\*(PD\d+|P\d+)-(\d+)([a-z]?)\*\*', text, re.M):
+    # The `(?:~~)?` is the same fix as the pattern further down this file, and
+    # having to make it TWICE is the finding: two regexes in one file for one
+    # concept, and the first pass fixed only the one it happened to grep for.
+    for m in re.finditer(r'^- \[( |x)\] (?:~~)?\*\*(PD\d+|P\d+)-(\d+)([a-z]?)\*\*', text, re.M):
         state, prefix, num, suffix = m.groups()
         key = num + suffix
         found[prefix].setdefault(key, state)
@@ -122,7 +125,21 @@ def measured_totals(text):
     been pointed at the TABLE. A derived figure with no check is `L-C1`, and the
     remedy for `L-C1` is a check rather than a note (`L-21`).
     """
-    rows = re.findall(r'^- \[([ x])\] \*\*((?:P|PD)\d+[A-Za-z]?)-\d+[a-z]?\*\*',
+# 🔴 The `(?:~~)?` is load-bearing, added 2026-09-04.
+#
+# A struck task is written `- [x] ~~**P2-07** …~~`, and this pattern required
+# `**` immediately after the checkbox — so **every struck task was invisible to
+# both counters for the life of this document**. Seven of them: six marked done
+# and one (`P0-26`) that was struck, left unchecked, and therefore appeared in
+# neither column. The programme totals were short by seven and nobody could see
+# which seven, because the thing that would have reported it was the thing that
+# could not see them.
+#
+# ⚠ A struck task IS a task. It was planned, it was reasoned about, and the
+# reason it will not be built is recorded — that is a resolution, not an
+# absence. Dropping it from the denominator flatters the completion figure and
+# loses the decision.
+    rows = re.findall(r'^- \[([ x])\] (?:~~)?\*\*((?:P|PD)\d+[A-Za-z]?)-\d+[a-z]?\*\*',
                       text, re.M)
     t = {'total': len(rows), 'open': 0, 'r1_open': 0, 'r1_done': 0}
     for mark, phase in rows:

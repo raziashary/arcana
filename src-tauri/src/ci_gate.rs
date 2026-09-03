@@ -5202,37 +5202,26 @@ let x = 1;
     /// now recorded four times.
     #[test]
     fn tg8_08_every_frontend_listener_has_a_rust_emitter() {
-        // 🔴 **Ten events the frontend listens for that Rust never emits.**
-        // Found by writing this gate. They are NOT `P8`'s subject — none names
-        // a deleted subsystem, they are ordinary readers with no writer — so
-        // they are recorded here rather than rewired, which is a product
-        // decision about what ought to emit them:
+        // 🔴 This list held **ten** events the frontend listened for and no
+        // Rust source emitted. It is now **empty**, and razi ruled that outcome
+        // (2026-09-04): file them as `P8` tasks and wire them rather than
+        // leaving a standing finding.
         //
-        //   * the Live Monitor's stage changes and token sparkline
-        //     (`agent:stage-change`, `agent:status-change`,
-        //     `agent:token-update`, `agent:tool-call-start`,
-        //     `agent:tool-call-result`) — the card subscribes to five events
-        //     that never arrive;
-        //   * the whole plan store (`plan:created`, `plan:updated`,
-        //     `plan:item_claimed`, `plan:step_completed`,
-        //     `plan:subplan_created`) — Rust emits only `plan:changed`, which
-        //     nothing listens for. The two sides were named independently and
-        //     have never once agreed.
+        //   * Five drove the Live Monitor — stage strip, tool detail and token
+        //     sparkline. `P8-66` gives them emitters: they are **agent-keyed**,
+        //     unlike the session-keyed `agent:tool-start`/`agent:token` pair
+        //     that feeds the chat transcript, which is why they were never
+        //     duplicates of anything.
+        //   * Five drove the plan store, and each handler was a `console.log`
+        //     — so even had they arrived, nothing would have moved on screen.
+        //     Rust emits ONE event, `plan:changed`, from ten sites, with a
+        //     `kind` field carrying exactly the distinction those five names
+        //     reached for. `P8-67` listens for that instead, and acts on it.
         //
-        // The list is a **ratchet**: a new listener with no emitter fails this
-        // gate, and each of these can be struck as it is wired up.
-        const KNOWN_UNEMITTED: &[&str] = &[
-            "agent:stage-change",
-            "agent:status-change",
-            "agent:token-update",
-            "agent:tool-call-start",
-            "agent:tool-call-result",
-            "plan:created",
-            "plan:updated",
-            "plan:item_claimed",
-            "plan:step_completed",
-            "plan:subplan_created",
-        ];
+        // ⚠ Kept, empty, deliberately. A listener added tomorrow with no
+        // emitter fails this gate, and the only way past is to write the
+        // emitter or to record the exemption here with a reason.
+        const KNOWN_UNEMITTED: &[&str] = &[];
 
         // ── what the frontend listens for ────────────────────────────────────
         let mut ts_files: Vec<std::path::PathBuf> = Vec::new();
@@ -5496,5 +5485,153 @@ let x = 1;
             "the seam no longer routes through `recall.rs`, so procedural text \
              can reach the prompt unflattened — the hole `P3-F` closed."
         );
+    }
+
+    // ── TG8-11 · the exit assertion ───────────────────────────────────────────
+
+    /// `P8-21` and `P8-24`. Every clause names the **Python orchestrator
+    /// subsystem**, which is the thing that was deleted — not the word
+    /// "sidecar", which `PD0` gave a second meaning.
+    ///
+    /// 🔴 The original assertion was *"`git ls-files | grep -i sidecar`
+    /// returns nothing"*. That could only be satisfied by deleting `PD0`'s
+    /// published deliverables, because AutoDev is itself a **sidecar of
+    /// AutoDesign** in that seam. `L-C6` — a check written from the claim
+    /// rather than from the invariant — caught before the phase rather than by
+    /// its audit, which is what `§0.2m` exists for.
+    ///
+    /// ⚠ The PROTECTED set is asserted to **still exist**. A sweep that
+    /// deleted them would satisfy every "is it gone?" clause below and be
+    /// catastrophic, so the gate checks both directions.
+    #[test]
+    fn tg8_11_the_exit_assertion() {
+        let root = repo_root();
+
+        // ── 1 · the deleted trees are gone ───────────────────────────────────
+        for gone in [
+            "src-tauri/src/sidecar",
+            "src-tauri/src/commands/sidecar_commands.rs",
+            "src-tauri/resources/sidecars",
+            "submodules",
+            ".git/modules/submodules",
+            "src/components/sidecar",
+            "src/stores/sidecarStore.ts",
+            "src/components/startup/StartupOverlay.tsx",
+            "installers/wix/bundle-sidecars.ps1",
+        ] {
+            assert!(
+                !root.join(gone).exists(),
+                "`{gone}` is back on disk"
+            );
+        }
+
+        // `.gitmodules` gone or empty.
+        let gm = root.join(".gitmodules");
+        if gm.exists() {
+            let body = std::fs::read_to_string(&gm).unwrap_or_default();
+            assert!(
+                body.trim().is_empty(),
+                "`.gitmodules` is non-empty:\n{body}"
+            );
+        }
+
+        // ── 2 · nothing shipped references the subsystem ─────────────────────
+        //
+        // `TG8-09` covers the four source trees. This adds the surfaces it does
+        // not: manifests, packaging, and the shipped README (`P8-24`).
+        const FORBIDDEN: &[&str] = &[
+            "core-orchestrator",
+            "memory-mcp-server",
+            "127.0.0.1:4000",
+            "127.0.0.1:8000",
+        ];
+
+        let mut manifests: Vec<std::path::PathBuf> = vec![
+            root.join("Cargo.toml"),
+            root.join("package.json"),
+            root.join("src-tauri/Cargo.toml"),
+            root.join("src-tauri/tauri.conf.json"),
+            root.join("autodev-core/Cargo.toml"),
+            root.join("src-cli/Cargo.toml"),
+            root.join("src-shared/Cargo.toml"),
+        ];
+        collect_ext(&root.join("installers"), "ps1", &mut manifests);
+        collect_ext(&root.join("installers"), "sh", &mut manifests);
+        collect_ext(&root.join("installers"), "spec", &mut manifests);
+        collect_ext(&root.join("installers"), "plist", &mut manifests);
+        collect_ext(&root.join("scripts"), "ps1", &mut manifests);
+        collect_ext(&root.join("scripts"), "sh", &mut manifests);
+        manifests.push(root.join("installers/deb/DEBIAN/control"));
+
+        let mut hits: Vec<String> = Vec::new();
+        let mut read_any = false;
+        for p in &manifests {
+            let body = read_source(p);
+            if body.is_empty() {
+                continue;
+            }
+            read_any = true;
+            for (n, line) in body.lines().enumerate() {
+                // A comment explaining the removal is not a reference to a live
+                // thing. Only executable/declared content counts here.
+                let t = line.trim_start();
+                if t.starts_with('#') || t.starts_with("//") || t.starts_with("<!--") {
+                    continue;
+                }
+                for w in FORBIDDEN {
+                    if line.contains(w) {
+                        let rel = p.strip_prefix(&root).unwrap_or(p).to_string_lossy()
+                            .replace('\\', "/");
+                        hits.push(format!("{rel}:{}: {w} — {}", n + 1, line.trim()));
+                    }
+                }
+            }
+        }
+        assert!(read_any, "no manifest or packaging file was read at all");
+        assert!(
+            hits.is_empty(),
+            "shipped manifests or packaging still declare the deleted subsystem:\n{}",
+            hits.join("\n")
+        );
+
+        // The README is the shipped document. Its delivery history is exempt:
+        // "Phase 2 … Sidecar integration" is a true statement about what
+        // shipped then, and a changelog edited to match the present is no
+        // longer a changelog (`P8-62`).
+        let readme = read_source(&root.join("README.md"));
+        assert!(!readme.trim().is_empty(), "README.md did not read");
+        let live = readme
+            .split("## Development Phases")
+            .next()
+            .expect("the README must have content before its history");
+        for w in FORBIDDEN {
+            assert!(
+                !live.contains(w),
+                "the README still describes `{w}` as something the app has, \
+                 outside its delivery history"
+            );
+        }
+
+        // ── 3 · and these are PROTECTED, not targets ─────────────────────────
+        //
+        // Every one uses the word "sidecar" in a different sense. A sweep run
+        // from the token rather than the subject would delete a published seam.
+        for protected in [
+            "tsconfig.sidecar.json",
+            "scripts/smoke-design-sidecar.mjs",
+            "src/design/contract/sidecar.ts",
+            "src-tauri/src/updater/check.rs",
+            "src-tauri/src/updater/download.rs",
+            "autodev-core/src/db/backup.rs",
+        ] {
+            assert!(
+                root.join(protected).exists(),
+                "`{protected}` is MISSING. It uses the word 'sidecar' in a \
+                 different sense — the AutoDesign seam, an update signature \
+                 asset, or SQLite's write-ahead log — and `P8-21` lists it as \
+                 protected. A sweep that deleted it satisfied every clause \
+                 above and broke something shipped."
+            );
+        }
     }
 }

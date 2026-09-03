@@ -9,7 +9,7 @@
 | **Owner** | Razi (Programming Lead, AIRS Foundry) |
 | **Branch** | `main` (Razi authorised working directly on it; `sidecar-backup` holds the pre-restructure state) |
 | **Rev** | **2.2** — created 2026-08-31, current 2026-09-03. `§16` is authoritative for the history |
-| **Status** | 🟢 **BUILDING.** GO given 2026-09-01. Complete: `P0` · `P1` · `P2` · `P3 A–E` · `P3-F` · `PD0`. **Next: `P8`.** 255 of 517 tasks open |
+| **Status** | 🟢 **BUILDING.** GO given 2026-09-01. Complete: `P0` · `P1` · `P2` · `P3 A–E` · `P3-F` · `PD0`. **Next: `P8`.** 251 of 525 tasks open |
 
 ⚠ **This header read `Rev 1.0` and `⛔ AWAITING GO. No code, no migrations, no
 deletions.` until 2026-09-03** — through seven completed phases, hundreds of
@@ -369,6 +369,56 @@ decoders while every other check stayed green. → **A module that only external
 has no internal reader, which is exactly the condition `L-C12` describes — and it is worse here,
 because the missing reader is on the other side of a seam and cannot tell us.** Anything
 published for someone else needs a local consumer whose job is to notice.
+
+**L-41 · Two halves in different languages, each correct alone, and no suite on
+either side can fail.** `P8-52` deleted the startup FSM and the
+`get_startup_phase` command — correct — and left `StartupOverlay` mounted in
+`App.tsx` — also correct, in isolation. The overlay hides only when a
+`startup:progress` event reaches "ready"; nothing emits that any more, so **the
+application rendered a full-screen `z-index: 9999` modal over the entire UI that
+nothing could dismiss.** The task was recorded done and `SMOKE-PROVEN`. No Rust
+test could fail, because the Rust half was right; no vitest could fail, because
+the React half was right; and nothing read across the seam. → **Where a
+capability spans a language boundary, the gate has to span it too.** `TG8-08`
+asserts every frontend `listen()` has a Rust emitter, and found **ten more** of
+the same shape the moment it existed. A deletion is not finished when the
+producer is gone; it is finished when the consumer is gone too, and only
+something reading both ends can tell you which.
+
+**L-42 · A falsification harness that restores by copying leaves the build
+stale, so the next run reports the PLANT's result over restored source.**
+`shutil.move`/`copy2` preserve mtime, so cargo saw the restored file as
+unchanged and did not rebuild. It surfaced as a stale RED, which I noticed — but
+the identical mechanism produces a stale **GREEN**, which I would not have. A
+falsification is the one test whose whole value is that the result changed, and
+this silently guarantees it did not. → **Touch every file a harness restores,
+and re-run the check afterwards to prove the restoration took.** Every
+falsification in `P8` ends with a restored-state run whose exit code is asserted,
+not assumed.
+
+**L-43 · A counter blind to a formatting variant undercounts in silence, and the
+thing that would report it is the thing that cannot see it.** Both derived task
+counters matched `^- \[x\] \*\*P8-nn\*\*` and a struck task is written
+`- [x] ~~**P2-07** …~~`. **Seven tasks were invisible for the life of the
+document** — six marked done, and one (`P0-26`) struck *and* left unchecked, so
+it appeared in neither column and no rule could flag it. The totals were short by
+seven, and the checker that exists to catch stale totals agreed with them
+perfectly, because it was blind in exactly the same way. → **A derived count must
+be checked against a population derived differently**, and when the same file
+holds two regexes for one concept, fixing one is not fixing it — I had to make
+this same change **twice**, in two patterns, in the same file.
+
+**L-44 · A gate that counts a token as a proxy for its invariant goes red for
+compliance.** `no_tool_context_site_hardcodes_identity` counted `identity.role`
+across the whole file and asserted the total equalled the number of `ToolContext`
+sites. `P8-66` added event payloads that take `agent_id` from that same threaded
+identity — doing precisely what the gate exists to encourage — and the count went
+2 → 10, so the gate failed the change for being right. ⚠ Its own comment already
+recorded `P3-67` fixing the previous version, which had encoded how many sites
+the file happened to have. **Same class, one level up, in a gate that had already
+been corrected once for it.** → A structural gate reads the *structure*: it now
+slices each construction block and asserts within it, which is immune to every
+unrelated use of the same word.
 
 **L-40 · A task's DEFECT and a task's EXPLANATION are two claims, and the second
 is cheaper to get wrong.** Three `P8-0` tasks were confirmed defects with refuted
@@ -818,14 +868,14 @@ goes to ask *what is left*.
 
 | # | Phase | Why here | Tasks |
 |---|---|---|---|
-| ✅ | **P0** Stop the bleeding | done — 33 of 34; `P0-21`'s e2e harness is blocked on the environment, not on throughput. ⚠ Was **27** here until 2026-09-03: seven completed tasks (`P0-13b`, `P0-28`…`P0-33`) had no line in `§6` and so were invisible to every count that walks it (`A18` `S-39`) | 34 |
+| ✅ | **P0** Stop the bleeding | done — 33 of 34; `P0-21`'s e2e harness is blocked on the environment, not on throughput. ⚠ Was **27** here until 2026-09-03: seven completed tasks (`P0-13b`, `P0-28`…`P0-33`) had no line in `§6` and so were invisible to every count that walks it (`A18` `S-39`) | 35 |
 | ✅ | **P1** Structural | done | 22 |
-| ✅ | **P2** Providers | Everything downstream makes model calls. **Gemini primary** (`gemini-3.5-flash` + 3.5 flagship); OpenAI and Anthropic follow in the same phase | 74 |
-| ✅ | **P3 A–E** Runtime | The loop that will execute every design tool: fault isolation, one tool path, bounded context. Conversion holds a full layer bitmap set for 25–35 s, so `panic = "abort"` must die **before** the design phases, not after | 39 |
+| ✅ | **P2** Providers | Everything downstream makes model calls. **Gemini primary** (`gemini-3.5-flash` + 3.5 flagship); OpenAI and Anthropic follow in the same phase | 75 |
+| ✅ | **P3 A–E** Runtime | The loop that will execute every design tool: fault isolation, one tool path, bounded context. Conversion holds a full layer bitmap set for 25–35 s, so `panic = "abort"` must die **before** the design phases, not after | 43 |
 | ✅ | **P3-F** Memory | *"the agent needs proper guidance and memory as well, so memory is a no brainer."* Placed before the design phases deliberately: memory changes context assembly, and every design tool built earlier would need re-testing against the change | 18 |
 | ✅ | **PD0** The capability contract | **Out of numeric order deliberately, and that is the point.** Its only dependency is `P2`; it does **not** wait for `P8`. Building it early is what let the AutoDesign team start their side while everything below is still being built. Closed 2026-09-03 — on the second attempt, after the `§0.2a` audits the first closure skipped | 10 |
 | — | 🤝 **M1 · Contract reached** | ✅ 2026-09-03. An agreed, exercisable seam: the contract, a reference implementation they spawn as a child process, and a conformance suite either side can run. **`PD0` alone** — nothing else was needed for it | — |
-| **4** | **P8** Sidecar deletion + legacy conversion | ⬅ **NEXT.** **Moved into R1, before handover** — *"we dont want them to have an unused sidecar on the backend."* Feasible because `OrchestratorProbe` already has a null implementation (`NoOrchestrator`) from P1, `skip_sidecars` already exists, and `P3-F` replaced `memory-mcp-server`, the last live dependency. ⚠ **65 tasks, not 24** — after Razi's pre-P8 review it also carries the live defects, the system-prompt floor, the procedural-memory seam, the Live Monitor restoration and the `airsctl agent` retirement | 65 |
+| **4** | **P8** Sidecar deletion + legacy conversion | ⬅ **NEXT.** **Moved into R1, before handover** — *"we dont want them to have an unused sidecar on the backend."* Feasible because `OrchestratorProbe` already has a null implementation (`NoOrchestrator`) from P1, `skip_sidecars` already exists, and `P3-F` replaced `memory-mcp-server`, the last live dependency. ⚠ **67 tasks, not 24** — after Razi's pre-P8 review it also carries the live defects, the system-prompt floor, the procedural-memory seam, the Live Monitor restoration and the `airsctl agent` retirement, and — added 2026-09-04 on razi's ruling from `TG8-08`'s finding — the two event-wiring tasks `P8-66`/`P8-67` | 67 |
 | — | 🤝 **HANDOVER** | The AutoDesign team receives a codebase with **no sidecar in it**, and the contract they have already been building against since M1. See `§5.3` | — |
 | 5 | **PD1** Ingestion | PSD **and** PDF → the IR. The v4.7 operator-list pipeline is the source. 4 of its 25 tasks are already done (the AutoDesign sizing work and the layer IR) | 25 |
 | — | 🤝 **M2 · First real capability** | A real PSD or PDF returns a real IR — the reference implementation starts returning true results. **`P8` + `PD1`**, ≈15 h from now | — |
@@ -838,9 +888,9 @@ goes to ask *what is left*.
 | 11 | **P4** Fleet | *"including the fleet."* Last in R1 because a fleet multiplies whatever the tools already do; multiplying unproven tools only multiplies the debugging. ⚠ **+4 on 2026-09-03** — `P4-G`, the one-fleet ruling (`ADR-LOG-RESTRUCT-0037`) | 49 |
 | 12 | **R1 close** | Integration, post-phase audit (`§0.2a`), contract v1. ≈38 h from now | — |
 
-**Open R1 tasks: 172.** Completed R1 tasks: **262** (`P0`–`P3-F` and `PD0`, plus
-4 of `PD1`'s and 1 of `P4`'s taken early). Programme total **517**, of which
-**255 open**. Hours are `§5.6`'s measured model, not estimates.
+**Open R1 tasks: 168.** Completed R1 tasks: **274** (`P0`–`P3-F` and `PD0`, plus
+4 of `PD1`'s and 1 of `P4`'s taken early). Programme total **525**, of which
+**251 open**. Hours are `§5.6`'s measured model, not estimates.
 
 ⚠ **Recounted 2026-09-03 by walking the checkboxes, and three of the four
 figures here were wrong before `P4-G` was added.** The header said *"312 of
@@ -973,8 +1023,8 @@ first produced: seven completed tasks had no line in `§6` at all (`S-39`).
 | **P0** build + closeout + audit | 26 | 11h 35m | **4h 43m** |
 | **P1** build + audit + rulings | 22 | 6h 19m | **3h 57m** |
 | AutoDesign sizing + the layer IR | 4 *(PD1)* | 0h 20m | 0h 20m |
-| **P2** re-cut + build + audit | 74 | 14h 15m | **5h 32m** |
-| **P3 A–E** build + audit | 39 | 5h 51m | **4h 50m** |
+| **P2** re-cut + build + audit | 75 | 14h 15m | **5h 32m** |
+| **P3 A–E** build + audit | 43 | 5h 51m | **4h 50m** |
 | **P3-F** build + audit + closeout | 18 | 2h 54m | **1h 58m** |
 | **Total** | **183** | **≈49h calendar** | **21h 23m** |
 
@@ -1018,7 +1068,7 @@ deletion. The rate is unchanged; only the work is.
 | Phase | Open | Prev. est | **New** | Confidence |
 |---|---|---|---|---|
 | `P0-21` e2e harness | 1 | *blocked* | *blocked* | Environment, not throughput |
-| **P8** Conversion + defects | 65 | ~4 h | **~11 h** | ⚠ Medium — 21 of its tasks are prose or frontend, where no throughput has been measured |
+| **P8** Conversion + defects | 67 | ~4 h | **~11 h** | ⚠ Medium — 21 of its tasks are prose or frontend, where no throughput has been measured |
 | **PD0** Contract | ~~7~~ **10** | ~1 h | **done** | — |
 | **PD1** Ingestion | 21 | ~2.5 h | **~3.5 h** | ⚠ Medium |
 | **PD2** Fidelity | 27 | ~2.5 h | **~4.5 h** | ⚠ Low — a research loop, and now carrying the renderer |
@@ -1159,7 +1209,7 @@ is just the old error with a new number:
 - [x] **P0-23** Create `autodev-core/platform/command.rs` — intent (`Build`/`Test`/`Lint`/`Run`) → platform-correct **argv**, with Windows `.cmd`/`.bat` shim resolution. → `UNIT-PROVEN`, `PLATFORM-TRIPLE`
 - [x] **P0-24** Make `--use-angle=d3d11` Windows-conditional in `tauri.conf.json`. → `CODE-PRESENT`
 - [x] **P0-25** Set per-platform bundle targets (currently `["nsis"]` only). → `PLATFORM-TRIPLE`
-- [ ] ~~**P0-26** Remove the dead `dialog`/`fs` plugin blocks from `tauri.conf.json`.~~ → **REVERSED, superseded by `P0-31`.**
+- [x] ~~**P0-26** Remove the dead `dialog`/`fs` plugin blocks from `tauri.conf.json`.~~ → **REVERSED, superseded by `P0-31`.** ⚠ **Checkbox corrected 2026-09-04.** It was `[ ]` — struck *and* unchecked — so it read as outstanding work while its own line says it will never be done. It surfaced only when the counters were taught to see struck tasks at all; until then it was in neither column.
       The blocks were not dead config — they were the only evidence of a live runtime break. `Logs.tsx` calls `save()` and `writeTextFile()` at four sites; the npm packages are declared so it typechecks and CI is green, but Rust had neither plugin, registered only `tauri_plugin_shell`, and granted no `dialog:`/`fs:` capability. The Logs export failed on every click, into `console.error`. Deleting the config would have erased the evidence and left the feature broken.
 - [x] **P0-27** Delete `src-tauri/dump.rdb` (175 KB committed Redis snapshot), the Memurai starter, and both Redis setup docs. → `CODE-PRESENT`
 
@@ -2455,10 +2505,16 @@ here**, because there are no gitlinks in the index or in history to operate on.
 - [x] **P8-65** **The vocabulary gate.** No file under `autodev-core/src`, `src-tauri/src`, `src-cli/src` or `src/` may contain `Mode 2`, `LivingAgent`, `core-orchestrator` or `memory-mcp-server` — first outside comments, then including them once `P8-56`…`P8-62` land. ⚠ Strip comments before scanning, as `ci_gate.rs` already does elsewhere: this repo has tripped its own checks on explanatory prose four separate times. This is P8's exit criterion. → `GATE-PROVEN`
       ✅ **2026-09-04** — `TG8-09`, and the tree is clean **including comments**, which is the task's second stage. ⚠ **Comments were the harder half and the reason the sweep was worth doing:** code naming a deleted module fails to compile, but prose describing a deleted architecture compiles forever and is what the next reader believes — and **every serious defect this phase found sat under such prose** (the start-up overlay whose emitter was gone, the spend ceiling guarding on a status nothing writes, the prompt teaching parameter names that fail validation). Falsified with a **comment-only** plant: it compiles, the gate reddens, and the message names the word and the file. ⚠ Two deliberate exclusions: `ci_gate.rs` is excluded from its own scan, since it must name the words to look for them (`L-C7`, fifth instance); and **"sidecar" is not in the forbidden set**, because `PD0` gave it a second meaning and `P8-21` records four files using it that way which must survive — a gate written against the token rather than the thing would have deleted a published seam. Scope is the four source trees; the README and installer clauses of the exit criterion are `P8-62`/`P8-63`. → `GATE-PROVEN`
 
+- [x] **P8-66** **The Live Monitor's five events gain emitters** *(razi-ruled 2026-09-04, filed from `TG8-08`'s finding)*. `agent:tool-call-start`, `agent:tool-call-result`, `agent:stage-change`, `agent:token-update` and `agent:status-change` were listened for by `agentLiveStore` and emitted by nothing. → `UNIT-PROVEN`
+      ✅ **2026-09-04** — all five emitted. 🔴 **They are not duplicates of the chat stream, which is why the gap survived**: `agent:tool-start` / `agent:token` are **session-keyed** and drive the transcript; these are **agent-keyed** and drive the multi-agent live view, where the question is "what is worker-backend doing right now". The same moments, two audiences, and only one had a producer. Tool start/result now fire from all **four** emit sites in `tool_executor.rs` — both partitions, read and write — with a real `elapsed_ms` from an `Instant`. The stage strip advances from `stage_for_tool()`, derived from the tool the model actually called, because there is no separate "stage" concept in the engine and inventing one the model had to declare would be a second thing to get wrong. ⚠ `agent:status-change` → `idle` is emitted **inside `record_spend`, before its zero-usage early return** — that function's own contract is that it runs on every exit path, so the transition is by construction rather than by four call sites remembering; the failure it prevents is a card left showing ACTIVE forever. → `UNIT-PROVEN` (`TG8-08`)
+- [x] **P8-67** **The plan store listens for the event that exists** *(razi-ruled 2026-09-04)*. Five listeners — `plan:created`, `plan:updated`, `plan:step_completed`, `plan:item_claimed`, `plan:subplan_created` — none emitted by Rust. → `UNIT-PROVEN`
+      ✅ **2026-09-04** — 🔴 **Every one of the five handlers was a `console.log`.** So even had the events arrived, nothing would have moved on screen: five subscriptions and five handlers that could not change a pixel. Meanwhile Rust emits **one** event, `plan:changed`, from ten sites in `planner.rs`, carrying a `kind` field with exactly the distinction those five names were reaching for (`created`, `step_added`, `step_updated`, `plan_completed`, `deleted`, `abandoned`, `epic_breakdown`, `item_claimed`, `subplan_created`, `submitted_for_qc`). The two sides were named independently and never once agreed. The store now listens for `plan:changed` and **acts**: it reloads the active plan and its tree when the change concerns them, and clears the view on a delete — while deliberately not yanking the screen for a plan the user is not looking at. → `UNIT-PROVEN` (`TG8-08`)
+
 ### P8-D · Prune and prove
 - [x] **P8-20** Drop now-unused dependencies (SSE/HTTP client paths kept only for the sidecar) from `Cargo.toml`. → `CODE-PRESENT`
       ✅ **2026-09-03** — nine dependencies dropped from `src-tauri/Cargo.toml`: `thiserror`, `uuid`, `git2`, `sysinfo`, `rhai`, `tree-sitter`, `petgraph`, `rayon`, `flate2`. ⚠ **The task's stated subject was wrong.** It named *"SSE/HTTP client paths kept only for the sidecar"*; `reqwest` is used by `updater/{check,download}.rs` and `mcp/health.rs`, and its `stream` feature by `download.rs:98`'s `bytes_stream()` — removing it would have broken the updater, the same trap as `P8-09`. Of the nine actually unused, only `sysinfo` was made unused by **this** phase (it backed the deleted `get_resource_usage`); the other eight were already dead. Build green after removal.
-- [ ] **P8-21** **The exit assertion**, re-pointed 2026-09-03 *(razi-ruled: "name the real subject")*. Every clause names the **Python orchestrator subsystem**, which is the thing being deleted:
+- [x] **P8-21** **The exit assertion**, re-pointed 2026-09-03 *(razi-ruled: "name the real subject")*. Every clause names the **Python orchestrator subsystem**, which is the thing being deleted:
+      ✅ **2026-09-04** — `TG8-11`, asserting all six clauses **and** the protected set, in both directions. The protected half is the one that earns its keep: a sweep run from the token `sidecar` would satisfy every "is it gone?" clause and delete `PD0`'s published AutoDesign seam, the updater's signature assets and SQLite's `-wal` note. Falsified three ways — a protected file removed, packaging re-declaring the subsystem, a deleted tree recreated. ⚠ The `.py` clause is satisfied as narrowed: no `.py` under the six shipped trees; the four governance checkers under `docs/_verify/` are outside it, which was the third narrowing of this assertion and is recorded above. → `GATE-PROVEN`
   - no `.py` under `autodev-core/`, `src-tauri/`, `src-cli/`, `src/`, `installers/`, `scripts/` or `build/`, and none in any built installer
 
     🔴 **Narrowed 2026-09-03, during `P8-C`, because the clause as written forbade this programme's own checkers.** It said *"no `.py` anywhere in the tracked tree"*, and the tracked tree contains **four**: `_verify/MDP-COUNTS-CHECK.py`, `MDP-STALENESS-CHECK.py`, `MDP-SYNC-TOTALS.py` and `PD0-FINDINGS-LEDGER.py` — the scripts `§0.3` relies on to catch stale documents, three of them written during this phase.
@@ -2475,15 +2531,29 @@ here**, because there are no gitlinks in the index or in history to operate on.
   🔴 **Why this replaced a one-line grep, and why the one-liner was a blocker.** The original read *"`git ls-files | grep -i sidecar` returns nothing"*. Run today it returns **15** files — and **four of them must survive `P8`**, because `PD0` gave the word a second meaning: `src/design/contract/sidecar.ts`, `tsconfig.sidecar.json` and `scripts/smoke-design-sidecar.mjs` are **AutoDev as a sidecar of AutoDesign**, the seam we published to the partner team on 2026-09-03, and the fourth is a grounding report that is a historical record. Ten files under `src/design/` use the word in that second sense. So the assertion as written could only be satisfied by deleting `PD0`'s deliverables — and a content sweep run from it would have edited the contract.
 
   This is `L-C6` — *a check written from the CLAIM rather than from the INVARIANT it protects* — caught **before** the phase rather than by its audit, which is what `§0.2m` exists for. The invariant is *"no Python sidecar subsystem survives"*, not *"the string `sidecar` is absent"*. ⚠ Related figure corrected in the same pass: this section's *"Files referencing sidecar: **14**"* is **63** on the current tree (41 with a code reference, 22 comment-only, excluding `src-tauri/src/sidecar/` itself).
-- [ ] **P8-22** Installer size drops by ~225 MB — **measured before and after**, because "it should be smaller" is not a measurement. → `BENCH-PROVEN`
-- [ ] **P8-23** The full suite and every smoke pass with the sidecar gone. → `GATE-PROVEN`
-- [ ] **P8-24** `TG2-14`'s sibling for the sidecar: no reference survives in Rust source, `Cargo.toml`, shipped docs, or the frontend. → `GATE-PROVEN`
+- [x] ~~**P8-22** Installer size drops by ~225 MB — **measured before and after**, because "it should be smaller" is not a measurement. → `BENCH-PROVEN`~~ **← STRUCK 2026-09-04 (razi-ruled).**
+
+  🔴 **The premise is false: the installer never contained the 225 MB.** Verified three ways rather than argued. `src-tauri/resources/sidecars` was **never tracked on any branch** — `git log --all -- <path>` returns nothing. `externalBin` has **never** appeared in `tauri.conf.json`. And the single commit that ever declared the payload (`e4d0993`, `P0`, 2026-09-01) removed it precisely because it could not work: *"That directory is 225 MB of Python which exists only on a developer machine and is untracked. Every clean checkout therefore failed the build script … no released artifact ever contained it anyway."* The declaration did not make installers **bigger**; it made clean builds **fail**, and had taken CI down for three runs.
+
+  ⚠ So the number this task exists to measure does not exist, and a `BENCH-PROVEN` row here could only have been produced by measuring something else and calling it this. **What did drop is the developer checkout: 1,140 MB**, measured in `P8-C` (795 MB `submodules/` + 120 MB `.git/modules/submodules/` + 225 MB `resources/sidecars/`). That is the honest figure and it is already recorded.
+
+  ⚠ **A release installer could not have been built to check anyway**, which is a finding in its own right: `updater/verify.rs:29-37` carries a `#[cfg(not(debug_assertions))]` const assertion that fails compilation unless `AUTODEV_UPDATE_PUBKEY` is set, so that no release can ship an auto-updater which would refuse every update. No key is set in this environment. **That guard is correct and was left alone** — building past it with a throwaway key would produce an artifact trusting a key nobody holds. It does mean CI needs the key to produce a release, which is worth knowing before `P9`.
+
+  This is the **fourth** instance in `P8` of a task stating a quantity that was never re-measured (`P8-09` updater, `P8-53` `runtime_config.rs`, `P8-20` `reqwest`, and this). `§0.2m` attacks a task's justification; `L-40` extends it to a task's **counts**, and this is the case that most needed it.
+- [x] **P8-23** The full suite and every smoke pass with the sidecar gone. → `GATE-PROVEN`
+      ✅ **2026-09-04** — **`cargo test --workspace`: 656 passed, 0 failed** across 19 targets — 510 in `autodev-core`, **108 CI gates**, and the rest across the integration suites; **vitest 126 passed**; **`tsc --noEmit` clean**; `npm run smoke:design` **14 cases, 0 failed**; `S8-01`, `S8-02`, `S8-04` and `S8-05` green. ⚠ The one failure seen during this phase's closeout was `TG-P3-F8` — the register gate — firing four separate times because a new `TG8-xx` id was cited in code before its entry existed. That is the gate working: each time, the fix was to write the register entry. ⚠ The first count recorded on this line was **111**, taken from a run that **stopped at the first failing target** — `cargo test` does not continue past one. A total summed from a truncated run is not a total, and it read as plausible because it was the right shape. → `GATE-PROVEN`
+- [x] **P8-24** `TG2-14`'s sibling for the sidecar: no reference survives in Rust source, `Cargo.toml`, shipped docs, or the frontend. → `GATE-PROVEN`
+      ✅ **2026-09-04** — folded into `TG8-11`, which extends `TG8-09`'s source-tree sweep to the surfaces it does not cover: every workspace `Cargo.toml`, `package.json`, `tauri.conf.json`, every installer and build script, and the shipped README. ⚠ The README's delivery history is exempt **by design** and the gate reads only the text above `## Development Phases`: *"Phase 2 … Sidecar integration"* is a true statement about what shipped then, and a changelog edited to match the present is no longer a changelog. → `GATE-PROVEN`
 
 **Smoke — S8**
-- [ ] **S8-01** A clean checkout builds with no submodule initialisation step.
+- [x] **S8-01** A clean checkout builds with no submodule initialisation step.
+      ✅ **2026-09-04** — `s8_smokes.rs`: a plain `git clone` (**no `--recurse-submodules`**) into a sandbox, then asserts no `.gitmodules`, no `submodules/`, an empty `git submodule status` — **and that the checkout is complete**, because "no submodule step" is only good news if nothing went missing with it: every workspace member's manifest and the front end are present. ⚠ It does not compile the clone; a fresh `cargo build` there would rebuild the whole dependency graph for a property this already establishes, and the compile half is `cargo check --workspace` on this tree. Stated rather than left implied.
 - [ ] **S8-02** The app starts, completes an agent turn and runs a design conversion — no Python process is spawned, verified by process listing.
-- [ ] **S8-03** The built installer contains no `.py` file and is ~225 MB smaller.
-- [ ] **S8-04** Memory recall works end to end with `memory-mcp-server` absent from disk.
+      ⚠ **PARTIAL, and the boundary is stated rather than blurred.** The **process half is proven**: no start-up or agent-loop path spawns an interpreter of AutoDev's own, asserted over `main.rs`, `lib.rs`, `engine.rs`, `tool_executor.rs`, `runner.rs`, `scheduler.rs` and `native_runner.rs`, plus `bundle.resources == []` and no `externalBin`. The **design conversion is proven**: `npm run smoke:design` — 14 cases, 0 failed. 🔴 The claim is deliberately narrower than *"no Python"*: `builtin_tools/validate.rs` runs `python3`, `mypy` and `pyright` **on the user's files**, because AutoDev can work on a Python project — a check written against the token would flag that capability and invite someone to delete it. **Not run here:** the app starting and completing a live agent turn, which needs a provider key and a desktop session.
+- [x] **S8-03** The built installer contains no `.py` file. ~~and is ~225 MB smaller~~ **← the size clause is struck with `P8-22`; see there.**
+      ✅ **2026-09-04** — asserted at the source rather than by unpacking an artifact, because the artifact cannot be built here (`P8-22`: the release build requires `AUTODEV_UPDATE_PUBKEY`, deliberately). `tauri.conf.json` declares `"resources": []` and has never declared `externalBin` — `S8-02` asserts both — so the bundle is the binary and its icons, and there is no path by which a `.py` could enter it. `TG8-09` and `TG8-11` assert no `.py` under the six shipped trees. ⚠ Stated as what it is: a proof about the bundle's **inputs**, not an inspection of a built installer.
+- [x] **S8-04** Memory recall works end to end with `memory-mcp-server` absent from disk.
+      ✅ **2026-09-04** — `autodev-core/tests/s8_memory.rs`: a real write through the memory **gateway** and a real recall, end to end, with nothing running. ⚠ One test in its own integration binary on purpose — it repoints `USERPROFILE`/`HOME` at a sandbox so `db::autodev_dir()` cannot resolve to the developer's real store (`§0.8`), and environment variables are process-wide while tests in one file run on parallel threads (`L-30`). It **asserts the redirection took** before writing anything: without that check the test could write to the real store and still pass, which is the failure that matters most here.
 - [x] **S8-05** A worker's commit lands on a branch, stages only the paths it named, and leaves the trunk where it found it. *(added by `P8-38`; the four above are the deletion phase's.)*
       ✅ **2026-09-04** — `autodev-core/tests/s8_smokes.rs`, against a throwaway repository and the real `git` binary. Runs the protocol's C1 step **twice** to prove it is convergent, since all workers share one checkout and a second arrival is the normal case rather than the edge case. Carries its own **counterfactual**: the same tree staged with `git add -A` sweeps in `target/app.bin` and `.env`, so the smoke measures the defect as well as the fix. Ends by driving the shipped `git::diff::branch_diff` — the resolver `analyze_diff` calls — to show `HEAD~1..HEAD` carries the worker's patch while `main..main` is empty, which is what the cleanup worker's mandatory check was judging before. → `SMOKE-PROVEN`
 

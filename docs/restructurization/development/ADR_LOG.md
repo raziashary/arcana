@@ -1596,6 +1596,100 @@ probe of mine said it was not.
 
 ---
 
+## ADR-LOG-RESTRUCT-0041 — P8's closeout: a struck measurement, ten wired events, and counters that could not see seven tasks
+
+**Status.** DECIDED
+**Author.** Claude · **Tier.** **`razi-ruled`** for the two decisions below; the third is `decided-independently` (a defect in a governance script, with no product surface).
+**When.** 2026-09-04 · `P8` closeout
+
+---
+
+### Decision 1 — `P8-22` is struck, not measured
+
+**What.** `P8-22` required `BENCH-PROVEN` evidence that the installer shrank by
+~225 MB. **Struck**, razi-ruled, on the finding that the premise is false.
+
+**Why.** Verified three ways rather than argued:
+
+1. `src-tauri/resources/sidecars` was **never tracked on any branch** —
+   `git log --all -- <path>` returns nothing.
+2. `externalBin` has **never** appeared in `tauri.conf.json`.
+3. The single commit that ever declared the payload (`e4d0993`, `P0`) removed it
+   *because it could not work*: the directory existed only on a developer
+   machine, so every clean checkout **failed the build**, taking CI down for
+   three runs. Its message states outright that *"no released artifact ever
+   contained it anyway."*
+
+So the quantity this task exists to measure does not exist, and a `BENCH-PROVEN`
+row could only have been produced by measuring something else and labelling it
+this. The real figure — **1,140 MB off the developer checkout** — was measured in
+`P8-C` and is already recorded.
+
+**⚠ A release installer could not have been built to check, and that is a
+separate finding worth carrying into `P9`.** `updater/verify.rs:29-37` holds a
+`#[cfg(not(debug_assertions))]` const assertion that fails compilation unless
+`AUTODEV_UPDATE_PUBKEY` is set, so that no release can ship an auto-updater which
+would refuse every update. No key is set in this environment. **The guard was
+left alone**: building past it with a throwaway key produces an artifact trusting
+a key nobody holds, and the guard is right.
+
+**Where.** `MASTER_DEVELOPMENT_PLAN.md` §`P8-D` · `S8-03`'s size clause struck with it.
+
+---
+
+### Decision 2 — the ten unemitted events are wired now, not filed as a finding
+
+**What.** `TG8-08` found ten frontend listeners with no Rust emitter. I proposed
+recording them as a standing finding for `P4`; **razi ruled: file them as `P8`
+tasks and wire them.** `P8-66` and `P8-67`, both closed.
+
+**Why the ruling was the right call.** Investigating to write the tasks showed
+the two groups were not one problem:
+
+- **The Live Monitor's five** were genuinely missing producers. They are
+  **agent-keyed**; the chat stream's `agent:tool-start` / `agent:token` are
+  **session-keyed**. Same moments, two audiences — which is exactly why the gap
+  survived review: the events *looked* like duplicates of something that
+  existed.
+- **The plan store's five** were worse than missing. **Every handler was a
+  `console.log`**, so even had the events arrived, nothing would have moved on
+  screen. Meanwhile Rust emits **one** event, `plan:changed`, from ten sites,
+  carrying a `kind` field with precisely the distinction those five names were
+  reaching for. The two sides were named independently and never once agreed.
+
+Had this been filed as a finding, the plan half would have been "wire five
+emitters" — five events nothing needed, feeding five handlers that did nothing.
+
+**How proven.** `TG8-08`'s allowlist is now **empty**, and the gate asserts both
+directions: a new unemitted listener fails it, and an entry that gains an emitter
+must be struck or it fails the other way.
+
+---
+
+### Decision 3 — the derived counters were blind to struck tasks
+
+**What.** Both `MDP-SYNC-TOTALS.py` and `MDP-COUNTS-CHECK.py` matched
+`^- \[x\] \*\*P8-nn\*\*`, and a struck task is written
+`- [x] ~~**P2-07** …~~`. Pattern corrected in both; three phase rows and the
+programme totals corrected with it.
+
+**Why it matters more than seven rows.** Seven tasks were invisible **for the
+life of the document**, and one of them (`P0-26`) was struck *and* left
+unchecked, so it appeared in neither column — no rule could flag it, because the
+only thing that reports stale counts was blind in exactly the same way. A struck
+task is a **resolution**, not an absence: it was planned, reasoned about, and the
+reason it will not be built is recorded. Dropping it from the denominator
+flatters the completion figure and loses the decision.
+
+**⚠ The same fix had to be made twice inside one file** — `MDP-COUNTS-CHECK.py`
+holds two regexes for one concept, and the first pass corrected only the one I
+happened to grep for. `L-43`.
+
+**Links.** `ADR-LOG-RESTRUCT-0040` · `§0.16 L-41`…`L-44` · `TG8-08` · `P8-22`,
+`P8-66`, `P8-67`
+
+---
+
 ## ADR-LOG-RESTRUCT-0040 — One fleet branch, not one per task; and the agent that had no floor was the assistant
 
 **Status.** DECIDED

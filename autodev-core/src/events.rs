@@ -99,6 +99,26 @@ pub const EVT_AGENT_DONE: &str = "agent:done";
 pub const EVT_AGENT_ERROR: &str = "agent:error";
 pub const EVT_COST_UPDATE: &str = "cost:update";
 
+// ── The Live Monitor channel (`P8-66`) ──────────────────────────────────
+//
+// 🔴 These five names were **listened for and never emitted**. `agentLiveStore`
+// subscribed to all five; nothing in Rust sent one, so the Live Monitor's stage
+// strip, tool detail and token sparkline were permanently inert — five typed
+// payloads, five handlers and a subscription, maintained for values that could
+// not arrive. Found by `TG8-08`, which now asserts every frontend listener has
+// an emitter.
+//
+// ⚠ They are NOT duplicates of `agent:tool-start` / `agent:tool-end`. Those
+// are **session-keyed** and drive the chat transcript; these are **agent-keyed**
+// and drive the multi-agent live view, where the question is "what is
+// worker-backend doing right now", not "what did this conversation just do".
+// The same moment, two audiences.
+pub const EVT_AGENT_TOOL_CALL_START: &str = "agent:tool-call-start";
+pub const EVT_AGENT_TOOL_CALL_RESULT: &str = "agent:tool-call-result";
+pub const EVT_AGENT_STAGE_CHANGE: &str = "agent:stage-change";
+pub const EVT_AGENT_TOKEN_UPDATE: &str = "agent:token-update";
+pub const EVT_AGENT_STATUS_CHANGE: &str = "agent:status-change";
+
 // Phase 3.0 R2 — fleet status push channel. Replaces polling-based derivation
 // of worker status in the Agent Roster. Emitted from RecipeRunner on every
 // transition (working / idle / error) and at tick boundaries.
@@ -396,6 +416,89 @@ pub struct PlanChangedPayload {
     pub plan_id: Option<String>,
     pub kind: String,
     pub status: Option<String>,
+}
+
+// ── Live Monitor payloads and helpers (`P8-66`) ────────────────────────
+//
+// ⚠ The field names are the frontend's, exactly. `src/types/live.ts` declares
+// these shapes and the store destructures them; a rename on either side is a
+// break no compiler sees, which is how the two halves came to disagree in the
+// first place.
+
+#[derive(Debug, Serialize, Clone)]
+pub struct AgentToolCallStartPayload {
+    pub agent_id: String,
+    pub tool_call_id: String,
+    pub name: String,
+    pub args: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct AgentToolCallResultPayload {
+    pub agent_id: String,
+    pub tool_call_id: String,
+    pub result: String,
+    pub is_error: bool,
+    pub elapsed_ms: u64,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct AgentStageChangePayload {
+    pub agent_id: String,
+    pub stage: String,
+    pub status: String,
+    pub elapsed_ms: Option<u64>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct AgentTokenUpdatePayload {
+    pub agent_id: String,
+    pub total_tokens: u32,
+    pub window_tokens: u32,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct AgentStatusChangePayload {
+    pub agent_id: String,
+    pub status: String,
+}
+
+pub fn emit_agent_tool_call_start(payload: AgentToolCallStartPayload) {
+    emit_serialized(EVT_AGENT_TOOL_CALL_START, &payload);
+}
+
+pub fn emit_agent_tool_call_result(payload: AgentToolCallResultPayload) {
+    emit_serialized(EVT_AGENT_TOOL_CALL_RESULT, &payload);
+}
+
+pub fn emit_agent_stage_change(payload: AgentStageChangePayload) {
+    emit_serialized(EVT_AGENT_STAGE_CHANGE, &payload);
+}
+
+pub fn emit_agent_token_update(payload: AgentTokenUpdatePayload) {
+    emit_serialized(EVT_AGENT_TOKEN_UPDATE, &payload);
+}
+
+pub fn emit_agent_status_change(payload: AgentStatusChangePayload) {
+    emit_serialized(EVT_AGENT_STATUS_CHANGE, &payload);
+}
+
+/// Which lifecycle stage a tool call belongs to.
+///
+/// The Live Monitor renders a fixed strip — claim, read, write, test — and this
+/// is what advances it. Derived from the tool the model actually called, which
+/// is the only signal that exists: there is no separate "stage" concept in the
+/// engine, and inventing one the model had to declare would be a second thing
+/// to get wrong.
+pub fn stage_for_tool(tool_name: &str) -> Option<&'static str> {
+    match tool_name {
+        "claim_task" | "update_task_status" | "assign_task" | "assign_tasks" => Some("claim"),
+        "read_file" | "grep" | "glob" | "list_directory" => Some("read"),
+        "write_file" | "edit_file" | "append_file" => Some("write"),
+        "bash" | "check_file" => Some("test"),
+        _ => None,
+    }
 }
 
 pub fn emit_plan_changed(payload: PlanChangedPayload) {

@@ -228,21 +228,40 @@ mod identity_tests {
         // guard and is worth nothing. Found by the P0 post-phase audit (F-09).
         //
         // The property that must hold is positive: EVERY construction site takes
-        // both fields from the threaded identity. Assert that instead.
-        let role_from_identity = source.matches("identity.role").count();
-        let depth_from_identity = source.matches("identity.depth").count();
-
+        // both fields from the threaded identity.
+        //
+        // 🔴 **This counted `identity.role` across the WHOLE FILE and
+        // asserted the total equalled the number of construction sites.** That
+        // is a proxy, and it held only while the executor mentioned the
+        // identity nowhere else. `P8-66` added event payloads that take
+        // `agent_id` from the same threaded identity — doing exactly what this
+        // gate exists to encourage — and the count went from 2 to 10, so the
+        // gate went red for **compliance**.
+        //
+        // ⚠ The gate's own comment already records `P3-67` fixing the previous
+        // version, which encoded how many sites the file happened to have. Same
+        // class, one level up: `L-C6`, a check written from a countable stand-in
+        // rather than from the invariant. It now reads each construction block.
+        let mut checked = 0usize;
+        for seg in source.split("ToolContext {").skip(1) {
+            let block = seg.split('}').next().unwrap_or_default();
+            assert!(
+                block.contains("identity.role"),
+                "a ToolContext site does not take agent_role from the threaded \
+                 AgentIdentity, which silently disables the ACP tools and the \
+                 qc_review gate for that path:\n{block}"
+            );
+            assert!(
+                block.contains("identity.depth"),
+                "a ToolContext site does not take depth from the threaded \
+                 AgentIdentity, so the subagent recursion guard cannot fire on \
+                 that path:\n{block}"
+            );
+            checked += 1;
+        }
         assert_eq!(
-            role_from_identity, sites,
-            "{role_from_identity} of {sites} ToolContext sites take agent_role from \
-             the threaded AgentIdentity. A site that hardcodes it silently disables \
-             the ACP tools and the qc_review gate for that path."
-        );
-        assert_eq!(
-            depth_from_identity, sites,
-            "{depth_from_identity} of {sites} ToolContext sites take depth from the \
-             threaded AgentIdentity. A hardcoded depth makes the subagent recursion \
-             guard unable to fire on that path."
+            checked, sites,
+            "{checked} of {sites} ToolContext construction blocks were examined              — the split is not finding them all, so some site went unchecked"
         );
 
         // A literal depth defeats the guard whatever value it is given.

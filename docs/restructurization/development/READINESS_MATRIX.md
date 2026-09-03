@@ -66,9 +66,9 @@ Cross-cutting invariants, scored **independently of the phase areas**.
 | A5 | **P5 · Graph** | 6 | ☐ | ☐ | ☐ | 0% | 0.0 |
 | A6 | **P6 · UI** | 10 | ☐ | ☐ | ☐ | 0% | 0.0 |
 | A7 | **P7 · Experience** | 8 | ☐ | ☐ | ☐ | 0% | 0.0 |
-| A8 | **P8 · Submodule deletion** | 4 | ☐ | ☐ | ☐ | 0% | 0.0 |
+| A8 | **P8 · Submodule deletion + the prompt floor** | 4 | ✅ | ☐ | ✅ | 67% | 2.7 |
 | A9 | **P9 · Delivery** | 4 | ☐ | ☐ | ☐ | 0% | 0.0 |
-| | **Total** | **100** | | | | | **34.0** |
+| | **Total** | **100** | | | | | **36.7** |
 
 ### §2.1 · Why `A3`'s Gates row is ☐ — the eight memory gates, clause by clause
 
@@ -174,15 +174,21 @@ Every mechanic reaches a phase and a scored area. **A mechanic with no phase is 
 
 ```
 overall = Σ (weight_i × area_pct_i)  for i in A0..A9
-        = 8 × 0.33  (A0: Build ✅, Smoke ☐, Gates ☐)
-        + 8 × 0.67  (A1: Build ✅, Smoke ✅, Gates ☐)
-        = 2.7 + 5.3
-        = 8.0   at rev 1.4
+        =  8 × 0.33  (A0: Build ✅, Smoke ☐, Gates ☐)  =  2.7
+        +  8 × 0.67  (A1: Build ✅, Smoke ✅, Gates ☐)  =  5.3
+        + 14 × 1.00  (A2: Build ✅, Smoke ✅, Gates ✅)  = 14.0
+        + 18 × 0.67  (A3: Build ✅, Smoke ✅, Gates ☐)  = 12.0
+        +  4 × 0.67  (A8: Build ✅, Smoke ☐, Gates ✅)  =  2.7
+        = 36.7  at rev 2.1
+
+⚠ This block itself read `= 8.0 at rev 1.4` while the table above it totalled
+34.0 — stale by two revisions and four areas, in the document whose whole job
+is to report a number. Corrected 2026-09-04, in the pass that scored A8.
 
 safety_cap = 50% if any overlay row is RED
            = ACTIVE  (9 of 16 RED; SO-4, SO-10, SO-11 GREEN; SO-2, SO-3, SO-12, SO-15 AMBER)
 
-reported = min(overall, safety_cap) = 8.0%
+reported = min(overall, safety_cap) = 36.7%
 ```
 
 ---
@@ -193,6 +199,7 @@ reported = min(overall, safety_cap) = 8.0%
 
 | Date | Rev | Overall | Cap | Change |
 |---|---|---|---|---|
+| 2026-09-04 | 2.1 | **36.7%** | Active (9/16 RED, not binding) | **`P8 · Sidecar deletion + legacy conversion` built and closed — 67 of 67 tasks.** Build ✅, Gates ✅, **Smoke ☐**. ⚠ The Smoke row is ☐ **on the register's own rule**: `S8-02`'s live half — the app starting and completing a real agent turn — needs a provider key and a desktop session, and `§0` says ✅ only with a cited ID and evidence, no partial credit. Four of five smokes are green; one is honestly short, so the row is honestly empty. **Eleven gates** (`TG8-01`…`TG8-11`), nine new this phase, every new one falsified. **`cargo test --workspace` 656 passed / 0 failed; vitest 126; `tsc` clean.** 🔴 **Three live defects were found by writing the gates rather than by reading the plan, and not one was in `P8`'s task list.** (1) `P8-52` had shipped a **launch blocker** — it deleted the startup FSM and the `get_startup_phase` command but left `StartupOverlay` mounted, and the overlay hides only on a `startup:progress` event, so the app rendered a full-screen `z-index: 9999` modal nothing could dismiss. That task was recorded done and `SMOKE-PROVEN`. (2) The **daily spend ceiling did not hold**: `pause_fleet` gated on worker status `"running"`, which nothing writes, so only *idle* workers were paused and a worker mid-tick kept spending and was re-fired. (3) A worker that ticked once **before a provider key was configured was never scheduled again**, even after the key was added, because the scheduler did not list its status. ⚠ `P8-22` is **struck**: the installer never contained the 225 MB — `resources/sidecars` was never tracked on any branch, and the one commit that declared it made clean builds *fail*. The real 1,140 MB drop was to the developer checkout. ⚠ The derived task counters were found **blind to struck tasks** — seven of them, one struck *and* unchecked — so the programme total was short by seven for the life of the document; both counters and three phase rows corrected. |
 | 2026-08-31 | 1.0 | **0%** | Active (16/16 RED) | Created. Ten scored areas weighted to 100, P4 heaviest as the headline capability. Sixteen safety-overlay rows — the twelve invariants plus four raised by the adversarial review (fault isolation, spend ceiling, secrets-in-memory, reversibility). All 43 mechanics mapped to a phase and an area. No phase started; awaiting GO. |
 | 2026-09-01 | 1.1 | **2.7%** | Active (12/16 RED) | **P0 closed out.** Eight commits. Build ✅; Smoke and Gates NOT ✅ — no partial credit, and both have named unproven clauses. Smoke: `S0-02…S0-06` proven, `S0-01` proven on Windows only (Linux/macOS need a CI run). Gates: `TG0-02` GREEN; `TG0-01`/`03`/`04`/`05` PARTIAL, each with the missing clause recorded. Four overlay rows moved: SO-4 and SO-11 to GREEN, SO-2 and SO-12 to AMBER. SO-6 stays RED deliberately — `platform/command.rs` is proven but has no caller, and a guard nothing calls is AMBER at best. Cap remains active. |
 | 2026-09-01 | 1.2 | **2.7%** | Active (12/16 RED) | **Post-phase audit applied.** The two mandatory §0.2a auditors returned 27 code findings and 41 stale-doc rows; 14 code findings are fixed, the rest triaged in `_verify/P0-AUDIT-TRIAGE.md` with an owning phase. **Four were regressions P0 itself introduced** — the fleet was silently dead on any machine without Python (`F-10`), subagent depth was incremented twice (`F-21`), the shipped supervisor's `request_review` was broken (`F-22`), and QC annotations were re-attributed to "user" (`F-04`). Score unchanged at 2.7%: Build stays ✅, and Smoke/Gates were already ☐. Two overlay rows would have been wrong without the audit — SO-4's gates tested one spelling of each defect (`F-18`), and the identity assertion behind SO-2 had become type-impossible (`F-09`); both are now falsifiable, proven by re-breaking. |

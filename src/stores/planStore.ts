@@ -69,26 +69,42 @@ interface PlanStore {
   listPlans: (scope?: PlanScope, status?: PlanStatus) => Promise<Plan[]>;
 }
 
-export const usePlanStore = create<PlanStore>((set) => {
-  // Setup event listeners
-  listen('plan:created', (event: any) => {
-    console.log('Plan created:', event.payload);
-  });
+// The shape Rust sends with `plan:changed` (autodev-core/src/events.rs).
+interface PlanChangedPayload {
+  plan_id: string | null;
+  kind: string;
+  status: string | null;
+}
 
-  listen('plan:updated', (event: any) => {
-    console.log('Plan updated:', event.payload);
-  });
+export const usePlanStore = create<PlanStore>((set, get) => {
+  // 🔴 `P8-67`. Five listeners stood here — `plan:created`,
+  // `plan:updated`, `plan:step_completed`, `plan:item_claimed` and
+  // `plan:subplan_created` — and **no Rust source emitted any of them**. Each
+  // body was a `console.log`, so even had they arrived, nothing would have
+  // moved on screen: five subscriptions and five handlers that could not
+  // change a pixel.
+  //
+  // Rust emits ONE event, `plan:changed`, from ten sites in `planner.rs`, with
+  // a `kind` field carrying exactly the distinction those five names were
+  // reaching for: created, step_added, step_updated, plan_completed, deleted,
+  // abandoned, epic_breakdown, item_claimed, subplan_created,
+  // submitted_for_qc. The two sides were named independently and never once
+  // agreed. Found by `TG8-08`.
+  listen<PlanChangedPayload>('plan:changed', (event) => {
+    const { plan_id, kind } = event.payload;
+    const active = get().activePlan;
 
-  listen('plan:step_completed', (event: any) => {
-    console.log('Plan step completed:', event.payload);
-  });
-
-  listen('plan:item_claimed', (event: any) => {
-    console.log('Plan item claimed:', event.payload);
-  });
-
-  listen('plan:subplan_created', (event: any) => {
-    console.log('Subplan created:', event.payload);
+    // A plan the user is not looking at should not yank the view. Refresh the
+    // active plan when the change is about it; otherwise leave the screen alone
+    // and let the next explicit load pick the change up.
+    if (kind === 'deleted' && active && plan_id === active.id) {
+      set({ activePlan: null, planTree: null });
+      return;
+    }
+    if (plan_id && active && plan_id === active.id) {
+      void get().loadPlan(plan_id);
+      void get().loadPlanTree(plan_id);
+    }
   });
 
   return {

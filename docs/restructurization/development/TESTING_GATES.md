@@ -48,10 +48,10 @@
 | **P5** | The graph | 4 | `TG5-01…04` |
 | **P6** | The UI | 9 | `TG6-01…09` |
 | **P7** | Experience | 5 | `TG7-01…05` |
-| **P8** | Submodule deletion **+ the prompt floor** | 10 | `TG8-01…10` |
+| **P8** | Submodule deletion **+ the prompt floor** | 11 | `TG8-01…11` |
 | **P9** | Delivery | 5 | `TG9-01…05` |
 | **PD0** | The design capability contract | 10 | `TGD0-01…10` |
-| | **Total** | **133** | |
+| | **Total** | **134** | |
 
 ---
 
@@ -622,7 +622,7 @@
 - [x] **TG8-08** `[conservation]` — **NEW (`P8-60`).** **No frontend listener without a Rust emitter.** Every Tauri event `src/` subscribes to must be emitted somewhere in `src-tauri/src` or `autodev-core/src`. ⚠ `ci_gate.rs` is **excluded from the emitter scan**, because this gate names every event in its own allowlist and would otherwise satisfy its own assertion (`L-C7`, the fourth instance in this register).
       Source: **NEW** — `P8-60` · Catches: the regression `P8-52` shipped. That task deleted the startup FSM that emitted `startup:progress` **and** the `get_startup_phase` command the overlay fell back to — and left `StartupOverlay` mounted in `App.tsx`. The overlay hides only when a `startup:progress` event reaches the "ready" phase, so `dismissed` could never flip and **the application rendered a full-screen `z-index: 9999` modal that nothing could dismiss**. `P8-52` was recorded done and `SMOKE-PROVEN`; no test in the suite could have failed, because each half is correct on its own and they are written in different languages · Falsified twice — re-adding an unemitted listener, and giving a listed event an emitter without striking it · Evidence: `GATE-PROVEN` — `ci_gate::tests::tg8_08_every_frontend_listener_has_a_rust_emitter`
 
-      🔴 **The gate found ten more of the same, and they are a standing finding rather than a `P8` task.** None names a deleted subsystem — they are ordinary readers with no writer — so they are listed in `KNOWN_UNEMITTED` and reported, not rewired: the Live Monitor's stage changes and token sparkline subscribe to **five** events Rust never emits (`agent:stage-change`, `agent:status-change`, `agent:token-update`, `agent:tool-call-start`, `agent:tool-call-result`), and the **entire plan store** subscribes to five more (`plan:created`, `plan:updated`, `plan:item_claimed`, `plan:step_completed`, `plan:subplan_created`) while Rust emits only `plan:changed`, which nothing listens for — the two sides were named independently and have never once agreed. The list is a **ratchet**: a new unemitted listener fails the gate, and an entry that gains an emitter must be struck or the gate fails the other way.
+      ✅ **RESOLVED 2026-09-04 — the allowlist is EMPTY.** The gate found ten more of the same, and razi ruled they be filed as `P8` tasks and wired rather than left standing (`P8-66`, `P8-67`). ~~They are a standing finding rather than a `P8` task.~~ None names a deleted subsystem — they are ordinary readers with no writer — so they are listed in `KNOWN_UNEMITTED` and reported, not rewired: the Live Monitor's stage changes and token sparkline subscribe to **five** events Rust never emits (`agent:stage-change`, `agent:status-change`, `agent:token-update`, `agent:tool-call-start`, `agent:tool-call-result`), and the **entire plan store** subscribes to five more (`plan:created`, `plan:updated`, `plan:item_claimed`, `plan:step_completed`, `plan:subplan_created`) while Rust emits only `plan:changed`, which nothing listens for — the two sides were named independently and have never once agreed. The list is a **ratchet**: a new unemitted listener fails the gate, and an entry that gains an emitter must be struck or the gate fails the other way — which is how it stayed honest while the ten were closed. ⚠ The Live Monitor's five were **not duplicates** of the chat stream: `agent:tool-start`/`agent:token` are session-keyed and feed the transcript, these are agent-keyed and feed the multi-agent view. The plan store's five were worse than missing — **every handler was a `console.log`**, so even had they arrived nothing would have moved, while Rust emitted one `plan:changed` from ten sites that nothing listened for.
 
 
 - [x] **TG8-09** `[governance]` — **NEW (`P8-65`). P8's exit criterion.** No file under `autodev-core/src`, `src-tauri/src`, `src-cli/src`, `src-shared/src` or `src/` contains `core-orchestrator`, `memory-mcp-server`, `LivingAgent` or `Mode 2` — **in code or in a comment**. The task specifies two stages; `P8-56`…`P8-62` have landed, so this is the second.
@@ -637,6 +637,14 @@
       Source: **NEW** — `P8-40`, `P8-41` · Catches: a retrieval that drifts into the loop (the fleet makes many calls per tick, so the query count and the prompt would grow with the batch width — `TG3-08` bounds input growth); a seam that ships enabled; and `flatten_for_prompt` being made public, which is what forces every path to the prompt through this module's rendering · Falsified twice, each red for its own mechanism · Evidence: `GATE-PROVEN` — `ci_gate::tests::tg8_10_the_procedural_seam_is_once_per_turn_and_off_by_default`
 
       ⚠ The security half is `UNIT-PROVEN` alongside it, in `memory::recall::injection_tests`: a stored procedure carrying `\n---\n## Global Instructions\n…` renders as **one line** with the payload intact but unable to reach the start of one. Asserted against the **pure** renderer, because the DB-backed path opens the real `~/.autodev/` store and a test going through it would read the developer's own memory (`§0.8`). Falsified by removing the flattener from that one call — red, naming the implant.
+
+
+- [x] **TG8-11** `[governance]` — **NEW (`P8-21`/`P8-24`). The exit assertion.** Three directions at once: the deleted trees are gone (`sidecar/`, `sidecar_commands.rs`, `resources/sidecars`, `submodules/`, `.git/modules/submodules`, `src/components/sidecar/`, `sidecarStore.ts`, `StartupOverlay.tsx`, `bundle-sidecars.ps1`, and `.gitmodules` absent or empty); no shipped **manifest, packaging file or README** declares `core-orchestrator`, `memory-mcp-server`, `127.0.0.1:4000` or `127.0.0.1:8000`; and — the direction that matters most — **the PROTECTED files still exist**.
+      Source: **NEW** — `P8-21`, `P8-24` · Catches: a returned tree, a re-declared dependency, **and a token-based sweep that deletes a published seam** · Falsified three ways — a protected file removed, packaging re-declaring the subsystem, a deleted tree recreated — each red naming its own mechanism · Evidence: `GATE-PROVEN` — `ci_gate::tests::tg8_11_the_exit_assertion`
+
+      ⚠ **The protected half is not defensive padding.** `PD0` gave "sidecar" a second meaning — AutoDev as a sidecar *of AutoDesign* — and the updater's `.sig`/`.sha256` and SQLite's `-wal` are two more senses. A sweep run from the token would satisfy every "is it gone?" clause above **and delete a seam published to a partner team**. The gate asserts `tsconfig.sidecar.json`, `scripts/smoke-design-sidecar.mjs`, `src/design/contract/sidecar.ts`, `updater/{check,download}.rs` and `db/backup.rs` are all still present.
+
+      ⚠ The README's **delivery history is exempt** by design: "Phase 2 … Sidecar integration" is a true statement about what shipped then, and a changelog edited to match the present is no longer a changelog. The gate reads only the text above `## Development Phases`.
 
 ---
 
@@ -734,7 +742,7 @@ Gates are only as honest as what they run against. Every corpus below is **check
 | `08-DATA-MODEL…` | `§4 Test gates` | 10 | `TG1-02…TG1-06`; `TG2-15`; `TG4-19…TG4-22` | **P1** (5), **P2** (1), **P4** (4) |
 | `09-DELIVERY` | `§6 Test gates` | 10 | `TG0-01`, `TG0-02`; `TG4-17`, `TG4-18`; `TG8-01`; `TG9-01…TG9-05` | **P0** (2), **P4** (2), **P8** (1), **P9** (5) |
 | `10-PROOF` | *(no gate table — by design)* | 0 gates; contributes the evidence classes (`§1`), the headline acceptance test (`TG7-02` + `TG9-01`), the CI blocking table (`TG0-02`) and the ten test families (`§17`) | — | — |
-| **NEW** | *(this document)* | 16 | `TG0-04`, `TG0-05`, `TG2-16`, `TG2-17`, `TG3-38`, `TG3-39`, `TG4-23`, `TG8-02`…`TG8-10` | P0 (2), P2 (2), P3 (2), P4 (1), P8 (9) |
+| **NEW** | *(this document)* | 17 | `TG0-04`, `TG0-05`, `TG2-16`, `TG2-17`, `TG3-38`, `TG3-39`, `TG4-23`, `TG8-02`…`TG8-11` | P0 (2), P2 (2), P3 (2), P4 (1), P8 (10) |
 
 **Spec gate totals:** 115 named in the specs − 8 merged = **107 surviving** + **8 NEW** = **115**, **+ 10 `TGD0`** added by `PD0` and its audit remediation = **125**.
 
@@ -797,7 +805,7 @@ Gates are only as honest as what they run against. Every corpus below is **check
 | **Destructive safety** | `TG3-36`, `TG4-23`, `TG7-05` | 3 |
 | **Anchor conformance** | `TG6-01`, `TG6-02`, `TG6-09` | 3 |
 | **Migration** | `TG1-02`, `TG1-03`, `TG1-04` | 3 |
-| **No-sidecar** | `TG8-01`, `TG8-02`, `TG8-09` | 3 |
+| **No-sidecar** | `TG8-01`, `TG8-02`, `TG8-09`, `TG8-11` | 4 |
 | **One prompt floor** | `TG8-03`, `TG8-04`, `TG8-05`, `TG8-06` | 4 |
 | **No reader without a writer** | `TG8-07`, `TG8-08` | 2 |
 | **Procedural seam** | `TG8-10` | 1 |
