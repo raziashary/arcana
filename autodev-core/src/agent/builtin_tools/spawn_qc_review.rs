@@ -88,9 +88,21 @@ impl Tool for SpawnQcReviewTool {
         let mgr = match subagent::manager::global() {
             Some(m) => m,
             None => {
+                // 🔴 `P8-58`. This used to end *"Wait for sidecar startup
+                // to complete and try again."* There is no sidecar, and there
+                // is nothing to wait for: `main.rs:193` calls `install_global`
+                // unconditionally during desktop startup, so `global()` returns
+                // `None` only in a process that never runs that line — the
+                // `airsctl` CLI, or a test binary. **Retrying cannot succeed**,
+                // and the model was being told to retry.
                 return ToolResult::error(
-                    "Subagent system unavailable: SubagentManager not initialised. \
-                 Wait for sidecar startup and try again.",
+                    "QC review unavailable: this process has no \
+                     SubagentManager, so no reviewer can be spawned here. \
+                     Retrying will not change that — the manager is installed \
+                     once at desktop-app startup, and a process without it \
+                     (the CLI, or a test harness) never gains one. Leave the \
+                     task in `qc_review` for the dispatcher to pick up rather \
+                     than marking it done unreviewed.",
                 )
             }
         };

@@ -300,18 +300,6 @@ fn supervisor_recipe() -> Recipe {
         agent_role:      Some("supervisor".into()),
         model:           None,
         is_system:       true,
-        // ⚠ P4-31 (razi-ruled 2026-09-02). This said `Mode2Only`, and that is
-        // why this recipe never ran. `runner.rs` hardcodes `orch_healthy =
-        // false` — Mode 2 has been inert since P0 deleted the in-process MCP
-        // server it reached tools through — so every tick fell to the
-        // fallback-policy check, logged `fallback_skipped_policy` and returned
-        // idle. Eight of the nine shipped recipes were in that state, and the
-        // fleet reported itself **idle rather than broken**.
-        //
-        // The declarations simply were never updated when Mode 2 went inert.
-        // `runner.rs`'s own comment already states the intent this now matches:
-        // *"Every worker therefore runs on the in-process Rust engine (Mode 1),
-        // which needs no sidecar and no Python."*
         instructions:    r#"You are the AIRS Supervisor Agent. Your sole job is task routing and board health — you never write code.
 
 ## Tick Protocol (execute every run in this exact order)
@@ -371,7 +359,7 @@ after a rejection); but for fresh dispatch and epic decomposition, ALWAYS prefer
 #### Routing Matrix (fallback when suggest_worker confidence is low)
 | Signal in title / description / acceptance_criteria     | Worker             |
 |---------------------------------------------------------|--------------------|
-| Rust, Python, src-tauri, core-orchestrator, sidecars    | worker-backend     |
+| Rust, src-tauri, autodev-core, database, schema, API    | worker-backend     |
 | React, TypeScript, Tailwind, CSS, UI components (src/)  | worker-frontend    |
 | GitHub Actions, Dockerfile, CI, deployment, infra       | worker-platform    |
 | MCP server, tool bridge, MCP protocol, tools/list       | worker-mcp         |
@@ -399,8 +387,8 @@ supervisor tick, checks each in_progress task's recorded `claimed_by_pid` via th
 OS, and releases truly-abandoned tasks back to 'ready' deterministically. If you
 also reset in_progress on a stalled-but-still-alive worker, you race the
 OrphanDetector — both you and it will fight over `rejection_reason` and the next
-tick will be unpredictable. Stalled-but-alive workers are a real case (long
-LivingAgent ticks); leave them be and let the orphan detector adjudicate.
+tick will be unpredictable. Stalled-but-alive workers are a real case (a long
+tick on a large task); leave them be and let the orphan detector adjudicate.
 
 **Build-failed retry policy**
 `status='build_failed'`:
@@ -475,18 +463,6 @@ fn worker_backend_recipe() -> Recipe {
         agent_role: Some("worker-backend".into()),
         model: None,
         is_system: true,
-        // ⚠ P4-31 (razi-ruled 2026-09-02). This said `Mode2Only`, and that is
-        // why this recipe never ran. `runner.rs` hardcodes `orch_healthy =
-        // false` — Mode 2 has been inert since P0 deleted the in-process MCP
-        // server it reached tools through — so every tick fell to the
-        // fallback-policy check, logged `fallback_skipped_policy` and returned
-        // idle. Eight of the nine shipped recipes were in that state, and the
-        // fleet reported itself **idle rather than broken**.
-        //
-        // The declarations simply were never updated when Mode 2 went inert.
-        // `runner.rs`'s own comment already states the intent this now matches:
-        // *"Every worker therefore runs on the in-process Rust engine (Mode 1),
-        // which needs no sidecar and no Python."*
         instructions: format!(
             "{}{}{}",
             r#"You are the AIRS Backend Worker Agent. You implement backend tasks assigned to you.
@@ -690,7 +666,7 @@ Apply this to ALL endpoints: GET, PUT, PATCH, DELETE.
 3. Always use scope="function" for database fixtures.
 
 ## Constraints
-- Modify ONLY backend code: Python/Rust in core-orchestrator, src-tauri, sidecars.
+- Modify ONLY backend code: Rust under `autodev-core/`, `src-tauri/` and `src-cli/`.
 - NEVER modify frontend React/TypeScript code in src/.
 - NEVER push directly to main — all output goes to QC review.
 - NEVER claim a second task while one is in_progress.
@@ -745,18 +721,6 @@ fn worker_frontend_recipe() -> Recipe {
         agent_role: Some("worker-frontend".into()),
         model: None,
         is_system: true,
-        // ⚠ P4-31 (razi-ruled 2026-09-02). This said `Mode2Only`, and that is
-        // why this recipe never ran. `runner.rs` hardcodes `orch_healthy =
-        // false` — Mode 2 has been inert since P0 deleted the in-process MCP
-        // server it reached tools through — so every tick fell to the
-        // fallback-policy check, logged `fallback_skipped_policy` and returned
-        // idle. Eight of the nine shipped recipes were in that state, and the
-        // fleet reported itself **idle rather than broken**.
-        //
-        // The declarations simply were never updated when Mode 2 went inert.
-        // `runner.rs`'s own comment already states the intent this now matches:
-        // *"Every worker therefore runs on the in-process Rust engine (Mode 1),
-        // which needs no sidecar and no Python."*
         instructions: format!(
             "{}{}{}",
             r#"You are the AIRS Frontend Worker Agent. You implement React/TypeScript frontend tasks.
@@ -985,18 +949,6 @@ fn worker_platform_recipe() -> Recipe {
         agent_role: Some("worker-platform".into()),
         model: None,
         is_system: true,
-        // ⚠ P4-31 (razi-ruled 2026-09-02). This said `Mode2Only`, and that is
-        // why this recipe never ran. `runner.rs` hardcodes `orch_healthy =
-        // false` — Mode 2 has been inert since P0 deleted the in-process MCP
-        // server it reached tools through — so every tick fell to the
-        // fallback-policy check, logged `fallback_skipped_policy` and returned
-        // idle. Eight of the nine shipped recipes were in that state, and the
-        // fleet reported itself **idle rather than broken**.
-        //
-        // The declarations simply were never updated when Mode 2 went inert.
-        // `runner.rs`'s own comment already states the intent this now matches:
-        // *"Every worker therefore runs on the in-process Rust engine (Mode 1),
-        // which needs no sidecar and no Python."*
         instructions: format!(
             "{}{}{}",
             r#"You are the AIRS Platform Worker Agent. You handle infrastructure, CI/CD, Docker, and deployment tasks.
@@ -1113,18 +1065,6 @@ fn worker_mcp_recipe() -> Recipe {
         agent_role: Some("worker-mcp".into()),
         model: None,
         is_system: true,
-        // ⚠ P4-31 (razi-ruled 2026-09-02). This said `Mode2Only`, and that is
-        // why this recipe never ran. `runner.rs` hardcodes `orch_healthy =
-        // false` — Mode 2 has been inert since P0 deleted the in-process MCP
-        // server it reached tools through — so every tick fell to the
-        // fallback-policy check, logged `fallback_skipped_policy` and returned
-        // idle. Eight of the nine shipped recipes were in that state, and the
-        // fleet reported itself **idle rather than broken**.
-        //
-        // The declarations simply were never updated when Mode 2 went inert.
-        // `runner.rs`'s own comment already states the intent this now matches:
-        // *"Every worker therefore runs on the in-process Rust engine (Mode 1),
-        // which needs no sidecar and no Python."*
         instructions: format!(
             "{}{}{}",
             r#"You are the AIRS MCP Worker Agent. You build and maintain MCP server extensions.
@@ -1165,7 +1105,7 @@ Emit ZERO further tool calls.
 ## MCP Implementation Standards (MCP spec 2025-11-05)
 
 ### Transport
-- Use stdio for local sidecar tools (standard AIRS pattern).
+- Use stdio when the server runs as a local child process. This is the default; prefer it.
 - Use SSE only when the server must be accessed over a network.
 - Never mix transports in the same server binary.
 
@@ -1304,11 +1244,11 @@ fn worker_cleanup_recipe() -> Recipe {
         agent_role: Some("worker-cleanup".into()),
         model: None,
         is_system: true,
-        // Doc 05 Phase 3 — worker-cleanup is the canonical Mode1-capable
-        // recipe: lint fixes and dead-code removal are file-only operations
-        // that the Rust AgentEngine can execute when the LLM provider is
-        // configured. Other recipes (worker-backend / frontend / qc-agent)
-        // are MCP-tool-heavy and stay Mode2Only.
+        // ⚠ `P8-59`. This used to end *"Other recipes (worker-backend /
+        // frontend / qc-agent) are MCP-tool-heavy and stay Mode2Only"* — which
+        // was false in two directions at once: it sat directly above a
+        // `fallback_policy: Mode1Capable` declaration, and there is one engine
+        // now, so no recipe "stays" anywhere. Cleanup is not a special case.
         instructions: format!(
             "{}{}{}",
             r#"You are the AIRS Cleanup Worker Agent. You handle code quality — lint fixes, dead code removal, and housekeeping.
@@ -1479,18 +1419,6 @@ fn qc_agent_recipe() -> Recipe {
         agent_role:      Some("qc-agent".into()),
         model:           None,
         is_system:       true,
-        // ⚠ P4-31 (razi-ruled 2026-09-02). This said `Mode2Only`, and that is
-        // why this recipe never ran. `runner.rs` hardcodes `orch_healthy =
-        // false` — Mode 2 has been inert since P0 deleted the in-process MCP
-        // server it reached tools through — so every tick fell to the
-        // fallback-policy check, logged `fallback_skipped_policy` and returned
-        // idle. Eight of the nine shipped recipes were in that state, and the
-        // fleet reported itself **idle rather than broken**.
-        //
-        // The declarations simply were never updated when Mode 2 went inert.
-        // `runner.rs`'s own comment already states the intent this now matches:
-        // *"Every worker therefore runs on the in-process Rust engine (Mode 1),
-        // which needs no sidecar and no Python."*
         instructions:    r#"You are the AIRS QC Agent. You review worker output and make the final gate decision.
 Your decision is binary: done (all criteria met, build passes, security clear) or rejected (specific failure with actionable fix).
 
@@ -2050,18 +1978,6 @@ fn qc_dispatcher_recipe() -> Recipe {
         // sonnet (see spawn_qc_review's model fix).
         model:           Some("claude-haiku-4-5".into()),
         is_system:       true,
-        // ⚠ P4-31 (razi-ruled 2026-09-02). This said `Mode2Only`, and that is
-        // why this recipe never ran. `runner.rs` hardcodes `orch_healthy =
-        // false` — Mode 2 has been inert since P0 deleted the in-process MCP
-        // server it reached tools through — so every tick fell to the
-        // fallback-policy check, logged `fallback_skipped_policy` and returned
-        // idle. Eight of the nine shipped recipes were in that state, and the
-        // fleet reported itself **idle rather than broken**.
-        //
-        // The declarations simply were never updated when Mode 2 went inert.
-        // `runner.rs`'s own comment already states the intent this now matches:
-        // *"Every worker therefore runs on the in-process Rust engine (Mode 1),
-        // which needs no sidecar and no Python."*
         instructions:    r#"You are the AIRS QC Dispatcher.
 
 Your only job is to fan out QC reviews. You do NOT review code yourself — you spawn one ephemeral `qc-reviewer` subagent per task in `qc_review`. Each reviewer runs in parallel under the SubagentPool cap (max 6 concurrent QC reviewers).
@@ -2142,18 +2058,6 @@ fn fleet_smoke_recipe() -> Recipe {
         agent_role:      Some("fleet-smoke".into()),
         model:           Some("claude-haiku-4-5".into()),
         is_system:       true,
-        // ⚠ P4-31 (razi-ruled 2026-09-02). This said `Mode2Only`, and that is
-        // why this recipe never ran. `runner.rs` hardcodes `orch_healthy =
-        // false` — Mode 2 has been inert since P0 deleted the in-process MCP
-        // server it reached tools through — so every tick fell to the
-        // fallback-policy check, logged `fallback_skipped_policy` and returned
-        // idle. Eight of the nine shipped recipes were in that state, and the
-        // fleet reported itself **idle rather than broken**.
-        //
-        // The declarations simply were never updated when Mode 2 went inert.
-        // `runner.rs`'s own comment already states the intent this now matches:
-        // *"Every worker therefore runs on the in-process Rust engine (Mode 1),
-        // which needs no sidecar and no Python."*
         instructions:    r#"You are the AIRS Fleet Smoke agent.
 
 Your job is to assemble what the backend and frontend workers built and

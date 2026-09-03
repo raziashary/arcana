@@ -93,12 +93,20 @@ pub fn register_all(registry: &mut ToolRegistry) {
 
 /// Register tools filtered by PA mode:
 /// - FastDevelopment: all file/execution tools + task board tools + planner
-/// - Review:          same as FastDevelopment (permission layer is at execution time)
-/// - Delegate:        create_task + planner — zero file tools
+/// - Review:          **the same arm**, byte for byte. The difference is
+///                    posture, set by the prompt — not capability, and not the
+///                    permission policy either: `agent_commands.rs:246` passes
+///                    `ManualApproval` as a literal for both (`P8-57`).
+/// - Delegate:        `create_task`, `planner` and the four memory tools —
+///                    zero file and execution tools.
 ///
-/// Task board tools (list_tasks, update_task_status, create_task) and planner are available
-/// in all modes so that recipe agents (Supervisor, Workers) can manage tasks and plans
-/// without resorting to writing Python scripts.
+/// ⚠ The sentence that used to close this comment was **false**: *"Task board
+/// tools (list_tasks, update_task_status, create_task) and planner are
+/// available in all modes."* `Delegate` registers `create_task` and never
+/// registered `list_tasks` or `update_task_status`, so a reader planning a
+/// Delegate-mode feature around reading the board would have built against a
+/// tool that is not there. It also justified itself by a subsystem that no
+/// longer exists (*"without resorting to writing Python scripts"*).
 pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
     match mode {
         PAMode::FastDevelopment | PAMode::Review => {

@@ -107,9 +107,21 @@ impl Tool for SpawnSubagentTool {
         let mgr = match subagent::manager::global() {
             Some(m) => m,
             None => {
+                // 🔴 `P8-58`. This used to end *"Wait for sidecar startup
+                // to complete and try again."* There is no sidecar, and there
+                // is nothing to wait for: `main.rs:193` calls `install_global`
+                // unconditionally during desktop startup, so `global()` returns
+                // `None` only in a process that never runs that line — the
+                // `airsctl` CLI, or a test binary. **Retrying cannot succeed**,
+                // and the model was being told to retry.
                 return ToolResult::error(
-                    "Subagent system unavailable: SubagentManager not yet initialised. \
-                 Wait for sidecar startup to complete and try again.",
+                    "Subagent system unavailable: this process has no \
+                     SubagentManager, so no subagent can be spawned here. \
+                     Retrying will not change that — the manager is installed \
+                     once at desktop-app startup, and a process without it \
+                     (the CLI, or a test harness) never gains one. Do the work \
+                     directly instead, or report that delegation is not \
+                     available in this context.",
                 )
             }
         };
