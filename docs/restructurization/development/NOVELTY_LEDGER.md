@@ -176,6 +176,28 @@
 
 ---
 
+## Design mechanics
+
+### N-21 · Writing to another product's capability-contract conventions
+
+| Field | Value |
+|---|---|
+| **source_pattern** | AutoDesign's `@airs/auto-design-capability-contracts@0.2.0` — a sibling product's shipped, versioned contract package |
+| **known_external_shape** | Per-family namespaced version literals (`ad-<name>/0.2.0`) pinned so an unknown version fails decode; `.strict()` objects that refuse undeclared fields; a `fixtures/v<semver>/{valid,invalid,races}` corpus; artifact transfer by reference with `sha256` + `storageRef` + `createdAt`/`expiresAt`; a nine-category error taxonomy with a `retryable` flag; and a three-valued outcome `inspection_ready \| partial \| held` in which `partial` must be evidenced |
+| **airs_adoption** | The **conventions**, not the types. Namespaced per-family versions; fail-closed decode with unknown-field refusal; reference-not-payload; the artifact field set verbatim so their existing decoder reads ours; their `category` and `retryable` verbatim; and their outcome triple, renaming only `inspection_ready` → `complete` for a reader outside the PDF context |
+| **airs_rejection** | **Their types, necessarily.** `capabilityIdSchema` is a closed 18-member `z.enum` of AutoDesign's own capabilities, the host manifest declares `productOwner: z.literal('airs_auto_design')`, and the catalog must contain every canonical capability exactly once — so AutoDev **cannot** publish a conforming manifest, and "write our contract to their shape" was never executable as stated. Also rejected: their 16 KiB input envelope as a *payload* limit (we carry a reference, so it never binds), their internal nine-status job vocabulary (we mirror the public one), and any event type we do not actually emit — three of theirs have no producer |
+| **airs_unique_addition** | **`FidelityReport.method`.** A fidelity score must state how it was obtained, and `unmeasured` may not carry a number. Nothing in AutoDesign's contract has this, and it exists because the organisation's own adaptation engine reported a fidelity score for a year that nothing measured — a penalty tally over the boxes the engine had just produced, with no rasterisation and no comparison anywhere in the pipeline. A contract that carries a `score` and no account of its provenance invites exactly that |
+| **proof_or_eval** | `TGD0-01`…`TGD0-08`, all in `npm test`; four falsified by planting a compiling defect and confirming the failure names its own reason. `SD0-01` spawns the sidecar as a real child process — nine cases, five of them refusals |
+| **status** | **ADOPTED-PROVEN** |
+
+⚠ **The design programme's other three rows are owed.** `PD1` is grounded in an
+external converter (`apps/psdconversions`), and `PD2`/`PD4` carry ~33 tasks
+derived from the AAE post-mortem — all externally-inspired, none yet in this
+register. Recorded here so they are not lost: `PD1`, `PD2` and `PD4` each open
+their own row at their own closeout.
+
+---
+
 ## Ledger discipline
 
 - **Closeout rule** — at final closeout every row is `ADOPTED-PROVEN` or `REJECTED`. A row still at `ADOPTED-INTENT` blocks the capstone.

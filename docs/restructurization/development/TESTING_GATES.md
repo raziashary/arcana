@@ -367,6 +367,39 @@
 
 ---
 
+## 6.5 PD0 — The capability contract
+
+> ⚠ **The design phases had no gate section at all** until 2026-09-03 — a
+> `grep` for `PD[0-9]` across this file returned zero hits, while `§0.5` says
+> *"smoke-then-gates is mandatory; both are the definition of done"*. So every
+> `DOC-GATE` / `UNIT-PROVEN` / `SMOKE-PROVEN` marker in `§10.5` pointed at
+> nothing. This section opens the register for `PD0`; `PD1`–`PD6` owe theirs at
+> their own closeouts.
+>
+> These run in `npm test` (`src/design/contract/gates.test.ts`), not in
+> `cargo test` — the contract is TypeScript by Razi's ruling. ⚠ That places them
+> outside `reachability_gate.rs`, which walks the four Rust crates only; it is
+> why `src/design/` could sit caller-less through two phases without anything
+> noticing. Wiring the suite into `npm test` is what replaces that backstop.
+
+- [x] **TGD0-01** `[policy]` — The operation set is exactly `ingest` · `export` · `adapt` · `change`, the outcome set is exactly `complete` · `partial` · `held`, and a **reserved** verb is refused *as reserved* rather than as unknown — so a caller reaching for `measure` learns it is coming, instead of concluding they misspelled something.
+      Source: `PD0-01` · Catches: a fifth verb arriving without a version decision · **Evidence: `GATE-PROVEN` 2026-09-03**
+- [x] **TGD0-02** `[conservation]` — **No event carries a design document, only a reference.** Asserted as a **byte budget** on every serialized event across all four operations, not as a structural check on the type: a structural check passes forever while someone adds a convenience field holding the document, and the byte budget catches the actual mistake. 4 KiB, four times under AutoDesign's own 16 KiB input cap.
+      Source: `PD0-02` · Catches: the 17–25 MB payload the IR exists to avoid, arriving down a pipe instead of into a context window · **Evidence: `GATE-PROVEN`, falsified** by inlining 9 KB into a settled event — fails naming *"the wire carries a reference, never the document"*
+- [x] **TGD0-03** `[correctness]` — An **unknown schema version is rejected, never parsed optimistically** — and the known one still decodes, so the gate cannot pass by refusing everything.
+      Source: `PD0-02` · Catches: version skew surfacing as wrong behaviour instead of a clean refusal · **Evidence: `GATE-PROVEN` 2026-09-03**
+- [x] **TGD0-04** `[data]` — **A fidelity report cannot claim a score nothing measured.** `method: 'unmeasured'` must carry a `null` score; any other method must carry a real one. The honest report is accepted, so the gate is not simply banning the field.
+      Source: `PD0-04` · Catches: **the AAE failure exactly** — an engine that reported a fidelity number computed as a penalty tally over its own output, with no rasterisation and no comparison anywhere, and looked measured for a year · **Evidence: `GATE-PROVEN`, falsified** by deleting the pairing check — fails naming *"null score"*
+- [x] **TGD0-05** `[correctness]` — **A `partial` outcome must be evidenced.** An unevidenced partial is refused.
+      Source: `PD0-04` · Catches: the old converter's behaviour of reporting loss as success, which is the case `PD0-04` exists for · **Evidence: `GATE-PROVEN` 2026-09-03**
+- [x] **TGD0-06** `[seam]` — **The sidecar is spawnable and settles as a real child process.** `execFileSync('node', [main.js])`, stdin request, NDJSON parsed off stdout, terminal event decoded through the same invariants as ours. ⚠ It **fails rather than skips** when the build is absent: a seam that is not built is not proven, and a skipping gate is not green (`§0.5`).
+      Source: `PD0-06`, `PD0-08` · Catches: `L-C12` at contract scale — a beautifully typed surface nothing has ever spoken across a process boundary · **Evidence: `GATE-PROVEN`, falsified** by suppressing the terminal event — fails naming *"settled"*
+- [x] **TGD0-07** `[governance]` — **The published document still describes the shipped contract.** Parses the operations table out of `AUTODESIGN-CAPABILITY-CONTRACT.md` and compares the **set** against `OPERATIONS`; also requires every outcome, the reserved verb and all four exit codes to appear.
+      ⚠ **The first version of this gate was blind and falsification proved it.** It used `toContain` over the whole document, so deleting an operation's table row left a stray mention in the mapping section and the gate stayed green over a document that no longer described a shipped operation — `L-C9`, in a gate written to prevent staleness. Re-pointed to the set.
+      Source: `PD0-09`, `§0.3` · Catches: a partner team reading a document that no longer matches what they are calling · **Evidence: `GATE-PROVEN`, falsified** by swapping a documented verb — fails naming *"not the shipped ones"*
+- [x] **TGD0-08** `[seam]` — **The conformance suite can fail.** Driven against a deliberately broken implementation it reports NOT CONFORMANT, and against the reference it passes — so the failure is discrimination rather than a suite that rejects everything.
+      Source: `PD0-06` · Catches: `L-C9` in the deliverable a partner team will trust most · **Evidence: `GATE-PROVEN` 2026-09-03**
+
 ## 7. P4 — The fleet
 
 **Slice:** event dispatch + exhaustive state enum (M-11) · atomic claim (M-12) · Rust-native build verification (M-13) · delivery + handoff (M-15) · reconciliation timestamps (M-16) · coordination capabilities (M-31…M-34).

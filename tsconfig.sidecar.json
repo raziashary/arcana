@@ -1,0 +1,35 @@
+{
+  // PD0-08 — the build that produces the spawnable sidecar.
+  //
+  // The app's own tsconfig targets a browser: `moduleResolution: "bundler"`,
+  // `noEmit`, DOM libs, and `allowImportingTsExtensions`. None of that produces
+  // a file Node can run, so the sidecar gets its own configuration rather than
+  // contorting the app's.
+  //
+  // ⚠ `lib` deliberately omits DOM. If a future edit imports something
+  // browser-bound into the contract — `psdToIr.ts`'s asset store holds live
+  // `HTMLCanvasElement`s, so this is a live hazard, not a hypothetical one —
+  // this build fails rather than emitting a file that dies at runtime in the
+  // one place nobody is watching.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "outDir": "dist-sidecar",
+    "rootDir": "src",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "declaration": true,
+    "types": ["node"]
+  },
+  "include": ["src/design/contract"],
+  // The suite is a deliverable; its vitest harness is not. Shipping a file
+  // that imports vitest into a spawned sidecar is a runtime failure waiting
+  // for the one machine that runs it without dev dependencies installed.
+  "exclude": ["src/design/contract/**/*.test.ts"]
+}

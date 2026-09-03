@@ -1,6 +1,8 @@
 # Build outputs
 sidecars/
 dist/
+# PD0 — the spawnable sidecar is a build output, rebuilt by `npm run build:sidecar`.
+dist-sidecar/
 target/
 scripts/
 src-tauri/resources/sidecars/
