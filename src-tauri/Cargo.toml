@@ -32,7 +32,6 @@ tokio = { version = "1", features = ["full"] }
 
 # Error handling
 anyhow    = "1"
-thiserror = "1"
 
 # Logging / tracing
 tracing            = "0.1"
@@ -49,7 +48,6 @@ keyring = "2"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 
 # Utilities
-uuid   = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # Async helpers
@@ -79,16 +77,13 @@ cron = "0.12"
 rfd = { version = "0.14" }
 
 # git2-rs — Phase 3 (already declared to lock dep version)
-git2 = "0.19"
 
 # Process resource monitoring (CPU%, memory) — Phase 3.4b SidecarPanel
-sysinfo = "0.33"
 
 # Ollama local LLM provider — Phase X
 # Task D3: Keep 0.3.4; panic prevention via D1 (sanitized OLLAMA_HOST) + D2 (catch_unwind)
 
 # Hook custom_condition expression evaluator — Phase 3.1
-rhai = { version = "1", features = ["sync"] }
 
 # Auto-updater — Phase 5.3
 ed25519-dalek = { version = "2", features = ["std"] }
@@ -96,15 +91,11 @@ semver = "1"
 tempfile = "3"
 
 # Graph Engine — Phase 6
-tree-sitter = "0.22"
-petgraph = "0.6"
 sha2 = "0.10"
-rayon = "1.10"
 ignore = "0.4"
 hex = "0.4"
 notify = "6"
 dirs = "5"
-flate2 = "1"
 base64 = "0.22"
 
 # .env loader — for AUTODEV_SIDECAR_PATH / AUTODEV_MEMORY_PATH in dev mode

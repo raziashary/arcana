@@ -9,7 +9,7 @@
 | **Owner** | Razi (Programming Lead, AIRS Foundry) |
 | **Branch** | `main` (Razi authorised working directly on it; `sidecar-backup` holds the pre-restructure state) |
 | **Rev** | **2.2** — created 2026-08-31, current 2026-09-03. `§16` is authoritative for the history |
-| **Status** | 🟢 **BUILDING.** GO given 2026-09-01. Complete: `P0` · `P1` · `P2` · `P3 A–E` · `P3-F` · `PD0`. **Next: `P8`.** 289 of 517 tasks open |
+| **Status** | 🟢 **BUILDING.** GO given 2026-09-01. Complete: `P0` · `P1` · `P2` · `P3 A–E` · `P3-F` · `PD0`. **Next: `P8`.** 282 of 517 tasks open |
 
 ⚠ **This header read `Rev 1.0` and `⛔ AWAITING GO. No code, no migrations, no
 deletions.` until 2026-09-03** — through seven completed phases, hundreds of
@@ -838,9 +838,9 @@ goes to ask *what is left*.
 | 11 | **P4** Fleet | *"including the fleet."* Last in R1 because a fleet multiplies whatever the tools already do; multiplying unproven tools only multiplies the debugging. ⚠ **+4 on 2026-09-03** — `P4-G`, the one-fleet ruling (`ADR-LOG-RESTRUCT-0037`) | 49 |
 | 12 | **R1 close** | Integration, post-phase audit (`§0.2a`), contract v1. ≈38 h from now | — |
 
-**Open R1 tasks: 206.** Completed R1 tasks: **228** (`P0`–`P3-F` and `PD0`, plus
+**Open R1 tasks: 199.** Completed R1 tasks: **235** (`P0`–`P3-F` and `PD0`, plus
 4 of `PD1`'s and 1 of `P4`'s taken early). Programme total **517**, of which
-**289 open**. Hours are `§5.6`'s measured model, not estimates.
+**282 open**. Hours are `§5.6`'s measured model, not estimates.
 
 ⚠ **Recounted 2026-09-03 by walking the checkboxes, and three of the four
 figures here were wrong before `P4-G` was added.** The header said *"312 of
@@ -2356,13 +2356,19 @@ here**, because there are no gitlinks in the index or in history to operate on.
   **Razi's ruling, verbatim, 2026-09-03:** *"look that submodule/sidecar is already dead since the new core and memory mcp server is being used elsewhere, so delete it all you have my authorization."*
 
   🔴 **And its boundary, ruled in the same message and binding on every task in `P8-C`:** *"do not touch the GitHub one, delete it from autodev only."* The deletion is **local to this repository**. `P8` must not push to, delete branches on, or otherwise modify `AIRS-Foundry/core-orchestrator` or `AIRS-Foundry/memory-mcp-server` — including their `autodev` branches, which are where this content lives and stays. Removing `submodules/`, `.git/modules/submodules/` and the `.gitmodules` stanzas touches nothing on those remotes; that is exactly why it is safe. → `DOC-GATE`
-- [ ] **P8-14** Delete both stanzas from **`.gitmodules`** — the only *tracked* artifact, so a normal file edit and a normal commit. → `CODE-PRESENT`
-- [ ] **P8-15** Delete **`.git/modules/submodules/`** — both object stores. ⚠ **Skipping this is the "survives by address" failure**: the working tree goes and the repository still carries the sidecar's git objects. → `CODE-PRESENT`
-- [ ] **P8-16** Delete the **`submodules/`** working tree. → `CODE-PRESENT`
-- [ ] **P8-17** Delete **`src-tauri/resources/sidecars/`** (225 MB) and its `tauri.conf.json` `resources` entry. → `CODE-PRESENT`
-- [ ] **P8-18** Remove the `submodules/` line from `.gitignore` — an ignore rule for a path that cannot exist is a claim the reader must disprove. → `CODE-PRESENT`
-- [ ] **P8-19** **No history rewrite.** Verified: this content was never committed to this repository, so there is nothing in history to excise and no force-push to justify. → `DOC-GATE`
+- [x] **P8-14** Delete both stanzas from **`.gitmodules`** — the only *tracked* artifact, so a normal file edit and a normal commit. → `CODE-PRESENT`
+      ✅ **2026-09-03** — both stanzas deleted; the file is gone entirely, since it held nothing else. It was the **only tracked artifact** of the two submodules, so this is a normal edit and a normal commit.
+- [x] **P8-15** Delete **`.git/modules/submodules/`** — both object stores. ⚠ **Skipping this is the "survives by address" failure**: the working tree goes and the repository still carries the sidecar's git objects. → `CODE-PRESENT`
+      ✅ **2026-09-03** — `.git/modules/submodules/` deleted, **120 MB** of object stores. This is the *"survives by address"* clause: the working tree can go while the repository still carries every object, and a later `git submodule update` would resurrect it.
+- [x] **P8-16** Delete the **`submodules/`** working tree. → `CODE-PRESENT`
+      ✅ **2026-09-03** — `submodules/` deleted, **795 MB** measured (`core-orchestrator` + `memory-mcp-server`). ⚠ Re-verified immediately before deleting, per the retraction in `P8-13`: both working trees were on branch `autodev`, and `git log origin/autodev..HEAD` was **empty in both**. Nothing was lost, and nothing on `AIRS-Foundry/core-orchestrator` or `AIRS-Foundry/memory-mcp-server` was touched.
+- [x] **P8-17** Delete **`src-tauri/resources/sidecars/`** (225 MB) and its `tauri.conf.json` `resources` entry. → `CODE-PRESENT`
+      ✅ **2026-09-03** — `src-tauri/resources/sidecars/` deleted, **225 MB**. Its `tauri.conf.json` entry was already `"resources": []`, fixed in `P0`; verified rather than assumed.
+- [x] **P8-18** Remove the `submodules/` line from `.gitignore` — an ignore rule for a path that cannot exist is a claim the reader must disprove. → `CODE-PRESENT`
+      ✅ **2026-09-03** — the `submodules/` rule and its five-line rationale removed from `.gitignore`. The comment described the directory as *"kept on disk as the reference source for capabilities still marked PORT"* — a claim that is now false, which is exactly why an ignore rule for an impossible path is a claim the reader must disprove.
+- [x] **P8-19** **No history rewrite.** Verified: this content was never committed to this repository, so there is nothing in history to excise and no force-push to justify. → `DOC-GATE`
 
+      ✅ **2026-09-03** — **verified, not assumed.** `git ls-files -s | awk '$1==160000'` returns nothing (no gitlinks in the index) and `git log --all --diff-filter=A -- submodules` returns nothing (never committed). So there is nothing in history to excise, no `git rm` to run, and no force-push to justify. → `DOC-GATE`
 ### P8-I · The complete conversion — what *"not a single line survives"* requires
 
 > `P8-B`/`P8-C` remove the sidecar's **code and files**. This group removes the
@@ -2417,9 +2423,14 @@ here**, because there are no gitlinks in the index or in history to operate on.
 - [ ] **P8-65** **The vocabulary gate.** No file under `autodev-core/src`, `src-tauri/src`, `src-cli/src` or `src/` may contain `Mode 2`, `LivingAgent`, `core-orchestrator` or `memory-mcp-server` — first outside comments, then including them once `P8-56`…`P8-62` land. ⚠ Strip comments before scanning, as `ci_gate.rs` already does elsewhere: this repo has tripped its own checks on explanatory prose four separate times. This is P8's exit criterion. → `GATE-PROVEN`
 
 ### P8-D · Prune and prove
-- [ ] **P8-20** Drop now-unused dependencies (SSE/HTTP client paths kept only for the sidecar) from `Cargo.toml`. → `CODE-PRESENT`
+- [x] **P8-20** Drop now-unused dependencies (SSE/HTTP client paths kept only for the sidecar) from `Cargo.toml`. → `CODE-PRESENT`
+      ✅ **2026-09-03** — nine dependencies dropped from `src-tauri/Cargo.toml`: `thiserror`, `uuid`, `git2`, `sysinfo`, `rhai`, `tree-sitter`, `petgraph`, `rayon`, `flate2`. ⚠ **The task's stated subject was wrong.** It named *"SSE/HTTP client paths kept only for the sidecar"*; `reqwest` is used by `updater/{check,download}.rs` and `mcp/health.rs`, and its `stream` feature by `download.rs:98`'s `bytes_stream()` — removing it would have broken the updater, the same trap as `P8-09`. Of the nine actually unused, only `sysinfo` was made unused by **this** phase (it backed the deleted `get_resource_usage`); the other eight were already dead. Build green after removal.
 - [ ] **P8-21** **The exit assertion**, re-pointed 2026-09-03 *(razi-ruled: "name the real subject")*. Every clause names the **Python orchestrator subsystem**, which is the thing being deleted:
-  - no `.py` anywhere in the tracked tree, and none in any built installer
+  - no `.py` under `autodev-core/`, `src-tauri/`, `src-cli/`, `src/`, `installers/`, `scripts/` or `build/`, and none in any built installer
+
+    🔴 **Narrowed 2026-09-03, during `P8-C`, because the clause as written forbade this programme's own checkers.** It said *"no `.py` anywhere in the tracked tree"*, and the tracked tree contains **four**: `_verify/MDP-COUNTS-CHECK.py`, `MDP-STALENESS-CHECK.py`, `MDP-SYNC-TOTALS.py` and `PD0-FINDINGS-LEDGER.py` — the scripts `§0.3` relies on to catch stale documents, three of them written during this phase.
+
+    The invariant is *"no Python **orchestrator subsystem** survives"*, not *"no file has a `.py` suffix"*. A governance script under `docs/` is not a shipped runtime, is not bundled, and its language is irrelevant to the property. ⚠ **This is the THIRD narrowing of this same assertion** (`ADR-LOG-RESTRUCT-0036` re-pointed the `grep -i sidecar` clause; `P8-09` struck the updater files), and all three had one cause: **a clause written about a token rather than about the thing the token stood for** — `L-C6`, three times in one task.
   - `src-tauri/src/sidecar/`, `src-tauri/src/commands/sidecar_commands.rs` and `src-tauri/resources/sidecars/` do not exist
   - `submodules/` and `.git/modules/submodules/` do not exist, and `.gitmodules` is gone or empty
   - no tracked file references `127.0.0.1:4000`, `127.0.0.1:8000`, `core-orchestrator` or `memory-mcp-server`
