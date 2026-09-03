@@ -107,14 +107,11 @@ impl RecipeScheduler {
                 slug_owned
             );
 
-            // The 120s wait for core-orchestrator that used to be here is REMOVED.
-            //
-            // It polled every 2s for up to two minutes before starting the
-            // schedule, so that the first tick could run in Mode 2. Mode 2 no
-            // longer runs (ADR-LOG-RESTRUCT-0008), so on a machine without the
-            // Python sidecar every worker sat idle for 120 seconds at boot and
-            // then did exactly what it would have done immediately. Found while
-            // fixing the P0 post-phase audit's F-11.
+            // ⚠ A 120-second start-up wait stood here. It polled every 2s for
+            // up to two minutes so the first tick could reach a second runtime
+            // that no longer runs — so every worker sat idle for two minutes at
+            // boot and then did exactly what it would have done immediately.
+            // Removed while fixing the P0 post-phase audit's F-11.
 
             // ── IMMEDIATE STARTUP TICK (Fleet Initialization) ─────────────────────
             // Fire one tick immediately after orchestrator is ready, regardless of
@@ -142,11 +139,13 @@ impl RecipeScheduler {
             }
 
             if let Err(e) = runner.run_recipe(&recipe, &slug_owned).await {
-                // Doc 08 Phase 2 — kind taxonomy. Startup tick failures
-                // almost always trace back to either the orch sidecar dying
-                // mid-startup or an invoke-level connection blip; both fit
-                // KIND_INVOKE_FAILED. tail -f | grep 'kind=invoke_failed'
-                // surfaces every occurrence regardless of slug.
+                // Doc 08 Phase 2 — kind taxonomy. `grep kind=invoke_failed`
+                // surfaces every start-up tick failure regardless of slug.
+                //
+                // ⚠ The reason given for this kind named two causes that can
+                // no longer occur. A start-up tick fails today because the
+                // provider rejected the call, a tool errored, or the recipe
+                // itself is malformed.
                 error!(
                     kind = crate::observability::error_kinds::KIND_INVOKE_FAILED,
                     worker_slug = slug_owned.as_str(),
@@ -156,23 +155,20 @@ impl RecipeScheduler {
                 // Non-fatal: continue to cron loop even if startup tick failed
             }
 
-            // ── MODE 2 CATCH-UP TICK — REMOVED IN P0 ─────────────────────────────
-            //
-            // This waited up to 90s for the orchestrator and then ran the recipe a
-            // SECOND time, so that a worker whose startup tick fell back to Mode 1
-            // would still get its agent YAML created by Mode 2's `ensure_agent`.
-            //
-            // Mode 2 no longer runs at all (ADR-LOG-RESTRUCT-0008), so the second
-            // call could never be a Mode 2 tick — it was a duplicate Mode 1 run:
-            // a second, paid LLM invocation of the same recipe, minutes after the
-            // first, for a reason that can no longer occur. Found by the P0
-            // post-phase audit (F-11).
+            // ── A REMOVED CATCH-UP TICK ─────────────────────────────
+            // ⚠ A "catch-up tick" stood here and was removed in `P0`. It
+            // waited up to 90s and then ran the same recipe a SECOND time, so a
+            // worker whose first tick had taken the fallback path would still
+            // get set up by the other one. With only one path left, the second
+            // call was simply a duplicate: another paid LLM invocation of the
+            // same recipe, minutes after the first, for a reason that could no
+            // longer occur. Found by the P0 post-phase audit (F-11).
 
             // ── CRON SCHEDULE LOOP ───────────────────────────────────────────────
             // After startup tick, fall back to the worker's configured schedule.
             //
             // Phase 7.2 — minimum tick floor.
-            // When a long-running recipe (e.g. 24 s LivingAgent call) causes the
+            // When a long-running recipe (a 24-second tick, say) causes the
             // next cron time to already be in the past, (next_fire - now) is
             // negative → .to_std() returns Err → .unwrap_or_default() returned
             // Duration::ZERO (0 ns), creating a tight spin loop.  Evidence: 32

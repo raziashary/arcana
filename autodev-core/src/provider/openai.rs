@@ -1,5 +1,4 @@
 // OpenAI provider — direct API calls to api.openai.com.
-// PA mode only. Worker mode delegates to core-orchestrator's litellm.
 // Implements the Provider trait with streaming support.
 
 use async_trait::async_trait;

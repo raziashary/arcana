@@ -29,7 +29,7 @@ pub struct CreateWorkerOutput {
     pub slug: String,
 }
 
-/// Result of updating a worker's model with immediate sync to core-orchestrator.
+/// Result of updating a worker's model.
 #[derive(Debug, Serialize)]
 pub struct UpdateModelSyncResult {
     /// Database update succeeded

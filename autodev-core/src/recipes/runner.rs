@@ -1,25 +1,16 @@
 // RecipeRunner — executes a single recipe as a background agent session.
 // Called by RecipeScheduler on each cron tick for autonomous worker agents.
 //
-// Dispatch priority (DEVELOPMENT_PLAN.md §4.1 — Dual-Mode Architecture):
-//   Mode 2: core-orchestrator LivingAgent (21 FSMs, mem0, A2A) — PRIMARY
-//   Mode 1: Rust AgentEngine (direct LLM)                      — LAST-RESORT ONLY
+// **One engine.** A tick resolves a provider, builds an `AgentEngine`, and runs
+// the recipe's instructions on it, in this process. There is no dispatch
+// decision to make and no second runtime to be healthy.
 //
-// Mode 2 is THE main mode for fleet workers. Mode 1 is only entered when
-// core-orchestrator is confirmed genuinely unreachable (is_healthy() → false).
-//
-// Transient Mode 2 failures (MCP server blip, ensure_agent error, invoke error)
-// do NOT fall back to Mode 1. They abort the current tick and let the next
-// cron tick retry Mode 2. Reasons:
-//   1. (Historical: this reasoning concerned the in-process MCP server on
-//      :8767, deleted in P0. Mode 2 is inert now — ADR-LOG-RESTRUCT-0008.)
-//   2. ensure_agent failures are typically auth-refresh races — next tick recovers.
-//   3. invoke_worker failures mean the LivingAgent may have already started the
-//      task; running Mode 1 on top risks double-execution and state corruption.
-//
-// The only legitimate Mode 1 path is `orch_healthy == false` at tick entry,
-// which means the orchestrator process genuinely did not respond to the
-// /api/system/health check after the grace-window retry policy in is_healthy().
+// ⚠ This header used to describe a two-engine architecture with a routing
+// priority between them, and it survived the removal of the second engine by
+// several phases — so the first thing anyone read about this file was a
+// dispatch rule it had stopped implementing. The history is in
+// `ADR-LOG-RESTRUCT-0008` and `P8-48`; it does not belong at the top of the
+// file that no longer does it (`P8-60`).
 
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -122,49 +113,14 @@ impl RecipeRunner {
             return Err(AutoDevError::Agent(msg));
         }
 
-        // ── Fleet-ready latch ───────────────────────────────────────────────────
-        // Hold the very first tick until core-orchestrator has been
-        // confirmed-healthy at least once. Without this, every worker fires
-        // its startup tick during the grace window (when `is_healthy()` is
-        // optimistically true) and burns 7 × `ensure_agent failed:
-        // service-login` warnings in the first 10s of every cold start.
-        // Once the latch trips, all subsequent ticks proceed with the
-        // normal grace-window health logic — so a single transient orch
-        // blip mid-session never blocks dispatch.
-        // REMOVED IN P0. This latch held every tick until core-orchestrator had
-        // answered a health probe at least once. Its purpose was to stop a cold
-        // start burning `ensure_agent failed: service-login` warnings — a Mode 2
-        // concern only.
+        // ⚠ A start-up latch and a health probe stood here. The latch held
+        // every tick until a second runtime answered a probe, so on a machine
+        // that did not have one the latch never opened and **every worker tick
+        // returned early reporting "idle"** — a fleet that was dead and said it
+        // was resting (P0 audit `F-10`). The probe that replaced it cost a
+        // round-trip per tick to fill a variable nothing read (`P8-48`).
         //
-        // With Mode 2 inert (ADR-LOG-RESTRUCT-0008), keeping it meant that on a
-        // machine with no Python the orchestrator never became healthy, the
-        // latch never opened, and EVERY worker tick returned early reporting
-        // "idle". The fleet was silently dead, which is the opposite of what the
-        // comment below it claimed. Found by the P0 post-phase audit (F-10).
-
-        // ── Mode 2 health check (needed for dispatch routing decision) ──────────
-        // We check orchestrator health early because it determines whether we
-        // apply the "no tasks" short-circuit below.
-        // Mode 2 is INERT from P0.
-        //
-        // A Mode 2 worker is a core-orchestrator LivingAgent that reaches
-        // AutoDev's tools by calling back into the in-process MCP server. That
-        // server was deleted in P0 (unauthenticated local RCE exposing bash,
-        // write_file and spawn_subagent — ADR-03-02), so a Mode 2 worker would
-        // now run with ZERO tools and burn tokens achieving nothing. The
-        // pre-flight below already treated that state as "abort the tick".
-        //
-        // Every worker therefore runs on the in-process Rust engine (Mode 1),
-        // which needs no sidecar and no Python. The Mode 2 branch is left in
-        // place, unreachable, and is deleted with the rest of the sidecar in
-        // P8; deleting it here would mean unpicking ~350 lines of nested
-        // control flow in the same commit that removes the MCP server.
-        //
-        // ADR-LOG-RESTRUCT-0008.
-        // P8-48 — the awaited health probe whose result was DISCARDED on
-        // every worker tick, and the `orch_healthy = false` pin beneath it,
-        // are both gone. The probe cost a round-trip per tick to fill a
-        // variable named `_orch_reachable` that nothing ever read.
+        // Both are gone. A tick now starts by doing the work.
         info!(
             "[RecipeRunner] tick dispatch — worker='{}' (native engine)",
             worker_slug
@@ -181,22 +137,13 @@ impl RecipeRunner {
         // hard `MAX_TOOL_TURNS` cap (20). That produced the "18 loops for a
         // simple markdown" behaviour seen in `logs/demo.txt`.
         //
-        // CRITICAL FIX: Only apply this short-circuit when running in Mode 1
-        // (Rust AgentEngine). When Mode 2 (orchestrator) is healthy, we ALWAYS
-        // dispatch through the LivingAgent so that:
-        //   1. ensure_agent() is called, creating the YAML config if missing
-        //   2. The agent's idle handling ("Board clean — idle.") runs
-        //   3. All fleet workers have consistent Mode 2 behavior
-        //
-        // Without this exception, workers with no tasks never reach
-        // ensure_agent(), so their YAMLs are never created and they appear
-        // "missing" from the fleet even though they're scheduled.
-        // P8-48 — `!orch_healthy` was ALWAYS true (the pin was `false`), so
-        // this reads as what it always did: every `worker-*` slug.
+        // ⚠ This was once conditional on which engine the tick would take.
+        // The condition was always true (`P8-48`), so it has only ever meant
+        // what it now says: every `worker-*` slug, every tick.
         if worker_slug.starts_with("worker-") {
             if !Self::has_runnable_task(worker_slug) {
                 info!(
-                    "[RecipeRunner] worker '{}' has no assigned/in_progress tasks — skipping tick (Mode 1)",
+                    "[RecipeRunner] worker '{}' has no assigned/in_progress tasks — skipping tick",
                     worker_slug
                 );
                 self.set_worker_status(worker_slug, "idle");
@@ -204,7 +151,7 @@ impl RecipeRunner {
             }
         }
 
-        // ── Model resolution (shared by both modes) ───────────────────────────
+        // ── Model resolution ───────────────────────────────────────────────
         // Priority: worker.model (DB) > recipe.model (YAML) > active_model > default.
         let worker_model: Option<String> = WorkersDb::open()
             .ok()
@@ -260,30 +207,20 @@ impl RecipeRunner {
                 })
         };
 
-        // P8-48 — the Mode 2 branch is DELETED.
+        // ⚠ Two dead branches stood here and were deleted in `P8-48` and
+        // `P8-47`: a dispatch arm into a second runtime, unreachable by
+        // construction since `P0`, and a policy guard that skipped any recipe
+        // carrying the serde DEFAULT policy — so the shipped recipes never ran
+        // and the fleet reported itself **idle rather than broken**.
         //
-        // 🔴 It was gated on `orch_healthy`, pinned `false` since P0
-        // (`ADR-LOG-RESTRUCT-0008`), so it was unreachable BY CONSTRUCTION
-        // and the `else` arm ran on every tick of every worker. What it
-        // guarded was dispatch into a Python process that no longer exists.
-        //
-        // ⚠ It also held EVERY `worker:tick-start` / `worker:tick-end`
-        // emitter in this file, which is why the Live Monitor has been
-        // permanently blank rather than merely stale. `P8-42` puts them on
-        // the native path in this same change — deleting this without that
-        // would have made the breakage structural.
+        // The first also held every `worker:tick-start` / `worker:tick-end`
+        // emitter in this file, which is why the Live Monitor showed nothing at
+        // all rather than something stale. `P8-42` moved them onto the live
+        // path in the same change.
 
-        // P8-25/P8-47 — the `Mode2Only` guard is DELETED.
-        //
-        // It returned `fallback_idle` for any recipe whose policy was
-        // `Mode2Only`, which was the serde DEFAULT, and `orch_healthy` has
-        // been pinned `false` since P0 — so this branch was unconditional
-        // and such a recipe never ran at all. Every worker now proceeds to
-        // the Mode 1 engine below, which is the only engine there is.
-
-        // ── Mode 1: Rust AgentEngine (fallback / standalone) ─────────────────
-        // Provider + API key are resolved here (only when Mode 2 is unavailable)
-        // so that Mode 2-only setups do not require a Rust provider to be configured.
+        // ── The engine ──────────────────────────────────────────────────
+        // A provider and key are required: without one there is nothing to run
+        // the recipe on.
         let provider_id = {
             let s = self.state.lock_tolerant();
             s.active_provider.clone()
@@ -292,15 +229,14 @@ impl RecipeRunner {
         let provider_id = match provider_id {
             Some(id) => id,
             None => {
-                // No local LLM provider configured — Mode 1 is not possible.
-                // 🔴 `P8-43`. This used to say the worker would *"stay
-                // idle; Mode 2 will handle this recipe once the orchestrator
-                // finishes starting"*, and logged *"Waiting for
-                // core-orchestrator"*. **Nothing is coming.** There is one
-                // engine, and a worker with no provider configured is not
-                // waiting for a peer to pick the task up — it is blocked until
-                // the user adds a key. Saying otherwise turned a fixable
-                // configuration gap into a wait with no end.
+                // No LLM provider configured — there is nothing to run on.
+                // 🔴 `P8-43`. This branch used to say the worker would stay
+                // idle until a second runtime finished starting and picked the
+                // recipe up, and logged that it was waiting for one.
+                // **Nothing is coming.** There is one engine, and a worker with
+                // no provider configured is not waiting for a peer — it is
+                // blocked until the user adds a key. Saying otherwise turned a
+                // fixable configuration gap into a wait with no end.
                 //
                 // Still not `"error"`: the user has simply not finished setting
                 // up, which is a state to report, not a failure to log.
@@ -386,11 +322,11 @@ impl RecipeRunner {
         // P8-42 — the Live Monitor's tick events, emitted around the NATIVE run.
         //
         // 🔴 Every `worker:tick-start` / `worker:tick-end` emitter used to live
-        // inside the Mode 2 branch, which `orch_healthy = false` made
-        // unreachable in `P0`. So the Live Monitor has shown nothing for every
-        // worker since then — not stale data, **no data** — and `P8-48`
-        // deleting that branch would have turned an accident into a structural
-        // impossibility. This is the half that keeps the capability.
+        // inside a branch that `P0` made unreachable. So the Live Monitor
+        // showed nothing for every worker from then on — not stale data, **no
+        // data** — and deleting that branch without moving these would have
+        // turned an accident into a structural impossibility. This is the half
+        // that keeps the capability.
         //
         // ⚠ `tick_duration_ms` is measured from an `Instant` taken here, not
         // computed from the two timestamps: the timestamps are RFC3339 strings

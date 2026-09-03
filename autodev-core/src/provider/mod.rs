@@ -1,6 +1,6 @@
-// Provider module — LLM provider abstraction for PA mode.
-// PA mode executes LLM calls natively in Rust; Worker mode delegates to
-// core-orchestrator's litellm provider. See DEVELOPMENT_PLAN.md Section 4.1.
+// Provider module — the LLM provider abstraction.
+// Every LLM call in this application is made from here, natively in Rust,
+// for the assistant and the fleet alike.
 
 pub mod anthropic;
 pub mod capped;

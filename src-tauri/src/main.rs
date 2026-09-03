@@ -15,50 +15,22 @@ use tauri::Manager;
 use autodev_core::state::lock::LockTolerant;
 
 fn main() {
-    // ─── .env loading ────────────────────────────────────────────────────────
-    // Load `.env` from the npm/project root so AUTODEV_SIDECAR_PATH and
-    // AUTODEV_MEMORY_PATH (single source of truth for sidecar paths in dev)
-    // are available to every subsystem before any path resolution runs.
+    // 🔴 `P8-64`. A `dotenvy::dotenv()` call stood here, in the SHIPPED binary.
     //
-    // dotenvy walks up from CWD looking for `.env`. With `cargo tauri dev`
-    // CWD is the project root, which is where `.env` lives.
-    let dotenv_loaded = dotenvy::dotenv().ok();
-    if let Some(ref p) = dotenv_loaded {
-        eprintln!("[AutoDev] Loaded .env from: {}", p.display());
-
-        // Canonicalize the sidecar path env vars so that downstream callers
-        // never depend on the CWD at the moment of resolution. Relative paths
-        // in `.env` (e.g. `./submodules/core-orchestrator`) are resolved
-        // against `.env`'s parent directory — the project root.
-        if let Some(env_dir) = p.parent() {
-            for key in &["AUTODEV_SIDECAR_PATH", "AUTODEV_MEMORY_PATH"] {
-                if let Ok(val) = std::env::var(key) {
-                    let pb = std::path::PathBuf::from(&val);
-                    let resolved = if pb.is_relative() {
-                        env_dir.join(&pb)
-                    } else {
-                        pb
-                    };
-                    match resolved.canonicalize() {
-                        Ok(abs) => {
-                            // Strip Windows \\?\ verbatim prefix so paths render cleanly in logs.
-                            let abs_str = abs
-                                .to_string_lossy()
-                                .trim_start_matches(r"\\?\")
-                                .to_string();
-                            std::env::set_var(key, &abs_str);
-                            eprintln!("[AutoDev] {key}={abs_str}");
-                        }
-                        Err(e) => {
-                            eprintln!("[AutoDev] WARN {key}='{val}' could not be resolved: {e}");
-                        }
-                    }
-                }
-            }
-        }
-    } else {
-        eprintln!("[AutoDev] No .env file found — relying on system environment variables");
-    }
+    // It existed to read two path variables that pointed at the deleted
+    // subsystem — and **nothing reads either of them today**, verified across
+    // the tree. But `dotenv()` loads the WHOLE file, and the repo `.env`
+    // declares three provider keys and AWS credentials beside those two paths.
+    // So a running application carried live secrets in its process
+    // environment, inherited by every child the agent spawns, including
+    // `bash.rs`, which runs commands the MODEL chooses. Reading a key needed
+    // no vulnerability beyond `echo $ANTHROPIC_API_KEY`.
+    //
+    // ⚠ The scrub below is NOT redundant now — it is more defensible. It no
+    // longer cleans up after this process's own load; it guards what the
+    // user's shell exported before AutoDev started, which is the case it was
+    // always really for. Keys come from the OS credential store (BYOK), never
+    // from the environment.
 
     // ─── Scrub credentials out of the process environment (F-8) ──────────────
     //
@@ -133,7 +105,7 @@ fn main() {
     // Canonical builtin_tools registry.
     //
     // This used to be handed to an in-process MCP server on 127.0.0.1:8767 so
-    // core-orchestrator LivingAgents could call AutoDev's tools. That server was
+    // agents in a separate process could call AutoDev's tools. That server was
     // an unauthenticated local endpoint exposing bash, write_file and
     // spawn_subagent to any process on the machine, and was deleted in P0
     // (ADR-03-02). The registry survives because `list_mcp_tools` reads it to
@@ -193,7 +165,7 @@ fn main() {
     autodev_lib::subagent::manager::install_global(subagent_mgr.clone());
 
     // ─── Analytics singleton ─────────────────────────────────────────────────
-    // The Dashboard, Mode-1 cost recorder, and every Mode-2 tick all read
+    // The Dashboard, the agent cost recorder and every worker tick all read
     // and write through `analytics::global()`. Without this `install_global`
     // call, that accessor panics (intentionally — silent in-memory fallbacks
     // have already cost one audit cycle, see docs/endtoendrun/14may2026/02).
@@ -324,10 +296,10 @@ fn main() {
                 }
 
                 // P8-08/P8-52 — the `StartupProgress` FSM is gone with the
-                // sidecar. Eight of its thirteen phases narrated Python boot
-                // (`MemoryStarting`, `VectorDb`, `MemoryReady`, `OrchStarting`,
-                // `Routers`, `Agents`, `LivingAgents`, `OrchReady`), so what
-                // remained could not describe a startup that no longer happens.
+                // sidecar. Eight of its thirteen phases narrated the boot of a
+                // Python process — memory store, vector DB, routers, agents —
+                // so what remained could not describe a startup that no longer
+                // happens.
                 // The overlay goes with it — a spinner that never advances is
                 // worse than no spinner.
                 //

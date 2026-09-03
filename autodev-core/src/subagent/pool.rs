@@ -3,7 +3,7 @@
 // Limits:
 //   * MAX_GLOBAL_CONCURRENT — hard cap on simultaneous live subagents
 //     across the whole app (prevents one rogue parent from monopolising
-//     core-orchestrator's worker pool)
+//     the machine)
 //   * MAX_PER_PARENT — hard cap per parent slug (so a single agent can't
 //     explode into hundreds of children)
 //   * MAX_NESTING_DEPTH — how deep the parent → child → grandchild chain

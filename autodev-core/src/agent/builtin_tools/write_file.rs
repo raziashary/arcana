@@ -67,10 +67,10 @@ impl Tool for WriteFileTool {
 
         // Workspace path-jail (Phase 1 of docs/endtoendrun/14may2026/07).
         // Refuse any write whose canonical destination escapes the configured
-        // workspace. Without this, a Mode 2 worker passing a relative path
-        // resolves against `std::env::current_dir()` in some MCP code paths,
-        // and files leak into `src-tauri/` during `tauri dev`. The error
-        // message tells the LLM exactly how to retry.
+        // workspace. Without this, an agent passing a relative path resolves
+        // it against `std::env::current_dir()`, and files leak into
+        // `src-tauri/` during `tauri dev`. The error message tells the model
+        // exactly how to retry.
         let path = match validate_workspace_path(&resolved, &ctx.working_dir) {
             Ok(canonical) => canonical,
             Err(msg) => return ToolResult::error(msg),

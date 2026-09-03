@@ -239,8 +239,7 @@ impl SubagentManager {
             .collect()
     }
 
-    /// Graceful termination: cancels the bridge task, then ensures core-orchestrator
-    /// has the agent deleted.
+    /// Graceful termination: aborts the subagent's task and drops its entry.
     pub async fn terminate(self: &Arc<Self>, id: &str, force: bool) -> Result<()> {
         let (task, abort) = {
             let mut reg = self.registry.lock().await;
@@ -281,8 +280,8 @@ impl SubagentManager {
         }
 
         // Nothing to clean up remotely: aborting the task above ends the
-        // in-process engine. The old path had to DELETE an ephemeral agent from
-        // core-orchestrator here.
+        // in-process engine. The old path had to delete an ephemeral agent
+        // from another process here.
 
         self.registry.lock().await.remove(id);
         info!("[SubagentManager] terminated {id} (force={force})");
@@ -340,10 +339,10 @@ impl SubagentManager {
     /// Orphan cleanup. Retained as a no-op so startup wiring and the Tauri
     /// command that calls it keep working.
     ///
-    /// It used to DELETE every `subagent-*` agent left registered in
-    /// core-orchestrator after a crash. Subagents are now in-process tokio
-    /// tasks: when AutoDev exits they exit with it, so no cross-process orphan
-    /// can survive a restart and there is nothing to sweep.
+    /// It used to delete every `subagent-*` agent left registered in another
+    /// process after a crash. Subagents are now in-process tokio tasks: when
+    /// AutoDev exits they exit with it, so no cross-process orphan can
+    /// survive a restart and there is nothing to sweep.
     pub async fn cleanup_orphans(&self) {
         debug!("[SubagentManager] orphan cleanup is a no-op: subagents are in-process");
     }

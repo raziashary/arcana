@@ -7,7 +7,8 @@
 //   - Extract user messages only (agent tool calls are too verbose).
 //   - Build a structured summary from turns: objectives, key decisions, outcomes.
 //   - Does NOT require an LLM call — uses rule-based condensation.
-//     (Full LLM summarization forwarded to core-orchestrator when online — Phase 4.8)
+//     (An LLM-written summary was once planned for a second runtime that no
+//     longer exists; rule-based condensation is what ships.)
 
 use tracing::{debug, info};
 

@@ -21,11 +21,18 @@ pub struct CoreConfig {
     pub working_dir: Option<String>,
     /// Default LLM provider name.
     pub default_provider: Option<String>,
-    /// Whether to auto-start sidecars on CLI commands that need them.
-    pub auto_start_sidecars: Option<bool>,
-    /// Core-orchestrator base URL (default: http://127.0.0.1:4000).
-    pub orchestrator_url: Option<String>,
 }
+
+// 🔴 `P8-64`. `CoreConfig` also carried `auto_start_sidecars` and
+// `orchestrator_url`. Both are gone: there is nothing to auto-start and no
+// second process to address.
+//
+// ⚠ Removing them is backwards compatible in the direction that matters.
+// `CliConfigFile` derives `Deserialize` without `deny_unknown_fields`, so an
+// existing `~/.autodev/config.toml` carrying either key still parses — serde
+// ignores a key with no field. `config set core.orchestrator_url ...` now
+// returns "Unknown key", which is the correct answer and better than accepting
+// a value nothing will read.
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProviderConfig {
@@ -85,8 +92,6 @@ impl CliConfigFile {
         cfg.core = Some(CoreConfig {
             working_dir: None,
             default_provider: Some("anthropic".into()),
-            auto_start_sidecars: Some(true),
-            orchestrator_url: Some("http://127.0.0.1:4000".into()),
         });
         let mut anthropic = ProviderConfig::default();
         anthropic.model = Some("claude-haiku-4-5".into());
@@ -110,8 +115,6 @@ impl CliConfigFile {
                 match *field {
                     "working_dir" => core.working_dir.clone(),
                     "default_provider" => core.default_provider.clone(),
-                    "auto_start_sidecars" => core.auto_start_sidecars.map(|v| v.to_string()),
-                    "orchestrator_url" => core.orchestrator_url.clone(),
                     _ => None,
                 }
             }
@@ -162,10 +165,6 @@ impl CliConfigFile {
                 match *field {
                     "working_dir" => core.working_dir = Some(value.into()),
                     "default_provider" => core.default_provider = Some(value.into()),
-                    "auto_start_sidecars" => {
-                        core.auto_start_sidecars = Some(value.parse().unwrap_or(false))
-                    }
-                    "orchestrator_url" => core.orchestrator_url = Some(value.into()),
                     k => return Err(SharedError::Other(format!("Unknown key: core.{k}"))),
                 }
             }
@@ -204,12 +203,6 @@ impl CliConfigFile {
             }
             if let Some(v) = &c.default_provider {
                 pairs.push(("core.default_provider".into(), v.clone()));
-            }
-            if let Some(v) = c.auto_start_sidecars {
-                pairs.push(("core.auto_start_sidecars".into(), v.to_string()));
-            }
-            if let Some(v) = &c.orchestrator_url {
-                pairs.push(("core.orchestrator_url".into(), v.clone()));
             }
         }
         if let Some(c) = &self.cli {
@@ -250,13 +243,6 @@ impl CliConfigFile {
             // never emit api_key — security
         }
         pairs
-    }
-
-    pub fn orchestrator_url(&self) -> String {
-        self.core
-            .as_ref()
-            .and_then(|c| c.orchestrator_url.clone())
-            .unwrap_or_else(|| "http://127.0.0.1:4000".into())
     }
 
     pub fn output_format(&self) -> String {

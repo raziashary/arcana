@@ -1,10 +1,10 @@
 // Native in-process subagent runner.
 //
 // Replaces `subagent/bridge.rs`, which drove a create → invoke(SSE) → delete
-// lifecycle against the Python `core-orchestrator` sidecar. Subagents now run
-// on the same Rust `AgentEngine` as every other agent, inside this process.
+// lifecycle against a separate process. Subagents now run on the same Rust
+// `AgentEngine` as every other agent, inside this one.
 //
-// Two things this buys beyond dropping a Python dependency:
+// Two things this buys beyond dropping the dependency:
 //
 //   1. The nesting guard becomes real. The old path carried the child's depth
 //      in its PROMPT — `bridge.rs` injected "Include `__depth: {n}` in every

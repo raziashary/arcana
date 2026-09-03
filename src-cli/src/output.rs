@@ -14,7 +14,6 @@ pub struct OutputContext {
     pub format: OutputFormat,
     pub quiet: bool,
     pub non_interactive: bool,
-    pub orchestrator_url: String,
     pub provider: Option<String>,
     pub model: Option<String>,
     pub working_dir: Option<String>,

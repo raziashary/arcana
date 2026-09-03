@@ -98,8 +98,6 @@ notify = "6"
 dirs = "5"
 base64 = "0.22"
 
-# .env loader — for AUTODEV_SIDECAR_PATH / AUTODEV_MEMORY_PATH in dev mode
-dotenvy = "0.15"
 
 [package.metadata.tauri]
 # This section is required by tauri-build to locate icons and capabilities

@@ -51,10 +51,6 @@ pub struct Cli {
     #[arg(long, short, global = true)]
     pub verbose: bool,
 
-    /// Core-orchestrator base URL
-    #[arg(long, global = true, env = "AIRSCTL_ORCHESTRATOR_URL")]
-    pub orchestrator_url: Option<String>,
-
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -126,13 +122,11 @@ async fn main() -> Result<()> {
 
     let cfg = load_config(&cli)?;
     let fmt = resolve_output_format(&cli, &cfg);
-    let orchestrator_url = resolve_orchestrator_url(&cli, &cfg);
 
     let ctx = OutputContext {
         format: fmt,
         quiet: cli.quiet,
         non_interactive: cli.non_interactive,
-        orchestrator_url: orchestrator_url.clone(),
         provider: cli
             .provider
             .clone()
@@ -237,8 +231,3 @@ fn resolve_output_format(cli: &Cli, cfg: &autodev_shared::config::CliConfigFile)
     }
 }
 
-fn resolve_orchestrator_url(cli: &Cli, cfg: &autodev_shared::config::CliConfigFile) -> String {
-    cli.orchestrator_url
-        .clone()
-        .unwrap_or_else(|| cfg.orchestrator_url())
-}

@@ -16,7 +16,6 @@ import SettingsTab from './tabs/Settings'
 import LogsTab     from './tabs/Logs'
 import DocsTab     from './tabs/Docs'
 import Dashboard   from './components/dashboard/Dashboard'
-import StartupOverlay from './components/startup/StartupOverlay'
 import ToastStack from './components/ToastStack'
 import { useSettingsStore } from './stores/settingsStore'
 import { useCostStore }     from './stores/costStore'
@@ -76,7 +75,12 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <StartupOverlay />
+      {/* P8-52 finished in P8-60. `StartupOverlay` was mounted here
+          unconditionally and hid itself only once a `startup:progress` event
+          reached the "ready" phase. P8-52 deleted the FSM that emitted those
+          events and the `get_startup_phase` command the overlay fell back to,
+          but left the component mounted -- so the app rendered a full-screen
+          blocking modal that nothing could ever dismiss. */}
       <TitleBar />
       <TabBar
         tabs={TABS}

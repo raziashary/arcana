@@ -1,5 +1,4 @@
 // Google Gemini provider — direct API calls to generativelanguage.googleapis.com.
-// PA mode only. Worker mode delegates to core-orchestrator's litellm.
 // Implements the Provider trait with streaming support.
 
 use async_trait::async_trait;

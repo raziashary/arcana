@@ -10,16 +10,19 @@
 //   use crate::observability::error_kinds;
 //   error!(kind = error_kinds::KIND_ORCH_CRASH, "orch died: {e}");
 
-/// Core-orchestrator (Python sidecar) process died or returned 500s.
-/// Triage owner: sidecar team. See
-/// `src-tauri/src/sidecar/watchdog.rs::is_healthy` for the detection point.
-pub const KIND_ORCH_CRASH: &str = "orch_crash";
-
-/// Watchdog circuit breaker opened: 6 consecutive /health failures AND TCP
-/// dead. The Rust runner stops attempting Mode 2 invokes until the breaker
-/// closes again. Triage: same root as orch_crash, with the additional fact
-/// that the auto-retry policy gave up.
-pub const KIND_WATCHDOG_RESTART: &str = "watchdog_restart";
+// 🔴 `KIND_ORCH_CRASH` and `KIND_WATCHDOG_RESTART` are DELETED (`P8-60`).
+// Both named the health of a second runtime and its watchdog, and both had
+// **zero emitters** — their detection point was
+// `src-tauri/src/sidecar/watchdog.rs`, removed in `P8-B`.
+//
+// ⚠ **Finding, not fixed here.** Of the nine kinds this taxonomy declared,
+// exactly ONE has an emitter (`KIND_INVOKE_FAILED`, at
+// `recipes/scheduler.rs`). The rest — `KIND_MCP_UNREACHABLE`,
+// `KIND_TOOL_FAILED`, `KIND_BUDGET_EXCEEDED` and the others below — name
+// live concepts and are still never logged, so the triage vocabulary a
+// responder would grep for does not appear in any log. That is out of `P8`'s
+// scope (they name nothing deleted) and is reported rather than deleted:
+// the fix is to emit them, not to remove the names.
 
 /// An MCP server AutoDev depends on became unresponsive.
 ///
@@ -37,9 +40,9 @@ pub const KIND_TOOL_FAILED: &str = "tool_failed";
 /// the cause is a policy decision, not a runtime fault.
 pub const KIND_BUDGET_EXCEEDED: &str = "budget_exceeded";
 
-/// LivingAgent invoke failed at the connection level (network blip / orch
-/// restart). The retry policy at `client.rs::try_invoke` already handles
-/// the transient case; emit this kind when retry also fails.
+/// A recipe run failed at the point of invocation — the provider rejected
+/// the call, a tool errored, or the recipe itself is malformed. Emitted by
+/// `recipes/scheduler.rs` for a failed start-up tick.
 pub const KIND_INVOKE_FAILED: &str = "invoke_failed";
 
 /// Path-jail (Doc 07) refused a write because the target escaped the
@@ -63,24 +66,37 @@ mod tests {
 
     /// Catch typos / re-use within the constants — every kind must be
     /// unique, and snake_case-only.
+    ///
+    /// ⚠ The population is **derived from this file's own source**, not
+    /// retyped. It used to be a hand-written array of all nine names, and
+    /// deleting two constants in `P8-60` broke the test rather than the test
+    /// noticing — which is the wrong direction: a list that must agree with the
+    /// declarations will disagree with them, and the one nobody updates is the
+    /// copy (`L-19`). Adding a constant now covers it automatically; forgetting
+    /// to is no longer possible.
     #[test]
     fn kinds_are_unique_and_snake_case() {
-        let kinds = [
-            KIND_ORCH_CRASH,
-            KIND_WATCHDOG_RESTART,
-            KIND_MCP_UNREACHABLE,
-            KIND_TOOL_FAILED,
-            KIND_BUDGET_EXCEEDED,
-            KIND_INVOKE_FAILED,
-            KIND_WORKSPACE_ESCAPE,
-            KIND_QC_REVIEWER_FAILED,
-            KIND_ANALYTICS_WRITE_FAILED,
-        ];
+        let src = include_str!("error_kinds.rs");
+        let kinds: Vec<&str> = src
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("pub const KIND_"))
+            .filter_map(|rest| rest.split_once('"'))
+            .filter_map(|(_, v)| v.split('"').next())
+            .collect();
+
+        assert!(
+            kinds.len() >= 5,
+            "only {} kind constant(s) parsed out of this file — the extractor \
+             stopped matching the declaration shape, so this test is checking \
+             almost nothing: {kinds:?}",
+            kinds.len()
+        );
+
         let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for k in &kinds {
-            assert!(seen.insert(*k), "duplicate kind: {k}");
+            assert!(seen.insert(k), "duplicate kind: {k}");
             assert!(
-                k.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+                k.chars().all(|c: char| c.is_ascii_lowercase() || c == '_'),
                 "kind '{k}' must be snake_case ASCII"
             );
         }

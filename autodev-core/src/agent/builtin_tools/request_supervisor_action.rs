@@ -1,7 +1,10 @@
 // request_supervisor_action — Worker→Supervisor communication tool.
-// Available to fleet workers through the in-process registry (P8-50 deleted
-// LivingAgents can send structured requests to the Supervisor without needing
+// Available to fleet workers through the in-process registry, so a worker
+// can send a structured request to the Supervisor without holding
 // create_task or assign_task privileges.
+//
+// ⚠ This sentence was left truncated mid-clause by `P8-50`'s edit and
+// repaired in `P8-60`.
 //
 // Use cases:
 //   - decompose_audit:  Worker completed an audit and discovered follow-up tasks

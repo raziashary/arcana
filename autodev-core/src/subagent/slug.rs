@@ -23,8 +23,8 @@ static SEQ: AtomicU64 = AtomicU64::new(1);
 
 /// Generate a unique subagent slug.
 ///
-/// `parent_slug` is sanitised to `[a-z0-9-]` to avoid breaking core-orchestrator's
-/// agent_id slugification rules. Empty parent_slug becomes "anon".
+/// `parent_slug` is sanitised to `[a-z0-9-]` so the slug is safe to use as an
+/// identifier, a log field and a filename. Empty parent_slug becomes "anon".
 pub fn generate(parent_slug: &str) -> String {
     let parent = sanitise(parent_slug);
     let parent = if parent.is_empty() {

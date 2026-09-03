@@ -921,17 +921,18 @@ impl AgentEngine {
         //   * a tool-batch failure.
         //
         // So an eighteen-turn run that died on turn nineteen recorded **$0.00**
-        // against the daily ceiling. Mode 2 was unaffected because
-        // `recipes/runner.rs` records per-turn, inside its loop — which is
+        // against the daily ceiling. The fleet path was unaffected, because
+        // `recipes/runner.rs` records per-turn inside its own loop — which is
         // probably why nobody noticed.
         //
         // `record_spend` is now called on every exit path.
         let cost_usd = self.record_spend(session_id, model, &total_usage);
 
-        // P2-49. `emit_cost_update` had exactly ONE caller — the Mode 2 worker
-        // tick — so the entire Mode 1 agent path was invisible to every cost
-        // surface that listens for it, including the only budget warning the UI
-        // had. Mode 1 emitted `agent_done` instead, which carries no cost.
+        // P2-49. `emit_cost_update` had exactly ONE caller — a worker-tick
+        // path that no longer runs — so the entire interactive agent path was
+        // invisible to every cost surface that listens for it, including the
+        // only budget warning the UI had. It emitted `agent_done` instead,
+        // which carries no cost.
         // (The cost event is emitted by `record_spend`, on every exit path
         // rather than only this one.)
 

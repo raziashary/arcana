@@ -2,8 +2,8 @@
 //
 // Purpose
 // -------
-// Prevent two callers — whether PA-mode and Mode 2, or two Mode 2 workers,
-// or two subagents inside the same parent agent — from writing the same
+// Prevent two callers — the assistant and a fleet worker, two workers, or
+// two subagents inside the same parent agent — from writing the same
 // file at the same time. The fleet's task-board atomicity guarantees only
 // one worker owns a *task*; this registry guarantees only one writer is
 // inside a *file's* read-modify-write cycle.
@@ -37,8 +37,6 @@
 //                    write so a concurrent writer can't slip in between.
 // * `append_file`  — append; lock prevents a concurrent overwrite from
 //                    truncating mid-append.
-// * `mcp_server::tool_adapter` — Mode 2 entry point uses the same registry
-//                    so PA-mode and Mode 2 callers contend on the same key.
 
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};

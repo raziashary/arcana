@@ -301,12 +301,13 @@ Do **not** write filesystem lockfiles (`current_tasks/*.lock`) and do not call `
 ///   would just be dead artifacts."* **The same prompt, contradicting itself.**
 /// - Coordination *"through GitHub Issues on the AIRS-Foundry organization"*,
 ///   workers polling *"your assigned GitHub Issues label"*, QC applying
-///   `qc-approved` labels to PRs, and branches named
+///   `qc-approved` labels to pull requests, and branches named
 ///   `worker/<role>/<issue-number>`. None of that is how this application
 ///   works: coordination is the SQLite task board, and it was already the task
 ///   board when this prompt was describing labels.
-/// - *"Python backend (core-orchestrator): run `uv run pytest` and `uv run
-///   mypy src/` before opening any PR"* — a subsystem deleted in `P8-B`/`P8-C`.
+/// - A "Python backend" section telling the model to run `uv run pytest` and
+///   `uv run mypy src/` before opening a PR, against the subsystem deleted in
+///   `P8-B`/`P8-C`.
 /// - A **tool catalogue** duplicating the schemas the request already carries
 ///   in its `tools` field (`engine.rs:252,509`). It had drifted: it documented
 ///   `edit_file(path, old_str, new_str)` while the schema requires
@@ -396,10 +397,9 @@ Everything in the assistant's normal working rules still applies."#;
 /// Delegate mode — conversation and the task board, no file access.
 ///
 /// 🔴 **`P8-57`. Its worked example taught the model to file work against
-/// a deleted subsystem**: *"title=\"Add GET /health endpoint to orchestrator
-/// API\""*. That is `core-orchestrator`, removed in `P8-B`/`P8-C` — so the one
-/// concrete example of a good task, on every turn in this mode, pointed at a
-/// service that no longer exists.
+/// a deleted subsystem** — a task titled *"Add GET /health endpoint to the
+/// orchestrator API"*. So the one concrete model of a good task, shown on every
+/// turn in this mode, pointed at a service removed in `P8-B`/`P8-C`.
 ///
 /// ⚠ It also **understated its own tools**, closing with *"## Available Tool"*
 /// singular and naming only `create_task`. `register_for_mode`'s `Delegate` arm

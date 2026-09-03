@@ -67,7 +67,7 @@ pub struct Recipe {
     // 🔴 It defaulted to `Mode2Only`, and `runner.rs` refused to run any
     // recipe carrying that policy. `orch_healthy` has been pinned `false`
     // since P0, so the guard was UNCONDITIONAL: `Mode2Only` did not mean
-    // "needs Mode 2", it meant **never runs**. And it was the serde
+    // "needs the second engine", it meant **never runs**. And it was the serde
     // default, so every recipe the UI saved -- `RecipeEditor.tsx`'s
     // `buildRecipe()` omits the key -- deserialised as stranded and then
     // sat reporting `fallback_idle` forever. The fleet reported itself

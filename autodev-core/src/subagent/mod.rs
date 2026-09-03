@@ -1,7 +1,7 @@
 // Subagent module — Phase 4.9.
 //
-// Ephemeral subagents implemented over core-orchestrator's persistent-agent
-// CRUD endpoints via a create → invoke(stream) → delete lifecycle.
+// Ephemeral subagents, run in-process on the same `AgentEngine` as every
+// other agent. Spawned, awaited and dropped within one parent turn.
 //
 // See: docs/development/PHASE_4_9_EPHEMERAL_VIA_LIFECYCLE.md
 //      docs/development/DEVELOPMENT_PLAN.md (Phase 4.9)

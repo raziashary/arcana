@@ -48,10 +48,10 @@
 | **P5** | The graph | 4 | `TG5-01…04` |
 | **P6** | The UI | 9 | `TG6-01…09` |
 | **P7** | Experience | 5 | `TG7-01…05` |
-| **P8** | Submodule deletion **+ the prompt floor** | 7 | `TG8-01…07` |
+| **P8** | Submodule deletion **+ the prompt floor** | 8 | `TG8-01…08` |
 | **P9** | Delivery | 5 | `TG9-01…05` |
 | **PD0** | The design capability contract | 10 | `TGD0-01…10` |
-| | **Total** | **130** | |
+| | **Total** | **131** | |
 
 ---
 
@@ -618,6 +618,12 @@
 
       🔴 **This gate's own first cut could not see the defect it was written for.** It extracted `set_worker_status(` from `runner.rs` alone, and both `paused` writers bypass that helper — so it compared a half-enumerated vocabulary and reported agreement. The falsification is what exposed it: planting the `pause_fleet` bug back left the gate **green**. `L-C9`, in the form that matters most — the check ran, passed, and was measuring the wrong population.
 
+
+- [x] **TG8-08** `[conservation]` — **NEW (`P8-60`).** **No frontend listener without a Rust emitter.** Every Tauri event `src/` subscribes to must be emitted somewhere in `src-tauri/src` or `autodev-core/src`. ⚠ `ci_gate.rs` is **excluded from the emitter scan**, because this gate names every event in its own allowlist and would otherwise satisfy its own assertion (`L-C7`, the fourth instance in this register).
+      Source: **NEW** — `P8-60` · Catches: the regression `P8-52` shipped. That task deleted the startup FSM that emitted `startup:progress` **and** the `get_startup_phase` command the overlay fell back to — and left `StartupOverlay` mounted in `App.tsx`. The overlay hides only when a `startup:progress` event reaches the "ready" phase, so `dismissed` could never flip and **the application rendered a full-screen `z-index: 9999` modal that nothing could dismiss**. `P8-52` was recorded done and `SMOKE-PROVEN`; no test in the suite could have failed, because each half is correct on its own and they are written in different languages · Falsified twice — re-adding an unemitted listener, and giving a listed event an emitter without striking it · Evidence: `GATE-PROVEN` — `ci_gate::tests::tg8_08_every_frontend_listener_has_a_rust_emitter`
+
+      🔴 **The gate found ten more of the same, and they are a standing finding rather than a `P8` task.** None names a deleted subsystem — they are ordinary readers with no writer — so they are listed in `KNOWN_UNEMITTED` and reported, not rewired: the Live Monitor's stage changes and token sparkline subscribe to **five** events Rust never emits (`agent:stage-change`, `agent:status-change`, `agent:token-update`, `agent:tool-call-start`, `agent:tool-call-result`), and the **entire plan store** subscribes to five more (`plan:created`, `plan:updated`, `plan:item_claimed`, `plan:step_completed`, `plan:subplan_created`) while Rust emits only `plan:changed`, which nothing listens for — the two sides were named independently and have never once agreed. The list is a **ratchet**: a new unemitted listener fails the gate, and an entry that gains an emitter must be struck or the gate fails the other way.
+
 ---
 
 ## 12. P9 — Delivery
@@ -714,7 +720,7 @@ Gates are only as honest as what they run against. Every corpus below is **check
 | `08-DATA-MODEL…` | `§4 Test gates` | 10 | `TG1-02…TG1-06`; `TG2-15`; `TG4-19…TG4-22` | **P1** (5), **P2** (1), **P4** (4) |
 | `09-DELIVERY` | `§6 Test gates` | 10 | `TG0-01`, `TG0-02`; `TG4-17`, `TG4-18`; `TG8-01`; `TG9-01…TG9-05` | **P0** (2), **P4** (2), **P8** (1), **P9** (5) |
 | `10-PROOF` | *(no gate table — by design)* | 0 gates; contributes the evidence classes (`§1`), the headline acceptance test (`TG7-02` + `TG9-01`), the CI blocking table (`TG0-02`) and the ten test families (`§17`) | — | — |
-| **NEW** | *(this document)* | 13 | `TG0-04`, `TG0-05`, `TG2-16`, `TG2-17`, `TG3-38`, `TG3-39`, `TG4-23`, `TG8-02`…`TG8-07` | P0 (2), P2 (2), P3 (2), P4 (1), P8 (6) |
+| **NEW** | *(this document)* | 14 | `TG0-04`, `TG0-05`, `TG2-16`, `TG2-17`, `TG3-38`, `TG3-39`, `TG4-23`, `TG8-02`…`TG8-08` | P0 (2), P2 (2), P3 (2), P4 (1), P8 (7) |
 
 **Spec gate totals:** 115 named in the specs − 8 merged = **107 surviving** + **8 NEW** = **115**, **+ 10 `TGD0`** added by `PD0` and its audit remediation = **125**.
 
@@ -779,7 +785,7 @@ Gates are only as honest as what they run against. Every corpus below is **check
 | **Migration** | `TG1-02`, `TG1-03`, `TG1-04` | 3 |
 | **No-sidecar** | `TG8-01`, `TG8-02` | 2 |
 | **One prompt floor** | `TG8-03`, `TG8-04`, `TG8-05`, `TG8-06` | 4 |
-| **No reader without a writer** | `TG8-07` | 1 |
+| **No reader without a writer** | `TG8-07`, `TG8-08` | 2 |
 
 **Thinnest families, flagged rather than padded:** *Destructive safety* (3) and *No-sidecar* (2). Both are thin for structural reasons — destructive safety is largely an enumeration inside `TG7-05` and `TG4-23`, and the no-sidecar family's real weight is that **P8 re-runs all 125 gates** under the sidecar-absent condition rather than adding gates of its own. Neither is a coverage gap; both are recorded so a later reader does not mistake thinness for oversight.
 

@@ -48,7 +48,7 @@ impl AnalyticsCollector {
         // can tell write-side from read-side failures at a glance. The
         // previous run produced zero such lines in the log — proof the writes
         // never reached the DB. After Phase 1 + 2 we should see one of these
-        // per Mode 1 / Mode 2 tick.
+        // per agent turn and per worker tick.
         debug!(
             "[analytics] insert token_usage session={} model={} prompt={} completion={} total={} cost_usd={:.6}",
             record.session_id, record.model,

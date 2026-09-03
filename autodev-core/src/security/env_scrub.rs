@@ -2,8 +2,9 @@
 //
 // ── The hole ─────────────────────────────────────────────────────────────────
 //
-// `main.rs` calls `dotenvy::dotenv()` unconditionally, in the SHIPPED binary,
-// to pick up two sidecar path variables. The repo `.env` also declares
+// `main.rs` USED TO CALL `dotenvy::dotenv()` unconditionally, in the SHIPPED
+// binary, to pick up two path variables (removed in `P8-64`, along with the
+// load itself — nothing read them). The repo `.env` also declares
 // `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` and
 // `AWS_SECRET_ACCESS_KEY` — so every one of those landed in the process
 // environment of a running application.
@@ -19,19 +20,26 @@
 //
 // ── What this does ───────────────────────────────────────────────────────────
 //
-// The variables the app legitimately needs from `.env` are read first, then
-// every credential-shaped variable is removed from the process environment. The
-// app never needed them: BYOK reads keys from the OS credential store, and the
-// live smoke reads `.env` directly from disk rather than from the environment.
+// Every credential-shaped variable is removed from the process environment at
+// start-up. The app never needed them there: BYOK reads keys from the OS
+// credential store, and the live smoke reads `.env` directly from disk rather
+// than from the environment.
+//
+// ⚠ With the `.env` load gone this is no longer cleaning up after ourselves.
+// It now guards what the USER's shell exported before AutoDev started — the
+// case it was always really for, and the reason it survives `P8-64`.
 
 use crate::security::redaction::is_sensitive_key;
 
-/// Variables the application genuinely consumes from `.env`.
+/// Variables the application genuinely needs to survive the scrub.
 ///
-/// Anything not on this list that looks like a credential is removed. The list
-/// is short on purpose — it is an allowlist, so a new secret added to `.env`
-/// is scrubbed by default rather than by remembering to add it somewhere.
-const KEEP: &[&str] = &["AUTODEV_SIDECAR_PATH", "AUTODEV_MEMORY_PATH"];
+/// ⚠ **Empty, and deliberately kept.** It held two path variables read from
+/// `.env`; `P8-64` deleted that load, and nothing read either name anywhere in
+/// the tree. An empty allowlist is the correct state — every credential-shaped
+/// variable is now removed without exception — and the constant stays so the
+/// next variable the app genuinely needs has an obvious, reviewed place to go
+/// rather than being added as a special case inside the loop.
+const KEEP: &[&str] = &[];
 
 /// Remove every credential-shaped variable from the process environment.
 ///
@@ -108,13 +116,21 @@ mod tests {
     }
 
     #[test]
-    fn the_paths_the_app_actually_needs_are_kept() {
-        // These are why `.env` is loaded at all. Scrubbing them would break
-        // sidecar path resolution, so they are an explicit allowlist rather
-        // than an accident of the pattern not matching.
-        for k in ["AUTODEV_SIDECAR_PATH", "AUTODEV_MEMORY_PATH"] {
-            assert!(KEEP.contains(&k), "{k} must be kept");
-        }
+    fn the_allowlist_is_empty_and_that_is_the_point() {
+        // \U0001F534 This test used to assert that two path variables were kept.
+        // `P8-64` removed the `.env` load they came from, and nothing in the
+        // tree read either name — so the allowlist protected two variables
+        // that no longer existed, which is an exemption with no subject.
+        //
+        // Asserted rather than deleted: an allowlist that silently regrows is
+        // how a credential ends up exempt, and this makes adding one a
+        // deliberate act that fails a test first.
+        assert!(
+            KEEP.is_empty(),
+            "a variable was added to the scrub allowlist: {KEEP:?}. Anything \
+             here survives in the environment of every child process the agent \
+             spawns, including the shell it runs model-authored commands in."
+        );
     }
 
     #[test]

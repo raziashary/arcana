@@ -80,7 +80,7 @@ impl TaskRouter {
     /// `update_task_status` so the affinity scorer has real timing data
     /// instead of the previous hardcoded 0. Token counts still default to 0
     /// because task_commands doesn't see the per-task token totals — token
-    /// data is folded in by the recipe runner's Mode 2 cost tracking path.
+    /// data is folded in by the recipe runner's own cost-tracking path.
     pub fn record_outcome_auto(task_id: &str, outcome: &str) -> Result<()> {
         let db = TasksDb::open()?;
         // Walk recent history rows; the first pending row for this task_id

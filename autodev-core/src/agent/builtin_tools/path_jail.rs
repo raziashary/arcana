@@ -1,6 +1,6 @@
 // path_jail.rs — Workspace-relative path validation for write/edit/append/bash tools.
 //
-// Without this, a Mode 2 LivingAgent that emits a relative path like
+// Without this, an agent that emits a relative path like
 // `AUTODEV_PROGRESS.md` or `server.js` resolves it against
 // `std::env::current_dir()` (= `src-tauri/` during `npm run tauri dev`), and
 // the tool writes the file there instead of in the configured workspace.

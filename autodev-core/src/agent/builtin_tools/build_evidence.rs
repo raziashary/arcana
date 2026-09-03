@@ -5,8 +5,8 @@
 // session has produced no evidence of an actual build.
 //
 // Why a module-level tracker instead of plumbing the tool history through
-// ToolContext: the LivingAgent and AgentEngine both invoke tools through
-// their own loops without exposing a shared transcript to the tool layer.
+// ToolContext: the agent loop invokes tools without exposing a shared
+// transcript to the tool layer.
 // We don't need accuracy — we need a directional "did this session run a
 // build in the last few minutes?" signal. A small in-memory ring keyed by
 // session_id with a TTL is enough.

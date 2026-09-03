@@ -100,10 +100,9 @@ impl Tool for EditFileTool {
         // worker A reads, worker B reads + writes, worker A writes — A
         // overwrites B's change with stale data.
         //
-        // The lock module is the same one wired into the MCP adapter, so
-        // PA-mode edits, Mode 2 edits, and ephemeral subagent edits all
-        // contend on a single key per file. Different files run in parallel
-        // as before.
+        // One registry for every writer, so an assistant edit, a fleet
+        // worker edit and an ephemeral subagent edit all contend on a
+        // single key per file. Different files run in parallel as before.
         let _lock_guard = path_lock::acquire_for(&file_path, &ctx.working_dir).await;
 
         debug!("Editing file: {:?}", file_path);

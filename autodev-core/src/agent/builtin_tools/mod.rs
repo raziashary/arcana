@@ -1,7 +1,6 @@
-// Built-in tool implementations.
-// PA mode: tools run natively in Rust.
-// Worker mode: tools are forwarded to core-orchestrator with __autodev suffix.
-// Tool availability varies by PAMode — see register_for_mode().
+// Built-in tool implementations. Every tool runs natively in Rust, in this
+// process, for every agent kind — assistant, fleet worker and subagent.
+// Which tools an agent gets varies by PAMode — see register_for_mode().
 
 pub mod assign_task;
 pub mod assign_tasks_batch;
@@ -46,9 +45,8 @@ pub mod validate;
 // docs/endtoendrun/14may2026/07-workspace-escape-rootcause.md.
 pub mod path_jail;
 // Process-wide per-file async mutex registry. Used by write_file, edit_file,
-// append_file, and the MCP tool_adapter so PA-mode and Mode 2 callers
-// contend on the same lock when targeting the same path. See
-// path_lock.rs for the design notes.
+// and append_file, so every writer contends on the same lock when
+// targeting the same path. See path_lock.rs for the design notes.
 pub mod path_lock;
 // Doc 09 T2.4 — module-level tracker of recent bash invocations that look
 // like build / test / smoke commands. update_task_status_tool reads from
@@ -86,7 +84,7 @@ pub fn register_all(registry: &mut ToolRegistry) {
 // P8-50 — `register_for_mcp_worker` is DELETED (~80 lines).
 //
 // It registered a tool subset for a fleet worker reached over MCP,
-// which was Mode 2. It had **zero callers**, and being `pub` it
+// reached over MCP. It had **zero callers**, and being `pub` it
 // produced no dead-code warning — so it compiled cleanly for months
 // while describing a dispatch path that no longer existed.
 

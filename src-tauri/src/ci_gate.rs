@@ -38,6 +38,21 @@ fn collect_rs(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Every file under `dir` with the given extension, recursively.
+fn collect_ext(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            collect_ext(&p, ext, out);
+        } else if p.extension().and_then(|x| x.to_str()) == Some(ext) {
+            out.push(p);
+        }
+    }
+}
+
 fn workflow_files() -> Vec<PathBuf> {
     let dir = repo_root().join(".github").join("workflows");
     let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -5164,5 +5179,146 @@ let x = 1;
                  distinction that no longer exists, and nothing writes it:\n{union}"
             );
         }
+    }
+
+    // ── TG8-08 · no frontend listener without a Rust emitter ──────────────────
+
+    /// Every Tauri event the frontend subscribes to is emitted somewhere in
+    /// Rust.
+    ///
+    /// 🔴 `P8-52` deleted the startup FSM that emitted `startup:progress` and
+    /// the `get_startup_phase` command the overlay fell back to — and left
+    /// `StartupOverlay` mounted in `App.tsx`. The overlay hides itself only
+    /// when a `startup:progress` event reaches the "ready" phase, so
+    /// `dismissed` could never flip and the app rendered a **full-screen
+    /// `z-index: 9999` modal that nothing could dismiss**. The task was marked
+    /// done and `SMOKE-PROVEN`. Nothing in the suite could fail, because the
+    /// two halves live in different languages and neither one is wrong on its
+    /// own.
+    ///
+    /// ⚠ **`ci_gate.rs` is excluded from the emitter scan.** This file names
+    /// every event in `KNOWN_UNEMITTED` below, so scanning itself would let
+    /// the gate satisfy its own assertion — `L-C7`, which this repository has
+    /// now recorded four times.
+    #[test]
+    fn tg8_08_every_frontend_listener_has_a_rust_emitter() {
+        // 🔴 **Ten events the frontend listens for that Rust never emits.**
+        // Found by writing this gate. They are NOT `P8`'s subject — none names
+        // a deleted subsystem, they are ordinary readers with no writer — so
+        // they are recorded here rather than rewired, which is a product
+        // decision about what ought to emit them:
+        //
+        //   * the Live Monitor's stage changes and token sparkline
+        //     (`agent:stage-change`, `agent:status-change`,
+        //     `agent:token-update`, `agent:tool-call-start`,
+        //     `agent:tool-call-result`) — the card subscribes to five events
+        //     that never arrive;
+        //   * the whole plan store (`plan:created`, `plan:updated`,
+        //     `plan:item_claimed`, `plan:step_completed`,
+        //     `plan:subplan_created`) — Rust emits only `plan:changed`, which
+        //     nothing listens for. The two sides were named independently and
+        //     have never once agreed.
+        //
+        // The list is a **ratchet**: a new listener with no emitter fails this
+        // gate, and each of these can be struck as it is wired up.
+        const KNOWN_UNEMITTED: &[&str] = &[
+            "agent:stage-change",
+            "agent:status-change",
+            "agent:token-update",
+            "agent:tool-call-start",
+            "agent:tool-call-result",
+            "plan:created",
+            "plan:updated",
+            "plan:item_claimed",
+            "plan:step_completed",
+            "plan:subplan_created",
+        ];
+
+        // ── what the frontend listens for ────────────────────────────────────
+        let mut ts_files: Vec<std::path::PathBuf> = Vec::new();
+        collect_ext(&repo_root().join("src"), "ts", &mut ts_files);
+        collect_ext(&repo_root().join("src"), "tsx", &mut ts_files);
+        assert!(
+            ts_files.len() > 20,
+            "only {} frontend source file(s) found — the walk is broken and this \
+             gate would compare an empty set: {ts_files:?}",
+            ts_files.len()
+        );
+
+        let mut listened: Vec<String> = Vec::new();
+        for p in &ts_files {
+            let src = read_source(p);
+            for seg in src.split("listen").skip(1) {
+                // `listen<Payload>('name'` or `listen('name'`
+                let head: String = seg.chars().take(120).collect();
+                let Some(q) = head.find(['\'', '"']) else { continue };
+                let quote = head.as_bytes()[q] as char;
+                let rest = &head[q + 1..];
+                let Some(end) = rest.find(quote) else { continue };
+                let name = &rest[..end];
+                // An event name is `namespace:event`. Anything else is some
+                // other call that merely starts with "listen".
+                if name.contains(':') && !name.contains(' ') && name.len() < 60 {
+                    listened.push(name.to_string());
+                }
+            }
+        }
+        listened.sort();
+        listened.dedup();
+        assert!(
+            listened.len() >= 15,
+            "only {} listener(s) extracted — the extractor is not matching the \
+             call shape, so this gate is checking almost nothing: {listened:?}",
+            listened.len()
+        );
+
+        // ── what Rust can emit ───────────────────────────────────────────────
+        let mut rs_files: Vec<std::path::PathBuf> = Vec::new();
+        collect_rs(&repo_root().join("src-tauri/src"), &mut rs_files);
+        collect_rs(&repo_root().join("autodev-core/src"), &mut rs_files);
+        // See the doc comment: this file names every KNOWN_UNEMITTED event.
+        rs_files.retain(|p| !p.ends_with("ci_gate.rs"));
+        assert!(
+            rs_files.len() > 20,
+            "only {} Rust source file(s) found — the walk is broken",
+            rs_files.len()
+        );
+        let rust: String = rs_files.iter().map(|p| read_source(p)).collect();
+        assert!(
+            rust.len() > 100_000,
+            "the Rust corpus read back as {} bytes, which cannot be right — \
+             every 'no emitter' assertion below would fire spuriously",
+            rust.len()
+        );
+
+        let mut orphaned: Vec<&String> = Vec::new();
+        for name in &listened {
+            if KNOWN_UNEMITTED.contains(&name.as_str()) {
+                continue;
+            }
+            if !rust.contains(&format!("\"{name}\"")) {
+                orphaned.push(name);
+            }
+        }
+        assert!(
+            orphaned.is_empty(),
+            "the frontend subscribes to these events and NO Rust source emits \
+             them, so the UI they drive is permanently inert: {orphaned:?}\n\
+             If a listener is deliberately unwired for now, add it to \
+             KNOWN_UNEMITTED with the reason — but a component whose only data \
+             source is one of these should be deleted, not left mounted."
+        );
+
+        // The ratchet only tightens: an entry that IS now emitted must be
+        // struck, or the list quietly becomes a list of nothing.
+        let resurrected: Vec<&&str> = KNOWN_UNEMITTED
+            .iter()
+            .filter(|n| rust.contains(&format!("\"{n}\"")))
+            .collect();
+        assert!(
+            resurrected.is_empty(),
+            "these events now HAVE a Rust emitter and are still listed as \
+             unemitted. Strike them from KNOWN_UNEMITTED: {resurrected:?}"
+        );
     }
 }

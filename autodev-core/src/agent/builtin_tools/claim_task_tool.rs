@@ -73,10 +73,10 @@ impl Tool for ClaimTaskTool {
         // Source of truth ORDER:
         //   1. `task.assigned_worker` — set atomically by assign_task /
         //      assign_tasks, definitively names who owns this task.
-        //   2. `ctx.agent_role` — the MCP request's `__agent_role` field,
-        //      passed by the LivingAgent. The Python bridge doesn't always
-        //      forward this through to the rmcp call (the source of the
-        //      "__agent_role not set" warnings in the logs).
+        //   2. `ctx.agent_role` — the identity the runtime assigns the
+        //      calling agent. Historically this arrived over a bridge that
+        //      did not always forward it, which is where the
+        //      "__agent_role not set" warnings in old logs came from.
         //
         // Previous behaviour preferred (2) and overwrote `assigned_worker`
         // with "unknown" when MCP didn't pass it — causing the kanban to

@@ -40,7 +40,7 @@ pub struct SubagentConfig {
     pub role: String,
 
     /// Parent's session ID — preserved for lineage but not propagated to the
-    /// subagent's LivingAgent (which always gets a fresh isolated session).
+    /// subagent, which always gets a fresh isolated session.
     pub parent_session_id: String,
 
     /// System prompt for the subagent. Inherits parent's prompt if empty.
@@ -83,15 +83,15 @@ impl SubagentConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SubagentStatus {
-    /// `POST /api/agents` in flight.
+    /// Being registered; its task has not started yet.
     Spawning,
-    /// Agent created in core-orchestrator, awaiting `invoke`.
+    /// Registered and awaiting its first turn.
     Idle,
-    /// `POST /api/agents/{id}/invoke/stream` is consuming events.
+    /// Its engine loop is running and emitting events.
     Running,
     /// Stream completed successfully; result accumulated.
     Completed,
-    /// Stream errored, timed out, or core-orchestrator reported failure.
+    /// The run errored, timed out, or the engine reported failure.
     Failed,
     /// User or pool explicitly aborted; cleanup in progress or done.
     Terminated,
@@ -121,8 +121,8 @@ impl SubagentStatus {
 /// so the handle stays cheaply cloneable for IPC across the Tauri boundary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubagentHandle {
-    /// core-orchestrator agent ID (= the unique slug we generated, e.g.
-    /// "subagent-worker-backend-1745740800123-1").
+    /// The unique slug generated for this subagent, e.g.
+    /// "subagent-worker-backend-1745740800123-1".
     pub id: String,
     pub config: SubagentConfig,
     pub status: SubagentStatus,
@@ -153,7 +153,7 @@ pub struct SubagentResult {
     /// Files the subagent modified (best-effort; populated when worktree
     /// integration is enabled and a diff is available).
     pub files_modified: Vec<String>,
-    /// Total cost in USD (when reported by core-orchestrator).
+    /// Total cost in USD.
     pub cost_usd: f64,
     pub tokens_in: u32,
     pub tokens_out: u32,
@@ -162,8 +162,8 @@ pub struct SubagentResult {
     pub error: Option<String>,
 }
 
-/// Streaming events forwarded from core-orchestrator's SSE endpoint
-/// (`/api/agents/{id}/invoke/stream`) to the AutoDev event bus.
+/// Streaming events forwarded from a subagent's engine loop to the AutoDev
+/// event bus.
 ///
 /// The kind discriminator (`"token"`, `"tool_start"`, etc.) lets the frontend
 /// reuse rendering logic from the existing chat event stream.
