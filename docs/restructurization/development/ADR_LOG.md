@@ -1684,10 +1684,27 @@ written from the implementation rather than from the CSS weight scale) ·
    committed at all — and the first negation I wrote was silently inert,
    because git cannot re-include a file whose parent directory is excluded.
    Leaving it would have re-created the exact finding it fixes. ⚠ **The other
-   four build scripts in that directory remain untracked** (`build-installers.sh`,
-   `build-linux.sh`, `build-macos.sh`, `build-windows.ps1`). That is outside
-   PD0 and is **flagged for Razi**, not decided here: build scripts absent from
-   version control is a `P9` question about how this product is released.
+   four build scripts in that directory were also untracked** (`build-installers.sh`,
+   `build-linux.sh`, `build-macos.sh`, `build-windows.ps1`) — flagged to Razi
+   rather than decided here, and **razi-ruled the same day: commit all four.**
+
+   The finding was worse than tidiness. `.github/workflows/build-release.yml`
+   **is** tracked and invokes three of them **by name** (`:143`, `:226`, `:280`),
+   so a CI runner's fresh clone hits *file not found* and the release pipeline
+   could only ever have worked on the one machine holding the untracked files.
+   Nothing caught it because **no version tag has ever been pushed**, so the
+   workflow has never run — `L-C12`'s shape at the pipeline level: a capability
+   that exists, is wired, and has never been exercised.
+
+   The blanket `scripts/` rule dated from the **first commit** (`07ded32`,
+   2026-04-08), before any of those files existed, so it was collateral rather
+   than a decision. Removed rather than given a fourth negation. Verified before
+   committing: no embedded credentials (all three read `CERT_PATH`,
+   `CERT_PASSWORD` and `GITHUB_TOKEN` from the environment), `bash -n` clean on
+   the three shell scripts, the PowerShell parser clean on the fourth, and every
+   flag the workflow passes (`-Channel`, `-Sign`, `--channel`, `--sign`,
+   `--notarize`, `--all`) is one the target script actually accepts. Everything
+   they delegate to under `installers/` was already tracked.
 
 **Links.** `ADR-LOG-RESTRUCT-0034` · `§0.2a` · `§0.2b` · `§0.2c` · `§0.2n` ·
 `§0.16 L-35`…`L-38` · `L-C1`, `L-C6`, `L-C9`, `L-C12`, `L-25`, `L-26`, `L-27` ·

@@ -4,15 +4,18 @@ dist/
 # PD0 — the spawnable sidecar is a build output, rebuilt by `npm run build:sidecar`.
 dist-sidecar/
 target/
-# Contents, not the directory: git cannot re-include a file whose PARENT is
-# excluded, so `scripts/` with a trailing slash makes the negation below inert.
-scripts/*
-# ...except the design-sidecar smoke, which MUST be in version control.
-# `W-2`: SD0-01 was recorded SMOKE-PROVEN on a nine-case run that lived in a
-# scratchpad and could not be reproduced from this repository. A smoke the
-# register calls "throwaway" is still evidence, and evidence nobody can re-run
-# is an assertion. Ignoring it again would re-create the finding it fixes.
-!scripts/smoke-design-sidecar.mjs
+# ⚠ `scripts/` was ignored here from the FIRST COMMIT (07ded32, 2026-04-08) —
+# before any of the files in it existed, so it was collateral rather than a
+# decision. The consequence was found on 2026-09-03: `build-release.yml` is
+# tracked and invokes `scripts/build-windows.ps1`, `scripts/build-macos.sh` and
+# `scripts/build-linux.sh` by name, and none of the three was in the repository.
+# A CI runner clones and those steps hit "file not found", so the release
+# pipeline could only ever have worked on one machine. Nothing caught it because
+# no version tag has ever been pushed, so the workflow has never run.
+#
+# The rule is removed rather than given a fourth negation: every file in
+# `scripts/` is a build orchestrator or a smoke, and both belong in version
+# control. Razi-ruled 2026-09-03.
 src-tauri/resources/sidecars/
 
 # Python
