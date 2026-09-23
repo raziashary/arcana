@@ -1,5 +1,5 @@
-// airsctl plugin — marketplace, install, uninstall, update, run, info.
-// airsctl worker setup — generate / redeem setup tokens.
+// arcanactl plugin — marketplace, install, uninstall, update, run, info.
+// arcanactl worker setup — generate / redeem setup tokens.
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
@@ -278,7 +278,7 @@ fn list(args: PluginListArgs, ctx: &OutputContext) -> Result<()> {
                 println!("     {}", p.description.dimmed());
             }
             println!("{}", "─".repeat(72).dimmed());
-            println!("Use {} to install", "airsctl plugin install <name>".cyan());
+            println!("Use {} to install", "arcanactl plugin install <name>".cyan());
         }
     }
     Ok(())
@@ -537,7 +537,7 @@ fn redeem_token(args: WorkerSetupRedeemArgs, ctx: &OutputContext) -> Result<()> 
 // the full Tauri crate. It calls the same filesystem paths.
 
 fn collect_local_plugins() -> Vec<PluginInfo> {
-    // Read ~/.autodev/plugins/ for installed plugins
+    // Read ~/.arcana/plugins/ for installed plugins
     let installed = scan_installed_names();
 
     // Return the 5 built-in plugins + anything installed on top
@@ -626,7 +626,7 @@ fn mk_builtin(
         name: name.into(),
         version: ver.into(),
         description: desc.into(),
-        author: "AIRS Foundry".into(),
+        author: "Arcana".into(),
         plugin_type: "worker-setup".into(),
         os_support: vec!["windows".into(), "linux".into(), "macos".into()],
         tags: tags.iter().map(|s| s.to_string()).collect(),
@@ -641,7 +641,7 @@ fn scan_installed_names() -> Vec<String> {
         return vec![];
     };
     let dir = std::path::PathBuf::from(home)
-        .join(".autodev")
+        .join(".arcana")
         .join("plugins");
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return vec![];
@@ -658,7 +658,7 @@ fn plugin_install_dir(name: &str) -> anyhow::Result<std::path::PathBuf> {
         .or_else(|_| std::env::var("HOME"))
         .map_err(|_| anyhow::anyhow!("Cannot determine home directory"))?;
     Ok(std::path::PathBuf::from(home)
-        .join(".autodev")
+        .join(".arcana")
         .join("plugins")
         .join(name))
 }
@@ -686,7 +686,7 @@ fn exec_install_by_name(name: &str) -> anyhow::Result<InstallResult> {
 
     // Write a minimal manifest
     let yaml = format!(
-        "name: {name}\nversion: 1.0.0\ntype: worker-setup\nauthor: AIRS Foundry\ndescription: Built-in plugin\nbuiltin: true\nos_support: [windows, linux, macos]\n"
+        "name: {name}\nversion: 1.0.0\ntype: worker-setup\nauthor: Arcana\ndescription: Built-in plugin\nbuiltin: true\nos_support: [windows, linux, macos]\n"
     );
     let _ = std::fs::write(install_dir.join("manifest.yaml"), &yaml);
 
@@ -808,7 +808,7 @@ fn exec_generate_token(
 ) -> anyhow::Result<SetupToken> {
     // Delegate to the token module logic via inline re-impl
     // (CLI doesn't link src-tauri; replicate the one-liner format)
-    let base_url = "https://raw.githubusercontent.com/AIRS-Foundry/autodev/main/src-cli";
+    let base_url = "https://raw.githubusercontent.com/raziashary/arcana/main/src-cli";
     let token_data = serde_json::json!({
         "fleet_id": fleet_id,
         "worker_type": worker_type,

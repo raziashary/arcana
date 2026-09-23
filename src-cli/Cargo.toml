@@ -1,21 +1,21 @@
 [package]
-name = "airsctl"
+name = "arcanactl"
 version = "1.0.0"
 edition = "2021"
-description = "airsctl — AutoDev headless CLI for automation, scripting, and CI/CD"
-authors = ["AIRS Foundry"]
+description = "arcanactl — Arcana headless CLI for automation, scripting, and CI/CD"
+authors = ["Arcana"]
 
 [[bin]]
-name = "airsctl"
+name = "arcanactl"
 path = "src/main.rs"
 
 [dependencies]
-autodev-shared = { path = "../src-shared" }
+arcana-shared = { path = "../src-shared" }
 
 # The agent runtime, shared with the desktop app. INV-1: one runtime, two
 # binaries. Linkable here only since P1 removed the tauri::AppHandle from every
 # event emission (ADR-LOG-RESTRUCT-0011).
-autodev-core = { path = "../autodev-core" }
+arcana-core = { path = "../arcana-core" }
 
 # CLI framework
 clap = { version = "4", features = ["derive", "env", "string"] }

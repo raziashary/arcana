@@ -69,7 +69,7 @@ interface PlanStore {
   listPlans: (scope?: PlanScope, status?: PlanStatus) => Promise<Plan[]>;
 }
 
-// The shape Rust sends with `plan:changed` (autodev-core/src/events.rs).
+// The shape Rust sends with `plan:changed` (arcana-core/src/events.rs).
 interface PlanChangedPayload {
   plan_id: string | null;
   kind: string;

@@ -1,4 +1,4 @@
-// mcpHealthStore.ts — health of the EXTERNAL MCP servers AutoDev connects to.
+// mcpHealthStore.ts — health of the EXTERNAL MCP servers Arcana connects to.
 //
 // 🔴 **Why this file exists (`P8-55`).** This state lived in `sidecarStore.ts`,
 // which carried two unrelated concerns: the dead Python sidecar's lifecycle,

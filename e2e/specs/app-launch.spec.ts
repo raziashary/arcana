@@ -5,11 +5,11 @@
 // assertion can fail. The acceptance test of `10 §2` is built on top of this in
 // P9; a harness that first exists in P9 cannot gate anything before it.
 //
-// It is still not vacuous: AutoDev opens a database, installs a process-wide
+// It is still not vacuous: Arcana opens a database, installs a process-wide
 // AppHandle and starts background tasks during setup. A panic in any of that
 // leaves no window for the driver to attach to, and this fails.
 
-describe('AutoDev application launch', () => {
+describe('Arcana application launch', () => {
   it('opens a window and renders the React root', async () => {
     const root = await $('#root')
     await root.waitForExist({ timeout: 30_000 })

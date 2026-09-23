@@ -1,7 +1,7 @@
 // Reachability gate — every .rs file in the workspace must be reachable from
 // its own crate's root.
 //
-// Since P1 the application spans four crates (`autodev-core`, `src-tauri`,
+// Since P1 the application spans four crates (`arcana-core`, `src-tauri`,
 // `src-cli`, `src-shared`), so this gate walks all four. It lives in
 // `src-tauri` only because that is where it was written; it is a workspace-wide
 // check and covers every crate equally.
@@ -121,7 +121,7 @@ fn declared_module_names(files: &[PathBuf]) -> HashSet<String> {
 /// The floors exist because this gate is only as wide as the tree it walks.
 /// Before P1 it walked `src-tauri/src` alone and asserted `> 100` files — which
 /// was true then and became false the moment P1 moved 182 files into
-/// `autodev-core`. Had the floor simply been lowered, the gate would have gone
+/// `arcana-core`. Had the floor simply been lowered, the gate would have gone
 /// green while silently protecting 84 files instead of 280
 /// (ADR-LOG-RESTRUCT-0015). A per-crate floor makes that failure loud: moving a
 /// crate's contents elsewhere trips its own floor rather than shrinking the
@@ -132,7 +132,7 @@ fn crate_roots() -> Vec<(&'static str, PathBuf, usize)> {
         .expect("src-tauri always has a workspace parent")
         .to_path_buf();
     vec![
-        ("autodev-core", workspace.join("autodev-core/src"), 150),
+        ("arcana-core", workspace.join("arcana-core/src"), 150),
         ("src-tauri", workspace.join("src-tauri/src"), 50),
         ("src-cli", workspace.join("src-cli/src"), 8),
         ("src-shared", workspace.join("src-shared/src"), 5),
@@ -166,7 +166,7 @@ mod tests {
             walked += files.len();
 
             // Declarations are collected per crate: a `mod` in `src-tauri` does
-            // not make a file in `autodev-core` reachable.
+            // not make a file in `arcana-core` reachable.
             let declared = declared_module_names(&files);
 
             for file in &files {

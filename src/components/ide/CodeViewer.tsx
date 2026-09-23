@@ -1,6 +1,6 @@
 // Code viewer — Monaco-based read-only editor.
 //
-// Rationale: AutoDev never edits files from the UI; agents mutate files via
+// Rationale: Arcana never edits files from the UI; agents mutate files via
 // the write_file / edit_file tools. The IDE viewer is therefore read-only,
 // which also simplifies state management and avoids stale-buffer bugs.
 
@@ -93,7 +93,7 @@ export default function CodeViewer({ tabPath }: Props) {
   const handleMount: OnMount = (editor, monacoInst) => {
     editorRef.current = editor
 
-    monacoInst.editor.defineTheme('autodev-dark', {
+    monacoInst.editor.defineTheme('arcana-dark', {
       base:    'vs-dark',
       inherit: true,
       rules: [
@@ -119,7 +119,7 @@ export default function CodeViewer({ tabPath }: Props) {
         'editorWidget.border':              '#0D3652',
       },
     })
-    monacoInst.editor.setTheme('autodev-dark')
+    monacoInst.editor.setTheme('arcana-dark')
 
     // Track selection to show the floating toolbar
     editor.onDidChangeCursorSelection(() => {
@@ -210,7 +210,7 @@ export default function CodeViewer({ tabPath }: Props) {
       <Editor
         value={tab.content.content}
         language={tab.content.language}
-        theme="autodev-dark"
+        theme="arcana-dark"
         onMount={handleMount}
         options={{
           readOnly:                true,

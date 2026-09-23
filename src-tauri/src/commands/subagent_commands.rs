@@ -53,7 +53,7 @@ impl SpawnSubagentRequest {
             // Deliberately not a field on the request: the mode is not the
             // caller's to choose. Letting the renderer name it would put the
             // policy back in reach of whatever can send this command.
-            permission_mode: autodev_core::agent::permission::PermissionMode::ManualApproval,
+            permission_mode: arcana_core::agent::permission::PermissionMode::ManualApproval,
             parent_session_id: self.parent_session_id,
             system_prompt: self.system_prompt.unwrap_or_default(),
             tools: self.tools,
@@ -139,7 +139,7 @@ pub async fn list_active_subagents(
 /// Doc 04 Phase 3.3 — live snapshot of QC reviewer concurrency.
 ///
 /// Returns a tuple `(in_flight, max_concurrent)` so the Subagent Monitor /
-/// AutoDev Live Monitor can render "QC: 3 / 6 in flight" without re-walking
+/// Arcana Live Monitor can render "QC: 3 / 6 in flight" without re-walking
 /// the registry on the frontend. `in_flight` is computed from the live
 /// subagent list filtered to `parent_slug == "qc-dispatcher"`;
 /// `max_concurrent` is the pool's `MAX_CONCURRENT_QC` constant.

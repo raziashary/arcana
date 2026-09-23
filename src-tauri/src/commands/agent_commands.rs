@@ -6,7 +6,7 @@ use tracing::info;
 
 use crate::agent::engine::AgentEngine;
 use crate::agent::permission::{PendingPermissions, PermissionMode, PermissionResponse};
-use crate::errors::{AutoDevError, Result};
+use crate::errors::{ArcanaError, Result};
 use crate::provider::anthropic::AnthropicProvider;
 use crate::provider::google::GoogleProvider;
 use crate::provider::openai::OpenAIProvider;
@@ -58,7 +58,7 @@ pub fn resolve_pa_mode(
     let chosen: &str = match override_mode {
         Some(explicit) if PAMODE_VALUES.contains(&explicit) => explicit,
         Some(bad) => {
-            return Err(AutoDevError::Agent(format!(
+            return Err(ArcanaError::Agent(format!(
                 "unknown paModeOverride {bad:?}; expected one of {}",
                 PAMODE_VALUES.join(", ")
             )))
@@ -106,11 +106,11 @@ pub async fn send_message(
         let p = s
             .active_provider
             .clone()
-            .ok_or_else(|| AutoDevError::Agent("No active provider set".into()))?;
+            .ok_or_else(|| ArcanaError::Agent("No active provider set".into()))?;
         let m = s
             .active_model
             .clone()
-            .ok_or_else(|| AutoDevError::Agent("No active model set".into()))?;
+            .ok_or_else(|| ArcanaError::Agent("No active model set".into()))?;
         (p, m)
     };
 
@@ -119,13 +119,13 @@ pub async fn send_message(
     // Every supported provider takes a key; the keyless branch went with
     // Ollama (P2-11).
     let api_key = VaultManager::get(&provider_key(&provider_id))?.ok_or_else(|| {
-        AutoDevError::Agent(format!("No API key for provider '{provider_id}'"))
+        ArcanaError::Agent(format!("No API key for provider '{provider_id}'"))
     })?;
 
     // Load session history
     let session = session_mgr
         .get_session(&session_id)?
-        .ok_or_else(|| AutoDevError::Agent(format!("Session '{session_id}' not found")))?;
+        .ok_or_else(|| ArcanaError::Agent(format!("Session '{session_id}' not found")))?;
 
     let working_dir = session.working_dir.clone();
 
@@ -207,12 +207,12 @@ pub async fn send_message(
         //
         // Built through the shared factory, which also applies the daily
         // ceiling (P2-21) rather than each caller remembering to wrap.
-        let provider = match autodev_core::provider::factory::build(&provider_id_c, api_key) {
+        let provider = match arcana_core::provider::factory::build(&provider_id_c, api_key) {
             Ok(p) => p,
             Err(e) => {
                 tracing::error!("Unsupported provider {provider_id_c}: {e}");
-                autodev_core::events::emit_agent_error(
-                    autodev_core::events::AgentErrorPayload {
+                arcana_core::events::emit_agent_error(
+                    arcana_core::events::AgentErrorPayload {
                         session_id: session_id_c.clone(),
                         message: format!("Unsupported provider: {provider_id_c}"),
                     },
@@ -265,7 +265,7 @@ pub async fn send_message(
         // rather than a line after `catch_unwind` — the latter is one early
         // `return` away from being skipped again.
         struct RunningGuard {
-            state: std::sync::Arc<std::sync::Mutex<autodev_core::state::AppState>>,
+            state: std::sync::Arc<std::sync::Mutex<arcana_core::state::AppState>>,
             session_id: String,
         }
         impl Drop for RunningGuard {
@@ -324,7 +324,7 @@ pub async fn send_message(
                     .unwrap_or_else(|| "non-string panic payload".to_string());
 
                 tracing::error!("Agent turn panicked and was contained: {detail}");
-                Err(autodev_core::errors::AutoDevError::Agent(format!(
+                Err(arcana_core::errors::ArcanaError::Agent(format!(
                     "The turn failed unexpectedly and was contained: {detail}"
                 )))
             }
@@ -486,7 +486,7 @@ pub fn respond_to_permission(
 }
 
 use crate::provider::types::{MessageContent, RequestMessage};
-use autodev_core::state::lock::LockTolerant;
+use arcana_core::state::lock::LockTolerant;
 
 fn build_history(messages: &[Message]) -> Vec<RequestMessage> {
     use crate::session::types::MessageRole;

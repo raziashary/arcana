@@ -3,7 +3,7 @@
 // This runs the real binary, not the dev server. That distinction is the whole
 // point: every defect in the restructure's register survived `tsc` and
 // `cargo clippy`, and the headline acceptance test is phrased as "a user
-// installs AutoDev on a clean machine … and receives a build-verified change".
+// installs Arcana on a clean machine … and receives a build-verified change".
 // Only a harness against the shipped artifact can ever assert that.
 //
 // Prerequisites (see e2e/README.md):
@@ -22,7 +22,7 @@ import path from 'node:path'
 let tauriDriver: ChildProcess | undefined
 
 const isWindows = os.platform() === 'win32'
-const binaryName = isWindows ? 'autodev.exe' : 'autodev'
+const binaryName = isWindows ? 'arcana.exe' : 'arcana'
 
 /** The debug binary produced by `npm run tauri -- build --debug`. */
 const application = path.resolve(

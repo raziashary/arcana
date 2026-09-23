@@ -5,7 +5,7 @@ use colored::Colorize;
 
 #[derive(Subcommand)]
 pub enum LogsCmd {
-    /// Tail log files from ~/.autodev/logs/
+    /// Tail log files from ~/.arcana/logs/
     View(ViewArgs),
     /// List available log files
     List,
@@ -247,7 +247,7 @@ fn get_log_dir() -> Result<std::path::PathBuf> {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .map_err(|_| anyhow::anyhow!("Cannot determine home directory"))?;
-    let dir = std::path::PathBuf::from(home).join(".autodev").join("logs");
+    let dir = std::path::PathBuf::from(home).join(".arcana").join("logs");
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }

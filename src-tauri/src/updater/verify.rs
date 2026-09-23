@@ -8,7 +8,7 @@
 // string — three independent ways to install an unverified binary.
 // See ADR-LOG-RESTRUCT-0002 and ADR-LOG-RESTRUCT-0003.
 //
-// The public key is embedded at COMPILE time from the AUTODEV_UPDATE_PUBKEY
+// The public key is embedded at COMPILE time from the ARCANA_UPDATE_PUBKEY
 // environment variable (see build.rs). There is deliberately NO runtime override:
 // an environment variable that can replace the update trust root is an injection
 // surface, and main.rs loads .env files by walking up from the working directory,
@@ -20,7 +20,7 @@ use std::path::Path;
 
 /// Base64-encoded Ed25519 public key for verifying update packages.
 /// Fixed at compile time; see the module header for why there is no override.
-const EMBEDDED_PUBLIC_KEY: Option<&str> = option_env!("AUTODEV_UPDATE_PUBKEY");
+const EMBEDDED_PUBLIC_KEY: Option<&str> = option_env!("ARCANA_UPDATE_PUBKEY");
 
 /// A release build with no signing key must not exist. Such a binary could only
 /// ever refuse updates, which reads to a user as "updates are broken" rather than
@@ -29,7 +29,7 @@ const EMBEDDED_PUBLIC_KEY: Option<&str> = option_env!("AUTODEV_UPDATE_PUBKEY");
 const _RELEASE_REQUIRES_PUBKEY: () = {
     if EMBEDDED_PUBLIC_KEY.is_none() {
         panic!(
-            "AUTODEV_UPDATE_PUBKEY must be set at build time for release builds. \
+            "ARCANA_UPDATE_PUBKEY must be set at build time for release builds. \
              See docs/updater-signing.md for key generation and CI setup."
         );
     }
@@ -45,7 +45,7 @@ pub fn verify_checksum(file_path: &Path, expected_hex: &str) -> Result<()> {
     if expected.is_empty() {
         anyhow::bail!(
             "Update refused: no SHA-256 checksum was published for this artifact. \
-             AutoDev will not install an unverified update."
+             Arcana will not install an unverified update."
         );
     }
     if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -73,7 +73,7 @@ pub fn verify_signature(file_path: &Path, sig_bytes: &[u8]) -> Result<()> {
     let pubkey_b64 = EMBEDDED_PUBLIC_KEY.ok_or_else(|| {
         anyhow!(
             "Update refused: this build has no update-signing public key compiled in, \
-             so no update can be verified. Rebuild with AUTODEV_UPDATE_PUBKEY set."
+             so no update can be verified. Rebuild with ARCANA_UPDATE_PUBKEY set."
         )
     })?;
     verify_signature_with_key(file_path, sig_bytes, pubkey_b64)
@@ -124,7 +124,7 @@ pub async fn verify_update(file_path: &Path, expected_checksum: &str, sig_url: &
     // 2. Ed25519 signature. An absent signature URL is a refusal, not a skip.
     if sig_url.trim().is_empty() {
         anyhow::bail!(
-            "Update refused: no signature was published for this artifact. Every AutoDev \
+            "Update refused: no signature was published for this artifact. Every Arcana \
              release must publish a detached .sig alongside its installer."
         );
     }
@@ -174,7 +174,7 @@ mod tests {
     /// Write bytes to a uniquely-named file under the OS temp dir.
     /// Avoids adding a `tempfile` dev-dependency for four tests.
     fn temp_file(tag: &str, contents: &[u8]) -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!("autodev-verify-test-{tag}.bin"));
+        let path = std::env::temp_dir().join(format!("arcana-verify-test-{tag}.bin"));
         let mut f = std::fs::File::create(&path).expect("create temp file");
         f.write_all(contents).expect("write temp file");
         path
@@ -188,8 +188,8 @@ mod tests {
 
     #[test]
     fn checksum_accepts_a_correct_digest() {
-        let path = temp_file("ck-ok", b"hello autodev");
-        let expected = sha256_hex(b"hello autodev");
+        let path = temp_file("ck-ok", b"hello arcana");
+        let expected = sha256_hex(b"hello arcana");
         assert!(verify_checksum(&path, &expected).is_ok());
         // Uppercase and surrounding whitespace must also be accepted.
         assert!(verify_checksum(&path, &format!("  {}  ", expected.to_uppercase())).is_ok());
@@ -227,7 +227,7 @@ mod tests {
 
     #[test]
     fn signature_accepts_the_matching_key_and_refuses_another() {
-        let payload = b"autodev installer bytes";
+        let payload = b"arcana installer bytes";
         let path = temp_file("sig-ok", payload);
 
         let signer = SigningKey::from_bytes(&[7u8; 32]);
@@ -307,7 +307,7 @@ mod tests {
     fn a_signature_made_by_openssl_verifies_here() {
         const PUBKEY_B64: &str = "IJX7mc5NQ/ZNHuuT7rbTj4Y9crlz/AHo6VbsIEtD5YU=";
         const SIG_B64: &str = "xf0awXDLzghtk9Vzs8/f+CanJZEKbfGYY5y3UExkiXu/Xi4cNXFkA9x8vpeCnFrdIy4jaDpOxS9NgCoBRCC0DA==";
-        const PAYLOAD: &[u8] = b"autodev test artifact";
+        const PAYLOAD: &[u8] = b"arcana test artifact";
 
         let sig = base64::engine::general_purpose::STANDARD
             .decode(SIG_B64)
@@ -321,7 +321,7 @@ mod tests {
         );
 
         // And the same signature must NOT verify over different bytes.
-        let tampered = temp_file("openssl-interop-tampered", b"autodev test artifactX");
+        let tampered = temp_file("openssl-interop-tampered", b"arcana test artifactX");
         assert!(verify_signature_with_key(&tampered, &sig, PUBKEY_B64).is_err());
 
         let _ = std::fs::remove_file(&path);

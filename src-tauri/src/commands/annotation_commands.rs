@@ -1,4 +1,4 @@
-// Annotation commands — CRUD for ~/.autodev/annotations.db
+// Annotation commands — CRUD for ~/.arcana/annotations.db
 // Used by: IDE CodeViewer (display), AnnotateFileTool (agent writes), frontend store
 
 use crate::db::annotations::{Annotation, AnnotationsDb, CreateAnnotationInput};

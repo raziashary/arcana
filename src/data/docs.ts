@@ -1,6 +1,6 @@
 // Documentation data — single source of truth for the Docs panel.
 // Content is structured as typed blocks so the renderer can apply
-// AutoDev-native styling without parsing markdown.
+// Arcana-native styling without parsing markdown.
 
 export type Block =
   | { t: 'h2';      text: string }

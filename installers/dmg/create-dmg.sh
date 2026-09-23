@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# create-dmg.sh — Build the AutoDev macOS DMG installer.
+# create-dmg.sh — Build the Arcana macOS DMG installer.
 # Phase 5.3 — Platform Installers.
 #
 # Usage:
@@ -9,7 +9,7 @@
 #   APPLE_ID           — Apple ID for notarization
 #   APPLE_TEAM_ID      — Team ID (10-char)
 #   APPLE_APP_PASSWORD — App-specific password for notarization
-#   SIGNING_IDENTITY   — Code signing identity (e.g. "Developer ID Application: AIRS Foundry Ltd (ABCDE12345)")
+#   SIGNING_IDENTITY   — Code signing identity (e.g. "Developer ID Application: Your Name (ABCDE12345)")
 #
 # Prerequisites:
 #   - Xcode Command Line Tools
@@ -80,7 +80,7 @@ npm ci --prefer-offline
 step "Building Tauri app (release, universal)"
 cd "$REPO_ROOT"
 
-export AUTODEV_CHANNEL="$CHANNEL"
+export ARCANA_CHANNEL="$CHANNEL"
 
 # Build for both architectures to create a Universal binary
 # If this is CI on arm64 only, omit --target universal-apple-darwin
@@ -105,7 +105,7 @@ if [[ "$SIGN" == "true" ]]; then
   step "Signing .app bundle"
 
   IDENTITY="${SIGNING_IDENTITY:-Developer ID Application}"
-  APP_BUNDLE="$TAURI_DIR/target/release/bundle/macos/AutoDev.app"
+  APP_BUNDLE="$TAURI_DIR/target/release/bundle/macos/Arcana.app"
 
   [[ -d "$APP_BUNDLE" ]] || die "App bundle not found: $APP_BUNDLE"
 
@@ -164,7 +164,7 @@ mkdir -p "$DIST_DIR"
 CHANNEL_SUFFIX=""
 [[ "$CHANNEL" != "stable" ]] && CHANNEL_SUFFIX="-$CHANNEL"
 ARCH=$(uname -m)
-DEST_NAME="autodev_${VERSION}${CHANNEL_SUFFIX}_${ARCH}.dmg"
+DEST_NAME="arcana_${VERSION}${CHANNEL_SUFFIX}_${ARCH}.dmg"
 DEST_PATH="$DIST_DIR/$DEST_NAME"
 
 cp "$DMG_FILE" "$DEST_PATH"

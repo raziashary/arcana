@@ -6,9 +6,7 @@ use anyhow::{Context, Result};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
-/// The update server base URL. Can be overridden by AUTODEV_UPDATE_URL env var.
-const DEFAULT_UPDATE_URL: &str =
-    "https://api.github.com/repos/AIRS-Foundry/autodev/releases/latest";
+/// Arcana has no published release feed yet. A feed must be opted into explicitly.
 
 /// Which update channel to use: stable, beta, nightly.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -70,8 +68,10 @@ pub async fn check_for_update(
     current_version: &str,
     channel: UpdateChannel,
 ) -> Result<Option<UpdateInfo>> {
-    let url =
-        std::env::var("AUTODEV_UPDATE_URL").unwrap_or_else(|_| DEFAULT_UPDATE_URL.to_string());
+    let url = match std::env::var("ARCANA_UPDATE_URL") {
+        Ok(url) if !url.trim().is_empty() => url,
+        _ => return Ok(None),
+    };
 
     // The manifest endpoint is overridable, so it is guarded like any other
     // update endpoint rather than trusted because it has a default.
@@ -86,7 +86,7 @@ pub async fn check_for_update(
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .https_only(true)
-        .user_agent(format!("AutoDev/{current_version} (auto-updater)"))
+        .user_agent(format!("Arcana/{current_version} (auto-updater)"))
         .build()
         .context("Failed to build HTTP client")?;
 
@@ -277,8 +277,8 @@ fn channel_accepts(channel: &UpdateChannel, release: &serde_json::Value) -> bool
 /// Matches on **extension plus architecture**, not on exact infix strings. The
 /// previous version required `_x64.msi` or `_x64-setup.exe` for Windows while
 /// `installers/wix/build-msi.ps1:222` actually ships
-/// `autodev_<version>[_channel]_x64_en-US.exe`, and required `_amd64.deb` while
-/// `scripts/build-linux.sh:90` ships `autodev_<version>_x86_64.deb`. Both
+/// `arcana_<version>[_channel]_x64_en-US.exe`, and required `_amd64.deb` while
+/// `scripts/build-linux.sh:90` ships `arcana_<version>_x86_64.deb`. Both
 /// therefore matched nothing, so Windows and the Linux `.deb` resolved to no
 /// asset at all and no update could ever be offered on those platforms.
 fn platform_key_from_filename(name: &str) -> Option<String> {

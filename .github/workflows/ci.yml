@@ -91,23 +91,23 @@ jobs:
       # It lives in this job because the whole workspace is already resolved
       # here. The independent real-world proof is `cli-checks`, which installs
       # no GTK or webkit at all - if core ever took a Tauri dependency, that
-      # job could not link airsctl. This step exists so the failure says what
+      # job could not link arcanactl. This step exists so the failure says what
       # went wrong instead of surfacing as a missing system library.
-      - name: Crate boundary - autodev-core must not depend on Tauri
+      - name: Crate boundary - arcana-core must not depend on Tauri
         run: |
           set -euo pipefail
-          for crate in autodev-core airsctl; do
+          for crate in arcana-core arcanactl; do
             echo "-- $crate"
             hits=$(cargo tree -p "$crate" | awk 'tolower($0) ~ /tauri|gtk|webkit|glib/ {n++} END {print n+0}')
             if [ "$hits" -ne 0 ]; then
-              echo "::error::$crate has $hits UI-framework dependencies. Core is linked by airsctl, which cannot link a UI framework - see ADR-LOG-RESTRUCT-0011."
+              echo "::error::$crate has $hits UI-framework dependencies. Core is linked by arcanactl, which cannot link a UI framework - see ADR-LOG-RESTRUCT-0011."
               cargo tree -p "$crate" | awk 'tolower($0) ~ /tauri|gtk|webkit|glib/'
               exit 1
             fi
           done
           # Prove the check can see a dependency when one exists, so a broken
           # grep cannot leave this step permanently and silently green.
-          desktop=$(cargo tree -p autodev | awk 'tolower($0) ~ /tauri/ {n++} END {print n+0}')
+          desktop=$(cargo tree -p arcana | awk 'tolower($0) ~ /tauri/ {n++} END {print n+0}')
           if [ "$desktop" -eq 0 ]; then
             echo "::error::found no tauri dependency in the desktop crate - this check is not working"
             exit 1
@@ -139,18 +139,6 @@ jobs:
       # this step re-ran the one above it and called the result linting.
       - name: ESLint
         run: npm run lint
-
-      # PD0 — `TGD0-06` spawns the sidecar as a real child process, which is the
-      # only gate that proves the SEAM rather than the shapes. It deliberately
-      # FAILS rather than skips when the build is absent (`§0.5`: a gate skipped
-      # in CI is not green), so the build has to happen before the tests.
-      #
-      # 🔴 Caught by reading this file, not by a run: the gate was written and
-      # committed while CI had no build step, so it would have failed every run
-      # from the moment it landed — and the pressure would then have been to
-      # mute the gate rather than add the step.
-      - name: Build the design sidecar
-        run: npm run build:sidecar
 
       - name: Unit tests
         run: npm test
@@ -271,7 +259,7 @@ jobs:
           # correctly flags as a way to neutralise a failing step — the fix is
           # to not need the exception, not to exempt it.
           code=0
-          timeout 20 xvfb-run --auto-servernum ./target/debug/autodev > app-launch.log 2>&1 || code=$?
+          timeout 20 xvfb-run --auto-servernum ./target/debug/arcana > app-launch.log 2>&1 || code=$?
           if [ "$code" -eq 124 ]; then
             echo "OK - the application was still running after 20s"
           else

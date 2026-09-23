@@ -105,7 +105,7 @@ export function UpdateDialog() {
           <div>
             <h2 id="update-dialog-title" className="text-lg font-semibold text-gray-100 flex items-center gap-2">
               {isCritical && <span className="text-orange-400">⚠</span>}
-              {isCritical ? 'Critical Update Required' : 'AutoDev Update Available'}
+              {isCritical ? 'Critical Update Required' : 'Arcana Update Available'}
             </h2>
             <p className="text-sm text-gray-400 mt-0.5">
               Version {availableUpdate.version}

@@ -1,4 +1,4 @@
-// Logs tab — Real-time log viewer for ~/.autodev/logs/autodev-YYYY-MM-DD.log
+// Logs tab — Real-time log viewer for ~/.arcana/logs/arcana-YYYY-MM-DD.log
 // Auto-refreshes every 3 seconds. Lines colour-coded by level.
 // All log events from Rust tracing (INFO/WARN/ERROR/DEBUG) appear here.
 //
@@ -316,7 +316,7 @@ export default function LogsTab() {
             onClick={async () => {
               if (!rawContent) return
               try {
-                const defaultPath = `autodev-${selectedDate || 'log'}.log`
+                const defaultPath = `arcana-${selectedDate || 'log'}.log`
                 const filePath = await save({
                   defaultPath,
                   filters: [{
@@ -360,7 +360,7 @@ export default function LogsTab() {
             <button
               onClick={async () => {
                 try {
-                  const defaultPath = `autodev-${selectedDate || 'log'}-FULL.log`
+                  const defaultPath = `arcana-${selectedDate || 'log'}-FULL.log`
                   const filePath = await save({
                     defaultPath,
                     filters: [{

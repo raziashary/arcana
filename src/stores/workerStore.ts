@@ -33,7 +33,7 @@ export interface Worker {
   tick_duration_ms:   number | undefined
   last_outcome:       string | undefined
   // Set on tick-start, cleared on tick-end — so a value here means "a tick is
-  // running right now", and that is all AutoDevPanel reads it for (`P8-43`).
+  // running right now", and that is all ArcanaPanel reads it for (`P8-43`).
   //
   // ⚠ The name is a leftover: it once distinguished two engines, and the
   // emitter now always sends "native". It is kept because the tick-start

@@ -1,6 +1,6 @@
 // Session commands — list, get, delete sessions.
 
-use crate::errors::AutoDevError;
+use crate::errors::ArcanaError;
 use crate::errors::Result;
 use crate::hooks::{HookContext, HookRegistry, HookType};
 use crate::session::{
@@ -97,7 +97,7 @@ pub fn update_session_title(
     session_mgr: State<'_, Arc<SessionManager>>,
 ) -> Result<()> {
     let session = session_mgr.get_session(&session_id)?.ok_or_else(|| {
-        crate::errors::AutoDevError::Session(format!("Session {} not found", session_id))
+        crate::errors::ArcanaError::Session(format!("Session {} not found", session_id))
     })?;
 
     let mut updated_session = session;
@@ -116,7 +116,7 @@ pub fn set_session_pa_mode(
     session_mgr: State<'_, Arc<SessionManager>>,
 ) -> Result<()> {
     if !PA_MODES.contains(&pa_mode.as_str()) {
-        return Err(AutoDevError::Session(format!(
+        return Err(ArcanaError::Session(format!(
             "Invalid pa_mode '{pa_mode}'. Expected one of: {}",
             PA_MODES.join(", ")
         )));

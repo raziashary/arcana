@@ -59,7 +59,7 @@ fn schedule_windows(installer_path: &Path, version: &str) -> Result<InstallResul
 
     // Write a batch file to TEMP that runs the installer then relaunches the app
     let temp = std::env::var("TEMP").unwrap_or_else(|_| "C:\\Temp".to_string());
-    let batch_path = PathBuf::from(&temp).join("autodev_update.bat");
+    let batch_path = PathBuf::from(&temp).join("arcana_update.bat");
 
     let ext = installer_path
         .extension()
@@ -90,7 +90,7 @@ fn schedule_windows(installer_path: &Path, version: &str) -> Result<InstallResul
     Ok(InstallResult {
         success: true,
         version: version.to_string(),
-        message: "Update ready. Restart AutoDev to apply.".into(),
+        message: "Update ready. Restart Arcana to apply.".into(),
         requires_restart: true,
     })
 }
@@ -103,7 +103,7 @@ fn write_runonce_key(batch_path: &Path) -> Result<()> {
             "add",
             "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
             "/v",
-            "AutoDevUpdate",
+            "ArcanaUpdate",
             "/d",
             &format!("\"{}\"", batch_path.display()),
             "/f",
@@ -121,10 +121,10 @@ fn write_runonce_key(batch_path: &Path) -> Result<()> {
 
 #[cfg(target_os = "macos")]
 fn schedule_macos(installer_path: &Path, version: &str) -> Result<InstallResult> {
-    // Write a shell script to ~/Library/Application Support/AutoDev/update.sh
+    // Write a shell script to ~/Library/Application Support/Arcana/update.sh
     let support = dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("AutoDev");
+        .join("Arcana");
     std::fs::create_dir_all(&support)?;
 
     let script_path = support.join("update.sh");
@@ -138,9 +138,9 @@ fn schedule_macos(installer_path: &Path, version: &str) -> Result<InstallResult>
         r#"#!/usr/bin/env bash
 set -e
 sleep 2
-MOUNT=$(hdiutil attach "{dmg_path}" -nobrowse -mountpoint /tmp/autodev_update 2>/dev/null | tail -1 | awk '{{print $3}}')
-if [ -d "$MOUNT/AutoDev.app" ]; then
-    rsync -a --delete "$MOUNT/AutoDev.app/" "{app_bundle}/"
+MOUNT=$(hdiutil attach "{dmg_path}" -nobrowse -mountpoint /tmp/arcana_update 2>/dev/null | tail -1 | awk '{{print $3}}')
+if [ -d "$MOUNT/Arcana.app" ]; then
+    rsync -a --delete "$MOUNT/Arcana.app/" "{app_bundle}/"
 fi
 hdiutil detach "$MOUNT" 2>/dev/null || true
 open "{app_bundle}"
@@ -164,7 +164,7 @@ rm -- "$0"
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.airs-foundry.autodev.update</string>
+    <string>dev.arcana.desktop.update</string>
     <key>ProgramArguments</key>
     <array><string>{script}</string></array>
     <key>RunAtLoad</key>
@@ -179,21 +179,21 @@ rm -- "$0"
         .join("Library/LaunchAgents");
     std::fs::create_dir_all(&agents_dir)?;
     std::fs::write(
-        agents_dir.join("com.airs-foundry.autodev.update.plist"),
+        agents_dir.join("dev.arcana.desktop.update.plist"),
         plist,
     )?;
 
     Ok(InstallResult {
         success: true,
         version: version.to_string(),
-        message: "Update ready. Quit AutoDev to apply.".into(),
+        message: "Update ready. Quit Arcana to apply.".into(),
         requires_restart: true,
     })
 }
 
 #[cfg(target_os = "macos")]
 fn find_app_bundle(binary_path: &str) -> String {
-    // Walk up from Contents/MacOS/autodev to find .app bundle
+    // Walk up from Contents/MacOS/arcana to find .app bundle
     let mut p = std::path::PathBuf::from(binary_path);
     for _ in 0..4 {
         p.pop();
@@ -201,7 +201,7 @@ fn find_app_bundle(binary_path: &str) -> String {
             return p.to_string_lossy().into_owned();
         }
     }
-    "/Applications/AutoDev.app".to_string()
+    "/Applications/Arcana.app".to_string()
 }
 
 // ─── Linux ────────────────────────────────────────────────────────────────────
@@ -220,7 +220,7 @@ fn schedule_linux(installer_path: &Path, version: &str) -> Result<InstallResult>
         let current_exe = current_exe_path();
         let script_path = dirs::cache_dir()
             .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join("autodev-update.sh");
+            .join("arcana-update.sh");
 
         let script = format!(
             r#"#!/usr/bin/env bash
@@ -240,12 +240,12 @@ exec "{current}"
         Ok(InstallResult {
             success: true,
             version: version.to_string(),
-            message: "AppImage update ready. Restart AutoDev to apply.".into(),
+            message: "AppImage update ready. Restart Arcana to apply.".into(),
             requires_restart: true,
         })
     } else if ext == "deb" {
         // Schedule deb installation via pkexec
-        let script_path = PathBuf::from("/tmp/autodev-update.sh");
+        let script_path = PathBuf::from("/tmp/arcana-update.sh");
         let script =
             format!("#!/usr/bin/env bash\npkexec apt-get install -y \"{installer_str}\"\n");
         std::fs::write(&script_path, &script)?;
@@ -255,7 +255,7 @@ exec "{current}"
         Ok(InstallResult {
             success: true,
             version: version.to_string(),
-            message: "Deb package ready. Restart AutoDev to install (requires pkexec).".into(),
+            message: "Deb package ready. Restart Arcana to install (requires pkexec).".into(),
             requires_restart: true,
         })
     } else {
@@ -270,7 +270,7 @@ exec "{current}"
 
 // ─── History & records ────────────────────────────────────────────────────────
 
-/// Persist an update record to ~/.autodev/update_history.json
+/// Persist an update record to ~/.arcana/update_history.json
 pub fn record_pending_update(version: &str, current_version: &str) -> Result<()> {
     let path = update_history_path();
     let mut records: Vec<UpdateRecord> = if path.exists() {
@@ -339,7 +339,7 @@ pub fn is_skipped(version: &str) -> bool {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 fn current_exe_path() -> PathBuf {
-    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("autodev"))
+    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("arcana"))
 }
 
 fn update_history_path() -> PathBuf {
@@ -347,7 +347,7 @@ fn update_history_path() -> PathBuf {
         .or_else(|_| std::env::var("HOME"))
         .unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home)
-        .join(".autodev")
+        .join(".arcana")
         .join("update_history.json")
 }
 
@@ -356,7 +356,7 @@ fn skipped_versions_path() -> PathBuf {
         .or_else(|_| std::env::var("HOME"))
         .unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home)
-        .join(".autodev")
+        .join(".arcana")
         .join("skipped_versions.json")
 }
 

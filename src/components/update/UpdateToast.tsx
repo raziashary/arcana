@@ -49,7 +49,7 @@ export function UpdateToast() {
           {isCritical ? 'Critical update available' : 'Update available'}
         </p>
         <p className="text-xs opacity-75 mt-0.5 truncate">
-          AutoDev {availableUpdate.version} is ready to install
+          Arcana {availableUpdate.version} is ready to install
         </p>
       </div>
 

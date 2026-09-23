@@ -1,4 +1,4 @@
-// SkillWatcher — watches ~/.autodev/skills/ for file changes and triggers
+// SkillWatcher — watches ~/.arcana/skills/ for file changes and triggers
 // automatic SkillRegistry reloads. Phase 3.1 deferred item.
 //
 // Uses the `notify` v6 crate (already in Cargo.toml from the graph engine).

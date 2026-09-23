@@ -4,7 +4,7 @@
 // after P8; one error path told the user to run
 // a command for starting the deleted service. NOT reimplemented natively --
 // that would duplicate the desktop engine for a surface with no user.
-// `airsctl` keeps its task/DB surface, which is live and used.
+// `arcanactl` keeps its task/DB surface, which is live and used.
 pub mod analytics;
 pub mod config;
 pub mod logs;

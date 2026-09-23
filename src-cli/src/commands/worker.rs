@@ -1,6 +1,6 @@
 use crate::output::{status_colored, OutputContext};
 use anyhow::Result;
-use autodev_core::db::workers::{Worker, WorkersDb, DEFAULT_MODEL};
+use arcana_core::db::workers::{Worker, WorkersDb, DEFAULT_MODEL};
 use clap::{Args, Subcommand};
 
 /// Matches the `polling_interval` DEFAULT in core's workers schema.

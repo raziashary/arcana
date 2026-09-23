@@ -1,1 +1,1 @@
-pub use autodev_core::analytics::*;
+pub use arcana_core::analytics::*;

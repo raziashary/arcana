@@ -12,35 +12,35 @@ use output::{OutputContext, OutputFormat};
 
 #[derive(Parser)]
 #[command(
-    name = "airsctl",
+    name = "arcanactl",
     version = "1.0.0",
-    author = "AIRS Foundry",
-    about = "AutoDev headless CLI for automation, scripting, and CI/CD",
+    author = "Arcana",
+    about = "Arcana headless CLI for automation, scripting, and CI/CD",
     long_about = None,
 )]
 pub struct Cli {
-    /// Path to config file (default: ~/.autodev/config.toml)
-    #[arg(long, global = true, env = "AIRSCTL_CONFIG")]
+    /// Path to config file (default: ~/.arcana/config.toml)
+    #[arg(long, global = true, env = "ARCANACTL_CONFIG")]
     pub config: Option<String>,
 
     /// Working directory for agent operations
-    #[arg(long, global = true, env = "AIRSCTL_WORKING_DIR")]
+    #[arg(long, global = true, env = "ARCANACTL_WORKING_DIR")]
     pub working_dir: Option<String>,
 
     /// LLM provider override (e.g. google, anthropic, openai)
-    #[arg(long, global = true, env = "AIRSDEV_PROVIDER")]
+    #[arg(long, global = true, env = "ARCANA_PROVIDER")]
     pub provider: Option<String>,
 
     /// Model override (e.g. claude-sonnet-4-6)
-    #[arg(long, global = true, env = "AIRSCTL_MODEL")]
+    #[arg(long, global = true, env = "ARCANACTL_MODEL")]
     pub model: Option<String>,
 
     /// Disable interactive prompts
-    #[arg(long, global = true, env = "AIRSCTL_NON_INTERACTIVE")]
+    #[arg(long, global = true, env = "ARCANACTL_NON_INTERACTIVE")]
     pub non_interactive: bool,
 
     /// Output format: table, json, plain
-    #[arg(long, global = true, default_value = "table", env = "AIRSCTL_OUTPUT")]
+    #[arg(long, global = true, default_value = "table", env = "ARCANACTL_OUTPUT")]
     pub output_format: String,
 
     /// Suppress all non-essential output
@@ -113,12 +113,12 @@ async fn main() -> Result<()> {
     init_tracing(cli.verbose, cli.quiet);
 
     // Declare this host's event policy before anything in the agent runtime can
-    // emit. `airsctl` has no window to deliver events to, and discarding them
+    // emit. `arcanactl` has no window to deliver events to, and discarding them
     // is the correct behaviour for a headless process rather than an error to
     // report on every event. Stating it explicitly means a future host that
     // *should* render events (a TUI, a log stream) has one obvious place to
     // change, instead of inheriting the default by accident.
-    autodev_core::events::install_sink(std::sync::Arc::new(autodev_core::events::NullEventSink));
+    arcana_core::events::install_sink(std::sync::Arc::new(arcana_core::events::NullEventSink));
 
     let cfg = load_config(&cli)?;
     let fmt = resolve_output_format(&cli, &cfg);
@@ -147,10 +147,10 @@ async fn main() -> Result<()> {
     //
     // The ledger is an audit trail, not a dependency: if it cannot be opened,
     // the command still runs.
-    let ledger = autodev_core::db::runs::RunsDb::open().ok();
+    let ledger = arcana_core::db::runs::RunsDb::open().ok();
     let run_id = ledger.as_ref().and_then(|db| {
         let _ = db.reap_abandoned();
-        db.begin(autodev_core::db::runs::kind::CLI, Some("airsctl"))
+        db.begin(arcana_core::db::runs::kind::CLI, Some("arcanactl"))
             .ok()
     });
 
@@ -158,9 +158,9 @@ async fn main() -> Result<()> {
 
     if let (Some(db), Some(id)) = (ledger.as_ref(), run_id.as_ref()) {
         let result = if dispatched.is_ok() {
-            autodev_core::db::runs::outcome::OK
+            arcana_core::db::runs::outcome::OK
         } else {
-            autodev_core::db::runs::outcome::FAILED
+            arcana_core::db::runs::outcome::FAILED
         };
         if let Err(e) = db.finish(id, result) {
             tracing::warn!("[runs] could not close run {id}: {e}");
@@ -178,7 +178,7 @@ async fn dispatch(
     match command {
         None => {
             if effective_non_interactive {
-                Cli::parse_from(["airsctl", "--help"]);
+                Cli::parse_from(["arcanactl", "--help"]);
             } else {
                 repl::run(ctx).await?;
             }
@@ -209,16 +209,16 @@ fn init_tracing(verbose: bool, quiet: bool) {
     fmt().with_env_filter(filter).with_target(false).init();
 }
 
-fn load_config(cli: &Cli) -> Result<autodev_shared::config::CliConfigFile> {
+fn load_config(cli: &Cli) -> Result<arcana_shared::config::CliConfigFile> {
     if let Some(path) = &cli.config {
         let content = std::fs::read_to_string(path)?;
-        let cfg: autodev_shared::config::CliConfigFile = toml::from_str(&content)?;
+        let cfg: arcana_shared::config::CliConfigFile = toml::from_str(&content)?;
         return Ok(cfg);
     }
-    Ok(autodev_shared::config::CliConfigFile::load()?)
+    Ok(arcana_shared::config::CliConfigFile::load()?)
 }
 
-fn resolve_output_format(cli: &Cli, cfg: &autodev_shared::config::CliConfigFile) -> OutputFormat {
+fn resolve_output_format(cli: &Cli, cfg: &arcana_shared::config::CliConfigFile) -> OutputFormat {
     let raw = if cli.output_format != "table" {
         cli.output_format.clone()
     } else {

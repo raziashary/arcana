@@ -1,4 +1,4 @@
-// workerChatStore — Frontend state for the AutoDev Communication Protocol.
+// workerChatStore — Frontend state for the Arcana Communication Protocol.
 //
 // Subscribes to the Rust-side `worker:message` event and maintains a chronological
 // log of every cross-worker message, plus a per-recipient unread count for the

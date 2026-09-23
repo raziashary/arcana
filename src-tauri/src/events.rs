@@ -1,14 +1,14 @@
 // The desktop app's event surface.
 //
 // Every payload type, event-name constant and `emit_*` function now lives in
-// `autodev-core::events`, which routes through the `EventSink` trait instead of
+// `arcana-core::events`, which routes through the `EventSink` trait instead of
 // a `tauri::AppHandle`. This module re-exports them so the 255 commands and the
 // frontend contract are unchanged, and supplies the one thing that genuinely
 // belongs to the host: a sink that forwards to a Tauri window.
 //
 // See ADR-LOG-RESTRUCT-0011 and ADR-LOG-RESTRUCT-0015.
 
-pub use autodev_core::events::*;
+pub use arcana_core::events::*;
 
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};

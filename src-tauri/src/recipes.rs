@@ -1,1 +1,1 @@
-pub use autodev_core::recipes::*;
+pub use arcana_core::recipes::*;

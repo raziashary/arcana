@@ -1,13 +1,13 @@
 // Sidebar — spec Section 10.
-// Live-data sections: CONTEXT, MCP ACTIVE, SKILLS, HOOKS, SESSION, + AUTODEV.md editor.
+// Live-data sections: CONTEXT, MCP ACTIVE, SKILLS, HOOKS, SESSION, + ARCANA.md editor.
 // Width: 176px. All data from real stores — no static stubs.
 
 import { useEffect }           from 'react'
-import { useAutodevMdStore }   from '../../stores/autodevMdStore'
+import { useArcanaMdStore }   from '../../stores/arcanaMdStore'
 import { useSkillStore }       from '../../stores/skillStore'
 import { useHookStore }        from '../../stores/hookStore'
 import { useCostStore }        from '../../stores/costStore'
-import AutodevMdCard           from '../autodev/AutodevMdCard'
+import ArcanaMdCard           from '../arcana/ArcanaMdCard'
 
 function fmtN(n: number): string {
   if (n < 1_000)     return String(n)
@@ -16,8 +16,8 @@ function fmtN(n: number): string {
 }
 
 export default function Sidebar() {
-  const globalContent = useAutodevMdStore(s => s.globalContent)
-  const loadGlobal    = useAutodevMdStore(s => s.loadGlobal)
+  const globalContent = useArcanaMdStore(s => s.globalContent)
+  const loadGlobal    = useArcanaMdStore(s => s.loadGlobal)
   const byCategory    = useSkillStore(s => s.byCategory)
   const hooks         = useHookStore(s => s.hooks)
   const loadHooks     = useHookStore(s => s.loadHooks)
@@ -31,7 +31,7 @@ export default function Sidebar() {
   }, [])
 
   // P8-55 — the orchestrator indicator is gone with the orchestrator.
-  const autodevLoaded = globalContent.trim().length > 0
+  const arcanaLoaded = globalContent.trim().length > 0
   const allSkills     = Object.values(byCategory).flat()
   const enabledHooks  = hooks.filter(h => h.enabled)
   const totalTokens   = tokensIn + tokensOut
@@ -51,8 +51,8 @@ export default function Sidebar() {
     >
       {/* ── CONTEXT ──────────────────────────────────────── */}
       <Section title="CONTEXT">
-        <Dot label="AUTODEV.md" active={autodevLoaded} />
-        <Dot label=".autodevhints" active={false} />
+        <Dot label="ARCANA.md" active={arcanaLoaded} />
+        <Dot label=".arcanahints" active={false} />
       </Section>
 
       {/* P8-55 — the "MCP ACTIVE" section is removed. All three dots reported
@@ -109,8 +109,8 @@ export default function Sidebar() {
         </div>
       </Section>
 
-      {/* ── AUTODEV.md editor card ────────────────────────── */}
-      <AutodevMdCard />
+      {/* ── ARCANA.md editor card ────────────────────────── */}
+      <ArcanaMdCard />
     </div>
   )
 }

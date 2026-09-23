@@ -2,7 +2,7 @@
 // Phase 2.1: Providers + System Prompt.
 // Phase 2.2: Workers section + GitHub PAT vault storage.
 // Phase 2.3: Model Config section (temperature, top_p, reasoning effort, thinking).
-// Phase 2.3+: Workspace folder selection — root dir for all AutoDev agents.
+// Phase 2.3+: Workspace folder selection — root dir for all Arcana agents.
 // References: DEVELOPMENT_PLAN.md Phase 2.3 — Provider Support & Model Enhancements
 
 import { useEffect, useState } from 'react'
@@ -279,7 +279,7 @@ function VaultBackendCard() {
       {orphans.length > 0 && (
         <div className="space-y-2">
           <div className="font-mono text-xs" style={{ color: 'var(--warning, #fbbf24)' }}>
-            {orphans.length} key{orphans.length === 1 ? '' : 's'} stored for a provider AutoDev
+            {orphans.length} key{orphans.length === 1 ? '' : 's'} stored for a provider Arcana
             no longer supports. These sit in your credential store until removed.
           </div>
           {orphans.map(o => (
@@ -410,7 +410,7 @@ function DailyCapCard() {
 
 // ─── Default Worker Budget (Ruflo Feature 4) ────────────────────────────────
 //
-// These values are persisted to ~/.autodev/runtime_config.json and read by
+// These values are persisted to ~/.arcana/runtime_config.json and read by
 // the Rust recipe runner when assigning tasks without an explicit budget.
 
 function DefaultWorkerBudgetCard() {
@@ -759,8 +759,8 @@ function GitHubMCPCard() {
       </div>
 
       <div className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
-        Records the endpoint of a GitHub MCP server so AutoDev can monitor whether it is reachable.
-        AutoDev does <strong>not</strong> yet call that server: nothing consumes this configuration to
+        Records the endpoint of a GitHub MCP server so Arcana can monitor whether it is reachable.
+        Arcana does <strong>not</strong> yet call that server: nothing consumes this configuration to
         open a tool connection, so workers cannot currently list repos, create PRs, or review code
         through it. The health indicator above reflects reachability only.
       </div>
@@ -769,7 +769,7 @@ function GitHubMCPCard() {
         <div className="font-mono text-xs" style={{ color: 'var(--text-3)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>GitHub Org / Username</div>
         <input
           type="text"
-          placeholder="AIRS-Foundry (leave empty for all accessible repos)"
+          placeholder="Organization (leave empty for all accessible repos)"
           value={orgInput}
           onChange={e => setOrgInput(e.target.value)}
           className="w-full font-mono text-xs px-3 py-1.5 rounded-sm"
@@ -780,7 +780,7 @@ function GitHubMCPCard() {
       <div className="space-y-2">
         <div className="font-mono text-xs" style={{ color: 'var(--text-3)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Allowed Repos (one per line, empty = all)</div>
         <textarea
-          placeholder="autodev&#10;my-other-repo"
+          placeholder="arcana&#10;my-other-repo"
           value={repoInput}
           onChange={e => setRepoInput(e.target.value)}
           rows={3}

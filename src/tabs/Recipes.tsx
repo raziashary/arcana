@@ -250,7 +250,7 @@ export default function RecipesTab() {
             className="flex flex-col items-center justify-center h-full font-mono text-xs"
             style={{ color: 'var(--text-4)' }}
           >
-            No recipes found in ~/.autodev/recipes/
+            No recipes found in ~/.arcana/recipes/
           </div>
         )}
       </div>

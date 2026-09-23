@@ -1,5 +1,10 @@
 # AutoDev — Programme Brief
 
+> **Historical brief, prepared 2026-09-04.** The current personal Arcana coding
+> programme is in [ARCANA-PROGRAMME-BRIEF.md](ARCANA-PROGRAMME-BRIEF.md).
+> PD0–PD6 and the AutoDesign handover below are retired; the percentages and
+> task counts below describe the old plan, not current readiness.
+
 **A condensed view of the restructure, for readers who are not in the code daily.**
 
 | | |

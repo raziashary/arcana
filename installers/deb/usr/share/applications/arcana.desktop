@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=Arcana
+GenericName=AI Development Assistant
+Comment=AI-powered development assistant with multi-agent workflows
+Exec=/usr/bin/arcana %f
+Icon=arcana
+Type=Application
+Categories=Development;IDE;
+MimeType=application/x-arcana-workspace;
+Keywords=ai;coding;assistant;llm;agent;development;
+StartupWMClass=Arcana
+StartupNotify=true
+Terminal=false

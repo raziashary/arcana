@@ -9,9 +9,9 @@ pub enum SystemCmd {
     Status,
     /// Show recent log entries
     Logs(LogsArgs),
-    /// Backup ~/.autodev/ to a zip archive
+    /// Backup ~/.arcana/ to a zip archive
     Backup(BackupArgs),
-    /// Restore ~/.autodev/ from a zip archive
+    /// Restore ~/.arcana/ from a zip archive
     Restore(RestoreArgs),
 }
 
@@ -28,7 +28,7 @@ pub struct LogsArgs {
 
 #[derive(Args)]
 pub struct BackupArgs {
-    /// Output path (default: ~/.autodev/backup-<timestamp>.zip)
+    /// Output path (default: ~/.arcana/backup-<timestamp>.zip)
     #[arg(short, long)]
     pub output: Option<String>,
 }
@@ -65,8 +65,8 @@ async fn status(ctx: OutputContext) -> Result<()> {
     let postgres_ok = probe_tcp("127.0.0.1:5432").await;
     let mcp_ok = probe_tcp("127.0.0.1:3100").await;
 
-    // AutoDev DB presence
-    let autodev_db = autodev_dir_exists();
+    // Arcana DB presence
+    let arcana_db = arcana_dir_exists();
 
     let headers = ["Service", "Status", "Details"];
     let rows = vec![
@@ -86,9 +86,9 @@ async fn status(ctx: OutputContext) -> Result<()> {
             "127.0.0.1:3100".into(),
         ],
         vec![
-            "autodev-db".to_string(),
-            bool_status(autodev_db),
-            "~/.autodev/".into(),
+            "arcana-db".to_string(),
+            bool_status(arcana_db),
+            "~/.arcana/".into(),
         ],
     ];
 
@@ -96,7 +96,7 @@ async fn status(ctx: OutputContext) -> Result<()> {
     Ok(())
 }
 
-// P8-12 — `airsctl system sidecars` is deleted. It probed the two Python
+// P8-12 — `arcanactl system sidecars` is deleted. It probed the two Python
 // processes and could only ever report them absent.
 
 
@@ -104,7 +104,7 @@ async fn logs(args: LogsArgs, ctx: OutputContext) -> Result<()> {
     let log_paths = find_log_files(args.service.as_deref());
 
     if log_paths.is_empty() {
-        ctx.info("No log files found in ~/.autodev/logs/");
+        ctx.info("No log files found in ~/.arcana/logs/");
         return Ok(());
     }
 
@@ -121,23 +121,23 @@ async fn logs(args: LogsArgs, ctx: OutputContext) -> Result<()> {
 }
 
 fn backup(args: BackupArgs, ctx: OutputContext) -> Result<()> {
-    let autodev_dir = get_autodev_dir()?;
+    let arcana_dir = get_arcana_dir()?;
 
     let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
     let output = args.output.unwrap_or_else(|| {
-        autodev_dir
+        arcana_dir
             .join(format!("backup-{timestamp}.zip"))
             .display()
             .to_string()
     });
 
-    ctx.info(&format!("Backing up ~/.autodev/ to {output}…"));
+    ctx.info(&format!("Backing up ~/.arcana/ to {output}…"));
 
-    // Walk ~/.autodev/ and collect .db and .toml files
-    let entries: Vec<_> = walkdir_collect(&autodev_dir);
+    // Walk ~/.arcana/ and collect .db and .toml files
+    let entries: Vec<_> = walkdir_collect(&arcana_dir);
 
     if entries.is_empty() {
-        ctx.warn("No files found in ~/.autodev/ to backup.");
+        ctx.warn("No files found in ~/.arcana/ to backup.");
         return Ok(());
     }
 
@@ -149,7 +149,7 @@ fn backup(args: BackupArgs, ctx: OutputContext) -> Result<()> {
 
     for entry in &entries {
         let rel = entry
-            .strip_prefix(&autodev_dir)
+            .strip_prefix(&arcana_dir)
             .unwrap_or(entry)
             .display()
             .to_string();
@@ -169,7 +169,7 @@ fn backup(args: BackupArgs, ctx: OutputContext) -> Result<()> {
 }
 
 fn restore(args: RestoreArgs, ctx: OutputContext) -> Result<()> {
-    let autodev_dir = get_autodev_dir()?;
+    let arcana_dir = get_arcana_dir()?;
 
     if !std::path::Path::new(&args.path).exists() {
         ctx.error(&format!("Backup file not found: {}", args.path));
@@ -177,7 +177,7 @@ fn restore(args: RestoreArgs, ctx: OutputContext) -> Result<()> {
     }
 
     if !args.force {
-        ctx.warn("This will overwrite existing ~/.autodev/ data.");
+        ctx.warn("This will overwrite existing ~/.arcana/ data.");
         ctx.warn("Re-run with --force to confirm.");
         return Ok(());
     }
@@ -190,7 +190,7 @@ fn restore(args: RestoreArgs, ctx: OutputContext) -> Result<()> {
 
     for i in 0..count {
         let mut entry = archive.by_index(i)?;
-        let dest = autodev_dir.join(entry.name());
+        let dest = arcana_dir.join(entry.name());
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -198,7 +198,7 @@ fn restore(args: RestoreArgs, ctx: OutputContext) -> Result<()> {
         std::io::copy(&mut entry, &mut out)?;
     }
 
-    ctx.success(&format!("Restored {count} files to ~/.autodev/"));
+    ctx.success(&format!("Restored {count} files to ~/.arcana/"));
     Ok(())
 }
 
@@ -232,19 +232,19 @@ fn bool_status(ok: bool) -> String {
     }
 }
 
-fn autodev_dir_exists() -> bool {
-    get_autodev_dir().map(|d| d.exists()).unwrap_or(false)
+fn arcana_dir_exists() -> bool {
+    get_arcana_dir().map(|d| d.exists()).unwrap_or(false)
 }
 
-fn get_autodev_dir() -> Result<std::path::PathBuf> {
+fn get_arcana_dir() -> Result<std::path::PathBuf> {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .map_err(|_| anyhow::anyhow!("Cannot determine home directory"))?;
-    Ok(std::path::PathBuf::from(home).join(".autodev"))
+    Ok(std::path::PathBuf::from(home).join(".arcana"))
 }
 
 fn find_log_files(service: Option<&str>) -> Vec<std::path::PathBuf> {
-    let Ok(dir) = get_autodev_dir() else {
+    let Ok(dir) = get_arcana_dir() else {
         return vec![];
     };
     let logs_dir = dir.join("logs");

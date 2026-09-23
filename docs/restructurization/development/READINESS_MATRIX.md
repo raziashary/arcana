@@ -1,4 +1,31 @@
-# AutoDev Restructure — Readiness Matrix
+# Arcana — Readiness Matrix
+
+> **2026-09-23 scope notice:** The original weighted matrix below measured an
+> AutoDesign-first programme and is now historical. Arcana's coding-only
+> outcomes and proof are in `ARCANA_CODING_SCOPE.md` and `GOAL.md`. The last
+> original score derived from the table below is **36.7%**; the 34.0% prose
+> snapshot was not refreshed after P8. No new Arcana readiness percentage has
+> been calculated, and the remaining P0/P3/P8 proof gaps remain open.
+
+## Current Arcana coding status (2026-09-23)
+
+| Area | Recorded state | Missing proof before a green claim |
+|---|---|---|
+| P0 security baseline | Historically closed | E2E harness task and applicable gates |
+| P1 structure | Historically closed | Recheck after Arcana identity rename |
+| P2 providers | Historically closed | Gemini key entered in desktop vault; optional paid live adapter smoke |
+| P3 native runtime and memory | Historically closed | Eight memory gate clauses and reader evidence |
+| P8 sidecar removal | Historically closed; Arcana desktop launch verified | Live coding turn and no application-owned Python process during it |
+| P4 fleet | Open | Build-verified task through assignment, worker, QC and recovery |
+| P5 graph | Open | Written graph read into a later relevant coding turn |
+| P6 coding UI | Open | Desktop event, setting and route smokes |
+| P7 experience | Open | Clean-profile coding turn, error and cancellation smokes |
+| P9 delivery | Later | Install, launch and update trust checks on each target platform |
+
+This table is a status and proof map, not a percentage. The weighted matrix
+below is the former programme's dated scoring record; it must not be used as
+Arcana's current readiness score. The retired PD gates are archived in
+`HISTORICAL_DESIGN_PROGRAMME.md`.
 
 > **LIVING DOCUMENT, append-only history.** Updated at every phase boundary. Never edit a past update-log entry.
 
@@ -6,7 +33,7 @@
 |---|---|
 | **Parents** | `MASTER_DEVELOPMENT_PLAN.md` · `TESTING_GATES.md` · `../vision/00-…-MASTER-PLAN.md` |
 | **Rev** | 1.0 — 2026-08-31 |
-| **Overall readiness** | **34.0%** — P0…P3 built and committed; **PD0 closed on its second attempt**, after the `§0.2a` audits I had skipped, and scored nowhere. A3 Build ✅ Smoke ✅ **Gates ☐**. ⚠ The design phases have no scored area — see the update log, 2026-09-03 rev 2.1. |
+| **Original-programme readiness snapshot** | **36.7%** by the last scored-area table below; superseded for Arcana's coding-only target. A3 Build ✅ Smoke ✅ **Gates ☐**. Design phases had no scored area. |
 
 ---
 

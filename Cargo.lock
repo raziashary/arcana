@@ -68,34 +68,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "airsctl"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "autodev-core",
- "autodev-shared",
- "base64 0.22.1",
- "chrono",
- "clap",
- "colored",
- "comfy-table",
- "dialoguer",
- "futures",
- "indicatif 0.17.11",
- "reqwest 0.12.28",
- "rustyline",
- "serde",
- "serde_json",
- "tokio",
- "toml 0.8.2",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "zip",
-]
-
-[[package]]
 name = "aligned"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -206,6 +178,134 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
 dependencies = [
  "derive_arbitrary",
+]
+
+[[package]]
+name = "arcana"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "arcana-core",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "cron",
+ "dirs 5.0.1",
+ "ed25519-dalek",
+ "futures",
+ "glob",
+ "hex",
+ "ignore",
+ "keyring",
+ "notify",
+ "regex",
+ "reqwest 0.12.28",
+ "rfd 0.14.1",
+ "rusqlite",
+ "semver",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-shell",
+ "tempfile",
+ "tokio",
+ "toml 0.8.2",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "walkdir",
+]
+
+[[package]]
+name = "arcana-core"
+version = "1.0.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "cron",
+ "dirs 5.0.1",
+ "fastembed",
+ "flate2",
+ "futures",
+ "git2",
+ "glob",
+ "hex",
+ "ignore",
+ "keyring",
+ "notify",
+ "petgraph",
+ "rayon",
+ "regex",
+ "reqwest 0.12.28",
+ "rhai",
+ "rusqlite",
+ "semver",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "sqlite-vec",
+ "sysinfo",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "toml 0.8.2",
+ "tracing",
+ "tree-sitter",
+ "uuid",
+ "walkdir",
+ "zeroize",
+]
+
+[[package]]
+name = "arcana-shared"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "toml 0.8.2",
+ "uuid",
+]
+
+[[package]]
+name = "arcanactl"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "arcana-core",
+ "arcana-shared",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "clap",
+ "colored",
+ "comfy-table",
+ "dialoguer",
+ "futures",
+ "indicatif 0.17.11",
+ "reqwest 0.12.28",
+ "rustyline",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml 0.8.2",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "zip",
 ]
 
 [[package]]
@@ -507,106 +607,6 @@ name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
-
-[[package]]
-name = "autodev"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "autodev-core",
- "base64 0.22.1",
- "chrono",
- "cron",
- "dirs 5.0.1",
- "ed25519-dalek",
- "futures",
- "glob",
- "hex",
- "ignore",
- "keyring",
- "notify",
- "regex",
- "reqwest 0.12.28",
- "rfd 0.14.1",
- "rusqlite",
- "semver",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-shell",
- "tempfile",
- "tokio",
- "toml 0.8.2",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "walkdir",
-]
-
-[[package]]
-name = "autodev-core"
-version = "1.0.0"
-dependencies = [
- "aes-gcm",
- "anyhow",
- "async-trait",
- "base64 0.22.1",
- "chrono",
- "cron",
- "dirs 5.0.1",
- "fastembed",
- "flate2",
- "futures",
- "git2",
- "glob",
- "hex",
- "ignore",
- "keyring",
- "notify",
- "petgraph",
- "rayon",
- "regex",
- "reqwest 0.12.28",
- "rhai",
- "rusqlite",
- "semver",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "sqlite-vec",
- "sysinfo",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "toml 0.8.2",
- "tracing",
- "tree-sitter",
- "uuid",
- "walkdir",
- "zeroize",
-]
-
-[[package]]
-name = "autodev-shared"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "chrono",
- "reqwest 0.12.28",
- "rusqlite",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "toml 0.8.2",
- "uuid",
-]
 
 [[package]]
 name = "av-scenechange"

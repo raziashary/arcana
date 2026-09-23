@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# AIRS AutoDev worker setup script — Linux / macOS
+# Arcana worker setup script — Linux / macOS
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/AIRS-Foundry/autodev/main/src-cli/setup.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/raziashary/arcana/main/src-cli/setup.sh | bash
 # With a fleet token:
 #   curl -fsSL .../setup.sh | bash -s -- --token "TOKEN" --type "worker-backend"
 #
 # The script:
-#   1. Installs the airsctl CLI binary
+#   1. Installs the arcanactl CLI binary
 #   2. Redeems the fleet token (if provided)
 #   3. Installs the appropriate worker plugin
 #   4. Verifies the installation
@@ -28,15 +28,15 @@ error()   { echo -e "${RED}[ERROR]${RESET} $*"; exit 1; }
 # ─── Argument parsing ─────────────────────────────────────────────────────────
 TOKEN=""
 WORKER_TYPE="worker-backend"
-AIRSCTL_VERSION="${AIRSCTL_VERSION:-latest}"
-INSTALL_DIR="${AIRSCTL_INSTALL_DIR:-$HOME/.local/bin}"
+ARCANACTL_VERSION="${ARCANACTL_VERSION:-latest}"
+INSTALL_DIR="${ARCANACTL_INSTALL_DIR:-$HOME/.local/bin}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --token)  TOKEN="$2";       shift 2 ;;
     --type)   WORKER_TYPE="$2"; shift 2 ;;
     --dir)    INSTALL_DIR="$2"; shift 2 ;;
-    --version) AIRSCTL_VERSION="$2"; shift 2 ;;
+    --version) ARCANACTL_VERSION="$2"; shift 2 ;;
     -h|--help)
       echo "Usage: setup.sh [--token TOKEN] [--type WORKER_TYPE] [--dir INSTALL_DIR]"
       exit 0 ;;
@@ -67,23 +67,23 @@ esac
 
 info "Detected OS: $OS | Arch: $ARCH"
 
-# ─── Install airsctl ──────────────────────────────────────────────────────────
-install_airsctl() {
-  info "Installing airsctl CLI..."
+# ─── Install arcanactl ──────────────────────────────────────────────────────────
+install_arcanactl() {
+  info "Installing arcanactl CLI..."
 
   mkdir -p "$INSTALL_DIR"
 
-  RELEASE_BASE="https://github.com/AIRS-Foundry/autodev/releases"
-  if [[ "$AIRSCTL_VERSION" == "latest" ]]; then
-    DOWNLOAD_URL="$RELEASE_BASE/latest/download/airsctl-${OS}-${ARCH}"
+  RELEASE_BASE="https://github.com/raziashary/arcana/releases"
+  if [[ "$ARCANACTL_VERSION" == "latest" ]]; then
+    DOWNLOAD_URL="$RELEASE_BASE/latest/download/arcanactl-${OS}-${ARCH}"
   else
-    DOWNLOAD_URL="$RELEASE_BASE/download/${AIRSCTL_VERSION}/airsctl-${OS}-${ARCH}"
+    DOWNLOAD_URL="$RELEASE_BASE/download/${ARCANACTL_VERSION}/arcanactl-${OS}-${ARCH}"
   fi
 
   # Try to download; if download fails, fall back to cargo install
-  if curl -fsSL --max-time 30 -o "$INSTALL_DIR/airsctl" "$DOWNLOAD_URL" 2>/dev/null; then
-    chmod +x "$INSTALL_DIR/airsctl"
-    success "airsctl installed to $INSTALL_DIR/airsctl"
+  if curl -fsSL --max-time 30 -o "$INSTALL_DIR/arcanactl" "$DOWNLOAD_URL" 2>/dev/null; then
+    chmod +x "$INSTALL_DIR/arcanactl"
+    success "arcanactl installed to $INSTALL_DIR/arcanactl"
   else
     warn "Binary download failed. Attempting to build from source via cargo..."
     if ! command -v cargo &>/dev/null; then
@@ -92,10 +92,10 @@ install_airsctl() {
       # shellcheck source=/dev/null
       source "$HOME/.cargo/env"
     fi
-    cargo install airsctl --root "$HOME/.local" --locked 2>/dev/null \
-      || cargo install --git https://github.com/AIRS-Foundry/autodev --bin airsctl --root "$HOME/.local"
+    cargo install arcanactl --root "$HOME/.local" --locked 2>/dev/null \
+      || cargo install --git https://github.com/raziashary/arcana --bin arcanactl --root "$HOME/.local"
     INSTALL_DIR="$HOME/.local/bin"
-    success "airsctl built and installed."
+    success "arcanactl built and installed."
   fi
 
   # Add to PATH if needed
@@ -108,12 +108,12 @@ install_airsctl() {
   fi
 }
 
-# ─── Verify airsctl is available ──────────────────────────────────────────────
-ensure_airsctl() {
-  if ! command -v airsctl &>/dev/null; then
-    install_airsctl
+# ─── Verify arcanactl is available ──────────────────────────────────────────────
+ensure_arcanactl() {
+  if ! command -v arcanactl &>/dev/null; then
+    install_arcanactl
   else
-    success "airsctl found: $(airsctl --version 2>/dev/null | head -1)"
+    success "arcanactl found: $(arcanactl --version 2>/dev/null | head -1)"
   fi
 }
 
@@ -125,10 +125,10 @@ redeem_token() {
   fi
 
   info "Validating setup token..."
-  if airsctl worker-setup validate --token "$TOKEN" 2>/dev/null; then
+  if arcanactl worker-setup validate --token "$TOKEN" 2>/dev/null; then
     success "Token valid."
     info "Redeeming token (installing '$WORKER_TYPE')..."
-    airsctl worker-setup redeem --token "$TOKEN"
+    arcanactl worker-setup redeem --token "$TOKEN"
   else
     warn "Token validation failed — installing plugin directly."
   fi
@@ -137,14 +137,14 @@ redeem_token() {
 # ─── Install worker plugin ────────────────────────────────────────────────────
 install_worker_plugin() {
   info "Installing plugin: $WORKER_TYPE"
-  airsctl plugin install "$WORKER_TYPE"
+  arcanactl plugin install "$WORKER_TYPE"
   success "Plugin '$WORKER_TYPE' installed."
 }
 
 # ─── Verify installation ──────────────────────────────────────────────────────
 verify_installation() {
   info "Verifying installation..."
-  if airsctl plugin verify "$WORKER_TYPE"; then
+  if arcanactl plugin verify "$WORKER_TYPE"; then
     success "All dependency checks passed for '$WORKER_TYPE'."
   else
     warn "Some checks failed — review output above and install missing dependencies."
@@ -154,11 +154,11 @@ verify_installation() {
 # ─── Main ─────────────────────────────────────────────────────────────────────
 main() {
   echo ""
-  echo -e "${BOLD}${CYAN}AIRS AutoDev Worker Setup${RESET}"
+  echo -e "${BOLD}${CYAN}AIRS Arcana Worker Setup${RESET}"
   echo -e "Worker type: ${BOLD}$WORKER_TYPE${RESET}"
   echo ""
 
-  ensure_airsctl
+  ensure_arcanactl
 
   if [[ -n "$TOKEN" ]]; then
     redeem_token
@@ -169,7 +169,7 @@ main() {
   verify_installation
 
   echo ""
-  success "Setup complete! Run ${BOLD}airsctl plugin list --installed${RESET} to see installed plugins."
+  success "Setup complete! Run ${BOLD}arcanactl plugin list --installed${RESET} to see installed plugins."
   echo ""
 }
 

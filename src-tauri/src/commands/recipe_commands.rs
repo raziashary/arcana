@@ -4,7 +4,7 @@
 // Phase 2.3: generate_recipe_yaml — AI-assisted YAML generation from description.
 // See: DEVELOPMENT_PLAN.md Phase 2.3 — Recipe Auto-Generation
 
-use crate::errors::{AutoDevError, Result};
+use crate::errors::{ArcanaError, Result};
 use crate::recipes::parser::{parse_recipe, save_recipe};
 use crate::recipes::{self, recipes_dir, Recipe};
 use crate::state::AppState;
@@ -13,7 +13,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::State;
-use autodev_core::state::lock::LockTolerant;
+use arcana_core::state::lock::LockTolerant;
 
 // ─── Backup helpers ────────────────────────────────────────────────────────────
 
@@ -45,7 +45,7 @@ pub struct RecipeBackup {
 
 // ─── Read Commands ─────────────────────────────────────────────────────────────
 
-/// List all recipes in ~/.autodev/recipes/
+/// List all recipes in ~/.arcana/recipes/
 #[tauri::command]
 pub fn list_recipes() -> Result<Vec<Recipe>> {
     recipes::list()
@@ -100,7 +100,7 @@ pub fn create_recipe(recipe: Recipe) -> Result<()> {
     let dir = recipes_dir()?;
     let path = dir.join(format!("{}.yaml", recipe.id));
     if path.exists() {
-        return Err(AutoDevError::Agent(format!(
+        return Err(ArcanaError::Agent(format!(
             "Recipe '{}' already exists. Use update_recipe to modify it.",
             recipe.id
         )));
@@ -121,7 +121,7 @@ pub fn update_recipe(recipe: Recipe, force: Option<bool>) -> Result<()> {
         if let Ok(yaml) = std::fs::read_to_string(&path) {
             if let Ok(existing) = parse_recipe(&yaml) {
                 if existing.is_system && !force.unwrap_or(false) {
-                    return Err(AutoDevError::Agent(format!(
+                    return Err(ArcanaError::Agent(format!(
                         "Recipe '{}' is a system recipe. Pass force=true to override.",
                         recipe.id
                     )));
@@ -141,7 +141,7 @@ pub fn delete_recipe(recipe_id: String) -> Result<()> {
     let dir = recipes_dir()?;
     let path = dir.join(format!("{recipe_id}.yaml"));
     if !path.exists() {
-        return Err(AutoDevError::Agent(format!(
+        return Err(ArcanaError::Agent(format!(
             "Recipe '{recipe_id}' not found"
         )));
     }
@@ -150,7 +150,7 @@ pub fn delete_recipe(recipe_id: String) -> Result<()> {
     if let Ok(yaml) = std::fs::read_to_string(&path) {
         if let Ok(recipe) = parse_recipe(&yaml) {
             if recipe.is_system {
-                return Err(AutoDevError::Agent(format!(
+                return Err(ArcanaError::Agent(format!(
                     "System recipe '{}' cannot be deleted",
                     recipe_id
                 )));
@@ -168,7 +168,7 @@ pub fn delete_recipe(recipe_id: String) -> Result<()> {
 pub fn restore_recipe_backup(recipe_id: String, backup_filename: String) -> Result<()> {
     let backup_path = backups_dir()?.join(&backup_filename);
     if !backup_path.exists() {
-        return Err(AutoDevError::Agent(format!(
+        return Err(ArcanaError::Agent(format!(
             "Backup not found: {backup_filename}"
         )));
     }
@@ -205,18 +205,18 @@ pub async fn generate_recipe_yaml(
         let p = s
             .active_provider
             .clone()
-            .ok_or_else(|| AutoDevError::Agent("No active provider set".into()))?;
+            .ok_or_else(|| ArcanaError::Agent("No active provider set".into()))?;
         let m = s
             .active_model
             .clone()
-            .ok_or_else(|| AutoDevError::Agent("No active model set".into()))?;
+            .ok_or_else(|| ArcanaError::Agent("No active model set".into()))?;
         (p, m)
     };
 
     // Every supported provider takes a key; the keyless branch went with
     // Ollama (P2-11).
     let api_key = VaultManager::get(&provider_key(&provider_id))?.ok_or_else(|| {
-        AutoDevError::Agent(format!("No API key for provider '{provider_id}'"))
+        ArcanaError::Agent(format!("No API key for provider '{provider_id}'"))
     })?;
 
     let inner: Arc<dyn Provider> = match provider_id.as_str() {
@@ -224,16 +224,16 @@ pub async fn generate_recipe_yaml(
         "openai" => Arc::new(OpenAIProvider::new(api_key)),
         "google" => Arc::new(GoogleProvider::new(api_key)),
         _ => {
-            return Err(AutoDevError::Agent(format!(
+            return Err(ArcanaError::Agent(format!(
                 "Unsupported provider: {provider_id}"
             )))
         }
     };
     // Every call passes the daily ceiling (P2-21).
-    let provider = autodev_core::provider::capped::CappedProvider::wrap(inner, state.inner().clone());
+    let provider = arcana_core::provider::capped::CappedProvider::wrap(inner, state.inner().clone());
 
     let prompt = format!(
-        "Generate a recipe YAML for an AutoDev worker agent with the following details:\n\
+        "Generate a recipe YAML for an Arcana worker agent with the following details:\n\
          - Worker type: {worker_type}\n\
          - Name: {name}\n\
          - Description: {description}\n\n\
@@ -259,7 +259,7 @@ pub async fn generate_recipe_yaml(
             role:    "user".to_string(),
             content: vec![MessageContent::Text { text: prompt }],
         }],
-        system:                 Some("You are an expert at writing AutoDev worker agent recipes in YAML format. Output only valid YAML with no explanation or markdown.".to_string()),
+        system:                 Some("You are an expert at writing Arcana worker agent recipes in YAML format. Output only valid YAML with no explanation or markdown.".to_string()),
         tools:                  vec![],
         max_tokens:             2048,
         temperature:            Some(0.4),
@@ -268,7 +268,7 @@ pub async fn generate_recipe_yaml(
         thinking_budget_tokens: None,
         // A recipe step's prompt is built per invocation; there is no shared
         // prefix across runs to cache.
-        cache: autodev_core::provider::usage::CachePolicy::Off,
+        cache: arcana_core::provider::usage::CachePolicy::Off,
         // P3-25: a one-shot recipe generation with no tool history —
         // nothing to clear.
         clear_tool_uses:        None,
@@ -286,7 +286,7 @@ pub async fn generate_recipe_yaml(
                 None
             }
         })
-        .ok_or_else(|| AutoDevError::Agent("Provider returned no text content".into()))?;
+        .ok_or_else(|| ArcanaError::Agent("Provider returned no text content".into()))?;
 
     // Strip any accidental markdown fences
     let yaml = yaml.trim();

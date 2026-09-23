@@ -145,7 +145,7 @@ function ChangesTab() {
   const clearDiff    = useGitStore((s) => s.clearDiff)
 
   const [message, setMessage] = useState('')
-  const [trailer, setTrailer] = useState('AutoDev/PA')
+  const [trailer, setTrailer] = useState('Arcana/PA')
   const [committing, setCommitting] = useState(false)
 
   if (!status) return null

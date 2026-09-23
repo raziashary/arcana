@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# AppRun — AppImage entry point for AutoDev.
+# AppRun — AppImage entry point for Arcana.
 # Phase 5.3 — Platform Installers.
 #
-# Sets up the runtime environment and launches the AutoDev binary.
+# Sets up the runtime environment and launches the Arcana binary.
 # APPDIR is set by the AppImage runtime to the mountpoint of the squashfs.
 
 set -euo pipefail
 
 APPDIR="${APPDIR:-$(dirname "$(readlink -f "$0")")}"
-AUTODEV_BIN="$APPDIR/usr/bin/autodev"
+ARCANA_BIN="$APPDIR/usr/bin/arcana"
 
 # ─── Library path ─────────────────────────────────────────────────────────────
 
@@ -24,16 +24,16 @@ fi
 
 # ─── GDK / WebKit DMA-BUF sandbox workaround (Tauri v2) ──────────────────────
 # Required on some compositors; disable sandbox if running without privileges.
-if [[ "${AUTODEV_NO_SANDBOX:-}" == "1" ]] || [[ "$(id -u)" -eq 0 ]]; then
+if [[ "${ARCANA_NO_SANDBOX:-}" == "1" ]] || [[ "$(id -u)" -eq 0 ]]; then
   export WEBKIT_DISABLE_DMABUF_RENDERER=1
 fi
 
 # ─── XDG base directories ─────────────────────────────────────────────────────
-# Point XDG dirs to ~/.autodev/ for portable installations.
+# Point XDG dirs to ~/.arcana/ for portable installations.
 export XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
 
 # ─── Launch ───────────────────────────────────────────────────────────────────
 
-exec "$AUTODEV_BIN" "$@"
+exec "$ARCANA_BIN" "$@"

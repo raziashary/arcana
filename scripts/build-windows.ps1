@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Build AutoDev Windows installers (MSI + NSIS).
+    Build Arcana Windows installers (MSI + NSIS).
 
 .DESCRIPTION
     Convenience wrapper around installers/wix/build-msi.ps1.
@@ -29,7 +29,7 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = $PSScriptRoot
 $RepoRoot  = Split-Path $ScriptDir -Parent
 
-Write-Host "AutoDev Windows Build" -ForegroundColor Cyan
+Write-Host "Arcana Windows Build" -ForegroundColor Cyan
 Write-Host "=====================" -ForegroundColor Cyan
 
 $buildScript = Join-Path $RepoRoot "installers\wix\build-msi.ps1"

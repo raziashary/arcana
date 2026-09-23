@@ -1,6 +1,6 @@
 // Model config store — per-model temperature, top_p, reasoning_effort, thinking settings.
 // Phase 2.3: T4a/T4b — Reasoning Effort + Temperature/Top-P per-model configuration.
-// Persisted in ~/.autodev/config.db via Tauri backend.
+// Persisted in ~/.arcana/config.db via Tauri backend.
 
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'

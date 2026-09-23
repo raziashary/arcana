@@ -64,7 +64,7 @@ export default function StatusBar() {
 
       {/* Middle: sidecar / MCP status */}
       <div className="flex items-center gap-2">
-        <span style={{ color: 'var(--text-4)' }}>autodev</span>
+        <span style={{ color: 'var(--text-4)' }}>arcana</span>
 
         {/* Ruflo Feature 6 — MCP disconnected warning */}
         {mcpDisconnected.length > 0 && (
@@ -86,7 +86,7 @@ export default function StatusBar() {
 
       {/* Right: token count */}
       <div style={{ color: 'var(--text-3)' }}>
-        {totalTokens > 0 ? `${fmtTokens(totalTokens)} tk` : 'autodev v1.0'}
+        {totalTokens > 0 ? `${fmtTokens(totalTokens)} tk` : 'arcana v1.0'}
       </div>
     </div>
   )

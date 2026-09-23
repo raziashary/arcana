@@ -15,7 +15,7 @@ import { useAgentStore }    from '../stores/agentStore'
 import { useSessionStore }  from '../stores/sessionStore'
 import { useSettingsStore, PA_MODES, type PAMode } from '../stores/settingsStore'
 import { useCostStore }     from '../stores/costStore'
-import { useAutodevMdStore } from '../stores/autodevMdStore'
+import { useArcanaMdStore } from '../stores/arcanaMdStore'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 import SkillsPalette from '../components/skills/SkillsPalette'
 import SkillSlashPicker from '../components/skills/SkillSlashPicker'
@@ -101,8 +101,8 @@ function ChatHeader({ localDir, setLocalDir }: ChatHeaderProps) {
   const paMode        = useSettingsStore(s => s.paMode)
   const setPAMode     = useSettingsStore(s => s.setPAMode)
   const byCategory    = useSkillStore(s => s.byCategory)
-  const globalContent = useAutodevMdStore(s => s.globalContent)
-  const loadGlobal    = useAutodevMdStore(s => s.loadGlobal)
+  const globalContent = useArcanaMdStore(s => s.globalContent)
+  const loadGlobal    = useArcanaMdStore(s => s.loadGlobal)
 
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const dropRef = useRef<HTMLDivElement>(null)
@@ -123,7 +123,7 @@ function ChatHeader({ localDir, setLocalDir }: ChatHeaderProps) {
   // P8-55 - the "N MCP" counter is gone. It counted the two PYTHON
   // sidecar processes, not MCP servers: 2 when the orchestrator was
   // running, 1 while starting. External MCP servers have their own panel.
-  const autodevOk   = globalContent.trim().length > 0
+  const arcanaOk   = globalContent.trim().length > 0
 
   return (
     <div
@@ -177,8 +177,8 @@ function ChatHeader({ localDir, setLocalDir }: ChatHeaderProps) {
           </>
         )}
         <span style={{ color: 'var(--text-4)' }}>&#183;</span>
-        <span style={{ color: autodevOk ? 'var(--accent)' : 'var(--danger)' }}>
-          AUTODEV.md {autodevOk ? '\u2713' : '\u2717'}
+        <span style={{ color: arcanaOk ? 'var(--accent)' : 'var(--danger)' }}>
+          ARCANA.md {arcanaOk ? '\u2713' : '\u2717'}
         </span>
         {localDir && (
           <>
@@ -470,7 +470,7 @@ export default function ChatTab() {
             style={{ color: 'var(--text-3)' }}
           >
             <div className="font-mono text-xs" style={{ letterSpacing: '0.08em' }}>
-              AUTODEV — PA MODE
+              ARCANA — PA MODE
             </div>
             <div className="text-sm" style={{ color: 'var(--text-4)' }}>
               Send a message to start a session

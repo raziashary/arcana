@@ -3,8 +3,8 @@
 // PAT is stored separately in the OS keychain via vault_commands.
 // See: DEVELOPMENT_PLAN.md Phase 2.3 — GitHub MCP Integration
 
-use crate::db::autodev_dir;
-use crate::errors::{AutoDevError, Result};
+use crate::db::arcana_dir;
+use crate::errors::{ArcanaError, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -41,11 +41,11 @@ pub fn get_github_mcp_config() -> Result<GitHubMcpConfig> {
             |r| r.get(0),
         )
         .optional()
-        .map_err(|e| AutoDevError::Agent(format!("get_github_mcp_config: {e}")))?;
+        .map_err(|e| ArcanaError::Agent(format!("get_github_mcp_config: {e}")))?;
 
     match row {
         Some(json) => serde_json::from_str(&json)
-            .map_err(|e| AutoDevError::Agent(format!("parse github mcp config: {e}"))),
+            .map_err(|e| ArcanaError::Agent(format!("parse github mcp config: {e}"))),
         None => Ok(GitHubMcpConfig::default()),
     }
 }
@@ -65,7 +65,7 @@ pub fn set_github_mcp_config(
         server_url,
     };
     let json = serde_json::to_string(&cfg)
-        .map_err(|e| AutoDevError::Agent(format!("serialize github mcp config: {e}")))?;
+        .map_err(|e| ArcanaError::Agent(format!("serialize github mcp config: {e}")))?;
 
     let conn = crate::db::app_settings::open()?;
     conn.execute(
@@ -73,6 +73,6 @@ pub fn set_github_mcp_config(
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         params![KEY, json],
     )
-    .map_err(|e| AutoDevError::Agent(format!("set_github_mcp_config: {e}")))?;
+    .map_err(|e| ArcanaError::Agent(format!("set_github_mcp_config: {e}")))?;
     Ok(())
 }

@@ -1,15 +1,14 @@
-Package: autodev
+Package: arcana
 Version: @VERSION@
 Architecture: amd64
-Maintainer: AIRS Foundry <support@airs.dev>
+Maintainer: Arcana
 Installed-Size: @INSTALLED_SIZE@
 Depends: libwebkit2gtk-4.1-0 (>= 2.40.0), libgtk-3-0 (>= 3.24.0), libayatana-appindicator3-1 | libappindicator3-1, libssl3 | libssl1.1, ca-certificates
 Recommends: git
 Section: devel
 Priority: optional
-Homepage: https://airs.dev/autodev
 Description: AI-powered development assistant with multi-agent workflows
- AutoDev is a local-first AI development assistant that orchestrates a fleet
+ Arcana is a local-first AI development assistant that orchestrates a fleet
  of specialized AI agents to help with coding, planning, code review, and
  project management.
  .

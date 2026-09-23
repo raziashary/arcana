@@ -2,7 +2,7 @@
 //
 // Renders per-task token and cost usage as a compact progress bar with
 // colour-coded fill and an EXCEEDED badge. Consumed by task cards in the
-// AutoDev Panel when a task is in_progress or needs_info with a budget set.
+// Arcana Panel when a task is in_progress or needs_info with a budget set.
 //
 // Colour thresholds (mirroring ADR-097):
 //   green  < 50 %

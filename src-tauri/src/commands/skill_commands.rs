@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::State;
 
-use crate::errors::{AutoDevError, Result};
+use crate::errors::{ArcanaError, Result};
 use crate::skills::types::{
     Skill, SkillCategory, SkillExecutionResult, SkillSummary, ValidationResult,
 };
@@ -80,7 +80,7 @@ pub fn execute_skill(
             .iter()
             .map(|e| format!("{}: {}", e.field, e.message))
             .collect();
-        return Err(AutoDevError::Agent(format!(
+        return Err(ArcanaError::Agent(format!(
             "Skill parameter validation failed: {}",
             msgs.join("; ")
         )));
@@ -100,13 +100,13 @@ pub fn reload_skills(registry: State<'_, Arc<SkillRegistry>>) -> Result<usize> {
 
 #[tauri::command]
 pub fn import_skill(source: String, registry: State<'_, Arc<SkillRegistry>>) -> Result<Skill> {
-    use crate::db::autodev_dir;
+    use crate::db::arcana_dir;
     use crate::skills::loader::SkillLoader;
     use std::path::Path;
 
     let path = Path::new(&source);
     if !path.exists() {
-        return Err(AutoDevError::Agent(format!("File not found: {source}")));
+        return Err(ArcanaError::Agent(format!("File not found: {source}")));
     }
 
     let category_hint = path
@@ -118,7 +118,7 @@ pub fn import_skill(source: String, registry: State<'_, Arc<SkillRegistry>>) -> 
     let loader = SkillLoader::new()?;
     let skill = loader.load_file(path, category_hint)?;
 
-    let dest_dir = autodev_dir()?.join("skills").join(skill.category.as_str());
+    let dest_dir = arcana_dir()?.join("skills").join(skill.category.as_str());
     std::fs::create_dir_all(&dest_dir)?;
     std::fs::copy(path, dest_dir.join(path.file_name().unwrap()))?;
 

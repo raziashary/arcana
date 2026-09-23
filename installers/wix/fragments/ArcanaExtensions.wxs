@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ArcanaExtensions.wxs — Custom WiX v4 fragment for the Arcana MSI installer.
+  Included via tauri.conf.json bundle.windows.wix.fragmentPaths.
+
+  This fragment adds:
+    1. A custom install condition that requires Windows 10 1809+ (build 17763)
+    2. (removed — the firewall exception for the deleted MCP server)
+    3. Start Menu shortcut with proper icon + App User Model ID
+    4. Registry entries for the .arcana file association
+    5. Environment variable %ARCANA_HOME% pointing to the install dir
+    6. Post-install launch action (optional; user can opt-out)
+
+  WiX v4 syntax — use `wix.exe build` or Tauri's bundled WiX runner.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <Fragment>
+
+    <!-- ─── OS version condition ──────────────────────────────────────────── -->
+    <!-- Require Windows 10 1809 (build 17763) or later -->
+    <Launch
+      Condition="Installed OR (VersionNT64 >= 1000 AND MsiNTProductType = 1)"
+      Message="Arcana requires Windows 10 version 1809 or later (64-bit)." />
+
+    <!-- ─── Component group: extra registry + shortcuts ──────────────────── -->
+    <ComponentGroup Id="ArcanaExtras" Directory="INSTALLDIR">
+
+      <!-- File association: .arcana files open with Arcana -->
+      <Component Id="ArcanaFileAssoc" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567890">
+        <RegistryKey Root="HKLM" Key="Software\Classes\.arcana">
+          <RegistryValue Type="string" Value="ArcanaWorkspace" />
+        </RegistryKey>
+        <RegistryKey Root="HKLM" Key="Software\Classes\ArcanaWorkspace">
+          <RegistryValue Type="string" Value="Arcana Workspace" />
+        </RegistryKey>
+        <RegistryKey Root="HKLM" Key="Software\Classes\ArcanaWorkspace\DefaultIcon">
+          <RegistryValue Type="string" Value="[INSTALLDIR]Arcana.exe,0" />
+        </RegistryKey>
+        <RegistryKey Root="HKLM" Key="Software\Classes\ArcanaWorkspace\shell\open\command">
+          <RegistryValue Type="string" Value="&quot;[INSTALLDIR]Arcana.exe&quot; &quot;%1&quot;" />
+        </RegistryKey>
+      </Component>
+
+      <!-- App User Model ID (taskbar grouping, jump lists) -->
+      <Component Id="ArcanaAppId" Guid="B2C3D4E5-F6A7-8901-BCDE-F12345678901">
+        <RegistryKey Root="HKCU" Key="Software\Classes\Applications\Arcana.exe">
+          <RegistryValue Name="AppUserModelID" Type="string"
+            Value="dev.arcana.desktop" />
+        </RegistryKey>
+      </Component>
+
+      <!-- ARCANA_HOME environment variable (machine-wide) -->
+      <Component Id="ArcanaEnvVar" Guid="C3D4E5F6-A7B8-9012-CDEF-123456789012">
+        <Environment
+          Id="ArcanaHome"
+          Action="set"
+          Name="ARCANA_HOME"
+          Part="all"
+          Permanent="no"
+          System="yes"
+          Value="[INSTALLDIR]" />
+      </Component>
+
+    </ComponentGroup>
+
+    <!-- The Windows Firewall exception that used to live here has been REMOVED.
+         It opened TCP 8767 with Profile="all" and Scope="localSubnet" — not even
+         localhost-only — for Arcana's in-process MCP server. That server was
+         deleted in P0 (it was an unauthenticated local endpoint exposing bash,
+         write_file and spawn_subagent), so every install was punching a hole in
+         the firewall for a service that no longer exists. Arcana listens on no
+         port; all of its network traffic is outbound. -->
+
+  </Fragment>
+
+  <!-- ─── Feature references ────────────────────────────────────────────────── -->
+  <Fragment>
+    <Feature Id="ArcanaExtrasFeature" Title="Arcana Extensions" Level="1">
+      <ComponentGroupRef Id="ArcanaExtras" />
+      <ComponentGroupRef Id="ArcanaFirewall" />
+    </Feature>
+  </Fragment>
+
+</Wix>

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build-linux.sh — Build AutoDev Linux installers (AppImage + .deb).
+# build-linux.sh — Build Arcana Linux installers (AppImage + .deb).
 # Phase 5.3 — Platform Installers.
 #
 # Usage:
@@ -34,7 +34,7 @@ if [[ "$BUILD_APPIMAGE" == "false" && "$BUILD_DEB" == "false" ]]; then
   BUILD_DEB=true
 fi
 
-echo "AutoDev Linux Build"
+echo "Arcana Linux Build"
 echo "==================="
 
 VERSION=$(grep -m1 '^version' "$TAURI_DIR/Cargo.toml" | sed 's/.*= *"\(.*\)"/\1/')
@@ -54,7 +54,7 @@ npm ci --prefer-offline
 # Build Tauri with all Linux targets
 echo
 echo "==> Building Tauri (release)"
-export AUTODEV_CHANNEL="$CHANNEL"
+export ARCANA_CHANNEL="$CHANNEL"
 
 BUNDLES=""
 [[ "$BUILD_APPIMAGE" == "true" ]] && BUNDLES="${BUNDLES:+$BUNDLES,}appimage"
@@ -71,10 +71,10 @@ if [[ "$BUILD_APPIMAGE" == "true" ]]; then
   echo "==> Packaging AppImage"
   APPIMAGE=$(find "$TAURI_DIR/target/release/bundle/appimage" -name "*.AppImage" | sort | tail -1)
   if [[ -f "$APPIMAGE" ]]; then
-    DEST="$DIST_DIR/autodev_${VERSION}${CHANNEL_SUFFIX}_${ARCH}.AppImage"
+    DEST="$DIST_DIR/arcana_${VERSION}${CHANNEL_SUFFIX}_${ARCH}.AppImage"
     cp "$APPIMAGE" "$DEST"
     chmod +x "$DEST"
-    sha256sum "$DEST" | awk '{print $1"  autodev_'"${VERSION}${CHANNEL_SUFFIX}_${ARCH}"'.AppImage"}' > "${DEST}.sha256"
+    sha256sum "$DEST" | awk '{print $1"  arcana_'"${VERSION}${CHANNEL_SUFFIX}_${ARCH}"'.AppImage"}' > "${DEST}.sha256"
     echo "  $DEST"
   else
     echo "  WARNING: AppImage not found — skipping"
@@ -87,9 +87,9 @@ if [[ "$BUILD_DEB" == "true" ]]; then
   echo "==> Packaging .deb"
   DEB=$(find "$TAURI_DIR/target/release/bundle/deb" -name "*.deb" | sort | tail -1)
   if [[ -f "$DEB" ]]; then
-    DEST="$DIST_DIR/autodev_${VERSION}${CHANNEL_SUFFIX}_${ARCH}.deb"
+    DEST="$DIST_DIR/arcana_${VERSION}${CHANNEL_SUFFIX}_${ARCH}.deb"
     cp "$DEB" "$DEST"
-    sha256sum "$DEST" | awk '{print $1"  autodev_'"${VERSION}${CHANNEL_SUFFIX}_${ARCH}"'.deb"}' > "${DEST}.sha256"
+    sha256sum "$DEST" | awk '{print $1"  arcana_'"${VERSION}${CHANNEL_SUFFIX}_${ARCH}"'.deb"}' > "${DEST}.sha256"
     echo "  $DEST"
   else
     echo "  WARNING: .deb not found — skipping"

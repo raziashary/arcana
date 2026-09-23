@@ -2,10 +2,10 @@
 //
 // This is the test the invariant was missing. Before P1 it could not have been
 // written: `AgentEngine::new` required a `tauri::AppHandle`, so the runtime was
-// constructible only from inside a running desktop window, and `airsctl` had no
+// constructible only from inside a running desktop window, and `arcanactl` had no
 // way to reach it. That is why the CLI grew its own parallel implementations in
 // `src-shared` — and why `src-shared/src/db/workers.rs` drifted from the schema
-// `src-tauri` actually writes, breaking every `airsctl worker` call.
+// `src-tauri` actually writes, breaking every `arcanactl worker` call.
 //
 // What this proves: the agent runtime constructs, registers its tools and runs
 // its permission machinery in a process with no UI framework linked at all.
@@ -16,16 +16,16 @@
 
 use std::sync::{Arc, Mutex};
 
-use autodev_core::agent::builtin_tools::register_for_mode;
-use autodev_core::agent::permission::PermissionMode;
-use autodev_core::agent::tool_registry::ToolRegistry;
-use autodev_core::agent::tool_trait::AgentIdentity;
-use autodev_core::agent::{AgentEngine, PAMode};
-use autodev_core::events::{emit, install_sink, NullEventSink};
-use autodev_core::provider::{
+use arcana_core::agent::builtin_tools::register_for_mode;
+use arcana_core::agent::permission::PermissionMode;
+use arcana_core::agent::tool_registry::ToolRegistry;
+use arcana_core::agent::tool_trait::AgentIdentity;
+use arcana_core::agent::{AgentEngine, PAMode};
+use arcana_core::events::{emit, install_sink, NullEventSink};
+use arcana_core::provider::{
     CompletionRequest, CompletionResponse, ModelInfo, Provider, ProviderStatus,
 };
-use autodev_core::state::app_state::AppState;
+use arcana_core::state::app_state::AppState;
 
 /// A provider that is never called.
 ///
@@ -50,18 +50,18 @@ impl Provider for StubProvider {
     async fn complete(
         &self,
         _request: CompletionRequest,
-    ) -> autodev_core::errors::Result<CompletionResponse> {
+    ) -> arcana_core::errors::Result<CompletionResponse> {
         unreachable!("the runtime-construction test never issues a completion")
     }
 
     async fn stream(
         &self,
         _request: CompletionRequest,
-    ) -> autodev_core::errors::Result<autodev_core::provider::traits::StreamResult> {
+    ) -> arcana_core::errors::Result<arcana_core::provider::traits::StreamResult> {
         unreachable!("the runtime-construction test never opens a stream")
     }
 
-    async fn test_connection(&self) -> autodev_core::errors::Result<ProviderStatus> {
+    async fn test_connection(&self) -> arcana_core::errors::Result<ProviderStatus> {
         unreachable!("the runtime-construction test never tests a connection")
     }
 }
@@ -110,7 +110,7 @@ fn the_cli_can_build_the_same_builtin_tool_set_the_desktop_app_runs() {
 
 #[test]
 fn emitting_without_a_host_sink_is_a_no_op_not_a_panic() {
-    // The headless default. `airsctl` installs this explicitly in `main`, but
+    // The headless default. `arcanactl` installs this explicitly in `main`, but
     // the property that matters is that emitting is safe even before any host
     // has installed anything — a core call site must never have to ask whether
     // a UI exists.

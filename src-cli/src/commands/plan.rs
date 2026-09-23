@@ -1,6 +1,6 @@
 use crate::output::{status_colored, OutputContext};
 use anyhow::Result;
-use autodev_core::db::plans::{
+use arcana_core::db::plans::{
     CreatePlanInput, CreatePlanItemInput, Plan, PlanItem, PlanScope, PlansDb,
 };
 use clap::{Args, Subcommand};
@@ -94,7 +94,7 @@ fn create(args: CreateArgs, ctx: OutputContext) -> Result<()> {
         description: args.description,
         session_id: None,
         assigned_agent: None,
-        created_by: Some("airsctl".into()),
+        created_by: Some("arcanactl".into()),
         agent_scope: PlanScope::from_str(args.scope.as_deref().unwrap_or("personal")),
         parent_plan_id: None,
         task_id: None,

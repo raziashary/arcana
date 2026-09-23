@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <!--
-        AutoDev macOS entitlements — Phase 5.3 Platform Installers.
+        Arcana macOS entitlements — Phase 5.3 Platform Installers.
         Required for hardened runtime + notarization.
     -->
 
@@ -23,9 +23,9 @@
     <key>com.apple.security.network.client</key>
     <true/>
 
-    <!-- com.apple.security.network.server was REMOVED. It granted AutoDev the
+    <!-- com.apple.security.network.server was REMOVED. It granted Arcana the
          right to LISTEN for incoming connections, and existed solely for the
-         in-process MCP server on :8767 that was deleted in P0. AutoDev now makes
+         in-process MCP server on :8767 that was deleted in P0. Arcana now makes
          only outbound requests (provider APIs, update checks, external MCP
          health probes), which network.client above already covers. -->
 

@@ -31,7 +31,7 @@ env:
   RUST_BACKTRACE: 1
   CARGO_TERM_COLOR: always
   # Update server public key (Ed25519) — set in repo secrets
-  AUTODEV_UPDATE_PUBKEY: ${{ secrets.AUTODEV_UPDATE_PUBKEY }}
+  ARCANA_UPDATE_PUBKEY: ${{ secrets.ARCANA_UPDATE_PUBKEY }}
 
 jobs:
 
@@ -91,7 +91,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "${{ needs.metadata.outputs.tag }}" \
-            --title "AutoDev ${{ needs.metadata.outputs.version }}" \
+            --title "Arcana ${{ needs.metadata.outputs.version }}" \
             --generate-notes \
             ${{ needs.metadata.outputs.draft == 'true' && '--draft' || '' }} \
             ${{ needs.metadata.outputs.channel != 'stable' && '--prerelease' || '' }}
@@ -135,7 +135,7 @@ jobs:
 
       - name: Build MSI
         env:
-          AUTODEV_CHANNEL: ${{ needs.metadata.outputs.channel }}
+          ARCANA_CHANNEL: ${{ needs.metadata.outputs.channel }}
           CERT_PATH:       ${{ secrets.WINDOWS_CERT_PATH }}
           CERT_PASSWORD:   ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: |
@@ -213,7 +213,7 @@ jobs:
 
       - name: Build DMG
         env:
-          AUTODEV_CHANNEL:   ${{ needs.metadata.outputs.channel }}
+          ARCANA_CHANNEL:   ${{ needs.metadata.outputs.channel }}
           SIGNING_IDENTITY:  ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID:          ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID:     ${{ secrets.APPLE_TEAM_ID }}
@@ -275,7 +275,7 @@ jobs:
 
       - name: Build AppImage + deb
         env:
-          AUTODEV_CHANNEL: ${{ needs.metadata.outputs.channel }}
+          ARCANA_CHANNEL: ${{ needs.metadata.outputs.channel }}
         run: |
           bash scripts/build-linux.sh \
             --all \
@@ -295,7 +295,7 @@ jobs:
 
   # ── Sign and checksum the built artifacts ──────────────────────────────────
   #
-  # AutoDev REFUSES to install an update that has no detached Ed25519 signature
+  # Arcana REFUSES to install an update that has no detached Ed25519 signature
   # and no SHA-256 checksum (src-tauri/src/updater/verify.rs — both are hard
   # failures in every build profile). Producing them is therefore part of
   # releasing, not an optional extra: a release published without these assets
@@ -310,10 +310,10 @@ jobs:
     steps:
       - name: Require the signing key
         env:
-          PRIVKEY: ${{ secrets.AUTODEV_UPDATE_PRIVKEY }}
+          PRIVKEY: ${{ secrets.ARCANA_UPDATE_PRIVKEY }}
         run: |
           if [ -z "$PRIVKEY" ]; then
-            echo "::error::AUTODEV_UPDATE_PRIVKEY is not set. Releases cannot be" \
+            echo "::error::ARCANA_UPDATE_PRIVKEY is not set. Releases cannot be" \
                  "signed, and an unsigned release is uninstallable. See" \
                  "docs/updater-signing.md for key generation and setup."
             exit 1
@@ -331,7 +331,7 @@ jobs:
 
       - name: Sign and checksum every installer
         env:
-          PRIVKEY: ${{ secrets.AUTODEV_UPDATE_PRIVKEY }}
+          PRIVKEY: ${{ secrets.ARCANA_UPDATE_PRIVKEY }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -362,13 +362,13 @@ jobs:
       # the application compiles in.
       - name: Verify the signatures before publishing
         env:
-          PUBKEY: ${{ secrets.AUTODEV_UPDATE_PUBKEY }}
+          PUBKEY: ${{ secrets.ARCANA_UPDATE_PUBKEY }}
         run: |
           set -euo pipefail
           shopt -s nullglob
 
           if [ -z "$PUBKEY" ]; then
-            echo "::error::AUTODEV_UPDATE_PUBKEY is not set, so the signatures" \
+            echo "::error::ARCANA_UPDATE_PUBKEY is not set, so the signatures" \
                  "cannot be checked against the key the app embeds."
             exit 1
           fi

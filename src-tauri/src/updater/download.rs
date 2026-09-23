@@ -68,7 +68,7 @@ pub async fn download_update(
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
         .https_only(true)
-        .user_agent("AutoDev auto-updater")
+        .user_agent("Arcana auto-updater")
         .build()?;
 
     let mut request = client.get(url);
@@ -212,7 +212,7 @@ fn sidecar_client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .https_only(true)
-        .user_agent("AutoDev auto-updater")
+        .user_agent("Arcana auto-updater")
         .build()
         .context("Building HTTP client failed")
 }
@@ -220,7 +220,7 @@ fn sidecar_client() -> Result<reqwest::Client> {
 /// Refuse any update endpoint that is not HTTPS with a real host.
 ///
 /// Enforced in code rather than assumed of the release manifest: the manifest
-/// URL itself is overridable (`AUTODEV_UPDATE_URL`), so a plaintext endpoint is
+/// URL itself is overridable (`ARCANA_UPDATE_URL`), so a plaintext endpoint is
 /// reachable without touching the repo.
 pub fn require_https(url: &str) -> Result<()> {
     let trimmed = url.trim();
@@ -246,7 +246,7 @@ pub fn download_dir() -> Result<PathBuf> {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .unwrap_or_else(|_| ".".to_string());
-    let dir = PathBuf::from(home).join(".autodev").join("updates");
+    let dir = PathBuf::from(home).join(".arcana").join("updates");
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }
@@ -290,7 +290,7 @@ pub fn safe_filename(url: &str) -> String {
         return candidate;
     }
     let digest = super::verify::sha256_hex(url.trim().as_bytes());
-    format!("autodev-update-{}.bin", &digest[..16])
+    format!("arcana-update-{}.bin", &digest[..16])
 }
 
 fn is_safe_filename(name: &str) -> bool {
@@ -330,16 +330,16 @@ mod tests {
     #[test]
     fn safe_filename_keeps_ordinary_asset_names() {
         assert_eq!(
-            safe_filename("https://example.com/rel/autodev_1.2.3_x64_en-US.msi"),
-            "autodev_1.2.3_x64_en-US.msi"
+            safe_filename("https://example.com/rel/arcana_1.2.3_x64_en-US.msi"),
+            "arcana_1.2.3_x64_en-US.msi"
         );
         assert_eq!(
-            safe_filename("https://example.com/a/AutoDev-1.2.3.AppImage"),
-            "AutoDev-1.2.3.AppImage"
+            safe_filename("https://example.com/a/Arcana-1.2.3.AppImage"),
+            "Arcana-1.2.3.AppImage"
         );
         assert_eq!(
-            safe_filename("https://example.com/a/autodev.msi.sig"),
-            "autodev.msi.sig"
+            safe_filename("https://example.com/a/arcana.msi.sig"),
+            "arcana.msi.sig"
         );
     }
 
@@ -417,7 +417,7 @@ mod tests {
         ] {
             let name = safe_filename(url);
             assert!(
-                name.starts_with("autodev-update-") && name.ends_with(".bin"),
+                name.starts_with("arcana-update-") && name.ends_with(".bin"),
                 "expected a fallback name for {url}, got {name}"
             );
         }

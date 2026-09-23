@@ -1,6 +1,6 @@
 // McpToolBrowser.tsx — Phase 3.4b
 //
-// Lists every builtin tool AutoDev exposes to its agents (the canonical Rust
+// Lists every builtin tool Arcana exposes to its agents (the canonical Rust
 // ToolRegistry). Data comes from the `list_mcp_tools` Tauri command, which
 // iterates the in-process ToolRegistry — NOT a JSON-RPC round-trip through
 // the MCP server (which would require Streamable HTTP session management).
@@ -65,7 +65,7 @@ export default function McpToolBrowser() {
     >
       <div className="flex items-center justify-between gap-2">
         <div className="font-mono text-xs" style={{ color: 'var(--text-2)' }}>
-          Built-in tools available to AutoDev agents{' '}
+          Built-in tools available to Arcana agents{' '}
           <span style={{ color: 'var(--text-3)' }}>
             ({tools.length} total, called in-process)
           </span>

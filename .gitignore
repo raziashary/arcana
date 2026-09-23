@@ -1,8 +1,5 @@
 # Build outputs
-sidecars/
 dist/
-# PD0 — the spawnable sidecar is a build output, rebuilt by `npm run build:sidecar`.
-dist-sidecar/
 target/
 # ⚠ `scripts/` was ignored here from the FIRST COMMIT (07ded32, 2026-04-08) —
 # before any of the files in it existed, so it was collateral rather than a
@@ -16,7 +13,6 @@ target/
 # The rule is removed rather than given a fourth negation: every file in
 # `scripts/` is a build orchestrator or a smoke, and both belong in version
 # control. Razi-ruled 2026-09-03.
-src-tauri/resources/sidecars/
 
 # Python
 *.pyc
@@ -37,7 +33,7 @@ target/
 **/*.rs.bk
 # Cargo.lock IS committed — see below. Left here as a marker so nobody
 # re-adds the ignore:
-#   AutoDev is an application, not a library. Without a committed lockfile CI
+#   Arcana is an application, not a library. Without a committed lockfile CI
 #   resolves dependencies fresh on every run ("Locking 766 packages to latest
 #   compatible versions"), so a build is not reproducible and an upstream
 #   release can turn CI red with no change on our side.
@@ -74,6 +70,9 @@ logs/
 .env.*.local
 
 # User data
+.arcana/sessions/
+.arcana/logs/
+# Historical AutoDev local artifacts, if present in an older checkout.
 .airs/sessions/
 .airs/logs/
 
@@ -82,9 +81,7 @@ logs/
 *.bak
 *.cache
 
-# Redis snapshots. AutoDev can start Memurai on Windows (see
-# sidecar/mod.rs), and a Redis launched with a repo working directory
-# writes its dump here. 175 KB of one was committed once already.
+# Redis snapshots from the retired sidecar era must not be committed.
 dump.rdb
 *.rdb
 

@@ -64,7 +64,7 @@ interface SettingsState {
   setPAMode:             (mode: PAMode) => void
 }
 
-const storedPAMode = (localStorage.getItem('autodev:pa_mode') ?? 'fast_development') as PAMode
+const storedPAMode = (localStorage.getItem('arcana:pa_mode') ?? 'fast_development') as PAMode
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   providers:          [],
@@ -149,7 +149,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     // session row is the source of truth so reloads / engine rebuilds
     // never snap back to `fast_development`. The active session id is
     // resolved lazily from sessionStore to avoid a circular import.
-    localStorage.setItem('autodev:pa_mode', mode)
+    localStorage.setItem('arcana:pa_mode', mode)
     set({ paMode: mode })
     void (async () => {
       try {

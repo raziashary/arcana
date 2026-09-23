@@ -4,7 +4,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── CSS Custom Properties — AutoDev Industrial Dark ─────────────────────── */
+/* ── CSS Custom Properties — Arcana Industrial Dark ─────────────────────── */
 :root {
   /* Backgrounds */
   --bg-app:           #0f0f17;   /* app root */
@@ -152,7 +152,7 @@ input::placeholder, textarea::placeholder {
   color: var(--text-3);
 }
 
-/* ── AutoDev dynamic UI animations ──────────────────────────────────────── */
+/* ── Arcana dynamic UI animations ──────────────────────────────────────── */
 @keyframes spin {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }

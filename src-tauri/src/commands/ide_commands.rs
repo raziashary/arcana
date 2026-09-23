@@ -3,7 +3,7 @@
 // workspace_commands::load_workspace_dir).
 
 use crate::commands::workspace_commands::load_workspace_dir;
-use crate::errors::{AutoDevError, Result};
+use crate::errors::{ArcanaError, Result};
 use crate::ide::{
     file_reader, file_search, file_tree, symbol_nav, symbols,
     types::{
@@ -18,7 +18,7 @@ use crate::ide::{
 fn require_workspace() -> Result<String> {
     let ws = load_workspace_dir();
     if ws.is_empty() {
-        return Err(AutoDevError::Agent(
+        return Err(ArcanaError::Agent(
             "Workspace folder is not configured. Set one in Settings first.".into(),
         ));
     }
@@ -116,10 +116,10 @@ pub fn create_file(path: String, content: Option<String>) -> Result<()> {
     let workspace = require_workspace()?;
     let abs = resolve_safe(&workspace, &path)?;
     if let Some(parent) = abs.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| AutoDevError::Agent(format!("mkdir: {e}")))?;
+        std::fs::create_dir_all(parent).map_err(|e| ArcanaError::Agent(format!("mkdir: {e}")))?;
     }
     std::fs::write(&abs, content.unwrap_or_default())
-        .map_err(|e| AutoDevError::Agent(format!("create file: {e}")))?;
+        .map_err(|e| ArcanaError::Agent(format!("create file: {e}")))?;
     Ok(())
 }
 
@@ -128,7 +128,7 @@ pub fn create_file(path: String, content: Option<String>) -> Result<()> {
 pub fn create_directory(path: String) -> Result<()> {
     let workspace = require_workspace()?;
     let abs = resolve_safe(&workspace, &path)?;
-    std::fs::create_dir_all(&abs).map_err(|e| AutoDevError::Agent(format!("mkdir: {e}")))?;
+    std::fs::create_dir_all(&abs).map_err(|e| ArcanaError::Agent(format!("mkdir: {e}")))?;
     Ok(())
 }
 
@@ -138,9 +138,9 @@ pub fn delete_file(path: String) -> Result<()> {
     let workspace = require_workspace()?;
     let abs = resolve_safe(&workspace, &path)?;
     if abs.is_dir() {
-        std::fs::remove_dir_all(&abs).map_err(|e| AutoDevError::Agent(format!("rmdir: {e}")))?;
+        std::fs::remove_dir_all(&abs).map_err(|e| ArcanaError::Agent(format!("rmdir: {e}")))?;
     } else {
-        std::fs::remove_file(&abs).map_err(|e| AutoDevError::Agent(format!("rm: {e}")))?;
+        std::fs::remove_file(&abs).map_err(|e| ArcanaError::Agent(format!("rm: {e}")))?;
     }
     Ok(())
 }
@@ -156,11 +156,11 @@ pub fn rename_file(old_path: String, new_path: String) -> Result<()> {
         // target itself to exist (it's being created by the rename).
         if let Some(parent) = p.parent() {
             std::fs::create_dir_all(parent)
-                .map_err(|e| AutoDevError::Agent(format!("mkdir for rename: {e}")))?;
+                .map_err(|e| ArcanaError::Agent(format!("mkdir for rename: {e}")))?;
         }
         p
     };
-    std::fs::rename(&abs_old, &abs_new).map_err(|e| AutoDevError::Agent(format!("rename: {e}")))?;
+    std::fs::rename(&abs_old, &abs_new).map_err(|e| ArcanaError::Agent(format!("rename: {e}")))?;
     Ok(())
 }
 
@@ -172,11 +172,11 @@ pub fn move_file(from_path: String, to_dir: String) -> Result<()> {
     let abs_from = resolve_safe(&workspace, &from_path)?;
     let file_name = abs_from
         .file_name()
-        .ok_or_else(|| AutoDevError::Agent("invalid from_path".into()))?;
+        .ok_or_else(|| ArcanaError::Agent("invalid from_path".into()))?;
     let abs_to_dir = std::path::Path::new(&workspace).join(&to_dir);
-    std::fs::create_dir_all(&abs_to_dir).map_err(|e| AutoDevError::Agent(format!("mkdir: {e}")))?;
+    std::fs::create_dir_all(&abs_to_dir).map_err(|e| ArcanaError::Agent(format!("mkdir: {e}")))?;
     let abs_dest = abs_to_dir.join(file_name);
-    std::fs::rename(&abs_from, &abs_dest).map_err(|e| AutoDevError::Agent(format!("move: {e}")))?;
+    std::fs::rename(&abs_from, &abs_dest).map_err(|e| ArcanaError::Agent(format!("move: {e}")))?;
     Ok(())
 }
 
@@ -199,7 +199,7 @@ fn resolve_safe(workspace: &str, path: &str) -> Result<std::path::PathBuf> {
             acc
         });
     if !normalized.starts_with(ws) {
-        return Err(AutoDevError::Agent(format!(
+        return Err(ArcanaError::Agent(format!(
             "path '{}' escapes workspace root",
             path
         )));

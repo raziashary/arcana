@@ -1,5 +1,13 @@
 # 00 — AutoDev Restructure: Master Plan
 
+> **Current scope, 2026-09-23:** The project is now **Arcana**, a personal
+> multi-agent coding platform. Razi withdrew the design-capability programme.
+> The original vision and ADRs below remain historical architectural evidence;
+> their design rollout and initial “PLANNING ONLY” status do not describe the
+> current build. See [Arcana coding scope](../development/ARCANA_CODING_SCOPE.md)
+> and the development plan's §0 rules for active work and unresolved contract
+> migrations.
+
 | | |
 |---|---|
 | **Owner** | Razi (Programming Lead, AIRS Foundry) |

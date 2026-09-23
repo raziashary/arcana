@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "autodev-core",
+    "arcana-core",
     "src-tauri",
     "src-cli",
     "src-shared",

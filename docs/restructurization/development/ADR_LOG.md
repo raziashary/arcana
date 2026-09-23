@@ -1,5 +1,10 @@
 # AutoDev Restructure — Runtime ADR Log
 
+> **Current direction, 2026-09-23:** Arcana is a personal coding platform.
+> See `ARCANA_CODING_SCOPE.md`. The entry count in the original header below
+> is a dated snapshot, not a live total; this append-only log continues past
+> `0019`.
+
 > **Append-only build-time decision journal.** A reversal is a new `SUPERSEDED-BY` entry, never an edit. Retractions of one's own findings are entries too — record the **mechanism of the error**, not just the correction.
 
 | | |
@@ -2419,4 +2424,145 @@ requirement — not adopted from an agent.
 
 **Links.** `ADR-LOG-RESTRUCT-0033` · `§0.2m` · `§0.2L-3` · `L-C9` · `L-C12` ·
 `AUTODESIGN-INTEGRATION-RESEARCH §3`, `§7.2`
+
+## ADR-LOG-RESTRUCT-0042 — Arcana becomes a personal coding platform
+
+**Status.** DECIDED for product scope; compatibility disposition pending.
+**Author.** Razi (owner direction, 2026-09-23).
+**Supersedes.** The AutoDesign-first R1/R2 sequencing and the planned PD1–PD6
+design capabilities in the MDP §5 and §10.5. Historical PD evidence remains.
+
+**What.** Razi renamed the project from AutoDev to Arcana, made it his personal
+project, and removed the PD-X design tasks from the intended product. The
+remaining target is a multi-agent coding platform built around the native Rust
+runtime, fleet, memory, graph, desktop UI, and delivery phases. The current
+scope and checkable outcomes are in `ARCANA_CODING_SCOPE.md`.
+
+**Why.** This is the owner's new product direction, given after P8. The old
+AutoDesign handover is no longer the sequence that determines when the coding
+platform is ready. It cannot be treated as a search-and-replace: `PD0` already
+published a runnable protocol, and `~/.autodev`, the keyring service, installer
+identifier, and CLI names are live identity and state boundaries.
+
+**Where/how.** The active-scope banner in the MDP and vision points to the
+new scope document. Design tasks remain visible as historical rows until
+their task and gate disposition is recorded. No PD0 contract consumer or local
+state has been removed or moved by this decision. The owner will decide the
+retirement policy for that published contract and whether existing local data
+must migrate before those implementation units change.
+
+**Evidence.** User direction in this task; `src/design/contract/main.ts` and
+`reference.ts` for PD0; `autodev-core/src/db/mod.rs` and
+`vault/keychain.rs` for persistent state; `_verify/ARCANA-RECON-PLAN.md` for
+the phase audit. This is a scope decision, not a claim of a green build.
+
+## ADR-LOG-RESTRUCT-0043 — Retire PD0 and start Arcana with fresh local state
+
+**Status.** DECIDED. **Author.** Razi (owner answers, 2026-09-23).
+**Supersedes.** ADR-0042's pending compatibility dispositions and the PD0
+published-interface retention requirement for the current product.
+
+**What.** Retire the PD0 Node design protocol and reference process as part of
+the coding-only project. Arcana starts with fresh local tasks, sessions, and
+provider vault entries. The old AutoDev root and OS keyring entries are left
+undisturbed; no data copy or deletion is required.
+
+**Why.** Razi confirmed there is no established AutoDev user data to carry
+forward and explicitly chose to retire the design interface. Keeping it in
+CI would preserve a product contract outside Arcana's new scope.
+
+**Where/how.** Remove `src/design`, its sidecar build/smoke, npm/CI hooks, and
+its design-only dependency. The P8 exit gate must still protect updater
+signature assets and SQLite backup code. Rename root/vault/installation
+identity as a separate unit. `.env` remains a live-test input only; the
+desktop key is entered through Settings. Historical PD0 evidence remains in
+the original documents.
+
+**Proof.** TypeScript/Rust checks, design-path absence scan, and a normal app
+launch. No retirement-complete claim is made by this decision entry.
+
+## ADR-LOG-RESTRUCT-0044 — Require an explicit Arcana update feed
+
+**Status.** DECIDED for the current personal build (2026-09-23).
+
+**What/why.** The renamed updater must not query the former AIRS Foundry release
+repository or assume a new Arcana release location. Until Arcana has a verified
+published feed, update checks return no update. An explicit HTTPS
+`ARCANA_UPDATE_URL` enables the existing updater path. This leaves signature and
+checksum verification intact and prevents a background request to an unrelated
+release source on every launch.
+
+**Where/proof.** `src-tauri/src/updater/check.rs`; Rust check and updater tests
+are part of the current rename validation. P9 must choose and prove a release
+source before enabling automatic updates for distributed builds.
+
+## ADR-LOG-RESTRUCT-0045 — Use a neutral local app identifier
+
+**Status.** DECIDED for the local Arcana build (2026-09-23).
+
+**What/why.** The Tauri bundle and macOS updater agent use
+`dev.arcana.desktop` instead of the former organization-owned identifier.
+This is a fresh install identity, consistent with the owner's decision not to
+migrate AutoDev state. It makes no claim to an unconfirmed web domain or
+release repository. If distribution later requires a different signing or
+store identifier, P9 must choose it before publishing installers.
+
+**Where/proof.** `src-tauri/tauri.conf.json`,
+`src-tauri/src/updater/install.rs`, and the WiX file-association fragment;
+current check/build and packaging smoke remain the validation boundary.
+
+## ADR-LOG-RESTRUCT-0046 — Archive retired design tasks outside the active plan
+
+**Status.** DECIDED by Razi's 2026-09-23 direction for this development-suite
+revision.
+
+**What/why.** The MDP now schedules one Arcana coding sequence: reconcile P8
+proof, then P4–P7; P9 release work follows later. The former §5 two-rollout
+sequence, PD0–PD6 task chapter, design-only P3/P4/P6/P9 rows, and PD0 gate
+section are preserved verbatim in `HISTORICAL_DESIGN_PROGRAMME.md`, outside
+the active checklists. This removes withdrawn work from active counts without
+erasing its dated evidence. Coding build evidence, security and lifecycle
+gates retain their obligations.
+
+**Where/how.** `MASTER_DEVELOPMENT_PLAN.md` §5 and phase task lists,
+`TESTING_GATES.md` phase index, `ARCANA_CODING_SCOPE.md`, and the public brief.
+The active MDP has ~~376 explicitly checkboxed P-numbered rows, 253 checked and
+123 open~~ **corrected by ADR-0047** at this edit; the active gate register has 126 P0–P9 rows. These are
+counts of written rows, not a readiness or pass claim. The source `origin`
+remote is `raziashary/arcana`, so worker setup links now use that owner; the
+updater feed still requires explicit configuration until P9 release proof.
+
+**Proof required.** Count scripts/searches, link and source scans, Rust and
+TypeScript validation, runnable smoke, and review of the historical extraction.
+
+## ADR-LOG-RESTRUCT-0047 — Correct the Arcana active task count
+
+**Status.** CORRECTION to ADR-0046, 2026-09-23.
+
+**What went wrong.** The first count pattern required `**P...` immediately
+after a checkbox. Seven struck-through completed tasks use `~~**P...` and were
+invisible to that pattern. It reported 376/253/123, seven short in both total
+and checked. This repeats the exact counter defect documented in the former
+MDP count checker, which I had read but had not applied to my own count.
+
+**Correction/proof.** The active MDP has **383** explicitly checkboxed P-numbered
+rows, **260 checked and 123 open**. The rewritten
+`_verify/MDP-COUNTS-CHECK.py` includes struck rows, checks unique IDs, checks
+the MDP header and §5.1 totals, checks 126 active gate rows, and requires the
+historical archive. No readiness score follows from these counts.
+
+## ADR-LOG-RESTRUCT-0048 — Keep Vite out of Cargo's build tree
+
+**Status.** DECIDED from the 2026-09-23 Windows desktop smoke.
+
+**What/why.** `npx tauri dev --no-watch` launched Vite, then Vite's Windows
+watcher tried to watch `target/debug/deps/arcana.exe` while Cargo linked it.
+Node raised `EBUSY` and Tauri exited before the app could start. Vite already
+ignores `src-tauri`; add `**/target/**` to the same watcher exclusion because
+Cargo artifacts are never frontend source. This keeps the desktop dev path
+from contending with its own linker.
+
+**Where/proof.** `vite.config.ts`; rerun Tauri dev smoke, observe the Arcana
+process and stop it cleanly with port 1420 freed. This entry does not claim a
+provider-backed turn or S8-02 completion.
 

@@ -1,6 +1,6 @@
 use crate::output::{status_colored, OutputContext};
 use anyhow::Result;
-use autodev_core::db::tasks::{CreateTaskInput, Task, TasksDb};
+use arcana_core::db::tasks::{CreateTaskInput, Task, TasksDb};
 use clap::{Args, Subcommand};
 
 #[derive(Subcommand)]
@@ -119,7 +119,7 @@ fn create(args: CreateArgs, ctx: OutputContext) -> Result<()> {
         priority: args.priority,
         task_type: args.task_type,
         acceptance_criteria: args.acceptance_criteria.unwrap_or_default(),
-        created_by: Some("airsctl".into()),
+        created_by: Some("arcanactl".into()),
     };
     let task = db.create(input)?;
     ctx.success(&format!("Created task #{}", task.id));

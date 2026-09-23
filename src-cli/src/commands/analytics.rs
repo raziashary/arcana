@@ -1,6 +1,6 @@
 use crate::output::OutputContext;
 use anyhow::Result;
-use autodev_shared::db::analytics::AnalyticsReader;
+use arcana_shared::db::analytics::AnalyticsReader;
 use clap::{Args, Subcommand};
 
 #[derive(Subcommand)]
@@ -198,7 +198,7 @@ fn open_analytics(ctx: &OutputContext) -> Result<AnalyticsReader> {
     AnalyticsReader::open().map_err(|e| {
         ctx.error(&format!(
             "Cannot open analytics DB: {e}\n  \
-             (Start the AutoDev desktop app to create and populate the database.)"
+             (Start the Arcana desktop app to create and populate the database.)"
         ));
         anyhow::anyhow!("{e}")
     })

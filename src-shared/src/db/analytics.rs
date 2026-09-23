@@ -1,7 +1,7 @@
-// Analytics read-only access for airsctl analytics commands.
-// Uses the same ~/.autodev/analytics.db written by the Tauri app.
+// Analytics read-only access for arcanactl analytics commands.
+// Uses the same ~/.arcana/analytics.db written by the Tauri app.
 
-use super::autodev_dir;
+use super::arcana_dir;
 use crate::errors::Result;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -49,7 +49,7 @@ pub struct AnalyticsReader {
 
 impl AnalyticsReader {
     pub fn open() -> Result<Self> {
-        let path = autodev_dir()?.join("analytics.db");
+        let path = arcana_dir()?.join("analytics.db");
         // Analytics DB may not exist yet — open creates it but don't run migrations
         // (the Tauri app is responsible for the schema)
         let conn = Connection::open(&path)?;

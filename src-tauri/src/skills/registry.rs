@@ -8,8 +8,8 @@ use tracing::info;
 
 use super::loader::SkillLoader;
 use super::types::{Skill, SkillCategory, SkillSummary};
-use crate::errors::{AutoDevError, Result};
-use autodev_core::state::lock::RwLockTolerant;
+use crate::errors::{ArcanaError, Result};
+use arcana_core::state::lock::RwLockTolerant;
 
 #[derive(Debug, Default)]
 struct RegistryInner {
@@ -52,7 +52,7 @@ impl SkillRegistry {
             .skills
             .get(name)
             .cloned()
-            .ok_or_else(|| AutoDevError::Agent(format!("Skill '{name}' not found")))
+            .ok_or_else(|| ArcanaError::Agent(format!("Skill '{name}' not found")))
     }
 
     /// List all skills, optionally filtered by category.

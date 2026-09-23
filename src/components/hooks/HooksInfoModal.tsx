@@ -37,7 +37,7 @@ export default function HooksInfoModal({ onClose }: Props) {
               What are Hooks?
             </h3>
             <p>
-              Hooks are event-driven actions that execute automatically at specific lifecycle points in AutoDev. They allow you to customize behavior, automate tasks, and integrate with external systems without modifying core code.
+              Hooks are event-driven actions that execute automatically at specific lifecycle points in Arcana. They allow you to customize behavior, automate tasks, and integrate with external systems without modifying core code.
             </p>
             <p className="mt-2">
               Think of them like Git hooks (pre-commit, post-commit) but for the entire agent lifecycle: before/after tools run, when files change, when commits happen, when plans execute, etc.

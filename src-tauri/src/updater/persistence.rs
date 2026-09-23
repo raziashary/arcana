@@ -1,6 +1,6 @@
 // Auto-updater persistence verification module.
 // Verifies that all user data is safe before and after an update.
-// User data lives in ~/.autodev/ (outside the app bundle) and is never
+// User data lives in ~/.arcana/ (outside the app bundle) and is never
 // touched by the installer — this module confirms that invariant.
 
 use anyhow::Result;
@@ -28,20 +28,20 @@ pub struct DataCheck {
 /// Returns `Err` only if critical data would be at risk.
 pub fn verify_data_integrity() -> Result<IntegrityReport> {
     let home = home_dir();
-    let autodev_dir = home.join(".autodev");
+    let arcana_dir = home.join(".arcana");
 
     let checks_to_run = vec![
-        ("Config DB", autodev_dir.join("config.db"), true),
-        ("Analytics DB", autodev_dir.join("analytics.db"), false),
-        ("Sessions dir", autodev_dir.join("sessions"), false),
-        ("Plans dir", autodev_dir.join("plans"), false),
-        ("Skills dir", autodev_dir.join("skills"), false),
-        ("Hooks dir", autodev_dir.join("hooks"), false),
-        ("Updates dir", autodev_dir.join("updates"), false),
-        ("Plugins dir", home.join(".autodev").join("plugins"), false),
+        ("Config DB", arcana_dir.join("config.db"), true),
+        ("Analytics DB", arcana_dir.join("analytics.db"), false),
+        ("Sessions dir", arcana_dir.join("sessions"), false),
+        ("Plans dir", arcana_dir.join("plans"), false),
+        ("Skills dir", arcana_dir.join("skills"), false),
+        ("Hooks dir", arcana_dir.join("hooks"), false),
+        ("Updates dir", arcana_dir.join("updates"), false),
+        ("Plugins dir", home.join(".arcana").join("plugins"), false),
         (
             "Fleet secret",
-            home.join(".autodev").join("fleet_secret"),
+            home.join(".arcana").join("fleet_secret"),
             false,
         ),
     ];
@@ -89,15 +89,15 @@ pub fn verify_data_integrity() -> Result<IntegrityReport> {
 }
 
 /// Create a restore point — a manifest of current state checksums.
-/// Stored at ~/.autodev/restore_point.json.
+/// Stored at ~/.arcana/restore_point.json.
 pub fn create_restore_point() -> Result<()> {
     let home = home_dir();
-    let autodev_dir = home.join(".autodev");
-    let manifest_path = autodev_dir.join("restore_point.json");
+    let arcana_dir = home.join(".arcana");
+    let manifest_path = arcana_dir.join("restore_point.json");
 
     let files_to_snapshot = vec![
-        autodev_dir.join("config.db"),
-        autodev_dir.join("analytics.db"),
+        arcana_dir.join("config.db"),
+        arcana_dir.join("analytics.db"),
     ];
 
     let mut snapshot = serde_json::Map::new();
@@ -129,7 +129,7 @@ pub fn create_restore_point() -> Result<()> {
         "files": snapshot,
     });
 
-    std::fs::create_dir_all(&autodev_dir)?;
+    std::fs::create_dir_all(&arcana_dir)?;
     std::fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
     Ok(())
 }
@@ -139,7 +139,7 @@ pub fn verify_post_update() -> Result<IntegrityReport> {
     let report = verify_data_integrity()?;
 
     // Also check the restore point exists
-    let restore_point = home_dir().join(".autodev").join("restore_point.json");
+    let restore_point = home_dir().join(".arcana").join("restore_point.json");
     if !restore_point.exists() {
         // First install — no restore point expected
         return Ok(report);
@@ -150,8 +150,8 @@ pub fn verify_post_update() -> Result<IntegrityReport> {
 
 /// Clean up old update files and the restore point after a successful update.
 pub fn cleanup_after_update() -> Result<()> {
-    let updates_dir = home_dir().join(".autodev").join("updates");
-    let restore_point = home_dir().join(".autodev").join("restore_point.json");
+    let updates_dir = home_dir().join(".arcana").join("updates");
+    let restore_point = home_dir().join(".arcana").join("restore_point.json");
 
     // Remove restore point (update succeeded)
     if restore_point.exists() {

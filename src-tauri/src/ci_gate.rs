@@ -13,7 +13,7 @@
 // Compiled only under `cfg(test)`.
 
 use std::path::{Path, PathBuf};
-use autodev_core::state::lock::RwLockTolerant;
+use arcana_core::state::lock::RwLockTolerant;
 
 /// Repository root — one level above `src-tauri/`.
 fn repo_root() -> PathBuf {
@@ -259,7 +259,7 @@ mod tests {
     /// renderer direct provider access — contained none of them and passed
     /// (F-18). The invariant is "no external origin", so that is what is
     /// asserted: every source in `connect-src` must be one of the local
-    /// schemes AutoDev's own IPC needs.
+    /// schemes Arcana's own IPC needs.
     #[test]
     fn tg0_03_csp_allows_no_external_origin_from_the_renderer() {
         let conf =
@@ -356,14 +356,14 @@ mod tests {
 
         // The invariant is "never COMMITTED", not "never exists". A developer
         // `.env` holding provider keys is expected in a working tree — that is
-        // how AutoDev is developed. What must never happen is it entering the
+        // how Arcana is developed. What must never happen is it entering the
         // index or a shipped artifact.
         let mut checked_any = false;
         for forbidden in [
             ".env",
             "src-tauri/dump.rdb",
             "dump.rdb",
-            "autodev-update-private.pem",
+            "arcana-update-private.pem",
         ] {
             let tracked = std::process::Command::new("git")
                 .args(["ls-files", "--error-unmatch", forbidden])
@@ -395,7 +395,7 @@ mod tests {
         }
     }
 
-    // ── TG-P1 · the crate boundary that makes `autodev-core` worth having ────
+    // ── TG-P1 · the crate boundary that makes `arcana-core` worth having ────
 
     /// Dependency lines in a Cargo manifest that pull in Tauri.
     ///
@@ -454,23 +454,23 @@ mod tests {
             }
         }
         let mut files = Vec::new();
-        walk(&repo_root().join("autodev-core/src"), &mut files);
+        walk(&repo_root().join("arcana-core/src"), &mut files);
         files
     }
 
-    /// `autodev-core` must not depend on Tauri.
+    /// `arcana-core` must not depend on Tauri.
     ///
-    /// This is the whole point of the crate: `airsctl` links the same agent
+    /// This is the whole point of the crate: `arcanactl` links the same agent
     /// runtime the desktop app does, and it cannot link a UI framework. Before
     /// P1 the runtime was unusable from the CLI because every event it emitted
     /// required a `tauri::AppHandle` (ADR-LOG-RESTRUCT-0011).
     #[test]
-    fn tg_p1_01_autodev_core_does_not_depend_on_tauri() {
-        let manifest = read_source(&repo_root().join("autodev-core/Cargo.toml"));
+    fn tg_p1_01_arcana_core_does_not_depend_on_tauri() {
+        let manifest = read_source(&repo_root().join("arcana-core/Cargo.toml"));
         let offenders = tauri_dependency_lines(&manifest);
         assert!(
             offenders.is_empty(),
-            "autodev-core has taken a dependency on Tauri, which defeats the crate's purpose — airsctl links this runtime and cannot link a UI framework: {}",
+            "arcana-core has taken a dependency on Tauri, which defeats the crate's purpose — arcanactl links this runtime and cannot link a UI framework: {}",
             offenders.join(" | ")
         );
     }
@@ -509,7 +509,7 @@ tokio = \"1\"
         .is_empty());
     }
 
-    /// No source file in `autodev-core` may reference `tauri` in code.
+    /// No source file in `arcana-core` may reference `tauri` in code.
     ///
     /// The manifest check is necessary but not sufficient: a path dependency,
     /// workspace inheritance, or a re-export through another crate could
@@ -519,11 +519,11 @@ tokio = \"1\"
         let files = core_rust_files();
         assert!(
             files.len() > 150,
-            "expected to walk autodev-core; found {} files",
+            "expected to walk arcana-core; found {} files",
             files.len()
         );
 
-        let src = repo_root().join("autodev-core/src");
+        let src = repo_root().join("arcana-core/src");
         let mut offenders = Vec::new();
         for file in &files {
             let Ok(text) = std::fs::read_to_string(file) else {
@@ -540,7 +540,7 @@ tokio = \"1\"
         }
         assert!(
             offenders.is_empty(),
-            "autodev-core references Tauri in code. Core depends on traits the host implements — see events::EventSink and recipes::orchestrator — never on the host's framework: {}",
+            "arcana-core references Tauri in code. Core depends on traits the host implements — see events::EventSink and recipes::orchestrator — never on the host's framework: {}",
             offenders.join(" | ")
         );
     }
@@ -583,7 +583,7 @@ let x = 1;
     fn table_creators(table: &str) -> Vec<String> {
         let root = repo_root();
         let mut out = Vec::new();
-        for krate in ["autodev-core", "src-tauri", "src-cli", "src-shared"] {
+        for krate in ["arcana-core", "src-tauri", "src-cli", "src-shared"] {
             let src = root.join(krate).join("src");
             let mut files = Vec::new();
             collect_rust_files(&src, &mut files);
@@ -656,12 +656,12 @@ let x = 1;
     /// others wrote.
     #[test]
     fn tg_p1_04_config_db_tables_have_exactly_one_creator() {
-        const OWNER: &str = "autodev-core/src/db/config_db.rs";
+        const OWNER: &str = "arcana-core/src/db/config_db.rs";
         // All six, not the three P1-15 knew about. `checkpoints` came from
         // `git/checkpoint.rs` and `hooks`/`hook_logs` from `hooks/db.rs`; both
         // predate P1 and both were missed because the search was for the table
         // name rather than for the file. Adopted into the ladder at v2.
-        for table in autodev_core::db::config_db::TABLES {
+        for table in arcana_core::db::config_db::TABLES {
             let creators = table_creators(table);
             assert_eq!(
                 creators,
@@ -732,7 +732,7 @@ let x = 1;
     /// at once — which is the shape of nearly every access here.
     #[test]
     fn tg_p1_05_every_core_connection_is_opened_tuned() {
-        let src = repo_root().join("autodev-core/src");
+        let src = repo_root().join("arcana-core/src");
         let mut files = Vec::new();
         collect_rust_files(&src, &mut files);
         assert!(
@@ -810,7 +810,7 @@ let x = 1;
     /// retry, a streaming variant — fails this gate unless it redacts.
     #[test]
     fn tg_p1_06_every_tool_execution_redacts_its_result() {
-        let path = repo_root().join("autodev-core/src/agent/tool_executor.rs");
+        let path = repo_root().join("arcana-core/src/agent/tool_executor.rs");
         let text = std::fs::read_to_string(&path).expect("tool_executor.rs");
         let production = text.split("#[cfg(test)]").next().unwrap_or("");
 
@@ -921,7 +921,7 @@ let x = 1;
     fn tg_p2_04_every_provider_construction_is_capped() {
         let mut unwrapped = Vec::new();
 
-        for dir in ["autodev-core/src", "src-tauri/src"] {
+        for dir in ["arcana-core/src", "src-tauri/src"] {
             let mut stack = vec![repo_root().join(dir)];
             while let Some(d) = stack.pop() {
                 let Ok(entries) = std::fs::read_dir(&d) else {
@@ -1031,8 +1031,8 @@ let x = 1;
         // absent: a user-driven session is capped by the daily ceiling, not by
         // a per-task one, and capping it at a worker's $0.50 would break it.
         let autonomous = [
-            "autodev-core/src/recipes/runner.rs",
-            "autodev-core/src/subagent/native_runner.rs",
+            "arcana-core/src/recipes/runner.rs",
+            "arcana-core/src/subagent/native_runner.rs",
         ];
 
         let mut unbudgeted = Vec::new();
@@ -1066,7 +1066,7 @@ let x = 1;
     #[test]
     fn tg_p2_03_the_budget_builders_are_not_dead_code() {
         let mut callers = 0;
-        for dir in ["autodev-core/src", "src-tauri/src"] {
+        for dir in ["arcana-core/src", "src-tauri/src"] {
             let root = repo_root().join(dir);
             let mut stack = vec![root];
             while let Some(d) = stack.pop() {
@@ -1117,7 +1117,7 @@ let x = 1;
         let offered_src =
             read_source(&repo_root().join("src/data/models.ts"));
         let pricing_src =
-            read_source(&repo_root().join("autodev-core/src/cost/pricing.rs"));
+            read_source(&repo_root().join("arcana-core/src/cost/pricing.rs"));
 
         // Every quoted token in the MODEL_GROUPS block that looks like a model id.
         //
@@ -1213,7 +1213,7 @@ let x = 1;
     /// IPC-facing value is fixed text.
     #[test]
     fn tg_p2_13_no_adapter_returns_a_raw_transport_error_to_the_renderer() {
-        let dir = repo_root().join("autodev-core/src/provider");
+        let dir = repo_root().join("arcana-core/src/provider");
         let mut offenders = Vec::new();
 
         for adapter in ["anthropic.rs", "openai.rs", "google.rs"] {
@@ -1292,7 +1292,7 @@ let x = 1;
     #[test]
     fn tg_p3_03_no_lock_propagates_poison() {
         let roots = [
-            repo_root().join("autodev-core/src"),
+            repo_root().join("arcana-core/src"),
             repo_root().join("src-tauri/src"),
             repo_root().join("src-cli/src"),
         ];
@@ -1436,7 +1436,7 @@ let x = 1;
         // written into a gate an hour after recording L-C6's seventh instance.
         {
             let executor = read_source(
-                &repo_root().join("autodev-core/src/agent/tool_executor.rs"),
+                &repo_root().join("arcana-core/src/agent/tool_executor.rs"),
             );
             let batch = executor
                 .split("pub async fn execute_batch")
@@ -1457,7 +1457,7 @@ let x = 1;
             );
         }
 
-        let src = read_source(&repo_root().join("autodev-core/src/agent/tool_executor.rs"));
+        let src = read_source(&repo_root().join("arcana-core/src/agent/tool_executor.rs"));
 
         // Exactly one function may decide permission.
         let gate_definitions = src.matches("async fn check_permission(").count();
@@ -1545,7 +1545,7 @@ let x = 1;
     /// any mode. Under BYOK that is the user's own code on the user's own key.
     #[test]
     fn tg_p3_56_tools_that_leave_the_machine_declare_network() {
-        let dir = repo_root().join("autodev-core/src/agent/builtin_tools");
+        let dir = repo_root().join("arcana-core/src/agent/builtin_tools");
 
         let mut declared = 0usize;
         let mut missing = Vec::new();
@@ -1618,7 +1618,7 @@ let x = 1;
     /// hole.
     #[test]
     fn tg_p3_14_every_path_taking_tool_calls_the_jail() {
-        let dir = repo_root().join("autodev-core/src/agent/builtin_tools");
+        let dir = repo_root().join("arcana-core/src/agent/builtin_tools");
 
         let mut offenders = Vec::new();
         let mut checked = 0usize;
@@ -1701,7 +1701,7 @@ let x = 1;
     /// resolver with the same shape fails too.
     #[test]
     fn tg_p3_19_no_executable_is_resolved_from_the_workspace() {
-        let path = repo_root().join("autodev-core/src/agent/builtin_tools/validate.rs");
+        let path = repo_root().join("arcana-core/src/agent/builtin_tools/validate.rs");
         let text = read_source(&path);
 
         // Markers of an interpreter/executable location, in any spelling.
@@ -1782,7 +1782,7 @@ let x = 1;
             ("transaction", &["transaction", "BEGIN", "tx"]),
         ];
 
-        let dir = repo_root().join("autodev-core/src/agent/builtin_tools");
+        let dir = repo_root().join("arcana-core/src/agent/builtin_tools");
         let mut offenders = Vec::new();
         let mut examined = 0usize;
 
@@ -1862,7 +1862,7 @@ let x = 1;
     /// model-facing prose and one machine-checked, drifting apart silently.
     #[test]
     fn tg_p3_20_enumerated_values_match_the_schema() {
-        let dir = repo_root().join("autodev-core/src/agent/builtin_tools");
+        let dir = repo_root().join("arcana-core/src/agent/builtin_tools");
         let mut checked = 0usize;
         let mut offenders = Vec::new();
 
@@ -1877,7 +1877,7 @@ let x = 1;
         // (`§0.16 L-C9`).
         let crate_sources = {
             let mut all = String::new();
-            let mut stack = vec![repo_root().join("autodev-core/src")];
+            let mut stack = vec![repo_root().join("arcana-core/src")];
             while let Some(d) = stack.pop() {
                 for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
                     let p = e.path();
@@ -1971,7 +1971,7 @@ let x = 1;
     /// the way to rejecting the URL.
     #[test]
     fn tg_p3_21_68_e2e_probe_keeps_evidence_and_stays_on_this_machine() {
-        let path = repo_root().join("autodev-core/src/agent/builtin_tools/e2e_probe.rs");
+        let path = repo_root().join("arcana-core/src/agent/builtin_tools/e2e_probe.rs");
         let text = read_source(&path);
 
         // ── P3-68 · the URL is confined, by resolution rather than spelling ─
@@ -2063,7 +2063,7 @@ let x = 1;
     /// halves true is the one asserted here.
     #[test]
     fn tg_p3_65_no_scheduled_recipe_declares_a_prompting_mode() {
-        let path = repo_root().join("autodev-core/src/recipes/defaults.rs");
+        let path = repo_root().join("arcana-core/src/recipes/defaults.rs");
         let text = read_source(&path);
 
         let mut current = String::new();
@@ -2125,7 +2125,7 @@ let x = 1;
 
         // The other half: the field must actually be READ, or none of the
         // above matters and we are back to a decorative control.
-        let runner = read_source(&repo_root().join("autodev-core/src/recipes/runner.rs"));
+        let runner = read_source(&repo_root().join("arcana-core/src/recipes/runner.rs"));
         assert!(
             runner.contains("PermissionMode::from(&recipe.permission_mode)"),
             "runner.rs must build the engine from the recipe's declared mode; \
@@ -2134,7 +2134,7 @@ let x = 1;
 
         // And `SmartApprove` must have a construction site (`P3-66`): a mode
         // that cannot be selected is a guard that cannot fire.
-        let types = read_source(&repo_root().join("autodev-core/src/recipes/types.rs"));
+        let types = read_source(&repo_root().join("arcana-core/src/recipes/types.rs"));
         assert!(
             types.contains("Self::SmartApprove"),
             "SmartApprove must be constructible — it had zero construction \
@@ -2162,7 +2162,7 @@ let x = 1;
     #[test]
     fn tg_p3_55_the_provisional_charge_is_released_on_every_failed_dispatch() {
         let path =
-            repo_root().join("autodev-core/src/agent/builtin_tools/spawn_qc_review.rs");
+            repo_root().join("arcana-core/src/agent/builtin_tools/spawn_qc_review.rs");
         let text = read_source(&path);
 
         // The release must be automatic, not eight hand-written call sites.
@@ -2262,7 +2262,7 @@ let x = 1;
     /// A third such site — and there are already two — fails this.
     #[test]
     fn tg_p3_22_capacity_is_released_at_termination() {
-        let path = repo_root().join("autodev-core/src/subagent/manager.rs");
+        let path = repo_root().join("arcana-core/src/subagent/manager.rs");
         let text = read_source(&path);
 
         // The permit must be takeable at all: `_permit: PoolPermit` is held
@@ -2341,9 +2341,9 @@ let x = 1;
     #[test]
     fn tg_p3_24_cancellation_reaches_the_children() {
         let manager = read_source(
-            &repo_root().join("autodev-core/src/subagent/manager.rs"),
+            &repo_root().join("arcana-core/src/subagent/manager.rs"),
         );
-        let engine = read_source(&repo_root().join("autodev-core/src/agent/engine.rs"));
+        let engine = read_source(&repo_root().join("arcana-core/src/agent/engine.rs"));
 
         assert!(
             manager.contains("pub async fn abort_children_of"),
@@ -2415,10 +2415,10 @@ let x = 1;
     #[test]
     fn tg_p3_58_63_declared_subagent_controls_are_honoured() {
         let runner = read_source(
-            &repo_root().join("autodev-core/src/subagent/native_runner.rs"),
+            &repo_root().join("arcana-core/src/subagent/native_runner.rs"),
         );
         let registry = read_source(
-            &repo_root().join("autodev-core/src/agent/tool_registry.rs"),
+            &repo_root().join("arcana-core/src/agent/tool_registry.rs"),
         );
 
         // ── P3-58 · the pool is the ONLY thing that decides depth ────────
@@ -2433,7 +2433,7 @@ let x = 1;
         // failure message called a defect. A gate that lists its subjects
         // misses the one nobody listed; this one sweeps the directory.
         {
-            let dir = repo_root().join("autodev-core/src/agent/builtin_tools");
+            let dir = repo_root().join("arcana-core/src/agent/builtin_tools");
             let mut offenders = Vec::new();
             let mut swept = 0usize;
 
@@ -2539,7 +2539,7 @@ let x = 1;
     /// one of them fails here.
     #[test]
     fn tg_p3_59_the_compaction_window_survives_the_production_path() {
-        use autodev_core::provider::traits::Provider;
+        use arcana_core::provider::traits::Provider;
 
         // The engine's lookup, reproduced exactly: find the model in
         // `provider.models()` and read `context_window`.
@@ -2547,7 +2547,7 @@ let x = 1;
             p.models().iter().find(|m| m.id == model).map(|m| m.context_window)
         }
 
-        let google = autodev_core::provider::google::GoogleProvider::new("not-a-real-key".into());
+        let google = arcana_core::provider::google::GoogleProvider::new("not-a-real-key".into());
 
         // Every Google model must survive the trip with a usable window.
         let listed = google.models();
@@ -2567,7 +2567,7 @@ let x = 1;
             );
             assert_eq!(
                 via,
-                autodev_core::provider::catalogue::capabilities_for(&m.id).context_window,
+                arcana_core::provider::catalogue::capabilities_for(&m.id).context_window,
                 "{}'s window differs between ModelInfo (what production reads) \
                  and ModelCapabilities (what the old test read). Two fields for \
                  one fact is how the P2 test passed over a live regression",
@@ -2591,7 +2591,7 @@ let x = 1;
         );
 
         // And the engine must still be reading that field, not a constant.
-        let engine = read_source(&repo_root().join("autodev-core/src/agent/engine.rs"));
+        let engine = read_source(&repo_root().join("arcana-core/src/agent/engine.rs"));
         assert!(
             engine.contains(".map(|m| m.context_window)"),
             "the engine must read the window from `provider.models()`; a \
@@ -2615,7 +2615,7 @@ let x = 1;
     #[test]
     fn tg_p3_g5_a_subagent_inherits_its_parents_permission_mode() {
         let runner = read_source(
-            &repo_root().join("autodev-core/src/subagent/native_runner.rs"),
+            &repo_root().join("arcana-core/src/subagent/native_runner.rs"),
         );
 
         let engine_call = runner
@@ -2634,7 +2634,7 @@ let x = 1;
         );
 
         // ── and the tools must actually pass it down ────────────────────
-        let dir = repo_root().join("autodev-core/src/agent/builtin_tools");
+        let dir = repo_root().join("arcana-core/src/agent/builtin_tools");
         let mut spawners = 0usize;
         let mut offenders = Vec::new();
 
@@ -2683,7 +2683,7 @@ let x = 1;
     /// third one fails the build instead of repeating the lesson a third time.
     #[test]
     fn tg_p3_g8_every_shell_spawning_tool_scrubs_credentials() {
-        let dir = repo_root().join("autodev-core/src/agent/builtin_tools");
+        let dir = repo_root().join("arcana-core/src/agent/builtin_tools");
         let mut offenders = Vec::new();
         let mut spawners = 0usize;
 
@@ -2747,7 +2747,7 @@ let x = 1;
         let mut scanned = 0usize;
 
         let mut stack = vec![
-            repo_root().join("autodev-core/src"),
+            repo_root().join("arcana-core/src"),
             repo_root().join("src-tauri/src"),
         ];
         while let Some(d) = stack.pop() {
@@ -2862,9 +2862,9 @@ let x = 1;
     /// is gone, and staying gone is the invariant. `P8-53` retires it.
     #[test]
     fn tg_p4_31_mode2_and_its_fallback_policy_are_gone() {
-        let types = read_source(&repo_root().join("autodev-core/src/recipes/types.rs"));
-        let runner = read_source(&repo_root().join("autodev-core/src/recipes/runner.rs"));
-        let defaults = read_source(&repo_root().join("autodev-core/src/recipes/defaults.rs"));
+        let types = read_source(&repo_root().join("arcana-core/src/recipes/types.rs"));
+        let runner = read_source(&repo_root().join("arcana-core/src/recipes/runner.rs"));
+        let defaults = read_source(&repo_root().join("arcana-core/src/recipes/defaults.rs"));
 
         // ⚠ `read_source` is `unwrap_or_default()`, so a MISSING file reads as
         // an empty string and every "is it gone?" assertion below would pass
@@ -2945,7 +2945,7 @@ let x = 1;
     /// own phrasing, proven right once already this phase.
     #[test]
     fn tg_p3_39_the_memory_gateway_is_the_only_write_path() {
-        let dir = repo_root().join("autodev-core/src/agent/builtin_tools");
+        let dir = repo_root().join("arcana-core/src/agent/builtin_tools");
 
         assert!(
             !dir.join("remember_this.rs").exists(),
@@ -2996,7 +2996,7 @@ let x = 1;
     #[test]
     fn tg_p3_47_provenance_is_derived_not_declared() {
         let tool = read_source(
-            &repo_root().join("autodev-core/src/agent/builtin_tools/propose_memory.rs"),
+            &repo_root().join("arcana-core/src/agent/builtin_tools/propose_memory.rs"),
         );
 
         // The schema must not offer the model a way to claim provenance.
@@ -3049,7 +3049,7 @@ let x = 1;
 
         // …and the same invariant at the definition, so a second parameter
         // cannot be reintroduced and then merely passed a constant.
-        let gw_src = read_source(&repo_root().join("autodev-core/src/memory/gateway.rs"));
+        let gw_src = read_source(&repo_root().join("arcana-core/src/memory/gateway.rs"));
         assert!(
             gw_src.contains("pub fn from_agent_role(role: &str) -> Self"),
             "from_agent_role must take the role and nothing else; its signature \
@@ -3057,7 +3057,7 @@ let x = 1;
         );
 
         // …and the ceiling itself must still discriminate.
-        let gw = read_source(&repo_root().join("autodev-core/src/memory/gateway.rs"));
+        let gw = read_source(&repo_root().join("arcana-core/src/memory/gateway.rs"));
         assert!(
             gw.contains("fn confidence_ceiling"),
             "the confidence ceiling is what stops an agent outranking the user"
@@ -3090,7 +3090,7 @@ let x = 1;
     /// here, with no list to remember to update.
     #[test]
     fn tg_p3_48_every_memory_writer_redacts_on_the_way_in() {
-        let dir = repo_root().join("autodev-core/src/memory");
+        let dir = repo_root().join("arcana-core/src/memory");
         let mut writers: Vec<(String, String)> = Vec::new();
 
         for entry in std::fs::read_dir(&dir).expect("memory module").flatten() {
@@ -3161,7 +3161,7 @@ let x = 1;
     /// user opens.
     #[test]
     fn tg_p3_49_recalled_memory_cannot_author_the_prompt() {
-        let recall = read_source(&repo_root().join("autodev-core/src/memory/recall.rs"));
+        let recall = read_source(&repo_root().join("arcana-core/src/memory/recall.rs"));
         // ⚠ Production code only — `L-25`, caught by falsifying this very gate.
         // The first version scanned the whole file, and the third assertion
         // below passed over a planted defect because `injection_tests` asserts
@@ -3202,7 +3202,7 @@ let x = 1;
     /// project recalled every other project's memories.
     #[test]
     fn tg_p3_31_every_retrieval_path_applies_scope() {
-        let backend = read_source(&repo_root().join("autodev-core/src/memory/backend.rs"));
+        let backend = read_source(&repo_root().join("arcana-core/src/memory/backend.rs"));
         assert!(
             backend.contains("if q.scope_keys.is_empty()"),
             "the backend must handle an empty scope explicitly"
@@ -3218,7 +3218,7 @@ let x = 1;
         for tool in ["get_memory.rs", "list_memories.rs"] {
             let src = read_source(
                 &repo_root()
-                    .join("autodev-core/src/agent/builtin_tools")
+                    .join("arcana-core/src/agent/builtin_tools")
                     .join(tool),
             );
             assert!(
@@ -3242,8 +3242,8 @@ let x = 1;
     /// asserts the two properties that were actually missing.
     #[test]
     fn tg_p3_44_45_memory_reaches_the_prompt_and_depends_on_the_query() {
-        let engine = read_source(&repo_root().join("autodev-core/src/agent/engine.rs"));
-        let ctx = read_source(&repo_root().join("autodev-core/src/agent/context.rs"));
+        let engine = read_source(&repo_root().join("arcana-core/src/agent/engine.rs"));
+        let ctx = read_source(&repo_root().join("arcana-core/src/agent/context.rs"));
 
         // The override branch must assemble memory rather than empty it.
         // ⚠ Comments stripped FIRST. This is the third time a gate of mine has
@@ -3308,7 +3308,7 @@ let x = 1;
     /// adding a dependency.
     #[test]
     fn tg_p3_33_the_embedding_dependency_is_optional_and_exactly_pinned() {
-        let manifest = read_source(&repo_root().join("autodev-core/Cargo.toml"));
+        let manifest = read_source(&repo_root().join("arcana-core/Cargo.toml"));
         let code: String = manifest
             .lines()
             .filter(|l| !l.trim_start().starts_with('#'))
@@ -3356,7 +3356,7 @@ let x = 1;
         // …and the vector backend must be compiled out on macOS regardless,
         // because no x86_64 ONNX Runtime exists upstream and the DMG is a
         // universal binary: enabling it there fails the build outright.
-        let manager = read_source(&repo_root().join("autodev-core/src/memory/manager.rs"));
+        let manager = read_source(&repo_root().join("arcana-core/src/memory/manager.rs"));
         assert!(
             manager.contains("not(target_os = \"macos\")"),
             "the vector backend must be excluded on macOS at compile time"
@@ -3378,7 +3378,7 @@ let x = 1;
     /// let `TG-P3-11` pass over a planted defect (`§0.16 L-C6`).
     #[test]
     fn tg_p3_17_every_validator_subprocess_is_bounded() {
-        let path = repo_root().join("autodev-core/src/agent/builtin_tools/validate.rs");
+        let path = repo_root().join("arcana-core/src/agent/builtin_tools/validate.rs");
         let text = read_source(&path);
 
         // The single legitimate `.output()` lives inside `run_bounded`, which
@@ -3432,7 +3432,7 @@ let x = 1;
     /// alone would have routed a **hang** into that same branch.
     #[test]
     fn tg_p3_18_a_check_that_did_not_run_cannot_report_clean() {
-        let path = repo_root().join("autodev-core/src/agent/builtin_tools/validate.rs");
+        let path = repo_root().join("arcana-core/src/agent/builtin_tools/validate.rs");
         let text = read_source(&path);
 
         let is_clean = text
@@ -3494,7 +3494,7 @@ let x = 1;
 
         // And no member may re-declare one, because a member's block looks
         // authoritative in review and is ignored at build time.
-        for member in ["src-tauri", "autodev-core", "src-cli", "src-shared"] {
+        for member in ["src-tauri", "arcana-core", "src-cli", "src-shared"] {
             let path = repo_root().join(member).join("Cargo.toml");
             let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
@@ -3526,7 +3526,7 @@ let x = 1;
     #[test]
     fn tg_p3_04_no_string_is_sliced_by_a_raw_byte_index() {
         let roots = [
-            repo_root().join("autodev-core/src"),
+            repo_root().join("arcana-core/src"),
             repo_root().join("src-tauri/src"),
             repo_root().join("src-cli/src"),
         ];
@@ -3679,7 +3679,7 @@ let x = 1;
     #[test]
     fn tg_p2_05_the_backend_catalogue_and_the_frontend_picker_agree() {
         let catalogue =
-            read_source(&repo_root().join("autodev-core/src/provider/catalogue.rs"));
+            read_source(&repo_root().join("arcana-core/src/provider/catalogue.rs"));
         let models_ts =
             read_source(&repo_root().join("src/data/models.ts"));
 
@@ -3768,7 +3768,7 @@ let x = 1;
     /// loop — which is most likely why this survived.
     #[test]
     fn tg_p2_10_every_error_exit_from_the_agent_loop_records_its_spend() {
-        let engine = read_source(&repo_root().join("autodev-core/src/agent/engine.rs"));
+        let engine = read_source(&repo_root().join("arcana-core/src/agent/engine.rs"));
 
         // The run loop, from `loop {` to the cost recording that follows it.
         let run = engine
@@ -3837,7 +3837,7 @@ let x = 1;
     /// exact shape of `L-18`.
     #[test]
     fn tg_p2_11_the_cached_prefix_is_built_from_the_stable_half_only() {
-        let engine = read_source(&repo_root().join("autodev-core/src/agent/engine.rs"));
+        let engine = read_source(&repo_root().join("arcana-core/src/agent/engine.rs"));
 
         assert!(
             engine.contains("build_system_prompt_parts"),
@@ -3882,7 +3882,7 @@ let x = 1;
     /// forbids naming one rather than forbidding the specific dead id.
     #[test]
     fn tg_p2_12_key_validation_does_not_name_a_model() {
-        let dir = repo_root().join("autodev-core/src/provider");
+        let dir = repo_root().join("arcana-core/src/provider");
         let mut offenders = Vec::new();
 
         for adapter in ["anthropic.rs", "openai.rs", "google.rs"] {
@@ -3957,7 +3957,7 @@ let x = 1;
     #[test]
     fn tg_p2_09_no_shipped_code_names_a_model_outside_the_catalogue() {
         let catalogue =
-            read_source(&repo_root().join("autodev-core/src/provider/catalogue.rs"));
+            read_source(&repo_root().join("arcana-core/src/provider/catalogue.rs"));
 
         // The ids the app offers, read from the catalogue's own entries.
         let offered: Vec<String> = catalogue
@@ -3973,7 +3973,7 @@ let x = 1;
         );
 
         let roots = [
-            repo_root().join("autodev-core/src"),
+            repo_root().join("arcana-core/src"),
             repo_root().join("src-tauri/src"),
             repo_root().join("src-cli/src"),
         ];
@@ -4106,7 +4106,7 @@ let x = 1;
     /// shape the defect had.
     #[test]
     fn tg_p2_08_model_settings_reach_the_request() {
-        let engine = read_source(&repo_root().join("autodev-core/src/agent/engine.rs"));
+        let engine = read_source(&repo_root().join("arcana-core/src/agent/engine.rs"));
 
         assert!(
             engine.contains("ModelConfigsDb"),
@@ -4148,7 +4148,7 @@ let x = 1;
     ///
     /// Two routes were closed and this keeps them closed:
     ///
-    ///   * **A CLI flag.** `airsctl` took an API key as an argument. A secret in
+    ///   * **A CLI flag.** `arcanactl` took an API key as an argument. A secret in
     ///     argv is visible in shell history and in the process table to every
     ///     other process on the machine, for the lifetime of the command.
     ///   * **A process environment variable.** Falling back to
@@ -4166,7 +4166,7 @@ let x = 1;
     #[test]
     fn tg_p2_07_no_shipped_code_reads_a_provider_key_from_argv_or_the_environment() {
         let roots = [
-            repo_root().join("autodev-core/src"),
+            repo_root().join("arcana-core/src"),
             repo_root().join("src-tauri/src"),
             repo_root().join("src-cli/src"),
         ];
@@ -4258,7 +4258,7 @@ let x = 1;
     /// **`ErrorClass` had no constructor at all until 2026-09-02.** It was
     /// defined, unit-tested against itself, and produced by nothing: all three
     /// adapters flattened failures into
-    /// `AutoDevError::Provider(format!("{status}: {text}"))`. So a spend-cap
+    /// `ArcanaError::Provider(format!("{status}: {text}"))`. So a spend-cap
     /// 429 and a rate-limit 429 were the same string, and Anthropic's 529
     /// overload was the same string as a 500.
     ///
@@ -4272,7 +4272,7 @@ let x = 1;
     /// so it must.
     #[test]
     fn tg_p2_06_every_provider_http_error_is_classified() {
-        let dir = repo_root().join("autodev-core/src/provider");
+        let dir = repo_root().join("arcana-core/src/provider");
         let mut offenders = Vec::new();
 
         for adapter in ["anthropic.rs", "openai.rs", "google.rs"] {
@@ -4324,7 +4324,7 @@ let x = 1;
     /// now uses `x-goog-api-key`.
     #[test]
     fn tg_p2_01_no_provider_puts_a_key_in_a_url() {
-        let dir = repo_root().join("autodev-core/src/provider");
+        let dir = repo_root().join("arcana-core/src/provider");
         let mut offenders = Vec::new();
 
         for entry in std::fs::read_dir(&dir).expect("provider dir") {
@@ -4420,7 +4420,7 @@ let x = 1;
     /// they cannot see, which weakens the control rather than the leak.
     #[test]
     fn tg_p1_06_raw_tool_input_reaches_only_the_permission_dialog() {
-        let path = repo_root().join("autodev-core/src/agent/tool_executor.rs");
+        let path = repo_root().join("arcana-core/src/agent/tool_executor.rs");
         let text = std::fs::read_to_string(&path).expect("tool_executor.rs");
         let production = text.split("#[cfg(test)]").next().unwrap_or("");
 
@@ -4511,27 +4511,27 @@ let x = 1;
     fn tg_p1_06_every_named_boundary_reaches_the_redactor() {
         const BOUNDARIES: &[(&str, &str, &str)] = &[
             (
-                "autodev-core/src",
+                "arcana-core/src",
                 "agent/tool_executor.rs",
                 "prompts: tool results on their way into the conversation",
             ),
             (
-                "autodev-core/src",
+                "arcana-core/src",
                 "memory/episodic.rs",
                 "memory: conversation history, which is permanent",
             ),
             (
-                "autodev-core/src",
+                "arcana-core/src",
                 "memory/semantic.rs",
                 "memory: extracted facts",
             ),
             (
-                "autodev-core/src",
+                "arcana-core/src",
                 "memory/procedural.rs",
                 "memory: skills written to disk",
             ),
             (
-                "autodev-core/src",
+                "arcana-core/src",
                 "analytics/collector.rs",
                 "analytics + egress diagnostics: provider errors and system events",
             ),
@@ -4571,7 +4571,7 @@ let x = 1;
     /// widens what escapes, and nothing else would notice.
     #[test]
     fn tg_p1_06_the_sensitive_key_list_is_intact() {
-        let path = repo_root().join("autodev-core/src/security/redaction.rs");
+        let path = repo_root().join("arcana-core/src/security/redaction.rs");
         let text = std::fs::read_to_string(&path).expect("redaction.rs");
         let production = text.split("#[cfg(test)]").next().unwrap_or("");
 
@@ -4601,7 +4601,7 @@ let x = 1;
     /// as a **total replacement** of the stable half. A recipe's `instructions`
     /// are passed as that override (`recipes/runner.rs`), and so is a
     /// subagent's `system_prompt` (`subagent/native_runner.rs`) — so the
-    /// prohibitions, the git house rules and the user's own `AUTODEV.md`
+    /// prohibitions, the git house rules and the user's own `ARCANA.md`
     /// reached the interactive assistant and **none of the agents that write
     /// files, run commands and commit**.
     ///
@@ -4615,16 +4615,16 @@ let x = 1;
     /// the one nobody updates when a worker is added.
     #[test]
     fn tg8_03_every_agent_kind_receives_the_invariant_core() {
-        use autodev_core::agent::context::{ContextBuilder, INVARIANT_CORE};
-        use autodev_core::agent::PAMode;
-        use autodev_core::recipes::defaults::{ensure_default_recipes, FLEET_WORKERS};
-        use autodev_core::recipes::parser::load_all_recipes;
+        use arcana_core::agent::context::{ContextBuilder, INVARIANT_CORE};
+        use arcana_core::agent::PAMode;
+        use arcana_core::recipes::defaults::{ensure_default_recipes, FLEET_WORKERS};
+        use arcana_core::recipes::parser::load_all_recipes;
 
         // One sandbox for this test alone. `L-30`: three P4 tests shared a temp
         // dir, each called `remove_dir_all`, and they passed alone and failed
         // in the full suite.
         let sandbox = std::env::temp_dir().join(format!(
-            "autodev-tg8-03-{}-{:?}",
+            "arcana-tg8-03-{}-{:?}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -4719,7 +4719,7 @@ let x = 1;
     /// the chokepoint every agent kind actually passes through.
     #[test]
     fn tg8_04_no_engine_path_bypasses_the_composer() {
-        let engine = read_source(&repo_root().join("autodev-core/src/agent/engine.rs"));
+        let engine = read_source(&repo_root().join("arcana-core/src/agent/engine.rs"));
 
         // Comments stripped FIRST. This gate's own explanation contains the
         // string it searches for — the recorded sub-pattern of `L-27` that has
@@ -4750,12 +4750,12 @@ let x = 1;
         assert!(
             !branch.contains("override_str.to_string()"),
             "the override arm returns the override verbatim again, which drops \
-             the invariant core and the user's AUTODEV.md:\n{branch}"
+             the invariant core and the user's ARCANA.md:\n{branch}"
         );
 
         // And the PA builder must delegate rather than re-assemble, or there
         // are two composers and one of them will drift (`L-19`).
-        let ctx = read_source(&repo_root().join("autodev-core/src/agent/context.rs"));
+        let ctx = read_source(&repo_root().join("arcana-core/src/agent/context.rs"));
         let ctx_code: String = ctx
             .lines()
             .filter(|l| !l.trim_start().starts_with("//"))
@@ -4820,7 +4820,7 @@ let x = 1;
     /// three times).
     #[test]
     fn tg8_05_the_core_carries_the_house_git_rules() {
-        use autodev_core::agent::context::INVARIANT_CORE;
+        use arcana_core::agent::context::INVARIANT_CORE;
 
         // (rule, the substring that can only appear if the rule is stated)
         let rules: &[(&str, &[&str])] = &[
@@ -4878,11 +4878,11 @@ let x = 1;
     /// loads and what the model is actually given.
     #[test]
     fn tg8_06_no_default_recipe_commits_blind_or_onto_a_trunk() {
-        use autodev_core::recipes::defaults::{ensure_default_recipes, FLEET_WORKERS};
-        use autodev_core::recipes::parser::load_all_recipes;
+        use arcana_core::recipes::defaults::{ensure_default_recipes, FLEET_WORKERS};
+        use arcana_core::recipes::parser::load_all_recipes;
 
         let sandbox = std::env::temp_dir().join(format!(
-            "autodev-tg8-06-{}-{:?}",
+            "arcana-tg8-06-{}-{:?}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -4921,7 +4921,7 @@ let x = 1;
                 "recipe for {slug} has no Commit Protocol section"
             );
             assert!(
-                r.instructions.contains("git switch -c autodev/fleet"),
+                r.instructions.contains("git switch -c arcana/fleet"),
                 "recipe for {slug} never creates a branch, so its commits land on \
                  whatever the user had checked out"
             );
@@ -4994,7 +4994,7 @@ let x = 1;
         // The writer set is DERIVED: every file that mentions `WorkersDb` and
         // calls `update_status(`. Naming the files here would be the same list
         // that must agree, one indirection later (`L-19`).
-        let core = repo_root().join("autodev-core/src");
+        let core = repo_root().join("arcana-core/src");
         let mut writer_files: Vec<std::path::PathBuf> = Vec::new();
         collect_rs(&core, &mut writer_files);
         let writer_files: Vec<std::path::PathBuf> = writer_files
@@ -5123,7 +5123,7 @@ let x = 1;
         // and the scheduler does not list **parks that worker permanently** —
         // no error, no failing test, and a log line that reads as a curiosity.
         // `idle_no_provider` was in exactly that state.
-        let sched = read_source(&repo_root().join("autodev-core/src/recipes/scheduler.rs"));
+        let sched = read_source(&repo_root().join("arcana-core/src/recipes/scheduler.rs"));
         assert!(!sched.trim().is_empty(), "scheduler.rs did not read");
         let sched_code: String = sched
             .lines()
@@ -5264,7 +5264,7 @@ let x = 1;
         // ── what Rust can emit ───────────────────────────────────────────────
         let mut rs_files: Vec<std::path::PathBuf> = Vec::new();
         collect_rs(&repo_root().join("src-tauri/src"), &mut rs_files);
-        collect_rs(&repo_root().join("autodev-core/src"), &mut rs_files);
+        collect_rs(&repo_root().join("arcana-core/src"), &mut rs_files);
         // See the doc comment: this file names every KNOWN_UNEMITTED event.
         rs_files.retain(|p| !p.ends_with("ci_gate.rs"));
         assert!(
@@ -5334,7 +5334,7 @@ let x = 1;
     /// recorded in this register.
     ///
     /// ⚠ The word "sidecar" is deliberately **not** in the forbidden set.
-    /// `PD0` gave it a second meaning — AutoDev as a sidecar *of AutoDesign* —
+    /// `PD0` gave it a second meaning — Arcana as a sidecar *of AutoDesign* —
     /// and `P8-21` records that four files using it in that sense must
     /// survive. A gate written against the token rather than the thing would
     /// have deleted a published seam.
@@ -5348,7 +5348,7 @@ let x = 1;
         ];
 
         let roots = [
-            "autodev-core/src",
+            "arcana-core/src",
             "src-tauri/src",
             "src-cli/src",
             "src-shared/src",
@@ -5423,7 +5423,7 @@ let x = 1;
     /// symbol it looks for (`L-C7`).
     #[test]
     fn tg8_10_the_procedural_seam_is_once_per_turn_and_off_by_default() {
-        let exec = read_source(&repo_root().join("autodev-core/src/agent/tool_executor.rs"));
+        let exec = read_source(&repo_root().join("arcana-core/src/agent/tool_executor.rs"));
         assert!(!exec.trim().is_empty(), "tool_executor.rs did not read");
         let code: String = exec
             .lines()
@@ -5472,7 +5472,7 @@ let x = 1;
         // flattener and framing. The guarantee is that `flatten_for_prompt`
         // stays PRIVATE, so a future caller cannot render procedural text any
         // other way and reach the prompt with it.
-        let recall = read_source(&repo_root().join("autodev-core/src/memory/recall.rs"));
+        let recall = read_source(&repo_root().join("arcana-core/src/memory/recall.rs"));
         assert!(!recall.trim().is_empty(), "recall.rs did not read");
         assert!(
             recall.contains("fn flatten_for_prompt(") && !recall.contains("pub fn flatten_for_prompt("),
@@ -5490,19 +5490,16 @@ let x = 1;
     // ── TG8-11 · the exit assertion ───────────────────────────────────────────
 
     /// `P8-21` and `P8-24`. Every clause names the **Python orchestrator
-    /// subsystem**, which is the thing that was deleted — not the word
-    /// "sidecar", which `PD0` gave a second meaning.
+    /// subsystem**, which is the thing that was deleted. Arcana later retired
+    /// the separate PD0 design contract by owner decision (ADR-0043).
     ///
     /// 🔴 The original assertion was *"`git ls-files | grep -i sidecar`
-    /// returns nothing"*. That could only be satisfied by deleting `PD0`'s
-    /// published deliverables, because AutoDev is itself a **sidecar of
-    /// AutoDesign** in that seam. `L-C6` — a check written from the claim
-    /// rather than from the invariant — caught before the phase rather than by
-    /// its audit, which is what `§0.2m` exists for.
+    /// returns nothing"*. It would have deleted unrelated updater signature
+    /// assets and SQLite backup companions. Name the Python subsystem instead.
     ///
-    /// ⚠ The PROTECTED set is asserted to **still exist**. A sweep that
-    /// deleted them would satisfy every "is it gone?" clause below and be
-    /// catastrophic, so the gate checks both directions.
+    /// ⚠ The remaining PROTECTED set is asserted to **still exist**. A sweep
+    /// that deleted it would satisfy every "is it gone?" clause below and
+    /// break updater verification or SQLite backup.
     #[test]
     fn tg8_11_the_exit_assertion() {
         let root = repo_root();
@@ -5551,7 +5548,7 @@ let x = 1;
             root.join("package.json"),
             root.join("src-tauri/Cargo.toml"),
             root.join("src-tauri/tauri.conf.json"),
-            root.join("autodev-core/Cargo.toml"),
+            root.join("arcana-core/Cargo.toml"),
             root.join("src-cli/Cargo.toml"),
             root.join("src-shared/Cargo.toml"),
         ];
@@ -5614,23 +5611,17 @@ let x = 1;
 
         // ── 3 · and these are PROTECTED, not targets ─────────────────────────
         //
-        // Every one uses the word "sidecar" in a different sense. A sweep run
-        // from the token rather than the subject would delete a published seam.
+        // Updater signature assets and SQLite WAL companions are not Python
+        // orchestrator code. The separate PD0 seam was retired in ADR-0043.
         for protected in [
-            "tsconfig.sidecar.json",
-            "scripts/smoke-design-sidecar.mjs",
-            "src/design/contract/sidecar.ts",
             "src-tauri/src/updater/check.rs",
             "src-tauri/src/updater/download.rs",
-            "autodev-core/src/db/backup.rs",
+            "arcana-core/src/db/backup.rs",
         ] {
             assert!(
                 root.join(protected).exists(),
-                "`{protected}` is MISSING. It uses the word 'sidecar' in a \
-                 different sense — the AutoDesign seam, an update signature \
-                 asset, or SQLite's write-ahead log — and `P8-21` lists it as \
-                 protected. A sweep that deleted it satisfied every clause \
-                 above and broke something shipped."
+                "`{protected}` is MISSING. It is an updater verification \
+                 asset or SQLite backup code, not the old Python subsystem."
             );
         }
     }

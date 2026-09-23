@@ -1,1 +1,1 @@
-pub use autodev_core::git::*;
+pub use arcana_core::git::*;

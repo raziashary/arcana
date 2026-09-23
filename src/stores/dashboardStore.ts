@@ -423,7 +423,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       // Index Phase 2: subscribe directly to `worker:tick-end` for live
       // Dashboard refresh after a tick. Rust emits this event
       // unconditionally on every successful and failed worker tick
-      // (see autodev-core/src/recipes/runner.rs `emit_worker_tick_end`),
+      // (see arcana-core/src/recipes/runner.rs `emit_worker_tick_end`),
       // independent of the `task:changed` channel above. Without this
       // subscription the DB-backed widgets (cost trend, leaderboard,
       // failures) wait up to 60s for the polling fallback before showing

@@ -28,7 +28,7 @@ const HOOK_TEMPLATES: HookTemplate[] = [
     category: 'safety',
     hook_type: 'pre_tool_use',
     conditions: { command_pattern: 'rm\\s+-rf\\s+/' },
-    action: { type: 'block', message: 'Destructive root deletion blocked by AutoDev' },
+    action: { type: 'block', message: 'Destructive root deletion blocked by Arcana' },
   },
   {
     id: 'block-force-push',
@@ -83,7 +83,7 @@ const HOOK_TEMPLATES: HookTemplate[] = [
     category: 'automation',
     hook_type: 'on_plan_complete',
     conditions: {},
-    action: { type: 'http', url: 'https://hooks.example.com/autodev', method: 'POST' },
+    action: { type: 'http', url: 'https://hooks.example.com/arcana', method: 'POST' },
   },
   // Notifications
   {
@@ -111,7 +111,7 @@ const HOOK_TEMPLATES: HookTemplate[] = [
     category: 'notifications',
     hook_type: 'on_error',
     conditions: {},
-    action: { type: 'notification', title: 'AutoDev Error', message: 'Agent encountered an error. Check the logs.' },
+    action: { type: 'notification', title: 'Arcana Error', message: 'Agent encountered an error. Check the logs.' },
   },
   // Logging
   {
@@ -121,7 +121,7 @@ const HOOK_TEMPLATES: HookTemplate[] = [
     category: 'logging',
     hook_type: 'pre_tool_use',
     conditions: {},
-    action: { type: 'log', file: '~/.autodev/logs/tools.log', message: '[{{hook_type}}] {{tool_name}}: {{command}}' },
+    action: { type: 'log', file: '~/.arcana/logs/tools.log', message: '[{{hook_type}}] {{tool_name}}: {{command}}' },
   },
   {
     id: 'log-errors',
@@ -130,7 +130,7 @@ const HOOK_TEMPLATES: HookTemplate[] = [
     category: 'logging',
     hook_type: 'on_error',
     conditions: {},
-    action: { type: 'log', file: '~/.autodev/logs/errors.log', message: '[{{hook_type}}] {{session_id}}: error' },
+    action: { type: 'log', file: '~/.arcana/logs/errors.log', message: '[{{hook_type}}] {{session_id}}: error' },
   },
   {
     id: 'log-git-events',
@@ -139,7 +139,7 @@ const HOOK_TEMPLATES: HookTemplate[] = [
     category: 'logging',
     hook_type: 'post_commit',
     conditions: {},
-    action: { type: 'log', file: '~/.autodev/logs/git.log', message: '[{{hook_type}}] commit by session {{session_id}}' },
+    action: { type: 'log', file: '~/.arcana/logs/git.log', message: '[{{hook_type}}] commit by session {{session_id}}' },
   },
 ]
 
@@ -941,7 +941,7 @@ function AddHookForm({ onAdd, onCancel }: { onAdd: (i: AddHookInput) => Promise<
         <div className="grid grid-cols-2 gap-2">
           <div className="space-y-1">
             <label style={labelStyle}>Title</label>
-            <input value={notifTitle} onChange={e => setNotifTitle(e.target.value)} style={inputStyle} placeholder="AutoDev Alert" />
+            <input value={notifTitle} onChange={e => setNotifTitle(e.target.value)} style={inputStyle} placeholder="Arcana Alert" />
           </div>
           <div className="space-y-1">
             <label style={labelStyle}>Message</label>
@@ -953,7 +953,7 @@ function AddHookForm({ onAdd, onCancel }: { onAdd: (i: AddHookInput) => Promise<
         <div className="grid grid-cols-2 gap-2">
           <div className="space-y-1">
             <label style={labelStyle}>File path</label>
-            <input value={logFile} onChange={e => setLogFile(e.target.value)} style={inputStyle} placeholder="~/.autodev/logs/hooks.log" />
+            <input value={logFile} onChange={e => setLogFile(e.target.value)} style={inputStyle} placeholder="~/.arcana/logs/hooks.log" />
           </div>
           <div className="space-y-1">
             <label style={labelStyle}>Message template</label>
@@ -970,7 +970,7 @@ function AddHookForm({ onAdd, onCancel }: { onAdd: (i: AddHookInput) => Promise<
       {actionType === 'emit_event' && (
         <div className="space-y-1">
           <label style={labelStyle}>Event name</label>
-          <input value={eventName} onChange={e => setEventName(e.target.value)} style={inputStyle} placeholder="autodev:hook-fired" />
+          <input value={eventName} onChange={e => setEventName(e.target.value)} style={inputStyle} placeholder="arcana:hook-fired" />
         </div>
       )}
 

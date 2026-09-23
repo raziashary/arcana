@@ -1,5 +1,5 @@
 #!/bin/sh
-# postinst — Post-installation script for the AutoDev .deb package.
+# postinst — Post-installation script for the Arcana .deb package.
 # Phase 5.3 — Platform Installers.
 # Runs as root after dpkg unpacks the package.
 
@@ -7,7 +7,7 @@ set -e
 
 case "$1" in
   configure)
-    # ── Create ~/.autodev directory structure for all users ─────────────────
+    # ── Create ~/.arcana directory structure for all users ─────────────────
     # We do NOT create it here (per-user dirs should be created at app launch)
     # but we do set up the system-wide MIME type and desktop file.
 
@@ -28,12 +28,12 @@ case "$1" in
 
     # ── AppArmor profile (if AppArmor is active) ──────────────────────────────
     if command -v aa-enabled >/dev/null 2>&1 && aa-enabled >/dev/null 2>&1; then
-      if [ -f /etc/apparmor.d/autodev ]; then
-        apparmor_parser -r /etc/apparmor.d/autodev 2>/dev/null || true
+      if [ -f /etc/apparmor.d/arcana ]; then
+        apparmor_parser -r /etc/apparmor.d/arcana 2>/dev/null || true
       fi
     fi
 
-    echo "AutoDev installed successfully. Run 'autodev' or find it in your application menu."
+    echo "Arcana installed successfully. Run 'arcana' or find it in your application menu."
     ;;
 
   abort-upgrade|abort-remove|abort-deconfigure)

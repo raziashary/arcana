@@ -1,6 +1,6 @@
 # End-to-end harness
 
-WebdriverIO driving the **built** AutoDev binary through `tauri-driver`.
+WebdriverIO driving the **built** Arcana binary through `tauri-driver`.
 
 Why against the built binary rather than the dev server: every defect in the
 restructure's register survived `tsc` and `cargo clippy`. A harness that tests

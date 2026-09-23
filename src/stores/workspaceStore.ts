@@ -1,10 +1,10 @@
-// Workspace directory store — holds the root folder for all AutoDev agents.
+// Workspace directory store — holds the root folder for all Arcana agents.
 // The workspace dir is used as:
 //   - working_dir for all PA chat sessions (persists per session)
 //   - working_dir for all worker recipe runs (RecipeRunner)
 //   - base for @-mention path resolution in chat input
 //
-// Stored in ~/.autodev/config.db on the Rust side.
+// Stored in ~/.arcana/config.db on the Rust side.
 
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'

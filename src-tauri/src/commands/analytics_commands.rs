@@ -6,7 +6,7 @@ use chrono::NaiveDate;
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::State;
 use tracing::info;
-use autodev_core::state::lock::LockTolerant;
+use arcana_core::state::lock::LockTolerant;
 
 // Doc 02 Phase 3.4 — one-shot diagnostic log on first dashboard hit.
 // On-call debugging frequently needs to know "is the dashboard actually
@@ -52,9 +52,9 @@ pub fn get_cost_analytics(
     granularity: String,
 ) -> Result<CostAnalytics> {
     let start_date = NaiveDate::parse_from_str(&start, "%Y-%m-%d")
-        .map_err(|e| crate::errors::AutoDevError::Agent(format!("Invalid date format: {}", e)))?;
+        .map_err(|e| crate::errors::ArcanaError::Agent(format!("Invalid date format: {}", e)))?;
     let end_date = NaiveDate::parse_from_str(&end, "%Y-%m-%d")
-        .map_err(|e| crate::errors::AutoDevError::Agent(format!("Invalid date format: {}", e)))?;
+        .map_err(|e| crate::errors::ArcanaError::Agent(format!("Invalid date format: {}", e)))?;
 
     let manager = analytics::global();
     let queries = manager.queries();
@@ -64,9 +64,9 @@ pub fn get_cost_analytics(
 #[tauri::command]
 pub fn get_token_usage(start: String, end: String) -> Result<TokenUsageAnalytics> {
     let start_date = NaiveDate::parse_from_str(&start, "%Y-%m-%d")
-        .map_err(|e| crate::errors::AutoDevError::Agent(format!("Invalid date format: {}", e)))?;
+        .map_err(|e| crate::errors::ArcanaError::Agent(format!("Invalid date format: {}", e)))?;
     let end_date = NaiveDate::parse_from_str(&end, "%Y-%m-%d")
-        .map_err(|e| crate::errors::AutoDevError::Agent(format!("Invalid date format: {}", e)))?;
+        .map_err(|e| crate::errors::ArcanaError::Agent(format!("Invalid date format: {}", e)))?;
 
     let manager = analytics::global();
     let queries = manager.queries();
@@ -90,9 +90,9 @@ pub fn predict_monthly_cost() -> Result<CostPrediction> {
 #[tauri::command]
 pub fn export_costs_csv(start: String, end: String, path: String) -> Result<ExportResult> {
     let start_date = NaiveDate::parse_from_str(&start, "%Y-%m-%d")
-        .map_err(|e| crate::errors::AutoDevError::Agent(format!("Invalid date format: {}", e)))?;
+        .map_err(|e| crate::errors::ArcanaError::Agent(format!("Invalid date format: {}", e)))?;
     let end_date = NaiveDate::parse_from_str(&end, "%Y-%m-%d")
-        .map_err(|e| crate::errors::AutoDevError::Agent(format!("Invalid date format: {}", e)))?;
+        .map_err(|e| crate::errors::ArcanaError::Agent(format!("Invalid date format: {}", e)))?;
 
     let manager = analytics::global();
     let exporter = manager.exporter();
@@ -102,9 +102,9 @@ pub fn export_costs_csv(start: String, end: String, path: String) -> Result<Expo
 #[tauri::command]
 pub fn export_costs_json(start: String, end: String, path: String) -> Result<ExportResult> {
     let start_date = NaiveDate::parse_from_str(&start, "%Y-%m-%d")
-        .map_err(|e| crate::errors::AutoDevError::Agent(format!("Invalid date format: {}", e)))?;
+        .map_err(|e| crate::errors::ArcanaError::Agent(format!("Invalid date format: {}", e)))?;
     let end_date = NaiveDate::parse_from_str(&end, "%Y-%m-%d")
-        .map_err(|e| crate::errors::AutoDevError::Agent(format!("Invalid date format: {}", e)))?;
+        .map_err(|e| crate::errors::ArcanaError::Agent(format!("Invalid date format: {}", e)))?;
 
     let manager = analytics::global();
     let exporter = manager.exporter();
@@ -118,9 +118,9 @@ pub fn get_worker_analytics(
     end: String,
 ) -> Result<serde_json::Value> {
     let start_date = NaiveDate::parse_from_str(&start, "%Y-%m-%d")
-        .map_err(|e| crate::errors::AutoDevError::Agent(format!("Invalid date format: {}", e)))?;
+        .map_err(|e| crate::errors::ArcanaError::Agent(format!("Invalid date format: {}", e)))?;
     let end_date = NaiveDate::parse_from_str(&end, "%Y-%m-%d")
-        .map_err(|e| crate::errors::AutoDevError::Agent(format!("Invalid date format: {}", e)))?;
+        .map_err(|e| crate::errors::ArcanaError::Agent(format!("Invalid date format: {}", e)))?;
 
     let manager = analytics::global();
     let db = manager.db();

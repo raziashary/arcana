@@ -1,5 +1,5 @@
 // TabBar — spec Section 2.2.
-// Height 36px, active tab accent bottom border, AutoDev task count badge, model + cost pills.
+// Height 36px, active tab accent bottom border, Arcana task count badge, model + cost pills.
 
 import type { TabId } from '../../App'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -31,7 +31,7 @@ export default function TabBar({ tabs, activeTab, onTabChange }: Props) {
     >
       <div className="flex h-full">
         {tabs.map(tab => {
-          const badge = tab.id === 'autodev' && activeTasks > 0 ? activeTasks : null
+          const badge = tab.id === 'arcana' && activeTasks > 0 ? activeTasks : null
           const isActive = activeTab === tab.id
           return (
             <button

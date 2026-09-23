@@ -97,7 +97,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           // Update directly (not via setPAMode) so we don't write back the
           // same value we just read — avoids a redundant round-trip.
           useSettingsStore.setState({ paMode: session.pa_mode as any })
-          localStorage.setItem('autodev:pa_mode', session.pa_mode)
+          localStorage.setItem('arcana:pa_mode', session.pa_mode)
         }
       } catch (e) {
         console.error('Failed to hydrate paMode from session:', e)

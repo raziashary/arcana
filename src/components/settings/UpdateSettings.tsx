@@ -43,7 +43,7 @@ export default function UpdateSettings() {
           Updates
         </div>
         <div className="text-xs mt-0.5" style={{ color: 'var(--text-3)' }}>
-          Manage AutoDev application updates
+          Manage Arcana application updates
         </div>
       </div>
 
@@ -142,7 +142,7 @@ export default function UpdateSettings() {
         )}
         {store.lastChecked && !store.isChecking && !store.availableUpdate && (
           <p className="text-xs" style={{ color: 'var(--text-3)' }}>
-            ✓ AutoDev is up to date
+            ✓ Arcana is up to date
           </p>
         )}
       </div>

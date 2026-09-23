@@ -33,7 +33,7 @@ pub fn is_tty() -> bool {
     }
 }
 
-/// Standard exit codes for airsctl.
+/// Standard exit codes for arcanactl.
 pub mod exit_code {
     pub const SUCCESS: i32 = 0;
     pub const ERROR: i32 = 1;

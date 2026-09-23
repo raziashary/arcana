@@ -1,4 +1,4 @@
-// ~/.airs/config.toml — airsctl configuration file types and I/O.
+// ~/.airs/config.toml — arcanactl configuration file types and I/O.
 
 use crate::errors::{Result, SharedError};
 use serde::{Deserialize, Serialize};
@@ -10,7 +10,7 @@ pub fn config_path() -> Result<PathBuf> {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .map_err(|_| SharedError::Other("Cannot determine home directory".into()))?;
-    let dir = PathBuf::from(home).join(".autodev");
+    let dir = PathBuf::from(home).join(".arcana");
     std::fs::create_dir_all(&dir)?;
     Ok(dir.join("config.toml"))
 }
@@ -29,7 +29,7 @@ pub struct CoreConfig {
 //
 // ⚠ Removing them is backwards compatible in the direction that matters.
 // `CliConfigFile` derives `Deserialize` without `deny_unknown_fields`, so an
-// existing `~/.autodev/config.toml` carrying either key still parses — serde
+// existing `~/.arcana/config.toml` carrying either key still parses — serde
 // ignores a key with no field. `config set core.orchestrator_url ...` now
 // returns "Unknown key", which is the correct answer and better than accepting
 // a value nothing will read.

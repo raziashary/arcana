@@ -1,6 +1,6 @@
 // App root — tab router + layout shell.
 // Renders TitleBar + TabBar + active tab content + Sidebar + StatusBar.
-// Design matches autodevmockup.html exactly.
+// Design matches arcanamockup.html exactly.
 
 import { useEffect } from 'react'
 import TitleBar    from './components/layout/TitleBar'
@@ -8,7 +8,7 @@ import TabBar      from './components/layout/TabBar'
 import StatusBar   from './components/layout/StatusBar'
 import Sidebar     from './components/layout/Sidebar'
 import ChatTab     from './tabs/Chat'
-import AutoDevTab  from './tabs/AutoDevPanel'
+import ArcanaTab  from './tabs/ArcanaPanel'
 import IDETab      from './tabs/IDE'
 import RecipesTab  from './tabs/Recipes'
 import GraphTab    from './tabs/Graph'
@@ -31,11 +31,11 @@ import { ErrorBoundary }    from './components/ErrorBoundary'
 import { WorkspaceMismatchBanner, StrayFilesBanner } from './components/WorkspaceMismatchBanner'
 // Doc 05 Phase 1 — sidecar crash banner with stderr tail + copy report.
 
-export type TabId = 'chat' | 'autodev' | 'ide' | 'recipes' | 'graph' | 'dashboard' | 'settings' | 'logs' | 'docs'
+export type TabId = 'chat' | 'arcana' | 'ide' | 'recipes' | 'graph' | 'dashboard' | 'settings' | 'logs' | 'docs'
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'chat',      label: 'Chat'      },
-  { id: 'autodev',   label: 'AutoDev'   },
+  { id: 'arcana',   label: 'Arcana'   },
   { id: 'ide',       label: 'IDE'       },
   { id: 'recipes',   label: 'Recipes'   },
   { id: 'logs',      label: 'Logs'      },
@@ -65,7 +65,7 @@ export default function App() {
     // flags) so React StrictMode's double-mount is safe.
     void initWorkerEvents()
     void initTaskEvents()
-    // AutoDev Communication Protocol — seed Fleet Chat from SQLite + subscribe
+    // Arcana Communication Protocol — seed Fleet Chat from SQLite + subscribe
     // to the live worker:message stream. Idempotent.
     void hydrateWorkerChat()
     // Phase 5.3 — subscribe to auto-updater events
@@ -101,7 +101,7 @@ export default function App() {
       <div className="app-body">
         <div className="app-main">
           {activeTab === 'chat'      && <ErrorBoundary label="Chat"><ChatTab /></ErrorBoundary>}
-          {activeTab === 'autodev'   && <ErrorBoundary label="AutoDev"><AutoDevTab /></ErrorBoundary>}
+          {activeTab === 'arcana'   && <ErrorBoundary label="Arcana"><ArcanaTab /></ErrorBoundary>}
           {activeTab === 'ide'       && <ErrorBoundary label="IDE"><IDETab /></ErrorBoundary>}
           {activeTab === 'recipes'   && <ErrorBoundary label="Recipes"><RecipesTab /></ErrorBoundary>}
           {activeTab === 'graph'     && <ErrorBoundary label="Graph"><GraphTab /></ErrorBoundary>}

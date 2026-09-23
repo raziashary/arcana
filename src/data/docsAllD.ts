@@ -1,5 +1,5 @@
 // Documentation — Sections 12–14
-// Full content faithful to AUTODEV_DOCUMENTATION.md
+// Full content faithful to ARCANA_DOCUMENTATION.md
 
 import type { DocSection } from './docs'
 
@@ -12,7 +12,7 @@ export const D_SECTIONS: DocSection[] = [
     anchors: ['Cron Scheduler', 'Recipe Runner', 'Fleet Management', 'Orphan Detection', 'Tool Execution', 'Context Building', 'Memory Integration'],
     blocks: [
       { t: 'h2', text: 'Cron Scheduler' },
-      { t: 'prose', text: 'Implementation: autodev-core/src/recipes/scheduler.rs' },
+      { t: 'prose', text: 'Implementation: arcana-core/src/recipes/scheduler.rs' },
       { t: 'list', items: [
         'Uses tokio tasks for background execution',
         'cron crate for POSIX cron expression parsing',
@@ -26,18 +26,18 @@ export const D_SECTIONS: DocSection[] = [
       ]},
       { t: 'prose', text: 'A worker that is paused or deleted ends its schedule; one that is still working skips the beat rather than overlapping with itself.' },
       { t: 'h2', text: 'Recipe Runner' },
-      { t: 'prose', text: 'Implementation: autodev-core/src/recipes/runner.rs' },
+      { t: 'prose', text: 'Implementation: arcana-core/src/recipes/runner.rs' },
       { t: 'code', lang: 'text', code: `Cron beat → runnable? → provider + model → AgentEngine → tick events → status` },
       { t: 'list', items: [
         'No-Op Short-Circuit: a worker with no assigned or in_progress task skips the tick, rather than spinning up the model to discover an empty board and inventing work to fill it.',
         'Model Resolution priority: worker.model (DB) > recipe.model (YAML) > active_model (Settings) > default',
-        'Workspace Directory priority: configured workspace > sandbox fallback (~/.autodev/agents/<slug>/)',
+        'Workspace Directory priority: configured workspace > sandbox fallback (~/.arcana/agents/<slug>/)',
         'Ephemeral Sessions: each tick creates fresh session ID, not persisted to session DB',
       ]},
       { t: 'h2', text: 'Startup' },
       { t: 'prose', text: 'There is no startup sequence to narrate. The app opens, reads its SQLite databases, installs its singletons and is ready; nothing is spawned and nothing has to become healthy first. Earlier versions bundled two Python services and showed a progress overlay while they came up — both are gone.' },
       { t: 'h2', text: 'Fleet Management' },
-      { t: 'prose', text: 'Worker Registry: ~/.autodev/workers.db (SQLite). Seeds 7 system workers on first open. CRUD via Tauri commands.' },
+      { t: 'prose', text: 'Worker Registry: ~/.arcana/workers.db (SQLite). Seeds 7 system workers on first open. CRUD via Tauri commands.' },
       { t: 'table', headers: ['Worker Status', 'Meaning'], rows: [
         ['Created', 'Seeded in DB, not yet started'],
         ['Idle', 'Recipe cron active, polling, no task currently'],
@@ -81,15 +81,15 @@ export const D_SECTIONS: DocSection[] = [
         'Fleet workers and subagents: the same registry, narrowed by the recipe or spawn call when it asks for a subset',
       ]},
       { t: 'h2', text: 'Context Building' },
-      { t: 'prose', text: 'Implementation: autodev-core/src/agent/context.rs' },
+      { t: 'prose', text: 'Implementation: arcana-core/src/agent/context.rs' },
       { t: 'h3', text: 'System Prompt Assembly Order' },
       { t: 'list', items: [
         '1. Base system prompt (mode-specific: BASE/REVIEW/DELEGATE)',
-        '2. Global AUTODEV.md (from SQLite primary, filesystem fallback)',
-        '3. Repo-specific AUTODEV.md (from SQLite or .autodev/autodev.md in workspace)',
+        '2. Global ARCANA.md (from SQLite primary, filesystem fallback)',
+        '3. Repo-specific ARCANA.md (from SQLite or .arcana/arcana.md in workspace)',
         '4. Memory context (if session_id attached to living agent)',
       ]},
-      { t: 'prose', text: 'AUTODEV.md Storage: Primary = SQLite (~/.autodev/config.db). Fallback = ~/.autodev/config/autodev_global.md or .autodev/autodev.md. UI-managed via AUTODEV.md editor in Settings.' },
+      { t: 'prose', text: 'ARCANA.md Storage: Primary = SQLite (~/.arcana/config.db). Fallback = ~/.arcana/config/arcana_global.md or .arcana/arcana.md. UI-managed via ARCANA.md editor in Settings.' },
       { t: 'h2', text: 'Memory Integration' },
       { t: 'prose', text: 'Implementation: src-tauri/src/memory/' },
       { t: 'table', headers: ['Tier', 'Type', 'Description'], rows: [
@@ -100,7 +100,7 @@ export const D_SECTIONS: DocSection[] = [
       { t: 'list', items: [
         'build_memory_context() — recalls relevant memories with token-aware budget management',
         'Intent detection for targeted recall (retrieves relevant context only)',
-        'Stored in SQLite under ~/.autodev/, with embeddings for semantic recall — no external memory service and nothing to keep running',
+        'Stored in SQLite under ~/.arcana/, with embeddings for semantic recall — no external memory service and nothing to keep running',
       ]},
     ],
   },
@@ -108,13 +108,13 @@ export const D_SECTIONS: DocSection[] = [
   /* ── 14: Glossary ───────────────────────────────────────────────── */
   {
     id: 'glossary', num: '14', title: 'Glossary', category: 'Internals', icon: 'book-open',
-    lead: 'Complete reference of terms, acronyms, and concepts used throughout AutoDev documentation and codebase.',
+    lead: 'Complete reference of terms, acronyms, and concepts used throughout Arcana documentation and codebase.',
     anchors: ['A–D', 'E–H', 'I–M', 'N–R', 'S–Z'],
     blocks: [
       { t: 'h2', text: 'A–D' },
       { t: 'table', headers: ['Term', 'Definition'], rows: [
         ['ACP', 'The worker message channel — how a worker asks the Supervisor a question and gets an answer back, through the task board'],
-        ['AUTODEV.md', 'Proprietary AIRS instruction system, stored in SQLite, editable from UI, injected into system prompt'],
+        ['ARCANA.md', 'Arcana instruction system, stored in SQLite, editable from UI, injected into the system prompt'],
         ['Bash Tool', 'Built-in tool for executing shell commands (tests, linting, git operations)'],
         ['Class Node', 'Graph node representing a class definition'],
         ['Community', 'Group of related nodes in the knowledge graph (clustered via Leiden algorithm)'],
@@ -127,7 +127,7 @@ export const D_SECTIONS: DocSection[] = [
         ['Fast Development Mode', 'PA mode with full tool access and no permission prompts'],
         ['File Node', 'Graph node representing a source file'],
         ['Force-Directed Graph', 'D3.js simulation where nodes repel each other and edges pull connected nodes together'],
-        ['Fleet branch', 'autodev/fleet — the shared branch every worker commits to. Workers never push it, open a pull request, or merge one'],
+        ['Fleet branch', 'arcana/fleet — the shared branch every worker commits to. Workers never push it, open a pull request, or merge one'],
         ['Git Worktree', 'Isolated working directory per task — prevents main branch pollution during worker execution'],
         ['GitHub MCP', 'MCP server providing GitHub Issues and Pull Request tools'],
         ['Glob Tool', 'Built-in tool for finding files matching glob patterns'],
@@ -136,12 +136,12 @@ export const D_SECTIONS: DocSection[] = [
       ]},
       { t: 'h2', text: 'I–M' },
       { t: 'table', headers: ['Term', 'Definition'], rows: [
-        ['Internal Task Board', 'SQLite database (~/.autodev/tasks.db) for autonomous task assignment between agents'],
+        ['Internal Task Board', 'SQLite database (~/.arcana/tasks.db) for autonomous task assignment between agents'],
         ['Leiden Algorithm', 'Graph clustering algorithm used to detect communities in the code knowledge graph'],
         ['Invariant core', 'The prohibitions, git rules and coordination note prepended to every agent\'s prompt, whatever its role'],
         ['Lock File', 'current_tasks/issue-N.lock — worker writes this before starting a task to prevent duplicate work'],
         ['MCP', 'Model Context Protocol — open standard for connecting AI tools to external services and data'],
-        ['MCP', 'Model Context Protocol — AutoDev is a client: you connect your own servers and their tools become available to agents'],
+        ['MCP', 'Model Context Protocol — Arcana is a client: you connect your own servers and their tools become available to agents'],
         ['Memory Core', '3-tier memory system: episodic (history), semantic (vector embeddings), procedural (skills/recipes)'],
         ['PA mode', 'Which of the three interactive modes the assistant is in: Fast Development, Review or Delegate'],
       ]},
@@ -155,7 +155,7 @@ export const D_SECTIONS: DocSection[] = [
         ['Recipe', 'YAML-defined workflow with cron scheduling for autonomous agent execution'],
         ['Recipe Runner', 'Rust module that executes recipes as background agent sessions'],
         ['Recipe Scheduler', 'Rust module that manages cron-based recipe execution for worker fleet'],
-        ['Recipe', 'A YAML workflow with a cron schedule and a set of instructions. A worker IS its recipe, plus the invariant core and your AUTODEV.md'],
+        ['Recipe', 'A YAML workflow with a cron schedule and a set of instructions. A worker IS its recipe, plus the invariant core and your ARCANA.md'],
         ['Review Mode', 'PA mode with explicit permission checkpoints before write operations'],
       ]},
       { t: 'h2', text: 'S–Z' },

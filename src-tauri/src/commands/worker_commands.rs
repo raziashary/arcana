@@ -1,10 +1,10 @@
-// Worker management commands — CRUD for ~/.autodev/workers.db
+// Worker management commands — CRUD for ~/.arcana/workers.db
 // Phase 2.2: CRUD + creation/deletion.
 // Phase 2:   start/stop now wired to the real RecipeScheduler (cron engine).
 // See: DEVELOPMENT_PLAN.md Phase 2 — Recipe Execution Engine
 
 use crate::db::workers::{slugify, Worker, WorkersDb};
-use crate::errors::{AutoDevError, Result};
+use crate::errors::{ArcanaError, Result};
 use crate::recipes::scheduler::RecipeScheduler;
 
 use serde::{Deserialize, Serialize};
@@ -69,7 +69,7 @@ pub fn create_worker(input: CreateWorkerInput) -> Result<CreateWorkerOutput> {
     let slug = slugify(&input.name);
 
     if db.slug_exists(&slug)? {
-        return Err(crate::errors::AutoDevError::Agent(format!(
+        return Err(crate::errors::ArcanaError::Agent(format!(
             "Worker slug '{}' already exists",
             slug
         )));
@@ -96,7 +96,7 @@ pub fn update_worker_status(worker_id: i64, status: String) -> Result<()> {
     // worker row still surfaces as a clean error without a phantom emit.
     let worker = db
         .get_by_id(worker_id)?
-        .ok_or_else(|| AutoDevError::Agent(format!("Worker id={worker_id} not found")))?;
+        .ok_or_else(|| ArcanaError::Agent(format!("Worker id={worker_id} not found")))?;
     db.update_status(worker_id, &status)?;
     // Phase 3.0 R2 — mirror UI-driven status edits through the push channel
     // so any other subscriber (another open window, a future mobile client)
@@ -141,7 +141,7 @@ pub async fn update_worker_model_sync(
     // no-op in SQLite, so without this the command would report "synced" for a
     // worker that does not exist.
     db.get_by_id(worker_id)?
-        .ok_or_else(|| AutoDevError::Agent(format!("Worker id={worker_id} not found")))?;
+        .ok_or_else(|| ArcanaError::Agent(format!("Worker id={worker_id} not found")))?;
 
     db.update_model(worker_id, &model)?;
 
@@ -197,7 +197,7 @@ pub fn start_worker_recipe(
     let db = WorkersDb::open()?;
     let worker = db
         .get_by_id(worker_id)?
-        .ok_or_else(|| AutoDevError::Agent(format!("Worker id={worker_id} not found")))?;
+        .ok_or_else(|| ArcanaError::Agent(format!("Worker id={worker_id} not found")))?;
     scheduler.start_worker(&worker.slug)
 }
 
@@ -210,7 +210,7 @@ pub fn stop_worker_recipe(
     let db = WorkersDb::open()?;
     let worker = db
         .get_by_id(worker_id)?
-        .ok_or_else(|| AutoDevError::Agent(format!("Worker id={worker_id} not found")))?;
+        .ok_or_else(|| ArcanaError::Agent(format!("Worker id={worker_id} not found")))?;
     scheduler.stop_worker(&worker.slug)
 }
 
@@ -231,7 +231,7 @@ pub fn stop_worker_recipe(
 
 #[cfg(test)]
 mod model_provider_tests {
-    use autodev_core::provider::routing::provider_for_model as model_to_provider;
+    use arcana_core::provider::routing::provider_for_model as model_to_provider;
 
     #[test]
     fn the_three_supported_providers_are_routed() {

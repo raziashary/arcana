@@ -1,5 +1,5 @@
-// Task board commands — Tauri commands for the Internal AutoDev Task Board.
-// Frontend reads tasks via these commands to populate the AutoDev Panel kanban.
+// Task board commands — Tauri commands for the Internal Arcana Task Board.
+// Frontend reads tasks via these commands to populate the Arcana Panel kanban.
 // PA's create_task tool writes directly via TasksDb; these expose read + status updates.
 
 use crate::db::tasks::{CreatePhasedTaskInput, PhaseSummary, Task, TasksDb, WorkerRequest};
@@ -149,7 +149,7 @@ pub fn get_qc_queue() -> Result<Vec<(Task, i64)>> {
             // searched for the string `parse_from_rfc3339`, which this line
             // does not contain — which is why the gate for this must be
             // behavioural rather than a grep.
-            let age = autodev_core::db::timestamps::parse_db_timestamp(&t.updated_at)
+            let age = arcana_core::db::timestamps::parse_db_timestamp(&t.updated_at)
                 .map(|dt| now - dt.timestamp())
                 .unwrap_or(0);
             (t, age)

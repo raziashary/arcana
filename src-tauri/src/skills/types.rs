@@ -1,6 +1,6 @@
 // Skills system types — Phase 3.1
 // Skills are reusable .md workflows with YAML frontmatter, invocable via slash commands
-// or programmatically by Fleet workers. Stored in ~/.autodev/skills/{category}/{name}.md
+// or programmatically by Fleet workers. Stored in ~/.arcana/skills/{category}/{name}.md
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

@@ -1,4 +1,4 @@
-// SkillLoader — scans ~/.autodev/skills/{category}/{name}.md on startup.
+// SkillLoader — scans ~/.arcana/skills/{category}/{name}.md on startup.
 // Each file has a YAML frontmatter block (--- ... ---) followed by the markdown template.
 // Phase 3.1
 
@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
 
 use super::types::{Skill, SkillCategory, SkillFrontmatter};
-use crate::db::autodev_dir;
-use crate::errors::{AutoDevError, Result};
+use crate::db::arcana_dir;
+use crate::errors::{ArcanaError, Result};
 
 pub struct SkillLoader {
     skills_dir: PathBuf,
@@ -15,12 +15,12 @@ pub struct SkillLoader {
 
 impl SkillLoader {
     pub fn new() -> Result<Self> {
-        let dir = autodev_dir()?.join("skills");
+        let dir = arcana_dir()?.join("skills");
         std::fs::create_dir_all(&dir)?;
         Ok(Self { skills_dir: dir })
     }
 
-    /// Path to the skills root directory: ~/.autodev/skills/
+    /// Path to the skills root directory: ~/.arcana/skills/
     pub fn skills_dir(&self) -> &Path {
         &self.skills_dir
     }
@@ -75,7 +75,7 @@ impl SkillLoader {
         // Expect file to start with ---\n
         let trimmed = content.trim_start();
         if !trimmed.starts_with("---") {
-            return Err(AutoDevError::Agent(format!(
+            return Err(ArcanaError::Agent(format!(
                 "Skill file {} is missing YAML frontmatter (--- block)",
                 path.display()
             )));
@@ -84,7 +84,7 @@ impl SkillLoader {
         // Find closing ---
         let after_open = &trimmed[3..];
         let close_pos = after_open.find("\n---").ok_or_else(|| {
-            AutoDevError::Agent(format!(
+            ArcanaError::Agent(format!(
                 "Skill file {} has unclosed frontmatter",
                 path.display()
             ))
@@ -96,7 +96,7 @@ impl SkillLoader {
             .to_string();
 
         let fm: SkillFrontmatter = serde_yaml::from_str(frontmatter_str).map_err(|e| {
-            AutoDevError::Agent(format!(
+            ArcanaError::Agent(format!(
                 "Skill frontmatter parse error in {}: {e}",
                 path.display()
             ))
@@ -117,7 +117,7 @@ impl SkillLoader {
             category,
             parameters: fm.parameters,
             version: fm.version,
-            author: fm.author.unwrap_or_else(|| "AutoDev".into()),
+            author: fm.author.unwrap_or_else(|| "Arcana".into()),
             tags: fm.tags.unwrap_or_default(),
             template,
             file_path: path.to_string_lossy().into_owned(),

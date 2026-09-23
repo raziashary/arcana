@@ -1,5 +1,5 @@
 // ToolCallDisplay — collapsible block showing tool name, args, result.
-// Design from autodevmockup.html .tool-block
+// Design from arcanamockup.html .tool-block
 
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, Terminal, Loader } from 'lucide-react'

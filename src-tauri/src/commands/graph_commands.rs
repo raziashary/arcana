@@ -66,7 +66,7 @@ pub struct GraphVisualizationData {
 // PER-REPO DATABASE PATH HELPER
 // ============================================================================
 
-// Derives a stable, per-repo SQLite path stored under ~/.autodev/graphs/<12-char-hash>.db.
+// Derives a stable, per-repo SQLite path stored under ~/.arcana/graphs/<12-char-hash>.db.
 // Using a hash of the repo path ensures:
 //   1. The DB is always in user's home dir (not inside the repo).
 //   2. Two different repos never share the same DB.
@@ -78,7 +78,7 @@ fn repo_db_path(repo_path: &str) -> Result<PathBuf> {
     let slug = hex::encode(Sha256::digest(repo_path.as_bytes()));
     let slug = &slug[..12];
     Ok(home
-        .join(".autodev")
+        .join(".arcana")
         .join("graphs")
         .join(format!("{}.db", slug)))
 }
@@ -536,7 +536,7 @@ pub async fn export_graph(
         "html" => export_html(&store, &communities, Path::new(&out_path))?,
         "svg" => export_svg(&store, &communities, Path::new(&out_path))?,
         _ => {
-            return Err(crate::errors::AutoDevError::Agent(format!(
+            return Err(crate::errors::ArcanaError::Agent(format!(
                 "Unknown format: {}",
                 format
             )))

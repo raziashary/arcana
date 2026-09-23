@@ -8,7 +8,7 @@
 // a Supervisor assigns a task without an explicit budget. `budget_commands.rs`
 // writes them; the recipe runner reads them.
 //
-// Storage path: ~/.autodev/runtime_config.json
+// Storage path: ~/.arcana/runtime_config.json
 // The file is created lazily on first write; a missing file returns defaults.
 //
 // 🔴 **`skip_sidecars` was removed in `P8-11`/`P8-53`.** It was Demo Mode: a
@@ -76,13 +76,13 @@ impl Default for RuntimeConfig {
     }
 }
 
-/// Resolve the on-disk path: `<HOME>/.autodev/runtime_config.json`.
+/// Resolve the on-disk path: `<HOME>/.arcana/runtime_config.json`.
 fn config_path() -> PathBuf {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."));
-    let dir = home.join(".autodev");
+    let dir = home.join(".arcana");
     let _ = fs::create_dir_all(&dir);
     dir.join(FILE_NAME)
 }

@@ -1,1 +1,1 @@
-pub use autodev_core::plugin::*;
+pub use arcana_core::plugin::*;

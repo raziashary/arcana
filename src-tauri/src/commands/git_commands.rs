@@ -4,7 +4,7 @@
 // helpers. Long-running operations (fetch/push/pull/clone) run on a
 // blocking thread so they don't stall the UI thread.
 
-use crate::errors::{AutoDevError, Result};
+use crate::errors::{ArcanaError, Result};
 use crate::git::types::{
     BlameLine, BranchInfo, CheckpointInfo, CommitInfo, DiffResult, GitStatusReport, PullResult,
     RepoInfo, RestoreResult, StashInfo, WorktreeInfo,
@@ -24,7 +24,7 @@ pub fn git_open_repo(path: String) -> Result<RepoInfo> {
 pub async fn git_clone(url: String, path: String, branch: Option<String>) -> Result<RepoInfo> {
     tokio::task::spawn_blocking(move || repo::clone_repo(&url, &path, branch.as_deref()))
         .await
-        .map_err(|e| AutoDevError::Git(format!("clone join: {e}")))?
+        .map_err(|e| ArcanaError::Git(format!("clone join: {e}")))?
 }
 
 #[tauri::command]
@@ -92,7 +92,7 @@ pub async fn git_push(
         remote::push(&repo_path, remote_name.as_deref(), branch.as_deref())
     })
     .await
-    .map_err(|e| AutoDevError::Git(format!("push join: {e}")))?
+    .map_err(|e| ArcanaError::Git(format!("push join: {e}")))?
 }
 
 #[tauri::command]
@@ -105,14 +105,14 @@ pub async fn git_pull(
         remote::pull(&repo_path, remote_name.as_deref(), branch.as_deref())
     })
     .await
-    .map_err(|e| AutoDevError::Git(format!("pull join: {e}")))?
+    .map_err(|e| ArcanaError::Git(format!("pull join: {e}")))?
 }
 
 #[tauri::command]
 pub async fn git_fetch(repo_path: String, remote_name: Option<String>) -> Result<()> {
     tokio::task::spawn_blocking(move || remote::fetch(&repo_path, remote_name.as_deref()))
         .await
-        .map_err(|e| AutoDevError::Git(format!("fetch join: {e}")))?
+        .map_err(|e| ArcanaError::Git(format!("fetch join: {e}")))?
 }
 
 // ─── Branches ─────────────────────────────────────────────────────────────────

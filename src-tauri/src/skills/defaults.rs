@@ -1,14 +1,14 @@
-// Default built-in skills — written to ~/.autodev/skills/ on first launch.
+// Default built-in skills — written to ~/.arcana/skills/ on first launch.
 // Code is the source of truth: builtin skills are always overwritten.
 // Phase 3.1
 
-use crate::db::autodev_dir;
+use crate::db::arcana_dir;
 use crate::errors::Result;
 use std::path::Path;
 
 /// Write all default skills to disk. Always overwrites builtin skills.
 pub fn ensure_default_skills() -> Result<()> {
-    let base = autodev_dir()?.join("skills");
+    let base = arcana_dir()?.join("skills");
 
     // Category directories
     for cat in &["coding", "debugging", "devops", "fleet", "custom"] {
@@ -108,7 +108,7 @@ parameters:
     default: "All edge cases handled, tests pass, no regressions"
     description: Acceptance criteria for the feature
 version: "1.0.0"
-author: "AutoDev"
+author: "Arcana"
 tags: [backend, frontend, api, feature]
 ---
 
@@ -172,7 +172,7 @@ parameters:
     default: true
     description: Whether authentication is required
 version: "1.0.0"
-author: "AutoDev"
+author: "Arcana"
 tags: [api, backend, rest]
 ---
 
@@ -224,7 +224,7 @@ parameters:
     required: true
     description: What the refactoring achieves (e.g., "extract service layer", "reduce duplication")
 version: "1.0.0"
-author: "AutoDev"
+author: "Arcana"
 tags: [refactoring, cleanup, architecture]
 ---
 
@@ -269,7 +269,7 @@ parameters:
     default: "correctness, security, performance, style"
     description: Specific aspects to focus on
 version: "1.0.0"
-author: "AutoDev"
+author: "Arcana"
 tags: [review, quality, security]
 ---
 
@@ -316,7 +316,7 @@ parameters:
     default: "auto-detect"
     description: Testing framework to use (pytest, jest, cargo test, etc.)
 version: "1.0.0"
-author: "AutoDev"
+author: "Arcana"
 tags: [testing, quality, coverage]
 ---
 
@@ -367,7 +367,7 @@ parameters:
     default: true
     description: Whether to implement a rollback/down migration
 version: "1.0.0"
-author: "AutoDev"
+author: "Arcana"
 tags: [database, migration, schema]
 ---
 
@@ -420,7 +420,7 @@ parameters:
     default: "unknown"
     description: Component or service exhibiting the error
 version: "1.0.0"
-author: "AutoDev"
+author: "Arcana"
 tags: [debugging, investigation, logs]
 ---
 
@@ -472,7 +472,7 @@ parameters:
     default: "50% improvement"
     description: Target performance goal
 version: "1.0.0"
-author: "AutoDev"
+author: "Arcana"
 tags: [performance, profiling, optimization]
 ---
 
@@ -515,7 +515,7 @@ parameters:
     required: true
     description: Component or function with suspected race condition
 version: "1.0.0"
-author: "AutoDev"
+author: "Arcana"
 tags: [concurrency, race-condition, debugging, async]
 ---
 
@@ -568,7 +568,7 @@ parameters:
     default: "8000"
     description: Port the service listens on
 version: "1.0.0"
-author: "AutoDev"
+author: "Arcana"
 tags: [docker, devops, containers, deployment]
 ---
 
@@ -619,7 +619,7 @@ parameters:
     required: true
     description: What is failing in the pipeline
 version: "1.0.0"
-author: "AutoDev"
+author: "Arcana"
 tags: [ci, github-actions, devops]
 ---
 
@@ -669,7 +669,7 @@ parameters:
     default: ""
     description: Specific package to update (leave empty for all)
 version: "1.0.0"
-author: "AutoDev"
+author: "Arcana"
 tags: [dependencies, security, maintenance]
 ---
 
@@ -725,7 +725,7 @@ parameters:
     default: "any"
     description: Type of tasks this worker handles
 version: "1.0.0"
-author: "AutoDev"
+author: "Arcana"
 tags: [fleet, worker, task, automation]
 ---
 
@@ -771,7 +771,7 @@ parameters:
     default: "1 minute"
     description: How often the supervisor polls
 version: "1.0.0"
-author: "AutoDev"
+author: "Arcana"
 tags: [fleet, supervisor, orchestration, task-management]
 ---
 
@@ -819,7 +819,7 @@ parameters:
     default: strict
     description: Review strictness level
 version: "1.0.0"
-author: "AutoDev"
+author: "Arcana"
 tags: [fleet, qc, review, quality]
 ---
 
@@ -879,7 +879,7 @@ parameters:
     default: "backend, frontend, platform"
     description: Worker types involved in this epic
 version: "1.0.0"
-author: "AutoDev"
+author: "Arcana"
 tags: [fleet, supervisor, epic, task-breakdown, planning]
 ---
 
@@ -938,7 +938,7 @@ parameters:
     default: false
     description: Take a full-page screenshot of the URL before running tests
 version: "1.0.0"
-author: "AutoDev"
+author: "Arcana"
 tags: [testing, playwright, browser, e2e, qc, visual-regression]
 requires_capability: [playwright]
 ---
@@ -957,7 +957,7 @@ If not installed, run: `npx playwright install chromium`
 ## Screenshot (if screenshot = true)
 Take a full-page screenshot of {{url}}:
 ```bash
-npx playwright screenshot --full-page {{url}} /tmp/autodev-screenshot-$(date +%s).png
+npx playwright screenshot --full-page {{url}} /tmp/arcana-screenshot-$(date +%s).png
 ```
 Report the saved path in your response.
 

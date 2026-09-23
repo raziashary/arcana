@@ -1,6 +1,6 @@
 // Memory system Tauri commands — Phase 4.1-4.6
 // Thin command layer over the memory module; all heavy lifting is in
-// src/memory/. Commands return AutoDevError on failure (serialised to frontend).
+// src/memory/. Commands return ArcanaError on failure (serialised to frontend).
 //
 // Command groups:
 //   Episodic  — get_session_timeline

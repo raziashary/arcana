@@ -1,5 +1,5 @@
-// Task store — Internal AutoDev Task Board state.
-// Reads tasks from Tauri (SQLite ~/.autodev/tasks.db) and provides kanban-ready columns.
+// Task store — Internal Arcana Task Board state.
+// Reads tasks from Tauri (SQLite ~/.arcana/tasks.db) and provides kanban-ready columns.
 
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'

@@ -61,7 +61,7 @@ export default function SkillCreatorModal({ onClose }: Props) {
               Create Skill
             </div>
             <div className="text-xs mt-0.5" style={{ color: 'var(--text-3)' }}>
-              Add a new custom skill to ~/.autodev/skills/
+              Add a new custom skill to ~/.arcana/skills/
             </div>
           </div>
           <button title="Close" onClick={onClose} className="p-1 rounded hover:opacity-70">

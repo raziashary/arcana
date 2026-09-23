@@ -70,7 +70,7 @@ export function WorkspaceMismatchBanner() {
           Workspace mismatch
         </div>
         <div style={{ color: 'var(--text-2)', wordBreak: 'break-all' }}>
-          AutoDev is running with <code>cwd={mismatch.current_dir}</code> but
+          Arcana is running with <code>cwd={mismatch.current_dir}</code> but
           the configured workspace is <code>{mismatch.configured_workspace}</code>.
           Agent file writes resolve against the configured workspace (the
           path jail), but any tool call that bypasses the jail still risks
@@ -149,7 +149,7 @@ export function StrayFilesBanner() {
         <span style={{ flexShrink: 0 }}>⚠</span>
         <div style={{ flex: 1 }}>
           <div style={{ color: 'var(--text-1)', marginBottom: 2 }}>
-            {strays.length} stray file{strays.length === 1 ? '' : 's'} detected in AutoDev repo
+            {strays.length} stray file{strays.length === 1 ? '' : 's'} detected in Arcana repo
           </div>
           <div style={{ color: 'var(--text-2)' }}>
             These files were likely written by a previous worker run with a leaked

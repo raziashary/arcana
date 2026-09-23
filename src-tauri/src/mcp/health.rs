@@ -1,7 +1,7 @@
 // health_monitor.rs — Ruflo Feature 6. Periodic liveness pings on connected
 // external MCP servers. When a connection drops, the UI shows an alert and
-// automatic reconnection is attempted. Internal AutoDev services (memory-mcp,
-// AutoDev's own former sidecars) had their own watchdog — this file
+// automatic reconnection is attempted. Internal Arcana services (memory-mcp,
+// Arcana's own former sidecars) had their own watchdog — this file
 // handles user-configured *external* MCP servers only (e.g. GitHub MCP).
 //
 // Transport variants:

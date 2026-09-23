@@ -1,4 +1,4 @@
-// Log reading commands — exposes ~/.autodev/logs/ to the frontend Logs tab.
+// Log reading commands — exposes ~/.arcana/logs/ to the frontend Logs tab.
 // Provides listing of available log files (by date) and content reading.
 // Log files are plain-text, one tracing event per line.
 //
@@ -8,7 +8,7 @@
 // `read_log_file_full` for download / export. See Logs.tsx for the
 // truncation banner UX.
 
-use crate::errors::AutoDevError;
+use crate::errors::ArcanaError;
 use crate::errors::Result;
 
 // ─── Return type ──────────────────────────────────────────────────────────────
@@ -31,7 +31,7 @@ fn logs_dir() -> Option<std::path::PathBuf> {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .ok()?;
-    Some(std::path::PathBuf::from(home).join(".autodev").join("logs"))
+    Some(std::path::PathBuf::from(home).join(".arcana").join("logs"))
 }
 
 // ─── Commands ─────────────────────────────────────────────────────────────────
@@ -47,7 +47,7 @@ pub fn list_log_files() -> Result<Vec<String>> {
         return Ok(vec![]);
     }
     let mut dates: Vec<String> = std::fs::read_dir(&dir)
-        .map_err(|e| AutoDevError::Agent(e.to_string()))?
+        .map_err(|e| ArcanaError::Agent(e.to_string()))?
         .filter_map(|e| e.ok())
         .filter(|e| {
             e.path()
@@ -57,9 +57,9 @@ pub fn list_log_files() -> Result<Vec<String>> {
                 .unwrap_or(false)
         })
         .filter_map(|e| {
-            // Extract date from filename: autodev-YYYY-MM-DD.log
+            // Extract date from filename: arcana-YYYY-MM-DD.log
             let name = e.file_name().to_string_lossy().to_string();
-            name.strip_prefix("autodev-")
+            name.strip_prefix("arcana-")
                 .and_then(|s| s.strip_suffix(".log"))
                 .map(|s| s.to_string())
         })
@@ -92,7 +92,7 @@ pub fn read_log_file(date: String, tail_lines: Option<usize>) -> Result<LogFileR
         date
     };
 
-    let path = dir.join(format!("autodev-{date_str}.log"));
+    let path = dir.join(format!("arcana-{date_str}.log"));
     if !path.exists() {
         return Ok(LogFileResult {
             content: String::new(),
@@ -106,7 +106,7 @@ pub fn read_log_file(date: String, tail_lines: Option<usize>) -> Result<LogFileR
     let full_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
 
     let content = std::fs::read_to_string(&path)
-        .map_err(|e| AutoDevError::Agent(format!("Failed to read log file: {e}")))?;
+        .map_err(|e| ArcanaError::Agent(format!("Failed to read log file: {e}")))?;
 
     let lines: Vec<&str> = content.lines().collect();
     let total = lines.len();
@@ -148,16 +148,16 @@ pub fn read_log_file_full(date: String) -> Result<String> {
         date
     };
 
-    let path = dir.join(format!("autodev-{date_str}.log"));
+    let path = dir.join(format!("arcana-{date_str}.log"));
     if !path.exists() {
         return Ok(String::new());
     }
 
     std::fs::read_to_string(&path)
-        .map_err(|e| AutoDevError::Agent(format!("Failed to read log file: {e}")))
+        .map_err(|e| ArcanaError::Agent(format!("Failed to read log file: {e}")))
 }
 
-/// Delete all .log files in ~/.autodev/logs/.
+/// Delete all .log files in ~/.arcana/logs/.
 /// Returns the number of files deleted.
 #[tauri::command]
 pub fn clear_log_files() -> Result<usize> {
@@ -167,7 +167,7 @@ pub fn clear_log_files() -> Result<usize> {
     if !dir.exists() {
         return Ok(0);
     }
-    let entries = std::fs::read_dir(&dir).map_err(|e| AutoDevError::Agent(e.to_string()))?;
+    let entries = std::fs::read_dir(&dir).map_err(|e| ArcanaError::Agent(e.to_string()))?;
     let mut deleted = 0usize;
     for entry in entries.flatten() {
         let path = entry.path();
@@ -210,11 +210,11 @@ pub fn export_log_file(
 
     let dest = std::path::PathBuf::from(&dest_path);
     if dest.as_os_str().is_empty() {
-        return Err(AutoDevError::Agent("No destination path given".into()));
+        return Err(ArcanaError::Agent("No destination path given".into()));
     }
     if let Some(parent) = dest.parent() {
         if !parent.as_os_str().is_empty() && !parent.exists() {
-            return Err(AutoDevError::Agent(format!(
+            return Err(ArcanaError::Agent(format!(
                 "Destination folder does not exist: {}",
                 parent.display()
             )));
@@ -222,7 +222,7 @@ pub fn export_log_file(
     }
 
     std::fs::write(&dest, contents.as_bytes())
-        .map_err(|e| AutoDevError::Agent(format!("Failed to write {}: {e}", dest.display())))?;
+        .map_err(|e| ArcanaError::Agent(format!("Failed to write {}: {e}", dest.display())))?;
 
     Ok(dest.to_string_lossy().into_owned())
 }

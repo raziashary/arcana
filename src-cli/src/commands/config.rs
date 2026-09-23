@@ -1,11 +1,11 @@
 use crate::output::OutputContext;
 use anyhow::Result;
-use autodev_shared::config::CliConfigFile;
+use arcana_shared::config::CliConfigFile;
 use clap::{Args, Subcommand};
 
 #[derive(Subcommand)]
 pub enum ConfigCmd {
-    /// Create default config at ~/.autodev/config.toml
+    /// Create default config at ~/.arcana/config.toml
     Init,
     /// Get a config value (key format: section.field)
     Get(GetArgs),
@@ -61,7 +61,7 @@ pub async fn run(cmd: ConfigCmd, ctx: OutputContext) -> Result<()> {
 }
 
 fn init(ctx: OutputContext) -> Result<()> {
-    let path = autodev_shared::config::config_path()?;
+    let path = arcana_shared::config::config_path()?;
     if path.exists() {
         ctx.warn(&format!("Config already exists at {}", path.display()));
         ctx.info("Use 'config set' to modify individual keys.");
@@ -113,7 +113,7 @@ fn list(ctx: OutputContext) -> Result<()> {
 }
 
 fn validate(ctx: OutputContext) -> Result<()> {
-    let path = autodev_shared::config::config_path()?;
+    let path = arcana_shared::config::config_path()?;
     if !path.exists() {
         ctx.error(&format!("Config file not found at {}", path.display()));
         ctx.info("Run 'config init' to create it.");

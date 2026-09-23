@@ -1,18 +1,18 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use autodev_lib::agent::builtin_tools;
-use autodev_lib::agent::permission::new_pending_permissions;
-use autodev_lib::agent::ToolRegistry;
-use autodev_lib::mcp::health::McpHealthMonitor;
-use autodev_lib::recipes::runner::RecipeRunner;
-use autodev_lib::recipes::scheduler::RecipeScheduler;
-use autodev_lib::session::manager::SessionManager;
-use autodev_lib::skills::SkillRegistry;
-use autodev_lib::state::AppState;
-use autodev_lib::updater::{start_background_check, UpdateChannel, UpdaterState};
+use arcana_core::state::lock::LockTolerant;
+use arcana_lib::agent::builtin_tools;
+use arcana_lib::agent::permission::new_pending_permissions;
+use arcana_lib::agent::ToolRegistry;
+use arcana_lib::mcp::health::McpHealthMonitor;
+use arcana_lib::recipes::runner::RecipeRunner;
+use arcana_lib::recipes::scheduler::RecipeScheduler;
+use arcana_lib::session::manager::SessionManager;
+use arcana_lib::skills::SkillRegistry;
+use arcana_lib::state::AppState;
+use arcana_lib::updater::{start_background_check, UpdateChannel, UpdaterState};
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
-use autodev_core::state::lock::LockTolerant;
 
 fn main() {
     // 🔴 `P8-64`. A `dotenvy::dotenv()` call stood here, in the SHIPPED binary.
@@ -28,33 +28,20 @@ fn main() {
     //
     // ⚠ The scrub below is NOT redundant now — it is more defensible. It no
     // longer cleans up after this process's own load; it guards what the
-    // user's shell exported before AutoDev started, which is the case it was
+    // user's shell exported before Arcana started, which is the case it was
     // always really for. Keys come from the OS credential store (BYOK), never
     // from the environment.
 
     // ─── Scrub credentials out of the process environment (F-8) ──────────────
-    //
-    // ⚠ This runs unconditionally, and it runs HERE — after the two sidecar
-    // path variables above have been read, and before anything can spawn a
-    // child process.
-    //
-    // `dotenvy::dotenv()` above loads the WHOLE file. The repo `.env` declares
-    // the three provider API keys and AWS credentials alongside those two
-    // paths, so a running application carried live secrets in its environment —
-    // inherited by every child process the agent spawns, including `bash.rs`,
-    // which runs commands the MODEL chooses. Reading a key needed no
-    // vulnerability beyond `echo $ANTHROPIC_API_KEY`.
-    //
-    // The app never needed them: BYOK reads keys from the OS credential store,
-    // and the live smoke reads `.env` from disk rather than from the
-    // environment, deliberately.
+    // This runs before anything can spawn a child process. BYOK reads keys
+    // from the vault; the opt-in live smoke reads `.env` directly from disk.
     //
     // Names are logged, never values.
     {
-        let removed = autodev_core::security::env_scrub::scrub_process_env();
+        let removed = arcana_core::security::env_scrub::scrub_process_env();
         if !removed.is_empty() {
             eprintln!(
-                "[AutoDev] Removed {} credential-shaped variable(s) from the process \
+                "[Arcana] Removed {} credential-shaped variable(s) from the process \
                  environment: {}",
                 removed.len(),
                 removed.join(", ")
@@ -73,10 +60,10 @@ fn main() {
     // Phase 7.3 — hold the WorkerGuard alive for the entire process lifetime.
     // Dropping it early would close the background log-writer thread, causing
     // silent log loss from that point on.
-    let _log_guard = autodev_lib::logging::init();
+    let _log_guard = arcana_lib::logging::init();
 
     // Doc 08 Phase 3 — prune logs older than the configured retention cap
-    // (default 14d, override via AUTODEV_LOG_RETENTION_DAYS env var).
+    // (default 14d, override via ARCANA_LOG_RETENTION_DAYS env var).
     // Idempotent and best-effort; failures log a warning but never block
     // startup. Runs AFTER logging::init so the prune result lands in the
     // new daily file.
@@ -84,17 +71,17 @@ fn main() {
         .or_else(|_| std::env::var("HOME"))
         .ok()
     {
-        let log_dir = std::path::PathBuf::from(home).join(".autodev").join("logs");
-        autodev_lib::observability::log_retention::prune(&log_dir);
+        let log_dir = std::path::PathBuf::from(home).join(".arcana").join("logs");
+        arcana_lib::observability::log_retention::prune(&log_dir);
     }
 
     // Initialise recipes (writes default system recipes if absent)
-    if let Err(e) = autodev_lib::recipes::init() {
+    if let Err(e) = arcana_lib::recipes::init() {
         eprintln!("Warning: Failed to initialise recipes: {e}");
     }
 
-    // Initialise skills (writes default builtin skills to ~/.autodev/skills/)
-    if let Err(e) = autodev_lib::skills::ensure_default_skills() {
+    // Initialise skills (writes default builtin skills to ~/.arcana/skills/)
+    if let Err(e) = arcana_lib::skills::ensure_default_skills() {
         eprintln!("Warning: Failed to initialise skills: {e}");
     }
     let skill_registry = Arc::new(SkillRegistry::new());
@@ -105,7 +92,7 @@ fn main() {
     // Canonical builtin_tools registry.
     //
     // This used to be handed to an in-process MCP server on 127.0.0.1:8767 so
-    // agents in a separate process could call AutoDev's tools. That server was
+    // agents in a separate process could call Arcana's tools. That server was
     // an unauthenticated local endpoint exposing bash, write_file and
     // spawn_subagent to any process on the machine, and was deleted in P0
     // (ADR-03-02). The registry survives because `list_mcp_tools` reads it to
@@ -121,7 +108,7 @@ fn main() {
     // receives a ToolContext rather than application state — without this it
     // would be the one path a provider call could take without meeting the
     // daily ceiling (P2-21). TG-P2-04 asserts this line exists.
-    autodev_lib::state::app_state::set_global(app_state.clone());
+    arcana_lib::state::app_state::set_global(app_state.clone());
 
     // P2-26. Restore the user's provider and model choice. Without this the
     // selection lived only in memory: they picked a model, used it, quit, and
@@ -140,7 +127,7 @@ fn main() {
         s.hydrate_today();
     }
 
-    autodev_lib::commands::settings_commands::hydrate_active_provider(&app_state);
+    arcana_lib::commands::settings_commands::hydrate_active_provider(&app_state);
     let skill_registry_managed = skill_registry.clone();
     let skill_registry_for_watch = skill_registry.clone();
 
@@ -156,13 +143,13 @@ fn main() {
     // the manager needs app state and the permission channel rather than an
     // HTTP client (ADR-LOG-RESTRUCT-0001). Installed globally so the spawn
     // builtin tools can reach it without Tauri `State<>` plumbing.
-    let subagent_mgr = autodev_lib::subagent::SubagentManager::new(
-        autodev_lib::subagent::native_runner::RunnerDeps {
+    let subagent_mgr = arcana_lib::subagent::SubagentManager::new(
+        arcana_lib::subagent::native_runner::RunnerDeps {
             state: app_state.clone(),
             pending: pending_permissions.clone(),
         },
     );
-    autodev_lib::subagent::manager::install_global(subagent_mgr.clone());
+    arcana_lib::subagent::manager::install_global(subagent_mgr.clone());
 
     // ─── Analytics singleton ─────────────────────────────────────────────────
     // The Dashboard, the agent cost recorder and every worker tick all read
@@ -170,17 +157,17 @@ fn main() {
     // call, that accessor panics (intentionally — silent in-memory fallbacks
     // have already cost one audit cycle, see docs/endtoendrun/14may2026/02).
     //
-    // `AnalyticsManager::new()` is async (opens & migrates ~/.autodev/analytics.db)
+    // `AnalyticsManager::new()` is async (opens & migrates ~/.arcana/analytics.db)
     // but we're still on the synchronous main thread before Tauri's runtime
     // starts, so block until the DB is ready. After install, kick the hourly +
     // daily rollup background thread.
     let analytics_mgr =
-        tauri::async_runtime::block_on(autodev_lib::analytics::AnalyticsManager::new())
-            .expect("Failed to initialise analytics DB at ~/.autodev/analytics.db");
+        tauri::async_runtime::block_on(arcana_lib::analytics::AnalyticsManager::new())
+            .expect("Failed to initialise analytics DB at ~/.arcana/analytics.db");
     let analytics_mgr = Arc::new(analytics_mgr);
-    autodev_lib::analytics::install_global(analytics_mgr.clone());
+    arcana_lib::analytics::install_global(analytics_mgr.clone());
     analytics_mgr.start_aggregation_job();
-    eprintln!("[AutoDev] analytics: installed global manager + started rollup job");
+    eprintln!("[Arcana] analytics: installed global manager + started rollup job");
 
     // Phase 5.3 — auto-updater state
     let updater_state = UpdaterState::new();
@@ -200,7 +187,7 @@ fn main() {
 
     // register_commands is defined in the lib crate so generate_handler! runs
     // where the #[tauri::command] __cmd__* macros are in scope.
-    let app = autodev_lib::register_commands(
+    let app = arcana_lib::register_commands(
         tauri::Builder::default()
             .plugin(tauri_plugin_shell::init())
             .plugin(tauri_plugin_dialog::init())
@@ -221,7 +208,7 @@ fn main() {
                 // emit through `EventSink`; until this runs they emit into a
                 // null sink, which is correct for a headless host but would
                 // silently drop the desktop's startup events.
-                if !autodev_lib::events::install_app_handle(app.handle().clone()) {
+                if !arcana_lib::events::install_app_handle(app.handle().clone()) {
                     // A sink was already installed. In a desktop process that
                     // means setup ran twice, and the second window's events
                     // would go to the first window's channel.
@@ -236,10 +223,10 @@ fn main() {
                 // can render dismissible "delete" affordances per file.
                 // Best-effort: scan failures never block startup.
                 {
-                    let strays = autodev_lib::observability::stray_files::scan(None);
+                    let strays = arcana_lib::observability::stray_files::scan(None);
                     if !strays.is_empty() {
-                        autodev_lib::events::emit_workspace_strays(
-                            autodev_lib::events::WorkspaceStraysPayload { strays },
+                        arcana_lib::events::emit_workspace_strays(
+                            arcana_lib::events::WorkspaceStraysPayload { strays },
                         );
                     }
                 }
@@ -248,7 +235,7 @@ fn main() {
                 // workspace mismatch and emit a one-shot event. Frontend
                 // banner subscribes and shows a "Set workspace" CTA.
                 {
-                    let configured = autodev_lib::commands::workspace_commands::load_workspace_dir();
+                    let configured = arcana_lib::commands::workspace_commands::load_workspace_dir();
                     let current = std::env::current_dir()
                         .map(|p| p.to_string_lossy().to_string())
                         .unwrap_or_default();
@@ -260,8 +247,8 @@ fn main() {
                                 .canonicalize().unwrap_or_default())
                             .unwrap_or(false);
                     if !configured.trim().is_empty() && !normalised_eq {
-                        autodev_lib::events::emit_workspace_mismatch(
-                            autodev_lib::events::WorkspaceMismatchPayload {
+                        arcana_lib::events::emit_workspace_mismatch(
+                            arcana_lib::events::WorkspaceMismatchPayload {
                                 current_dir: current,
                                 configured_workspace: configured,
                                 timestamp: chrono::Utc::now().to_rfc3339(),
@@ -279,7 +266,7 @@ fn main() {
                     let app_for_mcp  = app.handle().clone();
                     tauri::async_runtime::spawn(async move {
                         // Register GitHub MCP server if the user has it configured
-                        if let Ok(gh_cfg) = autodev_lib::commands::github_mcp_commands::get_github_mcp_config() {
+                        if let Ok(gh_cfg) = arcana_lib::commands::github_mcp_commands::get_github_mcp_config() {
                             if gh_cfg.enabled {
                                 if let Some(url) = &gh_cfg.server_url {
                                     monitor_ref.register_server("github-mcp", url).await;
@@ -318,7 +305,7 @@ fn main() {
                 // via a module-level OnceLock so `create_task`, `assign_task`,
                 // and `update_task_status` can fire push-based kicks without
                 // needing Tauri `State<>` access.
-                autodev_lib::recipes::scheduler::install_global(scheduler.clone());
+                arcana_lib::recipes::scheduler::install_global(scheduler.clone());
 
                 // P8-08 — the sidecar auto-start block is DELETED: the
                 // watchdog, both spawn paths, the health polling, and the
@@ -326,7 +313,7 @@ fn main() {
                 //
                 // 🔴 **One thing inside it was NOT sidecar work and is kept
                 // below.** `subagent_mgr.cleanup_orphans()` sweeps ephemeral
-                // subagents that outlived a previous AutoDev process (Phase
+                // subagents that outlived a previous Arcana process (Phase
                 // 4.9). It sat inside the fleet-ready branch only because that
                 // was the point in the boot where "everything is up" was known
                 // — not because it had anything to do with Python. Deleting
@@ -359,15 +346,15 @@ fn main() {
                 tauri::async_runtime::spawn(async move {
                     // Small delay to ensure the Tauri event loop is fully running
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    if let Ok(db) = autodev_lib::db::workers::WorkersDb::open() {
+                    if let Ok(db) = arcana_lib::db::workers::WorkersDb::open() {
                         for worker in db.list().unwrap_or_default() {
                             let has_recipe = worker.recipe_id.is_some();
                             let is_active  = worker.status != "paused" && worker.status != "deleted";
                             if has_recipe && is_active {
                                 if let Err(e) = scheduler_clone.start_worker(&worker.slug) {
-                                    eprintln!("[AutoDev] Auto-start worker '{}' failed: {e}", worker.slug);
+                                    eprintln!("[Arcana] Auto-start worker '{}' failed: {e}", worker.slug);
                                 } else {
-                                    eprintln!("[AutoDev] Auto-started worker '{}'", worker.slug);
+                                    eprintln!("[Arcana] Auto-started worker '{}'", worker.slug);
                                 }
                             }
                         }
@@ -377,13 +364,13 @@ fn main() {
                 app.manage(scheduler);
 
                 // Phase 3.1 — start skills file watcher.
-                // Watches ~/.autodev/skills/ for .md changes and auto-reloads the
+                // Watches ~/.arcana/skills/ for .md changes and auto-reloads the
                 // SkillRegistry, emitting "skills:reloaded" with the new skill count.
                 {
-                    let skills_dir = autodev_lib::db::autodev_dir()
+                    let skills_dir = arcana_lib::db::arcana_dir()
                         .unwrap_or_else(|_| std::path::PathBuf::from("."))
                         .join("skills");
-                    autodev_lib::skills::start_skill_watcher(
+                    arcana_lib::skills::start_skill_watcher(
                         skill_registry_for_watch,
                         skills_dir,
                         app.handle().clone(),
@@ -402,7 +389,7 @@ fn main() {
             }),
     )
     .build(tauri::generate_context!())
-    .expect("Error building AutoDev");
+    .expect("Error building Arcana");
 
     // The run/audit ledger (P1-18). Opening it here rather than in `.setup()`
     // so the run is closed on the way out: `RunEvent::Exit` fires after setup's
@@ -410,10 +397,10 @@ fn main() {
     //
     // `reap_abandoned` first — a crash leaves a run open forever, and an open
     // run reads as "still running" to anything querying the ledger.
-    let run_id = match autodev_lib::db::runs::RunsDb::open() {
+    let run_id = match arcana_lib::db::runs::RunsDb::open() {
         Ok(runs) => {
             let _ = runs.reap_abandoned();
-            match runs.begin(autodev_lib::db::runs::kind::APP, None) {
+            match runs.begin(arcana_lib::db::runs::kind::APP, None) {
                 Ok(id) => Some(id),
                 Err(e) => {
                     tracing::warn!("[runs] could not record this launch: {e}");
@@ -432,8 +419,8 @@ fn main() {
     app.run(move |_handle, event| {
         if let tauri::RunEvent::Exit = event {
             if let Some(id) = &run_id {
-                if let Ok(runs) = autodev_lib::db::runs::RunsDb::open() {
-                    if let Err(e) = runs.finish(id, autodev_lib::db::runs::outcome::OK) {
+                if let Ok(runs) = arcana_lib::db::runs::RunsDb::open() {
+                    if let Err(e) = runs.finish(id, arcana_lib::db::runs::outcome::OK) {
                         tracing::warn!("[runs] could not close run {id}: {e}");
                     }
                 }

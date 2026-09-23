@@ -1,4 +1,4 @@
-// AutoDev Rust backend library root.
+// Arcana Rust backend library root.
 // Module declarations; main.rs and tauri setup reference this.
 
 pub mod errors;
@@ -60,10 +60,10 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
             create_annotation, delete_annotation, list_annotations_for_file, resolve_annotation,
             update_annotation_response, update_annotation_task_id,
         },
-        autodev_instructions_commands::{
-            check_autodev_instructions_exists, delete_autodev_instructions,
-            get_autodev_instructions, get_autodev_instructions_char_count,
-            set_autodev_instructions,
+        arcana_instructions_commands::{
+            check_arcana_instructions_exists, delete_arcana_instructions,
+            get_arcana_instructions, get_arcana_instructions_char_count,
+            set_arcana_instructions,
         },
         browser_commands::{check_playwright_available, install_playwright_browsers},
         budget_commands::{
@@ -232,12 +232,12 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         get_epic_tasks,
         get_epic_phase_summary,
         create_phased_task,
-        // AUTODEV.md Instructions
-        get_autodev_instructions,
-        set_autodev_instructions,
-        delete_autodev_instructions,
-        check_autodev_instructions_exists,
-        get_autodev_instructions_char_count,
+        // ARCANA.md Instructions
+        get_arcana_instructions,
+        set_arcana_instructions,
+        delete_arcana_instructions,
+        check_arcana_instructions_exists,
+        get_arcana_instructions_char_count,
         // Recipes
         list_recipes,
         get_recipe,
@@ -462,7 +462,7 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         update_annotation_response,
         update_annotation_task_id,
         delete_annotation,
-        // AutoDev Communication Protocol — Fleet Chat
+        // Arcana Communication Protocol — Fleet Chat
         list_worker_messages_for_task,
         list_recent_worker_messages,
         count_unread_worker_messages_for,

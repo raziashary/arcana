@@ -1,13 +1,20 @@
-# TESTING_GATES.md — AutoDev Restructure
+# Arcana — Testing Gates
+
+> **2026-09-23 scope notice:** `ARCANA_CODING_SCOPE.md` and ADR-0042/0043
+> supersede design-capability work. PD0–PD6 gates are historical and are not
+> Arcana coding acceptance gates. Existing coding/security/P0–P9 gates retain
+> their original proof requirements unless a specific retired design clause is
+> called out. P8's TG8-11 now protects updater signatures and SQLite backup
+> but no longer requires retired PD0 source to exist.
 
 > **Status:** authored 2026-08-31 from the answered vision suite (`docs/restructurization/vision/`, master plan rev 0.9, ADR ledger complete at 51/0 open).
 > **Scope:** every test gate the ten specs asked for, plus eight gates added because an invariant or a risk was otherwise uncovered.
 > **Companion documents:** `MASTER_DEVELOPMENT_PLAN.md` (the build sequence and its inline smoke checks) · `READINESS_MATRIX.md` (phase readiness) · `ADR_LOG.md` (runtime decisions) · `NOVELTY_LEDGER.md`.
 > **Cross-checked against the MDP** on 2026-08-31. Phase names and the `TG<p>-<nn>` scheme agree. Three assignments where the MDP builds a capability **earlier** than Part 6 implies are annotated on the gate line (`TG1-05`, `TG3-38`, `TG4-18`); IDs were **not** renumbered, per `§1`.
 
-**125 gates across P0–P9 and PD0.** This document is the definition of done for the programme.
+**126 active P0–P9 gate rows.** Historical PD0 gates are archived; the applicable P0–P9 clauses remain the definition of done.
 
-⚠ **The count was stale from `2026-09-03` until the PD0 work audit (`W-8`) caught it.** PD0 added eight gates to `§6.5` and updated **none** of this document's own registers — not the headline, not the phase index, not `§14`'s traceability arithmetic, not `§17`'s families, not `§20`. The one register whose job is to be the definition of done was stale about its own contents, which is `§0.3` in the document `§0.3` is enforced through. The two gates the audit remediation itself added (`TGD0-09`, `TGD0-10`) are included here.
+⚠ **Historical count note:** The PD0 work audit (`W-8`) found earlier registers stale. The ten TGD0 rows and their dated evidence are now in `HISTORICAL_DESIGN_PROGRAMME.md`. The current 126-row count above is derived from P0–P9 checkbox entries, including 41 P3 entries.
 
 ---
 
@@ -43,15 +50,14 @@
 | **P0** | Stop the bleeding | 5 | `TG0-01…05` |
 | **P1** | Make the invisible visible | 6 | `TG1-01…06` |
 | **P2** | The provider layer | 17 | `TG2-01…17` (implemented as `TG-P2-01…09`, see note) |
-| **P3** | The runtime | 39 | `TG3-01…39` |
+| **P3** | The runtime | 41 | `TG3-01…41` |
 | **P4** | The fleet | 23 | `TG4-01…23` |
 | **P5** | The graph | 4 | `TG5-01…04` |
 | **P6** | The UI | 9 | `TG6-01…09` |
 | **P7** | Experience | 5 | `TG7-01…05` |
 | **P8** | Submodule deletion **+ the prompt floor** | 11 | `TG8-01…11` |
 | **P9** | Delivery | 5 | `TG9-01…05` |
-| **PD0** | The design capability contract | 10 | `TGD0-01…10` |
-| | **Total** | **134** | |
+| | **Current registered P0–P9 rows** | **126** | |
 
 ---
 
@@ -372,49 +378,9 @@
 
 ---
 
-## 6.5 PD0 — The capability contract
+## 6.5 Retired design gates
 
-> ⚠ **The design phases had no gate section at all** until 2026-09-03 — a
-> `grep` for `PD[0-9]` across this file returned zero hits, while `§0.5` says
-> *"smoke-then-gates is mandatory; both are the definition of done"*. So every
-> `DOC-GATE` / `UNIT-PROVEN` / `SMOKE-PROVEN` marker in `§10.5` pointed at
-> nothing. This section opens the register for `PD0`; `PD1`–`PD6` owe theirs at
-> their own closeouts.
->
-> These run in `npm test` (`src/design/contract/gates.test.ts`), not in
-> `cargo test` — the contract is TypeScript by Razi's ruling. ⚠ That places them
-> outside `reachability_gate.rs`, which walks the four Rust crates only; it is
-> why `src/design/` could sit caller-less through two phases without anything
-> noticing. Wiring the suite into `npm test` is what replaces that backstop.
-
-- [x] **TGD0-01** `[policy]` — The operation set is exactly `ingest` · `export` · `adapt` · `change`, the outcome set is exactly `complete` · `partial` · `held`, and a **reserved** verb is refused *as reserved* rather than as unknown — so a caller reaching for `measure` learns it is coming, instead of concluding they misspelled something.
-      Source: `PD0-01` · Catches: a fifth verb arriving without a version decision · **Evidence: `GATE-PROVEN` 2026-09-03**
-- [x] **TGD0-02** `[conservation]` — **No event carries a design document, only a reference.** Asserted as a **byte budget** on every serialized event across all four operations, not as a structural check on the type: a structural check passes forever while someone adds a convenience field holding the document, and the byte budget catches the actual mistake. 4 KiB, four times under AutoDesign's own 16 KiB input cap.
-      Source: `PD0-02` · Catches: the 17–25 MB payload the IR exists to avoid, arriving down a pipe instead of into a context window · **Evidence: `GATE-PROVEN`, falsified** by inlining 9 KB into a settled event — fails naming *"the wire carries a reference, never the document"*
-- [x] **TGD0-03** `[correctness]` — An **unknown schema version is rejected, never parsed optimistically** — and the known one still decodes, so the gate cannot pass by refusing everything.
-      Source: `PD0-02` · Catches: version skew surfacing as wrong behaviour instead of a clean refusal · **Evidence: `GATE-PROVEN` 2026-09-03**
-- [x] **TGD0-04** `[data]` — **A fidelity report cannot claim a score nothing measured.** `method: 'unmeasured'` must carry a `null` score; any other method must carry a real one. The honest report is accepted, so the gate is not simply banning the field.
-      Source: `PD0-04` · Catches: **the AAE failure exactly** — an engine that reported a fidelity number computed as a penalty tally over its own output, with no rasterisation and no comparison anywhere, and looked measured for a year · **Evidence: `GATE-PROVEN`, falsified** by deleting the pairing check — fails naming *"null score"*
-- [x] **TGD0-05** `[correctness]` — **A `partial` outcome must be evidenced.** An unevidenced partial is refused.
-      Source: `PD0-04` · Catches: the old converter's behaviour of reporting loss as success, which is the case `PD0-04` exists for · **Evidence: `GATE-PROVEN` 2026-09-03**
-- [x] **TGD0-06** `[seam]` — **The sidecar is spawnable and settles as a real child process.** `execFileSync('node', [main.js])`, stdin request, NDJSON parsed off stdout, terminal event decoded through the same invariants as ours. ⚠ It **fails rather than skips** when the build is absent: a seam that is not built is not proven, and a skipping gate is not green (`§0.5`).
-      Source: `PD0-06`, `PD0-08` · Catches: `L-C12` at contract scale — a beautifully typed surface nothing has ever spoken across a process boundary · **Evidence: `GATE-PROVEN` 2026-09-03, falsified** by suppressing the terminal event — fails naming *"settled"*
-      ⚠ **The class was written ahead of its proof, and the work audit (`W-15`) is right about it.** `GATE-PROVEN` is defined here as *"a blocking CI job that can fail is green"* — and at the moment this was recorded, CI had no `build:sidecar` step, so the job would have been **red on every run** from the commit that introduced the gate. It was corrected in the next commit (`a03d7ed`), which is the right outcome and the wrong order. Two consequences now closed: `pretest` runs `build:sidecar`, so the gate can no longer pass against pre-edit bytes locally (`A-22`), and `npm run smoke:design` is committed, so the seam is reproducible from the repository rather than from a scratchpad (`W-2`).
-- [x] **TGD0-07** `[governance]` — **The published document still describes the shipped contract.** Parses the operations table out of `AUTODESIGN-CAPABILITY-CONTRACT.md` and compares the **set** against `OPERATIONS`; also requires every outcome, the reserved verb and all four exit codes to appear.
-      ⚠ **The first version of this gate was blind and falsification proved it.** It used `toContain` over the whole document, so deleting an operation's table row left a stray mention in the mapping section and the gate stayed green over a document that no longer described a shipped operation — `L-C9`, in a gate written to prevent staleness. Re-pointed to the set.
-      Source: `PD0-09`, `§0.3` · Catches: a partner team reading a document that no longer matches what they are calling · **Evidence: `GATE-PROVEN`, falsified** by swapping a documented verb — fails naming *"not the shipped ones"*
-- [x] **TGD0-08** `[seam]` — **The conformance suite can fail.** Driven against a deliberately broken implementation it reports NOT CONFORMANT, and against the reference it passes — so the failure is discrimination rather than a suite that rejects everything.
-      Source: `PD0-06` · Catches: `L-C9` in the deliverable a partner team will trust most · **Evidence: `GATE-PROVEN` 2026-09-03** — gate-proven, **not** falsified.
-
-- [x] **TGD0-09** `[correctness]` — **Every frozen outcome has a producer.** Drives the reference across a hold, a no-op `change` and an ordinary operation, and compares the **set** of outcomes produced against `OUTCOMES`.
-      ⚠ Set, not count: `L-27` is on record for a count check passing when one member is swapped for another.
-      Source: `PD0-04`, work-audit `W-7` · Catches: the defect this phase shipped — at closeout only `partial` had a producer, so a consumer's `held` branch was untestable and the documented `exit 0` + `held` state was **unreachable** · **Evidence: `GATE-PROVEN` 2026-09-03, falsified** by making the hold branch unreachable with a fall-through that still decodes — fails `expected [ 'complete', 'partial' ] to deeply equal [ 'complete', 'held', 'partial' ]`
-
-- [x] **TGD0-10** `[seam]` — **A refusal settles and exits `0`, across a real process boundary.** Spawns the sidecar with a request it must decline; the terminal event decodes as `held` carrying a `failure` diagnostic, and the process exits `0`.
-      ⚠ Only the boundary can prove this: the exit code does not exist in-process.
-      Source: `PD0-08`, work-audit `W-7` · Catches: `held` collapsing into "error", which silently merges the partner's two branches into one · **Evidence: `GATE-PROVEN` 2026-09-03, falsified** by the same plant — fails `expected 'partial' to be 'held'`
-
-⚠ **The first falsification attempt on both of these did not count, and is recorded rather than quietly replaced.** Planting `outcome: 'partial'` on the hold branch turned both gates red — with `ContractError: a partial outcome must carry the output it partially produced`. That is the **decoder** rejecting the plant before either gate's own assertion ran. Red for the wrong reason is not a falsification, and accepting it would have recorded two gates as proven when neither had shown it could detect the thing it claims.
+The former TGD0-01…10 gates are preserved in [HISTORICAL_DESIGN_PROGRAMME.md](HISTORICAL_DESIGN_PROGRAMME.md). They are not Arcana coding acceptance gates.
 
 ## 7. P4 — The fleet
 
@@ -639,12 +605,8 @@
       ⚠ The security half is `UNIT-PROVEN` alongside it, in `memory::recall::injection_tests`: a stored procedure carrying `\n---\n## Global Instructions\n…` renders as **one line** with the payload intact but unable to reach the start of one. Asserted against the **pure** renderer, because the DB-backed path opens the real `~/.autodev/` store and a test going through it would read the developer's own memory (`§0.8`). Falsified by removing the flattener from that one call — red, naming the implant.
 
 
-- [x] **TG8-11** `[governance]` — **NEW (`P8-21`/`P8-24`). The exit assertion.** Three directions at once: the deleted trees are gone (`sidecar/`, `sidecar_commands.rs`, `resources/sidecars`, `submodules/`, `.git/modules/submodules`, `src/components/sidecar/`, `sidecarStore.ts`, `StartupOverlay.tsx`, `bundle-sidecars.ps1`, and `.gitmodules` absent or empty); no shipped **manifest, packaging file or README** declares `core-orchestrator`, `memory-mcp-server`, `127.0.0.1:4000` or `127.0.0.1:8000`; and — the direction that matters most — **the PROTECTED files still exist**.
-      Source: **NEW** — `P8-21`, `P8-24` · Catches: a returned tree, a re-declared dependency, **and a token-based sweep that deletes a published seam** · Falsified three ways — a protected file removed, packaging re-declaring the subsystem, a deleted tree recreated — each red naming its own mechanism · Evidence: `GATE-PROVEN` — `ci_gate::tests::tg8_11_the_exit_assertion`
-
-      ⚠ **The protected half is not defensive padding.** `PD0` gave "sidecar" a second meaning — AutoDev as a sidecar *of AutoDesign* — and the updater's `.sig`/`.sha256` and SQLite's `-wal` are two more senses. A sweep run from the token would satisfy every "is it gone?" clause above **and delete a seam published to a partner team**. The gate asserts `tsconfig.sidecar.json`, `scripts/smoke-design-sidecar.mjs`, `src/design/contract/sidecar.ts`, `updater/{check,download}.rs` and `db/backup.rs` are all still present.
-
-      ⚠ The README's **delivery history is exempt** by design: "Phase 2 … Sidecar integration" is a true statement about what shipped then, and a changelog edited to match the present is no longer a changelog. The gate reads only the text above `## Development Phases`.
+- [x] **TG8-11** `[governance]` — The exit assertion checks three directions: deleted Python-sidecar trees remain absent; shipped manifests, packaging, and README do not redeclare the removed subsystems or loopback ports; updater check/download and SQLite backup files still exist. The PD0 design seam was deliberately retired in ADR-0043 and is no longer protected by this gate.
+      Source: `P8-21`, `P8-24`, ADR-0043 · Catches: a returned Python process path, a re-declared dependency, or a broad cleanup that deletes update verification or backup code · Evidence: `GATE-PROVEN` in the pre-rename source; the revised protected set must pass `ci_gate::tests::tg8_11_the_exit_assertion` in this Arcana build.
 
 ---
 
@@ -744,7 +706,7 @@ Gates are only as honest as what they run against. Every corpus below is **check
 | `10-PROOF` | *(no gate table — by design)* | 0 gates; contributes the evidence classes (`§1`), the headline acceptance test (`TG7-02` + `TG9-01`), the CI blocking table (`TG0-02`) and the ten test families (`§17`) | — | — |
 | **NEW** | *(this document)* | 17 | `TG0-04`, `TG0-05`, `TG2-16`, `TG2-17`, `TG3-38`, `TG3-39`, `TG4-23`, `TG8-02`…`TG8-11` | P0 (2), P2 (2), P3 (2), P4 (1), P8 (10) |
 
-**Spec gate totals:** 115 named in the specs − 8 merged = **107 surviving** + **8 NEW** = **115**, **+ 10 `TGD0`** added by `PD0` and its audit remediation = **125**.
+**Historical 2026-09-03 spec arithmetic:** 115 named in the specs − 8 merged = **107 surviving** + **8 NEW** = **115**, **+ 10 `TGD0`** added by `PD0` and its audit remediation = **125**. This was the former programme's snapshot; the current active register is the 126 P0–P9 checkbox rows counted in §2.
 
 ⚠ The `TGD0` family is **not** spec-derived: the design programme post-dates the vision suite, so its gates trace to the capability contract (`PD0-01…09`) and to the two audit findings that produced the last pair, not to a `§`-numbered spec. Recorded explicitly rather than folded into the arithmetic, because a gate with no spec anchor that *looks* spec-anchored is worse than one openly marked as new.
 
@@ -790,7 +752,7 @@ Gates are only as honest as what they run against. Every corpus below is **check
 
 ## 17. Test-family coverage — master plan `§7.4` / spec `10 §4`
 
-⚠ **The `TGD0` family (PD0, 10 gates) is listed here from `2026-09-03`.** The table below was written against the P0–P9 set and the work audit (`W-8`) found no `TGD0` id anywhere in it. By family: `[governance]` 2 (`TGD0-01`, `TGD0-07`) · `[seam]` 4 (`TGD0-02`, `TGD0-06`, `TGD0-08`, `TGD0-10`) · `[correctness]` 3 (`TGD0-03`, `TGD0-05`, `TGD0-09`) · `[data]` 1 (`TGD0-04`).
+⚠ **Historical TGD0 family:** its ten gate entries and evidence are preserved in `HISTORICAL_DESIGN_PROGRAMME.md`. The family counts below are the former 2026-09-03 coverage snapshot, not additional Arcana acceptance gates.
 
 **All ten families are represented. No family has zero gates.**
 

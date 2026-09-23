@@ -1,4 +1,4 @@
-// Docs tab — AutoDev documentation panel.
+// Docs tab — Arcana documentation panel.
 // Three-column layout: sidebar nav | content | on-page anchors.
 // Data: docsAllA (01-04), docsAllB (05-07), docsAllC (08-11), docsAllD (12-14).
 
@@ -229,7 +229,7 @@ export default function Docs() {
 
       {/* ── Footer ───────────────────────────────────────────────────────── */}
       <div style={{ background: 'var(--bg-surface)', borderTop: '1px solid var(--border-1)', padding: '0 16px', height: 36, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
-        <span style={{ fontSize: 10, color: 'var(--text-4)', letterSpacing: '0.1em', fontFamily: 'var(--font-mono)' }}>AIRS FOUNDRY — AUTODEV DOCS</span>
+        <span style={{ fontSize: 10, color: 'var(--text-4)', letterSpacing: '0.1em', fontFamily: 'var(--font-mono)' }}>ARCANA DOCS</span>
         <div style={{ display: 'flex', gap: 4 }}>
           {prev && (
             <button onClick={() => navTo(prev.id)} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--text-4)', cursor: 'pointer', padding: '4px 10px', borderRadius: 4, background: 'none', border: 'none', fontFamily: 'var(--font-mono)', transition: 'all 0.1s' }}

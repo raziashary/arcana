@@ -1,32 +1,32 @@
 // Documentation — Sections 01–04
-// Full content faithful to AUTODEV_DOCUMENTATION.md
+// Full content faithful to ARCANA_DOCUMENTATION.md
 
 import type { DocSection } from './docs'
 
 export const A_SECTIONS: DocSection[] = [
 
-  /* ── 01: What is AutoDev? ──────────────────────────────────────── */
+  /* ── 01: What is Arcana? ──────────────────────────────────────── */
   {
-    id: 'what', num: '01', title: 'What is AutoDev?', category: 'Overview', icon: 'info-circle',
-    lead: 'A downloadable desktop application combining Claude Code and Goose into a single, branded, model-agnostic AI developer agent platform. Purpose-built for AIRS Foundry\'s AutoDev worker pipeline.',
+    id: 'what', num: '01', title: 'What is Arcana?', category: 'Overview', icon: 'info-circle',
+    lead: 'A personal desktop workspace for multi-agent software development, with a native Rust agent engine and a React interface.',
     anchors: ['Vision', 'Why Build This?', 'Key Features', 'Tech Stack'],
     blocks: [
       { t: 'h2', text: 'Vision' },
       { t: 'callout', text: 'One app. Any model. Full autonomy.' },
-      { t: 'prose', text: 'Any AIRS team member or AutoDev worker agent can: download one binary, enter their LLM API key (any provider), select their model, and start executing agentic development tasks with the full capability stack: AUTODEV.md, Skills, Recipes, Subagents, MCP servers, Hooks, and the AutoDev worker pipeline.' },
+      { t: 'prose', text: 'Arcana is being developed as a personal coding platform. Configure a provider key in Settings, select a model, and use chat, tasks, recipes, and coding tools as their development phases are verified.' },
       { t: 'h2', text: 'Why Build This?' },
       { t: 'h3', text: 'Claude Code Limitations' },
       { t: 'list', items: ['Locked to Anthropic subscriptions — rate limits cripple 24/7 worker agents', '512,000-line source leak (March 31, 2026) exposed vulnerabilities', 'No model flexibility — cannot route workers to cheaper models', 'Proprietary — cannot audit, fork, or adapt'] },
       { t: 'h3', text: 'Goose Limitations' },
-      { t: 'list', items: ['AGENTS.md ecosystem is newer and less mature', 'Not tailored to AutoDev\'s Supervisor → Worker → QC pipeline', 'Generic tool with no AIRS-specific automation'] },
-      { t: 'h3', text: 'AutoDev Advantage' },
-      { t: 'list', items: ['Model-agnostic by design (Google Gemini, Anthropic, or OpenAI)', 'AUTODEV.md-native with SQLite-backed instruction system', 'AutoDev-native GitHub Issues board understanding', 'Secure and auditable (AIRS controls the harness)', 'Downloadable and distributable single installer'] },
+      { t: 'list', items: ['A general-purpose agent does not provide Arcana\'s local task board', 'The Supervisor → Worker → QC flow remains an Arcana development goal'] },
+      { t: 'h3', text: 'Arcana Advantage' },
+      { t: 'list', items: ['Provider adapters for Google Gemini, Anthropic, and OpenAI', 'ARCANA.md instructions backed by SQLite', 'A local SQLite task board for the agent fleet', 'A native Rust tool loop shared across roles'] },
       { t: 'h2', text: 'Key Features' },
       { t: 'list', items: [
         'Model-agnostic: Google Gemini, Anthropic, or OpenAI',
         'Memory across sessions: episodic, semantic and procedural stores with relevance ranking and compaction',
         'A worker fleet: supervisor, five workers and QC, coordinated through a SQLite task board',
-        'AUTODEV.md: your own instructions, global and per-repository, edited in the app and given to every agent',
+        'ARCANA.md: your own instructions, global and per-repository, edited in the app and given to every agent',
         'MCP client: connect to GitHub, Slack, Adobe and your own MCP servers',
         'Skills & Recipes: reusable YAML workflows with cron scheduling',
         'One installer, no services to run: no Python, no Docker, no database to stand up',
@@ -39,12 +39,12 @@ export const A_SECTIONS: DocSection[] = [
         ['Desktop Shell', 'Tauri v2 (Rust)', 'Cross-platform native wrapper (~15MB base)'],
         ['Frontend', 'React 19 + TypeScript + Vite 8', 'Agent UI, chat, code editor, task board'],
         ['State Management', 'Zustand', 'Global state (sessions, config, agent status)'],
-        ['Styling', 'Tailwind CSS 3', 'AIRS design system (industrial-minimal, #00FF88 accent)'],
+        ['Styling', 'Tailwind CSS 3', 'Arcana interface styles'],
         ['Backend', 'Rust (Tauri commands)', 'Code editing tools, file I/O, command execution'],
         ['Provider Layer', 'Anthropic, OpenAI, Google', 'Multi-provider LLM abstraction'],
         ['MCP Health', 'reqwest', 'Liveness probes for user-configured external MCP servers'],
         ['Git Integration', 'git2-rs (libgit2)', 'Structured git operations, worktrees'],
-        ['Agent engine', 'Rust (autodev-core)', 'The tool loop every agent runs on — assistant, worker and subagent'],
+        ['Agent engine', 'Rust (arcana-core)', 'The tool loop every agent runs on — assistant, worker and subagent'],
         ['Memory', 'Rust + SQLite', 'Episodic, semantic and procedural stores with relevance ranking'],
         ['Keychain', 'keyring crate', 'OS keychain integration for API keys'],
         ['Database', 'SQLite (rusqlite)', 'Session persistence, task board, worker registry'],
@@ -55,18 +55,18 @@ export const A_SECTIONS: DocSection[] = [
   /* ── 02: Core Architecture ─────────────────────────────────────── */
   {
     id: 'arch', num: '02', title: 'Core Architecture', category: 'Overview', icon: 'topology-star',
-    lead: 'AutoDev is a Tauri v2 desktop application — a Rust backend and a React front end, in one process. Every agent it runs, from the interactive assistant to a fleet worker, runs on the same engine inside that process. There are no services to start and nothing to keep alive alongside it.',
+    lead: 'Arcana is a Tauri v2 desktop application — a Rust backend and a React front end, in one process. Every agent it runs, from the interactive assistant to a fleet worker, runs on the same engine inside that process. There are no services to start and nothing to keep alive alongside it.',
     anchors: ['High-Level Diagram', 'The engine', 'The fleet', 'What runs where'],
     blocks: [
       { t: 'h2', text: 'High-Level Architecture Diagram' },
       { t: 'code', lang: 'text', code: `┌──────────────────────────────────────────────────────────────┐
-│                        AutoDev — one process                     │
+│                        Arcana — one process                     │
 ├─────────────────────┬──────────────────────────────────────────┤
 │  React + TypeScript  │            Rust (Tauri v2)               │
-│  src/                │            src-tauri/ + autodev-core/    │
+│  src/                │            src-tauri/ + arcana-core/    │
 │                      │                                          │
 │  Chat                │   Tauri commands                         │
-│  AutoDev panel       │    agent · provider · vault · settings     │
+│  Arcana panel       │    agent · provider · vault · settings     │
 │  IDE                 │    tasks · workers · recipes · mcp         │
 │  Recipes             │                                          │
 │  Graph               │   AgentEngine                            │
@@ -82,7 +82,7 @@ export const A_SECTIONS: DocSection[] = [
 │                      │   graph/    knowledge graph               │
 │                      │   db/       SQLite                        │
 │                      │                                          │
-│                      │   ~/.autodev/  — SQLite on your disk      │
+│                      │   ~/.arcana/  — SQLite on your disk      │
 │                      │    tasks · workers · sessions · memory     │
 │                      │    analytics · recipes · instructions     │
 └─────────────────────┴──────────────────────────────────────────┘
@@ -103,7 +103,7 @@ MCP servers you connected yourself.` },
         'No round-trip — a turn is a function call, not an HTTP request to something else on your machine',
         'Nothing to start — the app works the moment it opens; there is no service that can fail to come up',
         'One place to look — an agent that misbehaves is debugged in one process, with one log',
-        'Headless too — airsctl -p "..." runs the same engine from a terminal',
+        'Headless too — arcanactl -p "..." runs the same engine from a terminal',
         'Local-first — sessions, memory and the task board are all on-device',
       ]},
       { t: 'h2', text: 'The fleet' },
@@ -120,7 +120,7 @@ MCP servers you connected yourself.` },
       { t: 'h3', text: 'How a worker gets its instructions' },
       { t: 'list', items: [
         'An invariant core every agent receives — the prohibitions, the git rules, and how work is coordinated',
-        'Your AUTODEV.md, global and per-repository',
+        'Your ARCANA.md, global and per-repository',
         'Its own recipe: role, protocol and what counts as done',
         'Its memory, rebuilt each turn from what it has learned',
       ]},
@@ -131,7 +131,7 @@ MCP servers you connected yourself.` },
   /* ── 03: Personal Assistant (PA) Mode ─────────────────────────── */
   {
     id: 'pa-mode', num: '03', title: 'Personal Assistant (PA) Mode', category: 'Agent Modes', icon: 'robot',
-    lead: 'The assistant is the interactive half of AutoDev — the one you talk to. It runs on the same engine as everything else, with direct access to your chosen provider. Three modes change what it can reach and how it works.',
+    lead: 'The assistant is the interactive half of Arcana — the one you talk to. It runs on the same engine as everything else, with direct access to your chosen provider. Three modes change what it can reach and how it works.',
     anchors: ['Mode Toggle', 'Fast Development', 'Review Mode', 'Delegate Mode', 'Interaction Flow', 'Switching Modes'],
     blocks: [
       { t: 'h2', text: 'Mode Toggle' },
@@ -159,9 +159,9 @@ MCP servers you connected yourself.` },
         'Logs reasoning for each write operation',
       ]},
       { t: 'h2', text: 'Delegate Mode' },
-      { t: 'prose', text: 'System Prompt: DELEGATE_SYSTEM_PROMPT (task creation focused). NO file access tools (no read_file, write_file, edit_file, bash). Decomposes user requests into atomic tasks and creates them on the internal AutoDev board.' },
+      { t: 'prose', text: 'System Prompt: DELEGATE_SYSTEM_PROMPT (task creation focused). NO file access tools (no read_file, write_file, edit_file, bash). Decomposes user requests into atomic tasks and creates them on the internal Arcana board.' },
       { t: 'list', items: [
-        'create_task (writes to internal AutoDev task board)',
+        'create_task (writes to internal Arcana task board)',
         'MCP tools (read-only only — GitHub MCP for context, no write tools)',
         'NO direct code execution whatsoever',
       ]},
@@ -175,7 +175,7 @@ MCP servers you connected yourself.` },
 5. Worker Frontend: claims it, implements it, runs the project's tests,
    commits to the fleet branch, moves it to qc_review
 6. QC: reviews the change and either marks it done or rejects it with a reason
-7. AutoDev panel: shows each transition as it happens` },
+7. Arcana panel: shows each transition as it happens` },
       { t: 'h2', text: 'Switching PA Modes' },
       { t: 'prose', text: 'Location: Chat header dropdown (3-button segmented control). State Management: settingsStore.ts persists paMode to localStorage. Effect: Changes tool registry and system prompt for the next message sent. Persistence: Mode preference saved across sessions.' },
     ],
@@ -184,7 +184,7 @@ MCP servers you connected yourself.` },
   /* ── 04: Fleet & Delegate Mode ─────────────────────────────────── */
   {
     id: 'fleet', num: '04', title: 'Fleet & Delegate Mode', category: 'Agent Modes', icon: 'users',
-    lead: 'The AutoDev fleet is a collection of autonomous worker agents that execute tasks assigned by a Supervisor agent. This multi-agent pipeline enables 24/7 autonomous development.',
+    lead: 'The Arcana fleet is a collection of autonomous worker agents that execute tasks assigned by a Supervisor agent. This multi-agent pipeline enables 24/7 autonomous development.',
     anchors: ['Fleet Architecture', 'Worker Types', 'Internal Task Board', 'Task Lifecycle', 'Worker Requests', 'Lock Files', 'Branch Naming', 'Orphan Detection'],
     blocks: [
       { t: 'h2', text: 'Fleet Architecture' },
@@ -210,7 +210,7 @@ MCP servers you connected yourself.` },
         ['QC Agent', '*/2 * * * *', 'PR review, test execution, QC reports'],
       ]},
       { t: 'h2', text: 'Internal Task Board' },
-      { t: 'prose', text: 'AutoDev uses an internal SQLite task board (~/.autodev/tasks.db). Why not GitHub Issues directly? Faster (no API calls), offline support, full control over data model. GitHub is still used for PRs, but task assignment happens internally.' },
+      { t: 'prose', text: 'Arcana uses an internal SQLite task board (~/.arcana/tasks.db). Why not GitHub Issues directly? Faster (no API calls), offline support, full control over data model. GitHub is still used for PRs, but task assignment happens internally.' },
       { t: 'code', lang: 'sql', code: `CREATE TABLE tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,

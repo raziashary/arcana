@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build-appimage.sh — Build the AutoDev AppImage for Linux.
+# build-appimage.sh — Build the Arcana AppImage for Linux.
 # Phase 5.3 — Platform Installers.
 #
 # Usage:
@@ -24,7 +24,7 @@ APPDIR_TEMPLATE="$SCRIPT_DIR/AppDir"
 VERSION=""
 CHANNEL="stable"
 ARCH="${ARCH:-$(uname -m)}"
-TOOLS_DIR="$HOME/.local/share/autodev-build-tools"
+TOOLS_DIR="$HOME/.local/share/arcana-build-tools"
 
 # ─── Argument parsing ─────────────────────────────────────────────────────────
 
@@ -89,7 +89,7 @@ npm ci --prefer-offline
 step "Building Tauri app (release)"
 cd "$REPO_ROOT"
 
-export AUTODEV_CHANNEL="$CHANNEL"
+export ARCANA_CHANNEL="$CHANNEL"
 npm run tauri -- build --bundles appimage
 
 # ─── Locate the built AppImage ────────────────────────────────────────────────
@@ -107,7 +107,7 @@ mkdir -p "$DIST_DIR"
 
 CHANNEL_SUFFIX=""
 [[ "$CHANNEL" != "stable" ]] && CHANNEL_SUFFIX="-$CHANNEL"
-DEST_NAME="autodev_${VERSION}${CHANNEL_SUFFIX}_${ARCH}.AppImage"
+DEST_NAME="arcana_${VERSION}${CHANNEL_SUFFIX}_${ARCH}.AppImage"
 DEST_PATH="$DIST_DIR/$DEST_NAME"
 
 cp "$BUILT_APPIMAGE" "$DEST_PATH"

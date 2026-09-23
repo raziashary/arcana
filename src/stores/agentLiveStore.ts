@@ -117,10 +117,10 @@ function truncate(s: string, n: number): string {
 
 export const useAgentLiveStore = create<AgentLiveStore>((set, get) => ({
   agents:             {},
-  isMonitorCollapsed: localStorage.getItem('autodev.live_monitor.collapsed') === 'true',
+  isMonitorCollapsed: localStorage.getItem('arcana.live_monitor.collapsed') === 'true',
   lastEventAt:        Date.now(),
 
-  // ── Initialise a set of agents (called from AutoDevTab on mount) ────────────
+  // ── Initialise a set of agents (called from ArcanaTab on mount) ────────────
   initAgents: (agentIds) => {
     const existing = get().agents
     const agents: Record<string, AgentLiveState> = {}
@@ -132,13 +132,13 @@ export const useAgentLiveStore = create<AgentLiveStore>((set, get) => ({
   },
 
   setMonitorCollapsed: (v) => {
-    localStorage.setItem('autodev.live_monitor.collapsed', String(v))
+    localStorage.setItem('arcana.live_monitor.collapsed', String(v))
     set({ isMonitorCollapsed: v })
   },
 
   // ── Doc 01 Phase 3 — wire `worker.model` from workerStore into the
   // live-state record so AgentLiveCard can render a "haiku" / "sonnet" badge.
-  // Called from AutoDevTab's effect after `loadWorkers()` resolves.
+  // Called from ArcanaTab's effect after `loadWorkers()` resolves.
   // Lazy-creates the agent record if it doesn't exist yet — same belt-and-
   // suspenders pattern as the event handlers.
   setAgentModel: (agentId, model) => {
@@ -415,7 +415,7 @@ export const useAgentLiveStore = create<AgentLiveStore>((set, get) => ({
     // `SubagentManager::pump_events` → `emit_subagent_event_global` → the
     // `subagent:event` channel. The payload shape is
     // `{ subagent_id, event: { kind: "tool_start"|"tool_end"|... } }`
-    // (tagged enum from autodev-core/src/subagent/types.rs).
+    // (tagged enum from arcana-core/src/subagent/types.rs).
     //
     // Translate `tool_start` / `tool_end` here so the Live Monitor card for
     // each subagent fills in tool names and timings. The agent_id is the

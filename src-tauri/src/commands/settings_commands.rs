@@ -1,7 +1,7 @@
 // Settings commands — provider config, active model, connection testing.
 
 use crate::agent::context::ContextBuilder;
-use crate::errors::{AutoDevError, Result};
+use crate::errors::{ArcanaError, Result};
 use crate::provider::anthropic::AnthropicProvider;
 use crate::provider::google::GoogleProvider;
 use crate::provider::openai::OpenAIProvider;
@@ -12,7 +12,7 @@ use crate::vault::keychain::{provider_key, VaultManager};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use tauri::State;
-use autodev_core::state::lock::LockTolerant;
+use arcana_core::state::lock::LockTolerant;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProviderInfo {
@@ -42,7 +42,7 @@ fn build_provider_info(id: &str, name: &str) -> Result<ProviderInfo> {
     // P2-53/P2-23. The fourth copy of this provider match. An empty key is
     // fine here: nothing is called, the adapter is constructed only to ask it
     // which models it serves, and that answer comes from the shared catalogue.
-    let models = autodev_core::provider::factory::build(id, String::new())
+    let models = arcana_core::provider::factory::build(id, String::new())
         .map(|p| p.models())
         .unwrap_or_default();
     Ok(ProviderInfo {
@@ -57,7 +57,7 @@ fn build_provider_info(id: &str, name: &str) -> Result<ProviderInfo> {
 #[tauri::command]
 pub async fn test_provider_connection(provider: String) -> Result<ProviderStatus> {
     let key = VaultManager::get(&provider_key(&provider))?
-        .ok_or_else(|| AutoDevError::Provider("No API key stored for provider".into()))?;
+        .ok_or_else(|| ArcanaError::Provider("No API key stored for provider".into()))?;
 
     match provider.as_str() {
         "anthropic" => {
@@ -72,7 +72,7 @@ pub async fn test_provider_connection(provider: String) -> Result<ProviderStatus
             let p = GoogleProvider::new(key);
             p.test_connection().await
         }
-        _ => Err(AutoDevError::Provider(format!(
+        _ => Err(ArcanaError::Provider(format!(
             "Provider '{}' not yet implemented",
             provider
         ))),
@@ -93,8 +93,8 @@ pub fn set_active_provider(
     // must not go on believing a selection that will not survive it. The
     // opposite order gives the user a working session and a silent surprise
     // next launch.
-    autodev_core::db::app_settings::set(ACTIVE_PROVIDER_KEY, &provider)?;
-    autodev_core::db::app_settings::set(ACTIVE_MODEL_KEY, &model)?;
+    arcana_core::db::app_settings::set(ACTIVE_PROVIDER_KEY, &provider)?;
+    arcana_core::db::app_settings::set(ACTIVE_MODEL_KEY, &model)?;
 
     let mut s = state.lock_tolerant();
     s.active_provider = Some(provider);
@@ -113,23 +113,23 @@ pub const ACTIVE_MODEL_KEY: &str = "active_model";
 /// and hydrating a dead id would hand the user a selection that looks valid and
 /// 404s on first use, which is harder to diagnose than an empty picker.
 pub fn hydrate_active_provider(state: &Arc<Mutex<AppState>>) {
-    let provider = autodev_core::db::app_settings::get(ACTIVE_PROVIDER_KEY)
+    let provider = arcana_core::db::app_settings::get(ACTIVE_PROVIDER_KEY)
         .ok()
         .flatten();
-    let model = autodev_core::db::app_settings::get(ACTIVE_MODEL_KEY).ok().flatten();
+    let model = arcana_core::db::app_settings::get(ACTIVE_MODEL_KEY).ok().flatten();
 
     let (Some(provider), Some(model)) = (provider, model) else {
         return;
     };
 
-    if autodev_core::provider::catalogue::entry(&model).is_none() {
+    if arcana_core::provider::catalogue::entry(&model).is_none() {
         tracing::warn!(
             "The saved model '{model}' is no longer offered, so it has not been restored.              Choose a model in Settings."
         );
         return;
     }
 
-    if autodev_core::provider::routing::provider_for_model(&model) != Some(provider.as_str()) {
+    if arcana_core::provider::routing::provider_for_model(&model) != Some(provider.as_str()) {
         tracing::warn!(
             "The saved selection ({provider} / {model}) is inconsistent — that model is              not served by that provider — so it has not been restored."
         );

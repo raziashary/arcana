@@ -1,11 +1,11 @@
 // Tauri command modules.
 // Commands are thin wrappers that delegate to core modules.
-// All commands return Result<T, AutoDevError> which serialises to the frontend.
+// All commands return Result<T, ArcanaError> which serialises to the frontend.
 
 pub mod agent_commands;
 pub mod analytics_commands;
 pub mod annotation_commands;
-pub mod autodev_instructions_commands;
+pub mod arcana_instructions_commands;
 pub mod browser_commands;
 pub mod budget_commands;
 pub mod diff_commands;
@@ -38,5 +38,5 @@ pub mod updater_commands;
 pub mod vault_commands;
 pub mod worker_commands;
 pub mod workspace_commands;
-// AutoDev Communication Protocol — Fleet Chat query commands.
+// Arcana Communication Protocol — Fleet Chat query commands.
 pub mod worker_message_commands;

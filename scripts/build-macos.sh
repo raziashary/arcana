@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build-macos.sh — Build AutoDev macOS DMG.
+# build-macos.sh — Build Arcana macOS DMG.
 # Phase 5.3 — Platform Installers.
 #
 # Usage:
@@ -25,7 +25,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-echo "AutoDev macOS Build"
+echo "Arcana macOS Build"
 echo "==================="
 
 bash "$REPO_ROOT/installers/dmg/create-dmg.sh" \

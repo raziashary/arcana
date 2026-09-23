@@ -1,13 +1,13 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Build the AutoDev Windows MSI installer using Tauri + WiX v4.
+    Build the Arcana Windows MSI installer using Tauri + WiX v4.
 
 .DESCRIPTION
     1. Verifies prerequisites (Rust, Node, WiX toolset)
     2. Builds the Tauri application in release mode
     3. Signs the installer with the code-signing certificate if CERT_PATH is set
-    4. Outputs autodev_<version>[_channel]_x64_en-US.exe to dist/, plus a
+    4. Outputs arcana_<version>[_channel]_x64_en-US.exe to dist/, plus a
        matching .sha256 sidecar.
 
     NOTE: despite this script's name, the artifact it collects is the NSIS
@@ -134,7 +134,7 @@ Write-Host "  TauriDir: $TauriDir"
 
 Push-Location $RepoRoot
 
-$env:AUTODEV_CHANNEL = $Channel
+$env:ARCANA_CHANNEL = $Channel
 
 # The update-signing public key is compiled into the binary from this
 # environment variable (src-tauri/src/updater/verify.rs uses option_env!, and
@@ -144,8 +144,8 @@ $env:AUTODEV_CHANNEL = $Channel
 # A debug build without it simply cannot verify updates. A RELEASE build without
 # it fails to compile on purpose, rather than shipping a binary that refuses
 # every update it is offered.
-if (-not $env:AUTODEV_UPDATE_PUBKEY) {
-    Write-Host "  AUTODEV_UPDATE_PUBKEY not set - this build cannot verify updates" -ForegroundColor Yellow
+if (-not $env:ARCANA_UPDATE_PUBKEY) {
+    Write-Host "  ARCANA_UPDATE_PUBKEY not set - this build cannot verify updates" -ForegroundColor Yellow
 }
 
 try {
@@ -213,8 +213,7 @@ if ($Sign) {
         /tr  $tsUrl `
         /f   $certPath `
         /p   $certPass `
-        /d   "AutoDev" `
-        /du  "https://airs.dev/autodev" `
+        /d   "Arcana" `
         $Installer.FullName
 
     & $signtool verify /pa /v $Installer.FullName
@@ -233,7 +232,7 @@ try {
 }
 
 $ChannelSuffix = if ($Channel -eq "stable") { "" } else { "-$Channel" }
-$DestName      = "autodev_${Version}${ChannelSuffix}_x64_en-US.exe"
+$DestName      = "arcana_${Version}${ChannelSuffix}_x64_en-US.exe"
 $DestPath      = Join-Path $DistDir $DestName
 
 try {

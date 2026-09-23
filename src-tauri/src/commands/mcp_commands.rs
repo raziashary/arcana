@@ -1,4 +1,4 @@
-// mcp_commands.rs — AutoDev as an MCP *client*, and its own tool surface.
+// mcp_commands.rs — Arcana as an MCP *client*, and its own tool surface.
 //
 // 🔴 **Why this file exists (`P8-51`).** These three commands lived in
 // `sidecar_commands.rs`, and `P8-06` says *"delete `sidecar_commands.rs` and
@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use autodev_core::agent::tool_registry::ToolRegistry;
+use arcana_core::agent::tool_registry::ToolRegistry;
 
 /// One tool, as the MCP tool browser renders it.
 ///
@@ -35,7 +35,7 @@ pub struct McpToolInfo {
     pub input_schema: serde_json::Value,
 }
 
-/// Every tool AutoDev exposes, for the MCP tool browser.
+/// Every tool Arcana exposes, for the MCP tool browser.
 ///
 /// Lets a developer inspect the available capabilities without connecting an
 /// external MCP client.
@@ -54,7 +54,7 @@ pub fn list_mcp_tools(registry: State<'_, Arc<ToolRegistry>>) -> Vec<McpToolInfo
     tools
 }
 
-/// Health of every external MCP server AutoDev is connected to.
+/// Health of every external MCP server Arcana is connected to.
 #[tauri::command]
 pub async fn get_mcp_health(
     monitor: State<'_, Arc<crate::mcp::health::McpHealthMonitor>>,

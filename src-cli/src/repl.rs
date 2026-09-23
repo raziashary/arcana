@@ -8,7 +8,7 @@ use crate::output::OutputContext;
 const HISTORY_FILE: &str = ".airs_history";
 
 pub async fn run(ctx: OutputContext) -> Result<()> {
-    println!("{}", "airsctl REPL — type 'help' or 'exit'".cyan().bold());
+    println!("{}", "arcanactl REPL — type 'help' or 'exit'".cyan().bold());
     println!(
         "{}",
         "Use arrow keys for history, Tab for fuzzy completion.".dimmed()
@@ -22,7 +22,7 @@ pub async fn run(ctx: OutputContext) -> Result<()> {
     }
 
     loop {
-        let line = rl.readline("airsctl> ");
+        let line = rl.readline("arcanactl> ");
         match line {
             Ok(input) => {
                 let input = input.trim().to_string();
@@ -104,8 +104,8 @@ fn print_help() {
 }
 
 async fn dispatch(input: &str, ctx: OutputContext) -> Result<()> {
-    // Prepend "airsctl" so clap can parse the subcommand
-    let mut args = vec!["airsctl"];
+    // Prepend "arcanactl" so clap can parse the subcommand
+    let mut args = vec!["arcanactl"];
     let parts: Vec<&str> = input.split_whitespace().collect();
     args.extend_from_slice(&parts);
 

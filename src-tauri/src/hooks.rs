@@ -1,1 +1,1 @@
-pub use autodev_core::hooks::*;
+pub use arcana_core::hooks::*;

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "AutoDev",
+  "productName": "Arcana",
   "version": "1.0.0",
-  "identifier": "com.airs-foundry.autodev",
+  "identifier": "dev.arcana.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "AutoDev",
+        "title": "Arcana",
         "width": 1200,
         "height": 800,
         "minWidth": 1000,
@@ -46,8 +46,8 @@
     "resources": [],
     "category": "DeveloperTool",
     "shortDescription": "AI Agent Desktop Platform",
-    "longDescription": "AutoDev is an AI-powered development assistant that orchestrates multi-agent workflows, manages tasks, and integrates with your development environment.",
-    "copyright": "© 2026 AIRS Foundry. All rights reserved.",
+    "longDescription": "Arcana is an AI-powered development assistant that orchestrates multi-agent workflows, manages tasks, and integrates with your development environment.",
+    "copyright": "© 2026 Arcana",
     "linux": {
       "deb": {
         "depends": [
@@ -65,10 +65,10 @@
     "fileAssociations": [
       {
         "ext": [
-          "autodev"
+          "arcana"
         ],
-        "name": "AutoDev Project",
-        "description": "AutoDev Project File",
+        "name": "Arcana Project",
+        "description": "Arcana Project File",
         "role": "Editor"
       }
     ],

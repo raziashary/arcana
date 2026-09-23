@@ -136,7 +136,7 @@ export const useSkillStore = create<SkillState>((set, get) => ({
 
   initWatcher: async () => {
     // Listen for the backend "skills:reloaded" event emitted by the Rust
-    // SkillWatcher whenever a .md file changes in ~/.autodev/skills/.
+    // SkillWatcher whenever a .md file changes in ~/.arcana/skills/.
     // Automatically refreshes byCategory so the palette stays current.
     const unlisten = await listen<number>('skills:reloaded', (event) => {
       console.log(`[SkillStore] skills:reloaded — ${event.payload} skills loaded`)

@@ -107,10 +107,10 @@ export function AnnotationPanel({ annotation }: AnnotationPanelProps) {
             <div className="ann-panel-section-label">Fleet Task</div>
             <button
               className="ann-panel-task-link"
-              title="Open AutoDev panel to view this task"
+              title="Open Arcana panel to view this task"
               onClick={() => {
                 setActive(null)
-                setActiveTab('autodev')
+                setActiveTab('arcana')
               }}
             >
               ◈ {annotation.taskId}

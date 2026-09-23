@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use tauri::{Emitter, State};
 
-use crate::errors::AutoDevError;
+use crate::errors::ArcanaError;
 use crate::updater::{
     self,
     check::{UpdateChannel, UpdateInfo},
@@ -21,7 +21,7 @@ use crate::updater::{
 pub async fn check_for_update(
     state: State<'_, Arc<UpdaterState>>,
     channel: Option<String>,
-) -> Result<Option<UpdateInfo>, AutoDevError> {
+) -> Result<Option<UpdateInfo>, ArcanaError> {
     let ch = match channel.as_deref() {
         Some("beta") => UpdateChannel::Beta,
         Some("nightly") => UpdateChannel::Nightly,
@@ -34,7 +34,7 @@ pub async fn check_for_update(
             Ok(Some(info))
         }
         Ok(_) => Ok(None),
-        Err(e) => Err(AutoDevError::from(e)),
+        Err(e) => Err(ArcanaError::from(e)),
     }
 }
 
@@ -42,7 +42,7 @@ pub async fn check_for_update(
 #[tauri::command]
 pub async fn get_cached_update(
     state: State<'_, Arc<UpdaterState>>,
-) -> Result<Option<UpdateInfo>, AutoDevError> {
+) -> Result<Option<UpdateInfo>, ArcanaError> {
     Ok(state.latest.lock().await.clone())
 }
 
@@ -55,14 +55,14 @@ pub async fn download_update(
     version: String,
     app_handle: tauri::AppHandle,
     state: State<'_, Arc<UpdaterState>>,
-) -> Result<DownloadProgress, AutoDevError> {
+) -> Result<DownloadProgress, ArcanaError> {
     // Get cached update info
     let info = state.latest.lock().await.clone().ok_or_else(|| {
-        AutoDevError::Agent("No update info cached — call check_for_update first".into())
+        ArcanaError::Agent("No update info cached — call check_for_update first".into())
     })?;
 
     if info.version != version {
-        return Err(AutoDevError::Agent(format!(
+        return Err(ArcanaError::Agent(format!(
             "Version mismatch: cached={}, requested={version}",
             info.version
         )));
@@ -70,7 +70,7 @@ pub async fn download_update(
 
     let asset = info
         .asset_for_current_platform()
-        .ok_or_else(|| AutoDevError::Agent("No update available for this platform".into()))?
+        .ok_or_else(|| ArcanaError::Agent("No update available for this platform".into()))?
         .clone();
 
     // Create progress channel
@@ -174,7 +174,7 @@ pub async fn download_update(
 #[tauri::command]
 pub async fn get_download_progress(
     state: State<'_, Arc<UpdaterState>>,
-) -> Result<Option<DownloadProgress>, AutoDevError> {
+) -> Result<Option<DownloadProgress>, ArcanaError> {
     Ok(state.progress.lock().await.clone())
 }
 
@@ -186,13 +186,13 @@ pub async fn install_update(
     version: String,
     app_handle: tauri::AppHandle,
     state: State<'_, Arc<UpdaterState>>,
-) -> Result<InstallResult, AutoDevError> {
+) -> Result<InstallResult, ArcanaError> {
     let progress = state.progress.lock().await.clone().ok_or_else(|| {
-        AutoDevError::Agent("No download in progress — call download_update first".into())
+        ArcanaError::Agent("No download in progress — call download_update first".into())
     })?;
 
     if progress.stage != DownloadStage::Ready {
-        return Err(AutoDevError::Agent(format!(
+        return Err(ArcanaError::Agent(format!(
             "Download not ready (stage: {:?})",
             progress.stage
         )));
@@ -202,15 +202,15 @@ pub async fn install_update(
         .path
         .as_ref()
         .map(std::path::PathBuf::from)
-        .ok_or_else(|| AutoDevError::Agent("Installer path missing".into()))?;
+        .ok_or_else(|| ArcanaError::Agent("Installer path missing".into()))?;
 
     // The download command's verification proves nothing about this file now.
-    // It sits in a user-writable directory (~/.autodev/updates) and install is a
+    // It sits in a user-writable directory (~/.arcana/updates) and install is a
     // SEPARATE IPC call, so anything able to write there between the two calls
     // gets its binary installed. Re-verify against the published checksum and
     // signature immediately before scheduling.
     let info = state.latest.lock().await.clone().ok_or_else(|| {
-        AutoDevError::Agent(
+        ArcanaError::Agent(
             "No update info cached — cannot verify the installer before install".into(),
         )
     })?;
@@ -219,7 +219,7 @@ pub async fn install_update(
     // happened; without this the update history could record a version that was
     // never the one installed.
     if info.version != version || progress.version != version {
-        return Err(AutoDevError::Agent(format!(
+        return Err(ArcanaError::Agent(format!(
             "Version mismatch at install: requested={version}, cached={}, downloaded={}",
             info.version, progress.version
         )));
@@ -227,29 +227,29 @@ pub async fn install_update(
 
     let asset = info
         .asset_for_current_platform()
-        .ok_or_else(|| AutoDevError::Agent("No update available for this platform".into()))?;
+        .ok_or_else(|| ArcanaError::Agent("No update available for this platform".into()))?;
 
     let expected_checksum = updater::download::download_checksum(&asset.checksum)
         .await
         .map_err(|e| {
-            AutoDevError::Agent(format!(
+            ArcanaError::Agent(format!(
                 "Install refused: could not fetch the published checksum: {e}"
             ))
         })?;
 
     updater::verify_update(&installer_path, &expected_checksum, &asset.signature)
         .await
-        .map_err(|e| AutoDevError::Agent(format!("Install refused: {e}")))?;
+        .map_err(|e| ArcanaError::Agent(format!("Install refused: {e}")))?;
 
     // Pre-update: verify data integrity and create restore point
     updater::create_restore_point()
-        .map_err(|e| AutoDevError::Agent(format!("Restore point creation failed: {e}")))?;
+        .map_err(|e| ArcanaError::Agent(format!("Restore point creation failed: {e}")))?;
 
     updater::verify_data_integrity()
-        .map_err(|e| AutoDevError::Agent(format!("Data integrity check failed: {e}")))?;
+        .map_err(|e| ArcanaError::Agent(format!("Data integrity check failed: {e}")))?;
 
     let result = updater::schedule_install(&installer_path, &version, updater::APP_VERSION)
-        .map_err(AutoDevError::from)?;
+        .map_err(ArcanaError::from)?;
 
     if result.requires_restart {
         // Give frontend time to show "restarting" UI
@@ -267,8 +267,8 @@ pub async fn install_update(
 pub async fn skip_version(
     version: String,
     state: State<'_, Arc<UpdaterState>>,
-) -> Result<(), AutoDevError> {
-    updater::skip_version(&version).map_err(AutoDevError::from)?;
+) -> Result<(), ArcanaError> {
+    updater::skip_version(&version).map_err(ArcanaError::from)?;
     // Clear cached update if it's the skipped version
     let mut latest = state.latest.lock().await;
     if latest
@@ -283,7 +283,7 @@ pub async fn skip_version(
 
 /// Get the history of installed updates.
 #[tauri::command]
-pub async fn get_update_history() -> Result<Vec<UpdateRecord>, AutoDevError> {
+pub async fn get_update_history() -> Result<Vec<UpdateRecord>, ArcanaError> {
     Ok(updater::get_update_history())
 }
 
@@ -291,6 +291,6 @@ pub async fn get_update_history() -> Result<Vec<UpdateRecord>, AutoDevError> {
 
 /// Verify that all user data is intact (pre or post update).
 #[tauri::command]
-pub async fn verify_data_integrity() -> Result<IntegrityReport, AutoDevError> {
-    updater::verify_data_integrity().map_err(AutoDevError::from)
+pub async fn verify_data_integrity() -> Result<IntegrityReport, ArcanaError> {
+    updater::verify_data_integrity().map_err(ArcanaError::from)
 }

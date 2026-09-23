@@ -1,5 +1,5 @@
 // Documentation — Sections 08–11
-// Full content faithful to AUTODEV_DOCUMENTATION.md
+// Full content faithful to ARCANA_DOCUMENTATION.md
 
 import type { DocSection } from './docs'
 
@@ -8,11 +8,11 @@ export const C_SECTIONS: DocSection[] = [
   /* ── 08: Settings Panel ─────────────────────────────────────────── */
   {
     id: 'settings', num: '08', title: 'Settings Panel', category: 'Interface', icon: 'settings',
-    lead: 'The Settings panel is the central configuration hub for AutoDev. It manages providers, models, workers, GitHub integration, system prompts, hooks, and more. Location: src/tabs/Settings.tsx',
+    lead: 'The Settings panel is the central configuration hub for Arcana. It manages providers, models, workers, GitHub integration, system prompts, hooks, and more. Location: src/tabs/Settings.tsx',
     anchors: ['Workspace', 'Credential Storage', 'Daily Spend Ceiling', 'Default Worker Budget', 'MCP Tools', 'Browser Testing', 'Providers', 'Model Parameters', 'GitHub', 'Workers', 'System Prompt', 'Hooks', 'Updates'],
     blocks: [
       { t: 'h2', text: '1. Workspace Folder' },
-      { t: 'prose', text: 'Sets the root directory for all AutoDev agents (PA, Supervisor, Workers). All agents operate inside this folder. @path/to/file references in chat are relative to workspace. Default: None (agents use sandbox directories). Storage: workspaceStore.ts (localStorage).' },
+      { t: 'prose', text: 'Sets the root directory for all Arcana agents (PA, Supervisor, Workers). All agents operate inside this folder. @path/to/file references in chat are relative to workspace. Default: None (agents use sandbox directories). Storage: workspaceStore.ts (localStorage).' },
       { t: 'h2', text: '2. Credential Storage' },
       { t: 'prose', text: 'Shows which backend holds your API keys — the OS keychain where one is available — and which keys are currently stored. Keys are never written to a config file and never placed in the process environment.' },
       { t: 'h2', text: '3. Daily Spend Ceiling' },
@@ -41,7 +41,7 @@ export const C_SECTIONS: DocSection[] = [
       { t: 'h2', text: '8. GitHub Configuration' },
       { t: 'prose', text: 'GitHub PAT Card: Store GitHub Personal Access Token (used for GitHub Issues API, stored in OS keychain). GitHub MCP Card: configure GitHub MCP server (URL, auth, tool list: create_issue, list_issues, etc.).' },
       { t: 'h2', text: '9. Workers' },
-      { t: 'prose', text: 'Manage the worker fleet. Worker table: list all workers (system + custom), status indicators (idle/working/error/paused), start/stop buttons, edit configuration, delete workers (except system-defined). Storage: ~/.autodev/workers.db (SQLite).' },
+      { t: 'prose', text: 'Manage the worker fleet. Worker table: list all workers (system + custom), status indicators (idle/working/error/paused), start/stop buttons, edit configuration, delete workers (except system-defined). Storage: ~/.arcana/workers.db (SQLite).' },
       { t: 'table', headers: ['Worker Config Field', 'Description'], rows: [
         ['name, slug, type', 'Identity fields'],
         ['model', 'Model preference (overrides global)'],
@@ -51,7 +51,7 @@ export const C_SECTIONS: DocSection[] = [
         ['description', 'Human-readable description'],
       ]},
       { t: 'h2', text: '10. System Prompt' },
-      { t: 'prose', text: 'Edit the three PA mode system prompts. Storage: ~/.autodev/config.db (SQLite). AUTODEV.md Integration: global AUTODEV.md injected into all modes; repo-specific AUTODEV.md injected when in workspace; system prompt + AUTODEV.md = full prompt.' },
+      { t: 'prose', text: 'Edit the three PA mode system prompts. Storage: ~/.arcana/config.db (SQLite). ARCANA.md Integration: global ARCANA.md injected into all modes; repo-specific ARCANA.md injected when in workspace; system prompt + ARCANA.md = full prompt.' },
       { t: 'table', headers: ['Prompt', 'Used In'], rows: [
         ['Base System Prompt', 'Fast Development mode'],
         ['Review System Prompt', 'Review mode (adds permission consciousness)'],
@@ -60,14 +60,14 @@ export const C_SECTIONS: DocSection[] = [
       { t: 'h2', text: '11. Hooks' },
       { t: 'prose', text: 'Configure lifecycle hooks. Hook Types: PreToolUse/PostToolUse, SessionStart/SessionEnd, AgentLoopStart/AgentLoopEnd, OnToolError/OnError. Actions: Script, Modify, HTTP. UI: list/enable/disable/add/test/delete hooks, view execution logs.' },
       { t: 'h2', text: '12. Updates' },
-      { t: 'prose', text: 'Check for and apply AutoDev updates. Features: check for updates, download and apply updates, view update history.' },
+      { t: 'prose', text: 'Check for and apply Arcana updates. Features: check for updates, download and apply updates, view update history.' },
     ],
   },
 
-  /* ── 09: Dashboard Panel (AutoDev Panel) ───────────────────────── */
+  /* ── 09: Dashboard Panel (Arcana Panel) ───────────────────────── */
   {
-    id: 'dashboard', num: '09', title: 'Dashboard Panel (AutoDev Panel)', category: 'Interface', icon: 'dashboard',
-    lead: 'The AutoDev Panel is the central dashboard for monitoring the worker fleet and task board. It displays real-time agent status, task progress, and fleet metrics. Location: src/tabs/AutoDevPanel.tsx',
+    id: 'dashboard', num: '09', title: 'Dashboard Panel (Arcana Panel)', category: 'Interface', icon: 'dashboard',
+    lead: 'The Arcana Panel is the central dashboard for monitoring the worker fleet and task board. It displays real-time agent status, task progress, and fleet metrics. Location: src/tabs/ArcanaPanel.tsx',
     anchors: ['Layout', 'Agent Roster', 'Task Board', 'Metrics Footer', 'Live Monitor', 'Worker Requests', 'Orphan Alert'],
     blocks: [
       { t: 'h2', text: 'Layout' },
@@ -160,8 +160,8 @@ FileSearch overlay (Ctrl/Cmd+P) — fuzzy file search` },
       ]},
       { t: 'h2', text: 'Code Viewer (Monaco)' },
       { t: 'prose', text: 'Location: src/components/ide/CodeViewer.tsx. Full Monaco Editor (VS Code\'s editor engine), read-only. Features: syntax highlighting, line numbers with active line highlighting, minimap, binary file detection, encoding detection, language auto-detection, goto line support.' },
-      { t: 'callout', text: 'Read-only is intentional: AutoDev agents edit files via write_file and edit_file tools. The UI viewer is for exploration. Avoids stale-buffer bugs and prevents conflicts with agent operations.' },
-      { t: 'h3', text: 'Custom AutoDev Dark Theme Colors' },
+      { t: 'callout', text: 'Read-only is intentional: Arcana agents edit files via write_file and edit_file tools. The UI viewer is for exploration. Avoids stale-buffer bugs and prevents conflicts with agent operations.' },
+      { t: 'h3', text: 'Custom Arcana Dark Theme Colors' },
       { t: 'table', headers: ['Element', 'Color'], rows: [
         ['Background', '#01111D'],
         ['Foreground', '#D6DEEB'],

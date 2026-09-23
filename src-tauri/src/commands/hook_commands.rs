@@ -45,7 +45,7 @@ pub fn remove_hook(hook_id: String) -> Result<()> {
 pub async fn test_hook(hook_id: String, context: HookContext) -> Result<Vec<HookExecutionLog>> {
     let db = HooksDb::open()?;
     let hook = db.get(&hook_id)?.ok_or_else(|| {
-        crate::errors::AutoDevError::Agent(format!("Hook '{}' not found", hook_id))
+        crate::errors::ArcanaError::Agent(format!("Hook '{}' not found", hook_id))
     })?;
 
     use crate::hooks::executor::HookExecutor;

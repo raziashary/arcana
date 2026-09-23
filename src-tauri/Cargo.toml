@@ -1,16 +1,16 @@
 [package]
-name = "autodev"
+name = "arcana"
 version = "1.0.0"
-description = "AutoDev — AI Agent Desktop Platform for AIRS Foundry"
-authors = ["AIRS Foundry"]
+description = "Arcana personal multi-agent coding desktop"
+authors = ["Arcana"]
 edition = "2021"
 
 [lib]
-name = "autodev_lib"
+name = "arcana_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "autodev"
+name = "arcana"
 path = "src/main.rs"
 
 [build-dependencies]
@@ -23,7 +23,7 @@ tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 
 # Serialization
-autodev-core = { path = "../autodev-core" }
+arcana-core = { path = "../arcana-core" }
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
 

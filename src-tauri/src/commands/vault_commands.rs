@@ -22,7 +22,7 @@ use crate::vault::keychain::{github_pat_key, provider_key, VaultBackend, VaultMa
 
 /// Providers whose keys are probed by `list_vault_entries`.
 ///
-/// This deliberately includes ids that AutoDev no longer uses. A key stored
+/// This deliberately includes ids that Arcana no longer uses. A key stored
 /// under a retired provider is precisely the orphan this command exists to
 /// surface — dropping the id from the list would hide the secret in the user's
 /// keychain rather than let them delete it.
@@ -62,7 +62,7 @@ pub struct VaultEntryStatus {
     /// A human-facing label for the UI.
     pub label: String,
     pub present: bool,
-    /// True when a key exists for a provider AutoDev no longer supports, so the
+    /// True when a key exists for a provider Arcana no longer supports, so the
     /// UI can offer to clean it up.
     pub orphaned: bool,
     /// Which store is actually holding this secret (`P2-71`).
@@ -107,7 +107,7 @@ fn masked_last4(secret: &str) -> String {
     secret.chars().skip(count - 4).collect()
 }
 
-/// Whether a provider id is one AutoDev currently supports.
+/// Whether a provider id is one Arcana currently supports.
 fn is_supported_provider(id: &str) -> bool {
     matches!(id, "anthropic" | "openai" | "google")
 }
@@ -136,7 +136,7 @@ fn is_supported_provider(id: &str) -> bool {
 pub async fn set_provider_key(provider: String, api_key: String) -> Result<VaultWriteResult> {
     let trimmed = api_key.trim().to_string();
     if trimmed.is_empty() {
-        return Err(crate::errors::AutoDevError::Vault(
+        return Err(crate::errors::ArcanaError::Vault(
             "Refusing to store an empty API key.".into(),
         ));
     }
@@ -144,17 +144,17 @@ pub async fn set_provider_key(provider: String, api_key: String) -> Result<Vault
     // Built from the shared factory rather than a fourth copy of the provider
     // match. An unknown id is refused here rather than stored: a key for a
     // provider we cannot construct is a key we can never use.
-    let candidate = autodev_core::provider::factory::build(&provider, trimmed.clone())?;
+    let candidate = arcana_core::provider::factory::build(&provider, trimmed.clone())?;
 
     match candidate.test_connection().await {
-        Ok(autodev_core::provider::ProviderStatus::Connected) => {}
-        Ok(autodev_core::provider::ProviderStatus::Error(why)) => {
-            return Err(crate::errors::AutoDevError::Vault(format!(
+        Ok(arcana_core::provider::ProviderStatus::Connected) => {}
+        Ok(arcana_core::provider::ProviderStatus::Error(why)) => {
+            return Err(crate::errors::ArcanaError::Vault(format!(
                 "That key was not accepted by {provider}, so it has NOT been saved: {why}"
             )));
         }
         Ok(other) => {
-            return Err(crate::errors::AutoDevError::Vault(format!(
+            return Err(crate::errors::ArcanaError::Vault(format!(
                 "{provider} did not confirm the key ({other:?}); it has NOT been saved."
             )));
         }
@@ -196,7 +196,7 @@ pub fn delete_provider_key(provider: String) -> Result<()> {
 pub fn set_github_pat(pat: String) -> Result<VaultWriteResult> {
     let trimmed = pat.trim();
     if trimmed.is_empty() {
-        return Err(crate::errors::AutoDevError::Vault(
+        return Err(crate::errors::ArcanaError::Vault(
             "Refusing to store an empty GitHub PAT.".into(),
         ));
     }

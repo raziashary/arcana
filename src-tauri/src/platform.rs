@@ -1,6 +1,6 @@
 // Platform-correct command construction (BUG-COMPILE's root-cause fix).
 //
-// MOVED to `autodev-core` in P1-B and re-exported here so existing
+// MOVED to `arcana-core` in P1-B and re-exported here so existing
 // `crate::platform::…` paths keep resolving. Had zero `tauri::` references, which
 // is why it could move first.
-pub use autodev_core::platform::*;
+pub use arcana_core::platform::*;

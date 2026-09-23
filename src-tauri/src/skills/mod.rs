@@ -2,7 +2,7 @@
 // Provides reusable .md workflow templates invocable via slash commands
 // or programmatically by Fleet workers.
 //
-// ~/.autodev/skills/{category}/{skill-name}.md
+// ~/.arcana/skills/{category}/{skill-name}.md
 
 pub mod defaults;
 pub mod engine;

@@ -1,5 +1,5 @@
 // TitleBar — macOS-style window chrome with traffic-light dots.
-// Design from autodevmockup.html .titlebar
+// Design from arcanamockup.html .titlebar
 
 import { getCurrentWindow } from '@tauri-apps/api/window'
 
@@ -45,7 +45,7 @@ export default function TitleBar() {
         className="font-mono text-xs"
         style={{ color: '#555', letterSpacing: '0.05em' }}
       >
-        AutoDev — v1.0.0
+        Arcana — v1.0.0
       </span>
 
       {/* Right spacer (symmetrical with dots) */}

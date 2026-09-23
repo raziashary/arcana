@@ -1,5 +1,5 @@
 #!/bin/sh
-# prerm — Pre-removal script for the AutoDev .deb package.
+# prerm — Pre-removal script for the Arcana .deb package.
 # Phase 5.3 — Platform Installers.
 # Runs as root before dpkg removes files.
 
@@ -7,9 +7,9 @@ set -e
 
 case "$1" in
   remove|upgrade|deconfigure)
-    # ── Stop AutoDev if running ────────────────────────────────────────────────
+    # ── Stop Arcana if running ────────────────────────────────────────────────
     if command -v pkill >/dev/null 2>&1; then
-      pkill -x autodev 2>/dev/null || true
+      pkill -x arcana 2>/dev/null || true
     fi
     ;;
 

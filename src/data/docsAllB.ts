@@ -1,5 +1,5 @@
 // Documentation — Sections 05–07
-// Full content faithful to AUTODEV_DOCUMENTATION.md
+// Full content faithful to ARCANA_DOCUMENTATION.md
 
 import type { DocSection } from './docs'
 
@@ -37,9 +37,9 @@ instructions: |
         ['(none)', 'On-demand only — run manually from UI'],
       ]},
       { t: 'h2', text: 'How a recipe runs' },
-      { t: 'prose', text: 'On its cron beat the scheduler checks the worker is in a runnable state, then hands the recipe to the engine in this process. The recipe\'s instructions become that worker\'s own instructions, appended to the invariant core every agent receives and to your AUTODEV.md.' },
+      { t: 'prose', text: 'On its cron beat the scheduler checks the worker is in a runnable state, then hands the recipe to the engine in this process. The recipe\'s instructions become that worker\'s own instructions, appended to the invariant core every agent receives and to your ARCANA.md.' },
       { t: 'h2', text: 'Recipe Scheduler' },
-      { t: 'prose', text: 'Implementation: autodev-core/src/recipes/scheduler.rs' },
+      { t: 'prose', text: 'Implementation: arcana-core/src/recipes/scheduler.rs' },
       { t: 'list', items: [
         'Uses tokio tasks for background execution',
         'cron crate for POSIX cron expression parsing',
@@ -51,12 +51,12 @@ instructions: |
         'Orphan detection runs before each Supervisor tick',
       ]},
       { t: 'h2', text: 'Recipe Runner' },
-      { t: 'prose', text: 'Implementation: autodev-core/src/recipes/runner.rs' },
+      { t: 'prose', text: 'Implementation: arcana-core/src/recipes/runner.rs' },
       { t: 'code', lang: 'text', code: `Cron beat → runnable? → resolve provider + model → AgentEngine → tick events → status` },
       { t: 'list', items: [
         'No-op short-circuit: a worker with no assigned or in_progress task skips the tick rather than spinning up the model to find an empty board',
         'Model resolution: worker.model > recipe.model > active_model > default',
-        'Workspace directory: configured workspace > sandbox (~/.autodev/agents/<slug>/)',
+        'Workspace directory: configured workspace > sandbox (~/.arcana/agents/<slug>/)',
         'Ephemeral sessions — each tick creates fresh session ID (not persisted)',
         'Status updates: idle → working → idle/error',
       ]},
@@ -80,7 +80,7 @@ instructions: |
   - name: repo_name
     type: string
     required: false
-    default: "airs-orchestrator"` },
+    default: "arcana"` },
       { t: 'h2', text: 'Recipe UI' },
       { t: 'prose', text: 'Location: src/tabs/Recipes.tsx' },
       { t: 'list', items: [
@@ -102,7 +102,7 @@ instructions: |
     anchors: ['What are Skills?', 'Categories', 'File Structure', 'Parameters', 'Invocation', 'Skills Palette', 'Execution Flow', 'Built-in Skills', 'Tauri Commands'],
     blocks: [
       { t: 'h2', text: 'What are Skills?' },
-      { t: 'prose', text: 'Skills are .md files with YAML frontmatter stored in ~/.autodev/skills/{category}/{skill-name}.md. They combine YAML frontmatter (metadata: name, description, category, parameters, version) with a markdown template body containing {{parameter}} placeholders.' },
+      { t: 'prose', text: 'Skills are .md files with YAML frontmatter stored in ~/.arcana/skills/{category}/{skill-name}.md. They combine YAML frontmatter (metadata: name, description, category, parameters, version) with a markdown template body containing {{parameter}} placeholders.' },
       { t: 'h2', text: 'Skill Categories' },
       { t: 'table', headers: ['Category', 'Description', 'Icon'], rows: [
         ['Coding', 'Development workflows (feature implementation, refactoring)', '⚡ Zap'],
@@ -127,7 +127,7 @@ parameters:
     default: JWT_SECRET
     description: Environment variable name for JWT secret
 version: "1.0.0"
-author: AIRS Foundry
+author: Arcana
 tags: [authentication, jwt, rest-api]
 ---
 
@@ -176,7 +176,7 @@ User sends message → Agent executes the workflow` },
 6. User sends message
 7. Agent executes the workflow as if user typed it directly` },
       { t: 'h2', text: 'Default Built-in Skills' },
-      { t: 'prose', text: 'AutoDev ships with 20+ pre-built skills. Custom skills stored in ~/.autodev/skills/custom/. User-created skills via the custom category.' },
+      { t: 'prose', text: 'Arcana ships with 20+ pre-built skills. Custom skills stored in ~/.arcana/skills/custom/. User-created skills via the custom category.' },
       { t: 'table', headers: ['Category', 'Skill', 'Purpose'], rows: [
         ['Coding', 'add-auth-endpoint', 'Add JWT authentication endpoint'],
         ['Coding', 'add-rest-endpoint', 'Add REST API endpoint with tests'],
@@ -287,7 +287,7 @@ For each hook registered for event (sorted by priority):
     3. If conditions don't match → Skipped` },
       { t: 'prose', text: 'Priority: hooks execute in priority order (lower number = higher priority). Block action stops the event from proceeding — the agent receives an error message from the hook.' },
       { t: 'h2', text: 'Hook Execution Logs' },
-      { t: 'prose', text: 'Stored in SQLite (~/.autodev/config.db). Fields: id, hook_id, hook_name, hook_type, outcome (Executed/Blocked/Skipped/Failed), output, error, executed_at, duration_ms. Retention: 30 days (configurable).' },
+      { t: 'prose', text: 'Stored in SQLite (~/.arcana/config.db). Fields: id, hook_id, hook_name, hook_type, outcome (Executed/Blocked/Skipped/Failed), output, error, executed_at, duration_ms. Retention: 30 days (configurable).' },
       { t: 'h2', text: 'Settings UI' },
       { t: 'prose', text: 'Location: src/components/settings/HooksSettings.tsx' },
       { t: 'list', items: [
