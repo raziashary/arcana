@@ -2874,3 +2874,23 @@ tests prove depth and permission behavior. Retry decisions and provider
 routing continue through their current typed results and real engine
 consumers; a second generic decision engine would duplicate authority.
 
+## ADR-LOG-RESTRUCT-0066 — Align P8-02 smoke with the coding-only product scope
+
+**Status.** OWNER-RULED by the user's 2026-09-23 coding-only direction;
+correction recorded 2026-09-24.
+
+**Choice.** Retire P8-02's legacy design-conversion clause with the PD-X
+programme. The active smoke is that Arcana starts, completes a native
+coding-agent turn, and has no application-owned Python sidecar process. Keep
+the 2026-09-03 `skip_sidecars` implementation note only as historical evidence;
+that setting has since been removed because no sidecar remains to skip.
+
+**Why.** Requiring a design conversion contradicted the owner's decision to
+make Arcana fully coding-focused and retire PD-X. S8-02 already demonstrates
+the retained coding behavior through the live Gemini desktop path and process
+observation.
+
+**Proof.** `MASTER_DEVELOPMENT_PLAN.md` P8-02 now states the coding-only
+outcome; `S8-02` and `_verify/P8-ARCANA-CLOSEOUT-2026-09-24.md` carry the
+recorded live-turn and process-list evidence.
+
