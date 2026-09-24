@@ -20,19 +20,19 @@
 // See: DEVELOPMENT_PLAN.md Phase 4.1-4.8
 
 pub mod backend;
+pub mod db;
 pub mod embed;
+pub mod episodic;
 pub mod gateway;
 pub mod manager;
-pub mod rank;
-pub mod vector;
-pub mod db;
-pub mod episodic;
 pub mod migration;
 pub mod procedural;
+pub mod rank;
 pub mod recall;
 pub mod semantic;
 pub mod summarizer;
 pub mod types;
+pub mod vector;
 
 pub use db::MemoryDb;
 pub use episodic::EpisodicStore;

@@ -40,7 +40,6 @@ impl Tool for GetEpicProgressTool {
         })
     }
 
-
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let epic_id = match input["epic_id"].as_str() {
             Some(s) if !s.trim().is_empty() => s.trim().to_string(),

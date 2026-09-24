@@ -247,7 +247,12 @@ mod model_provider_tests {
     fn a_dropped_provider_is_refused_not_rerouted() {
         // Each of these used to resolve to a provider no key can be stored
         // for -- or, worse, silently to OpenAI.
-        for model in ["grok-3-mini-beta", "llama-3.3-70b", "qwen3-max", "kimi-k2.5-nvidia"] {
+        for model in [
+            "grok-3-mini-beta",
+            "llama-3.3-70b",
+            "qwen3-max",
+            "kimi-k2.5-nvidia",
+        ] {
             assert_eq!(model_to_provider(model), None, "{model} must not route");
         }
     }

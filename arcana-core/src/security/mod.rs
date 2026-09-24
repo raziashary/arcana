@@ -8,5 +8,5 @@ pub mod redaction;
 
 pub mod env_scrub;
 
-pub mod truncate;
 pub mod path_key;
+pub mod truncate;

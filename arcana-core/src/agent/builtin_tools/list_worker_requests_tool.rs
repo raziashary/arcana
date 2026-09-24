@@ -42,7 +42,6 @@ impl Tool for ListWorkerRequestsTool {
         })
     }
 
-
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let status_filter = input["status"].as_str();
 

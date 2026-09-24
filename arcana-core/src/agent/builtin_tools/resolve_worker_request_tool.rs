@@ -53,7 +53,6 @@ impl Tool for ResolveWorkerRequestTool {
         })
     }
 
-
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let id = match input["id"].as_i64() {
             Some(v) => v,

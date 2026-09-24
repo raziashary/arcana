@@ -22,6 +22,22 @@ fn sse(payload: &str) -> String {
     format!("data: {payload}")
 }
 
+#[test]
+fn native_reasoning_content_is_not_emitted_as_visible_text() {
+    let chunks = parse(&sse(
+        r#"{"choices":[{"delta":{"reasoning_content":"private thought","content":"visible answer"}}]}"#,
+    ))
+    .expect("parse");
+    assert!(matches!(
+        &chunks[0],
+        StreamChunk::ThinkingDelta { text, .. } if text == "private thought"
+    ));
+    assert!(matches!(
+        &chunks[1],
+        StreamChunk::TextDelta { text, .. } if text == "visible answer"
+    ));
+}
+
 /// The single chunk a frame is expected to produce.
 ///
 /// The parser returns a `Vec` since `F-7` — a frame can carry text, several
@@ -72,8 +88,15 @@ fn openai_includes_cached_tokens_in_prompt_tokens_so_the_adapter_subtracts() {
     };
 
     assert_eq!(usage.cached_read, 8448);
-    assert_eq!(usage.input, 211, "cached tokens must be subtracted out of `input`");
-    assert_eq!(usage.total_input(), 8659, "and the total must match the wire");
+    assert_eq!(
+        usage.input, 211,
+        "cached tokens must be subtracted out of `input`"
+    );
+    assert_eq!(
+        usage.total_input(),
+        8659,
+        "and the total must match the wire"
+    );
 }
 
 #[test]
@@ -99,7 +122,13 @@ fn a_tool_calls_id_and_name_arrive_only_on_its_first_fragment() {
         r#"{"id":"c1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"read_file","arguments":""}}]}}]}"#,
     ));
 
-    let StreamChunk::ToolUseStart { id, name, block_index, .. } = first else {
+    let StreamChunk::ToolUseStart {
+        id,
+        name,
+        block_index,
+        ..
+    } = first
+    else {
         panic!("expected ToolUseStart, got {first:?}");
     };
     assert_eq!(id, "call_abc");
@@ -113,10 +142,17 @@ fn a_tool_calls_id_and_name_arrive_only_on_its_first_fragment() {
             r#"{{"id":"c1","choices":[{{"index":0,"delta":{{"tool_calls":[{{"index":0,"function":{{"arguments":"{fragment}"}}}}]}}}}]}}"#
         );
         let chunk = one(&sse(&payload));
-        let StreamChunk::ToolInputDelta { partial_json, block_index } = chunk else {
+        let StreamChunk::ToolInputDelta {
+            partial_json,
+            block_index,
+        } = chunk
+        else {
             panic!("expected ToolInputDelta, got {chunk:?}");
         };
-        assert_eq!(block_index, 0, "the index is the only thing tying this to its call");
+        assert_eq!(
+            block_index, 0,
+            "the index is the only thing tying this to its call"
+        );
         accumulated.push_str(&partial_json);
     }
 
@@ -138,7 +174,19 @@ fn parallel_tool_calls_keep_separate_indices() {
         r#"{"choices":[{"delta":{"tool_calls":[{"index":1,"id":"call_b","type":"function","function":{"name":"grep","arguments":""}}]}}]}"#,
     ));
 
-    let (StreamChunk::ToolUseStart { block_index: ia, id: id_a, .. }, StreamChunk::ToolUseStart { block_index: ib, id: id_b, .. }) = (a, b) else {
+    let (
+        StreamChunk::ToolUseStart {
+            block_index: ia,
+            id: id_a,
+            ..
+        },
+        StreamChunk::ToolUseStart {
+            block_index: ib,
+            id: id_b,
+            ..
+        },
+    ) = (a, b)
+    else {
         panic!("expected two ToolUseStarts");
     };
     assert_ne!(ia, ib, "parallel calls must not share a block index");
@@ -203,7 +251,6 @@ fn a_malformed_data_payload_errors_instead_of_being_swallowed() {
     );
 }
 
-
 #[test]
 fn every_parallel_tool_call_in_one_frame_survives() {
     // 🔴 F-7, from the P2 post-phase audit. The parser returned
@@ -227,14 +274,21 @@ fn every_parallel_tool_call_in_one_frame_survives() {
     let starts: Vec<(&String, &String, u64)> = chunks
         .iter()
         .filter_map(|c| match c {
-            StreamChunk::ToolUseStart { id, name, block_index, .. } => {
-                Some((id, name, *block_index))
-            }
+            StreamChunk::ToolUseStart {
+                id,
+                name,
+                block_index,
+                ..
+            } => Some((id, name, *block_index)),
             _ => None,
         })
         .collect();
 
-    assert_eq!(starts.len(), 3, "parallel tool calls were dropped: {chunks:?}");
+    assert_eq!(
+        starts.len(),
+        3,
+        "parallel tool calls were dropped: {chunks:?}"
+    );
     assert_eq!(starts[0].0, "call_a");
     assert_eq!(starts[1].0, "call_b");
     assert_eq!(starts[2].0, "call_c");
@@ -254,11 +308,15 @@ fn text_and_a_tool_call_in_one_frame_both_survive() {
     .expect("parse");
 
     assert!(
-        chunks.iter().any(|c| matches!(c, StreamChunk::TextDelta { .. })),
+        chunks
+            .iter()
+            .any(|c| matches!(c, StreamChunk::TextDelta { .. })),
         "the text was dropped: {chunks:?}"
     );
     assert!(
-        chunks.iter().any(|c| matches!(c, StreamChunk::ToolUseStart { .. })),
+        chunks
+            .iter()
+            .any(|c| matches!(c, StreamChunk::ToolUseStart { .. })),
         "the tool call was dropped: {chunks:?}"
     );
 }
@@ -271,9 +329,13 @@ fn a_frame_carrying_arguments_and_a_stop_reason_yields_both() {
     ))
     .expect("parse");
 
-    assert!(chunks.iter().any(|c| matches!(c, StreamChunk::ToolInputDelta { .. })));
+    assert!(chunks
+        .iter()
+        .any(|c| matches!(c, StreamChunk::ToolInputDelta { .. })));
     assert!(
-        chunks.iter().any(|c| matches!(c, StreamChunk::MessageDelta { .. })),
+        chunks
+            .iter()
+            .any(|c| matches!(c, StreamChunk::MessageDelta { .. })),
         "the stop reason was dropped, so the loop would not know the turn ended: {chunks:?}"
     );
 }

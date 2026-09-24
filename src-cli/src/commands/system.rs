@@ -99,7 +99,6 @@ async fn status(ctx: OutputContext) -> Result<()> {
 // P8-12 — `arcanactl system sidecars` is deleted. It probed the two Python
 // processes and could only ever report them absent.
 
-
 async fn logs(args: LogsArgs, ctx: OutputContext) -> Result<()> {
     let log_paths = find_log_files(args.service.as_deref());
 

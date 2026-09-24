@@ -9,11 +9,11 @@ use crate::recipes::parser::{parse_recipe, save_recipe};
 use crate::recipes::{self, recipes_dir, Recipe};
 use crate::state::AppState;
 use crate::vault::keychain::{provider_key, VaultManager};
+use arcana_core::state::lock::LockTolerant;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::State;
-use arcana_core::state::lock::LockTolerant;
 
 // ─── Backup helpers ────────────────────────────────────────────────────────────
 
@@ -215,9 +215,8 @@ pub async fn generate_recipe_yaml(
 
     // Every supported provider takes a key; the keyless branch went with
     // Ollama (P2-11).
-    let api_key = VaultManager::get(&provider_key(&provider_id))?.ok_or_else(|| {
-        ArcanaError::Agent(format!("No API key for provider '{provider_id}'"))
-    })?;
+    let api_key = VaultManager::get(&provider_key(&provider_id))?
+        .ok_or_else(|| ArcanaError::Agent(format!("No API key for provider '{provider_id}'")))?;
 
     let inner: Arc<dyn Provider> = match provider_id.as_str() {
         "anthropic" => Arc::new(AnthropicProvider::new(api_key)),
@@ -230,7 +229,8 @@ pub async fn generate_recipe_yaml(
         }
     };
     // Every call passes the daily ceiling (P2-21).
-    let provider = arcana_core::provider::capped::CappedProvider::wrap(inner, state.inner().clone());
+    let provider =
+        arcana_core::provider::capped::CappedProvider::wrap(inner, state.inner().clone());
 
     let prompt = format!(
         "Generate a recipe YAML for an Arcana worker agent with the following details:\n\

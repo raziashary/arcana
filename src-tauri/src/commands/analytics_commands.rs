@@ -2,11 +2,11 @@
 use crate::analytics::{self, types::*};
 use crate::errors::Result;
 use crate::state::AppState;
+use arcana_core::state::lock::LockTolerant;
 use chrono::NaiveDate;
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::State;
 use tracing::info;
-use arcana_core::state::lock::LockTolerant;
 
 // Doc 02 Phase 3.4 — one-shot diagnostic log on first dashboard hit.
 // On-call debugging frequently needs to know "is the dashboard actually

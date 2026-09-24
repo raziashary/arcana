@@ -31,6 +31,13 @@ pub enum MessageContent {
     Text {
         text: String,
     },
+    /// Anthropic's signed reasoning block. This is provider-internal history,
+    /// not visible chat text; the signature must be replayed unchanged when a
+    /// tool result follows the assistant turn.
+    Thinking {
+        text: String,
+        signature: Option<String>,
+    },
     ToolUse {
         id: String,
         name: String,
@@ -197,6 +204,11 @@ pub enum StreamChunk {
     },
     ThinkingDelta {
         text: String,
+        block_index: u64,
+    },
+    ThinkingSignature {
+        signature: String,
+        block_index: u64,
     },
     ToolUseStart {
         id: String,

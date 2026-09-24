@@ -77,7 +77,6 @@ impl Tool for SpawnSubagentTool {
         })
     }
 
-
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let task_description = match input.get("task_description").and_then(|v| v.as_str()) {
             Some(s) if !s.trim().is_empty() => s.trim().to_string(),
@@ -122,7 +121,7 @@ impl Tool for SpawnSubagentTool {
                      (the CLI, or a test harness) never gains one. Do the work \
                      directly instead, or report that delegation is not \
                      available in this context.",
-                )
+                );
             }
         };
 
@@ -197,8 +196,8 @@ impl Tool for SpawnSubagentTool {
                 .map(|n| n as u32)
                 .unwrap_or(0),
             depth: ctx.depth + 1, // K.11 — increment nesting depth
-                // G-5: a child never outranks its parent.
-                permission_mode: ctx.permission_mode.clone(),
+            // G-5: a child never outranks its parent.
+            permission_mode: ctx.permission_mode.clone(),
         };
 
         // Spawn (returns immediately) then await the bridge task to drive it

@@ -1,5 +1,11 @@
 # P8 · Pre-build baseline — measured 2026-09-03, before the first line of the phase
 
+> **2026-09-24 correction:** This is a historical pre-build snapshot, not a
+> current TG8-02 pass. Its ten-row check matched destinations and test names
+> without proving the specified behaviors. P8-01 was reopened, then closed
+> only after retained coding behaviors had consumer-backed proofs; see
+> `P8-ARCANA-CLOSEOUT-2026-09-24.md` and ADR-0053/0056.
+
 **Why this file exists.** `TG8-01` asserts *"the **full suite** passes with the
 sidecar absent"*. That is a comparison, and a comparison needs a **before**.
 Without this record, any test that fails after the deletion is ambiguous — was

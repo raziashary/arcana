@@ -41,6 +41,27 @@ fn req() -> CompletionRequest {
     }
 }
 
+#[test]
+fn google_sends_tool_json_schema_through_the_json_schema_field() {
+    let mut request = req();
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {"path": {"type": "string"}},
+        "required": ["path"],
+        "additionalProperties": false
+    });
+    request.tools[0].input_schema = schema.clone();
+
+    let body = GoogleProvider::new(String::new()).build_body_for_test(&request, true);
+    let declaration = &body["tools"][0]["functionDeclarations"][0];
+    assert_eq!(declaration["parametersJsonSchema"], schema);
+    assert!(declaration.get("parameters").is_none());
+    assert_eq!(
+        request.tools[0].input_schema, schema,
+        "the shared schema is unchanged"
+    );
+}
+
 /// A message carrying a tool result **and** commentary, which is the shape
 /// `P2-39` showed OpenAI silently truncating.
 fn message_with_result_and_text() -> RequestMessage {
@@ -84,6 +105,29 @@ fn every_adapter_sends_an_output_ceiling() {
     );
 }
 
+#[test]
+fn anthro_thinking_history_is_invisible_to_google_and_openai() {
+    let baseline = req();
+    let mut with_thinking = req();
+    with_thinking.messages[0].content.insert(
+        0,
+        MessageContent::Thinking {
+            text: "private reason".into(),
+            signature: Some("opaque-signature".into()),
+        },
+    );
+    let google = GoogleProvider::new(String::new());
+    let openai = OpenAIProvider::new(String::new());
+    assert_eq!(
+        google.build_body_for_test(&baseline, false),
+        google.build_body_for_test(&with_thinking, false),
+    );
+    assert_eq!(
+        openai.build_body_for_test(&baseline, false),
+        openai.build_body_for_test(&with_thinking, false),
+    );
+}
+
 // ── usage on a stream · P2-42 ────────────────────────────────────────────────
 
 #[test]
@@ -116,9 +160,12 @@ fn openai_keeps_text_that_shares_a_message_with_tool_results() {
     let msgs = body["messages"].as_array().expect("messages");
 
     let has_tool = msgs.iter().any(|m| m["role"] == "tool");
-    let has_text = msgs
-        .iter()
-        .any(|m| m["content"].as_str().unwrap_or("").contains("here is what I found"));
+    let has_text = msgs.iter().any(|m| {
+        m["content"]
+            .as_str()
+            .unwrap_or("")
+            .contains("here is what I found")
+    });
     assert!(has_tool, "the tool result must be sent");
     assert!(has_text, "and the text alongside it must not be dropped");
 }
@@ -320,7 +367,8 @@ fn parallel_tool_turn() -> CompletionRequest {
 
 #[test]
 fn anthropic_keeps_parallel_results_in_one_user_message() {
-    let body = AnthropicProvider::new(String::new()).build_body_for_test(&parallel_tool_turn(), false);
+    let body =
+        AnthropicProvider::new(String::new()).build_body_for_test(&parallel_tool_turn(), false);
     let msgs = body["messages"].as_array().expect("messages");
 
     // Anthropic rejects results split across messages, so the count of user
@@ -334,7 +382,10 @@ fn anthropic_keeps_parallel_results_in_one_user_message() {
                     .is_some_and(|cs| cs.iter().any(|c| c["type"] == "tool_result"))
         })
         .count();
-    assert_eq!(carrying, 1, "anthropic requires every result for a turn in ONE user message");
+    assert_eq!(
+        carrying, 1,
+        "anthropic requires every result for a turn in ONE user message"
+    );
 
     let results: Vec<serde_json::Value> = msgs
         .iter()
@@ -344,7 +395,11 @@ fn anthropic_keeps_parallel_results_in_one_user_message() {
         .collect();
     assert_eq!(results.len(), 3, "anthropic dropped a parallel tool result");
     for (i, id) in ["call_a", "call_b", "call_c"].iter().enumerate() {
-        assert_eq!(results[i]["tool_use_id"], serde_json::json!(id), "results reordered");
+        assert_eq!(
+            results[i]["tool_use_id"],
+            serde_json::json!(id),
+            "results reordered"
+        );
     }
     assert_eq!(
         results[2]["is_error"],
@@ -358,8 +413,7 @@ fn openai_flattens_parallel_results_into_one_tool_message_each_in_call_order() {
     let body = OpenAIProvider::new(String::new()).build_body_for_test(&parallel_tool_turn(), false);
     let msgs = body["messages"].as_array().expect("messages");
 
-    let tool_msgs: Vec<&serde_json::Value> =
-        msgs.iter().filter(|m| m["role"] == "tool").collect();
+    let tool_msgs: Vec<&serde_json::Value> = msgs.iter().filter(|m| m["role"] == "tool").collect();
     assert_eq!(tool_msgs.len(), 3, "openai dropped a parallel tool result");
     for (i, id) in ["call_a", "call_b", "call_c"].iter().enumerate() {
         assert_eq!(
@@ -411,8 +465,14 @@ fn google_emits_one_function_response_part_per_parallel_result() {
         .collect();
     assert_eq!(calls.len(), 3, "google lost a parallel tool CALL");
     // Arguments survive — P2-06 was the same defect on the response side.
-    assert_eq!(calls[0]["functionCall"]["args"]["path"], serde_json::json!("a.rs"));
-    assert_eq!(calls[2]["functionCall"]["args"]["pattern"], serde_json::json!("fn main"));
+    assert_eq!(
+        calls[0]["functionCall"]["args"]["path"],
+        serde_json::json!("a.rs")
+    );
+    assert_eq!(
+        calls[2]["functionCall"]["args"]["pattern"],
+        serde_json::json!("fn main")
+    );
 }
 
 #[test]
@@ -425,8 +485,16 @@ fn every_shipped_model_that_claims_parallel_tools_actually_gets_them() {
     // was perfectly capable of running at once.
     for e in crate::provider::catalogue::CATALOGUE {
         let caps = crate::provider::catalogue::capabilities_for(e.id);
-        assert!(caps.parallel_tools, "{} does not report parallel tool support", e.id);
-        assert!(caps.tools && caps.streaming, "{} lost a base capability", e.id);
+        assert!(
+            caps.parallel_tools,
+            "{} does not report parallel tool support",
+            e.id
+        );
+        assert!(
+            caps.tools && caps.streaming,
+            "{} lost a base capability",
+            e.id
+        );
     }
 }
 
@@ -456,15 +524,20 @@ fn anthropic_marks_a_breakpoint_only_when_explicit_caching_is_asked_for() {
     );
     let block = &body["system"][0];
     assert_eq!(
-        block["cache_control"]["type"], serde_json::json!("ephemeral"),
+        block["cache_control"]["type"],
+        serde_json::json!("ephemeral"),
         "no breakpoint means nothing caches, and Anthropic reports that as success"
     );
     assert_eq!(
-        block["cache_control"]["ttl"], serde_json::json!("5m"),
+        block["cache_control"]["ttl"],
+        serde_json::json!("5m"),
         "the TTL is a COST decision: 1.25x write vs 2.0x for the hour"
     );
     // P2-63 made this an array so there was a block to hang this on at all.
-    assert!(body["system"].is_array(), "a bare string has nowhere to carry cache_control");
+    assert!(
+        body["system"].is_array(),
+        "a bare string has nowhere to carry cache_control"
+    );
 
     // And with caching off, the field must be absent — not present-and-false.
     let off = AnthropicProvider::new(String::new())
@@ -513,8 +586,13 @@ fn google_sends_no_cache_field_because_its_cache_is_implicit() {
 
     for policy in [
         CachePolicy::Off,
-        CachePolicy::Automatic { affinity_key: "k".into() },
-        CachePolicy::Explicit { breakpoints: vec![0], ttl: CacheTtl::FiveMinutes },
+        CachePolicy::Automatic {
+            affinity_key: "k".into(),
+        },
+        CachePolicy::Explicit {
+            breakpoints: vec![0],
+            ttl: CacheTtl::FiveMinutes,
+        },
     ] {
         let body =
             GoogleProvider::new(String::new()).build_body_for_test(&req_with_cache(policy), false);
@@ -525,7 +603,6 @@ fn google_sends_no_cache_field_because_its_cache_is_implicit() {
         );
     }
 }
-
 
 #[test]
 fn google_echoes_a_tool_calls_signature_back_verbatim() {
@@ -561,7 +638,9 @@ fn google_echoes_a_tool_calls_signature_back_verbatim() {
         *opaque = None;
     }
     let body = GoogleProvider::new(String::new()).build_body_for_test(&without, false);
-    assert!(body["contents"][0]["parts"][0].get("thoughtSignature").is_none());
+    assert!(body["contents"][0]["parts"][0]
+        .get("thoughtSignature")
+        .is_none());
 }
 
 #[test]

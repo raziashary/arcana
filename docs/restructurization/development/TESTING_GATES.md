@@ -12,7 +12,7 @@
 > **Companion documents:** `MASTER_DEVELOPMENT_PLAN.md` (the build sequence and its inline smoke checks) · `READINESS_MATRIX.md` (phase readiness) · `ADR_LOG.md` (runtime decisions) · `NOVELTY_LEDGER.md`.
 > **Cross-checked against the MDP** on 2026-08-31. Phase names and the `TG<p>-<nn>` scheme agree. Three assignments where the MDP builds a capability **earlier** than Part 6 implies are annotated on the gate line (`TG1-05`, `TG3-38`, `TG4-18`); IDs were **not** renumbered, per `§1`.
 
-**126 active P0–P9 gate rows.** Historical PD0 gates are archived; the applicable P0–P9 clauses remain the definition of done.
+**127 active P0–P9 gate rows.** Historical PD0 gates are archived; the applicable P0–P9 clauses remain the definition of done.
 
 ⚠ **Historical count note:** The PD0 work audit (`W-8`) found earlier registers stale. The ten TGD0 rows and their dated evidence are now in `HISTORICAL_DESIGN_PROGRAMME.md`. The current 126-row count above is derived from P0–P9 checkbox entries, including 41 P3 entries.
 
@@ -57,7 +57,7 @@
 | **P7** | Experience | 5 | `TG7-01…05` |
 | **P8** | Submodule deletion **+ the prompt floor** | 11 | `TG8-01…11` |
 | **P9** | Delivery | 5 | `TG9-01…05` |
-| | **Current registered P0–P9 rows** | **126** | |
+| | **Current registered P0–P9 rows** | **127** | |
 
 ---
 
@@ -550,19 +550,23 @@ The former TGD0-01…10 gates are preserved in [HISTORICAL_DESIGN_PROGRAMME.md](
 ## 11. P8 — Submodule deletion
 
 **Slice:** remove `sidecar/` (3,161 LOC), the 29 sidecar-dependent commands, `resources/sidecars` (225 MB), both `.gitmodules` entries, the remaining MCP HTTP server code, and the now-dead dependencies.
-**Entry gate (Part 6, strengthened by review fix 9):** every ported capability passes its tests with the sidecar **absent — not merely stopped**.
-**Exit gate:** the tree contains no Python; the installer contains no `.py`; the app is fully functional on all three platforms.
+**Entry gate (Part 6, strengthened by review fix 9):** every retained ported capability passes its tests with the sidecar **absent — not merely stopped**.
+**Exit gate:** the shipped runtime contains no Python orchestrator; the inspected Windows installer contains no `.py`; all already-built standing gates pass without sidecars. Cross-platform installation and release proof belong to P9.
 
-> **P8's deletion half has only two gates of its own, and that is correct.** A deletion phase proves itself by **re-running the entire standing gate set (`TG0-01…TG7-05`) under the sidecar-absent condition**. Any gate that regresses here identifies a coupling that was not enumerated — which is exactly `R-6`. P8's exit dependency on the no-`.py` clause of `TG9-02` is noted there.
+> **P8's deletion half has only two gates of its own.** The owner ruled on 2026-09-24 (ADR-0055) that P8 re-runs **every already-built, runnable standing gate and suite** with the sidecar absent. P4–P7 gates not yet built are owned by those future phases, and incomplete P0/P3 spec proofs stay visible in their own registers. Any current gate that regresses here identifies an unenumerated coupling — `R-6`. P9 retains the cross-platform release and installer gates.
 >
 > 🔴 **Amended 2026-09-04, during `P8-E`.** That sentence was written when P8 was deletion only. It is not: `P8-E` **builds** a prompt floor every agent stands on, and `P8-F`/`P8-I` build further. New behaviour needs new gates, and the standing set cannot cover it — no gate in `TG0…TG7` could fail because a fleet worker runs without the prohibitions, since before `P8-E` none of them did. `TG8-03…06` are those gates.
 
-- [ ] **TG8-01** `[seam]` — The **full suite** passes with the sidecar **absent** — the directory renamed or deleted, not the process stopped. "Not running" is too weak: persona YAML still reads `{orch}/config/agents/*.yaml`, so a stopped-but-present sidecar can still satisfy a file read. The corrected ported-capability list is the population; the P4-era "10 provider families" and the P7-era startup FSM (deleted by **OQ-3**) are excluded from it.
-      Source: spec `01 §8 G-NOSIDECAR` + spec `09 §6 G-NOSIDECAR` (merged — both specs asked for the same P8 entry gate) · Catches: any residual coupling; `R1 B-08`'s finding that the original entry gate was unmeetable as written · Proves: **INV-1** (as restated by **G-02**) · Covers: **R-6** · Evidence: _pending_
+- [x] **TG8-01** `[seam]` — The **full current runnable suite** passes with the sidecar **absent** — the directory renamed or deleted, not the process stopped. This includes every already-built standing gate; unbuilt P4–P7 gates become binding in their own phases under ADR-0055. The corrected retained ported-capability list remains TG8-02's separate population.
+      Source: spec `01 §8 G-NOSIDECAR` + spec `09 §6 G-NOSIDECAR` (merged), scoped by the 2026-09-24 owner ruling ADR-0055 · Catches: residual coupling in built paths · Proves: **INV-1** for the current native runtime · Covers: **R-6** · Evidence: `GATE-PROVEN` on Windows in `P8-ARCANA-CLOSEOUT-2026-09-24.md` — credential-free isolated `cargo test --workspace --all-targets --locked -- --test-threads=4`, 673 passed in 16 targets; frontend typecheck, build, lint and tests pass. TG8-12 verifies runtime lease consumers; final installer inspection and post-phase audits are recorded in the closeout. The initial checkbox was retracted after review revealed the old preamble's impossible P4–P7 clause, then restored only after the owner ruled the built-gate scope. Release platform proof remains P9.
 
-- [ ] **TG8-02** `[governance]` — **NEW (plan-mandated by correction #1; covers R-6).** The deletion phase **cannot complete while any capability grounding marked `PORT` remains unported.** The gate reads the grounding reports' PORT verdicts as its checklist and asserts a named, tested destination in the Rust tree for each — the ported-capability count is **ten, not nine**, and the tenth is `M-40` redaction (`TG3-38`).
+- [x] **TG8-02** `[governance]` — **NEW (plan-mandated by correction #1; covers R-6).** The deletion phase **cannot complete while any capability grounding marked `PORT` remains unported.** The gate reads the grounding reports' PORT verdicts as its checklist and asserts a named, tested destination in the Rust tree for each — the ported-capability count is **ten, not nine**, and the tenth is `M-40` redaction (`TG3-38`).
       → **The tenth PORT entry is now supplied.** `M-40` redaction was ported in `P1-20`/`P1-21` — both Python redactors, wired at the tool-result funnel and all four memory writes, proven end to end by `S1-04`. This gate's checklist can therefore be satisfied for that row at P8; the other nine remain its job.
-      Source: **NEW** — `00 §Part 1B` M-40's closing note: *"adds a P8 gate: the deletion phase cannot complete while a capability grounding marked PORT remains unported. That is the check which would have caught this without a review."* No spec turned that mandate into a named gate · Catches: the failure mode that actually occurred — `G4b §A.14` ruled redaction **PORT** and the plan dropped it, undetected until an adversarial review · Covers: **R-6** · Evidence: _pending_
+      Source: **NEW** — `00 §Part 1B` M-40's closing note: *"adds a P8 gate: the deletion phase cannot complete while a capability grounding marked PORT remains unported. That is the check which would have caught this without a review."* No spec turned that mandate into a named gate · Catches: the failure mode that actually occurred — `G4b §A.14` ruled redaction **PORT** and the plan dropped it, undetected until an adversarial review · Covers: **R-6** · Evidence: reconciled in the 2026-09-24 closeout below
+
+      🔴 **2026-09-24 audit correction:** `_verify/P8-BASELINE.md` located ten Rust symbols and associated tests, then called the gate satisfiable without proving the behaviors in G4b's ten verdicts. `_verify/P8-ARCANA-CLOSEOUT-2026-09-24.md` maps each row and its retained coding proof. At least nine rows had coding-relevant gaps; redaction already had stronger proof. The owner ruled that design-only subclauses retire and all retained coding behavior be implemented and proven (ADR-0056); no whole row disappeared.
+
+      ✅ **CLOSED 2026-09-24.** All ten retained coding rows now name a Rust destination, a production reader, and behavior-focused positive/negative proof in `_verify/P8-ARCANA-CLOSEOUT-2026-09-24.md`. The final isolated workspace suite and frontend checks pass; TG8-12 covers all runtime lease consumers. The historical 2026-09-03 false green is preserved above as the correction record.
 
 
 - [x] **TG8-03** `[security]` — **NEW (`P8-39`).** **No agent kind runs without the invariant core.** Asserted by *running* the composer each call site uses, over the real default recipes loaded from disk, for every `PAMode`, for a user-set custom prompt, and for a subagent prompt — not by searching a source file for a phrase (`L-C7`). The worker population is `FLEET_WORKERS`, never a list retyped in the gate (`L-19`).
@@ -607,6 +611,9 @@ The former TGD0-01…10 gates are preserved in [HISTORICAL_DESIGN_PROGRAMME.md](
 
 - [x] **TG8-11** `[governance]` — The exit assertion checks three directions: deleted Python-sidecar trees remain absent; shipped manifests, packaging, and README do not redeclare the removed subsystems or loopback ports; updater check/download and SQLite backup files still exist. The PD0 design seam was deliberately retired in ADR-0043 and is no longer protected by this gate.
       Source: `P8-21`, `P8-24`, ADR-0043 · Catches: a returned Python process path, a re-declared dependency, or a broad cleanup that deletes update verification or backup code · Evidence: `GATE-PROVEN` in the pre-rename source; the revised protected set must pass `ci_gate::tests::tg8_11_the_exit_assertion` in this Arcana build.
+
+- [x] **TG8-12** `[conservation]` — Every native agent-run entry path holds the same bounded runtime lease for its entire run: interactive chat, recipe worker, and subagent. The host starts the periodic idle reaper; the shared registry still enforces duplicate admission, the 500-entry cap, 600-second expiry, and panic cleanup. The gate reads the real entry-point bodies and fails if any consumer or the reaper wiring disappears; `runtime_registry` unit tests exercise the admission and cleanup behavior.
+      Source: **NEW** — `P8-70` · Catches: a registry with no reader, or one execution path bypassing it · Evidence: `GATE-PROVEN` — `ci_gate::tests::tg8_12_each_native_run_entry_path_holds_a_runtime_lease` plus `state::runtime_registry::tests`.
 
 ---
 

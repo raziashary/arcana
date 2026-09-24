@@ -118,9 +118,8 @@ pub async fn send_message(
     // keyless local-provider branch went with Ollama (P2-11).
     // Every supported provider takes a key; the keyless branch went with
     // Ollama (P2-11).
-    let api_key = VaultManager::get(&provider_key(&provider_id))?.ok_or_else(|| {
-        ArcanaError::Agent(format!("No API key for provider '{provider_id}'"))
-    })?;
+    let api_key = VaultManager::get(&provider_key(&provider_id))?
+        .ok_or_else(|| ArcanaError::Agent(format!("No API key for provider '{provider_id}'")))?;
 
     // Load session history
     let session = session_mgr
@@ -128,6 +127,12 @@ pub async fn send_message(
         .ok_or_else(|| ArcanaError::Agent(format!("Session '{session_id}' not found")))?;
 
     let working_dir = session.working_dir.clone();
+
+    // The native runtime registry admits the actual interactive turn before
+    // either a message or a running flag is written. A duplicate active pair
+    // is rejected without leaving a phantom conversation entry.
+    let runtime_lease =
+        arcana_core::state::runtime_registry::global().admit("supervisor", &session_id)?;
 
     // Register agent as running in app state
     {
@@ -199,6 +204,9 @@ pub async fn send_message(
     )?;
 
     tokio::spawn(async move {
+        // The lease releases on every exit, including provider failure, turn
+        // error and panic. Durable session history is owned separately.
+        let _runtime_lease = runtime_lease;
         // ⚠ P3-05. This `match` was a sixth copy of the provider ladder, and
         // its `_ =>` arm **returned without emitting any terminal event** — so
         // an unsupported provider left the UI spinning forever on a task that
@@ -211,12 +219,10 @@ pub async fn send_message(
             Ok(p) => p,
             Err(e) => {
                 tracing::error!("Unsupported provider {provider_id_c}: {e}");
-                arcana_core::events::emit_agent_error(
-                    arcana_core::events::AgentErrorPayload {
-                        session_id: session_id_c.clone(),
-                        message: format!("Unsupported provider: {provider_id_c}"),
-                    },
-                );
+                arcana_core::events::emit_agent_error(arcana_core::events::AgentErrorPayload {
+                    session_id: session_id_c.clone(),
+                    message: format!("Unsupported provider: {provider_id_c}"),
+                });
                 let mut s = state_clone.lock_tolerant();
                 if let Some(agent) = s.agents.get_mut(&session_id_c) {
                     agent.is_running = false;
@@ -301,34 +307,33 @@ pub async fn send_message(
         // boundary. That is sound here precisely because of `lock_tolerant`:
         // the state is readable after a panic by design, and the fields it
         // holds carry no cross-field invariant a half-finished turn could break.
-        let result = match futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(
-            engine.run(
+        let result =
+            match futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(engine.run(
                 &session_id_c,
                 &working_dir_c,
                 &model_c,
                 history,
                 &user_msg_c,
                 system_prompt_override.as_deref(),
-            ),
-        ))
-        .await
-        {
-            Ok(r) => r,
-            Err(panic) => {
-                // The panic payload is usually a `&str` or `String`; anything
-                // else is reported as such rather than dropped.
-                let detail = panic
-                    .downcast_ref::<&str>()
-                    .map(|s| (*s).to_string())
-                    .or_else(|| panic.downcast_ref::<String>().cloned())
-                    .unwrap_or_else(|| "non-string panic payload".to_string());
+            )))
+            .await
+            {
+                Ok(r) => r,
+                Err(panic) => {
+                    // The panic payload is usually a `&str` or `String`; anything
+                    // else is reported as such rather than dropped.
+                    let detail = panic
+                        .downcast_ref::<&str>()
+                        .map(|s| (*s).to_string())
+                        .or_else(|| panic.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "non-string panic payload".to_string());
 
-                tracing::error!("Agent turn panicked and was contained: {detail}");
-                Err(arcana_core::errors::ArcanaError::Agent(format!(
-                    "The turn failed unexpectedly and was contained: {detail}"
-                )))
-            }
-        };
+                    tracing::error!("Agent turn panicked and was contained: {detail}");
+                    Err(arcana_core::errors::ArcanaError::Agent(format!(
+                        "The turn failed unexpectedly and was contained: {detail}"
+                    )))
+                }
+            };
 
         match result {
             Ok(updated_history) => {
@@ -350,7 +355,10 @@ pub async fn send_message(
                 // Every assistant message produced by this turn is persisted,
                 // with its text blocks joined rather than overwritten.
                 let assistant_messages: Vec<&crate::provider::types::RequestMessage> =
-                    updated_history.iter().filter(|m| m.role == "assistant").collect();
+                    updated_history
+                        .iter()
+                        .filter(|m| m.role == "assistant")
+                        .collect();
 
                 // Only the ones this turn added. `history` was the prior
                 // conversation, so anything beyond its length is new.
@@ -525,8 +533,12 @@ mod p8_32_tests {
     /// 🔴 The defect itself. Before the fix this returned `FastDevelopment`.
     #[test]
     fn p8_32_an_explicit_override_beats_a_populated_session() {
-        let mode = resolve_pa_mode(Some("delegate"), "fast_development", Some("fast_development"))
-            .expect("a legal override must resolve");
+        let mode = resolve_pa_mode(
+            Some("delegate"),
+            "fast_development",
+            Some("fast_development"),
+        )
+        .expect("a legal override must resolve");
         assert_eq!(mode, PAMode::Delegate);
     }
 
@@ -534,8 +546,7 @@ mod p8_32_tests {
     /// must not reset the PA's mode mid-conversation.
     #[test]
     fn p8_32_the_session_still_beats_the_ambient_store() {
-        let mode = resolve_pa_mode(None, "review", Some("fast_development"))
-            .expect("resolve");
+        let mode = resolve_pa_mode(None, "review", Some("fast_development")).expect("resolve");
         assert_eq!(
             mode,
             PAMode::Review,
@@ -568,7 +579,10 @@ mod p8_32_tests {
         let err = resolve_pa_mode(Some("teleport"), "review", None)
             .expect_err("an unknown override must be refused");
         let msg = err.to_string();
-        assert!(msg.contains("teleport"), "the message must name the bad value: {msg}");
+        assert!(
+            msg.contains("teleport"),
+            "the message must name the bad value: {msg}"
+        );
         assert!(
             msg.contains("delegate"),
             "the message must list the legal values: {msg}"
@@ -585,4 +599,3 @@ mod p8_32_tests {
         }
     }
 }
-

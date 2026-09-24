@@ -139,9 +139,7 @@ mod tests {
     fn matches_canonical_log_filenames() {
         assert!(is_arcana_log(&PathBuf::from("arcana-2026-05-14.log")));
         assert!(is_arcana_log(&PathBuf::from("arcana-.2026-05-14..log")));
-        assert!(is_arcana_log(&PathBuf::from(
-            "/tmp/arcana-2026-05-14.log"
-        )));
+        assert!(is_arcana_log(&PathBuf::from("/tmp/arcana-2026-05-14.log")));
         // Negative cases — must never delete these
         assert!(!is_arcana_log(&PathBuf::from("user-notes.md")));
         assert!(!is_arcana_log(&PathBuf::from("arcana.log")));

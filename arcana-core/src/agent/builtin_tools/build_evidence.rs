@@ -16,10 +16,10 @@
 // would have caught the calendar run's `"build": "node -c …"` bug —
 // `-c` is a Bash flag, not a Node flag, so it errored 255 every time.
 
+use crate::state::lock::LockTolerant;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use crate::state::lock::LockTolerant;
 
 /// Build evidence stays in the tracker for 15 minutes. Long enough for a
 /// worker tick (build → write artefact → smoke → commit → status update),
@@ -443,7 +443,10 @@ mod p8_28_tests {
         // above while destroying the feature — `L-37`'s shape at the level of
         // a test suite rather than a single assertion.
         assert_eq!(classify("npm run build"), Some(BuildEvidenceKind::Node));
-        assert_eq!(classify("npm run build --silent"), Some(BuildEvidenceKind::Node));
+        assert_eq!(
+            classify("npm run build --silent"),
+            Some(BuildEvidenceKind::Node)
+        );
         assert_eq!(classify("cargo build"), Some(BuildEvidenceKind::Cargo));
         assert_eq!(classify("cargo test --all"), Some(BuildEvidenceKind::Cargo));
         assert_eq!(classify("uv run pytest"), Some(BuildEvidenceKind::Python));
@@ -452,8 +455,14 @@ mod p8_28_tests {
     #[test]
     fn a_build_in_a_later_segment_still_classifies() {
         // The build is not always the first thing on the line.
-        assert_eq!(classify("cd frontend && npm run build"), Some(BuildEvidenceKind::Node));
-        assert_eq!(classify("CI=1 npm run build"), Some(BuildEvidenceKind::Node));
+        assert_eq!(
+            classify("cd frontend && npm run build"),
+            Some(BuildEvidenceKind::Node)
+        );
+        assert_eq!(
+            classify("CI=1 npm run build"),
+            Some(BuildEvidenceKind::Node)
+        );
         assert_eq!(
             classify("npm install; npm run build"),
             Some(BuildEvidenceKind::Node)

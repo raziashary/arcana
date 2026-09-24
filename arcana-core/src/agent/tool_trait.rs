@@ -205,9 +205,11 @@ mod identity_tests {
         // meaning of three other gates that parse source (`L-C15`).
         let source = std::fs::read_to_string(&path)
             .expect("read tool_executor.rs")
-            .replace("
+            .replace(
+                "
 ", "
-");
+",
+            );
 
         let sites = source.matches("ToolContext {").count();
 

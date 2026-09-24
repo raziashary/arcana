@@ -99,8 +99,6 @@ impl Tool for GlobTool {
         })
     }
 
-
-
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         let params: GlobInput = match serde_json::from_value(input) {
             Ok(p) => p,
@@ -123,10 +121,7 @@ impl Tool for GlobTool {
         // harmless read: the model names a path, the contents enter its
         // context, and nothing asked the user. Six tools bypassed the jail;
         // two of them acted on the path rather than merely reading it.
-        let search_path = match super::path_jail::validate_workspace_path(
-            &raw,
-            &ctx.working_dir,
-        ) {
+        let search_path = match super::path_jail::validate_workspace_path(&raw, &ctx.working_dir) {
             Ok(canonical) => canonical,
             Err(e) => return ToolResult::error(e),
         };

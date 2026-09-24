@@ -15,9 +15,11 @@ and proof rules remain in the MDP §0.
 | Arcana identity | Rename applied in source; validation is in progress | Fresh Arcana data/key location, packaging checks |
 | Installable product | P9 is later work | Windows, Linux, macOS build and launch smoke with applicable security checks |
 
-Current checkpoint: reconnaissance, Python repair, rename/build checks, and
-desktop launch verification completed; the live Gemini coding-turn smoke and
-earlier P0/P3 proof gaps remain open. Current implementation scope ends at P8
-cleanup and preparation for P4–P7; P9 and additional features follow later.
+Current checkpoint: P8 is closed. The live Gemini tool-backed desktop coding
+turn, sidecar-absent Windows suite, ten retained coding-port proofs, final
+debug installer inspection, and independent Luna reviews are recorded in the
+P8 closeout. P0/P3 gate-proof gaps remain visible in their own registers.
+Implementation now proceeds through P4, P5, P6, then P7; P9 and additional
+features follow later.
 Remaining design capability phases are withdrawn from the target. The owner
 approved PD0 retirement and fresh Arcana state in ADR-0043.

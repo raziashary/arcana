@@ -32,7 +32,11 @@ fn remember(c: &Connection, text: &str, scope_ref: &str) {
         &Proposal {
             content: text.to_string(),
             tier: MemoryTier::Semantic,
-            scope: if scope_ref.is_empty() { "global".into() } else { "project".into() },
+            scope: if scope_ref.is_empty() {
+                "global".into()
+            } else {
+                "project".into()
+            },
             scope_ref: scope_ref.to_string(),
             proposer: Proposer::User,
             claimed_confidence: 1.0,
@@ -70,8 +74,16 @@ fn recall(c: &Connection, query: &str, project: &str) -> Vec<String> {
 #[test]
 fn s3_04_two_different_questions_recall_different_things() {
     let c = db();
-    remember(&c, "the deploy key rotates on the first of each month", "/proj");
-    remember(&c, "the frontend is styled with Tailwind and no CSS modules", "/proj");
+    remember(
+        &c,
+        "the deploy key rotates on the first of each month",
+        "/proj",
+    );
+    remember(
+        &c,
+        "the frontend is styled with Tailwind and no CSS modules",
+        "/proj",
+    );
     remember(&c, "integration tests need Docker running locally", "/proj");
 
     let deploy = recall(&c, "when does the deploy key rotate", "/proj");
@@ -111,7 +123,11 @@ fn s3_04_two_different_questions_recall_different_things() {
 #[test]
 fn s3_04b_recall_cannot_cross_a_project_boundary() {
     let c = db();
-    remember(&c, "the staging password is in the ops vault", "/secret-project");
+    remember(
+        &c,
+        "the staging password is in the ops vault",
+        "/secret-project",
+    );
     remember(&c, "this project deploys on Fridays", "/other-project");
 
     let seen = recall(&c, "staging password ops vault", "/other-project");
@@ -160,7 +176,11 @@ fn s3_04c_global_memories_are_shared_and_project_memories_are_not() {
 #[test]
 fn s3_05_recall_degrades_to_lexical_and_says_so() {
     let c = db();
-    remember(&c, "the deploy key rotates on the first of each month", "/proj");
+    remember(
+        &c,
+        "the deploy key rotates on the first of each month",
+        "/proj",
+    );
 
     let hits = recall(&c, "deploy key rotation", "/proj");
     assert!(

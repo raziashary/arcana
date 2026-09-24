@@ -473,7 +473,7 @@ mod tests {
             label: "anthropic API key".into(),
             present: true,
             orphaned: false,
-                    backend: "test".to_string(),
+            backend: "test".to_string(),
             backend_note: "test".to_string(),
         })
         .expect("serialize");

@@ -59,8 +59,8 @@ const CHILD_LOG_TAIL_BYTES: usize = 4_000;
 /// This costs the tool nothing it was for. Its entire purpose is to probe a
 /// server it spawned itself, seconds earlier, on this machine.
 fn validate_probe_url(raw: &str) -> Result<(), String> {
-    let url = reqwest::Url::parse(raw)
-        .map_err(|e| format!("'probe_url' is not a valid URL: {e}"))?;
+    let url =
+        reqwest::Url::parse(raw).map_err(|e| format!("'probe_url' is not a valid URL: {e}"))?;
 
     match url.scheme() {
         "http" | "https" => {}
@@ -86,7 +86,9 @@ fn validate_probe_url(raw: &str) -> Result<(), String> {
         .collect();
 
     if addrs.is_empty() {
-        return Err(format!("'probe_url' host '{host}' resolved to no addresses"));
+        return Err(format!(
+            "'probe_url' host '{host}' resolved to no addresses"
+        ));
     }
 
     // EVERY address must be loopback. One public address among several is
@@ -185,7 +187,6 @@ impl Tool for E2eProbeTool {
             "required": ["start_cmds", "probe_url", "expected_text"]
         })
     }
-
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let start_cmds: Vec<String> = match input.get("start_cmds") {
@@ -585,7 +586,11 @@ mod p3_21_68_tests {
 
     #[test]
     fn a_non_http_scheme_is_refused() {
-        for url in ["file:///etc/passwd", "gopher://127.0.0.1/", "ftp://127.0.0.1/"] {
+        for url in [
+            "file:///etc/passwd",
+            "gopher://127.0.0.1/",
+            "ftp://127.0.0.1/",
+        ] {
             assert!(
                 validate_probe_url(url).is_err(),
                 "{url} must be refused — only http/https reach a dev server"

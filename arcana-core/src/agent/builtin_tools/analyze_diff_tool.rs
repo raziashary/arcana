@@ -57,7 +57,6 @@ impl Tool for AnalyzeDiffTool {
         })
     }
 
-
     // `_ctx` until P3-14: the workspace was never consulted, so any repository
     // path the model named was diffed and uploaded.
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
@@ -73,14 +72,13 @@ impl Tool for AnalyzeDiffTool {
         // result to a third-party LLM** — so an unjailed path here exfiltrates
         // any repository on the machine, not merely reads it. It also declared
         // `is_read_only = true` and was therefore never prompted (`P3-56`).
-        let repo_path_buf =
-            match super::path_jail::validate_workspace_path(
-                std::path::Path::new(repo_path_raw),
-                &ctx.working_dir,
-            ) {
-                Ok(canonical) => canonical,
-                Err(e) => return ToolResult::error(e),
-            };
+        let repo_path_buf = match super::path_jail::validate_workspace_path(
+            std::path::Path::new(repo_path_raw),
+            &ctx.working_dir,
+        ) {
+            Ok(canonical) => canonical,
+            Err(e) => return ToolResult::error(e),
+        };
         let repo_path = repo_path_buf.to_string_lossy().to_string();
         let repo_path = repo_path.as_str();
         let base_branch = match input["base_branch"].as_str() {
@@ -310,9 +308,8 @@ fn build_analyzer_from_vault() -> crate::errors::Result<DiffAnalyzer> {
             ))
         })?;
 
-    let api_key = VaultManager::get(&provider_key(&provider_id))?.ok_or_else(|| {
-        ArcanaError::Agent(format!("No API key for provider '{provider_id}'"))
-    })?;
+    let api_key = VaultManager::get(&provider_key(&provider_id))?
+        .ok_or_else(|| ArcanaError::Agent(format!("No API key for provider '{provider_id}'")))?;
 
     // Built through the shared factory, which applies the daily ceiling. This
     // tool holds no AppState — tools receive a ToolContext — so it reaches the

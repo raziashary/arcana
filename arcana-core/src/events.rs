@@ -21,9 +21,9 @@
 //
 // See ADR-LOG-RESTRUCT-0011.
 
+use crate::state::lock::LockTolerant;
 use serde::Serialize;
 use std::sync::{Arc, OnceLock};
-use crate::state::lock::LockTolerant;
 
 /// A host that can deliver events to a user interface.
 ///
@@ -85,6 +85,49 @@ pub fn emit_serialized<T: serde::Serialize>(name: &str, payload: &T) {
     match serde_json::to_value(payload) {
         Ok(value) => sink().emit(name, value),
         Err(e) => tracing::warn!("[events] dropping '{name}': payload did not serialise: {e}"),
+    }
+}
+
+/// In-process lifecycle events. Correlation uses the same call ID exposed by
+/// the existing Tauri tool events; the desktop transport remains unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InternalEvent {
+    ToolStarted {
+        session_id: String,
+        agent_id: String,
+        call_id: String,
+        tool_name: String,
+    },
+    ToolFinished {
+        session_id: String,
+        agent_id: String,
+        call_id: String,
+        is_error: bool,
+        cancelled: bool,
+    },
+}
+
+type InternalSubscriber = Arc<dyn Fn(&InternalEvent) + Send + Sync>;
+static INTERNAL_SUBSCRIBERS: OnceLock<std::sync::RwLock<Vec<InternalSubscriber>>> = OnceLock::new();
+
+/// Subscribe to typed runtime events. Subscribers are called without holding
+/// the bus lock, so a reader may query state during a callback.
+pub fn subscribe_internal(subscriber: InternalSubscriber) {
+    INTERNAL_SUBSCRIBERS
+        .get_or_init(Default::default)
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(subscriber);
+}
+
+pub fn publish_internal(event: InternalEvent) {
+    let subscribers = INTERNAL_SUBSCRIBERS
+        .get_or_init(Default::default)
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    for subscriber in subscribers {
+        subscriber(&event);
     }
 }
 
@@ -359,8 +402,6 @@ pub struct WorkspaceMismatchPayload {
 pub fn emit_workspace_mismatch(payload: WorkspaceMismatchPayload) {
     emit_serialized(EVT_WORKSPACE_MISMATCH, &payload);
 }
-
-
 
 // ── Worker Request payloads + emit helpers ───────────────────────────────────
 

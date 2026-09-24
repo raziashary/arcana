@@ -61,14 +61,13 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
             update_annotation_response, update_annotation_task_id,
         },
         arcana_instructions_commands::{
-            check_arcana_instructions_exists, delete_arcana_instructions,
-            get_arcana_instructions, get_arcana_instructions_char_count,
-            set_arcana_instructions,
+            check_arcana_instructions_exists, delete_arcana_instructions, get_arcana_instructions,
+            get_arcana_instructions_char_count, set_arcana_instructions,
         },
         browser_commands::{check_playwright_available, install_playwright_browsers},
         budget_commands::{
-            cmd_set_task_budget, get_daily_budget_summary, get_task_budget_status,
-            set_default_worker_budget, get_daily_cap, set_daily_cap,
+            cmd_set_task_budget, get_daily_budget_summary, get_daily_cap, get_task_budget_status,
+            set_daily_cap, set_default_worker_budget,
         },
         diff_commands::{analyze_diff, analyze_pr_diff},
         file_commands::search_workspace_files,
@@ -99,6 +98,11 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         },
         log_commands::{
             clear_log_files, export_log_file, list_log_files, read_log_file, read_log_file_full,
+        },
+        // P8-51 — the three MCP-client commands, kept. The other fourteen
+        // were sidecar lifecycle and are deleted with it (`P8-06`).
+        mcp_commands::{
+            force_reconnect_mcp, get_active_tool_executions, get_mcp_health, list_mcp_tools,
         },
         memory_commands::{
             deactivate_fact, delete_memory_topic, get_memory_md, get_memory_stats,
@@ -131,9 +135,6 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
             get_active_provider, get_cost_today, get_default_system_prompt, get_system_prompt,
             list_providers, set_active_provider, set_system_prompt, test_provider_connection,
         },
-        // P8-51 — the three MCP-client commands, kept. The other fourteen
-        // were sidecar lifecycle and are deleted with it (`P8-06`).
-        mcp_commands::{force_reconnect_mcp, get_mcp_health, list_mcp_tools},
         skill_commands::{
             execute_skill, get_skill, import_skill, list_skills, reload_skills, search_skills,
             skills_by_category, validate_skill_parameters,
@@ -282,6 +283,7 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         // A registration surviving its command is a compile error, which is
         // the point: this handler is the one place that cannot keep a corpse.
         list_mcp_tools,
+        get_active_tool_executions,
         get_mcp_health,
         force_reconnect_mcp,
         // Skills system (Phase 3.1)

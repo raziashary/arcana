@@ -143,8 +143,8 @@ fn load() -> Result<BTreeMap<String, String>> {
         return Ok(BTreeMap::new());
     }
 
-    let blob = std::fs::read(&path)
-        .map_err(|e| ArcanaError::Vault(format!("reading the vault: {e}")))?;
+    let blob =
+        std::fs::read(&path).map_err(|e| ArcanaError::Vault(format!("reading the vault: {e}")))?;
     if blob.len() < 12 {
         return Err(ArcanaError::Vault(
             "the vault file is too short to contain a nonce — it is truncated or corrupt".into(),
@@ -310,7 +310,11 @@ mod tests {
 
         let secret = br#"{"provider.anthropic.api_key":"sk-ant-test"}"#;
         let ct = cipher.encrypt(&nonce, secret.as_ref()).expect("encrypt");
-        assert_ne!(&ct[..], &secret[..], "the ciphertext must not be the plaintext");
+        assert_ne!(
+            &ct[..],
+            &secret[..],
+            "the ciphertext must not be the plaintext"
+        );
 
         let pt = cipher.decrypt(&nonce, ct.as_ref()).expect("decrypt");
         assert_eq!(pt, secret);
@@ -344,9 +348,18 @@ mod tests {
         apply_store(&mut v, &provider_key("google"), "AIza-C");
 
         assert_eq!(v.len(), 3, "three providers must occupy three entries");
-        assert_eq!(v.get(&provider_key("anthropic")).map(String::as_str), Some("sk-ant-A"));
-        assert_eq!(v.get(&provider_key("openai")).map(String::as_str), Some("sk-oai-B"));
-        assert_eq!(v.get(&provider_key("google")).map(String::as_str), Some("AIza-C"));
+        assert_eq!(
+            v.get(&provider_key("anthropic")).map(String::as_str),
+            Some("sk-ant-A")
+        );
+        assert_eq!(
+            v.get(&provider_key("openai")).map(String::as_str),
+            Some("sk-oai-B")
+        );
+        assert_eq!(
+            v.get(&provider_key("google")).map(String::as_str),
+            Some("AIza-C")
+        );
     }
 
     #[test]
@@ -360,7 +373,10 @@ mod tests {
 
         apply_store(&mut v, &provider_key("anthropic"), "sk-ant-NEW");
 
-        assert_eq!(v.get(&provider_key("anthropic")).map(String::as_str), Some("sk-ant-NEW"));
+        assert_eq!(
+            v.get(&provider_key("anthropic")).map(String::as_str),
+            Some("sk-ant-NEW")
+        );
         assert_eq!(
             v.get(&provider_key("openai")).map(String::as_str),
             Some("sk-oai-KEEP"),
@@ -392,12 +408,17 @@ mod tests {
         // So a provider that happened to be called "github" could never collide
         // with the PAT and silently overwrite it.
         let mut v = BTreeMap::new();
-        apply_store(&mut v, &crate::vault::keychain::github_pat_key(), "ghp_TOKEN");
+        apply_store(
+            &mut v,
+            &crate::vault::keychain::github_pat_key(),
+            "ghp_TOKEN",
+        );
         apply_store(&mut v, &provider_key("github"), "not-the-pat");
 
         assert_eq!(v.len(), 2, "these must be two distinct entries");
         assert_eq!(
-            v.get(&crate::vault::keychain::github_pat_key()).map(String::as_str),
+            v.get(&crate::vault::keychain::github_pat_key())
+                .map(String::as_str),
             Some("ghp_TOKEN")
         );
     }

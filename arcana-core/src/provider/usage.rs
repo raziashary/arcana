@@ -353,8 +353,8 @@ impl StopReason {
             "end_turn" | "stop" => StopReason::EndTurn,
             "tool_use" | "tool_calls" | "function_call" => StopReason::ToolUse,
             "stop_sequence" => StopReason::StopSequence,
-            "content_filter" | "safety" | "recitation" | "prohibited_content"
-            | "blocklist" | "spii" => StopReason::ContentFilter,
+            "content_filter" | "safety" | "recitation" | "prohibited_content" | "blocklist"
+            | "spii" => StopReason::ContentFilter,
             // Gemini emits this when it tried to call a tool and produced
             // arguments that do not parse. It is a tool intent that FAILED, not
             // a clean end — mapping it to `EndTurn` would end the loop as
@@ -407,11 +407,15 @@ pub enum CacheSupport {
     /// carried no minimum on the belief that "the vendor handles it"; that
     /// made a short OpenAI prefix report as fully cacheable when nothing
     /// would ever cache.
-    Automatic { min_tokens: u32 },
+    Automatic {
+        min_tokens: u32,
+    },
     /// We mark breakpoints, and **below `min_tokens` nothing caches and no
     /// error is returned** (spec `02 §4.3`). The prefix builder warns when the
     /// assembled prefix falls short, because the provider will not.
-    Explicit { min_tokens: u32 },
+    Explicit {
+        min_tokens: u32,
+    },
 }
 
 impl ModelCapabilities {
@@ -596,16 +600,25 @@ mod tests {
     fn every_vendors_truncation_spelling_maps_to_max_tokens() {
         // The whole point: three wire values, one meaning. If any regresses to
         // `Other`, a truncated turn is fed back to the model as complete.
-        assert_eq!(StopReason::parse("anthropic", "max_tokens"), StopReason::MaxTokens);
+        assert_eq!(
+            StopReason::parse("anthropic", "max_tokens"),
+            StopReason::MaxTokens
+        );
         assert_eq!(StopReason::parse("openai", "length"), StopReason::MaxTokens);
-        assert_eq!(StopReason::parse("google", "MAX_TOKENS"), StopReason::MaxTokens);
+        assert_eq!(
+            StopReason::parse("google", "MAX_TOKENS"),
+            StopReason::MaxTokens
+        );
         assert!(StopReason::parse("openai", "length").is_truncated());
         assert!(StopReason::parse("google", "MAX_TOKENS").is_truncated());
     }
 
     #[test]
     fn every_vendors_clean_finish_maps_to_end_turn() {
-        assert_eq!(StopReason::parse("anthropic", "end_turn"), StopReason::EndTurn);
+        assert_eq!(
+            StopReason::parse("anthropic", "end_turn"),
+            StopReason::EndTurn
+        );
         assert_eq!(StopReason::parse("openai", "stop"), StopReason::EndTurn);
         assert_eq!(StopReason::parse("google", "STOP"), StopReason::EndTurn);
         assert!(!StopReason::parse("openai", "stop").is_truncated());
@@ -613,8 +626,14 @@ mod tests {
 
     #[test]
     fn tool_intent_maps_across_the_two_vendors_that_signal_it() {
-        assert_eq!(StopReason::parse("anthropic", "tool_use"), StopReason::ToolUse);
-        assert_eq!(StopReason::parse("openai", "tool_calls"), StopReason::ToolUse);
+        assert_eq!(
+            StopReason::parse("anthropic", "tool_use"),
+            StopReason::ToolUse
+        );
+        assert_eq!(
+            StopReason::parse("openai", "tool_calls"),
+            StopReason::ToolUse
+        );
         assert!(StopReason::parse("openai", "tool_calls").wants_tools());
         assert!(!StopReason::parse("openai", "stop").wants_tools());
     }
@@ -623,20 +642,32 @@ mod tests {
     fn google_safety_stops_are_a_filter_not_a_clean_end() {
         // Google has several of these and OpenAI one. Treating any as `EndTurn`
         // reports a blocked response as a satisfied one.
-        for raw in ["SAFETY", "RECITATION", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII"] {
+        for raw in [
+            "SAFETY",
+            "RECITATION",
+            "PROHIBITED_CONTENT",
+            "BLOCKLIST",
+            "SPII",
+        ] {
             assert_eq!(
                 StopReason::parse("google", raw),
                 StopReason::ContentFilter,
                 "{raw} must classify as a filter stop"
             );
         }
-        assert_eq!(StopReason::parse("openai", "content_filter"), StopReason::ContentFilter);
+        assert_eq!(
+            StopReason::parse("openai", "content_filter"),
+            StopReason::ContentFilter
+        );
     }
 
     #[test]
     fn a_malformed_tool_call_is_neither_a_clean_end_nor_a_runnable_call() {
         let r = StopReason::parse("google", "MALFORMED_FUNCTION_CALL");
-        assert!(!matches!(r, StopReason::EndTurn), "must not end the loop cleanly");
+        assert!(
+            !matches!(r, StopReason::EndTurn),
+            "must not end the loop cleanly"
+        );
         assert!(!r.wants_tools(), "there is no parseable call to run");
     }
 
@@ -647,7 +678,10 @@ mod tests {
         assert!(!r.is_truncated());
         assert!(!r.wants_tools());
         // An absent finish_reason stays distinguishable from a present unknown.
-        assert_eq!(StopReason::parse("google", ""), StopReason::Other("google:<empty>".into()));
+        assert_eq!(
+            StopReason::parse("google", ""),
+            StopReason::Other("google:<empty>".into())
+        );
     }
 
     // ── P2-12 · the running total must not mask a per-turn miss ───────────
@@ -676,9 +710,15 @@ mod tests {
             tool: 0,
         };
 
-        assert!(after_turn_2.cached_read > 0, "the running total still looks healthy");
+        assert!(
+            after_turn_2.cached_read > 0,
+            "the running total still looks healthy"
+        );
         let turn_2 = after_turn_2.delta_since(&after_turn_1);
-        assert_eq!(turn_2.cached_read, 0, "but THIS turn read nothing from cache");
+        assert_eq!(
+            turn_2.cached_read, 0,
+            "but THIS turn read nothing from cache"
+        );
         assert_eq!(turn_2.input, 4_300);
         assert_eq!(turn_2.output, 150);
     }
@@ -688,8 +728,22 @@ mod tests {
         // A provider reporting a smaller total than the previous call is
         // malformed. Wrapping would turn that into a delta near u32::MAX and
         // report a vast phantom cache read.
-        let later = Usage { input: 10, cached_read: 0, cache_write: 0, output: 5, reasoning: 0, tool: 0 };
-        let earlier = Usage { input: 100, cached_read: 50, cache_write: 0, output: 60, reasoning: 0, tool: 0 };
+        let later = Usage {
+            input: 10,
+            cached_read: 0,
+            cache_write: 0,
+            output: 5,
+            reasoning: 0,
+            tool: 0,
+        };
+        let earlier = Usage {
+            input: 100,
+            cached_read: 50,
+            cache_write: 0,
+            output: 60,
+            reasoning: 0,
+            tool: 0,
+        };
         let d = later.delta_since(&earlier);
         assert_eq!(d.input, 0);
         assert_eq!(d.cached_read, 0);
@@ -746,7 +800,10 @@ mod tests {
         );
         assert!(ErrorClass::classify("anthropic", 529, "").is_retryable());
         // And 503 still classifies as overload for the vendors that use it.
-        assert_eq!(ErrorClass::classify("openai", 503, ""), ErrorClass::Overloaded);
+        assert_eq!(
+            ErrorClass::classify("openai", 503, ""),
+            ErrorClass::Overloaded
+        );
     }
 
     #[test]

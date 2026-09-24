@@ -22,7 +22,15 @@ use std::sync::Arc;
 
 use tauri::State;
 
+use arcana_core::agent::execution_registry::{self, ActiveTool};
 use arcana_core::agent::tool_registry::ToolRegistry;
+
+/// Snapshot of tools currently executing for a session. The same redacted
+/// arguments shown in `agent:tool-start` are returned for listener hydration.
+#[tauri::command]
+pub fn get_active_tool_executions(session_id: String) -> Vec<ActiveTool> {
+    execution_registry::active_by_session(&session_id)
+}
 
 /// One tool, as the MCP tool browser renders it.
 ///

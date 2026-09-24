@@ -67,8 +67,6 @@ impl Tool for EditFileTool {
         })
     }
 
-
-
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         // Clone before moving into from_value so the hook context below can reference it.
         let input_for_hook = input.clone();

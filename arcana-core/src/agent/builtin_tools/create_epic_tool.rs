@@ -45,7 +45,6 @@ impl Tool for CreateEpicTool {
         })
     }
 
-
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let title = match input["title"].as_str() {
             Some(t) if !t.trim().is_empty() => t.trim().to_string(),

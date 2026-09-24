@@ -389,20 +389,20 @@ async fn check_tsc_syntax(path: &Path, working_dir: &str) -> LintResult {
     let path_str = path.to_string_lossy().to_string();
     let mut cmd = tokio::process::Command::new("tsc");
     cmd.args([
-            "--noEmit",
-            "--allowJs",
-            "--isolatedModules",
-            "--jsx",
-            "preserve",
-            "--target",
-            "es2020",
-            "--module",
-            "esnext",
-            "--moduleResolution",
-            "node",
-            &path_str,
-        ])
-        .current_dir(working_dir);
+        "--noEmit",
+        "--allowJs",
+        "--isolatedModules",
+        "--jsx",
+        "preserve",
+        "--target",
+        "es2020",
+        "--module",
+        "esnext",
+        "--moduleResolution",
+        "node",
+        &path_str,
+    ])
+    .current_dir(working_dir);
 
     match run_bounded(cmd, CHECKER_TIMEOUT).await {
         Ran::NotFound => did_not_run(
@@ -1594,7 +1594,10 @@ mod p3_17_18_tests {
         // "warning" branch — reporting a HANG as "✓ No syntax errors", which
         // is strictly worse than hanging, because a hang is at least visible.
         let (bin, args): (&str, Vec<&str>) = if cfg!(windows) {
-            ("powershell", vec!["-NoProfile", "-Command", "Start-Sleep 30"])
+            (
+                "powershell",
+                vec!["-NoProfile", "-Command", "Start-Sleep 30"],
+            )
         } else {
             ("sleep", vec!["30"])
         };

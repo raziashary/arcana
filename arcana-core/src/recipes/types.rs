@@ -62,23 +62,23 @@ pub struct Recipe {
     pub agent_role: Option<String>, // "supervisor" | "worker-backend" | "qc"
     pub model: Option<String>,      // model override (default from settings)
     pub is_system: bool,            // system recipes cannot be deleted by users
-    // P8-25/P8-47 — `fallback_policy` DELETED.
-    //
-    // 🔴 It defaulted to `Mode2Only`, and `runner.rs` refused to run any
-    // recipe carrying that policy. `orch_healthy` has been pinned `false`
-    // since P0, so the guard was UNCONDITIONAL: `Mode2Only` did not mean
-    // "needs the second engine", it meant **never runs**. And it was the serde
-    // default, so every recipe the UI saved -- `RecipeEditor.tsx`'s
-    // `buildRecipe()` omits the key -- deserialised as stranded and then
-    // sat reporting `fallback_idle` forever. The fleet reported itself
-    // idle rather than broken, which is the hardest kind of dead to see.
-    //
-    // ⚠ Deleting the field is what makes this a real fix. Flipping the
-    // default would have left every `fallback_policy: mode2_only` already
-    // written to `~/.arcana/recipes/*.yaml` still stranded, because
-    // `#[serde(default)]` only fills a key that is MISSING. Nothing here
-    // sets `deny_unknown_fields`, so that stale key is now ignored and old
-    // YAML keeps parsing -- see `p8_25_tests`.
+                                    // P8-25/P8-47 — `fallback_policy` DELETED.
+                                    //
+                                    // 🔴 It defaulted to `Mode2Only`, and `runner.rs` refused to run any
+                                    // recipe carrying that policy. `orch_healthy` has been pinned `false`
+                                    // since P0, so the guard was UNCONDITIONAL: `Mode2Only` did not mean
+                                    // "needs the second engine", it meant **never runs**. And it was the serde
+                                    // default, so every recipe the UI saved -- `RecipeEditor.tsx`'s
+                                    // `buildRecipe()` omits the key -- deserialised as stranded and then
+                                    // sat reporting `fallback_idle` forever. The fleet reported itself
+                                    // idle rather than broken, which is the hardest kind of dead to see.
+                                    //
+                                    // ⚠ Deleting the field is what makes this a real fix. Flipping the
+                                    // default would have left every `fallback_policy: mode2_only` already
+                                    // written to `~/.arcana/recipes/*.yaml` still stranded, because
+                                    // `#[serde(default)]` only fills a key that is MISSING. Nothing here
+                                    // sets `deny_unknown_fields`, so that stale key is now ignored and old
+                                    // YAML keeps parsing -- see `p8_25_tests`.
 }
 
 /// Execution state of a recipe run

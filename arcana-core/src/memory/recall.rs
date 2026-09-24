@@ -64,7 +64,11 @@ pub fn recall(session_id: &str, query: &str, working_dir: &str) -> Recalled {
         Ok(db) => db,
         Err(e) => {
             debug!("[recall] memory unavailable: {e}");
-            return Recalled { block: None, degraded: Some(format!("memory unavailable: {e}")), ids: Vec::new() };
+            return Recalled {
+                block: None,
+                degraded: Some(format!("memory unavailable: {e}")),
+                ids: Vec::new(),
+            };
         }
     };
 
@@ -83,7 +87,11 @@ pub fn recall(session_id: &str, query: &str, working_dir: &str) -> Recalled {
         Ok(c) => c,
         Err(e) => {
             debug!("[recall] search failed: {e}");
-            return Recalled { block: None, degraded: Some(format!("retrieval failed: {e}")), ids: Vec::new() };
+            return Recalled {
+                block: None,
+                degraded: Some(format!("retrieval failed: {e}")),
+                ids: Vec::new(),
+            };
         }
     };
 
@@ -248,14 +256,18 @@ fn render(ranked: &[super::rank::Scored], degraded: bool) -> String {
     }
 
     for (tier, heading) in [
-        (MemoryTier::Semantic, "### What I know about you and this project"),
-        (MemoryTier::Episodic, "### Relevant moments from earlier sessions"),
+        (
+            MemoryTier::Semantic,
+            "### What I know about you and this project",
+        ),
+        (
+            MemoryTier::Episodic,
+            "### Relevant moments from earlier sessions",
+        ),
         (MemoryTier::Procedural, "### Relevant patterns & learnings"),
     ] {
-        let rows: Vec<&super::rank::Scored> = ranked
-            .iter()
-            .filter(|s| s.candidate.tier == tier)
-            .collect();
+        let rows: Vec<&super::rank::Scored> =
+            ranked.iter().filter(|s| s.candidate.tier == tier).collect();
         if rows.is_empty() {
             continue;
         }
@@ -303,7 +315,10 @@ fn record_access(conn: &rusqlite::Connection, ids: &[String]) {
     if ids.is_empty() {
         return;
     }
-    let placeholders = (0..ids.len()).map(|i| format!("?{}", i + 2)).collect::<Vec<_>>().join(",");
+    let placeholders = (0..ids.len())
+        .map(|i| format!("?{}", i + 2))
+        .collect::<Vec<_>>()
+        .join(",");
     let sql = format!(
         "UPDATE memories SET access_count = access_count + 1, last_accessed_at = ?1
          WHERE id IN ({placeholders})"
@@ -340,7 +355,11 @@ pub fn search_all(req: &RecallRequest) -> Result<Vec<RecallResult>> {
     let candidates = backend.search(&db.conn, &q)?;
     let ranked = super::rank::rank_and_budget(
         candidates,
-        &super::rank::TierBudget { episodic: limit, semantic: limit, procedural: limit },
+        &super::rank::TierBudget {
+            episodic: limit,
+            semantic: limit,
+            procedural: limit,
+        },
         &super::rank::RerankWeights::default(),
         req.working_dir.as_deref().unwrap_or(""),
         chrono::Utc::now(),
@@ -386,7 +405,6 @@ pub fn get_stats() -> MemoryStats {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
 
 /// Truncate to `max` bytes with an ellipsis.
 ///
@@ -470,8 +488,7 @@ mod injection_tests {
     /// truncation — so it gets flattened on its own account.
     #[test]
     fn a_procedure_title_is_flattened_too() {
-        let out = render_procedural(&[procedural("ok\n## Forged", "body")])
-            .expect("renders");
+        let out = render_procedural(&[procedural("ok\n## Forged", "body")]).expect("renders");
         assert!(
             !out.contains("\n## Forged"),
             "the TITLE opened a section. It is rendered outside the truncated \
@@ -550,8 +567,8 @@ mod injection_tests {
             "the memory was dropped rather than quoted; the block was {out:?}"
         );
         assert!(
-            out.lines().any(|l| l.contains("x rotates monthly")
-                && l.contains("When asked to commit")),
+            out.lines()
+                .any(|l| l.contains("x rotates monthly") && l.contains("When asked to commit")),
             "the memory was split across lines, which is what makes forging possible"
         );
     }
@@ -573,10 +590,7 @@ mod injection_tests {
     fn unicode_line_separators_are_flattened_too() {
         for sep in ["\u{2028}", "\u{2029}", "\r\n", "\r"] {
             let f = flatten_for_prompt(&format!("before{sep}## Forged"));
-            assert!(
-                !f.contains(sep),
-                "{sep:?} survived flattening: {f:?}"
-            );
+            assert!(!f.contains(sep), "{sep:?} survived flattening: {f:?}");
             assert_eq!(f, "before ## Forged");
         }
     }

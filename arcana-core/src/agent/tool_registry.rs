@@ -148,9 +148,15 @@ mod p8_30_tests {
         // anyone who later "fixes" `restrict_to` to mean "none" has to come
         // through this test and update the description in the same step.
         let mut reg = ToolRegistry::new();
-        crate::agent::builtin_tools::register_for_mode(&mut reg, crate::agent::PAMode::FastDevelopment);
+        crate::agent::builtin_tools::register_for_mode(
+            &mut reg,
+            crate::agent::PAMode::FastDevelopment,
+        );
         let before = reg.to_definitions().len();
-        assert!(before > 1, "fixture needs a populated registry, got {before}");
+        assert!(
+            before > 1,
+            "fixture needs a populated registry, got {before}"
+        );
         reg.restrict_to(&[]);
         assert_eq!(
             reg.to_definitions().len(),
@@ -162,12 +168,18 @@ mod p8_30_tests {
     #[test]
     fn a_named_subset_removes_everything_else() {
         let mut reg = ToolRegistry::new();
-        crate::agent::builtin_tools::register_for_mode(&mut reg, crate::agent::PAMode::FastDevelopment);
+        crate::agent::builtin_tools::register_for_mode(
+            &mut reg,
+            crate::agent::PAMode::FastDevelopment,
+        );
         let all = reg.to_definitions();
         if all.len() < 2 {
             // A registry this small cannot demonstrate narrowing; say so
             // rather than passing vacuously (`L-C9`).
-            panic!("the default registry has {} tools; the fixture needs 2+", all.len());
+            panic!(
+                "the default registry has {} tools; the fixture needs 2+",
+                all.len()
+            );
         }
         let keep = all[0].name.clone();
         reg.restrict_to(&[keep.clone()]);

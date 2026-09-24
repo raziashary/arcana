@@ -4,8 +4,8 @@
 use super::storage::SessionStorage;
 use super::types::{Message, Session};
 use crate::errors::Result;
-use std::sync::{Arc, Mutex};
 use crate::state::lock::LockTolerant;
+use std::sync::{Arc, Mutex};
 
 pub struct SessionManager {
     storage: Arc<Mutex<SessionStorage>>,

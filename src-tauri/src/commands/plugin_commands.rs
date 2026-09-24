@@ -96,10 +96,7 @@ pub async fn get_plugin_config(name: String) -> Result<Option<serde_json::Value>
 
 /// Set / update the config for an installed plugin.
 #[tauri::command]
-pub async fn set_plugin_config(
-    name: String,
-    values: serde_json::Value,
-) -> Result<(), ArcanaError> {
+pub async fn set_plugin_config(name: String, values: serde_json::Value) -> Result<(), ArcanaError> {
     let mgr = PluginManager::new();
     let cfg = PluginConfig { name, values };
     mgr.set_config(&cfg).map_err(ArcanaError::from)

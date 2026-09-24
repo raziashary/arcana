@@ -51,7 +51,6 @@ impl Tool for WriteFileTool {
         })
     }
 
-
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         let path_str = match input["path"].as_str() {
             Some(p) => p,

@@ -108,7 +108,7 @@ bash('git rev-parse --abbrev-ref HEAD')
 If that prints `main` or `master`, run:
 
 ```
-bash('git switch -c arcana/fleet 2>/dev/null || git switch arcana/fleet')
+bash('git switch -c arcana/fleet || git switch arcana/fleet')
 ```
 
 This is safe to run concurrently with the other workers: the first form creates
@@ -2145,7 +2145,6 @@ and emit ZERO further tool_use blocks.
     }
 }
 
-
 #[cfg(test)]
 mod qc_prompt_cache_tests {
     use super::*;
@@ -2183,12 +2182,20 @@ mod qc_prompt_cache_tests {
             .iter()
             .map(|_| prefix::build(&[], QC_REVIEWER_PROTOCOL, &[], &[]).hash)
             .collect();
-        assert_eq!(hashes.len(), 1, "the shared prefix must hash to a single key");
+        assert_eq!(
+            hashes.len(),
+            1,
+            "the shared prefix must hash to a single key"
+        );
 
         // The prompts themselves still differ — the per-run facts are present,
         // just not in front of the protocol.
         let whole: std::collections::HashSet<&String> = prompts.iter().collect();
-        assert_eq!(whole.len(), 6, "each reviewer must still be told its own task");
+        assert_eq!(
+            whole.len(),
+            6,
+            "each reviewer must still be told its own task"
+        );
     }
 
     #[test]
@@ -2205,7 +2212,10 @@ mod qc_prompt_cache_tests {
             "the task id appears at byte {id_at}, inside the {protocol_len}-byte shared \
              protocol — everything after it is uncacheable"
         );
-        assert!(p.contains("/repo/arcana"), "the repo path must still be present");
+        assert!(
+            p.contains("/repo/arcana"),
+            "the repo path must still be present"
+        );
     }
 
     #[test]

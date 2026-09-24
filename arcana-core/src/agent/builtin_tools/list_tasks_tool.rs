@@ -46,7 +46,6 @@ impl Tool for ListTasksTool {
         })
     }
 
-
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let status_filter = input["status"].as_str();
         // compact=true by default — avoids token bloat from description + acceptance_criteria.

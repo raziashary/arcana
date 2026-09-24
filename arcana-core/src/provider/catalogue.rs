@@ -357,7 +357,10 @@ mod tests {
                 crate::cost::pricing::price_for(id).is_err(),
                 "{id} is priced now — remove it from UNPRICED"
             );
-            assert!(entry(id).is_some(), "{id} is exempted but not offered — drop the entry");
+            assert!(
+                entry(id).is_some(),
+                "{id} is exempted but not offered — drop the entry"
+            );
         }
     }
 
@@ -385,7 +388,10 @@ mod tests {
             "gpt-5.5-pro",
             "gpt-5.3-codex",
         ] {
-            assert!(entry(dead).is_none(), "{dead} is retired and must not be offered");
+            assert!(
+                entry(dead).is_none(),
+                "{dead} is retired and must not be offered"
+            );
         }
     }
 
@@ -447,7 +453,10 @@ mod tests {
         let opus = capabilities_for("claude-opus-5").cache_minimum();
         assert_eq!(sonnet, Some(1_024));
         assert_eq!(opus, Some(4_096));
-        assert_ne!(sonnet, opus, "a provider-level answer would be wrong for one of these");
+        assert_ne!(
+            sonnet, opus,
+            "a provider-level answer would be wrong for one of these"
+        );
         // And reasoning differs inside OpenAI too.
         assert!(capabilities_for("gpt-5.4").reasoning);
         assert!(!capabilities_for("gpt-5.4-nano").reasoning);
@@ -456,7 +465,11 @@ mod tests {
     #[test]
     fn an_unknown_model_gets_the_conservative_record_never_a_permissive_one() {
         let c = capabilities_for("some-model-shipped-next-year");
-        assert_eq!(c.cache, CacheSupport::None, "must not claim a cache that will not form");
+        assert_eq!(
+            c.cache,
+            CacheSupport::None,
+            "must not claim a cache that will not form"
+        );
         assert!(!c.parallel_tools);
         assert!(!c.vision);
         assert_eq!(c.cache_minimum(), None);

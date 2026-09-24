@@ -1,8 +1,8 @@
 // Anthropic provider — direct API calls to api.anthropic.com.
 // Implements the Provider trait with streaming support.
 
-use async_trait::async_trait;
 use super::usage::CachePolicy;
+use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;
 use serde_json::json;
@@ -10,10 +10,10 @@ use tracing::{debug, error};
 
 use super::streaming::parse_sse_line;
 use super::traits::{Provider, StreamResult};
-use super::usage::Usage;
 use super::types::{
     CompletionRequest, CompletionResponse, MessageContent, ModelInfo, ProviderStatus, StreamChunk,
 };
+use super::usage::Usage;
 use crate::errors::{ArcanaError, Result};
 use crate::state::lock::LockTolerant;
 
@@ -66,6 +66,30 @@ impl AnthropicProvider {
         self.build_body(req, _stream)
     }
 
+    #[cfg(test)]
+    pub fn build_checked_body_for_test(
+        &self,
+        req: &CompletionRequest,
+        stream: bool,
+    ) -> Result<serde_json::Value> {
+        Self::validate_thinking_history(req)?;
+        Ok(self.build_body(req, stream))
+    }
+
+    fn validate_thinking_history(req: &CompletionRequest) -> Result<()> {
+        // A signed block must never be silently dropped or sent unsigned.
+        // Anthropic verifies the original text/signature pair on tool follow-up.
+        if req.messages.iter().flat_map(|m| &m.content).any(|c| {
+            matches!(c, MessageContent::Thinking { signature, .. }
+                if signature.as_deref().is_none_or(str::is_empty))
+        }) {
+            return Err(ArcanaError::Provider(
+                "Anthropic thinking history is missing a signature".into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn build_body(&self, req: &CompletionRequest, stream: bool) -> serde_json::Value {
         // Phase 7.1 — normalize all model identifiers to bare direct-API IDs.
         //
@@ -109,7 +133,14 @@ impl AnthropicProvider {
                     .iter()
                     .map(|c| match c {
                         MessageContent::Text { text } => json!({ "type": "text", "text": text }),
-                        MessageContent::ToolUse { id, name, input, .. } => json!({
+                        MessageContent::Thinking { text, signature } => json!({
+                            "type": "thinking",
+                            "thinking": text,
+                            "signature": signature,
+                        }),
+                        MessageContent::ToolUse {
+                            id, name, input, ..
+                        } => json!({
                             "type": "tool_use",
                             "id":   id,
                             "name": name,
@@ -244,6 +275,7 @@ impl Provider for AnthropicProvider {
     }
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
+        Self::validate_thinking_history(&request)?;
         let body = self.build_body(&request, false);
         debug!("Anthropic complete: model={}", request.model);
 
@@ -258,10 +290,7 @@ impl Provider for AnthropicProvider {
         if request.clear_tool_uses.is_some() {
             builder = builder.header("anthropic-beta", ANTHROPIC_CONTEXT_MGMT_BETA);
         }
-        let resp = builder
-            .json(&body)
-            .send()
-            .await?;
+        let resp = builder.json(&body).send().await?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -270,11 +299,8 @@ impl Provider for AnthropicProvider {
             // re-derived downstream: a 429 from a spend cap and a 429 from a
             // rate limit are the same status and only the body tells them
             // apart, so the one place that has the body is the place to decide.
-            let class = crate::provider::usage::ErrorClass::classify(
-                "anthropic",
-                status.as_u16(),
-                &text,
-            );
+            let class =
+                crate::provider::usage::ErrorClass::classify("anthropic", status.as_u16(), &text);
             return Err(ArcanaError::Provider(format!(
                 "Anthropic {status} [{class:?}]: {text}"
             )));
@@ -285,6 +311,7 @@ impl Provider for AnthropicProvider {
     }
 
     async fn stream(&self, request: CompletionRequest) -> Result<StreamResult> {
+        Self::validate_thinking_history(&request)?;
         let body = self.build_body(&request, true);
         debug!("Anthropic stream: model={}", request.model);
 
@@ -299,10 +326,7 @@ impl Provider for AnthropicProvider {
         if request.clear_tool_uses.is_some() {
             builder = builder.header("anthropic-beta", ANTHROPIC_CONTEXT_MGMT_BETA);
         }
-        let resp = builder
-            .json(&body)
-            .send()
-            .await?;
+        let resp = builder.json(&body).send().await?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -311,11 +335,8 @@ impl Provider for AnthropicProvider {
             // re-derived downstream: a 429 from a spend cap and a 429 from a
             // rate limit are the same status and only the body tells them
             // apart, so the one place that has the body is the place to decide.
-            let class = crate::provider::usage::ErrorClass::classify(
-                "anthropic",
-                status.as_u16(),
-                &text,
-            );
+            let class =
+                crate::provider::usage::ErrorClass::classify("anthropic", status.as_u16(), &text);
             return Err(ArcanaError::Provider(format!(
                 "Anthropic stream {status} [{class:?}]: {text}"
             )));
@@ -393,7 +414,7 @@ impl Provider for AnthropicProvider {
     }
 }
 
-fn parse_completion_response(data: serde_json::Value) -> Result<CompletionResponse> {
+pub(super) fn parse_completion_response(data: serde_json::Value) -> Result<CompletionResponse> {
     let message_id = data["id"].as_str().unwrap_or("").to_string();
     let stop_reason = data["stop_reason"]
         .as_str()
@@ -420,6 +441,10 @@ fn parse_completion_response(data: serde_json::Value) -> Result<CompletionRespon
         .filter_map(|block| match block["type"].as_str()? {
             "text" => Some(MessageContent::Text {
                 text: block["text"].as_str().unwrap_or("").to_string(),
+            }),
+            "thinking" => Some(MessageContent::Thinking {
+                text: block["thinking"].as_str().unwrap_or("").to_string(),
+                signature: block["signature"].as_str().map(str::to_string),
             }),
             "tool_use" => Some(MessageContent::ToolUse {
                 id: block["id"].as_str().unwrap_or("").to_string(),

@@ -41,7 +41,6 @@ impl Tool for ListDirectoryTool {
         })
     }
 
-
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         let path_str = input["path"].as_str().unwrap_or(&ctx.working_dir);
         let recursive = input["recursive"].as_bool().unwrap_or(false);

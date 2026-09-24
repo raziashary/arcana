@@ -53,7 +53,6 @@ impl Tool for SearchMemoryTool {
         })
     }
 
-
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         let query = match input["query"].as_str() {
             Some(q) => q.to_string(),

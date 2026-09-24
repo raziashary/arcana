@@ -42,7 +42,7 @@ use arcana_core::provider::catalogue;
 use arcana_core::provider::google::GoogleProvider;
 use arcana_core::provider::openai::OpenAIProvider;
 use arcana_core::provider::types::{CompletionRequest, MessageContent, RequestMessage};
-use arcana_core::provider::usage::{CachePolicy, CacheTtl, CacheSupport};
+use arcana_core::provider::usage::{CachePolicy, CacheSupport, CacheTtl};
 use arcana_core::provider::Provider;
 
 /// Read one key from the repo `.env` without exporting anything.
@@ -51,7 +51,9 @@ use arcana_core::provider::Provider;
 /// let this pass against whatever key happened to be exported in the shell,
 /// which is the ambient-credential failure the house rules name explicitly.
 fn key_from_dotenv(name: &str) -> Option<String> {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent()?.to_path_buf();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()?
+        .to_path_buf();
     let text = std::fs::read_to_string(root.join(".env")).ok()?;
     for line in text.lines() {
         let line = line.trim();
@@ -171,12 +173,19 @@ fn long_system_prompt() -> String {
 async fn s2_01_anthropic_answers_and_reports_six_field_usage() {
     let p = AnthropicProvider::new(require_key!("ANTHROPIC_API_KEY"));
     let r = p
-        .complete(small_request("claude-sonnet-5", "Be terse.", CachePolicy::Off))
+        .complete(small_request(
+            "claude-sonnet-5",
+            "Be terse.",
+            CachePolicy::Off,
+        ))
         .await
         .expect("anthropic completion failed");
 
     assert!(!r.content.is_empty(), "no content returned");
-    assert!(r.usage.output > 0, "zero output tokens on a call that produced text");
+    assert!(
+        r.usage.output > 0,
+        "zero output tokens on a call that produced text"
+    );
     assert!(
         r.usage.input > 0,
         "zero input tokens — the usage field names have most likely changed"
@@ -193,7 +202,10 @@ async fn s2_02_openai_answers_and_reports_six_field_usage() {
         .expect("openai completion failed");
 
     assert!(!r.content.is_empty(), "no content returned");
-    assert!(r.usage.output > 0, "zero output tokens on a call that produced text");
+    assert!(
+        r.usage.output > 0,
+        "zero output tokens on a call that produced text"
+    );
     assert!(r.usage.input > 0, "zero input tokens");
     println!("openai usage: {:?} stop={}", r.usage, r.stop_reason);
 }
@@ -218,7 +230,10 @@ async fn s2_03_google_answers_and_reports_six_field_usage() {
     let r = p.complete(req).await.expect("google completion failed");
 
     assert!(!r.content.is_empty(), "no content returned");
-    assert!(r.usage.output > 0, "zero output tokens on a call that produced text");
+    assert!(
+        r.usage.output > 0,
+        "zero output tokens on a call that produced text"
+    );
     assert!(r.usage.input > 0, "zero input tokens");
     println!("google usage: {:?} stop={}", r.usage, r.stop_reason);
 }
@@ -372,7 +387,10 @@ async fn p2_65_the_delegate_prompt_is_measured_against_the_real_minimum() {
 
     let status = resp.status();
     let json: serde_json::Value = resp.json().await.expect("count_tokens body");
-    assert!(status.is_success(), "count_tokens returned {status}: {json}");
+    assert!(
+        status.is_success(),
+        "count_tokens returned {status}: {json}"
+    );
 
     let measured = json["input_tokens"].as_u64().expect("input_tokens") as u32;
     let estimated = arcana_core::cache::prefix::estimate_tokens(prompt);
@@ -384,7 +402,11 @@ async fn p2_65_the_delegate_prompt_is_measured_against_the_real_minimum() {
         let min = caps.cache_minimum().unwrap_or(0);
         println!(
             "  {model}: minimum {min} → {}",
-            if measured >= min { "CACHEABLE" } else { "silently uncacheable" }
+            if measured >= min {
+                "CACHEABLE"
+            } else {
+                "silently uncacheable"
+            }
         );
     }
 
@@ -591,7 +613,6 @@ async fn cache_minimums_are_not_silently_wrong() {
     }
 }
 
-
 // ── S2-08 · a Gemini tool call carries REAL arguments, and two run in parallel ─
 
 #[tokio::test]
@@ -609,7 +630,11 @@ async fn s2_08_gemini_tool_calls_carry_their_arguments_and_run_in_parallel() {
 
     let p = GoogleProvider::new(require_key!("GOOGLE_API_KEY"));
 
-    let mut req = small_request("gemini-3.7-flash", "Use the tools you are given.", CachePolicy::Off);
+    let mut req = small_request(
+        "gemini-3.7-flash",
+        "Use the tools you are given.",
+        CachePolicy::Off,
+    );
     req.max_tokens = 2048;
     req.tools = vec![ToolDefinition {
         name: "read_file".to_string(),
@@ -647,7 +672,10 @@ async fn s2_08_gemini_tool_calls_carry_their_arguments_and_run_in_parallel() {
     for (name, input) in &calls {
         assert_eq!(*name, "read_file");
         assert!(
-            input.get("path").and_then(|v| v.as_str()).is_some_and(|p| !p.is_empty()),
+            input
+                .get("path")
+                .and_then(|v| v.as_str())
+                .is_some_and(|p| !p.is_empty()),
             "a tool call arrived with EMPTY arguments ({input}) — this is exactly the \
              defect P2-06 fixed, and it makes every Gemini tool call a no-op"
         );
@@ -688,7 +716,10 @@ async fn s2_03_session_cost_matches_the_providers_own_reported_usage() {
         + (r.usage.cache_write as f64 / 1_000_000.0) * price.cache_write
         + ((r.usage.output + r.usage.reasoning) as f64 / 1_000_000.0) * price.output;
 
-    println!("usage={:?} cost=${cost:.8} expected=${expected:.8}", r.usage);
+    println!(
+        "usage={:?} cost=${cost:.8} expected=${expected:.8}",
+        r.usage
+    );
     assert!(
         (cost - expected).abs() < 1e-9,
         "cost ${cost} does not reconcile with the provider's reported usage (${expected})"
@@ -696,7 +727,10 @@ async fn s2_03_session_cost_matches_the_providers_own_reported_usage() {
 
     // And a turn that produced output must not be free — the P2-52 invariant,
     // checked against a real response rather than a fixture.
-    assert!(r.usage.total() > 0, "a turn that returned content reported zero tokens");
+    assert!(
+        r.usage.total() > 0,
+        "a turn that returned content reported zero tokens"
+    );
     assert!(cost > 0.0, "a turn that spent tokens reported zero cost");
 }
 
@@ -752,7 +786,11 @@ async fn s2_10_a_failed_tool_result_survives_a_real_round_trip_on_every_provider
 
     for (id, model, provider) in cases {
         // ── Turn 1: get the model to call the tool ───────────────────────────
-        let mut first = small_request(model, "Use the read_file tool when asked.", CachePolicy::Off);
+        let mut first = small_request(
+            model,
+            "Use the read_file tool when asked.",
+            CachePolicy::Off,
+        );
         first.max_tokens = 2048;
         first.tools = vec![tool.clone()];
         first.messages[0].content = vec![MessageContent::Text {
@@ -882,13 +920,27 @@ async fn s2_13_an_invalid_key_is_rejected_rather_than_accepted() {
     // accepts anything is not validation. A garbage key must come back as an
     // error, not as Connected.
     let cases: Vec<(&str, Box<dyn Provider>)> = vec![
-        ("anthropic", Box::new(AnthropicProvider::new("sk-ant-invalid-key-for-testing".into())) as Box<dyn Provider>),
-        ("openai", Box::new(OpenAIProvider::new("sk-invalid-key-for-testing".into()))),
-        ("google", Box::new(GoogleProvider::new("AIza-invalid-key-for-testing".into()))),
+        (
+            "anthropic",
+            Box::new(AnthropicProvider::new(
+                "invalid-anthropic-key-for-testing".into(),
+            )) as Box<dyn Provider>,
+        ),
+        (
+            "openai",
+            Box::new(OpenAIProvider::new("sk-invalid-key-for-testing".into())),
+        ),
+        (
+            "google",
+            Box::new(GoogleProvider::new("AIza-invalid-key-for-testing".into())),
+        ),
     ];
 
     for (id, provider) in cases {
-        let status = provider.test_connection().await.expect("must not error out");
+        let status = provider
+            .test_connection()
+            .await
+            .expect("must not error out");
         println!("{id} (bad key): {status:?}");
         assert_ne!(
             status,

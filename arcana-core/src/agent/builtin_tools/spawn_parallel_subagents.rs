@@ -78,7 +78,6 @@ impl Tool for SpawnParallelSubagentsTool {
         })
     }
 
-
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let subtasks = match input.get("subtasks").and_then(|v| v.as_array()) {
             Some(arr) if !arr.is_empty() => arr.clone(),

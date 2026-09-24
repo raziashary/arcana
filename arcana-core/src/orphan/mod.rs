@@ -243,7 +243,7 @@ mod tests {
     fn task_aged(db: &TasksDb, hours: i64) -> crate::db::tasks::Task {
         db.conn
             .execute(
-                "INSERT INTO tasks (title, priority, task_type, status, acceptance_criteria,                  created_by, created_at, updated_at, claimed_by_pid, claim_host)                  VALUES ('ttl probe', 'p2', 'chore', 'in_progress', '', 'test',                  datetime('now', ?1), datetime('now', ?1), NULL, 'some-other-host')",
+                "INSERT INTO tasks (title, priority, task_type, status, assigned_worker, acceptance_criteria,                  created_by, created_at, updated_at, claimed_by_pid, claim_host)                  VALUES ('ttl probe', 'p2', 'chore', 'in_progress', 'worker-backend', '', 'test',                  datetime('now', ?1), datetime('now', ?1), NULL, 'some-other-host')",
                 rusqlite::params![format!("-{hours} hours")],
             )
             .expect("insert backdated task");

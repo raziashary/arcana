@@ -8,11 +8,12 @@ pub mod builtin_tools;
 pub mod compaction;
 pub mod context;
 pub mod engine;
+pub mod execution_registry;
 pub mod permission;
-pub mod tool_executor;
-pub mod tool_registry;
 pub mod terminal_event;
 pub mod tool_effect;
+pub mod tool_executor;
+pub mod tool_registry;
 pub mod tool_trait;
 
 pub use engine::AgentEngine;

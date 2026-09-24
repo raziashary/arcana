@@ -19,7 +19,6 @@ use uuid::Uuid;
 
 use crate::agent::engine::AgentEngine;
 use crate::agent::permission::{PendingPermissions, PermissionMode};
-use crate::recipes::types::RecipePermissionMode;
 use crate::agent::PAMode;
 use crate::db::workers::WorkersDb;
 use crate::errors::{ArcanaError, Result};
@@ -33,10 +32,11 @@ use crate::provider::google::GoogleProvider;
 use crate::provider::openai::OpenAIProvider;
 use crate::provider::traits::Provider;
 use crate::recipes::types::Recipe;
+use crate::recipes::types::RecipePermissionMode;
 use crate::session::manager::SessionManager;
+use crate::state::lock::LockTolerant;
 use crate::state::AppState;
 use crate::vault::keychain::{provider_key, VaultManager};
-use crate::state::lock::LockTolerant;
 
 /// A recipe that is scheduled AND asks for prompts, described.
 ///
@@ -89,7 +89,6 @@ impl RecipeRunner {
             pending,
         }
     }
-
 
     /// Execute a recipe for the given worker slug.
     /// Updates worker status in DB: idle → working → idle/error.
@@ -180,6 +179,10 @@ impl RecipeRunner {
 
         // Ephemeral session id — used by Mode 1 if reached
         let session_id = format!("recipe-{}-{}", worker_slug, Uuid::new_v4());
+        // Track the native run under its worker/session pair for its entire
+        // lifetime. This does not retain the engine or persist the session.
+        let _runtime_lease =
+            crate::state::runtime_registry::global().admit(worker_slug, &session_id)?;
 
         // Working directory for recipe agents.
         //
@@ -254,9 +257,7 @@ impl RecipeRunner {
         // them carried no information and a `grep` for it selected everything.
         info!(
             provider = provider_id.as_str(),
-            "[RecipeRunner] Worker '{}' active (provider='{}')",
-            worker_slug,
-            provider_id,
+            "[RecipeRunner] Worker '{}' active (provider='{}')", worker_slug, provider_id,
         );
 
         let api_key = VaultManager::get(&provider_key(&provider_id))?.ok_or_else(|| {
@@ -269,16 +270,11 @@ impl RecipeRunner {
             "anthropic" => Arc::new(AnthropicProvider::new(api_key)),
             "openai" => Arc::new(OpenAIProvider::new(api_key)),
             "google" => Arc::new(GoogleProvider::new(api_key)),
-            other => {
-                return Err(ArcanaError::Agent(format!(
-                    "Unsupported provider: {other}"
-                )))
-            }
+            other => return Err(ArcanaError::Agent(format!("Unsupported provider: {other}"))),
         };
 
         // Every worker call passes the daily ceiling (P2-21).
-        let provider =
-            crate::provider::capped::CappedProvider::wrap(inner, self.state.clone());
+        let provider = crate::provider::capped::CappedProvider::wrap(inner, self.state.clone());
 
         self.set_worker_status(worker_slug, "working");
         info!(
@@ -645,8 +641,11 @@ mod p3_65_runner_tests {
         // users author: `RecipeEditor.tsx` puts `permission_mode` and
         // `schedule` on the same form, so the invalid pair is two clicks away
         // and no source gate can reach it.
-        let msg = unanswerable_prompt_config(&recipe(Some("*/1 * * * *"), RecipePermissionMode::Supervised))
-            .expect("a scheduled supervised recipe cannot work and must say so");
+        let msg = unanswerable_prompt_config(&recipe(
+            Some("*/1 * * * *"),
+            RecipePermissionMode::Supervised,
+        ))
+        .expect("a scheduled supervised recipe cannot work and must say so");
 
         assert!(msg.contains("test-recipe"), "name the recipe: {msg}");
         assert!(msg.contains("*/1 * * * *"), "name the schedule: {msg}");
@@ -670,8 +669,11 @@ mod p3_65_runner_tests {
     #[test]
     fn a_scheduled_autonomous_recipe_is_the_normal_fleet_case() {
         assert!(
-            unanswerable_prompt_config(&recipe(Some("*/5 * * * *"), RecipePermissionMode::Autonomous))
-                .is_none(),
+            unanswerable_prompt_config(&recipe(
+                Some("*/5 * * * *"),
+                RecipePermissionMode::Autonomous
+            ))
+            .is_none(),
             "the entire fleet runs this way; refusing it would stop everything"
         );
     }

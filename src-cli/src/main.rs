@@ -230,4 +230,3 @@ fn resolve_output_format(cli: &Cli, cfg: &arcana_shared::config::CliConfigFile) 
         _ => OutputFormat::Table,
     }
 }
-

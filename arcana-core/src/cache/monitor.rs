@@ -289,7 +289,11 @@ mod tests {
             );
             assert!(!v.is_alarm());
         }
-        assert_eq!(m.alarm_count(), 0, "a correctly-declined cache is not a fault");
+        assert_eq!(
+            m.alarm_count(),
+            0,
+            "a correctly-declined cache is not a fault"
+        );
     }
 
     #[test]
@@ -358,8 +362,16 @@ mod tests {
         for i in 0..6u64 {
             m.observe(i, 4096, &c, &usage_with_cached_read(0));
         }
-        assert_eq!(m.distinct_prefixes(), 6, "six requests, six prefixes — nothing reusable");
-        assert_eq!(m.alarm_count(), 0, "no prefix repeated, so no miss to report");
+        assert_eq!(
+            m.distinct_prefixes(),
+            6,
+            "six requests, six prefixes — nothing reusable"
+        );
+        assert_eq!(
+            m.alarm_count(),
+            0,
+            "no prefix repeated, so no miss to report"
+        );
         m.report_reuse(6);
     }
     #[test]
@@ -389,8 +401,16 @@ mod tests {
             shared.observe(run, 4096, &c, &usage_with_cached_read(0));
         }
 
-        assert_eq!(shared.distinct_prefixes(), 6, "six runs, six single-use prefixes");
-        assert_eq!(shared.alarm_count(), 0, "no prefix repeated, so no MISS to report");
+        assert_eq!(
+            shared.distinct_prefixes(),
+            6,
+            "six runs, six single-use prefixes"
+        );
+        assert_eq!(
+            shared.alarm_count(),
+            0,
+            "no prefix repeated, so no MISS to report"
+        );
         shared.report_reuse(6);
     }
 
@@ -398,6 +418,9 @@ mod tests {
     fn the_global_monitor_is_one_instance() {
         let a = global() as *const CacheMonitor;
         let b = global() as *const CacheMonitor;
-        assert_eq!(a, b, "the process monitor must be a single accumulating instance");
+        assert_eq!(
+            a, b,
+            "the process monitor must be a single accumulating instance"
+        );
     }
 }

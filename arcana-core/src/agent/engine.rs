@@ -17,9 +17,7 @@ use super::tool_registry::ToolRegistry;
 use super::tool_trait::Tool;
 use crate::cost::tracker::CostTracker;
 use crate::errors::{ArcanaError, Result};
-use crate::events::{
-    emit_thinking, emit_token, AgentDonePayload, ThinkingPayload, TokenPayload,
-};
+use crate::events::{emit_thinking, emit_token, AgentDonePayload, ThinkingPayload, TokenPayload};
 // ⚠ P3-05. `emit_agent_done` / `emit_agent_error` / `AgentErrorPayload` are
 // deliberately NOT imported here. `TerminalEventGuard` owns terminal emission
 // outright — there is no way to emit one without going through it, and
@@ -28,10 +26,10 @@ use crate::events::{
 use crate::hooks::{HookContext, HookRegistry, HookType};
 use crate::provider::traits::Provider;
 use crate::provider::types::{CompletionRequest, MessageContent, RequestMessage, StreamChunk};
-use crate::session::manager::SessionManager;
-use crate::state::AppState;
 use crate::provider::usage::{StopReason, Usage};
+use crate::session::manager::SessionManager;
 use crate::state::lock::LockTolerant;
+use crate::state::AppState;
 
 const MAX_TOOL_TURNS: usize = 20;
 
@@ -786,7 +784,10 @@ impl AgentEngine {
             let mut unknown_tools: Vec<(String, String)> = Vec::new(); // (tool_use_id, name)
 
             for tc in &tool_calls {
-                if let MessageContent::ToolUse { id, name, input, .. } = tc {
+                if let MessageContent::ToolUse {
+                    id, name, input, ..
+                } = tc
+                {
                     match self.registry.get(name) {
                         Some(tool) => {
                             tool_batch.push((tool, input.clone(), id.clone()));
@@ -962,12 +963,11 @@ impl AgentEngine {
         // Infer provider from model name (engine only knows the model string).
         {
             // P2-53. This substring ladder was written out here AND in the other
-                            // runtime path, and they did not agree: `o4-mini`
-                            // matched neither and was filed as "unknown",
-                            // attributing real spend to a vendor that does not
-                            // exist. One shared function now answers.
-                            let analytics_provider =
-                                crate::provider::routing::provider_for_analytics(model);
+            // runtime path, and they did not agree: `o4-mini`
+            // matched neither and was filed as "unknown",
+            // attributing real spend to a vendor that does not
+            // exist. One shared function now answers.
+            let analytics_provider = crate::provider::routing::provider_for_analytics(model);
             // Phase 1 of docs/endtoendrun/14may2026/02 — fail loudly so a
             // future analytics regression shows up in the log instead of
             // silently zeroing the Dashboard.
@@ -1086,29 +1086,76 @@ impl AgentEngine {
         // inverting any commentary the model emitted after a tool call.
         let mut text_by_block: std::collections::BTreeMap<u64, String> =
             std::collections::BTreeMap::new();
+        let mut thinking_by_block: std::collections::BTreeMap<u64, (String, Option<String>)> =
+            std::collections::BTreeMap::new();
+        let xml_thinking_fallback = !crate::provider::catalogue::capabilities_for(model).reasoning;
+        let mut xml_detectors: std::collections::BTreeMap<
+            u64,
+            crate::provider::streaming::XmlThinkingDetector,
+        > = std::collections::BTreeMap::new();
         // block index → (tool_use_id, tool_name, partial_input_json)
         // (id, name, accumulated-json, opaque-echo-token)
         //
         // The fourth element is Gemini'"'"'s `thoughtSignature`, which must be
         // echoed back on the next request or the turn is rejected with a 400.
-        let mut tool_use_map: std::collections::BTreeMap<u64, (String, String, String, Option<String>)> =
-            std::collections::BTreeMap::new();
+        let mut tool_use_map: std::collections::BTreeMap<
+            u64,
+            (String, String, String, Option<String>),
+        > = std::collections::BTreeMap::new();
         let mut content_blocks: Vec<MessageContent> = Vec::new();
 
         while let Some(chunk) = stream.next().await {
             match chunk? {
                 StreamChunk::TextDelta { text, block_index } => {
-                    emit_token(TokenPayload {
-                        session_id: session_id.to_string(),
-                        text: text.clone(),
-                    });
-                    text_by_block.entry(block_index).or_default().push_str(&text);
+                    if xml_thinking_fallback {
+                        let detector = xml_detectors.entry(block_index).or_default();
+                        for segment in detector.push(&text) {
+                            match segment {
+                                crate::provider::streaming::ThinkingSegment::Content(text) => {
+                                    emit_token(TokenPayload {
+                                        session_id: session_id.to_string(),
+                                        text: text.clone(),
+                                    });
+                                    text_by_block
+                                        .entry(block_index)
+                                        .or_default()
+                                        .push_str(&text);
+                                }
+                                crate::provider::streaming::ThinkingSegment::Thinking(text) => {
+                                    emit_thinking(ThinkingPayload {
+                                        session_id: session_id.to_string(),
+                                        text,
+                                    });
+                                }
+                            }
+                        }
+                    } else {
+                        emit_token(TokenPayload {
+                            session_id: session_id.to_string(),
+                            text: text.clone(),
+                        });
+                        text_by_block
+                            .entry(block_index)
+                            .or_default()
+                            .push_str(&text);
+                    }
                 }
-                StreamChunk::ThinkingDelta { text } => {
+                StreamChunk::ThinkingDelta { text, block_index } => {
                     emit_thinking(ThinkingPayload {
                         session_id: session_id.to_string(),
                         text: text.clone(),
                     });
+                    thinking_by_block
+                        .entry(block_index)
+                        .or_default()
+                        .0
+                        .push_str(&text);
+                }
+                StreamChunk::ThinkingSignature {
+                    signature,
+                    block_index,
+                } => {
+                    thinking_by_block.entry(block_index).or_default().1 = Some(signature);
                 }
                 StreamChunk::ToolUseStart {
                     id,
@@ -1151,7 +1198,63 @@ impl AgentEngine {
             }
         }
 
-        content_blocks.extend(assemble_in_wire_order(text_by_block, tool_use_map));
+        for (block_index, detector) in &mut xml_detectors {
+            if let Some(segment) = detector.finish() {
+                match segment {
+                    crate::provider::streaming::ThinkingSegment::Content(text) => {
+                        emit_token(TokenPayload {
+                            session_id: session_id.to_string(),
+                            text: text.clone(),
+                        });
+                        text_by_block
+                            .entry(*block_index)
+                            .or_default()
+                            .push_str(&text);
+                    }
+                    crate::provider::streaming::ThinkingSegment::Thinking(text) => {
+                        emit_thinking(ThinkingPayload {
+                            session_id: session_id.to_string(),
+                            text,
+                        });
+                    }
+                }
+            }
+        }
+
+        for (block_index, segment) in finish_xml_thinking(&mut xml_detectors) {
+            match segment {
+                crate::provider::streaming::ThinkingSegment::Content(text) => {
+                    emit_token(TokenPayload {
+                        session_id: session_id.to_string(),
+                        text: text.clone(),
+                    });
+                    text_by_block
+                        .entry(block_index)
+                        .or_default()
+                        .push_str(&text);
+                }
+                crate::provider::streaming::ThinkingSegment::Thinking(text) => {
+                    emit_thinking(ThinkingPayload {
+                        session_id: session_id.to_string(),
+                        text,
+                    });
+                }
+            }
+        }
+
+        if thinking_by_block
+            .values()
+            .any(|(_, signature)| signature.as_deref().is_none_or(str::is_empty))
+        {
+            return Err(crate::errors::ArcanaError::Provider(
+                "Anthropic thinking block has no signature; refusing an unreplayable turn".into(),
+            ));
+        }
+        content_blocks.extend(assemble_with_thinking_in_wire_order(
+            text_by_block,
+            thinking_by_block,
+            tool_use_map,
+        ));
 
         Ok(content_blocks)
     }
@@ -1360,8 +1463,34 @@ fn assemble_in_wire_order(
     text_by_block: std::collections::BTreeMap<u64, String>,
     tool_use_map: std::collections::BTreeMap<u64, (String, String, String, Option<String>)>,
 ) -> Vec<MessageContent> {
+    assemble_with_thinking_in_wire_order(text_by_block, Default::default(), tool_use_map)
+}
+
+fn finish_xml_thinking(
+    detectors: &mut std::collections::BTreeMap<
+        u64,
+        crate::provider::streaming::XmlThinkingDetector,
+    >,
+) -> Vec<(u64, crate::provider::streaming::ThinkingSegment)> {
+    detectors
+        .iter_mut()
+        .filter_map(|(block_index, detector)| {
+            detector.finish().map(|segment| (*block_index, segment))
+        })
+        .collect()
+}
+
+fn assemble_with_thinking_in_wire_order(
+    text_by_block: std::collections::BTreeMap<u64, String>,
+    thinking_by_block: std::collections::BTreeMap<u64, (String, Option<String>)>,
+    tool_use_map: std::collections::BTreeMap<u64, (String, String, String, Option<String>)>,
+) -> Vec<MessageContent> {
     let mut ordered: std::collections::BTreeMap<u64, MessageContent> =
         std::collections::BTreeMap::new();
+
+    for (idx, (text, signature)) in thinking_by_block {
+        ordered.insert(idx, MessageContent::Thinking { text, signature });
+    }
 
     for (idx, text) in text_by_block {
         // An empty text block is dropped rather than emitted: an empty content
@@ -1398,10 +1527,44 @@ fn assemble_in_wire_order(
 #[cfg(test)]
 mod wire_order_tests {
     use super::*;
+    use crate::provider::anthropic::AnthropicProvider;
+    use crate::provider::streaming::parse_sse_line;
+    use crate::provider::types::{CompletionRequest, RequestMessage};
     use std::collections::BTreeMap;
 
     fn tool(id: &str, name: &str, json: &str) -> (String, String, String, Option<String>) {
         (id.to_string(), name.to_string(), json.to_string(), None)
+    }
+
+    #[test]
+    fn stream_end_flushes_an_incomplete_xml_delimiter_into_visible_history() {
+        let mut detector = crate::provider::streaming::XmlThinkingDetector::default();
+        assert_eq!(
+            detector.push("visible <think"),
+            vec![crate::provider::streaming::ThinkingSegment::Content(
+                "visible ".into()
+            )]
+        );
+        let mut detectors = BTreeMap::from([(3, detector)]);
+        let flushed = finish_xml_thinking(&mut detectors);
+        assert_eq!(
+            flushed,
+            vec![(
+                3,
+                crate::provider::streaming::ThinkingSegment::Content("<think".into())
+            )]
+        );
+
+        let mut visible = BTreeMap::from([(3, "visible ".to_string())]);
+        for (block, segment) in flushed {
+            if let crate::provider::streaming::ThinkingSegment::Content(text) = segment {
+                visible.entry(block).or_default().push_str(&text);
+            }
+        }
+        assert!(matches!(
+            assemble_in_wire_order(visible, BTreeMap::new()).as_slice(),
+            [MessageContent::Text { text }] if text == "visible <think"
+        ));
     }
 
     /// A tool call carrying a provider echo token (Gemini'"'"'s thoughtSignature).
@@ -1411,7 +1574,324 @@ mod wire_order_tests {
         json: &str,
         sig: &str,
     ) -> (String, String, String, Option<String>) {
-        (id.to_string(), name.to_string(), json.to_string(), Some(sig.to_string()))
+        (
+            id.to_string(),
+            name.to_string(),
+            json.to_string(),
+            Some(sig.to_string()),
+        )
+    }
+
+    struct FixtureStreamProvider {
+        chunks: Vec<StreamChunk>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::provider::traits::Provider for FixtureStreamProvider {
+        fn id(&self) -> &str {
+            "anthropic"
+        }
+        fn name(&self) -> &str {
+            "Fixture"
+        }
+        fn models(&self) -> Vec<crate::provider::types::ModelInfo> {
+            Vec::new()
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> crate::errors::Result<crate::provider::types::CompletionResponse> {
+            unreachable!("streaming tests must use the real stream consumer")
+        }
+
+        async fn stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> crate::errors::Result<crate::provider::traits::StreamResult> {
+            Ok(Box::pin(futures::stream::iter(
+                self.chunks.clone().into_iter().map(Ok),
+            )))
+        }
+
+        async fn test_connection(
+            &self,
+        ) -> crate::errors::Result<crate::provider::types::ProviderStatus> {
+            Ok(crate::provider::types::ProviderStatus::Connected)
+        }
+    }
+
+    fn fixture_request() -> CompletionRequest {
+        CompletionRequest {
+            model: "claude-sonnet-5".into(),
+            messages: vec![],
+            system: None,
+            tools: vec![],
+            max_tokens: 128,
+            temperature: None,
+            top_p: None,
+            reasoning_effort: None,
+            thinking_budget_tokens: Some(64),
+            cache: Default::default(),
+            clear_tool_uses: None,
+        }
+    }
+
+    fn fixture_engine(chunks: Vec<StreamChunk>) -> AgentEngine {
+        let provider = Arc::new(FixtureStreamProvider { chunks });
+        AgentEngine::new(
+            provider,
+            super::super::permission::PermissionMode::Autonomous,
+            super::super::PAMode::FastDevelopment,
+            Arc::new(Mutex::new(crate::state::AppState::default())),
+            super::super::permission::new_pending_permissions(),
+            super::super::tool_trait::AgentIdentity::supervisor(),
+        )
+    }
+
+    #[tokio::test]
+    async fn production_stream_consumer_replays_signed_thinking_before_a_tool_result() {
+        let engine = fixture_engine(vec![
+            StreamChunk::ThinkingDelta {
+                text: "consider file".into(),
+                block_index: 0,
+            },
+            StreamChunk::ThinkingSignature {
+                signature: "signed-opaque".into(),
+                block_index: 0,
+            },
+            StreamChunk::ToolUseStart {
+                id: "toolu_1".into(),
+                name: "read_file".into(),
+                block_index: 1,
+                opaque: None,
+            },
+            StreamChunk::ToolInputDelta {
+                block_index: 1,
+                partial_json: r#"{"path":"package.json"}"#.into(),
+            },
+            StreamChunk::MessageDelta {
+                stop_reason: "tool_use".into(),
+                usage: Usage::default(),
+            },
+            StreamChunk::Done,
+        ]);
+        let mut usage = Usage::default();
+        let mut stop_reason = None;
+        let assistant_content = engine
+            .stream_response(
+                "p8-anthropic-session",
+                "claude-sonnet-5",
+                fixture_request(),
+                &mut usage,
+                &mut stop_reason,
+            )
+            .await
+            .expect("production stream consumer should assemble the assistant turn");
+        assert_eq!(stop_reason.as_deref(), Some("tool_use"));
+
+        let follow_up = CompletionRequest {
+            messages: vec![
+                RequestMessage {
+                    role: "assistant".into(),
+                    content: assistant_content,
+                },
+                RequestMessage {
+                    role: "user".into(),
+                    content: vec![MessageContent::ToolResult {
+                        tool_use_id: "toolu_1".into(),
+                        name: "read_file".into(),
+                        content: "{\"name\":\"arcana\"}".into(),
+                        is_error: false,
+                    }],
+                },
+            ],
+            ..fixture_request()
+        };
+        let body = AnthropicProvider::new("unused".into())
+            .build_checked_body_for_test(&follow_up, true)
+            .expect("stream-produced signed history must serialize for the next request");
+        assert_eq!(
+            body["messages"][0]["content"][0],
+            serde_json::json!({
+                "type": "thinking", "thinking": "consider file", "signature": "signed-opaque",
+            })
+        );
+        assert_eq!(body["messages"][0]["content"][1]["type"], "tool_use");
+        assert_eq!(body["messages"][1]["content"][0]["tool_use_id"], "toolu_1");
+    }
+
+    #[tokio::test]
+    async fn production_stream_consumer_keeps_xml_reasoning_private_and_flushes_visible_tail() {
+        let engine = fixture_engine(vec![
+            StreamChunk::TextDelta {
+                text: "safe <thi".into(),
+                block_index: 0,
+            },
+            StreamChunk::TextDelta {
+                text: "nking>secret</thinking> visible <think".into(),
+                block_index: 0,
+            },
+            StreamChunk::MessageDelta {
+                stop_reason: "stop".into(),
+                usage: Usage::default(),
+            },
+            StreamChunk::Done,
+        ]);
+        let mut usage = Usage::default();
+        let mut stop_reason = None;
+        let content = engine
+            .stream_response(
+                "p8-streaming-session",
+                "gpt-5.4-nano",
+                fixture_request(),
+                &mut usage,
+                &mut stop_reason,
+            )
+            .await
+            .expect("non-reasoning model uses the production XML fallback");
+
+        assert!(matches!(
+            content.as_slice(),
+            [MessageContent::Text { text }] if text == "safe  visible <think"
+        ));
+        assert!(content.iter().all(|part| match part {
+            MessageContent::Text { text } => !text.contains("secret"),
+            _ => false,
+        }));
+    }
+
+    #[tokio::test]
+    async fn production_stream_consumer_rejects_an_anthropic_thinking_block_without_signature() {
+        let engine = fixture_engine(vec![
+            StreamChunk::ThinkingDelta {
+                text: "private".into(),
+                block_index: 0,
+            },
+            StreamChunk::ToolUseStart {
+                id: "toolu_1".into(),
+                name: "read_file".into(),
+                block_index: 1,
+                opaque: None,
+            },
+            StreamChunk::MessageDelta {
+                stop_reason: "tool_use".into(),
+                usage: Usage::default(),
+            },
+            StreamChunk::Done,
+        ]);
+        let mut usage = Usage::default();
+        let mut stop_reason = None;
+        let error = engine
+            .stream_response(
+                "p8-anthropic-session",
+                "claude-sonnet-5",
+                fixture_request(),
+                &mut usage,
+                &mut stop_reason,
+            )
+            .await
+            .expect_err("an unsigned thinking block cannot be replayed");
+        assert!(error.to_string().contains("no signature"));
+    }
+
+    #[test]
+    fn signed_streamed_thinking_is_replayed_before_a_tool_follow_up() {
+        let frames = [
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"consider "}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"file"}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"signed-opaque"}}"#,
+            r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"read_file","input":{}}}"#,
+            r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"package.json\"}"}}"#,
+        ];
+        let mut thinking = BTreeMap::new();
+        let mut tools = BTreeMap::new();
+        for frame in frames {
+            let chunk = parse_sse_line(&format!("data: {frame}"))
+                .expect("valid Anthropic frame")
+                .expect("content event");
+            match chunk {
+                StreamChunk::ThinkingDelta { text, block_index } => {
+                    thinking
+                        .entry(block_index)
+                        .or_insert_with(|| (String::new(), None))
+                        .0
+                        .push_str(&text);
+                }
+                StreamChunk::ThinkingSignature {
+                    signature,
+                    block_index,
+                } => {
+                    thinking
+                        .entry(block_index)
+                        .or_insert_with(|| (String::new(), None))
+                        .1 = Some(signature);
+                }
+                StreamChunk::ToolUseStart {
+                    id,
+                    name,
+                    block_index,
+                    opaque,
+                } => {
+                    tools.insert(block_index, (id, name, String::new(), opaque));
+                }
+                StreamChunk::ToolInputDelta {
+                    block_index,
+                    partial_json,
+                } => {
+                    tools
+                        .get_mut(&block_index)
+                        .expect("tool started")
+                        .2
+                        .push_str(&partial_json);
+                }
+                _ => panic!("unexpected content event"),
+            }
+        }
+        let assistant = assemble_with_thinking_in_wire_order(BTreeMap::new(), thinking, tools);
+        let request = CompletionRequest {
+            model: "claude-haiku-4-5".into(),
+            messages: vec![
+                RequestMessage {
+                    role: "assistant".into(),
+                    content: assistant,
+                },
+                RequestMessage {
+                    role: "user".into(),
+                    content: vec![MessageContent::ToolResult {
+                        tool_use_id: "toolu_1".into(),
+                        name: "read_file".into(),
+                        content: "{\"name\":\"arcana\"}".into(),
+                        is_error: false,
+                    }],
+                },
+            ],
+            system: None,
+            tools: vec![],
+            max_tokens: 128,
+            temperature: None,
+            top_p: None,
+            reasoning_effort: None,
+            thinking_budget_tokens: Some(64),
+            cache: Default::default(),
+            clear_tool_uses: None,
+        };
+        let body = AnthropicProvider::new("unused".into())
+            .build_checked_body_for_test(&request, true)
+            .expect("signed tool follow-up must be sendable");
+        let blocks = body["messages"][0]["content"]
+            .as_array()
+            .expect("assistant blocks");
+        assert_eq!(
+            blocks[0],
+            serde_json::json!({
+                "type": "thinking", "thinking": "consider file", "signature": "signed-opaque",
+            })
+        );
+        assert_eq!(blocks[1]["type"], "tool_use");
+        assert_eq!(blocks[1]["input"]["path"], "package.json");
+        assert_eq!(body["messages"][1]["content"][0]["tool_use_id"], "toolu_1");
     }
 
     #[test]

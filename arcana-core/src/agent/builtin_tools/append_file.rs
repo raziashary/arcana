@@ -51,7 +51,6 @@ impl Tool for AppendFileTool {
         })
     }
 
-
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         let path_str = match input["path"].as_str() {
             Some(p) if !p.trim().is_empty() => p,

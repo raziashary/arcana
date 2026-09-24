@@ -76,7 +76,12 @@ mod tests {
 
     #[test]
     fn a_dropped_provider_does_not_route() {
-        for m in ["grok-3-mini-beta", "llama-3.3-70b", "qwen3-max", "ollama-llama3"] {
+        for m in [
+            "grok-3-mini-beta",
+            "llama-3.3-70b",
+            "qwen3-max",
+            "ollama-llama3",
+        ] {
             assert_eq!(provider_for_model(m), None, "{m} must not route");
         }
     }

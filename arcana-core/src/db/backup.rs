@@ -188,10 +188,9 @@ pub fn backup_database_in(
     {
         let check = Connection::open_with_flags(
             &dest,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
-                | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
-            .map_err(|e| ArcanaError::Agent(format!("Backup is not readable: {e}")))?;
+        .map_err(|e| ArcanaError::Agent(format!("Backup is not readable: {e}")))?;
         let ok: String = check
             .query_row("PRAGMA integrity_check", [], |r| r.get(0))
             .map_err(|e| ArcanaError::Agent(format!("Backup integrity check failed: {e}")))?;
@@ -295,11 +294,9 @@ mod tests {
         // …and the snapshot's own FTS5 index survived and is searchable, so
         // "verified" means the data is really there rather than merely that a
         // file opened.
-        let restored = Connection::open_with_flags(
-            &backup.path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
-        .expect("open backup");
+        let restored =
+            Connection::open_with_flags(&backup.path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .expect("open backup");
         let hits: i64 = restored
             .query_row(
                 "SELECT count(*) FROM notes_fts WHERE notes_fts MATCH 'deploy'",

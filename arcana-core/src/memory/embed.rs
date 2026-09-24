@@ -253,10 +253,7 @@ mod enabled {
                 Ok(g) => g,
                 Err(p) => p.into_inner(),
             };
-            guard
-                .embed(vec![text], None)
-                .ok()
-                .and_then(|mut v| v.pop())
+            guard.embed(vec![text], None).ok().and_then(|mut v| v.pop())
         })
         .await
         .ok()
@@ -279,7 +276,11 @@ mod enabled {
             None
         }
 
-        fn search(&self, conn: &rusqlite::Connection, q: &RetrievalQuery) -> Result<Vec<Candidate>> {
+        fn search(
+            &self,
+            conn: &rusqlite::Connection,
+            q: &RetrievalQuery,
+        ) -> Result<Vec<Candidate>> {
             // Scope is mandatory here exactly as it is lexically.
             if q.scope_keys.is_empty() {
                 return Ok(Vec::new());
@@ -367,7 +368,10 @@ mod tests {
             s.contains(".arcana"),
             "the model cache is outside the app data root: {dir:?} — INV-5"
         );
-        assert!(!s.starts_with("./"), "a CWD-relative cache is the default this replaces");
+        assert!(
+            !s.starts_with("./"),
+            "a CWD-relative cache is the default this replaces"
+        );
     }
 
     /// 🔴 The half the task did not name: setting the path is not enough.
@@ -442,7 +446,10 @@ mod tests {
         assert!(!msg.is_empty());
 
         if cfg!(target_os = "macos") {
-            assert!(msg.contains("macOS"), "the platform reason must be named: {msg}");
+            assert!(
+                msg.contains("macOS"),
+                "the platform reason must be named: {msg}"
+            );
             assert!(msg.contains("keyword"), "and what still works: {msg}");
         } else if !cfg!(feature = "embeddings") {
             assert!(

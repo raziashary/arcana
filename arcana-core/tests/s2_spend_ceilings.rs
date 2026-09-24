@@ -25,7 +25,6 @@ fn read_source(path: &std::path::Path) -> String {
         .replace("\r\n", "\n")
 }
 
-
 // ── S2-05 · exceeding the cap stops work ─────────────────────────────────────
 
 #[test]
@@ -39,7 +38,11 @@ fn s2_05_the_ceiling_fires_at_the_limit_not_past_it() {
     // ⚠ `>=`, not `>`. Firing only when spend EXCEEDS the ceiling lets a call
     // land exactly on it and pass, which means the cap is off by one call —
     // and the call that lands on it is unbounded in size.
-    assert_eq!(cap.evaluate(10.0), CapState::Exceeded, "the cap must fire AT the limit");
+    assert_eq!(
+        cap.evaluate(10.0),
+        CapState::Exceeded,
+        "the cap must fire AT the limit"
+    );
     assert_eq!(cap.evaluate(10.01), CapState::Exceeded);
 }
 
@@ -52,7 +55,11 @@ fn s2_05_a_disabled_ceiling_never_reports_exceeded() {
         limit_usd: 0.01,
     };
     assert_eq!(cap.evaluate(1_000_000.0), CapState::Disabled);
-    assert_eq!(cap.fraction_used(500.0), None, "a disabled cap has no meter to fill");
+    assert_eq!(
+        cap.fraction_used(500.0),
+        None,
+        "a disabled cap has no meter to fill"
+    );
 }
 
 #[test]
@@ -179,9 +186,8 @@ fn s2_11_tool_call_ordering_does_not_depend_on_hash_iteration_order() {
     // index — so the property is checked structurally too. Re-running the same
     // assembly in one process cannot detect a per-process hash seed; asserting
     // the ordering path holds no `HashMap` can.
-    let engine = read_source(
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/agent/engine.rs"),
-    );
+    let engine =
+        read_source(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/agent/engine.rs"));
 
     let assembler = engine
         .split("fn assemble_in_wire_order(")
@@ -203,9 +209,8 @@ fn s2_11_tool_call_ordering_does_not_depend_on_hash_iteration_order() {
     );
 
     // And the prefix builder sorts its tools for the same reason.
-    let prefix = read_source(
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/cache/prefix.rs"),
-    );
+    let prefix =
+        read_source(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/cache/prefix.rs"));
     assert!(
         prefix.contains("tools.sort_by"),
         "an unsorted tool list produces a different cache prefix on every restart"
@@ -279,12 +284,13 @@ fn s2_06_a_stale_stored_day_is_discarded_rather_than_carried_forward() {
     let mut s = AppState::new();
     s.cost_today_usd = 42.0;
     s.tokens_in_today = 1_000;
-    s.cost_day = Some(
-        chrono::NaiveDate::from_ymd_opt(2020, 1, 1).expect("a date in the past"),
-    );
+    s.cost_day = Some(chrono::NaiveDate::from_ymd_opt(2020, 1, 1).expect("a date in the past"));
 
     s.roll_day_if_needed(chrono::Local::now().date_naive());
 
-    assert_eq!(s.cost_today_usd, 0.0, "yesterday's spend must not cap today");
+    assert_eq!(
+        s.cost_today_usd, 0.0,
+        "yesterday's spend must not cap today"
+    );
     assert_eq!(s.tokens_in_today, 0);
 }

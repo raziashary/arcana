@@ -145,8 +145,8 @@ pub fn blame(repo_path: &str, file: &str, line: Option<usize>) -> Result<Vec<Bla
 pub fn commit_diff(repo_path: &str, commit_oid: &str) -> Result<super::types::DiffResult> {
     let repo = super::repo::open(repo_path)?;
 
-    let oid = git2::Oid::from_str(commit_oid)
-        .map_err(|e| ArcanaError::Git(format!("parse oid: {e}")))?;
+    let oid =
+        git2::Oid::from_str(commit_oid).map_err(|e| ArcanaError::Git(format!("parse oid: {e}")))?;
 
     let commit = repo
         .find_commit(oid)

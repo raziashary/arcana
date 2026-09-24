@@ -6,7 +6,6 @@
 use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 use crate::db::tasks::TasksDb;
 use crate::hooks::{HookContext, HookRegistry, HookType, ToolCallContext};
-use crate::recipes::defaults::FLEET_WORKERS;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
@@ -56,7 +55,6 @@ impl Tool for UpdateTaskStatusTool {
         })
     }
 
-
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let id = match input["id"].as_i64() {
             Some(id) if id > 0 => id,
@@ -78,15 +76,9 @@ impl Tool for UpdateTaskStatusTool {
         // ⚠ `TaskStatus::from_str` is the authority, not a list retyped here —
         // a second list is the thing `L-19` is about ("two lists that must
         // agree will disagree, and the second is always invisible").
-        // ⚠ A ROUND TRIP, because `TaskStatus::from_str` returns `Self` and
-        // its fallback arm is `_ => Self::Ready` -- it cannot report an
-        // unknown value, it silently becomes `Ready`. So a typo like
-        // `"in-progress"` did not make the task invisible; it put the task
-        // back on the READY queue to be assigned again. The round trip is
-        // identity exactly for the values the enum knows, and needs no
-        // second list. (`P4-02` fixes the swallowing at the DB layer; this
-        // is the tool boundary and does not wait for it.)
-        if crate::db::tasks::TaskStatus::from_str(&status).as_str() != status {
+        // The task parser is fallible at every boundary; an unknown value
+        // must never silently become `ready` in either the tool or DB reader.
+        if crate::db::tasks::TaskStatus::from_str(&status).is_err() {
             return ToolResult::error(format!(
                 "'{status}' is not a task status. The recognised values are the \
                  nine this tool's schema declares; check spelling and case."
@@ -130,11 +122,17 @@ impl Tool for UpdateTaskStatusTool {
         // Validate the worker slug is a known fleet worker when explicitly set.
         // Catches typos like 'backend-worker' before they silently corrupt the board.
         if let Some(ref w) = assigned_worker {
-            if !FLEET_WORKERS.contains(&w.as_str()) {
+            let registered_workers = match crate::db::workers::WorkersDb::open()
+                .and_then(|db| db.registered_slugs())
+            {
+                Ok(workers) => workers,
+                Err(e) => return ToolResult::error(&format!("Failed to read worker roster: {e}")),
+            };
+            if !registered_workers.iter().any(|slug| slug == w) {
                 return ToolResult::error(&format!(
-                    "Unknown worker slug '{w}'. Valid workers: {}. \
+                    "Unknown worker slug '{w}'. Registered workers: {}. \
                      Check for typos — worker slugs use the format 'worker-<domain>'.",
-                    FLEET_WORKERS.join(", ")
+                    registered_workers.join(", ")
                 ));
             }
         }

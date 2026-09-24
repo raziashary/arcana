@@ -61,9 +61,8 @@ impl RecipeScheduler {
             })?
             .to_string();
 
-        let recipe = load_recipe_by_id(&recipe_id)?.ok_or_else(|| {
-            ArcanaError::Agent(format!("Recipe '{recipe_id}' not found on disk"))
-        })?;
+        let recipe = load_recipe_by_id(&recipe_id)?
+            .ok_or_else(|| ArcanaError::Agent(format!("Recipe '{recipe_id}' not found on disk")))?;
 
         // Parse cron schedule (5-field POSIX → 6-field with leading seconds=0)
         let raw_schedule = recipe

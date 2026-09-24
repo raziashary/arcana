@@ -186,6 +186,9 @@ mod budget_enforcement_tests {
         let b = TaskBudget::unlimited();
         assert_eq!(b.max_usd, None);
         assert!(b.check(&spent(u64::MAX, 1e9, 1)).is_none());
-        assert!(b.check(&spent(0, 0.0, 20)).is_some(), "turns are still capped");
+        assert!(
+            b.check(&spent(0, 0.0, 20)).is_some(),
+            "turns are still capped"
+        );
     }
 }

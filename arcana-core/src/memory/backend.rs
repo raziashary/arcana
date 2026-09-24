@@ -290,11 +290,21 @@ mod tests {
         // every turn because the query never reached any tier. `TG3-12` asks
         // exactly this, and it failed by construction before today.
         let c = db();
-        insert(&c, "m1", "semantic", "global", "the deploy key rotates monthly");
+        insert(
+            &c,
+            "m1",
+            "semantic",
+            "global",
+            "the deploy key rotates monthly",
+        );
         insert(&c, "m2", "semantic", "global", "the frontend uses Tailwind");
 
-        let a = LexicalBackend.search(&c, &q("deploy key", &["global"])).unwrap();
-        let b = LexicalBackend.search(&c, &q("Tailwind", &["global"])).unwrap();
+        let a = LexicalBackend
+            .search(&c, &q("deploy key", &["global"]))
+            .unwrap();
+        let b = LexicalBackend
+            .search(&c, &q("Tailwind", &["global"]))
+            .unwrap();
 
         assert_eq!(a.len(), 1, "got {a:?}");
         assert_eq!(b.len(), 1, "got {b:?}");
@@ -310,9 +320,19 @@ mod tests {
         // The other half of TG3-12: different queries differ, identical queries
         // do not.
         let c = db();
-        insert(&c, "m1", "semantic", "global", "the deploy key rotates monthly");
-        let a = LexicalBackend.search(&c, &q("deploy", &["global"])).unwrap();
-        let b = LexicalBackend.search(&c, &q("deploy", &["global"])).unwrap();
+        insert(
+            &c,
+            "m1",
+            "semantic",
+            "global",
+            "the deploy key rotates monthly",
+        );
+        let a = LexicalBackend
+            .search(&c, &q("deploy", &["global"]))
+            .unwrap();
+        let b = LexicalBackend
+            .search(&c, &q("deploy", &["global"]))
+            .unwrap();
         assert_eq!(
             a.iter().map(|c| c.id.clone()).collect::<Vec<_>>(),
             b.iter().map(|c| c.id.clone()).collect::<Vec<_>>()
@@ -325,7 +345,9 @@ mod tests {
         insert(&c, "mine", "semantic", "project:/a", "shared secret alpha");
         insert(&c, "theirs", "semantic", "project:/b", "shared secret beta");
 
-        let a = LexicalBackend.search(&c, &q("shared secret", &["project:/a"])).unwrap();
+        let a = LexicalBackend
+            .search(&c, &q("shared secret", &["project:/a"]))
+            .unwrap();
         assert_eq!(a.len(), 1);
         assert_eq!(a[0].id, "mine", "another project's memory leaked in");
 
@@ -343,7 +365,13 @@ mod tests {
         // silently behaving like a match-all search.
         let c = db();
         for i in 0..5 {
-            insert(&c, &format!("m{i}"), "semantic", "global", &format!("fact {i}"));
+            insert(
+                &c,
+                &format!("m{i}"),
+                "semantic",
+                "global",
+                &format!("fact {i}"),
+            );
         }
         let query = q("", &["global"]);
         assert!(!query.is_lexically_searchable());
@@ -394,14 +422,30 @@ mod tests {
     #[test]
     fn bm25_is_returned_so_that_higher_means_more_relevant() {
         let c = db();
-        insert(&c, "strong", "semantic", "global", "deploy deploy deploy key");
-        insert(&c, "weak", "semantic", "global", "deploy something unrelated entirely");
-        let r = LexicalBackend.search(&c, &q("deploy", &["global"])).unwrap();
+        insert(
+            &c,
+            "strong",
+            "semantic",
+            "global",
+            "deploy deploy deploy key",
+        );
+        insert(
+            &c,
+            "weak",
+            "semantic",
+            "global",
+            "deploy something unrelated entirely",
+        );
+        let r = LexicalBackend
+            .search(&c, &q("deploy", &["global"]))
+            .unwrap();
         assert!(r.len() >= 2);
         assert!(
             r[0].lexical_score >= r[1].lexical_score,
             "results are not ordered by descending relevance: {:?}",
-            r.iter().map(|c| (c.id.clone(), c.lexical_score)).collect::<Vec<_>>()
+            r.iter()
+                .map(|c| (c.id.clone(), c.lexical_score))
+                .collect::<Vec<_>>()
         );
     }
 }

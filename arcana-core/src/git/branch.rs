@@ -103,8 +103,8 @@ pub fn checkout(repo_path: &str, refname: &str) -> Result<()> {
 pub fn checkout_commit(repo_path: &str, commit_oid: &str) -> Result<()> {
     let repo = super::repo::open(repo_path)?;
 
-    let oid = git2::Oid::from_str(commit_oid)
-        .map_err(|e| ArcanaError::Git(format!("parse oid: {e}")))?;
+    let oid =
+        git2::Oid::from_str(commit_oid).map_err(|e| ArcanaError::Git(format!("parse oid: {e}")))?;
 
     let commit = repo
         .find_commit(oid)
@@ -128,8 +128,8 @@ pub fn create_from_commit(
 ) -> Result<()> {
     let repo = super::repo::open(repo_path)?;
 
-    let oid = git2::Oid::from_str(commit_oid)
-        .map_err(|e| ArcanaError::Git(format!("parse oid: {e}")))?;
+    let oid =
+        git2::Oid::from_str(commit_oid).map_err(|e| ArcanaError::Git(format!("parse oid: {e}")))?;
 
     let commit = repo
         .find_commit(oid)

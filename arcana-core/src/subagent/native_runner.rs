@@ -64,8 +64,7 @@ pub struct RunnerDeps {
 /// is always one the provider recognises.
 fn pick_servable_model(provider_id: &str, requested: &str, active: Option<&str>) -> String {
     let serves = |m: &str| {
-        !m.trim().is_empty()
-            && crate::provider::routing::provider_for_model(m) == Some(provider_id)
+        !m.trim().is_empty() && crate::provider::routing::provider_for_model(m) == Some(provider_id)
     };
 
     if serves(requested) {
@@ -237,6 +236,11 @@ async fn run_inner(
     // model belongs to the provider that will actually serve it.
     let model = pick_servable_model(&provider_id, &config.model, fallback_model.as_deref());
 
+    // A subagent's ID is its run identity; pair it with a stable per-run
+    // session key so duplicate active runs are rejected and cleanup is scoped.
+    let _runtime_lease =
+        crate::state::runtime_registry::global().admit(subagent_id, subagent_id)?;
+
     let provider = build_provider(&provider_id, deps.state.clone())?;
 
     emit(
@@ -364,8 +368,8 @@ fn build_provider(
     state: Arc<std::sync::Mutex<AppState>>,
 ) -> Result<Arc<dyn Provider>> {
     // Every supported provider takes a key. The local-provider branch went
-      // with Ollama (P2-11) — there is no keyless provider any more, so the
-      // absence of a key is now unconditionally an error rather than a case.
+    // with Ollama (P2-11) — there is no keyless provider any more, so the
+    // absence of a key is now unconditionally an error rather than a case.
     let api_key = VaultManager::get(&provider_key(provider_id))?.ok_or_else(|| {
         ArcanaError::Agent(format!(
             "No API key stored for provider '{provider_id}' — set it in Settings"
@@ -559,7 +563,9 @@ mod p3_58_63_tests {
         let active = crate::provider::catalogue::models_for("google")
             .into_iter()
             .map(|m| m.id)
-            .find(|id| Some(id.as_str()) != crate::provider::catalogue::default_model_for("google"));
+            .find(|id| {
+                Some(id.as_str()) != crate::provider::catalogue::default_model_for("google")
+            });
 
         if let Some(active) = active {
             let chosen = pick_servable_model("google", "claude-opus-4", Some(&active));

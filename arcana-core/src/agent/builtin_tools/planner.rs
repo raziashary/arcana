@@ -44,7 +44,6 @@ impl Tool for PlannerTool {
         })
     }
 
-
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let yaml_dsl = match input["yaml_dsl"].as_str() {
             Some(s) if !s.trim().is_empty() => s,

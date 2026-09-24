@@ -130,8 +130,6 @@ impl Tool for GrepTool {
         })
     }
 
-
-
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         let params: GrepInput = match serde_json::from_value(input) {
             Ok(p) => p,
@@ -155,10 +153,7 @@ impl Tool for GrepTool {
         // harmless read: the model names a path, the contents enter its
         // context, and nothing asked the user. Six tools bypassed the jail;
         // two of them acted on the path rather than merely reading it.
-        let search_path = match super::path_jail::validate_workspace_path(
-            &raw,
-            &ctx.working_dir,
-        ) {
+        let search_path = match super::path_jail::validate_workspace_path(&raw, &ctx.working_dir) {
             Ok(canonical) => canonical,
             Err(e) => return ToolResult::error(e),
         };
@@ -267,8 +262,10 @@ impl Tool for GrepTool {
                     let bound = |s: &str| {
                         crate::security::truncate::truncate_bytes(s, MAX_LINE_BYTES).to_string()
                     };
-                    let context_before: Vec<String> =
-                        lines[ctx_start..line_num].iter().map(|s| bound(s)).collect();
+                    let context_before: Vec<String> = lines[ctx_start..line_num]
+                        .iter()
+                        .map(|s| bound(s))
+                        .collect();
                     let context_after: Vec<String> = lines[line_num + 1..ctx_end]
                         .iter()
                         .map(|s| bound(s))
@@ -336,7 +333,10 @@ impl Tool for GrepTool {
             let mut trimmed = output;
             // T-23 — drop whole FILE results while there is more than one...
             while trimmed.results.len() > 1
-                && serde_json::to_string(&trimmed).map(|j| j.len()).unwrap_or(0) > MAX_TOTAL_BYTES
+                && serde_json::to_string(&trimmed)
+                    .map(|j| j.len())
+                    .unwrap_or(0)
+                    > MAX_TOTAL_BYTES
             {
                 trimmed.results.pop();
             }
@@ -350,7 +350,10 @@ impl Tool for GrepTool {
                 .first()
                 .map(|r| r.matches.len() > 1)
                 .unwrap_or(false)
-                && serde_json::to_string(&trimmed).map(|j| j.len()).unwrap_or(0) > MAX_TOTAL_BYTES
+                && serde_json::to_string(&trimmed)
+                    .map(|j| j.len())
+                    .unwrap_or(0)
+                    > MAX_TOTAL_BYTES
             {
                 if let Some(first) = trimmed.results.first_mut() {
                     first.matches.pop();

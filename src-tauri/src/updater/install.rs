@@ -178,10 +178,7 @@ rm -- "$0"
         .unwrap_or_else(|| PathBuf::from("."))
         .join("Library/LaunchAgents");
     std::fs::create_dir_all(&agents_dir)?;
-    std::fs::write(
-        agents_dir.join("dev.arcana.desktop.update.plist"),
-        plist,
-    )?;
+    std::fs::write(agents_dir.join("dev.arcana.desktop.update.plist"), plist)?;
 
     Ok(InstallResult {
         success: true,

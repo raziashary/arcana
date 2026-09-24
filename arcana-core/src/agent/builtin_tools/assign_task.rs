@@ -16,16 +16,10 @@
 use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 use crate::db::tasks::TasksDb;
 use crate::hooks::{HookContext, HookRegistry, HookType, ToolCallContext};
-use crate::recipes::defaults::FLEET_WORKERS;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
 pub struct AssignTaskTool;
-
-/// K.9 — Use the shared FLEET_WORKERS constant so this list stays in sync
-/// with the recipe definitions in defaults.rs. Previously a separate hardcoded
-/// list here could silently drift when new workers were added.
-const VALID_WORKERS: &[&str] = FLEET_WORKERS;
 
 #[async_trait]
 impl Tool for AssignTaskTool {
@@ -41,8 +35,7 @@ impl Tool for AssignTaskTool {
         "Atomically assign a ready task to a worker. Sets status='assigned' AND \
         assigned_worker in one operation — this is the ONLY correct way for the \
         Supervisor to dispatch work. Prefer this over update_task_status for \
-        assignments. Valid workers: worker-backend, worker-frontend, \
-        worker-platform, worker-mcp, worker-cleanup."
+        assignments. The registered worker roster is checked at dispatch time."
     }
 
     fn input_schema(&self) -> Value {
@@ -55,14 +48,12 @@ impl Tool for AssignTaskTool {
                 },
                 "worker_slug": {
                     "type": "string",
-                    "enum": VALID_WORKERS,
-                    "description": "The worker to dispatch the task to"
+                    "description": "A currently registered worker slug; Arcana validates it against the live worker roster"
                 }
             },
             "required": ["id", "worker_slug"]
         })
     }
-
 
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let id = match input["id"].as_i64() {
@@ -73,10 +64,15 @@ impl Tool for AssignTaskTool {
             Some(s) if !s.trim().is_empty() => s.trim().to_string(),
             _ => return ToolResult::error("'worker_slug' is required"),
         };
-        if !VALID_WORKERS.contains(&worker_slug.as_str()) {
+        let registered_workers =
+            match crate::db::workers::WorkersDb::open().and_then(|db| db.registered_slugs()) {
+                Ok(workers) => workers,
+                Err(e) => return ToolResult::error(&format!("Failed to read worker roster: {e}")),
+            };
+        if !registered_workers.iter().any(|slug| slug == &worker_slug) {
             return ToolResult::error(&format!(
-                "'{worker_slug}' is not a valid worker. Expected one of: {}",
-                VALID_WORKERS.join(", ")
+                "'{worker_slug}' is not a registered worker. Registered workers: {}",
+                registered_workers.join(", ")
             ));
         }
 

@@ -55,7 +55,6 @@ impl Tool for CreateTaskTool {
         })
     }
 
-
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let title = match input["title"].as_str() {
             Some(t) if !t.trim().is_empty() => t.trim().to_string(),

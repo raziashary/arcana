@@ -305,8 +305,8 @@ mod tests {
     /// a public key and a signature over known bytes reveal nothing.
     #[test]
     fn a_signature_made_by_openssl_verifies_here() {
-        const PUBKEY_B64: &str = "IJX7mc5NQ/ZNHuuT7rbTj4Y9crlz/AHo6VbsIEtD5YU=";
-        const SIG_B64: &str = "xf0awXDLzghtk9Vzs8/f+CanJZEKbfGYY5y3UExkiXu/Xi4cNXFkA9x8vpeCnFrdIy4jaDpOxS9NgCoBRCC0DA==";
+        const PUBKEY_B64: &str = "GuDUbKepVLIPKmkNoIcFAnQKSGh8Q95K8iaEYVk2jlI=";
+        const SIG_B64: &str = "mkPDDpIGiY6uPcwbkJX0+zAOyCTqh22MGma/chFh0C9sOeQiR0liNwYtylweD4iZ9XcJy0JrWr5RGFONH/wFCQ==";
         const PAYLOAD: &[u8] = b"arcana test artifact";
 
         let sig = base64::engine::general_purpose::STANDARD

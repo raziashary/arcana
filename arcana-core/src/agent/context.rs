@@ -3,15 +3,13 @@
 // NOT file-based like Claude Code — this is UI-managed, stored in ~/.arcana/config.db
 // See: docs/arcana-vision/ARCANA.md-deep-spec.md
 
-use std::path::Path;
-use tracing::debug;
-
 // TODO: Import DB module when implemented
 // use crate::db::arcana_instructions;
 
 pub struct ContextBuilder {
     working_dir: String,
     session_id: Option<String>,
+    workers_db: Option<crate::db::workers::WorkersDb>,
 }
 
 impl ContextBuilder {
@@ -19,12 +17,19 @@ impl ContextBuilder {
         Self {
             working_dir: working_dir.into(),
             session_id: None,
+            workers_db: None,
         }
     }
 
     /// Attach a session ID so memory context can be injected into the prompt.
     pub fn with_session(mut self, session_id: impl Into<String>) -> Self {
         self.session_id = Some(session_id.into());
+        self
+    }
+
+    #[cfg(test)]
+    fn with_workers_db(mut self, workers_db: crate::db::workers::WorkersDb) -> Self {
+        self.workers_db = Some(workers_db);
         self
     }
     // ⚠ `build_system_prompt` was DELETED in P2-62.
@@ -169,6 +174,29 @@ impl ContextBuilder {
         repo_path: &str,
         query: &str,
     ) -> (String, String) {
+        let roster = if mode == super::PAMode::Delegate {
+            let roster_result = match self.workers_db.as_ref() {
+                Some(db) => registered_roster_from_db(db),
+                None => crate::db::workers::WorkersDb::open()
+                    .and_then(|db| registered_roster_from_db(&db)),
+            };
+            Some(roster_result.unwrap_or_else(|error| {
+                tracing::warn!("Could not load registered worker roster for prompt: {error}");
+                registered_roster_block(&[])
+            }))
+        } else {
+            None
+        };
+        self.build_system_prompt_parts_with_roster(mode, repo_path, query, roster)
+    }
+
+    fn build_system_prompt_parts_with_roster(
+        &self,
+        mode: super::PAMode,
+        repo_path: &str,
+        query: &str,
+        roster: Option<String>,
+    ) -> (String, String) {
         let base = match mode {
             super::PAMode::FastDevelopment => BASE_SYSTEM_PROMPT,
             super::PAMode::Review => REVIEW_SYSTEM_PROMPT,
@@ -203,7 +231,14 @@ impl ContextBuilder {
         // rebuilt from the episodic and semantic stores on every call, so a
         // single new fact changes these bytes — and anything sharing a cache
         // region with it is invalidated along with it.
-        (stable, self.memory_block(repo_path, query))
+        let mut volatile = self.memory_block(repo_path, query);
+        if let Some(roster) = roster {
+            if !volatile.is_empty() {
+                volatile.push_str("\n\n");
+            }
+            volatile.push_str(&roster);
+        }
+        (stable, volatile)
     }
 
     /// The memory block for this session, scoped to `repo_path` and searched
@@ -243,6 +278,21 @@ fn home_dir() -> Option<std::path::PathBuf> {
         .map(std::path::PathBuf::from)
 }
 
+fn registered_roster_block(slugs: &[String]) -> String {
+    let roster = if slugs.is_empty() {
+        "No workers are currently registered. Do not invent worker names.".to_string()
+    } else {
+        slugs.join(", ")
+    };
+    format!(
+        "## Registered Workers (live roster)\n\nOnly assign work to these registered worker slugs: {roster}"
+    )
+}
+
+fn registered_roster_from_db(db: &crate::db::workers::WorkersDb) -> crate::errors::Result<String> {
+    Ok(registered_roster_block(&db.registered_slugs()?))
+}
+
 /// The floor every agent stands on — PA, fleet worker, subagent, QC.
 ///
 /// 🔴 **`P8-34`. Before this, nothing was universal.** A recipe's
@@ -271,6 +321,7 @@ You may be running as the interactive assistant, as a fleet worker on a task, or
 - Never modify files outside the scope you were given.
 - Never mark work complete without running the project's own tests, and never make a failing test pass by deleting, skipping or weakening it. Fix the cause.
 - Never report success for work you did not verify. If you could not check something, say so.
+- Report only actions you actually performed. Do not claim a file was read, changed, or tested unless the corresponding tool action succeeded; describe results instead of narrating tool execution.
 
 ## Version control
 
@@ -476,8 +527,68 @@ mod p3_43_45_tests {
         // This compiles only because `build_system_prompt_parts` takes a query.
         // If someone removes the parameter, this test stops building — which is
         // the loudest possible failure for "the query was dropped again".
-        let (stable, _volatile) =
-            b.build_system_prompt_parts(super::super::PAMode::FastDevelopment, "/proj", "deploy key");
+        let (stable, _volatile) = b.build_system_prompt_parts(
+            super::super::PAMode::FastDevelopment,
+            "/proj",
+            "deploy key",
+        );
         assert!(!stable.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod p8_live_prompt_tests {
+    use super::*;
+
+    #[test]
+    fn delegate_composer_reads_the_live_worker_database_into_the_volatile_prompt() {
+        let dir =
+            std::env::temp_dir().join(format!("arcana-prompt-roster-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create isolated worker db directory");
+        let db = crate::db::workers::WorkersDb::open_at(&dir.join("workers.db"))
+            .expect("open isolated worker db");
+        db.create(
+            "Custom Coder",
+            "custom-coder",
+            "custom",
+            "gemini-3.7-flash",
+            &[],
+            120,
+            None,
+        )
+        .expect("register custom worker");
+        let deleted_id = db
+            .create(
+                "Retired Worker",
+                "worker-retired",
+                "custom",
+                "gemini-3.7-flash",
+                &[],
+                120,
+                None,
+            )
+            .expect("register worker to retire");
+        db.update_status(deleted_id, "deleted")
+            .expect("soft-delete worker");
+
+        let builder = ContextBuilder::new("/project").with_workers_db(db);
+        let (stable, volatile) = builder.build_system_prompt_parts(
+            super::super::PAMode::Delegate,
+            "/project",
+            "build a feature",
+        );
+        assert!(!stable.contains("custom-coder"));
+        assert!(volatile.contains("custom-coder"));
+        assert!(!volatile.contains("worker-retired"));
+        assert!(volatile.contains("Only assign work to these registered worker slugs"));
+
+        drop(builder);
+        std::fs::remove_dir_all(dir).expect("remove isolated worker db");
+    }
+
+    #[test]
+    fn universal_prompt_requires_honest_tool_claims() {
+        assert!(INVARIANT_CORE.contains("Report only actions you actually performed"));
+        assert!(INVARIANT_CORE.contains("unless the corresponding tool action succeeded"));
     }
 }

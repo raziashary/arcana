@@ -106,7 +106,6 @@ impl Tool for WriteInterfaceSpecTool {
         })
     }
 
-
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let routes_val = match input.get("routes") {
             Some(v) if v.is_array() => v,

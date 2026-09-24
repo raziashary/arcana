@@ -69,7 +69,6 @@ impl Tool for SpawnQcReviewTool {
         })
     }
 
-
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let task_id = match input.get("task_id").and_then(|v| v.as_i64()) {
             Some(n) if n > 0 => n,
@@ -103,7 +102,7 @@ impl Tool for SpawnQcReviewTool {
                      (the CLI, or a test harness) never gains one. Leave the \
                      task in `qc_review` for the dispatcher to pick up rather \
                      than marking it done unreviewed.",
-                )
+                );
             }
         };
 

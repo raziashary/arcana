@@ -1,11 +1,11 @@
 // Cache layer — query result caching with LRU eviction
 
 use crate::errors::Result;
+use crate::state::lock::LockTolerant;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use crate::state::lock::LockTolerant;
 
 #[derive(Debug, Clone)]
 pub struct CacheEntry<T> {

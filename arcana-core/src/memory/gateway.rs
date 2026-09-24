@@ -224,9 +224,8 @@ pub fn propose(conn: &rusqlite::Connection, p: &Proposal) -> Result<Verdict> {
     // ── Duplication, within the proposal's own scope ─────────────────────
     // Scoped deliberately: the same sentence about two different projects is
     // two memories, not one.
-    let mut stmt = conn.prepare(
-        "SELECT id, content FROM memories WHERE scope_key = ?1 AND tier = ?2 LIMIT 500",
-    )?;
+    let mut stmt = conn
+        .prepare("SELECT id, content FROM memories WHERE scope_key = ?1 AND tier = ?2 LIMIT 500")?;
     let scope_key = scope_key_of(&p.scope, &p.scope_ref);
     let existing: Vec<(String, String)> = stmt
         .query_map(
@@ -308,8 +307,11 @@ mod tests {
     #[test]
     fn an_autonomous_agent_cannot_claim_the_users_confidence() {
         let c = db();
-        let v = propose(&c, &proposal("the deploy key rotates monthly", Proposer::AutonomousAgent))
-            .unwrap();
+        let v = propose(
+            &c,
+            &proposal("the deploy key rotates monthly", Proposer::AutonomousAgent),
+        )
+        .unwrap();
 
         match v {
             Verdict::Stored { confidence, .. } => assert!(
@@ -352,8 +354,14 @@ mod tests {
     #[test]
     fn the_proposer_is_derived_from_the_agent_role_not_chosen() {
         assert_eq!(Proposer::from_agent_role("supervisor"), Proposer::Assistant);
-        assert_eq!(Proposer::from_agent_role("worker-backend"), Proposer::AutonomousAgent);
-        assert_eq!(Proposer::from_agent_role("qc-agent"), Proposer::AutonomousAgent);
+        assert_eq!(
+            Proposer::from_agent_role("worker-backend"),
+            Proposer::AutonomousAgent
+        );
+        assert_eq!(
+            Proposer::from_agent_role("qc-agent"),
+            Proposer::AutonomousAgent
+        );
         // 🔴 There is no longer any argument that could make this the user.
         // The previous line here asserted `from_agent_role("worker-backend",
         // true) == Proposer::User` and called it correct — the escalation was
@@ -388,7 +396,9 @@ mod tests {
         };
 
         let stored: String = c
-            .query_row("SELECT content FROM memories WHERE id = ?1", [&id], |r| r.get(0))
+            .query_row("SELECT content FROM memories WHERE id = ?1", [&id], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert!(
             !stored.contains("AKIAIOSFODNN7EXAMPLE"),
@@ -405,11 +415,17 @@ mod tests {
     #[test]
     fn a_duplicate_is_rejected_within_its_scope() {
         let c = db();
-        let p = proposal("the deploy key rotates monthly on the first", Proposer::User);
+        let p = proposal(
+            "the deploy key rotates monthly on the first",
+            Proposer::User,
+        );
         assert!(propose(&c, &p).unwrap().is_stored());
 
         // A restatement, not a byte-identical repeat.
-        let again = proposal("the deploy key rotates on the first, monthly", Proposer::User);
+        let again = proposal(
+            "the deploy key rotates on the first, monthly",
+            Proposer::User,
+        );
         match propose(&c, &again).unwrap() {
             Verdict::Rejected { reason } => assert!(reason.contains("duplicate"), "{reason}"),
             other => panic!("a restatement was stored again: {other:?}"),
@@ -421,7 +437,11 @@ mod tests {
         // Duplication is scoped on purpose: two projects may share a fact and
         // each needs its own, or one project's memory answers for the other.
         let c = db();
-        assert!(propose(&c, &proposal("the api runs on port 8080", Proposer::User)).unwrap().is_stored());
+        assert!(
+            propose(&c, &proposal("the api runs on port 8080", Proposer::User))
+                .unwrap()
+                .is_stored()
+        );
 
         let mut other = proposal("the api runs on port 8080", Proposer::User);
         other.scope_ref = "/different".into();
@@ -464,9 +484,12 @@ mod tests {
         // The FTS5 triggers must fire for gateway writes too — a memory that
         // cannot be found is not stored in any useful sense.
         let c = db();
-        assert!(propose(&c, &proposal("the deploy key rotates monthly", Proposer::User))
-            .unwrap()
-            .is_stored());
+        assert!(propose(
+            &c,
+            &proposal("the deploy key rotates monthly", Proposer::User)
+        )
+        .unwrap()
+        .is_stored());
 
         let n: i64 = c
             .query_row(

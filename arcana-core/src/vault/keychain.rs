@@ -56,9 +56,7 @@ impl VaultBackend {
     /// never true.
     pub fn security_note(&self) -> &'static str {
         match self {
-            VaultBackend::OsKeychain => {
-                "Protected by the operating system's credential store."
-            }
+            VaultBackend::OsKeychain => "Protected by the operating system's credential store.",
             VaultBackend::EncryptedFile => {
                 "No system keyring was available, so keys are held in an encrypted file \
                  readable only by your user account. This is weaker than the system \
@@ -262,7 +260,10 @@ fn index_write(keys: &[String]) {
         // secret is already safely in the keychain, and losing the index costs
         // discoverability, not the key.
         if let Err(e) = std::fs::write(&path, json) {
-            tracing::warn!("could not update the vault key index at {}: {e}", path.display());
+            tracing::warn!(
+                "could not update the vault key index at {}: {e}",
+                path.display()
+            );
         }
     }
 }
@@ -315,7 +316,10 @@ mod tests {
         // `docsMore.ts` claimed protection the code did not implement. The
         // fallback's note must name the actual limit, or it repeats that.
         let note = VaultBackend::EncryptedFile.security_note();
-        assert!(note.contains("weaker"), "the note must not imply parity with the keyring");
+        assert!(
+            note.contains("weaker"),
+            "the note must not imply parity with the keyring"
+        );
         assert!(
             note.contains("home directory"),
             "the note must say who can read it, not merely that it is encrypted"

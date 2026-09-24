@@ -42,8 +42,8 @@ use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
-use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 use crate::state::lock::LockTolerant;
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
 type Registry = StdMutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>;
 
@@ -207,7 +207,10 @@ mod p3_16_tests {
         let relative = lock_key(std::path::Path::new("File.rs"), &ws);
 
         assert_eq!(direct, dotted, "`./` produced a second lock slot");
-        assert_eq!(direct, relative, "a relative path produced a second lock slot");
+        assert_eq!(
+            direct, relative,
+            "a relative path produced a second lock slot"
+        );
     }
 
     #[test]

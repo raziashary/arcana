@@ -152,11 +152,15 @@ mod tests {
             .prepare("INSERT INTO m(memory_id, scope_key, embedding) VALUES (?1, ?2, ?3)")
             .unwrap();
         // Scope `b` owns the two closest points to the query (0,0).
-        ins.execute(rusqlite::params!["b1", "b", encode(&[0.0, 0.0])]).unwrap();
-        ins.execute(rusqlite::params!["b2", "b", encode(&[0.1, 0.0])]).unwrap();
+        ins.execute(rusqlite::params!["b1", "b", encode(&[0.0, 0.0])])
+            .unwrap();
+        ins.execute(rusqlite::params!["b2", "b", encode(&[0.1, 0.0])])
+            .unwrap();
         // Scope `a` has one near-ish and one deliberately far point.
-        ins.execute(rusqlite::params!["a1", "a", encode(&[0.5, 0.0])]).unwrap();
-        ins.execute(rusqlite::params!["a2", "a", encode(&[1.0, 1.0])]).unwrap();
+        ins.execute(rusqlite::params!["a1", "a", encode(&[0.5, 0.0])])
+            .unwrap();
+        ins.execute(rusqlite::params!["a2", "a", encode(&[1.0, 1.0])])
+            .unwrap();
         drop(ins);
 
         let mut q = c

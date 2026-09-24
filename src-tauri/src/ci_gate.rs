@@ -12,8 +12,8 @@
 //
 // Compiled only under `cfg(test)`.
 
-use std::path::{Path, PathBuf};
 use arcana_core::state::lock::RwLockTolerant;
+use std::path::{Path, PathBuf};
 
 /// Repository root — one level above `src-tauri/`.
 fn repo_root() -> PathBuf {
@@ -232,8 +232,7 @@ mod tests {
         // `lint` must not resolve to the typecheck by any route. The first
         // version checked only for a literal `tsc`, so `"lint": "npm run
         // typecheck"` restored the exact defect and passed (F-18).
-        let package_json =
-            read_source(&repo_root().join("package.json"));
+        let package_json = read_source(&repo_root().join("package.json"));
         let parsed: serde_json::Value =
             serde_json::from_str(&package_json).expect("parse package.json");
         let lint = parsed["scripts"]["lint"]
@@ -1043,8 +1042,8 @@ let x = 1;
                 continue;
             }
             // The builder must be applied to the engine this file constructs.
-            let has_budget = production.contains(".with_budget(")
-                || production.contains(".with_task_budget(");
+            let has_budget =
+                production.contains(".with_budget(") || production.contains(".with_task_budget(");
             if !has_budget {
                 unbudgeted.push(rel);
             }
@@ -1114,10 +1113,8 @@ let x = 1;
     /// This reads both and fails when they do.
     #[test]
     fn tg_p2_02_every_offered_model_is_priced_or_documented() {
-        let offered_src =
-            read_source(&repo_root().join("src/data/models.ts"));
-        let pricing_src =
-            read_source(&repo_root().join("arcana-core/src/cost/pricing.rs"));
+        let offered_src = read_source(&repo_root().join("src/data/models.ts"));
+        let pricing_src = read_source(&repo_root().join("arcana-core/src/cost/pricing.rs"));
 
         // Every quoted token in the MODEL_GROUPS block that looks like a model id.
         //
@@ -1243,25 +1240,27 @@ let x = 1;
             offenders.is_empty(),
             "a provider status shown in the UI must not carry a raw transport error:
 {}",
-            offenders.join("
-")
+            offenders.join(
+                "
+"
+            )
         );
     }
 
-        /// Read a source file with line endings normalised to `\n`.
-///
+    /// Read a source file with line endings normalised to `\n`.
+    ///
     /// ── Why this exists (found 2026-09-02, P3) ───────────────────────────────────
-///
+    ///
     /// Several gates locate a function body by splitting on a literal `"\n}\n"` or
     /// `"\n    }"`. Git's `core.autocrlf` rewrote the working tree to CRLF, so those
     /// patterns stopped matching — and the `unwrap_or(whole_file)` fallback meant
     /// the gate silently widened from *"this function's body"* to **"the rest of the
     /// file"**, then failed on a symbol that appears somewhere further down.
-///
+    ///
     /// `S2-11` failed exactly this way: it asserts the tool-ordering path holds no
     /// `HashMap`, the path is `BTreeMap`-only and correct, and the gate reported it
     /// broken because it was reading 40 KB it was never meant to see.
-///
+    ///
     /// A gate whose meaning depends on how git happened to check the file out is
     /// not a gate. Every gate that parses source reads through here.
     fn read_source(path: &std::path::Path) -> String {
@@ -1421,7 +1420,6 @@ let x = 1;
     /// from inside the workspace under inspection.
     #[test]
     fn tg_p3_11_one_permission_gate_keyed_on_effect() {
-
         // ── the invariant this gate should have asserted from the start ──
         //
         // 🔴 The P3 post-phase gap hunt found a SECOND `check_permission` call
@@ -1435,9 +1433,7 @@ let x = 1;
         // one gate", which is what the fix existed to establish. `§0.16 L-C6`,
         // written into a gate an hour after recording L-C6's seventh instance.
         {
-            let executor = read_source(
-                &repo_root().join("arcana-core/src/agent/tool_executor.rs"),
-            );
+            let executor = read_source(&repo_root().join("arcana-core/src/agent/tool_executor.rs"));
             let batch = executor
                 .split("pub async fn execute_batch")
                 .nth(1)
@@ -1514,8 +1510,10 @@ let x = 1;
                 None => l,
             })
             .collect::<Vec<_>>()
-            .join("
-");
+            .join(
+                "
+",
+            );
 
         assert!(
             !code_only.contains("read-only always approved"),
@@ -1524,7 +1522,9 @@ let x = 1;
 
         // And the decision must be reached before the partition, so a
         // concurrency-safe tool cannot skip it.
-        let gate_at = src.find("self.check_permission(").expect("the gate must be called");
+        let gate_at = src
+            .find("self.check_permission(")
+            .expect("the gate must be called");
         let partition_at = src
             .find("Partition the approved calls")
             .expect("the partition comment must exist");
@@ -1559,7 +1559,11 @@ let x = 1;
             if !text.contains("impl Tool for") {
                 continue;
             }
-            let name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("").to_string();
+            let name = path
+                .file_stem()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
 
             if text.contains("fn effect(") {
                 declared += 1;
@@ -1628,7 +1632,11 @@ let x = 1;
             if path.extension().and_then(|e| e.to_str()) != Some("rs") {
                 continue;
             }
-            let name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("").to_string();
+            let name = path
+                .file_stem()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
             // The jail itself, and the lock that keys on jailed paths.
             if name == "path_jail" || name == "path_lock" || name == "mod" {
                 continue;
@@ -1705,7 +1713,8 @@ let x = 1;
         let text = read_source(&path);
 
         // Markers of an interpreter/executable location, in any spelling.
-        const EXE_MARKERS: [&str; 6] = ["Scripts", "/bin/", ".exe", "venv", "python.exe", "bin\\\\"];
+        const EXE_MARKERS: [&str; 6] =
+            ["Scripts", "/bin/", ".exe", "venv", "python.exe", "bin\\\\"];
 
         let mut offenders = Vec::new();
         for (i, line) in text.lines().enumerate() {
@@ -1996,9 +2005,7 @@ let x = 1;
         let call_site = text
             .find("validate_probe_url(&probe_url)")
             .expect("validate_probe_url must actually be CALLED, not merely defined");
-        let spawn_site = text
-            .find("run_probe(")
-            .expect("run_probe must exist");
+        let spawn_site = text.find("run_probe(").expect("run_probe must exist");
         assert!(
             call_site < spawn_site,
             "probe_url is validated at byte {call_site} but children are spawned \
@@ -2011,7 +2018,10 @@ let x = 1;
             .split("async fn run_probe")
             .nth(1)
             .expect("run_probe must exist");
-        let spawn_block = runner.split("let started_processes").next().unwrap_or(runner);
+        let spawn_block = runner
+            .split("let started_processes")
+            .next()
+            .unwrap_or(runner);
 
         assert!(
             !spawn_block.contains("stdout(Stdio::null())"),
@@ -2161,8 +2171,7 @@ let x = 1;
     /// thing, and only the type system writes that once.
     #[test]
     fn tg_p3_55_the_provisional_charge_is_released_on_every_failed_dispatch() {
-        let path =
-            repo_root().join("arcana-core/src/agent/builtin_tools/spawn_qc_review.rs");
+        let path = repo_root().join("arcana-core/src/agent/builtin_tools/spawn_qc_review.rs");
         let text = read_source(&path);
 
         // The release must be automatic, not eight hand-written call sites.
@@ -2190,12 +2199,10 @@ let x = 1;
         let charge_at = execute
             .find("let _charge =")
             .expect("the charge must be taken inside execute");
-        let handoff_at = execute
-            .find("_charge.handed_off()")
-            .expect(
-                "the charge must be handed off once the reviewer is in flight, or \
+        let handoff_at = execute.find("_charge.handed_off()").expect(
+            "the charge must be handed off once the reviewer is in flight, or \
                  the success path releases it and the ceiling never sees in-flight work",
-            );
+        );
 
         assert!(
             charge_at < handoff_at,
@@ -2340,9 +2347,7 @@ let x = 1;
     /// for the helper's definition.
     #[test]
     fn tg_p3_24_cancellation_reaches_the_children() {
-        let manager = read_source(
-            &repo_root().join("arcana-core/src/subagent/manager.rs"),
-        );
+        let manager = read_source(&repo_root().join("arcana-core/src/subagent/manager.rs"));
         let engine = read_source(&repo_root().join("arcana-core/src/agent/engine.rs"));
 
         assert!(
@@ -2355,7 +2360,9 @@ let x = 1;
             .find("is_cancelled(session_id)")
             .expect("the engine must check for cancellation");
         let after_cancel = &engine[cancel_site..];
-        let block_end = after_cancel.find("            }").unwrap_or(after_cancel.len());
+        let block_end = after_cancel
+            .find("            }")
+            .unwrap_or(after_cancel.len());
         let cancel_block = &after_cancel[..block_end.min(1400)];
 
         assert!(
@@ -2414,12 +2421,8 @@ let x = 1;
     /// assertions are all of the same shape: the value must reach a **reader**.
     #[test]
     fn tg_p3_58_63_declared_subagent_controls_are_honoured() {
-        let runner = read_source(
-            &repo_root().join("arcana-core/src/subagent/native_runner.rs"),
-        );
-        let registry = read_source(
-            &repo_root().join("arcana-core/src/agent/tool_registry.rs"),
-        );
+        let runner = read_source(&repo_root().join("arcana-core/src/subagent/native_runner.rs"));
+        let registry = read_source(&repo_root().join("arcana-core/src/agent/tool_registry.rs"));
 
         // ── P3-58 · the pool is the ONLY thing that decides depth ────────
         //
@@ -2448,8 +2451,10 @@ let x = 1;
                     .lines()
                     .filter(|l| !l.trim_start().starts_with("//"))
                     .collect::<Vec<_>>()
-                    .join("
-");
+                    .join(
+                        "
+",
+                    );
                 swept += 1;
 
                 let name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("?");
@@ -2544,7 +2549,10 @@ let x = 1;
         // The engine's lookup, reproduced exactly: find the model in
         // `provider.models()` and read `context_window`.
         fn window_via_provider(p: &dyn Provider, model: &str) -> Option<u32> {
-            p.models().iter().find(|m| m.id == model).map(|m| m.context_window)
+            p.models()
+                .iter()
+                .find(|m| m.id == model)
+                .map(|m| m.context_window)
         }
 
         let google = arcana_core::provider::google::GoogleProvider::new("not-a-real-key".into());
@@ -2614,9 +2622,7 @@ let x = 1;
     /// line beneath it is the tell.
     #[test]
     fn tg_p3_g5_a_subagent_inherits_its_parents_permission_mode() {
-        let runner = read_source(
-            &repo_root().join("arcana-core/src/subagent/native_runner.rs"),
-        );
+        let runner = read_source(&repo_root().join("arcana-core/src/subagent/native_runner.rs"));
 
         let engine_call = runner
             .split("let engine = AgentEngine::new(")
@@ -2739,9 +2745,8 @@ let x = 1;
     /// legitimate ("this is what TG3-27 will assert"), citing a fiction is not.
     #[test]
     fn tg_p3_f8_every_cited_gate_id_exists_in_the_register() {
-        let register = read_source(
-            &repo_root().join("docs/restructurization/development/TESTING_GATES.md"),
-        );
+        let register =
+            read_source(&repo_root().join("docs/restructurization/development/TESTING_GATES.md"));
 
         let mut cited: std::collections::BTreeSet<String> = Default::default();
         let mut scanned = 0usize;
@@ -2995,9 +3000,8 @@ let x = 1;
     /// vocabulary of the schema.
     #[test]
     fn tg_p3_47_provenance_is_derived_not_declared() {
-        let tool = read_source(
-            &repo_root().join("arcana-core/src/agent/builtin_tools/propose_memory.rs"),
-        );
+        let tool =
+            read_source(&repo_root().join("arcana-core/src/agent/builtin_tools/propose_memory.rs"));
 
         // The schema must not offer the model a way to claim provenance.
         let schema = tool
@@ -3121,8 +3125,12 @@ let x = 1;
                 .collect::<Vec<_>>()
                 .join("\n");
 
-            let inserts = ["INSERT INTO memories", "INSERT INTO episodic_memories",
-                           "INSERT INTO semantic_memories", "INSERT INTO procedural_memories"];
+            let inserts = [
+                "INSERT INTO memories",
+                "INSERT INTO episodic_memories",
+                "INSERT INTO semantic_memories",
+                "INSERT INTO procedural_memories",
+            ];
             if inserts.iter().any(|i| code.contains(i)) {
                 writers.push((name, code));
             }
@@ -3137,8 +3145,10 @@ let x = 1;
 
         for (name, code) in &writers {
             assert!(
-                code.contains("redaction::redact") || code.contains("redact_text")
-                    || code.contains("redact_json") || code.contains("redact_value_text"),
+                code.contains("redaction::redact")
+                    || code.contains("redact_text")
+                    || code.contains("redact_json")
+                    || code.contains("redact_value_text"),
                 "{name} inserts into a memory table without redacting first — memory \
                  is permanent and is replayed into the system prompt, so a secret \
                  written here is a secret kept and re-sent for ever"
@@ -3167,7 +3177,11 @@ let x = 1;
         // below passed over a planted defect because `injection_tests` asserts
         // the same string it was looking for. A corpus that contains the claim
         // cannot corroborate the claim.
-        let production = recall.split("#[cfg(test)]").next().unwrap_or(&recall).to_string();
+        let production = recall
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap_or(&recall)
+            .to_string();
         let code: String = production
             .lines()
             .filter(|l| !l.trim_start().starts_with("///") && !l.trim_start().starts_with("//"))
@@ -3256,8 +3270,10 @@ let x = 1;
             .lines()
             .filter(|l| !l.trim_start().starts_with("//"))
             .collect::<Vec<_>>()
-            .join("
-");
+            .join(
+                "
+",
+            );
         let branch = engine_code
             .split("match system_prompt_override")
             .nth(1)
@@ -3283,8 +3299,10 @@ let x = 1;
             .lines()
             .filter(|l| !l.trim_start().starts_with("//"))
             .collect::<Vec<_>>()
-            .join("
-");
+            .join(
+                "
+",
+            );
         assert!(
             !ctx_code.contains("build_memory_context(sid, \"\", repo_path)"),
             "the empty-string query is back. That single literal made recall \
@@ -3313,8 +3331,10 @@ let x = 1;
             .lines()
             .filter(|l| !l.trim_start().starts_with('#'))
             .collect::<Vec<_>>()
-            .join("
-");
+            .join(
+                "
+",
+            );
 
         let dep_line = code
             .lines()
@@ -3410,7 +3430,8 @@ let x = 1;
             "run_bounded should contain exactly one `.output()`; found {in_helper}"
         );
         assert_eq!(
-            total_output_calls, 1,
+            total_output_calls,
+            1,
             "found {} unbounded validator subprocess spawn(s) — every \
              `tokio::process::Command` in validate.rs must go through \
              `run_bounded`, or a hanging checker hangs the write that called it",
@@ -3642,8 +3663,19 @@ let x = 1;
             // The string bindings this codebase slices, named rather than
             // guessed: a broad heuristic flags every Vec slice in the tree.
             let touches_a_string = [
-                "&fact[", "&note[", "&output[", "&command[", "&text[", "&s[", "&content[",
-                "&combined[", "&stdout[", "&stderr[", "&line[", "&body[", "&prompt[",
+                "&fact[",
+                "&note[",
+                "&output[",
+                "&command[",
+                "&text[",
+                "&s[",
+                "&content[",
+                "&combined[",
+                "&stdout[",
+                "&stderr[",
+                "&line[",
+                "&body[",
+                "&prompt[",
             ]
             .iter()
             .any(|b| code.contains(b));
@@ -3678,10 +3710,8 @@ let x = 1;
     /// id living in TypeScript is exactly as dead as one living in Rust.
     #[test]
     fn tg_p2_05_the_backend_catalogue_and_the_frontend_picker_agree() {
-        let catalogue =
-            read_source(&repo_root().join("arcana-core/src/provider/catalogue.rs"));
-        let models_ts =
-            read_source(&repo_root().join("src/data/models.ts"));
+        let catalogue = read_source(&repo_root().join("arcana-core/src/provider/catalogue.rs"));
+        let models_ts = read_source(&repo_root().join("src/data/models.ts"));
 
         // The Rust side: every `id: "..."` inside a CatalogueEntry.
         let mut backend: Vec<String> = catalogue
@@ -3774,7 +3804,10 @@ let x = 1;
         let run = engine
             .split("    pub async fn run(")
             .nth(1)
-            .expect("run() must exist");
+            .expect("run() must exist")
+            .split("\n    async fn stream_response(")
+            .next()
+            .expect("run() boundary must be followed by stream_response()");
 
         let mut unrecorded = Vec::new();
         let mut recorded = 0usize;
@@ -3956,8 +3989,7 @@ let x = 1;
     /// deliberately name dead ids to assert they are refused.
     #[test]
     fn tg_p2_09_no_shipped_code_names_a_model_outside_the_catalogue() {
-        let catalogue =
-            read_source(&repo_root().join("arcana-core/src/provider/catalogue.rs"));
+        let catalogue = read_source(&repo_root().join("arcana-core/src/provider/catalogue.rs"));
 
         // The ids the app offers, read from the catalogue's own entries.
         let offered: Vec<String> = catalogue
@@ -3999,9 +4031,7 @@ let x = 1;
                     }
                     // The catalogue and price table are the registries
                     // themselves; the fixture suites name dead ids on purpose.
-                    if name == "catalogue.rs"
-                        || name == "pricing.rs"
-                        || name.ends_with("_tests.rs")
+                    if name == "catalogue.rs" || name == "pricing.rs" || name.ends_with("_tests.rs")
                     {
                         continue;
                     }
@@ -4391,7 +4421,10 @@ let x = 1;
         );
 
         let file_wrapped = production.contains("RedactingWriter {");
-        assert!(file_wrapped, "the file appender must write through the redactor");
+        assert!(
+            file_wrapped,
+            "the file appender must write through the redactor"
+        );
 
         // Neither sink may be constructed without going through one of the two
         // wrappers. `fmt::layer()` with a bare writer is the regression shape.
@@ -4679,9 +4712,11 @@ let x = 1;
                 .iter()
                 .find(|r| r.agent_role.as_deref() == Some(slug))
                 .unwrap_or_else(|| {
-                    panic!("no default recipe for fleet worker {slug} — either the \
+                    panic!(
+                        "no default recipe for fleet worker {slug} — either the \
                             worker has no recipe, or `agent_role` no longer carries \
-                            the slug this gate matches on")
+                            the slug this gate matches on"
+                    )
                 });
 
             // Exactly what `recipes/runner.rs` passes as the override.
@@ -4824,10 +4859,19 @@ let x = 1;
 
         // (rule, the substring that can only appear if the rule is stated)
         let rules: &[(&str, &[&str])] = &[
-            ("branch before the first commit", &["branch before your first commit"]),
-            ("stage deliberately, never a blind add", &["git add -A", "Stage deliberately"]),
+            (
+                "branch before the first commit",
+                &["branch before your first commit"],
+            ),
+            (
+                "stage deliberately, never a blind add",
+                &["git add -A", "Stage deliberately"],
+            ),
             ("never commit secrets or .env", &["secrets", ".env"]),
-            ("never force-push or rewrite published history", &["force-push", "published history"]),
+            (
+                "never force-push or rewrite published history",
+                &["force-push", "published history"],
+            ),
             (
                 "never push to main / open / merge a PR unapproved",
                 &["push to `main`", "pull request"],
@@ -4892,14 +4936,25 @@ let x = 1;
         std::fs::create_dir_all(&sandbox).expect("sandbox");
         ensure_default_recipes(&sandbox).expect("write default recipes");
         let (recipes, errors) = load_all_recipes(&sandbox);
-        assert!(errors.is_empty(), "default recipes do not parse: {errors:?}");
-        assert!(!recipes.is_empty(), "no recipes written — this gate checked nothing");
+        assert!(
+            errors.is_empty(),
+            "default recipes do not parse: {errors:?}"
+        );
+        assert!(
+            !recipes.is_empty(),
+            "no recipes written — this gate checked nothing"
+        );
 
         for r in &recipes {
             // A blind stage, as an INSTRUCTION rather than as the prohibition.
             // The protocol names `git add -A` in order to forbid it, so match
             // the executable form: inside a `bash(` call.
-            for bad in ["bash('git add -A", "bash(\"git add -A", "bash('git add .", "bash(\"git add ."] {
+            for bad in [
+                "bash('git add -A",
+                "bash(\"git add -A",
+                "bash('git add .",
+                "bash(\"git add .",
+            ] {
                 assert!(
                     !r.instructions.contains(bad),
                     "recipe `{}` still tells the agent to stage blindly: {bad}",
@@ -5147,13 +5202,11 @@ let x = 1;
         assert!(
             recognised.len() >= 4,
             "only {} status arms found in the scheduler match — the extractor is \
-             not matching, so this half checks nothing: {recognised:?}"
-            , recognised.len()
+             not matching, so this half checks nothing: {recognised:?}",
+            recognised.len()
         );
-        let unrecognised: Vec<&String> = written
-            .iter()
-            .filter(|w| !recognised.contains(w))
-            .collect();
+        let unrecognised: Vec<&String> =
+            written.iter().filter(|w| !recognised.contains(w)).collect();
         assert!(
             unrecognised.is_empty(),
             "the runner writes these statuses and `recipes/scheduler.rs` does not \
@@ -5240,10 +5293,14 @@ let x = 1;
             for seg in src.split("listen").skip(1) {
                 // `listen<Payload>('name'` or `listen('name'`
                 let head: String = seg.chars().take(120).collect();
-                let Some(q) = head.find(['\'', '"']) else { continue };
+                let Some(q) = head.find(['\'', '"']) else {
+                    continue;
+                };
                 let quote = head.as_bytes()[q] as char;
                 let rest = &head[q + 1..];
-                let Some(end) = rest.find(quote) else { continue };
+                let Some(end) = rest.find(quote) else {
+                    continue;
+                };
                 let name = &rest[..end];
                 // An event name is `namespace:event`. Anything else is some
                 // other call that merely starts with "listen".
@@ -5475,7 +5532,8 @@ let x = 1;
         let recall = read_source(&repo_root().join("arcana-core/src/memory/recall.rs"));
         assert!(!recall.trim().is_empty(), "recall.rs did not read");
         assert!(
-            recall.contains("fn flatten_for_prompt(") && !recall.contains("pub fn flatten_for_prompt("),
+            recall.contains("fn flatten_for_prompt(")
+                && !recall.contains("pub fn flatten_for_prompt("),
             "`flatten_for_prompt` is public. Private is what forces every path \
              to the prompt through this module's own rendering, which is how \
              `P8-41` is enforced rather than merely intended."
@@ -5485,6 +5543,243 @@ let x = 1;
             "the seam no longer routes through `recall.rs`, so procedural text \
              can reach the prompt unflattened — the hole `P3-F` closed."
         );
+    }
+
+    // ── TG8-12 · native runtime leases reach every run entry path ─────────────
+
+    fn rust_item_body<'a>(source: &'a str, signature: &str) -> &'a str {
+        let start = source
+            .find(signature)
+            .unwrap_or_else(|| panic!("Rust item is missing: {signature}"));
+        let after_signature = &source[start + signature.len()..];
+        let open = start
+            + signature.len()
+            + after_signature
+                .find('{')
+                .unwrap_or_else(|| panic!("Rust item has no body: {signature}"));
+        let bytes = source.as_bytes();
+        let mut depth = 0usize;
+        let mut index = open;
+        let mut line_comment = false;
+        let mut block_depth = 0usize;
+        let mut quote: Option<u8> = None;
+        let mut raw_end: Option<Vec<u8>> = None;
+
+        while index < bytes.len() {
+            if line_comment {
+                if bytes[index] == b'\n' {
+                    line_comment = false;
+                }
+                index += 1;
+                continue;
+            }
+            if block_depth > 0 {
+                if bytes.get(index..index + 2) == Some(b"/*") {
+                    block_depth += 1;
+                    index += 2;
+                } else if bytes.get(index..index + 2) == Some(b"*/") {
+                    block_depth -= 1;
+                    index += 2;
+                } else {
+                    index += 1;
+                }
+                continue;
+            }
+            if let Some(end) = &raw_end {
+                if bytes.get(index..index + end.len()) == Some(end.as_slice()) {
+                    index += end.len();
+                    raw_end = None;
+                } else {
+                    index += 1;
+                }
+                continue;
+            }
+            if let Some(delimiter) = quote {
+                if bytes[index] == b'\\' {
+                    index += 2;
+                } else if bytes[index] == delimiter {
+                    quote = None;
+                    index += 1;
+                } else {
+                    index += 1;
+                }
+                continue;
+            }
+
+            if bytes.get(index..index + 2) == Some(b"//") {
+                line_comment = true;
+                index += 2;
+            } else if bytes.get(index..index + 2) == Some(b"/*") {
+                block_depth = 1;
+                index += 2;
+            } else if bytes[index] == b'r' {
+                let mut cursor = index + 1;
+                while bytes.get(cursor) == Some(&b'#') {
+                    cursor += 1;
+                }
+                if bytes.get(cursor) == Some(&b'\"') {
+                    let hashes = cursor - index - 1;
+                    let mut end = vec![b'\"'];
+                    end.extend(std::iter::repeat_n(b'#', hashes));
+                    raw_end = Some(end);
+                    index = cursor + 1;
+                } else {
+                    index += 1;
+                }
+            } else if bytes[index] == b'\"' || bytes[index] == b'\'' {
+                quote = Some(bytes[index]);
+                index += 1;
+            } else if bytes[index] == b'{' {
+                depth += 1;
+                index += 1;
+            } else if bytes[index] == b'}' {
+                depth -= 1;
+                index += 1;
+                if depth == 0 {
+                    return &source[open + 1..index - 1];
+                }
+            } else {
+                index += 1;
+            }
+        }
+        panic!("Rust item body is unclosed: {signature}");
+    }
+
+    fn rust_brace_depth_before(source: &str, needle: &str) -> usize {
+        let end = source
+            .find(needle)
+            .unwrap_or_else(|| panic!("Rust item is missing `{needle}`"));
+        let bytes = source.as_bytes();
+        let mut depth = 0usize;
+        let mut index = 0usize;
+        let mut line_comment = false;
+        let mut block_depth = 0usize;
+        let mut quote: Option<u8> = None;
+        let mut raw_end: Option<Vec<u8>> = None;
+
+        while index < end {
+            if line_comment {
+                if bytes[index] == b'\n' {
+                    line_comment = false;
+                }
+                index += 1;
+                continue;
+            }
+            if block_depth > 0 {
+                if bytes.get(index..index + 2) == Some(b"/*") {
+                    block_depth += 1;
+                    index += 2;
+                } else if bytes.get(index..index + 2) == Some(b"*/") {
+                    block_depth -= 1;
+                    index += 2;
+                } else {
+                    index += 1;
+                }
+                continue;
+            }
+            if let Some(marker) = &raw_end {
+                if bytes.get(index..index + marker.len()) == Some(marker.as_slice()) {
+                    index += marker.len();
+                    raw_end = None;
+                } else {
+                    index += 1;
+                }
+                continue;
+            }
+            if let Some(delimiter) = quote {
+                if bytes[index] == b'\\' {
+                    index += 2;
+                } else if bytes[index] == delimiter {
+                    quote = None;
+                    index += 1;
+                } else {
+                    index += 1;
+                }
+                continue;
+            }
+
+            if bytes.get(index..index + 2) == Some(b"//") {
+                line_comment = true;
+                index += 2;
+            } else if bytes.get(index..index + 2) == Some(b"/*") {
+                block_depth = 1;
+                index += 2;
+            } else if bytes[index] == b'r' {
+                let mut cursor = index + 1;
+                while bytes.get(cursor) == Some(&b'#') {
+                    cursor += 1;
+                }
+                if bytes.get(cursor) == Some(&b'\"') {
+                    let hashes = cursor - index - 1;
+                    let mut marker = vec![b'\"'];
+                    marker.extend(std::iter::repeat_n(b'#', hashes));
+                    raw_end = Some(marker);
+                    index = cursor + 1;
+                } else {
+                    index += 1;
+                }
+            } else if bytes[index] == b'\"' || bytes[index] == b'\'' {
+                quote = Some(bytes[index]);
+                index += 1;
+            } else if bytes[index] == b'{' {
+                depth += 1;
+                index += 1;
+            } else if bytes[index] == b'}' {
+                depth = depth.saturating_sub(1);
+                index += 1;
+            } else {
+                index += 1;
+            }
+        }
+        depth
+    }
+
+    #[test]
+    fn tg8_12_each_native_run_entry_path_holds_a_runtime_lease() {
+        let interactive =
+            read_source(&repo_root().join("src-tauri/src/commands/agent_commands.rs"));
+        let interactive = rust_item_body(&interactive, "pub async fn send_message(");
+        let admission = interactive
+            .find("global().admit(\"supervisor\", &session_id)")
+            .expect("interactive path must acquire a lease");
+        let spawn = interactive
+            .find("tokio::spawn(async move {")
+            .expect("interactive path must spawn the run");
+        assert!(admission < spawn, "admission must precede the run");
+        assert!(interactive[spawn..].contains("let _runtime_lease = runtime_lease;"));
+        assert_eq!(
+            rust_brace_depth_before(interactive, "let _runtime_lease = runtime_lease;"),
+            1,
+            "interactive lease must live at the async run closure scope"
+        );
+
+        let recipe = read_source(&repo_root().join("arcana-core/src/recipes/runner.rs"));
+        let recipe = rust_item_body(&recipe, "pub async fn run_recipe(");
+        assert!(recipe.contains("global().admit(worker_slug, &session_id)?"));
+        assert!(recipe.contains("let _runtime_lease"));
+        assert_eq!(
+            rust_brace_depth_before(recipe, "let _runtime_lease"),
+            0,
+            "recipe lease must live in the run function scope"
+        );
+
+        let subagent = read_source(&repo_root().join("arcana-core/src/subagent/native_runner.rs"));
+        let subagent = rust_item_body(&subagent, "async fn run_inner(");
+        assert!(subagent.contains("global().admit(subagent_id, subagent_id)?"));
+        assert!(subagent.contains("let _runtime_lease"));
+        assert_eq!(
+            rust_brace_depth_before(subagent, "let _runtime_lease"),
+            0,
+            "subagent lease must live in the run function scope"
+        );
+
+        let startup = read_source(&repo_root().join("src-tauri/src/main.rs"));
+        let startup = rust_item_body(&startup, "fn main()");
+        assert!(startup.contains("runtime_registry::spawn_reaper()"));
+
+        let registry = read_source(&repo_root().join("arcana-core/src/state/runtime_registry.rs"));
+        assert!(registry.contains("MAX_RUNTIMES: usize = 500"));
+        assert!(registry.contains("IDLE_TIMEOUT: Duration = Duration::from_secs(600)"));
     }
 
     // ── TG8-11 · the exit assertion ───────────────────────────────────────────
@@ -5516,10 +5811,7 @@ let x = 1;
             "src/components/startup/StartupOverlay.tsx",
             "installers/wix/bundle-sidecars.ps1",
         ] {
-            assert!(
-                !root.join(gone).exists(),
-                "`{gone}` is back on disk"
-            );
+            assert!(!root.join(gone).exists(), "`{gone}` is back on disk");
         }
 
         // `.gitmodules` gone or empty.
@@ -5577,7 +5869,10 @@ let x = 1;
                 }
                 for w in FORBIDDEN {
                     if line.contains(w) {
-                        let rel = p.strip_prefix(&root).unwrap_or(p).to_string_lossy()
+                        let rel = p
+                            .strip_prefix(&root)
+                            .unwrap_or(p)
+                            .to_string_lossy()
                             .replace('\\', "/");
                         hits.push(format!("{rel}:{}: {w} — {}", n + 1, line.trim()));
                     }

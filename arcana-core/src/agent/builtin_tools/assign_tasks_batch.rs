@@ -26,11 +26,8 @@ use std::collections::HashSet;
 
 use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 use crate::db::tasks::TasksDb;
-use crate::recipes::defaults::FLEET_WORKERS;
 
 pub struct AssignTasksBatchTool;
-
-const VALID_WORKERS: &[&str] = FLEET_WORKERS;
 
 #[async_trait]
 impl Tool for AssignTasksBatchTool {
@@ -69,8 +66,7 @@ impl Tool for AssignTasksBatchTool {
                             "task_id":     { "type": "integer", "description": "Task ID, must be in dispatchable state (ready/assigned/failed/rejected)." },
                             "worker_slug": {
                                 "type": "string",
-                                "enum": VALID_WORKERS,
-                                "description": "Target worker."
+                                "description": "A currently registered worker slug."
                             }
                         },
                         "required": ["task_id", "worker_slug"]
@@ -81,7 +77,6 @@ impl Tool for AssignTasksBatchTool {
             "required": ["assignments"]
         })
     }
-
 
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let assignments = match input.get("assignments").and_then(|v| v.as_array()) {
@@ -95,6 +90,12 @@ impl Tool for AssignTasksBatchTool {
             Ok(db) => db,
             Err(e) => return ToolResult::error(&format!("Failed to open tasks database: {e}")),
         };
+
+        let registered_workers =
+            match crate::db::workers::WorkersDb::open().and_then(|db| db.registered_slugs()) {
+                Ok(workers) => workers,
+                Err(e) => return ToolResult::error(&format!("Failed to read worker roster: {e}")),
+            };
 
         let mut results: Vec<Value> = Vec::with_capacity(assignments.len());
         let mut kicked: HashSet<String> = HashSet::new();
@@ -122,14 +123,14 @@ impl Tool for AssignTasksBatchTool {
                 }
             };
 
-            if !VALID_WORKERS.contains(&worker_slug.as_str()) {
+            if !registered_workers.iter().any(|slug| slug == &worker_slug) {
                 failure_count += 1;
                 results.push(json!({
                     "index":       idx,
                     "task_id":     id,
                     "worker_slug": worker_slug,
                     "ok":          false,
-                    "error":       format!("'{}' is not a valid worker. Expected one of: {}", worker_slug, VALID_WORKERS.join(", ")),
+                    "error":       format!("'{}' is not a registered worker. Registered workers: {}", worker_slug, registered_workers.join(", ")),
                 }));
                 continue;
             }

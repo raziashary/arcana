@@ -97,7 +97,6 @@ impl ToolEffect {
                 self,
                 ToolEffect::Execute | ToolEffect::Network | ToolEffect::Board
             ),
-
             // ⚠ Spec `06 §1.1` names a fourth mode, `ChatOnly`. It does not
             // exist in `PermissionMode` — the code has three variants — and
             // §0.0 makes the shipped code the anchor, so it is not invented
@@ -184,7 +183,12 @@ mod tests {
             ToolEffect::Network,
             ToolEffect::Board,
         ];
-        let profile = |m: &M| effects.iter().map(|e| e.requires_prompt(m)).collect::<Vec<_>>();
+        let profile = |m: &M| {
+            effects
+                .iter()
+                .map(|e| e.requires_prompt(m))
+                .collect::<Vec<_>>()
+        };
 
         let autonomous = profile(&M::Autonomous);
         let manual = profile(&M::ManualApproval);
@@ -218,7 +222,10 @@ mod tests {
             let d = e.describe();
             assert!(!d.is_empty());
             // A dialog that names the variant tells the user nothing.
-            assert!(!d.contains("Effect"), "{d:?} names the type, not the consequence");
+            assert!(
+                !d.contains("Effect"),
+                "{d:?} names the type, not the consequence"
+            );
         }
     }
 }

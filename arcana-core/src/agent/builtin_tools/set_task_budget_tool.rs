@@ -60,7 +60,6 @@ impl Tool for SetTaskBudgetTool {
         })
     }
 
-
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let task_id = match input.get("task_id").and_then(|v| v.as_i64()) {
             Some(id) => id,

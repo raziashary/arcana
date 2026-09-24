@@ -58,7 +58,6 @@ impl Tool for AnnotateFileTool {
         })
     }
 
-
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let file_path = match input["file_path"].as_str() {
             Some(p) if !p.is_empty() => p.to_string(),

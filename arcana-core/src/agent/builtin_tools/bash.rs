@@ -56,7 +56,6 @@ impl Tool for BashTool {
         })
     }
 
-
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         let command = match input["command"].as_str() {
             Some(c) => c.to_string(),
@@ -612,10 +611,7 @@ mod p8_26_tests {
 
     #[test]
     fn a_redundant_quoted_cd_prefix_is_stripped() {
-        let out = strip_redundant_cd_prefix(
-            &format!("cd \"{WD}\" && npm install"),
-            WD,
-        );
+        let out = strip_redundant_cd_prefix(&format!("cd \"{WD}\" && npm install"), WD);
         assert_eq!(out, "npm install");
     }
 
@@ -627,10 +623,7 @@ mod p8_26_tests {
 
     #[test]
     fn a_set_location_prefix_is_stripped() {
-        let out = strip_redundant_cd_prefix(
-            &format!("Set-Location \"{WD}\" ; cargo test"),
-            WD,
-        );
+        let out = strip_redundant_cd_prefix(&format!("Set-Location \"{WD}\" ; cargo test"), WD);
         assert_eq!(out, "cargo test");
     }
 
@@ -669,10 +662,8 @@ mod p8_26_tests {
     fn no_powershell_cmdlet_is_ever_substituted() {
         // Asserts the SECRET-IS-GONE shape (`L-C14`): name the thing that must
         // be absent, rather than checking that something changed.
-        let out = strip_redundant_cd_prefix(
-            &format!("cd \"{WD}\" && npm run build 2>&1 | tail -50"),
-            WD,
-        );
+        let out =
+            strip_redundant_cd_prefix(&format!("cd \"{WD}\" && npm run build 2>&1 | tail -50"), WD);
         assert!(!out.contains("Select-Object"), "got: {out}");
         assert!(!out.contains("Select-String"), "got: {out}");
         assert_eq!(out, "npm run build 2>&1 | tail -50");
@@ -693,7 +684,10 @@ mod p8_26_tests {
                 !d.contains("PowerShell-compatible alternatives"),
                 "the description still recommends PowerShell under cmd",
             );
-            assert!(d.contains("NOT PowerShell"), "it must say which shell this is");
+            assert!(
+                d.contains("NOT PowerShell"),
+                "it must say which shell this is"
+            );
             assert!(d.contains("findstr"), "it must name a cmd-native filter");
         }
     }
@@ -758,4 +752,3 @@ mod p8_26_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
-

@@ -72,7 +72,10 @@ fn p3_12_02_the_three_modes_decide_differently() {
     let manual = profile(&PermissionMode::ManualApproval);
     let smart = profile(&PermissionMode::SmartApprove);
 
-    assert_ne!(autonomous, manual, "Autonomous and ManualApproval must differ");
+    assert_ne!(
+        autonomous, manual,
+        "Autonomous and ManualApproval must differ"
+    );
     assert_ne!(autonomous, smart, "Autonomous and SmartApprove must differ");
     assert_ne!(
         manual, smart,

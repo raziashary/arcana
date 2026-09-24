@@ -80,8 +80,7 @@ impl CappedProvider {
                 // scheduler would hand the same work to the next worker while
                 // this one was still returning, and the ceiling would read as a
                 // burst of errors rather than a stop.
-                let paused = crate::budget::daily::pause_fleet("daily spend ceiling")
-                    .unwrap_or(0);
+                let paused = crate::budget::daily::pause_fleet("daily spend ceiling").unwrap_or(0);
 
                 crate::events::emit_budget_exceeded(crate::events::BudgetExceededEvent {
                     session_id: String::new(),

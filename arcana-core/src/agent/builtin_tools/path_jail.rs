@@ -331,7 +331,12 @@ mod p3_15_tests {
         // The mechanism: `Path::file_name()` yields `None` for `..`, so the
         // tail-rejoin loop skipped it and the path silently changed.
         let (dir, workspace) = ws();
-        let target = dir.path().join("newdir").join("sub").join("..").join("x.txt");
+        let target = dir
+            .path()
+            .join("newdir")
+            .join("sub")
+            .join("..")
+            .join("x.txt");
 
         let result = validate_workspace_path(&target, &workspace);
 
@@ -371,7 +376,12 @@ mod p3_15_tests {
         let (dir, workspace) = ws();
         fs::create_dir_all(dir.path().join("src/components")).unwrap();
 
-        for rel in ["file.txt", "src/main.rs", "src/components/App.tsx", "deep/new/dir/f.ts"] {
+        for rel in [
+            "file.txt",
+            "src/main.rs",
+            "src/components/App.tsx",
+            "deep/new/dir/f.ts",
+        ] {
             let target = dir.path().join(rel);
             assert!(
                 validate_workspace_path(&target, &workspace).is_ok(),

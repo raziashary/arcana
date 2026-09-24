@@ -312,8 +312,7 @@ impl SubagentManager {
             let reg = self.registry.lock().await;
             reg.iter()
                 .filter(|(_, e)| {
-                    e.handle.config.parent_slug == parent_slug
-                        && !e.handle.status.is_terminal()
+                    e.handle.config.parent_slug == parent_slug && !e.handle.status.is_terminal()
                 })
                 .map(|(id, _)| id.clone())
                 .collect()

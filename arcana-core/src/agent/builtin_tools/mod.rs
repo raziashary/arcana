@@ -88,7 +88,6 @@ pub fn register_all(registry: &mut ToolRegistry) {
 // produced no dead-code warning — so it compiled cleanly for months
 // while describing a dispatch path that no longer existed.
 
-
 /// Register tools filtered by PA mode:
 /// - FastDevelopment: all file/execution tools + task board tools + planner
 /// - Review:          **the same arm**, byte for byte. The difference is

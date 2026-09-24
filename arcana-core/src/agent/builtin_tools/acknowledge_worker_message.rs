@@ -43,7 +43,6 @@ impl Tool for AcknowledgeWorkerMessageTool {
         })
     }
 
-
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let id = match input["id"].as_i64() {
             Some(n) if n > 0 => n,

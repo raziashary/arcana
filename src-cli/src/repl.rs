@@ -133,7 +133,6 @@ async fn dispatch(input: &str, ctx: OutputContext) -> Result<()> {
 // P8-44 — `dispatch_agent` is deleted with the `agent` verb it drove.
 // Every one of its subcommands was HTTP to the orchestrator.
 
-
 async fn dispatch_task(args: &[&str], ctx: OutputContext) -> Result<()> {
     use crate::commands::task::{CreateArgs, GetArgs, ListArgs, TaskCmd};
     let cmd = match args.first().copied() {

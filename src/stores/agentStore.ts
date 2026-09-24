@@ -4,6 +4,7 @@
 
 import { create } from 'zustand'
 import { listen, UnlistenFn } from '@tauri-apps/api/event'
+import { invoke } from '@tauri-apps/api/core'
 
 export type MessageRole = 'user' | 'assistant' | 'tool'
 
@@ -80,6 +81,49 @@ interface AgentState {
 let _msgIdCounter = 0
 const nextId = () => `msg-${Date.now()}-${_msgIdCounter++}`
 
+export interface ActiveToolExecution {
+  session_id: string
+  agent_id: string
+  call_id: string
+  tool_name: string
+  input: Record<string, unknown>
+}
+
+export function hydrateActiveToolCalls(
+  messages: ChatMessage[],
+  active: ActiveToolExecution[],
+  sessionId: string,
+  completedDuringHydration: ReadonlySet<string>,
+): ChatMessage[] {
+  const msgs = [...messages]
+  let assistantIndex = -1
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].sessionId === sessionId && msgs[i].role === 'assistant') {
+      assistantIndex = i
+      break
+    }
+  }
+  if (assistantIndex < 0) return messages
+
+  const assistant = msgs[assistantIndex]
+  const known = new Set(assistant.toolCalls.map(call => call.callId))
+  const missing = active
+    .filter(tool => tool.session_id === sessionId
+      && !known.has(tool.call_id)
+      && !completedDuringHydration.has(tool.call_id))
+    .map(tool => ({
+      callId: tool.call_id,
+      toolName: tool.tool_name,
+      input: tool.input,
+      output: null,
+      isError: false,
+      pending: true,
+    } satisfies ToolCallDisplay))
+  if (!missing.length) return messages
+  msgs[assistantIndex] = { ...assistant, toolCalls: [...assistant.toolCalls, ...missing] }
+  return msgs
+}
+
 export const useAgentStore = create<AgentState>((set, get) => ({
   messages:          [],
   isStreaming:       false,
@@ -134,6 +178,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
 
   setupListeners: async (sessionId) => {
     const unlisteners: UnlistenFn[] = []
+    const completedDuringHydration = new Set<string>()
 
     // Token streaming
     unlisteners.push(await listen<{ session_id: string; text: string }>('agent:token', ({ payload }) => {
@@ -186,6 +231,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     // Tool end - update the pending tool call AND add a separate tool message for persistence
     unlisteners.push(await listen<{ session_id: string; call_id: string; tool_name: string; output: string; is_error: boolean }>('agent:tool-end', ({ payload }) => {
       if (payload.session_id !== sessionId) return
+      completedDuringHydration.add(payload.call_id)
       set(s => {
         // First update the pending tool call in the assistant message
         const msgs = s.messages.map(msg => ({
@@ -260,6 +306,19 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         return { messages: msgs, isStreaming: false }
       })
     }))
+
+    // Listener registration happens first to close the start-event race. The
+    // snapshot fills in tools that were already running when this view mounted.
+    try {
+      const active = await invoke<ActiveToolExecution[]>('get_active_tool_executions', { sessionId })
+      if (active.length) {
+        set(s => ({ messages: hydrateActiveToolCalls(
+          s.messages, active, sessionId, completedDuringHydration,
+        ) }))
+      }
+    } catch (error) {
+      console.warn('Could not hydrate active tool executions:', error)
+    }
 
     return unlisteners
   },

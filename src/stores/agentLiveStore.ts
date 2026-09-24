@@ -32,6 +32,7 @@ interface AgentLiveStore {
   lastEventAt:        number
 
   initAgents:          (agentIds: string[]) => void
+  removeAgent:         (agentId: string) => void
   setAgentModel:       (agentId: string, model: string | null) => void
   setMonitorCollapsed: (v: boolean) => void
   handleToolCallStart: (payload: AgentToolCallStartPayload) => void
@@ -129,6 +130,15 @@ export const useAgentLiveStore = create<AgentLiveStore>((set, get) => ({
       agents[id] = existing[id] ?? makeInitialAgent(id)
     })
     set({ agents })
+  },
+
+  removeAgent: (agentId) => {
+    set(state => {
+      if (!(agentId in state.agents)) return state
+      const agents = { ...state.agents }
+      delete agents[agentId]
+      return { agents, lastEventAt: Date.now() }
+    })
   },
 
   setMonitorCollapsed: (v) => {
@@ -390,6 +400,10 @@ export const useAgentLiveStore = create<AgentLiveStore>((set, get) => ({
       listen<{ slug: string; status: string }>(
         'worker:status',
         e => {
+          if (e.payload.status === 'deleted') {
+            store.removeAgent(e.payload.slug)
+            return
+          }
           // Rust emits status strings like "idle" / "working" / "error".
           // Translate to AgentLiveState's enum.
           //

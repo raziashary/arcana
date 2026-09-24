@@ -59,17 +59,20 @@ fn sandbox_repo(tag: &str) -> PathBuf {
     dir
 }
 
-/// The exact branch step the recipes give the worker, run through a shell the
-/// way `bash()` runs it.
+/// The exact branch step the recipes give the worker, run through the shell
+/// that `bash()` actually uses on this platform.
 fn run_c1(dir: &Path) -> bool {
-    let script = "git switch -c arcana/fleet 2>/dev/null || git switch arcana/fleet";
-    // `sh` on every platform. Git for Windows ships one, and the recipe text is
-    // a POSIX one-liner — the `||` fallback and the `2>/dev/null` are the two
-    // parts of C1 that a shell has to actually honour for the step to be
-    // convergent, so running it through anything else would prove nothing.
-    Command::new("sh")
-        .arg("-c")
-        .arg(script)
+    let script = "git switch -c arcana/fleet || git switch arcana/fleet";
+    let mut command = if cfg!(target_os = "windows") {
+        let mut command = Command::new("cmd");
+        command.args(["/C", script]);
+        command
+    } else {
+        let mut command = Command::new("sh");
+        command.args(["-c", script]);
+        command
+    };
+    command
         .current_dir(dir)
         .output()
         .map(|o| o.status.success())
@@ -126,7 +129,11 @@ fn s8_05_a_worker_commit_branches_stages_narrowly_and_spares_the_trunk() {
     // What a blind stage sweeps up: build output, and a file holding a secret.
     std::fs::create_dir_all(repo.join("target")).unwrap();
     std::fs::write(repo.join("target").join("app.bin"), "binary").unwrap();
-    std::fs::write(repo.join(".env"), "ANTHROPIC_API_KEY=sk-ant-not-a-real-key\n").unwrap();
+    std::fs::write(
+        repo.join(".env"),
+        "ANTHROPIC_API_KEY=sk-ant-not-a-real-key\n",
+    )
+    .unwrap();
 
     git_ok(&repo, &["add", "app.rs"]);
     let staged = git_ok(&repo, &["diff", "--cached", "--name-only"]);
@@ -151,7 +158,11 @@ fn s8_05_a_worker_commit_branches_stages_narrowly_and_spares_the_trunk() {
     std::fs::write(probe.join("app.rs"), "fn main() { work(); }\n").unwrap();
     std::fs::create_dir_all(probe.join("target")).unwrap();
     std::fs::write(probe.join("target").join("app.bin"), "binary").unwrap();
-    std::fs::write(probe.join(".env"), "ANTHROPIC_API_KEY=sk-ant-not-a-real-key\n").unwrap();
+    std::fs::write(
+        probe.join(".env"),
+        "ANTHROPIC_API_KEY=sk-ant-not-a-real-key\n",
+    )
+    .unwrap();
     git_ok(&probe, &["add", "-A"]);
     let swept = git_ok(&probe, &["diff", "--cached", "--name-only"]);
     let swept_paths: Vec<&str> = swept.lines().collect();
@@ -372,8 +383,8 @@ fn s8_02_no_startup_or_agent_path_spawns_an_interpreter() {
     assert_eq!(read, startup.len(), "not every start-up path was read");
 
     // And the bundle carries no payload to start.
-    let conf = std::fs::read_to_string(root.join("src-tauri/tauri.conf.json"))
-        .expect("tauri.conf.json");
+    let conf =
+        std::fs::read_to_string(root.join("src-tauri/tauri.conf.json")).expect("tauri.conf.json");
     assert!(
         conf.contains("\"resources\": []"),
         "the bundle declares resources again. A release ships the binary and \

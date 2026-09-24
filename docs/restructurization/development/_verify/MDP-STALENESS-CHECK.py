@@ -28,7 +28,6 @@ a check written from the claim rather than from the invariant.
 import io
 import os
 import re
-import subprocess
 import sys
 
 MDP = 'docs/restructurization/development/MASTER_DEVELOPMENT_PLAN.md'
@@ -102,13 +101,14 @@ CHECKS = [
          count_matches(rust_files('src-tauri/src'), r'^\s*#\[tauri::command\]'))),
     ('S-7', 'the module tree shows mcp/, and mcp_server/ is gone from disk',
      lambda: present('[P0 DONE — `mcp_server/` deleted (705 LOC),') and
-             subprocess.run('test -d src-tauri/src/mcp_server', shell=True).returncode != 0),
+             os.path.isdir('src-tauri/src/mcp') and
+             not os.path.exists('src-tauri/src/mcp_server')),
     ('S-9', '§2 states unwind, and the workspace root agrees',
      lambda: present('[profile.release] panic = "unwind"   // workspace-root') and
              count_matches(['Cargo.toml'], r'^panic = "unwind"') == 1),
     ('S-34', 'the provider count is three in prose AND in the diagram',
      lambda: absent('4 providers') and absent('**the four**') and
-             sorted(f for f in os.listdir('autodev-core/src/provider')
+             sorted(f for f in os.listdir('arcana-core/src/provider')
                     if f in ('anthropic.rs', 'openai.rs', 'google.rs')) ==
              ['anthropic.rs', 'google.rs', 'openai.rs']),
 
@@ -134,7 +134,9 @@ CHECKS = [
 
     # ── structure ──────────────────────────────────────────────────────────
     ('S-19', 'the P4-F group sits in §10, not inside PD6',
-     lambda: TEXT.index('### P4-F ·') < TEXT.index('## §10.5.0 ·')),
+     lambda: TEXT.index('# §10 · Phase P4') < TEXT.index('### P4-F ·') <
+             TEXT.index('## §11.1 · P8') and
+             '## §10.5.6 · PD6' not in TEXT),
     ('S-13', 'the change log has rows for P1, P2 and P3 A–E',
      lambda: all(present('| %s |' % r) for r in ('1.5', '1.6', '1.7', '1.8'))),
     ('S-37', "§0.6's fixed order carries the audits and the refresh",

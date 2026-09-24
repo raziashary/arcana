@@ -55,13 +55,14 @@ impl WorkerType {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkerStatus {
-    Created, // Seeded but not yet started
-    Idle,    // Started, polling, no current task
-    Active,  // Running — recipe cron is active
-    Working, // Executing a task
-    Paused,  // User paused
-    Error,   // Recipe crashed / last run failed
-    Deleted, // Soft-deleted
+    Created,        // Seeded but not yet started
+    Idle,           // Started, polling, no current task
+    IdleNoProvider, // Started without a configured provider; retried by scheduler
+    Active,         // Running — recipe cron is active
+    Working,        // Executing a task
+    Paused,         // User paused
+    Error,          // Recipe crashed / last run failed
+    Deleted,        // Soft-deleted
 }
 
 impl WorkerStatus {
@@ -69,6 +70,7 @@ impl WorkerStatus {
         match self {
             Self::Created => "created",
             Self::Idle => "idle",
+            Self::IdleNoProvider => "idle_no_provider",
             Self::Active => "active",
             Self::Working => "working",
             Self::Paused => "paused",
@@ -79,6 +81,7 @@ impl WorkerStatus {
     pub fn from_str(s: &str) -> Self {
         match s {
             "idle" => Self::Idle,
+            "idle_no_provider" => Self::IdleNoProvider,
             "active" => Self::Active,
             "working" => Self::Working,
             "paused" => Self::Paused,
@@ -452,6 +455,17 @@ impl WorkersDb {
             .map_err(|e| ArcanaError::Agent(format!("workers list collect: {e}")))
     }
 
+    /// Registered worker slugs used by both prompt construction and dispatch
+    /// validation. Deleted rows stay in history but are not valid targets.
+    pub fn registered_slugs(&self) -> Result<Vec<String>> {
+        Ok(self
+            .list()?
+            .into_iter()
+            .filter(|worker| worker.status != "deleted")
+            .map(|worker| worker.slug)
+            .collect())
+    }
+
     pub fn get_by_id(&self, id: i64) -> Result<Option<Worker>> {
         let mut stmt = self
             .conn
@@ -723,6 +737,32 @@ mod tests {
         };
         assert!(cols.iter().any(|c| c == "last_seen"), "got {cols:?}");
         drop(db);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn registered_roster_includes_custom_workers_and_excludes_deleted_rows() {
+        let path = temp_db("registered-roster");
+        let db = WorkersDb::open_at(&path).expect("open");
+        let id = db
+            .create(
+                "Custom",
+                "custom-coder",
+                "custom",
+                "gemini-3.7-flash",
+                &[],
+                120,
+                None,
+            )
+            .expect("create custom worker");
+        let slugs = db.registered_slugs().expect("roster");
+        assert!(slugs.iter().any(|slug| slug == "custom-coder"));
+        db.update_status(id, "deleted").expect("delete worker");
+        assert!(!db
+            .registered_slugs()
+            .unwrap()
+            .iter()
+            .any(|slug| slug == "custom-coder"));
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

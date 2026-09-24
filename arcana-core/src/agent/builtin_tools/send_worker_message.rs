@@ -19,7 +19,6 @@ use serde_json::{json, Value};
 use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 use crate::db::tasks::TasksDb;
 use crate::events::{emit_worker_message, WorkerMessagePayload};
-use crate::recipes::defaults::FLEET_WORKERS;
 use crate::recipes::scheduler;
 
 pub struct SendWorkerMessageTool;
@@ -28,12 +27,12 @@ const MAX_BODY_BYTES: usize = 4096;
 const VALID_KINDS: &[&str] = &["nudge", "question", "answer", "fyi", "broadcast"];
 
 /// Recipients the protocol accepts. `*` is the broadcast wildcard, supervisor-only.
-fn is_known_recipient(slug: &str) -> bool {
+fn is_known_recipient(slug: &str, registered_workers: &[String]) -> bool {
     slug == "supervisor"
         || slug == "qc-agent"
         || slug == "qc-dispatcher"
         || slug == "*"
-        || FLEET_WORKERS.contains(&slug)
+        || registered_workers.iter().any(|worker| worker == slug)
 }
 
 #[async_trait]
@@ -88,17 +87,21 @@ impl Tool for SendWorkerMessageTool {
         })
     }
 
-
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         // ── Validate `to` ────────────────────────────────────────────────────
         let to = match input["to"].as_str() {
             Some(s) if !s.trim().is_empty() => s.trim().to_string(),
             _ => return ToolResult::error("'to' is required (worker slug or '*')"),
         };
-        if !is_known_recipient(&to) {
+        let registered_workers =
+            match crate::db::workers::WorkersDb::open().and_then(|db| db.registered_slugs()) {
+                Ok(workers) => workers,
+                Err(e) => return ToolResult::error(&format!("Failed to read worker roster: {e}")),
+            };
+        if !is_known_recipient(&to, &registered_workers) {
             return ToolResult::error(format!(
-                "'{to}' is not a known recipient. Valid: {}, supervisor, qc-agent, qc-dispatcher, or '*' (broadcast).",
-                FLEET_WORKERS.join(", ")
+                "'{to}' is not a known recipient. Registered workers: {}; supervisor, qc-agent, qc-dispatcher, or '*' (broadcast).",
+                registered_workers.join(", ")
             ));
         }
 
@@ -177,7 +180,7 @@ impl Tool for SendWorkerMessageTool {
         let targets: Vec<String> = if to == "*" {
             // Every fleet worker + supervisor's helpers, EXCLUDING the sender
             // (supervisor doesn't broadcast to itself).
-            let mut all: Vec<String> = FLEET_WORKERS.iter().map(|s| s.to_string()).collect();
+            let mut all = registered_workers;
             all.push("qc-agent".into());
             all.push("qc-dispatcher".into());
             all.retain(|s| s != &from);

@@ -138,7 +138,6 @@ fn main() {
     // Used by AgentEngine (tool executor) and respond_to_permission command.
     let pending_permissions = new_pending_permissions();
 
-
     // Subagent registry. Subagents run in-process on a nested AgentEngine, so
     // the manager needs app state and the permission channel rather than an
     // HTTP client (ADR-LOG-RESTRUCT-0001). Installed globally so the spawn
@@ -200,6 +199,10 @@ fn main() {
             .manage(updater_state)          // Phase 5.3 — auto-updater state
             .manage(mcp_health_monitor)     // Ruflo Feature 6 — MCP Connection Health Monitor
             .setup(move |app| {
+                // Own lightweight native runtime admission state for the
+                // process lifetime; the periodic task only reaps idle leases.
+                arcana_core::state::runtime_registry::spawn_reaper();
+
                 // Startup progress state machine — drives the loading overlay.
                 // Attached to SidecarManager so spawn/health transitions + log
                 // lines from both Python sidecars all feed the same FSM.
@@ -336,12 +339,6 @@ fn main() {
 
                 // Auto-start every worker that has a recipe bound and is not paused/deleted.
                 // Deferred via async_runtime::spawn to ensure the Tokio runtime is active.
-                // Note: the StartupPhase::Workers transition is NOT emitted from here
-                // because the scheduler spawn fires at a fixed +500ms delay, while the
-                // sidecar fleet takes ~15s to become healthy; advancing to Workers too
-                // early would lock out the later MemoryReady/OrchReady transitions
-                // (advance() is monotonic). Workers is emitted from the sidecar
-                // auto-start path once both sidecars are healthy.
                 let scheduler_clone = scheduler.clone();
                 tauri::async_runtime::spawn(async move {
                     // Small delay to ensure the Tauri event loop is fully running

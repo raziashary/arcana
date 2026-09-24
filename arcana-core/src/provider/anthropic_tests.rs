@@ -15,10 +15,71 @@
 // runs in CI with no credentials (§0.5).
 
 use super::streaming::parse_sse_line;
-use super::types::StreamChunk;
+use super::types::{MessageContent, StreamChunk};
 
 fn sse(payload: &str) -> String {
     format!("data: {payload}")
+}
+
+#[test]
+fn unsigned_thinking_is_rejected_before_an_outbound_tool_follow_up() {
+    use super::anthropic::AnthropicProvider;
+    use super::types::{CompletionRequest, RequestMessage};
+
+    let mut request = CompletionRequest {
+        model: "claude-haiku-4-5".into(),
+        messages: vec![RequestMessage {
+            role: "assistant".into(),
+            content: vec![
+                MessageContent::Thinking {
+                    text: "reason".into(),
+                    signature: None,
+                },
+                MessageContent::ToolUse {
+                    id: "toolu_1".into(),
+                    name: "read_file".into(),
+                    input: serde_json::json!({"path":"package.json"}),
+                    opaque: None,
+                },
+            ],
+        }],
+        system: None,
+        tools: vec![],
+        max_tokens: 64,
+        temperature: None,
+        top_p: None,
+        reasoning_effort: None,
+        thinking_budget_tokens: Some(32),
+        cache: Default::default(),
+        clear_tool_uses: None,
+    };
+    let provider = AnthropicProvider::new("unused".into());
+    assert!(provider
+        .build_checked_body_for_test(&request, true)
+        .is_err());
+    if let MessageContent::Thinking { signature, .. } = &mut request.messages[0].content[0] {
+        *signature = Some(String::new());
+    }
+    assert!(provider
+        .build_checked_body_for_test(&request, true)
+        .is_err());
+}
+
+#[test]
+fn unary_thinking_block_keeps_its_signature() {
+    let response = super::anthropic::parse_completion_response(serde_json::json!({
+        "id": "msg_1", "model": "claude-haiku-4-5", "stop_reason": "tool_use",
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+        "content": [
+            {"type":"thinking","thinking":"reason","signature":"opaque-sig"},
+            {"type":"tool_use","id":"toolu_1","name":"read_file","input":{}},
+        ],
+    }))
+    .expect("unary response");
+    assert!(
+        matches!(&response.content[0], MessageContent::Thinking { text, signature }
+        if text == "reason" && signature.as_deref() == Some("opaque-sig"))
+    );
 }
 
 #[test]
@@ -41,7 +102,10 @@ fn message_start_carries_the_entire_input_side_of_usage() {
         panic!("expected MessageDelta, got {chunk:?}");
     };
     assert_eq!(usage.input, 1200);
-    assert_eq!(usage.cached_read, 8000, "the cache alarm reads this and nothing else");
+    assert_eq!(
+        usage.cached_read, 8000,
+        "the cache alarm reads this and nothing else"
+    );
     assert_eq!(usage.cache_write, 150);
     assert_eq!(usage.output, 0, "output is not known on this frame");
     assert!(
@@ -82,12 +146,21 @@ fn tool_arguments_arrive_as_partial_json_and_must_concatenate() {
     .expect("parse")
     .expect("a ToolUseStart");
 
-    let StreamChunk::ToolUseStart { id, name, block_index, .. } = start else {
+    let StreamChunk::ToolUseStart {
+        id,
+        name,
+        block_index,
+        ..
+    } = start
+    else {
         panic!("expected ToolUseStart, got {start:?}");
     };
     assert_eq!(id, "toolu_01");
     assert_eq!(name, "read_file");
-    assert_eq!(block_index, 1, "the wire index is what orders the assembled blocks");
+    assert_eq!(
+        block_index, 1,
+        "the wire index is what orders the assembled blocks"
+    );
 
     let mut accumulated = String::new();
     for fragment in [r#"{\"pa"#, r#"th\": \"src/m"#, r#"ain.rs\"}"#] {
@@ -115,8 +188,11 @@ fn a_truncated_turn_is_distinguishable_from_a_clean_one() {
     // P2-10/P2-46. `max_tokens` here means the assistant message is cut — and
     // possibly cut mid-`tool_use`, leaving arguments that will not parse.
     // Continuing the loop over it feeds a malformed message back to the model.
-    for (wire, expect_truncated) in [("max_tokens", true), ("end_turn", false), ("tool_use", false)]
-    {
+    for (wire, expect_truncated) in [
+        ("max_tokens", true),
+        ("end_turn", false),
+        ("tool_use", false),
+    ] {
         let chunk = parse_sse_line(&sse(&format!(
             r#"{{"type":"message_delta","delta":{{"stop_reason":"{wire}"}},"usage":{{"output_tokens":42}}}}"#
         )))
@@ -126,7 +202,10 @@ fn a_truncated_turn_is_distinguishable_from_a_clean_one() {
         let StreamChunk::MessageDelta { stop_reason, usage } = chunk else {
             panic!("expected MessageDelta");
         };
-        assert_eq!(stop_reason, wire, "the raw wire value is preserved verbatim");
+        assert_eq!(
+            stop_reason, wire,
+            "the raw wire value is preserved verbatim"
+        );
         assert_eq!(usage.output, 42);
         // D-9. The input side belongs to `message_start` alone.
         assert_eq!(usage.input, 0);
@@ -182,12 +261,17 @@ fn a_malformed_data_payload_errors_instead_of_being_swallowed() {
     // The opposite failure: a `data:` line that is not JSON is a real problem
     // and must surface. Returning None here would silently drop content.
     let err = parse_sse_line(&sse("{not json"));
-    assert!(err.is_err(), "a malformed data payload must not be silently dropped");
+    assert!(
+        err.is_err(),
+        "a malformed data payload must not be silently dropped"
+    );
 }
 
 #[test]
 fn the_done_sentinel_ends_the_stream() {
-    let chunk = parse_sse_line("data: [DONE]").expect("parse").expect("a chunk");
+    let chunk = parse_sse_line("data: [DONE]")
+        .expect("parse")
+        .expect("a chunk");
     assert!(matches!(chunk, StreamChunk::Done));
 }
 
@@ -208,7 +292,6 @@ fn usage_absent_from_a_frame_reads_as_zero_rather_than_failing_the_turn() {
     assert_eq!(usage.output, 0);
     assert_eq!(usage.total(), 0);
 }
-
 
 #[test]
 fn a_streamed_turn_does_not_double_count_its_input() {
@@ -293,7 +376,9 @@ fn a_cached_streamed_turn_counts_its_cache_read_once() {
 #[cfg(test)]
 mod p3_25_wire_tests {
     use super::super::anthropic::AnthropicProvider;
-    use crate::provider::types::{ClearToolUses, CompletionRequest, RequestMessage, MessageContent};
+    use crate::provider::types::{
+        ClearToolUses, CompletionRequest, MessageContent, RequestMessage,
+    };
 
     fn base() -> CompletionRequest {
         CompletionRequest {

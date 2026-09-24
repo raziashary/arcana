@@ -273,10 +273,22 @@ mod tests {
         let two_weeks = recency_score(&(now - Duration::days(14)).to_rfc3339(), now);
         let a_month = recency_score(&(now - Duration::days(28)).to_rfc3339(), now);
 
-        assert!((fresh - 1.0).abs() < 0.01, "today should score ~1.0, got {fresh}");
-        assert!((two_weeks - 0.5).abs() < 0.02, "14 days should halve, got {two_weeks}");
-        assert!((a_month - 0.25).abs() < 0.02, "28 days should quarter, got {a_month}");
-        assert!(a_month > 0.0, "decay must never reach zero — deprioritise, do not destroy");
+        assert!(
+            (fresh - 1.0).abs() < 0.01,
+            "today should score ~1.0, got {fresh}"
+        );
+        assert!(
+            (two_weeks - 0.5).abs() < 0.02,
+            "14 days should halve, got {two_weeks}"
+        );
+        assert!(
+            (a_month - 0.25).abs() < 0.02,
+            "28 days should quarter, got {a_month}"
+        );
+        assert!(
+            a_month > 0.0,
+            "decay must never reach zero — deprioritise, do not destroy"
+        );
     }
 
     #[test]
@@ -297,8 +309,14 @@ mod tests {
         let budget = TierBudget::default();
         let out = rank_and_budget(cs, &budget, &RerankWeights::default(), "/proj", Utc::now());
 
-        let n_epi = out.iter().filter(|s| matches!(s.candidate.tier, MemoryTier::Episodic)).count();
-        let n_sem = out.iter().filter(|s| matches!(s.candidate.tier, MemoryTier::Semantic)).count();
+        let n_epi = out
+            .iter()
+            .filter(|s| matches!(s.candidate.tier, MemoryTier::Episodic))
+            .count();
+        let n_sem = out
+            .iter()
+            .filter(|s| matches!(s.candidate.tier, MemoryTier::Semantic))
+            .count();
         assert_eq!(n_epi, budget.episodic);
         assert_eq!(n_sem, budget.semantic);
     }
@@ -315,7 +333,13 @@ mod tests {
             .collect();
         cs.push(cand("s1", MemoryTier::Semantic));
 
-        let out = rank_and_budget(cs, &TierBudget::default(), &RerankWeights::default(), "/proj", Utc::now());
+        let out = rank_and_budget(
+            cs,
+            &TierBudget::default(),
+            &RerankWeights::default(),
+            "/proj",
+            Utc::now(),
+        );
         assert!(
             out.iter().any(|s| s.candidate.id == "s1"),
             "the single semantic memory was crowded out by episodic ones"
@@ -339,7 +363,10 @@ mod tests {
             "/proj",
             Utc::now(),
         );
-        assert_eq!(out[0].candidate.id, "mine", "scope_match did not discriminate");
+        assert_eq!(
+            out[0].candidate.id, "mine",
+            "scope_match did not discriminate"
+        );
     }
 
     #[test]
@@ -347,9 +374,23 @@ mod tests {
         // TG3-12's second half depends on this: identical inputs must give an
         // identical order, or "the same query twice returns the same set" is
         // flaky for reasons nobody can reproduce.
-        let cs: Vec<Candidate> = (0..10).map(|i| cand(&format!("m{i}"), MemoryTier::Semantic)).collect();
-        let a = rank_and_budget(cs.clone(), &TierBudget::default(), &RerankWeights::default(), "/proj", Utc::now());
-        let b = rank_and_budget(cs, &TierBudget::default(), &RerankWeights::default(), "/proj", Utc::now());
+        let cs: Vec<Candidate> = (0..10)
+            .map(|i| cand(&format!("m{i}"), MemoryTier::Semantic))
+            .collect();
+        let a = rank_and_budget(
+            cs.clone(),
+            &TierBudget::default(),
+            &RerankWeights::default(),
+            "/proj",
+            Utc::now(),
+        );
+        let b = rank_and_budget(
+            cs,
+            &TierBudget::default(),
+            &RerankWeights::default(),
+            "/proj",
+            Utc::now(),
+        );
         assert_eq!(
             a.iter().map(|s| s.candidate.id.clone()).collect::<Vec<_>>(),
             b.iter().map(|s| s.candidate.id.clone()).collect::<Vec<_>>()

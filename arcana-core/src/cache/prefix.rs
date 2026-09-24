@@ -218,7 +218,10 @@ mod tests {
         reordered.reverse();
         let a = build(&tools(), "base", &[], &[]);
         let b = build(&reordered, "base", &[], &[]);
-        assert_eq!(a.hash, b.hash, "tool order must not affect the cached prefix");
+        assert_eq!(
+            a.hash, b.hash,
+            "tool order must not affect the cached prefix"
+        );
     }
 
     #[test]
@@ -228,7 +231,10 @@ mod tests {
         // prompt in front of it.
         let a = build(&tools(), "base", &[], &["remembered: X".into()]);
         let b = build(&tools(), "base", &[], &["remembered: X and Y".into()]);
-        assert_eq!(a.hash, b.hash, "a new memory must not invalidate the prefix");
+        assert_eq!(
+            a.hash, b.hash,
+            "a new memory must not invalidate the prefix"
+        );
         assert_ne!(a.volatile, b.volatile, "but the content must still be SENT");
         assert!(!a.stable.contains("remembered"));
     }
@@ -248,7 +254,10 @@ mod tests {
     fn a_changed_tool_schema_changes_the_prefix() {
         let mut changed = tools();
         changed[0].1 = r#"{"type":"object","required":["path"]}"#.to_string();
-        assert_ne!(build(&tools(), "b", &[], &[]).hash, build(&changed, "b", &[], &[]).hash);
+        assert_ne!(
+            build(&tools(), "b", &[], &[]).hash,
+            build(&changed, "b", &[], &[]).hash
+        );
     }
 
     #[test]
@@ -306,7 +315,10 @@ mod tests {
 
         // Just over the raw minimum, inside the error band → not claimed.
         let borderline = build(&[], &"x".repeat(4_200), &[], &[]);
-        assert!(borderline.estimated_tokens > 1_000, "clears the bare minimum");
+        assert!(
+            borderline.estimated_tokens > 1_000,
+            "clears the bare minimum"
+        );
         assert!(
             !will_cache(&borderline, &c, "m"),
             "must not claim a cache when the estimate could be wrong by more than the headroom"

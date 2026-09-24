@@ -9,6 +9,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
+use super::execution_registry::{ActiveTool, ExecutionGuard};
 use super::permission::{PendingPermissions, PermissionMode, PermissionResponse};
 use super::tool_trait::{AgentIdentity, Tool, ToolContext, ToolResult};
 use crate::errors::Result;
@@ -16,8 +17,7 @@ use crate::events::{
     emit_agent_stage_change, emit_agent_tool_call_result, emit_agent_tool_call_start,
     emit_permission_request, emit_tool_end, emit_tool_start, stage_for_tool,
     AgentStageChangePayload, AgentToolCallResultPayload, AgentToolCallStartPayload,
-    PermissionPayload, ToolEndPayload,
-    ToolStartPayload,
+    PermissionPayload, ToolEndPayload, ToolStartPayload,
 };
 use crate::hooks::{HookContext, HookRegistry, HookType, ToolCallContext};
 use crate::session::manager::SessionManager;
@@ -424,6 +424,13 @@ impl ToolExecutor {
                     // Redaction boundary — see `redact_result`. The tool is
                     // given the raw input; everything reported is redacted.
                     let reported = Self::reported_input(&input);
+                    let execution = ExecutionGuard::start(ActiveTool {
+                        session_id: session_id.clone(),
+                        agent_id: identity.role.clone(),
+                        call_id: call_id.clone(),
+                        tool_name: tool.name().to_string(),
+                        input: reported.clone(),
+                    });
 
                     // Emit start event
                     emit_tool_start(ToolStartPayload {
@@ -469,6 +476,7 @@ impl ToolExecutor {
                         output: result.output.clone(),
                         is_error: result.is_error,
                     });
+                    execution.finish(result.is_error);
 
                     let elapsed_ms = started.elapsed().as_millis() as u64;
                     emit_agent_tool_call_result(AgentToolCallResultPayload {
@@ -556,6 +564,13 @@ impl ToolExecutor {
                     depth: self.identity.depth,
                     agent_role: self.identity.role.clone(),
                 };
+                let execution = ExecutionGuard::start(ActiveTool {
+                    session_id: self.session_id.clone(),
+                    agent_id: self.identity.role.clone(),
+                    call_id: call_id.clone(),
+                    tool_name: tool.name().to_string(),
+                    input: reported.clone(),
+                });
 
                 // Emit start event
                 emit_tool_start(ToolStartPayload {
@@ -683,6 +698,7 @@ impl ToolExecutor {
                     output: result.output.clone(),
                     is_error: result.is_error,
                 });
+                execution.finish(result.is_error);
 
                 let elapsed_ms = started.elapsed().as_millis() as u64;
                 emit_agent_tool_call_result(AgentToolCallResultPayload {
@@ -822,5 +838,91 @@ impl ToolExecutor {
             }
             Some(PermissionResponse::Deny) | None => Ok(false),
         }
+    }
+}
+
+#[cfg(test)]
+mod p8_execution_registry_tests {
+    use super::*;
+    use crate::agent::execution_registry::active_by_session;
+    use crate::agent::tool_effect::ToolEffect;
+    use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
+    use async_trait::async_trait;
+    use serde_json::Value;
+    use tokio::sync::Notify;
+
+    struct BlockedReadTool {
+        started: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+
+    #[async_trait]
+    impl Tool for BlockedReadTool {
+        fn name(&self) -> &str {
+            "blocked_read"
+        }
+        fn description(&self) -> &str {
+            "A deterministic test tool."
+        }
+        fn input_schema(&self) -> Value {
+            serde_json::json!({"type":"object"})
+        }
+        fn effect(&self) -> ToolEffect {
+            ToolEffect::Read
+        }
+
+        async fn execute(&self, _input: Value, _ctx: &ToolContext) -> ToolResult {
+            self.started.notify_one();
+            self.release.notified().await;
+            ToolResult::success("released")
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_batch_exposes_running_tool_to_registry_reader_then_cleans_it() {
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let tool: Arc<dyn Tool> = Arc::new(BlockedReadTool {
+            started: Arc::clone(&started),
+            release: Arc::clone(&release),
+        });
+        let session_id = format!("p8-execution-{}", Uuid::new_v4());
+        let mut executor = ToolExecutor::new(
+            PermissionMode::Autonomous,
+            crate::agent::permission::new_pending_permissions(),
+            session_id.clone(),
+            ".".into(),
+            AgentIdentity::supervisor(),
+        );
+
+        let execution = tokio::spawn(async move {
+            executor
+                .execute_batch(vec![(
+                    tool,
+                    serde_json::json!({"path":"x"}),
+                    "tool-use".into(),
+                )])
+                .await
+        });
+        started.notified().await;
+        let active = active_by_session(&session_id);
+        assert_eq!(
+            active.len(),
+            1,
+            "the production executor must register before dispatch"
+        );
+        assert_eq!(active[0].tool_name, "blocked_read");
+        assert_eq!(active[0].input, serde_json::json!({"path":"x"}));
+
+        release.notify_one();
+        let results = execution
+            .await
+            .expect("executor task")
+            .expect("batch result");
+        assert_eq!(results[0].1.output, "released");
+        assert!(
+            active_by_session(&session_id).is_empty(),
+            "completed execution must leave the query surface"
+        );
     }
 }

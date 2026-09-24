@@ -41,7 +41,6 @@ impl Tool for ClaimTaskTool {
         })
     }
 
-
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let task_id = match input["task_id"].as_i64() {
             Some(id) if id > 0 => id,

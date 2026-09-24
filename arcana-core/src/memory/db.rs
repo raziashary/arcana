@@ -55,10 +55,11 @@ impl MemoryDb {
 
     /// `memory.db`'s ladder. `v1` is the schema as it stands, created idempotently,
     /// so an existing database is stamped without being altered.
-    pub(crate) const LADDER: &[Migration] = &[Migration {
-        version: 1,
-        name: "memory-baseline",
-        sql: r#"
+    pub(crate) const LADDER: &[Migration] = &[
+        Migration {
+            version: 1,
+            name: "memory-baseline",
+            sql: r#"
 
             -- ─────────────────────────────────────────────────────────────
             -- Tier 1: Episodic Memory (raw conversation experience)
@@ -138,38 +139,38 @@ impl MemoryDb {
             CREATE INDEX IF NOT EXISTS idx_proc_updated
                 ON procedural_memories(updated_at DESC);
         "#,
-    },
-    // ═════════════════════════════════════════════════════════════════════
-    // v2 — the unified retrieval index (P3-30 / P3-31 / P3-38 / P3-42)
-    // ═════════════════════════════════════════════════════════════════════
-    //
-    // ⚠ A NEW RUNG, not an edit to v1. `L-C13`: a database already at v1 would
-    // never receive columns added to the baseline, and only a *fresh* database
-    // would look correct — the defect would be invisible to exactly the test
-    // most likely to be written.
-    //
-    // ── Why a separate index rather than columns on the three tier tables ──
-    //
-    // Spec `03 §4.5` states the target shape: *"The schema uses a tier
-    // discriminator value, not a table per tier."* Retrieval also has to rank
-    // all three tiers against each other in one pool (`§4.2`), which a
-    // per-table design cannot do without a union at every query.
-    //
-    // The tier tables keep their tier-specific payload (episodic keeps cost and
-    // tokens, semantic keeps category and tags, procedural keeps topic). This
-    // table carries only what RETRIEVAL needs, and `ref_id` points back.
-    //
-    // 🔴 This comment claimed "everything is written through one seam so the
-    // two cannot diverge". **That was false when written.** Only the gateway
-    // wrote here; `episodic.rs` and `procedural.rs` wrote to their own tables
-    // and nothing else, so every NEW turn and topic was invisible to recall —
-    // the index was frozen at whatever the v2 backfill captured. Closed by v3,
-    // which makes the indexing a database trigger rather than a convention the
-    // write paths have to remember.
-    Migration {
-        version: 2,
-        name: "memory-retrieval-index",
-        sql: r#"
+        },
+        // ═════════════════════════════════════════════════════════════════════
+        // v2 — the unified retrieval index (P3-30 / P3-31 / P3-38 / P3-42)
+        // ═════════════════════════════════════════════════════════════════════
+        //
+        // ⚠ A NEW RUNG, not an edit to v1. `L-C13`: a database already at v1 would
+        // never receive columns added to the baseline, and only a *fresh* database
+        // would look correct — the defect would be invisible to exactly the test
+        // most likely to be written.
+        //
+        // ── Why a separate index rather than columns on the three tier tables ──
+        //
+        // Spec `03 §4.5` states the target shape: *"The schema uses a tier
+        // discriminator value, not a table per tier."* Retrieval also has to rank
+        // all three tiers against each other in one pool (`§4.2`), which a
+        // per-table design cannot do without a union at every query.
+        //
+        // The tier tables keep their tier-specific payload (episodic keeps cost and
+        // tokens, semantic keeps category and tags, procedural keeps topic). This
+        // table carries only what RETRIEVAL needs, and `ref_id` points back.
+        //
+        // 🔴 This comment claimed "everything is written through one seam so the
+        // two cannot diverge". **That was false when written.** Only the gateway
+        // wrote here; `episodic.rs` and `procedural.rs` wrote to their own tables
+        // and nothing else, so every NEW turn and topic was invisible to recall —
+        // the index was frozen at whatever the v2 backfill captured. Closed by v3,
+        // which makes the indexing a database trigger rather than a convention the
+        // write paths have to remember.
+        Migration {
+            version: 2,
+            name: "memory-retrieval-index",
+            sql: r#"
             CREATE TABLE IF NOT EXISTS memories (
                 id            TEXT PRIMARY KEY,
                 -- The discriminator. 'episodic' | 'semantic' | 'procedural',
@@ -309,28 +310,28 @@ impl MemoryDb {
                 p.updated_at
             FROM procedural_memories p;
         "#,
-    },
-    // ═════════════════════════════════════════════════════════════════════
-    // v3 — keep the retrieval index in step with the tier tables
-    // ═════════════════════════════════════════════════════════════════════
-    //
-    // 🔴 v2 backfilled the existing rows and stopped there. New episodic turns
-    // and new procedural topics went into their own tables and **nowhere else**,
-    // so the retrieval index was frozen at migration time: every conversation
-    // after the upgrade was unrecallable, silently, with no error and nothing to
-    // notice but recall that felt oddly stale.
-    //
-    // ⚠ Triggers rather than calls in the write paths, for the same reason the
-    // FTS5 index uses them: a convention the write path must remember is one a
-    // new write path will forget, and there are already four of them across
-    // three files. The database enforces this now.
-    //
-    // The scope and source expressions mirror v2's backfill exactly, so a row
-    // written today and the same row backfilled yesterday land identically.
-    Migration {
-        version: 3,
-        name: "memory-index-triggers",
-        sql: r#"
+        },
+        // ═════════════════════════════════════════════════════════════════════
+        // v3 — keep the retrieval index in step with the tier tables
+        // ═════════════════════════════════════════════════════════════════════
+        //
+        // 🔴 v2 backfilled the existing rows and stopped there. New episodic turns
+        // and new procedural topics went into their own tables and **nowhere else**,
+        // so the retrieval index was frozen at migration time: every conversation
+        // after the upgrade was unrecallable, silently, with no error and nothing to
+        // notice but recall that felt oddly stale.
+        //
+        // ⚠ Triggers rather than calls in the write paths, for the same reason the
+        // FTS5 index uses them: a convention the write path must remember is one a
+        // new write path will forget, and there are already four of them across
+        // three files. The database enforces this now.
+        //
+        // The scope and source expressions mirror v2's backfill exactly, so a row
+        // written today and the same row backfilled yesterday land identically.
+        Migration {
+            version: 3,
+            name: "memory-index-triggers",
+            sql: r#"
             -- Episodic: one row per turn.
             CREATE TRIGGER IF NOT EXISTS episodic_index_ai
             AFTER INSERT ON episodic_memories
@@ -507,7 +508,8 @@ impl MemoryDb {
              WHERE tier = 'semantic'
                AND ref_id IN (SELECT id FROM semantic_memories WHERE is_active = 0);
         "#,
-    }];
+        },
+    ];
 
     fn migrate(&self) -> Result<()> {
         // ⚠ `sqlite3_auto_extension` only affects connections opened AFTER it
@@ -568,9 +570,18 @@ mod p3_30_tests {
             .map(|r| r.unwrap())
             .collect();
         for required in [
-            "tier", "scope", "scope_ref", "scope_key", "content",
-            "source", "source_file", "source_line",
-            "importance", "confidence", "access_count", "last_accessed_at",
+            "tier",
+            "scope",
+            "scope_ref",
+            "scope_key",
+            "content",
+            "source",
+            "source_file",
+            "source_line",
+            "importance",
+            "confidence",
+            "access_count",
+            "last_accessed_at",
         ] {
             assert!(
                 cols.iter().any(|c| c == required),
@@ -605,7 +616,8 @@ mod p3_30_tests {
             )
             .unwrap();
         assert_eq!(stale, 0, "FTS5 kept the OLD content after an update");
-        c.execute_batch("DELETE FROM memories WHERE id='m1';").unwrap();
+        c.execute_batch("DELETE FROM memories WHERE id='m1';")
+            .unwrap();
         let after_delete: i64 = c
             .query_row(
                 "SELECT count(*) FROM memories_fts WHERE memories_fts MATCH 'lazy'",
@@ -649,18 +661,30 @@ mod p3_30_tests {
 
         // Pre-existing rows are indexed, not stranded.
         let n: i64 = c
-            .query_row("SELECT count(*) FROM memories WHERE tier='episodic'", [], |r| r.get(0))
+            .query_row(
+                "SELECT count(*) FROM memories WHERE tier='episodic'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(n, 2, "existing episodic rows were not backfilled");
 
         // …and scoped by their working_dir rather than dumped into 'global',
         // where every other project would recall them.
         let scoped: String = c
-            .query_row("SELECT scope_key FROM memories WHERE ref_id='e1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT scope_key FROM memories WHERE ref_id='e1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(scoped, "project:/work/proj");
         let global: String = c
-            .query_row("SELECT scope_key FROM memories WHERE ref_id='e2'", [], |r| r.get(0))
+            .query_row(
+                "SELECT scope_key FROM memories WHERE ref_id='e2'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(global, "global", "a row with no working_dir must be global");
 
@@ -673,7 +697,10 @@ mod p3_30_tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(hits, 1, "backfilled rows were not indexed for lexical search");
+        assert_eq!(
+            hits, 1,
+            "backfilled rows were not indexed for lexical search"
+        );
     }
 
     #[test]
@@ -750,7 +777,11 @@ mod p3_30_v3_tests {
 
         // …and scoped from its working_dir, not dumped into global.
         let scope: String = c
-            .query_row("SELECT scope_key FROM memories WHERE ref_id='e-new'", [], |r| r.get(0))
+            .query_row(
+                "SELECT scope_key FROM memories WHERE ref_id='e-new'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(scope, "project:/proj");
     }
@@ -790,7 +821,10 @@ mod p3_30_v3_tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(stale, 0, "the index kept the topic's OLD text after an edit");
+        assert_eq!(
+            stale, 0,
+            "the index kept the topic's OLD text after an edit"
+        );
         let fresh: i64 = c
             .query_row(
                 "SELECT count(*) FROM memories_fts WHERE memories_fts MATCH 'guide'",
@@ -815,7 +849,9 @@ mod p3_30_v3_tests {
         )
         .unwrap();
         let n: i64 = c
-            .query_row("SELECT count(*) FROM memories WHERE ref_id='s1'", [], |r| r.get(0))
+            .query_row("SELECT count(*) FROM memories WHERE ref_id='s1'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(n, 1, "a direct semantic write was not indexed");
     }
@@ -873,7 +909,10 @@ mod p3_30_v3_tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(hits, 0, "it is gone from `memories` but still in the search index");
+        assert_eq!(
+            hits, 0,
+            "it is gone from `memories` but still in the search index"
+        );
     }
 
     /// The other direction, or the trigger above is just breaking recall.
@@ -881,12 +920,18 @@ mod p3_30_v3_tests {
     fn reactivating_a_fact_brings_it_back() {
         let c = laddered();
         add_fact(&c, "s1", "the api gateway listens on port 8080");
-        c.execute("UPDATE semantic_memories SET is_active = 0 WHERE id = 's1'", [])
-            .unwrap();
+        c.execute(
+            "UPDATE semantic_memories SET is_active = 0 WHERE id = 's1'",
+            [],
+        )
+        .unwrap();
         assert_eq!(indexed(&c, "s1"), 0);
 
-        c.execute("UPDATE semantic_memories SET is_active = 1 WHERE id = 's1'", [])
-            .unwrap();
+        c.execute(
+            "UPDATE semantic_memories SET is_active = 1 WHERE id = 's1'",
+            [],
+        )
+        .unwrap();
         assert_eq!(
             indexed(&c, "s1"),
             1,
@@ -906,7 +951,11 @@ mod p3_30_v3_tests {
         .unwrap();
 
         let content: String = c
-            .query_row("SELECT content FROM memories WHERE ref_id = 's1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT content FROM memories WHERE ref_id = 's1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(
             content, "the deploy key rotates every fortnight",
@@ -935,9 +984,12 @@ mod p3_30_v3_tests {
             assert_eq!(indexed(&c, r), 1, "{r} was not indexed to begin with");
         }
 
-        c.execute("DELETE FROM semantic_memories WHERE id = 's1'", []).unwrap();
-        c.execute("DELETE FROM episodic_memories WHERE id = 'e1'", []).unwrap();
-        c.execute("DELETE FROM procedural_memories WHERE id = 'p1'", []).unwrap();
+        c.execute("DELETE FROM semantic_memories WHERE id = 's1'", [])
+            .unwrap();
+        c.execute("DELETE FROM episodic_memories WHERE id = 'e1'", [])
+            .unwrap();
+        c.execute("DELETE FROM procedural_memories WHERE id = 'p1'", [])
+            .unwrap();
 
         for r in ["s1", "e1", "p1"] {
             assert_eq!(indexed(&c, r), 0, "{r} outlived its own row in the index");
@@ -967,9 +1019,16 @@ mod p3_30_v3_tests {
             [],
         )
         .unwrap();
-        c.execute("UPDATE semantic_memories SET is_active = 0 WHERE id = 's1'", [])
-            .unwrap();
-        assert_eq!(indexed(&c, "s1"), 1, "the v2 window is the point of this fixture");
+        c.execute(
+            "UPDATE semantic_memories SET is_active = 0 WHERE id = 's1'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            indexed(&c, "s1"),
+            1,
+            "the v2 window is the point of this fixture"
+        );
 
         crate::db::migrate::run_ladder(&c, "memory.db(test)", MemoryDb::LADDER).unwrap();
         assert_eq!(
@@ -997,13 +1056,21 @@ mod p3_30_v3_tests {
         )
         .unwrap();
         let before: i64 = c
-            .query_row("SELECT count(*) FROM memories WHERE ref_id='gap'", [], |r| r.get(0))
+            .query_row(
+                "SELECT count(*) FROM memories WHERE ref_id='gap'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(before, 0, "the fixture must actually be unindexed at v2");
 
         crate::db::migrate::run_ladder(&c, "memory.db(test)", MemoryDb::LADDER).unwrap();
         let after: i64 = c
-            .query_row("SELECT count(*) FROM memories WHERE ref_id='gap'", [], |r| r.get(0))
+            .query_row(
+                "SELECT count(*) FROM memories WHERE ref_id='gap'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(after, 1, "v3 did not catch up rows written under v2");
     }

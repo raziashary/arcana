@@ -41,7 +41,6 @@ impl Tool for SuggestWorkerTool {
         })
     }
 
-
     async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
         let task_id = match input["task_id"].as_i64() {
             Some(id) if id > 0 => id,

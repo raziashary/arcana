@@ -2566,3 +2566,311 @@ from contending with its own linker.
 process and stop it cleanly with port 1420 freed. This entry does not claim a
 provider-backed turn or S8-02 completion.
 
+## ADR-LOG-RESTRUCT-0049 — Regenerate the updater interop vector after the rename
+
+**Status.** CORRECTION found by the P8 full-suite run, 2026-09-23.
+
+**What went wrong.** The Arcana rename changed the fixed payload in
+`a_signature_made_by_openssl_verifies_here` but retained the Ed25519 public key
+and signature generated for the old bytes. The verifier correctly rejected the
+pair; the first all-targets run stopped at that test (107 other desktop-library
+tests passed), so it did not establish TG8-01.
+
+**Correction/proof.** Generate a fresh throwaway Ed25519 key with the Git for
+Windows OpenSSL binary, sign the new fixed payload with `pkeyutl -sign -rawin`,
+embed only its public key and detached signature, and discard the temporary
+private key. Re-run the interop test and full suite; the tampered-payload
+negative control must still fail verification.
+
+## ADR-LOG-RESTRUCT-0050 — Exercise the worker commit recipe in its real shell
+
+**Status.** CORRECTION found by the isolated P8 suite, 2026-09-23.
+
+**What went wrong.** `S8-05` ran the recipe's branch command through `sh` on
+every platform, although the production `bash` tool uses `cmd /C` on Windows.
+This laptop has Git but no `sh` on PATH, so the smoke failed before exercising
+the branch protocol. The recipe also carried a POSIX `2>/dev/null` redirect
+that is not portable to the production Windows shell.
+
+**Correction/proof.** Keep the convergent `git switch -c … || git switch …`
+branch step without a shell-specific redirect, and execute the smoke through
+the same platform shell as the production tool. Run it twice against a
+throwaway repository and verify the original trunk stays in place. This is a
+test/recipe contract correction, not a reason to add `sh` to Arcana's Windows
+runtime requirements.
+
+## ADR-LOG-RESTRUCT-0051 — Ignore the complete repository-local Arcana store
+
+**Status.** DECIDED during P8 verification, 2026-09-23.
+
+**What/why.** The previous ignore covered only `.arcana/sessions/` and
+`.arcana/logs/`. An isolated suite home placed under `.arcana/verify/` exposed
+that its local databases and Windows cache files would otherwise appear as
+untracked source. The entire repository-local `.arcana/` tree is runtime/test
+state, not application source, so the ignore now covers it. No tracked file
+resides there; the real user vault and home store remain outside the repository.
+
+**Where/proof.** `.gitignore`; `git status` must show only deliberate source
+edits, while the isolated suite continues to use an external test home.
+
+## ADR-LOG-RESTRUCT-0052 — Send Gemini tool schemas in its JSON Schema field
+
+**Status.** CORRECTION from the first live Arcana Gemini turn, 2026-09-23.
+
+**What went wrong.** The native Google adapter put every shared tool JSON
+Schema under `functionDeclarations[].parameters`. Gemini rejected the request
+before generating any token because `annotate_file` declares
+`additionalProperties: false`, which that restricted Schema field does not
+recognize. Provider connection validation passed because it makes no tool call.
+The desktop displayed the provider's 400 error instead of a coding result.
+
+**Correction/proof.** Google's [FunctionDeclaration API reference]
+(https://ai.google.dev/api/generate-content#functiondeclaration) defines
+`parametersJsonSchema` for a full JSON Schema and makes it mutually exclusive
+with `parameters`. Use that field without mutating the shared tool definition;
+assert the outbound body shape in a conformance test, then repeat the live
+desktop turn including a tool call and a visible answer. A successful key
+check alone is not proof of tool-capable Gemini operation.
+
+## ADR-LOG-RESTRUCT-0053 — Reopen P8-01 when port names lacked behavior proof
+
+**Status.** CORRECTION to the 2026-09-03 P8-01/TG8-02 claim, 2026-09-24.
+
+**What went wrong.** `_verify/P8-BASELINE.md` concluded that all ten G4b
+PORT/PARTIAL rows had named, tested Rust destinations by locating related
+symbols and tests. That instrument did not exercise each row's actual
+behavior. A fresh audit found no replay of Anthropic signed thinking across a
+tool follow-up, no in-flight execution query registry, no 600-second/500-cap
+session reap, no prior-to-next task-state validation, and no full proof for
+the prompt, intelligence, bridge, and correlated bus clauses. The streaming
+row likewise proves SSE parsing, not its specified three-mode detector.
+Redaction has stronger behavioral proof. The baseline's `SATISFIABLE` result
+was therefore a false green, not a current acceptance result.
+
+**Decision/proof.** Reopen P8-01 and leave TG8-02 unchecked. Keep all ten rows
+in the audit population: none is wholly design-only. Record precise
+destinations, tests and missing behavior in
+`_verify/P8-ARCANA-CLOSEOUT-2026-09-24.md`. The owner subsequently ruled
+to retire design-only clauses while implementing and proving all retained
+coding behavior (ADR-0056). Only then restore this gate's check.
+
+## ADR-LOG-RESTRUCT-0054 — Repoint the staleness checker to Arcana's active tree
+
+**Status.** CORRECTION during the 2026-09-24 P8 no-stale sweep.
+
+**What went wrong.** `_verify/MDP-STALENESS-CHECK.py` still opened
+`autodev-core/src/provider`, although that tree became `arcana-core`, and
+compared P4-F with a PD0 heading moved to the historical archive. Both checks
+raised rather than checking the current tree. Its `S-7` also invoked Unix
+`test -d` through `cmd.exe` on Windows; the command failed, which accidentally
+made the absence check pass without examining the directory.
+
+**Correction/proof.** Point the provider check at `arcana-core`, bound P4-F
+between the active §10 and §11 headings, and check MCP directory presence and
+absence with `os.path`. The Python checker now reports 21 checks, 0 open and
+passes syntax compilation on Windows. No historical PD0 text was rewritten.
+
+## ADR-LOG-RESTRUCT-0055 — Apply P8's sidecar-absent suite to built gates
+
+**Status.** OWNER-RULED 2026-09-24.
+
+**Conflict.** `TESTING_GATES.md` §11's old P8 preamble required the entire
+TG0–TG7 set during P8, but the active MDP explicitly schedules P4–P7 after
+P8. Several of those future gates have no implementation yet. A review caught
+our first TG8-01 green mark using only the current Windows suite against that
+literal wording; it was retracted while the owner decided scope.
+
+**Ruling and application.** The owner chose **"Apply built gates only"**:
+P8's sidecar-absent regression run covers all tests and gates that are already
+built and runnable in the current CI suite. Future P4–P7 gates become binding
+in their own phases. This makes the P8 prerequisite executable without
+silently treating unbuilt future gates as passed. The separate incomplete
+P0/P3 specification proofs stay open in their own registers and readiness
+rows. Record the 652-test isolated Rust suite and the frontend checks as
+TG8-01's current Windows proof, and leave platform-triple release proof to P9.
+
+## ADR-LOG-RESTRUCT-0056 — Retain coding ports and repair the workspace format gate
+
+**Status.** OWNER-RULED 2026-09-24.
+
+**Scope.** The owner chose to retire only Adobe/design clauses from G4b's ten
+PORT/PARTIAL rows and **implement and prove the coding-relevant behavior** in
+Arcana. No entire row is dropped. TG8-02 stays open until the retained behavior
+has named Rust destinations and tests that fail when the behavior is removed.
+This is a product-scope decision, not a declaration that the old baseline's
+symbol matches were adequate.
+
+**Format gate.** The same ruling authorized a mechanical workspace-wide
+`cargo fmt --all` pass for pre-existing formatting debt, followed by
+`cargo fmt --all -- --check` and proportionate tests. Keep formatting changes
+separate from behavior edits in review and a logical commit where possible.
+
+## ADR-LOG-RESTRUCT-0057 — Enforce task lifecycle at the database boundary in P8
+
+**Status.** OWNER-RULED 2026-09-24; implementation pending.
+
+**Conflict.** G4b §A.5 retains coding lifecycle guards as part of the sidecar
+port. Today `TasksDb::update_status_with_reason` accepts any supplied
+transition; Tauri, CLI and recipes can bypass the agent tool's narrower
+checks. `TaskStatus` parsing silently maps unknown strings to `Ready`. The
+worker runner also writes `idle_no_provider`, which `WorkerStatus` fails to
+represent. ~~`P4-02` owns strict parsing of unknown task statuses.~~ **This
+was false: P4-02 explicitly concerns `workers.status`; see ADR-0058.**
+
+**Ruling.** The owner chose **"Enforce transitions in P8"** for the task
+database. Derive legal moves and recovery exceptions from all current task
+writers, including direct SQL paths, and test direct DB, UI/CLI and tool paths.
+P4-02's worker parser ownership remains with P4; P8 can represent the real
+`idle_no_provider` state without claiming the future strict-parser task. The
+exact task transition graph remains a pre-build verification subject, not an
+assumed policy.
+
+## ADR-LOG-RESTRUCT-0058 — Correct the worker/task status ownership claim
+
+**Status.** CORRECTION from the P8 §0.2m pre-build audit, 2026-09-24.
+
+**Mechanism.** ADR-0057 and the draft port workplan said P4-02 owned strict
+parsing of unknown **task** statuses. Its actual MDP task says
+`workers.status`; the draft conflated two distinct database contracts and
+would have silently moved a P4 task into P8. The audit also found
+`TasksDb::unblock_ready_tasks` writes status by direct SQL twice, bypassing
+`update_status_with_reason`; one write ignores the SQL result. A guard in
+that method alone would not enforce the task invariant.
+
+**Correction.** Keep P4-02's worker-parser acceptance in P4. P8's owner ruling
+applies to task lifecycle enforcement; its implementation must cover all
+direct and indirect task status writers or enforce at the database boundary.
+Test the unblock/recovery path as a negative control. Reconcile `idle_no_provider`
+with the worker enum as a current bug without declaring P4-02 complete.
+
+## ADR-LOG-RESTRUCT-0059 — Port the MCP round trip as direct built-in dispatch
+
+**Status.** DECIDED from P8 §0.2m source review, 2026-09-24.
+
+**What the bridge served.** G4b A.12/C.7 describes `MCPBridge` converting
+the *existing Rust in-process MCP server's 26 built-in tools* into Python
+`ToolSpec`s, then calling back over HTTP. P8 removed that redundant
+Rust→Python→Rust round trip. The current core `ToolRegistry` already produces
+tool definitions and dispatches the built-ins directly from `AgentEngine`.
+Configured external MCP servers currently have health/config paths but no
+agent tool-discovery/call consumer; adding a generic external client here
+would create a new product/trust contract rather than port the old bridge.
+
+**Proof obligation.** TG8-02's bridge row requires a behavioral test from
+built-in `ToolRegistry` definition through a model-facing request and a real
+tool result consumed by the engine, plus the separate DELEGATE parser and
+depth/cycle behavior. Keep external MCP discovery/call as a separately named
+future feature, not a false claim that health/config already supplies tools.
+
+## ADR-LOG-RESTRUCT-0060 — Prefer integrated native ports, prove equivalence when necessary
+
+**Status.** OWNER-RULED 2026-09-24 after the P8 §0.2m pre-build refutation.
+
+**Choice.** The owner wants a full AutoDev→Arcana conversion and prefers to
+recreate and **integrate** the old coding mechanisms, including runtime/tool
+registries, delegation and internal events, rather than declaring them
+irrelevant because the current tree has no reader. Where literal recreation
+is not possible or would violate the native trust/permission architecture,
+prove the native equivalent on a real coding path and record the reason.
+
+**Guardrails.** A new registry, bus, prompt source or decision type is not
+accepted because it exists: a production consumer must read it and a test
+must fail if that consumption is removed. Do not revive the unauthenticated
+hosted MCP server, a prose delegation permission bypass, old sidecar
+startup phases, Adobe/design features or Redis/A2A transport solely for
+parity. Port the coding semantics into Rust and keep Arcana's current
+security boundaries. TG8-02 remains open until every retained row meets
+this standard.
+
+## ADR-LOG-RESTRUCT-0061 — Manual task changes obey the shared lifecycle
+
+**Status.** OWNER-RULED 2026-09-24.
+
+**Choice.** Tauri UI and CLI manual task-status actions must follow the **same
+legal transitions** as agent/recipe actions. There is no special manual
+override that bypasses the task database guard. The current free-form status
+command therefore may return an invalid-transition error for a jump it used
+to accept. This is intentional and must be represented clearly to callers.
+
+**Proof.** P8-69 must test valid workflow/recovery edges and invalid jumps
+through the shared DB method and each direct SQL writer, then drive one UI/CLI
+path to show it cannot bypass the rule. Do not use the unrelated P4-02 worker
+parser task as evidence of task lifecycle completion.
+
+## ADR-LOG-RESTRUCT-0062 — Represent native runtime isolation as leases
+
+**Status.** DECIDED from G4b A.4 and P8 §0.2m evidence, 2026-09-24;
+implementation pending.
+
+**Why this shape.** The old Python sidecar retained one `AgentRuntime` object
+per `(agent_id, session_id)`, with 600-second idle reap and a 500-entry cap.
+Arcana already creates a fresh `AgentEngine` for each interactive turn,
+recipe tick and subagent run; recipe/subagent sessions are intentionally
+ephemeral. Retaining those engines for ten minutes would add a new lifetime,
+hold provider state and conflict with that native design.
+
+**Native port.** Track lightweight `(agent_id, session_id)` admission leases,
+not retained engines. All three production entry paths must acquire a lease;
+an active pair cannot be admitted twice, idle entries are reaped after 600
+seconds on a 60-second interval, and the registry refuses entry 501 while
+preserving persisted session rows. A guard releases activity on every normal,
+error and panic exit. Tests with a controlled clock prove isolation, cap and
+reap; an entry-path test must prove a real caller consults the registry.
+This is the allowed native equivalent under ADR-0060, not a literal Python
+object-lifetime transplant.
+
+## ADR-LOG-RESTRUCT-0063 — Keep provider reasoning private across the native stream
+
+**Status.** DECIDED from the current provider catalogue and stream contracts,
+2026-09-24.
+
+**Choice.** Preserve three distinct input modes in Arcana's existing stream
+path: provider-native reasoning, provider-native thinking, and bounded
+incremental `<thinking>` fallback for models whose catalogue entry does not
+advertise native reasoning. Private segments feed only the dedicated thinking
+event and never ordinary chat text or provider-visible history. Provider
+capability metadata selects the mode; model-name heuristics do not.
+
+**Proof.** Test native OpenAI/Gemini/Anthropic chunks, split and incomplete XML
+delimiters, and the engine path that routes each segment. Anthropic signed
+block replay is covered separately by P8-68.
+
+## ADR-LOG-RESTRUCT-0064 — Use the live worker database as prompt and dispatch authority
+
+**Status.** DECIDED from current WorkersDb and tool validation paths,
+2026-09-24.
+
+**Choice.** Delegate prompt construction and assignment/recipient validation
+share the current non-deleted worker roster from `WorkersDb`. The roster is
+placed only in the volatile prompt tail, so roster changes do not stale the
+cached stable prompt prefix. If the database cannot be read, the composer does
+not invent an authoritative roster. Tool-result honesty remains in the shared
+invariant core used by all agent kinds.
+
+**Proof.** Database tests cover custom and deleted workers; composer tests
+cover the volatile live-roster fragment and invariant core; tool validation
+tests demonstrate the same database roster is accepted by the real dispatch
+surface.
+
+## ADR-LOG-RESTRUCT-0065 — Correlate in-flight executions through typed native events
+
+**Status.** DECIDED from the current execute_batch, Tauri event, and chat
+reconnect consumers, 2026-09-24.
+
+**Choice.** Keep existing public Tauri event names and payloads while adding a
+typed in-process event channel for internal execution tracking. `execute_batch`
+publishes start/finish events and owns an RAII execution guard; the registry
+subscribes to finish events and exposes only redacted active-call snapshots to
+the Tauri command. The chat store hydrates that snapshot after reconnect and
+guards against a late snapshot resurrecting a tool already completed in the
+live stream. The Arcana built-in tool registry and structured subagent tool
+remain the dispatch and delegation authorities; no prose delegation parser
+or external MCP client is added without a real supported caller.
+
+**Proof.** Run a blocked real tool through `execute_batch`, query it from the
+registry reader, then observe completion cleanup; test the frontend late
+snapshot race and redacted command payload. Existing pool and native-runner
+tests prove depth and permission behavior. Retry decisions and provider
+routing continue through their current typed results and real engine
+consumers; a second generic decision engine would duplicate authority.
+

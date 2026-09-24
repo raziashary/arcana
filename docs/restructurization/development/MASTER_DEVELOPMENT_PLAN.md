@@ -15,7 +15,7 @@
 | **Owner** | Razi (Arcana personal project) |
 | **Branch** | `main` (Razi authorised working directly on it; `sidecar-backup` holds the pre-restructure state) |
 | **Rev** | **3.0 scope notice** — 2026-09-23; `§16` preserves the original build history, ADR-0042/0043 record the owner's new direction |
-| **Status** | 🟢 **BUILDING ARCANA.** P0–P3 and P8 were recorded closed in the old programme, with P0/P3/P8 proof gaps still tracked. Next active coding phase: P4. Retired design tasks are in `HISTORICAL_DESIGN_PROGRAMME.md`; the current active register has 383 explicit checkbox rows, 123 open. |
+| **Status** | ✅ **P8 CLOSED.** S8-01…S8-05, TG8-01, TG8-02, TG8-12 and P8-01/P8-68…73 have current Arcana evidence under ADR-0055's built-gate scope. Independent GPT-6 Luna audits are resolved. P4 is next; P5–P7 follow in order. Retired design tasks are in `HISTORICAL_DESIGN_PROGRAMME.md`; the current active register has 389 explicit checkbox rows, 123 open (266 checked). |
 
 ⚠ **This header read `Rev 1.0` and `⛔ AWAITING GO. No code, no migrations, no
 deletions.` until 2026-09-03** — through seven completed phases, hundreds of
@@ -623,8 +623,8 @@ this is the same widening, done deliberately by me rather than by `core.autocrlf
 
 | Surface | Path | Size | State |
 |---|---|---|---|
-| Tauri backend | `src-tauri/src/` | **16,951 LOC, 80 files** | **238** Tauri commands, all registered |
-| **Core** *(new — `P1-05`)* | `autodev-core/src/` | **63,382 LOC, 219 files** | The engine, extracted from the desktop shell. **Had no row here at all** until 2026-09-03 |
+| Tauri backend | `src-tauri/src/` | **16,951 LOC, 80 files** | **239** Tauri commands, all registered |
+| **Core** *(new — `P1-05`)* | `arcana-core/src/` | **63,382 LOC, 219 files** | The engine, extracted from the desktop shell. **Had no row here at all** until 2026-09-03 |
 | Frontend | `src/` | **40,088 LOC** (`.ts`/`.tsx`) | 9 tabs, **25** component dirs, **29** stores |
 | CLI | `src-cli/src/` | **4,019 LOC** | `airsctl`; agent commands are 100% sidecar HTTP *(retired in `P8`)* |
 
@@ -852,19 +852,20 @@ in force.
 | P1 | Shared Rust core, persistence and redaction | Recorded closed; source is now named `arcana-core` | P0 |
 | P2 | Provider adapters, costs and vault | Recorded closed; Gemini is the only key needed for this owner's current setup | P1 |
 | P3 | Native engine, tools, subagents and memory | Recorded closed; memory gate proof remains open | P2 |
-| P8 | Remove Python sidecars and unify the native path | Recorded closed; live desktop/provider turn remains unproven | P3 |
-| P4 | A coding task is assigned, built, reviewed and recovered by the fleet | Next implementation phase after P8 proof reconciliation | P8 |
+| P8 | Remove Python sidecars and unify the native path | Closed against coding-only scope; built standing gates, ten retained ports, independent audits and Windows debug installer evidence recorded | P3 |
+| P4 | A coding task is assigned, built, reviewed and recovered by the fleet | Next implementation phase | P8 |
 | P5 | A real code graph is written and read into relevant context | Open | P4 |
 | P6 | Coding UI, events, settings and reachability work end to end | Open; design viewer tasks retired | P5 |
 | P7 | First-run and failure experience supports a working coding turn | Open | P6 |
 | P9 | Build, signing and installation on supported platforms | Later work, after P4–P7 | P7 |
 
-The active task register contains **383 explicitly checkboxed P-numbered
-rows: 260 checked and 123 unchecked** at the 2026-09-23 scope conversion.
+The active task register contains **389 explicitly checkboxed P-numbered
+rows: 266 checked and 123 unchecked** after closing P8-01 and P8-68–73 on
+2026-09-24.
 This is a source-derived checkbox count,
 not a readiness score. It excludes retired PD0–PD6 rows and withdrawn
 design-only P4-45–48 and P6-25–28; the latter remain in the historical file.
-P0, P3 and P8 proof gaps are still open despite their checked phase tasks.
+P0 and P3 proof gaps remain visible despite their checked phase tasks.
 
 ## §5.2 · Current work boundary
 
@@ -1630,7 +1631,8 @@ that never starts them.
       ✅ **2026-09-03** — `src-cli/src/commands/agent.rs` deleted (415 lines, five subcommands), with its REPL dispatcher and the `Commands::Agent` arm. All five were pure HTTP to `{orchestrator_url}/api/agents/*`; one error path told the user to run `cargo run --bin core-orchestrator`. **Not reimplemented natively** — that would duplicate the desktop engine for a surface with no user. `airsctl` keeps its task/DB surface.
 ### P8-A · Verify the entry gate
 - [x] **P8-01** `TG8-02` runs: every capability grounding marked **PORT** has a named, tested destination in the Rust tree. → `GATE-PROVEN`
-      ✅ **2026-09-03** — `TG8-02`'s population is `G4b`'s own *PORT / DELETE SUMMARY*: 4 `PORT` + 6 `PARTIAL` = the **ten** the gate names, with `security/` (redaction) as the tenth. All ten have a named, tested destination in the Rust tree; evidence in `_verify/P8-BASELINE.md`. ⚠ The instrument was wrong twice before it was right — see that file. → `GATE-PROVEN`
+      🔴 **2026-09-24 CORRECTION to the 2026-09-03 completion claim.** The old baseline's ten-row assertion matched Rust symbols and nearby tests, but did not prove the *behavior* named in each G4b verdict. A fresh source-level audit found coding-relevant gaps in at least nine rows, including Anthropic signed-thinking replay with tools, in-flight execution queries, session idle reap/cap, task transition guards, prompt authority, decision engine, DELEGATE/MCP bridge and correlated internal bus. Redaction has stronger behavioral proof. No entire row is design-only. The owner ruled that Adobe/design subclauses retire while retained coding behavior is implemented and proven (ADR-0056). `_verify/P8-ARCANA-CLOSEOUT-2026-09-24.md` holds the row-by-row status; ~~TG8-02 remains open through implementation/proof~~ **TG8-02 was restored to green after every retained coding row received consumer-backed behavior evidence on 2026-09-24**. The historical 2026-09-03 claim remains visible here to show what was corrected.
+      ✅ **CLOSED 2026-09-24 after the retained coding behavior was implemented and tested.** The ten row-by-row destinations, real readers, negative controls and proof classes are recorded in `_verify/P8-ARCANA-CLOSEOUT-2026-09-24.md`; the sidecar-absent workspace, frontend, desktop, and installer checks are reconciled there. Adobe/design clauses remain retired under ADR-0056. The corrected 2026-09-03 false green remains visible above.
 - [x] **P8-02** The app starts, completes a turn, and runs a design conversion with `skip_sidecars = true` — **absent, not merely stopped**. → `SMOKE-PROVEN`
       ✅ **2026-09-03** — `skip_sidecars` existed, was written by `set_skip_sidecars` and branched on at `main.rs:352`, so the app had a tested path that never started them. ⚠ The flag itself is now **deleted** (`P8-11`/`P8-53`): with no sidecars to skip, *absent* is the only state there is, which is a stronger form of what this task asked for. → `SMOKE-PROVEN` by `S8-02`
 - [x] **P8-03** Native memory (`P3-F`) serves every read that `memory-mcp-server` served. → `GATE-PROVEN`
@@ -1811,13 +1813,62 @@ here**, because there are no gitlinks in the index or in history to operate on.
 - [x] **P8-24** `TG2-14`'s sibling for the sidecar: no reference survives in Rust source, `Cargo.toml`, shipped docs, or the frontend. → `GATE-PROVEN`
       ✅ **2026-09-04** — folded into `TG8-11`, which extends `TG8-09`'s source-tree sweep to the surfaces it does not cover: every workspace `Cargo.toml`, `package.json`, `tauri.conf.json`, every installer and build script, and the shipped README. ⚠ The README's delivery history is exempt **by design** and the gate reads only the text above `## Development Phases`: *"Phase 2 … Sidecar integration"* is a true statement about what shipped then, and a changelog edited to match the present is no longer a changelog. → `GATE-PROVEN`
 
+### P8-J · Correct and prove the retained coding ports
+
+The 2026-09-24 §0.2m pre-build refutation is
+`_verify/P8-PORT-PREBUILD-AUDIT-2026-09-24.md`. ADR-0056 retires design-only
+clauses and requires every retained coding behavior to have a native
+destination, production consumer and behavior proof. The ten-row audit and
+independent review disposition are recorded in
+`_verify/P8-ARCANA-CLOSEOUT-2026-09-24.md`; TG8-02 is closed.
+
+- [x] **P8-68** Preserve Anthropic signed thinking across a streamed tool
+  follow-up. The model-facing request after a tool result must carry the
+  original thinking block and signature in wire order, while Google/OpenAI
+  behavior and the visible chat text remain correct. Test the streamed response,
+  exact next outbound body, privacy boundaries, and missing-signature negative
+  case; Gemini's desktop turn exercises the native agent/tool loop.
+  → `UNIT-PROVEN` + `SMOKE-PROVEN`
+- [x] **P8-69** Enforce legal task-status transitions at the shared database
+  boundary, including direct SQL claim/recovery/unblock/parent-completion
+  writers. Derive legal edges from current workflows, test each writer and
+  reject invalid/unknown task status without silently mapping it to `ready`.
+  Enforce the existing assignment invariants (`ready` is unassigned;
+  `assigned`/`in_progress` have an owner) for UI, CLI and raw SQL too.
+  Keep P4-02's separate strict **worker** status parser task open. →
+  `LIVE-DB-PROVEN`
+- [x] **P8-70** Track `(agent_id, session_id)` native runtime admission with
+  lightweight leases on interactive, recipe and subagent paths. Reject a
+  duplicate active pair or entry 501, reap idle leases after 600 seconds on a
+  60-second cadence, and never delete durable session history. Test duplicate,
+  cap, controlled-clock reap and panic cleanup; TG8-12 guards that all three
+  production paths hold the lease and the host starts its reaper (ADR-0062).
+  → `UNIT-PROVEN` + `GATE-PROVEN` + `SMOKE-PROVEN`
+- [x] **P8-71** Keep coding prompt contracts in Arcana's existing single
+  composer: live worker roster in Delegate mode from `workers.db`, the same
+  roster for assignment, and explicit tool-result honesty for every agent.
+  Keep the roster volatile so it cannot stale the cached stable prefix; retire
+  Adobe/design prompt clauses. → `UNIT-PROVEN` + `LIVE-DB-PROVEN`
+- [x] **P8-72** Preserve G4b's three streaming modes: provider-native
+  reasoning, provider-native thinking, and a bounded incremental XML fallback
+  for models without native reasoning. Private content must never enter normal
+  chat text or replay as provider-visible text. Test split delimiters, native
+  provider chunks, and an incomplete-tag negative case. → `UNIT-PROVEN`
+- [x] **P8-73** Prove native equivalents for the remaining coding seams without
+  adding dead abstractions: built-in model tool definition→dispatch→result,
+  permission-safe structured delegation with depth limits, typed retry/routing
+  decisions with their real consumers, and correlated internal events read by
+  the in-flight registry and reconnecting chat UI. Retire prose delegation and
+  external MCP discovery where they would create a second permission boundary
+  or unsupported product contract. → `GATE-PROVEN` + `SMOKE-PROVEN`
+
 **Smoke — S8**
 - [x] **S8-01** A clean checkout builds with no submodule initialisation step.
       ✅ **2026-09-04** — `s8_smokes.rs`: a plain `git clone` (**no `--recurse-submodules`**) into a sandbox, then asserts no `.gitmodules`, no `submodules/`, an empty `git submodule status` — **and that the checkout is complete**, because "no submodule step" is only good news if nothing went missing with it: every workspace member's manifest and the front end are present. ⚠ It does not compile the clone; a fresh `cargo build` there would rebuild the whole dependency graph for a property this already establishes, and the compile half is `cargo check --workspace` on this tree. Stated rather than left implied.
-- [ ] **S8-02** Arcana starts and completes a native coding-agent turn without spawning an application-owned Python process; verify the process list and the user-visible result.
-      ⚠ **Still open.** Earlier source checks proved the startup and agent-loop path does not spawn the former orchestration interpreter, but a live desktop turn has not been observed. The retired PD0 conversion smoke is historical evidence only; see `HISTORICAL_DESIGN_PROGRAMME.md`. Arcana may still run Python tools on a user's Python project by request.
+- [x] **S8-02** Arcana starts and completes a native coding-agent turn without spawning an application-owned Python process; verify the process list and the user-visible result.
+      ✅ **2026-09-24** — Live Windows desktop session `13fdac95-d2e1-4bea-83e3-ba168a9f54f4` used the Google `gemini-3.7-flash` provider and the `read_file` tool through the Chat UI. The final answer correctly read `package.json` as package `arcana` with `"typecheck": "tsc --noEmit"`. A four-minute process-ancestry sample rooted at Arcana PID 12412 found no application-owned Python process. The first live attempt exposed a Gemini tool-schema error; it was fixed and the successful turn repeated. Evidence: `_verify/P8-ARCANA-CLOSEOUT-2026-09-24.md`, ADR-0052. Arcana may still run Python tools on a user's Python project by request.
 - [x] **S8-03** The built installer contains no `.py` file. ~~and is ~225 MB smaller~~ **← the size clause is struck with `P8-22`; see there.**
-      ✅ **2026-09-04** — asserted at the source rather than by unpacking an artifact, because the artifact cannot be built here (`P8-22`: the release build requires `AUTODEV_UPDATE_PUBKEY`, deliberately). `tauri.conf.json` declares `"resources": []` and has never declared `externalBin` — `S8-02` asserts both — so the bundle is the binary and its icons, and there is no path by which a `.py` could enter it. `TG8-09` and `TG8-11` assert no `.py` under the six shipped trees. ⚠ Stated as what it is: a proof about the bundle's **inputs**, not an inspection of a built installer.
+      ✅ **2026-09-24 Arcana final-tree recheck** — `npx tauri build --debug --bundles nsis` produced `target/debug/bundle/nsis/Arcana_1.0.0_x64-setup.exe` (13,439,723 bytes; SHA-256 `8CFD67F67581E84D8C801E30B5CC797039700933150F14AE6AAE7344CC339F4B`). `7z l -slt` listed eight internal entries (seven NSIS support assets and `arcana.exe`), with zero `.py` entries. This supersedes the **2026-09-04 source-input-only proof** for Windows debug packaging. Release-signing and other-platform installers remain P9 work; the release updater public-key guard remains intact. Evidence: `_verify/P8-ARCANA-CLOSEOUT-2026-09-24.md`.
 - [x] **S8-04** Memory recall works end to end with `memory-mcp-server` absent from disk.
       ✅ **2026-09-04** — `autodev-core/tests/s8_memory.rs`: a real write through the memory **gateway** and a real recall, end to end, with nothing running. ⚠ One test in its own integration binary on purpose — it repoints `USERPROFILE`/`HOME` at a sandbox so `db::autodev_dir()` cannot resolve to the developer's real store (`§0.8`), and environment variables are process-wide while tests in one file run on parallel threads (`L-30`). It **asserts the redirection took** before writing anything: without that check the test could write to the real store and still pass, which is the failure that matters most here.
 - [x] **S8-05** A worker's commit lands on a branch, stages only the paths it named, and leaves the trunk where it found it. *(added by `P8-38`; the four above are the deletion phase's.)*
@@ -1826,8 +1877,9 @@ here**, because there are no gitlinks in the index or in history to operate on.
 **Exit.** S8 → `TG-P8` → matrix → progress → no-stale → commit.
 
 **Narrative success criterion.** *A newcomer clones the repository, runs one build command,
-and gets a working AutoDev. Nothing asks them to initialise a submodule, no Python
-interpreter is required, and searching the tree for "sidecar" returns only history.*
+and gets a working Arcana. Nothing asks them to initialise a submodule, no Python
+interpreter is required for agent orchestration, and no Python orchestrator
+sidecar remains in the shipped runtime.*
 
 ---
 

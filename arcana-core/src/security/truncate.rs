@@ -117,7 +117,11 @@ mod tests {
     fn a_string_that_fits_is_returned_unchanged() {
         assert_eq!(truncate_bytes("hello", 5), "hello");
         assert_eq!(truncate_bytes("hello", 99), "hello");
-        assert_eq!(truncate_with_note("hello", 5), "hello", "no marker when nothing was cut");
+        assert_eq!(
+            truncate_with_note("hello", 5),
+            "hello",
+            "no marker when nothing was cut"
+        );
     }
 
     #[test]
@@ -125,11 +129,14 @@ mod tests {
         assert_eq!(truncate_bytes_from_end("abcdef", 3), "def");
         // And it moves FORWARD off a boundary, so the result is shorter than
         // the budget rather than containing a partial character.
-        let s = "aé日";           // 1 + 2 + 3 bytes
+        let s = "aé日"; // 1 + 2 + 3 bytes
         let out = truncate_bytes_from_end(s, 4);
         assert!(s.ends_with(out), "must be a genuine tail");
         assert!(out.len() <= 4);
-        assert_eq!(out, "日", "walked forward past the split é rather than including half of it");
+        assert_eq!(
+            out, "日",
+            "walked forward past the split é rather than including half of it"
+        );
     }
 
     #[test]
@@ -137,7 +144,11 @@ mod tests {
         // `end > 0` in the loop guard is what makes this terminate; without it
         // the walk underflows on a leading multi-byte character.
         assert_eq!(truncate_bytes("日本語", 0), "");
-        assert_eq!(truncate_bytes("日本語", 1), "", "cannot fit even one character");
+        assert_eq!(
+            truncate_bytes("日本語", 1),
+            "",
+            "cannot fit even one character"
+        );
         assert_eq!(truncate_bytes("日本語", 2), "");
         assert_eq!(truncate_bytes("日本語", 3), "日");
     }

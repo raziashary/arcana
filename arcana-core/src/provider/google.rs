@@ -8,10 +8,10 @@ use serde_json::json;
 use tracing::{debug, error};
 
 use super::traits::{Provider, StreamResult};
-use super::usage::Usage;
 use super::types::{
     CompletionRequest, CompletionResponse, MessageContent, ModelInfo, ProviderStatus, StreamChunk,
 };
+use super::usage::Usage;
 use crate::errors::{ArcanaError, Result};
 use crate::state::lock::LockTolerant;
 
@@ -78,8 +78,11 @@ impl GoogleProvider {
             let parts: Vec<serde_json::Value> = msg
                 .content
                 .iter()
-                .map(|c| match c {
-                    MessageContent::Text { text } => json!({ "text": text }),
+                .filter_map(|c| match c {
+                    // Anthropic-only replay data must not leak into Gemini's
+                    // visible/model text or become an invalid Gemini part.
+                    MessageContent::Thinking { .. } => None,
+                    MessageContent::Text { text } => Some(json!({ "text": text })),
                     MessageContent::ToolUse {
                         id: _,
                         name,
@@ -98,14 +101,14 @@ impl GoogleProvider {
                         if let Some(sig) = opaque {
                             part["thoughtSignature"] = json!(sig);
                         }
-                        part
+                        Some(part)
                     }
                     MessageContent::ToolResult {
                         tool_use_id: _,
                         name,
                         content,
                         is_error,
-                    } => json!({
+                    } => Some(json!({
                         "functionResponse": {
                             // P2-37: the NAME, not the id. Sending the id told
                             // Gemini that a function called `gemini-read_file-0`
@@ -122,7 +125,7 @@ impl GoogleProvider {
                                 json!({ "result": content })
                             }
                         }
-                    }),
+                    })),
                 })
                 .collect();
 
@@ -148,7 +151,11 @@ impl GoogleProvider {
                     "functionDeclarations": [{
                         "name": t.name,
                         "description": t.description,
-                        "parameters": t.input_schema,
+                        // Gemini's `parameters` is a restricted Schema object.
+                        // Our tool definitions are JSON Schema, including
+                        // `additionalProperties`; preserve them through the
+                        // dedicated JSON Schema field instead.
+                        "parametersJsonSchema": t.input_schema,
                     }]
                 })
             })
@@ -232,11 +239,8 @@ impl Provider for GoogleProvider {
             // P2-67/68. Classified here, where the body is available: a 429
             // from a spend cap and a 429 from a rate limit are the same
             // status, and only the body separates them.
-            let class = crate::provider::usage::ErrorClass::classify(
-                "google",
-                status.as_u16(),
-                &text,
-            );
+            let class =
+                crate::provider::usage::ErrorClass::classify("google", status.as_u16(), &text);
             return Err(ArcanaError::Provider(format!(
                 "Google {status} [{class:?}]: {text}"
             )));
@@ -272,11 +276,8 @@ impl Provider for GoogleProvider {
             // re-derived downstream: a 429 from a spend cap and a 429 from a
             // rate limit are the same status and only the body tells them
             // apart, so the one place that has the body is the place to decide.
-            let class = crate::provider::usage::ErrorClass::classify(
-                "google",
-                status.as_u16(),
-                &text,
-            );
+            let class =
+                crate::provider::usage::ErrorClass::classify("google", status.as_u16(), &text);
             return Err(ArcanaError::Provider(format!(
                 "Google stream {status} [{class:?}]: {text}"
             )));
@@ -417,10 +418,18 @@ fn parse_google_chunk(v: &serde_json::Value) -> Result<Vec<StreamChunk>> {
     if let Some(parts) = candidate["content"]["parts"].as_array() {
         for (idx, part) in parts.iter().enumerate() {
             if let Some(text) = part["text"].as_str() {
-                out.push(StreamChunk::TextDelta {
-                    text: text.to_string(),
-                    block_index: idx as u64,
-                });
+                let block_index = idx as u64;
+                if part["thought"].as_bool().unwrap_or(false) {
+                    out.push(StreamChunk::ThinkingDelta {
+                        text: text.to_string(),
+                        block_index,
+                    });
+                } else {
+                    out.push(StreamChunk::TextDelta {
+                        text: text.to_string(),
+                        block_index,
+                    });
+                }
                 continue;
             }
 
@@ -486,7 +495,8 @@ fn parse_google_chunk(v: &serde_json::Value) -> Result<Vec<StreamChunk>> {
         // version did — threw that away whenever usage was absent.
         out.push(StreamChunk::MessageDelta {
             stop_reason: finish_reason.to_string(),
-            usage: Usage::from_inclusive_input(prompt_total, cached_read, 0, output).with_reasoning(reasoning),
+            usage: Usage::from_inclusive_input(prompt_total, cached_read, 0, output)
+                .with_reasoning(reasoning),
         });
     }
 
@@ -506,7 +516,9 @@ fn parse_completion_response(data: serde_json::Value) -> Result<CompletionRespon
     // INCLUSIVE vendor: `promptTokenCount` contains the cached tokens.
     let usage = Usage::from_inclusive_input(
         usage_metadata["promptTokenCount"].as_u64().unwrap_or(0) as u32,
-        usage_metadata["cachedContentTokenCount"].as_u64().unwrap_or(0) as u32,
+        usage_metadata["cachedContentTokenCount"]
+            .as_u64()
+            .unwrap_or(0) as u32,
         0,
         usage_metadata["candidatesTokenCount"].as_u64().unwrap_or(0) as u32,
     )
@@ -518,9 +530,16 @@ fn parse_completion_response(data: serde_json::Value) -> Result<CompletionRespon
             for (idx, part) in parts.iter().enumerate() {
                 // Text content
                 if let Some(text) = part["text"].as_str() {
-                    content.push(MessageContent::Text {
-                        text: text.to_string(),
-                    });
+                    if part["thought"].as_bool().unwrap_or(false) {
+                        content.push(MessageContent::Thinking {
+                            text: text.to_string(),
+                            signature: None,
+                        });
+                    } else {
+                        content.push(MessageContent::Text {
+                            text: text.to_string(),
+                        });
+                    }
                 }
 
                 // Function call

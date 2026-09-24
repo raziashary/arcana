@@ -90,7 +90,6 @@ impl Tool for CheckFileTool {
         })
     }
 
-
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         // ── Resolve path ──────────────────────────────────────────────────────
         let path_str = match input["path"].as_str() {
@@ -347,10 +346,12 @@ mod p8_33_t28_tests {
     fn run(path: &std::path::Path, checks: serde_json::Value) -> ToolResult {
         let tool = CheckFileTool;
         let dir = path.parent().expect("parent").to_path_buf();
-        tokio::runtime::Runtime::new().expect("rt").block_on(tool.execute(
-            serde_json::json!({ "path": path.to_string_lossy(), "checks": checks }),
-            &ctx(&dir),
-        ))
+        tokio::runtime::Runtime::new()
+            .expect("rt")
+            .block_on(tool.execute(
+                serde_json::json!({ "path": path.to_string_lossy(), "checks": checks }),
+                &ctx(&dir),
+            ))
     }
 
     /// 🔴 The false green.

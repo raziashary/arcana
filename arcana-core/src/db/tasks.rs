@@ -182,18 +182,19 @@ impl TaskStatus {
             Self::NeedsInfo => "needs_info",
         }
     }
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_str(s: &str) -> std::result::Result<Self, String> {
         match s {
-            "assigned" => Self::Assigned,
-            "in_progress" => Self::InProgress,
-            "qc_review" => Self::QcReview,
-            "done" => Self::Done,
-            "build_failed" => Self::BuildFailed,
-            "failed" => Self::Failed,
-            "cancelled" => Self::Cancelled,
-            "rejected" => Self::Rejected,
-            "needs_info" => Self::NeedsInfo,
-            _ => Self::Ready,
+            "ready" => Ok(Self::Ready),
+            "assigned" => Ok(Self::Assigned),
+            "in_progress" => Ok(Self::InProgress),
+            "qc_review" => Ok(Self::QcReview),
+            "done" => Ok(Self::Done),
+            "build_failed" => Ok(Self::BuildFailed),
+            "failed" => Ok(Self::Failed),
+            "cancelled" => Ok(Self::Cancelled),
+            "rejected" => Ok(Self::Rejected),
+            "needs_info" => Ok(Self::NeedsInfo),
+            _ => Err(format!("unknown task status '{s}'")),
         }
     }
 }
@@ -349,10 +350,11 @@ impl TasksDb {
     /// already there" from "this statement is wrong", which is precisely how
     /// the graph store stamped `user_version = 5` over six failed statements
     /// (`ADR-LOG-RESTRUCT-0013`).
-    const LADDER: &[Migration] = &[Migration {
-        version: 1,
-        name: "tasks-baseline",
-        sql: r#"
+    const LADDER: &[Migration] = &[
+        Migration {
+            version: 1,
+            name: "tasks-baseline",
+            sql: r#"
             PRAGMA journal_mode = WAL;
             PRAGMA foreign_keys = ON;
 
@@ -444,7 +446,74 @@ impl TasksDb {
             CREATE INDEX IF NOT EXISTS idx_worker_messages_created
                 ON worker_messages(created_at);
         "#,
-    }];
+        },
+        Migration {
+            version: 2,
+            name: "task-status-lifecycle",
+            sql: r#"
+            -- All writers, including direct claim/recovery/budget/epic SQL,
+            -- pass through these guards. Existing rows remain readable; an
+            -- unknown legacy value is rejected by row_to_task and on update.
+            CREATE TRIGGER tasks_status_insert_guard
+            BEFORE INSERT ON tasks
+            WHEN NEW.status NOT IN ('ready','assigned','in_progress','qc_review',
+                                    'done','build_failed','failed','cancelled',
+                                    'rejected','needs_info')
+              OR (NEW.status = 'ready' AND NEW.assigned_worker IS NOT NULL)
+              OR (NEW.status IN ('assigned','in_progress') AND NEW.assigned_worker IS NULL)
+            BEGIN
+                SELECT RAISE(ABORT, 'unknown task status');
+            END;
+
+            CREATE TRIGGER tasks_status_update_guard
+            BEFORE UPDATE ON tasks
+            WHEN OLD.status NOT IN ('ready','assigned','in_progress','qc_review',
+                                    'done','build_failed','failed','cancelled',
+                                    'rejected','needs_info')
+              OR NEW.status NOT IN ('ready','assigned','in_progress','qc_review',
+                                    'done','build_failed','failed','cancelled',
+                                    'rejected','needs_info')
+              OR (NEW.status = 'ready' AND NEW.assigned_worker IS NOT NULL)
+              OR (NEW.status IN ('assigned','in_progress') AND NEW.assigned_worker IS NULL)
+              OR (OLD.task_type = 'epic' AND NEW.status = 'done'
+                  AND OLD.status != 'done' AND (
+                      NOT EXISTS (SELECT 1 FROM tasks child
+                                  WHERE child.epic_id = CAST(OLD.id AS TEXT))
+                      OR EXISTS (SELECT 1 FROM tasks child
+                                 WHERE child.epic_id = CAST(OLD.id AS TEXT)
+                                   AND child.status != 'done')))
+              OR (NEW.status != OLD.status AND NOT (
+                  (OLD.status = 'ready' AND NEW.status IN
+                      ('assigned','in_progress','needs_info','cancelled'))
+                  OR (OLD.status = 'assigned' AND NEW.status IN
+                      ('ready','in_progress','failed','needs_info','cancelled'))
+                  OR (OLD.status = 'in_progress' AND NEW.status IN
+                      ('ready','qc_review','done','build_failed','failed',
+                       'rejected','needs_info','cancelled'))
+                  OR (OLD.status = 'qc_review' AND NEW.status IN
+                      ('done','rejected','build_failed','failed','cancelled'))
+                  OR (OLD.status = 'build_failed' AND NEW.status IN
+                      ('ready','failed','cancelled'))
+                  OR (OLD.status = 'failed' AND NEW.status IN
+                      ('ready','assigned','cancelled'))
+                  OR (OLD.status = 'rejected' AND NEW.status IN
+                      ('ready','assigned','cancelled'))
+                  OR (OLD.status = 'needs_info' AND NEW.status IN
+                      ('ready','failed','cancelled'))
+                  OR (OLD.task_type = 'epic' AND OLD.status = 'ready'
+                      AND NEW.status IN ('done','rejected')
+                      AND EXISTS (SELECT 1 FROM tasks child
+                                  WHERE child.epic_id = CAST(OLD.id AS TEXT))
+                      AND NOT EXISTS (SELECT 1 FROM tasks child
+                                      WHERE child.epic_id = CAST(OLD.id AS TEXT)
+                                        AND child.status != 'done'))
+              ))
+            BEGIN
+                SELECT RAISE(ABORT, 'illegal task status transition');
+            END;
+        "#,
+        },
+    ];
 
     /// Columns added to `tasks` after its original `CREATE TABLE`.
     const ADDED_COLUMNS: &[(&str, &str)] = &[
@@ -1649,16 +1718,21 @@ impl TasksDb {
             });
             if all_done {
                 // Transition needs_info → ready
-                let _ = self.conn.execute(
-                    "UPDATE tasks SET status = 'ready', updated_at = datetime('now') WHERE id = ?1",
+                let changed = self.conn.execute(
+                    "UPDATE tasks SET status = 'ready', assigned_worker = NULL,
+                                      updated_at = datetime('now')
+                     WHERE id = ?1 AND status = 'needs_info'",
                     params![task.id],
-                );
+                )?;
+                if changed == 0 {
+                    continue;
+                }
                 unblocked_ids.push(task.id);
                 crate::events::emit_task_changed(crate::events::TaskChangedPayload {
                     task_id: Some(task.id),
                     kind: "unblocked".into(),
                     status: Some("ready".into()),
-                    assigned_worker: task.assigned_worker.clone(),
+                    assigned_worker: None,
                 });
             }
         }
@@ -1671,18 +1745,20 @@ impl TasksDb {
                 if !subtasks.is_empty() && subtasks.iter().all(|t| t.status == TaskStatus::Done) {
                     // All subtasks done — mark the epic task itself as done
                     if let Ok(epic_id_int) = epic_id.parse::<i64>() {
-                        let _ = self.conn.execute(
+                        let changed = self.conn.execute(
                             "UPDATE tasks SET status = 'done', completed_at = datetime('now'),
                                              updated_at = datetime('now')
-                             WHERE id = ?1 AND task_type = 'epic'",
+                             WHERE id = ?1 AND task_type = 'epic' AND status != 'done'",
                             params![epic_id_int],
-                        );
-                        crate::events::emit_task_changed(crate::events::TaskChangedPayload {
-                            task_id: Some(epic_id_int),
-                            kind: "epic_complete".into(),
-                            status: Some("done".into()),
-                            assigned_worker: None,
-                        });
+                        )?;
+                        if changed > 0 {
+                            crate::events::emit_task_changed(crate::events::TaskChangedPayload {
+                                task_id: Some(epic_id_int),
+                                kind: "epic_complete".into(),
+                                status: Some("done".into()),
+                                assigned_worker: None,
+                            });
+                        }
                     }
                 }
             }
@@ -1792,7 +1868,19 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         description: row.get(2)?,
         priority: TaskPriority::from_str(&row.get::<_, String>(3)?),
         task_type: TaskType::from_str(&row.get::<_, String>(4)?),
-        status: TaskStatus::from_str(&row.get::<_, String>(5)?),
+        status: {
+            let raw: String = row.get(5)?;
+            TaskStatus::from_str(&raw).map_err(|message| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    5,
+                    rusqlite::types::Type::Text,
+                    Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        message,
+                    )),
+                )
+            })?
+        },
         acceptance_criteria: row.get(6)?,
         assigned_worker: row.get(7)?,
         rejection_reason: row.get(8)?,
@@ -1883,47 +1971,210 @@ mod tests {
         dir.join("tasks.db")
     }
 
-
-    /// `T-36` (P8-33) — the round trip is what validates a status string.
-    ///
-    /// 🔴 `TaskStatus::from_str` returns `Self`, and its fallback arm is
-    /// `_ => Self::Ready`. It cannot report an unknown value: every typo
-    /// becomes `Ready`. So `"in-progress"` (hyphen) did not make a task
-    /// invisible — it put the task back on the READY queue to be assigned
-    /// again, which is a live behavioural defect and worse than the audit
-    /// described.
-    ///
-    /// ⚠ Asserted as a round trip rather than against a retyped list of nine
-    /// strings. A second list is `L-19`: two lists that must agree will
-    /// disagree, and the second one is always the invisible one.
+    /// P8-69: unknown task statuses fail, while every declared state parses.
     #[test]
     fn t36_the_round_trip_accepts_every_real_status_and_rejects_a_typo() {
         for real in [
-            "ready", "assigned", "in_progress", "qc_review", "done",
-            "build_failed", "failed", "cancelled", "rejected", "needs_info",
+            "ready",
+            "assigned",
+            "in_progress",
+            "qc_review",
+            "done",
+            "build_failed",
+            "failed",
+            "cancelled",
+            "rejected",
+            "needs_info",
         ] {
             assert_eq!(
-                TaskStatus::from_str(real).as_str(),
+                TaskStatus::from_str(real).expect("known status").as_str(),
                 real,
                 "{real} is a real status and the round trip lost it"
             );
         }
         for typo in ["in-progress", "Done", "qc review", "", "teleport"] {
-            assert_ne!(
-                TaskStatus::from_str(typo).as_str(),
-                typo,
-                "{typo:?} round-tripped, so the tool guard would accept it"
-            );
+            assert!(TaskStatus::from_str(typo).is_err(), "{typo:?} was accepted");
         }
     }
 
-    /// The swallowing itself, pinned so `P4-02` has a test to flip.
     #[test]
-    fn t36_an_unknown_status_currently_becomes_ready_which_is_the_defect() {
+    fn t36_an_unknown_status_does_not_become_ready() {
+        assert!(TaskStatus::from_str("in-progress").is_err());
+    }
+
+    #[test]
+    fn p8_69_rejects_invalid_manual_and_direct_sql_transitions() {
+        let db = TasksDb::open_at(&sandbox("p8-69-invalid")).expect("open");
+        let task = ready_task(&db, "guarded");
+        assert!(db.update_status(task.id, "done", None).is_err());
+        assert!(db.update_status(task.id, "in-progress", None).is_err());
         assert_eq!(
-            TaskStatus::from_str("in-progress"),
-            TaskStatus::Ready,
-            "if this changes, `P4-02` has landed and the comment above is stale"
+            db.get_by_id(task.id).unwrap().unwrap().status,
+            TaskStatus::Ready
+        );
+        assert!(db
+            .conn
+            .execute(
+                "UPDATE tasks SET status='done' WHERE id=?1",
+                params![task.id]
+            )
+            .is_err());
+        assert!(db
+            .conn
+            .execute(
+                "INSERT INTO tasks(title,status) VALUES('bad','in-progress')",
+                []
+            )
+            .is_err());
+        assert!(
+            db.conn
+                .execute(
+                    "UPDATE tasks SET status='assigned' WHERE id=?1",
+                    params![task.id]
+                )
+                .is_err(),
+            "assigned state without an owner must be rejected at the DB boundary"
+        );
+        assert!(
+            db.conn
+                .execute(
+                    "UPDATE tasks SET status='in_progress' WHERE id=?1",
+                    params![task.id]
+                )
+                .is_err(),
+            "in-progress state without an owner must be rejected at the DB boundary"
+        );
+        assert!(
+            db.conn
+                .execute(
+                    "UPDATE tasks SET assigned_worker='worker-backend' WHERE id=?1",
+                    params![task.id]
+                )
+                .is_err(),
+            "ready tasks cannot carry a stale worker assignment"
+        );
+        assert!(db
+            .conn
+            .execute(
+                "INSERT INTO tasks(title,status) VALUES('ownerless','assigned')",
+                []
+            )
+            .is_err());
+
+        db.update_status(task.id, "assigned", Some("worker"))
+            .expect("assign");
+        db.claim_task_with_pid(task.id, "worker", 123)
+            .expect("claim");
+        db.update_status(task.id, "qc_review", Some("worker"))
+            .expect("review");
+        db.update_status(task.id, "done", Some("worker"))
+            .expect("approve");
+        assert!(db
+            .update_status(task.id, "in_progress", Some("worker"))
+            .is_err());
+        assert_eq!(
+            db.get_by_id(task.id).unwrap().unwrap().status,
+            TaskStatus::Done
+        );
+    }
+
+    #[test]
+    fn p8_69_direct_claim_release_budget_and_unblock_follow_lifecycle() {
+        let db = TasksDb::open_at(&sandbox("p8-69-writers")).expect("open");
+        let claimed = ready_task(&db, "self serve");
+        let taken = db
+            .claim_next_ready("worker", 321)
+            .expect("claim")
+            .expect("row");
+        assert_eq!(taken.id, claimed.id);
+        assert_eq!(taken.status, TaskStatus::InProgress);
+        db.release_orphaned_task(taken.id, "dead process")
+            .expect("release");
+        let released = db.get_by_id(taken.id).unwrap().unwrap();
+        assert_eq!(released.status, TaskStatus::Ready);
+        assert!(released.assigned_worker.is_none());
+
+        let budgeted = ready_task(&db, "budgeted");
+        db.mark_task_budget_exceeded(budgeted.id, "limit")
+            .expect("budget");
+        assert_eq!(
+            db.get_by_id(budgeted.id).unwrap().unwrap().status,
+            TaskStatus::NeedsInfo
+        );
+        db.update_status(budgeted.id, "ready", None)
+            .expect("resume");
+
+        let epic = db.create_epic("parent", None, "test").expect("epic");
+        let child = db
+            .create_phased_task(CreatePhasedTaskInput {
+                epic_id: epic.id.to_string(),
+                phase: "coding".into(),
+                phase_order: 1,
+                title: "child".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "done".into(),
+                blocked_by: vec![],
+                milestone: None,
+                created_by: Some("test".into()),
+            })
+            .expect("child");
+        let blocked = db
+            .create_phased_task(CreatePhasedTaskInput {
+                epic_id: epic.id.to_string(),
+                phase: "coding".into(),
+                phase_order: 1,
+                title: "blocked".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "done".into(),
+                blocked_by: vec![child.id.to_string()],
+                milestone: None,
+                created_by: Some("test".into()),
+            })
+            .expect("blocked child");
+        assert_eq!(blocked.status, TaskStatus::NeedsInfo);
+        // A needs_info row can retain ownership after budget/recovery paths or
+        // an upgrade from the older unconstrained database. Unblocking must
+        // clear that stale owner atomically with the return to ready.
+        db.conn
+            .execute(
+                "UPDATE tasks SET assigned_worker = 'worker-stale' WHERE id = ?1",
+                params![blocked.id],
+            )
+            .expect("fixture an owned needs_info task");
+        assert!(db.update_status(epic.id, "done", None).is_err());
+        db.update_status(child.id, "assigned", Some("worker"))
+            .unwrap();
+        db.update_status(child.id, "in_progress", Some("worker"))
+            .unwrap();
+        db.update_status(child.id, "done", Some("worker")).unwrap();
+        assert_eq!(db.unblock_ready_tasks(child.id).unwrap(), vec![blocked.id]);
+        assert_eq!(
+            db.get_by_id(blocked.id).unwrap().unwrap().status,
+            TaskStatus::Ready
+        );
+        assert_eq!(
+            db.get_by_id(blocked.id).unwrap().unwrap().assigned_worker,
+            None,
+            "unblocking must clear the owner before the row becomes ready"
+        );
+        assert_eq!(
+            db.get_by_id(epic.id).unwrap().unwrap().status,
+            TaskStatus::Ready
+        );
+        db.update_status(blocked.id, "assigned", Some("worker"))
+            .unwrap();
+        db.update_status(blocked.id, "in_progress", Some("worker"))
+            .unwrap();
+        db.update_status(blocked.id, "done", Some("worker"))
+            .unwrap();
+        assert!(db.unblock_ready_tasks(blocked.id).unwrap().is_empty());
+        assert_eq!(
+            db.get_by_id(epic.id).unwrap().unwrap().status,
+            TaskStatus::Done
         );
     }
 
@@ -2074,7 +2325,9 @@ mod tests {
             .expect("assign");
 
         assert!(
-            db.claim_next_ready("latecomer", 4242).expect("claim").is_none(),
+            db.claim_next_ready("latecomer", 4242)
+                .expect("claim")
+                .is_none(),
             "an assigned task was claimed out from under its worker"
         );
     }

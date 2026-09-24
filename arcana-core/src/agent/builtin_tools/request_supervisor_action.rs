@@ -69,7 +69,6 @@ impl Tool for RequestSupervisorActionTool {
         })
     }
 
-
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let request_type = match input["request_type"].as_str() {
             Some(t) if !t.trim().is_empty() => t.trim().to_string(),

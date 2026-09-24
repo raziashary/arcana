@@ -117,7 +117,10 @@ mod tests {
         })
         .join();
 
-        assert!(state.lock().is_err(), "the mutex must genuinely be poisoned");
+        assert!(
+            state.lock().is_err(),
+            "the mutex must genuinely be poisoned"
+        );
 
         // The tolerant path recovers, and sees the write the panicking thread
         // completed before it died.
@@ -147,7 +150,10 @@ mod tests {
         })
         .join();
 
-        assert!(lock.read().is_err(), "the rwlock must genuinely be poisoned");
+        assert!(
+            lock.read().is_err(),
+            "the rwlock must genuinely be poisoned"
+        );
         assert_eq!(&*lock.read_tolerant(), "before-during");
 
         lock.write_tolerant().push_str("-after");

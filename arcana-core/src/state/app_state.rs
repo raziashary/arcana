@@ -11,7 +11,6 @@ pub struct ActiveAgent {
     pub cancel_flag: bool,
 }
 
-
 // ── Persisted spend counters (S2-06) ─────────────────────────────────────────
 //
 // The daily ceiling reads `cost_today()`. Held in memory alone, that figure was
@@ -140,8 +139,12 @@ impl AppState {
             // unreachable. Discarded rather than trusted.
             .filter(|v: &f64| v.is_finite() && *v >= 0.0)
             .unwrap_or(0.0);
-        self.tokens_in_today = get(KEY_TOKENS_IN_TODAY).and_then(|v| v.parse().ok()).unwrap_or(0);
-        self.tokens_out_today = get(KEY_TOKENS_OUT_TODAY).and_then(|v| v.parse().ok()).unwrap_or(0);
+        self.tokens_in_today = get(KEY_TOKENS_IN_TODAY)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        self.tokens_out_today = get(KEY_TOKENS_OUT_TODAY)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
 
         // Discards the restored figures if they belong to a previous day.
         self.roll_day_if_needed(chrono::Local::now().date_naive());

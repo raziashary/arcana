@@ -76,7 +76,6 @@ impl Tool for ReadFileTool {
         })
     }
 
-
     async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
         let path_str = match input["path"].as_str() {
             Some(p) => p.to_string(),
@@ -206,11 +205,9 @@ impl Tool for ReadFileTool {
                 // TG3-16: bound the bytes, and SAY SO. A silent byte cap is
                 // the `P3-18` shape — output that looks complete and is not.
                 if output.len() > READ_FILE_MAX_BYTES {
-                    let kept = crate::security::truncate::truncate_bytes(
-                        &output,
-                        READ_FILE_MAX_BYTES,
-                    )
-                    .to_string();
+                    let kept =
+                        crate::security::truncate::truncate_bytes(&output, READ_FILE_MAX_BYTES)
+                            .to_string();
                     let dropped = output.len() - kept.len();
                     output = format!(
                         "{kept}\n\n[⚠ Output truncated at {} KB — {dropped} further bytes \

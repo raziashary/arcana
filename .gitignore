@@ -70,8 +70,7 @@ logs/
 .env.*.local
 
 # User data
-.arcana/sessions/
-.arcana/logs/
+.arcana/
 # Historical AutoDev local artifacts, if present in an older checkout.
 .airs/sessions/
 .airs/logs/

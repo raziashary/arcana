@@ -9,10 +9,10 @@ use crate::provider::traits::Provider;
 use crate::provider::types::{ModelInfo, ProviderStatus};
 use crate::state::AppState;
 use crate::vault::keychain::{provider_key, VaultManager};
+use arcana_core::state::lock::LockTolerant;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use tauri::State;
-use arcana_core::state::lock::LockTolerant;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProviderInfo {
@@ -116,7 +116,9 @@ pub fn hydrate_active_provider(state: &Arc<Mutex<AppState>>) {
     let provider = arcana_core::db::app_settings::get(ACTIVE_PROVIDER_KEY)
         .ok()
         .flatten();
-    let model = arcana_core::db::app_settings::get(ACTIVE_MODEL_KEY).ok().flatten();
+    let model = arcana_core::db::app_settings::get(ACTIVE_MODEL_KEY)
+        .ok()
+        .flatten();
 
     let (Some(provider), Some(model)) = (provider, model) else {
         return;

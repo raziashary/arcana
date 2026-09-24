@@ -30,9 +30,8 @@ fn build_analyzer(state: &Arc<Mutex<AppState>>) -> Result<DiffAnalyzer> {
 
     // Every supported provider takes a key; the keyless branch went with
     // Ollama (P2-11).
-    let api_key = VaultManager::get(&provider_key(&provider_id))?.ok_or_else(|| {
-        ArcanaError::Agent(format!("No API key for provider '{provider_id}'"))
-    })?;
+    let api_key = VaultManager::get(&provider_key(&provider_id))?
+        .ok_or_else(|| ArcanaError::Agent(format!("No API key for provider '{provider_id}'")))?;
 
     let inner: Arc<dyn Provider> = match provider_id.as_str() {
         "anthropic" => Arc::new(AnthropicProvider::new(api_key)),

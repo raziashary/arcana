@@ -11,6 +11,22 @@
 
 use super::*;
 
+#[test]
+fn native_thought_parts_are_not_emitted_as_visible_text() {
+    let chunks = parse_google_sse_line(&sse(
+        r#"{"candidates":[{"content":{"parts":[{"text":"private thought","thought":true},{"text":"visible answer"}]}}]}"#,
+    ))
+    .expect("parse");
+    assert!(matches!(
+        &chunks[0],
+        StreamChunk::ThinkingDelta { text, .. } if text == "private thought"
+    ));
+    assert!(matches!(
+        &chunks[1],
+        StreamChunk::TextDelta { text, .. } if text == "visible answer"
+    ));
+}
+
 /// One SSE `data:` line, as Gemini sends it.
 fn sse(payload: &str) -> String {
     format!("data: {payload}")
@@ -55,19 +71,19 @@ fn parallel_tool_calls_all_survive() {
     // Gemini emits parallel calls as several `functionCall` parts of ONE
     // candidate. The old parser `return`ed on the first matching part, so
     // every call after the first was silently dropped.
-    let chunks = parse_google_sse_line(&sse(
-        r#"{"candidates":[{"content":{"parts":[
+    let chunks = parse_google_sse_line(&sse(r#"{"candidates":[{"content":{"parts":[
             {"functionCall":{"name":"read_file","args":{"path":"a.rs"}}},
             {"functionCall":{"name":"read_file","args":{"path":"b.rs"}}},
             {"functionCall":{"name":"grep","args":{"q":"fn main"}}}
-        ]}}]}"#,
-    ))
+        ]}}]}"#))
     .expect("parse");
 
     let starts: Vec<_> = chunks
         .iter()
         .filter_map(|c| match c {
-            StreamChunk::ToolUseStart { id, block_index, .. } => Some((id.clone(), *block_index)),
+            StreamChunk::ToolUseStart {
+                id, block_index, ..
+            } => Some((id.clone(), *block_index)),
             _ => None,
         })
         .collect();
@@ -104,12 +120,10 @@ fn parallel_tool_calls_all_survive() {
 fn text_and_a_tool_call_in_one_chunk_both_survive() {
     // The old loop returned on the first text part, so a tool call sharing the
     // chunk was lost entirely.
-    let chunks = parse_google_sse_line(&sse(
-        r#"{"candidates":[{"content":{"parts":[
+    let chunks = parse_google_sse_line(&sse(r#"{"candidates":[{"content":{"parts":[
             {"text":"Let me look."},
             {"functionCall":{"name":"read_file","args":{"path":"x.rs"}}}
-        ]}}]}"#,
-    ))
+        ]}}]}"#))
     .expect("parse");
 
     assert!(chunks
@@ -125,11 +139,9 @@ fn usage_arrives_on_a_frame_that_has_no_parts() {
     // The usage handler was unreachable by two routes. This is the first: a
     // pure finish/usage frame has no `parts`, and the old parser returned
     // `None` before ever reaching the `finishReason` check thirty lines below.
-    let chunks = parse_google_sse_line(&sse(
-        r#"{"candidates":[{"finishReason":"STOP"}],
+    let chunks = parse_google_sse_line(&sse(r#"{"candidates":[{"finishReason":"STOP"}],
             "usageMetadata":{"promptTokenCount":1000,"candidatesTokenCount":50,
-                             "cachedContentTokenCount":900,"thoughtsTokenCount":7}}"#,
-    ))
+                             "cachedContentTokenCount":900,"thoughtsTokenCount":7}}"#))
     .expect("parse");
 
     let delta = chunks
@@ -175,10 +187,7 @@ fn usage_also_arrives_when_the_frame_carries_text() {
 fn a_truncated_turn_is_distinguishable_from_a_clean_one() {
     // P2-46. With `stop_reason` discarded, a MAX_TOKENS truncation and a clean
     // STOP were the same code path, so silent truncation was invisible.
-    for (reason, payload) in [
-        ("MAX_TOKENS", "MAX_TOKENS"),
-        ("STOP", "STOP"),
-    ] {
+    for (reason, payload) in [("MAX_TOKENS", "MAX_TOKENS"), ("STOP", "STOP")] {
         let chunks = parse_google_sse_line(&sse(&format!(
             r#"{{"candidates":[{{"finishReason":"{payload}"}}],
                  "usageMetadata":{{"promptTokenCount":5,"candidatesTokenCount":1}}}}"#
@@ -199,10 +208,8 @@ fn a_truncated_turn_is_distinguishable_from_a_clean_one() {
 fn usage_is_reported_even_when_every_count_is_absent() {
     // The old code gated MessageDelta on a non-zero token count, so a finish
     // frame without usage threw the stop reason away with it.
-    let chunks = parse_google_sse_line(&sse(
-        r#"{"candidates":[{"finishReason":"SAFETY"}]}"#,
-    ))
-    .expect("parse");
+    let chunks = parse_google_sse_line(&sse(r#"{"candidates":[{"finishReason":"SAFETY"}]}"#))
+        .expect("parse");
     let StreamChunk::MessageDelta { stop_reason, usage } = chunks
         .iter()
         .find(|c| matches!(c, StreamChunk::MessageDelta { .. }))
@@ -237,7 +244,6 @@ fn an_empty_candidate_list_yields_nothing_rather_than_panicking() {
         .expect("parse")
         .is_empty());
 }
-
 
 #[test]
 fn a_tool_calls_thought_signature_survives_the_round_trip() {

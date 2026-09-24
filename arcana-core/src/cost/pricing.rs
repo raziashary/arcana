@@ -376,7 +376,10 @@ mod tests {
         // priced at both rates differs by exactly 2x.
         let at_low = cost_usd("gemini-3.1-pro-preview", &usage(200_000, 0, 0, 0)).unwrap();
         let at_high = cost_usd("gemini-3.1-pro-preview", &usage(200_001, 0, 0, 0)).unwrap();
-        assert!(at_high > at_low * 1.9, "crossing the cliff must roughly double");
+        assert!(
+            at_high > at_low * 1.9,
+            "crossing the cliff must roughly double"
+        );
     }
 
     #[test]

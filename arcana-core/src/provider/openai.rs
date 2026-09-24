@@ -1,18 +1,18 @@
 // OpenAI provider — direct API calls to api.openai.com.
 // Implements the Provider trait with streaming support.
 
-use async_trait::async_trait;
 use super::usage::CachePolicy;
+use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;
 use serde_json::json;
 use tracing::{debug, error};
 
 use super::traits::{Provider, StreamResult};
-use super::usage::Usage;
 use super::types::{
     CompletionRequest, CompletionResponse, MessageContent, ModelInfo, ProviderStatus, StreamChunk,
 };
+use super::usage::Usage;
 use crate::errors::{ArcanaError, Result};
 use crate::state::lock::LockTolerant;
 
@@ -287,11 +287,8 @@ impl Provider for OpenAIProvider {
             // P2-67/68. Classified here, where the body is available: a 429
             // from a spend cap and a 429 from a rate limit are the same
             // status, and only the body separates them.
-            let class = crate::provider::usage::ErrorClass::classify(
-                "openai",
-                status.as_u16(),
-                &text,
-            );
+            let class =
+                crate::provider::usage::ErrorClass::classify("openai", status.as_u16(), &text);
             return Err(ArcanaError::Provider(format!(
                 "OpenAI {status} [{class:?}]: {text}"
             )));
@@ -321,11 +318,8 @@ impl Provider for OpenAIProvider {
             // re-derived downstream: a 429 from a spend cap and a 429 from a
             // rate limit are the same status and only the body tells them
             // apart, so the one place that has the body is the place to decide.
-            let class = crate::provider::usage::ErrorClass::classify(
-                "openai",
-                status.as_u16(),
-                &text,
-            );
+            let class =
+                crate::provider::usage::ErrorClass::classify("openai", status.as_u16(), &text);
             return Err(ArcanaError::Provider(format!(
                 "OpenAI stream {status} [{class:?}]: {text}"
             )));
@@ -480,6 +474,19 @@ fn parse_openai_chunk(v: &serde_json::Value) -> Result<Vec<StreamChunk>> {
 
     let delta = &choices[0]["delta"];
 
+    let has_reasoning = delta["reasoning_content"]
+        .as_str()
+        .is_some_and(|s| !s.is_empty());
+    if let Some(reasoning) = delta["reasoning_content"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+    {
+        out.push(StreamChunk::ThinkingDelta {
+            text: reasoning.to_string(),
+            block_index: 0,
+        });
+    }
+
     // Text content delta.
     if let Some(content) = delta["content"].as_str() {
         // OpenAI's chat stream carries no per-block index for content — the
@@ -489,7 +496,7 @@ fn parse_openai_chunk(v: &serde_json::Value) -> Result<Vec<StreamChunk>> {
         //
         // No longer an early return: a frame can carry text AND a tool call.
         out.push(StreamChunk::TextDelta {
-            block_index: 0,
+            block_index: if has_reasoning { 1 } else { 0 },
             text: content.to_string(),
         });
     }
@@ -497,7 +504,7 @@ fn parse_openai_chunk(v: &serde_json::Value) -> Result<Vec<StreamChunk>> {
     // Tool calls delta — EVERY entry, not just the first.
     if let Some(tool_calls) = delta["tool_calls"].as_array() {
         for tc in tool_calls {
-            let index = tc["index"].as_u64().unwrap_or(0);
+            let index = tc["index"].as_u64().unwrap_or(0) + u64::from(has_reasoning) * 2;
 
             // The id and name appear only on the first fragment for an index.
             if let Some(id) = tc["id"].as_str() {
@@ -562,7 +569,9 @@ fn parse_completion_response(data: serde_json::Value) -> Result<CompletionRespon
     let u = &data["usage"];
     let usage = Usage::from_inclusive_input(
         u["prompt_tokens"].as_u64().unwrap_or(0) as u32,
-        u["prompt_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0) as u32,
+        u["prompt_tokens_details"]["cached_tokens"]
+            .as_u64()
+            .unwrap_or(0) as u32,
         0,
         u["completion_tokens"].as_u64().unwrap_or(0) as u32,
     )
@@ -582,6 +591,14 @@ fn parse_completion_response(data: serde_json::Value) -> Result<CompletionRespon
 
     let message = choices.get(0).and_then(|c| c.get("message"));
     let mut content = Vec::new();
+    if let Some(reasoning) = data["choices"][0]["message"]["reasoning_content"].as_str() {
+        if !reasoning.is_empty() {
+            content.push(MessageContent::Thinking {
+                text: reasoning.to_string(),
+                signature: None,
+            });
+        }
+    }
 
     if let Some(msg) = message {
         // Text content

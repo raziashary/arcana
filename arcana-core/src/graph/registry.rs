@@ -2,11 +2,11 @@
 
 use super::store::GraphStore;
 use crate::errors::Result;
+use crate::state::lock::LockTolerant;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use crate::state::lock::LockTolerant;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoEntry {

@@ -278,7 +278,10 @@ fn list(args: PluginListArgs, ctx: &OutputContext) -> Result<()> {
                 println!("     {}", p.description.dimmed());
             }
             println!("{}", "─".repeat(72).dimmed());
-            println!("Use {} to install", "arcanactl plugin install <name>".cyan());
+            println!(
+                "Use {} to install",
+                "arcanactl plugin install <name>".cyan()
+            );
         }
     }
     Ok(())
