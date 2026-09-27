@@ -2894,3 +2894,40 @@ observation.
 outcome; `S8-02` and `_verify/P8-ARCANA-CLOSEOUT-2026-09-24.md` carry the
 recorded live-turn and process-list evidence.
 
+## ADR-LOG-RESTRUCT-0075 — Enforce fleet commit safety in the Arcana host
+
+**Status.** OWNER-RULED by the user's 2026-09-27 instruction to close P8
+properly after the audit identified prompt-only commit safety.
+
+**Choice.** Keep the shared `arcana/fleet` branch selected for the fleet, but
+make staging and committing host-owned. Workers call the registered
+`git_commit` tool with explicit file paths and a Conventional Commit subject
+plus a descriptive body. The host refuses `main`/`master`/`trunk`, unrelated
+pre-staged changes, paths outside the repository, directories, `.env` files,
+and staged diffs redacted by Arcana's credential scanner. Bash rejects direct
+`git add` and `git commit`; branch inspection and switching remain available.
+
+**Why.** The previous recipe protocol depended on model compliance. P8-38's
+smoke drove raw Git commands itself, so it proved the script worked but did not
+prove the production tool path could stop an agent from bypassing it. The owner
+directed Arcana to close this host-enforcement gap with a real gate and smoke.
+
+**Proof required.** Behavior-focused negative cases for trunk, pre-staged
+changes, unsafe paths, credentials, and incomplete messages; positive isolated
+repository commit with only named files; Bash refusal and production registry
+registration; recipe consumer and end-to-end smoke. Keep P8 open until TG8-13
+and S8-06 pass on the current Arcana source.
+
+**Implementation evidence (2026-09-27; strengthened 2026-09-28).** P8-74, TG8-13, and S8-06 passed on
+the current tree. The Git tool refuses paths and diffs according to the
+redaction scanner's recognized credential patterns. The Bash guard inspects
+textual command segments, including covered shell wrappers, and is not a
+general-purpose process sandbox; encoded or otherwise obfuscated executable
+code remains outside that heuristic. The supported worker path uses the host
+tool, and the gate/smoke evidence is in `TESTING_GATES.md` and the P4 session
+checkpoint.
+
+The 2026-09-28 closeout strengthening protects a branch literally named
+`trunk` in addition to `main` and `master`, restores the index after every
+post-staging failure, and exercises host-tool trunk refusal in S8-06 before
+proving the allowed named-file commit on `arcana/fleet`. The updated focused

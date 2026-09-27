@@ -5,14 +5,14 @@
 > outcomes and proof are in `ARCANA_CODING_SCOPE.md` and `GOAL.md`. The last
 > original score derived from the table below is **36.7%**; the 34.0% prose
 > snapshot was not refreshed after P8. No new Arcana readiness percentage has
-> been calculated. P8 is now closed against the coding-only scope: live Arcana
-> coding turn, sidecar-absent Windows suite, ten retained coding-port proofs,
-> completed post-phase reviews, and final debug installer inspection are
-> recorded in the closeout; TG8-01 follows ADR-0055's built-gate scope.
-> Separate P0/P3 proof gaps remain in their own registers and were not waived
-> by P8.
+> been calculated. P8's 2026-09-24 coding-only closeout remains historical.
+> The 2026-09-27 cross-phase audit reopened P8 under ADR-0075 because commit
+> safety was prompt-only. P8-74, TG8-13, and S8-06 now have current-tree
+> behavior and consumer evidence; the implementation limitation is recorded in
+> the P8 row and ADR-0075. Separate P0/P3 proof gaps remain in their own
+> registers.
 
-## Current Arcana coding status (2026-09-24)
+## Current Arcana coding status (updated 2026-09-28)
 
 | Area | Recorded state | Missing proof before a green claim |
 |---|---|---|
@@ -20,7 +20,7 @@
 | P1 structure | Historically closed | Recheck after Arcana identity rename |
 | P2 providers | Gemini key in Arcana vault; live tool-backed desktop turn passed | Other provider and cross-platform proof remains outside this P8 closeout |
 | P3 native runtime and memory | Historically closed | Eight memory gate clauses and reader evidence |
-| P8 native coding conversion | Closed: native Gemini `read_file` turn and four-minute no-app-Python sample passed (`S8-02`); final isolated 673-test Rust suite passed across 16 targets (`TG8-01`, ADR-0055 built-gate scope); ten retained coding ports have named consumers and behavior proofs (`TG8-02`); final Windows debug NSIS archive has no `.py` (`S8-03`); P8-68–73 and TG8-12 are checked; Luna post-phase reviews found no remaining P8 blocker | None within P8's built-gate scope; P0/P3 specification gaps remain assigned to their own registers, and P4–P7 features/gates remain future phases |
+| P8 native coding conversion | P8-74 closed under ADR-0075: registered host `git_commit`, Bash mutation guard, safe named-file staging with rollback on refusal, `main`/`master`/`trunk` protection, updated recipes, Tauri gate, and isolated repository smoke pass | Textual Bash inspection is not a sandbox against intentionally obfuscated executable code; the supported worker path and covered shell forms are host-guarded. Prior S8-02/S8-03/TG8-01 evidence remains dated 2026-09-24 and is unchanged |
 | P4 fleet | Open | Build-verified task through assignment, worker, QC and recovery |
 | P5 graph | Open | Written graph read into a later relevant coding turn |
 | P6 coding UI | Open | Desktop event, setting and route smokes |

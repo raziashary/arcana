@@ -12,7 +12,7 @@
 > **Companion documents:** `MASTER_DEVELOPMENT_PLAN.md` (the build sequence and its inline smoke checks) · `READINESS_MATRIX.md` (phase readiness) · `ADR_LOG.md` (runtime decisions) · `NOVELTY_LEDGER.md`.
 > **Cross-checked against the MDP** on 2026-08-31. Phase names and the `TG<p>-<nn>` scheme agree. Three assignments where the MDP builds a capability **earlier** than Part 6 implies are annotated on the gate line (`TG1-05`, `TG3-38`, `TG4-18`); IDs were **not** renumbered, per `§1`.
 
-**127 active P0–P9 gate rows.** Historical PD0 gates are archived; the applicable P0–P9 clauses remain the definition of done.
+**128 active P0–P9 gate rows.** Historical PD0 gates are archived; the applicable P0–P9 clauses remain the definition of done.
 
 ⚠ **Historical count note:** The PD0 work audit (`W-8`) found earlier registers stale. The ten TGD0 rows and their dated evidence are now in `HISTORICAL_DESIGN_PROGRAMME.md`. The current 126-row count above is derived from P0–P9 checkbox entries, including 41 P3 entries.
 
@@ -55,9 +55,9 @@
 | **P5** | The graph | 4 | `TG5-01…04` |
 | **P6** | The UI | 9 | `TG6-01…09` |
 | **P7** | Experience | 5 | `TG7-01…05` |
-| **P8** | Submodule deletion **+ the prompt floor** | 11 | `TG8-01…11` |
+| **P8** | Submodule deletion **+ host commit safety** | 13 | `TG8-01…13` |
 | **P9** | Delivery | 5 | `TG9-01…05` |
-| | **Current registered P0–P9 rows** | **127** | |
+| | **Current registered P0–P9 rows** | **128** | |
 
 ---
 
@@ -614,6 +614,19 @@ The former TGD0-01…10 gates are preserved in [HISTORICAL_DESIGN_PROGRAMME.md](
 
 - [x] **TG8-12** `[conservation]` — Every native agent-run entry path holds the same bounded runtime lease for its entire run: interactive chat, recipe worker, and subagent. The host starts the periodic idle reaper; the shared registry still enforces duplicate admission, the 500-entry cap, 600-second expiry, and panic cleanup. The gate reads the real entry-point bodies and fails if any consumer or the reaper wiring disappears; `runtime_registry` unit tests exercise the admission and cleanup behavior.
       Source: **NEW** — `P8-70` · Catches: a registry with no reader, or one execution path bypassing it · Evidence: `GATE-PROVEN` — `ci_gate::tests::tg8_12_each_native_run_entry_path_holds_a_runtime_lease` plus `state::runtime_registry::tests`.
+
+- [x] **TG8-13** `[security]` `[governance]` — Commit safety is host-enforced on
+      the production worker path. The `git_commit` built-in is registered for
+      FastDevelopment; Bash refuses direct `git add` and `git commit`; the host
+      refuses `main`, `master`, and `trunk`, unrelated pre-staged changes, unsafe or
+      secret-bearing paths, and incomplete commit messages. Positive and
+      negative behavior is exercised in an isolated repository, and the shipped
+      worker recipe calls the tool. Falsify by removing the registration,
+      removing the Bash refusal, changing an explicit path to a directory, or
+      allowing a protected-branch commit; each must fail the relevant assertion.
+      Source: **NEW** — user-directed P8 re-open following the 2026-09-27
+      cross-phase audit · Catches: prompt-only rules that a model can skip ·
+      Evidence: `cargo test -p arcana --lib ci_gate::tests::tg8_13_host_commit_safety_is_registered_and_used_by_workers --locked -- --nocapture`; `cargo test -p arcana-core --lib agent::builtin_tools::git_commit::tests --locked -- --nocapture` (7 passed); `cargo test -p arcana-core --test s8_git_safety --locked -- --nocapture` (passed; real tool refusal on initialized trunk, no staging/ref movement, then named-file-only fleet commit). The host resets staged state after any post-staging refusal. Bash refusal is covered by `agent::builtin_tools::bash::git_mutation_guard_tests`.
 
 ---
 

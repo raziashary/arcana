@@ -15,7 +15,7 @@
 | **Owner** | Razi (Arcana personal project) |
 | **Branch** | `main` (Razi authorised working directly on it; `sidecar-backup` holds the pre-restructure state) |
 | **Rev** | **3.0 scope notice** — 2026-09-23; `§16` preserves the original build history, ADR-0042/0043 record the owner's new direction |
-| **Status** | ✅ **P8 CLOSED.** S8-01…S8-05, TG8-01, TG8-02, TG8-12 and P8-01/P8-68…73 have current Arcana evidence under ADR-0055's built-gate scope. Independent GPT-6 Luna audits are resolved. P4 is next; P5–P7 follow in order. Retired design tasks are in `HISTORICAL_DESIGN_PROGRAMME.md`; the current active register has 389 explicit checkbox rows, 123 open (266 checked). |
+| **Status** | ✅ **P8 CLOSED.** Original 2026-09-24 closeout plus host-enforced commit safety follow-up P8-74/TG8-13/S8-06 passed 2026-09-28 under ADR-0075; P4 is active. The current register has 390 checkboxed rows, 123 open (267 checked). |
 
 ⚠ **This header read `Rev 1.0` and `⛔ AWAITING GO. No code, no migrations, no
 deletions.` until 2026-09-03** — through seven completed phases, hundreds of
@@ -859,9 +859,8 @@ in force.
 | P7 | First-run and failure experience supports a working coding turn | Open | P6 |
 | P9 | Build, signing and installation on supported platforms | Later work, after P4–P7 | P7 |
 
-The active task register contains **389 explicitly checkboxed P-numbered
-rows: 266 checked and 123 unchecked** after closing P8-01 and P8-68–73 on
-2026-09-24.
+The active task register contains **390 explicitly checkboxed P-numbered
+rows: 267 checked and 123 unchecked** after P8-74 closed on 2026-09-28.
 This is a source-derived checkbox count,
 not a readiness score. It excludes retired PD0–PD6 rows and withdrawn
 design-only P4-45–48 and P6-25–28; the latter remain in the historical file.
@@ -1863,6 +1862,18 @@ independent review disposition are recorded in
   external MCP discovery where they would create a second permission boundary
   or unsupported product contract. → `GATE-PROVEN` + `SMOKE-PROVEN`
 
+- [x] **P8-74** Replace prompt-only commit safety with a host-validated commit
+  path. Bash refuses shell command segments invoking `git add` or `git commit`;
+  the registered tool accepts explicit files, refuses `main`/`master`/`trunk`,
+  unrelated staged changes, unsafe paths and sensitive diffs, and requires a
+  Conventional Commit subject plus a descriptive body. Prove refusal and success
+  through tool behavior and the shipped worker recipe. → `GATE-PROVEN` + `SMOKE-PROVEN`
+      ✅ **2026-09-28** — Seven unit tests cover protected branches, unsafe paths,
+      sensitive-diff refusal/index rollback, named-file-only success, and complete
+      messages. `tests/s8_git_safety.rs` proves trunk refusal preserves staging/ref,
+      then commits only a named file on `arcana/fleet`. Bash has a textual guard,
+      not an OS sandbox against obfuscated executable code. Exact commands are in
+      `TESTING_GATES.md`.
 **Smoke — S8**
 - [x] **S8-01** A clean checkout builds with no submodule initialisation step.
       ✅ **2026-09-04** — `s8_smokes.rs`: a plain `git clone` (**no `--recurse-submodules`**) into a sandbox, then asserts no `.gitmodules`, no `submodules/`, an empty `git submodule status` — **and that the checkout is complete**, because "no submodule step" is only good news if nothing went missing with it: every workspace member's manifest and the front end are present. ⚠ It does not compile the clone; a fresh `cargo build` there would rebuild the whole dependency graph for a property this already establishes, and the compile half is `cargo check --workspace` on this tree. Stated rather than left implied.
@@ -1875,6 +1886,12 @@ independent review disposition are recorded in
 - [x] **S8-05** A worker's commit lands on a branch, stages only the paths it named, and leaves the trunk where it found it. *(added by `P8-38`; the four above are the deletion phase's.)*
       ✅ **2026-09-04** — `autodev-core/tests/s8_smokes.rs`, against a throwaway repository and the real `git` binary. Runs the protocol's C1 step **twice** to prove it is convergent, since all workers share one checkout and a second arrival is the normal case rather than the edge case. Carries its own **counterfactual**: the same tree staged with `git add -A` sweeps in `target/app.bin` and `.env`, so the smoke measures the defect as well as the fix. Ends by driving the shipped `git::diff::branch_diff` — the resolver `analyze_diff` calls — to show `HEAD~1..HEAD` carries the worker's patch while `main..main` is empty, which is what the cleanup worker's mandatory check was judging before. → `SMOKE-PROVEN`
 
+- [x] **S8-06** A production-registry worker cannot stage or commit through Bash;
+      the host tool refuses trunk, unrelated staging, unsafe or sensitive paths
+      and incomplete messages, while an allowed task commits only named files on
+      `arcana/fleet` and leaves the trunk reference unchanged. → `SMOKE-PROVEN`
+      ✅ **2026-09-28** — isolated real-tool smoke passed; TG8-13 proves production
+      registration and the default recipe consumer.
 **Exit.** S8 → `TG-P8` → matrix → progress → no-stale → commit.
 
 **Narrative success criterion.** *A newcomer clones the repository, runs one build command,
