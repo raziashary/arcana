@@ -64,8 +64,23 @@ impl Tool for GitCommitTool {
 }
 
 fn resolve_commit_workspace(working_dir: &str) -> Result<std::path::PathBuf, String> {
-    crate::platform::workspace::resolve_workspace_dir(Some(working_dir))
-        .map_err(|error| format!("Cannot commit outside a valid Arcana workspace: {error}"))
+    let path = Path::new(working_dir);
+    if !path.is_absolute() {
+        return Err("Cannot commit outside a valid Arcana workspace: path must be absolute".into());
+    }
+    let canonical = path.canonicalize().map_err(|error| {
+        format!(
+            "Cannot resolve the Arcana workspace '{}': {error}",
+            path.display()
+        )
+    })?;
+    if !canonical.is_dir() {
+        return Err(format!(
+            "Cannot commit outside a valid Arcana workspace: '{}' is not a directory",
+            canonical.display()
+        ));
+    }
+    Ok(canonical)
 }
 
 fn commit_paths(repo_path: &Path, paths: &[&str], message: &str) -> Result<String, String> {
