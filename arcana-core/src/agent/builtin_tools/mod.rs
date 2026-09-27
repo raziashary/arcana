@@ -8,6 +8,7 @@ pub mod bash;
 pub mod create_task;
 pub mod edit_file;
 pub mod get_task_tool;
+pub mod git_commit;
 pub mod glob;
 pub mod graph_prompts;
 pub mod graph_tools;
@@ -112,6 +113,7 @@ pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
             registry.register(Arc::new(write_file::WriteFileTool));
             registry.register(Arc::new(edit_file::EditFileTool));
             registry.register(Arc::new(bash::BashTool));
+            registry.register(Arc::new(git_commit::GitCommitTool));
             registry.register(Arc::new(list_directory::ListDirectoryTool));
             registry.register(Arc::new(grep::GrepTool));
             registry.register(Arc::new(glob::GlobTool));
