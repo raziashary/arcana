@@ -86,8 +86,8 @@ pub fn ensure_default_recipes(recipes_dir: &Path) -> Result<()> {
 /// `git worktree` is forbidden (`P8-34`'s core), and a lockfile is the very
 /// primitive the sidecar fleet used and this one replaced.
 ///
-/// The `switch -c || switch` pair is deliberately convergent: whoever arrives
-/// first creates the branch, everyone after joins it, and neither needs a lock.
+/// `git_commit` owns path validation, staging, trunk refusal, secret scanning,
+/// and the final commit. Shell Git mutation commands are refused by `BashTool`.
 fn commit_protocol() -> &'static str {
     r#"
 ---
@@ -117,37 +117,22 @@ All workers share one checkout, so `arcana/fleet` is a **shared** branch — do
 not create a branch of your own, and do not switch branches again later in the
 task.
 
-### Step C2 — Stage the paths you actually changed
+### Step C2 — Commit through Arcana's host checks
 
 ```
 bash('git status --porcelain')
-bash('git add <path> <path> ...')
+git_commit(
+  paths=['src/file.rs', 'tests/file.rs'],
+  message='fix(core): describe the task change\n\nExplain why the change is needed and what was verified.'
+)
 ```
 
-Name the paths. **Never `git add -A`, and never `git add .`** — a blind stage
-sweeps in build output, dependency directories, editor scratch files and
-anything an ignore rule did not anticipate. `git status --porcelain` tells you
-what is present; stage what you meant to write, and nothing else.
+`git_commit` accepts only explicit repository-relative files. The host refuses
+`main` and `master`, unrelated pre-staged content, `.env` files, paths outside
+the repository, secret-bearing staged diffs, and title-only commit messages.
+If it refuses, report the exact reason and do not retry through Bash.
 
-### Step C3 — Read the staged diff before committing
-
-```
-bash('git diff --cached')
-```
-
-If it contains an API key, a token, a password, a `.env` file or any other
-credential, **do not commit**. Unstage it with
-`bash('git restore --staged <path>')` and say so on the task.
-
-### Step C4 — Commit
-
-```
-bash('git commit -m "<type>(<scope>): <one-line task summary>"')
-```
-
-Conventional-commit types: feat / fix / refactor / test / docs / chore.
-
-### Step C5 — Stop at the commit
+### Step C3 — Stop at the commit
 
 Do **not** push, do **not** open a pull request, and do **not** merge one. Do
 not delete or rewrite anything. The branch is your deliverable; the user

@@ -4946,25 +4946,33 @@ let x = 1;
         );
 
         for r in &recipes {
-            // A blind stage, as an INSTRUCTION rather than as the prohibition.
-            // The protocol names `git add -A` in order to forbid it, so match
-            // the executable form: inside a `bash(` call.
             for bad in [
                 "bash('git add -A",
                 "bash(\"git add -A",
                 "bash('git add .",
                 "bash(\"git add .",
+                "bash('git commit",
+                "bash(\"git commit",
             ] {
                 assert!(
                     !r.instructions.contains(bad),
-                    "recipe `{}` still tells the agent to stage blindly: {bad}",
+                    "recipe `{}` still performs shell-authored Git mutation: {bad}",
                     r.id
                 );
             }
         }
 
-        // Every worker that commits must carry the protocol, and the protocol
-        // must be the one that branches.
+        let mut registry = arcana_core::agent::tool_registry::ToolRegistry::new();
+        arcana_core::agent::builtin_tools::register_for_mode(
+            &mut registry,
+            arcana_core::agent::PAMode::FastDevelopment,
+        );
+        assert!(
+            registry.get("git_commit").is_some(),
+            "the host commit guard must exist in the production FastDevelopment tool registry"
+        );
+
+        // Every worker that commits must call the host-validated tool.
         for slug in FLEET_WORKERS {
             let r = recipes
                 .iter()
@@ -4976,14 +4984,8 @@ let x = 1;
                 "recipe for {slug} has no Commit Protocol section"
             );
             assert!(
-                r.instructions.contains("git switch -c arcana/fleet"),
-                "recipe for {slug} never creates a branch, so its commits land on \
-                 whatever the user had checked out"
-            );
-            assert!(
-                r.instructions.contains("git diff --cached"),
-                "recipe for {slug} commits without reading the staged diff, so a \
-                 credential in the working tree is committed unseen"
+                r.instructions.contains("git_commit("),
+                "recipe for {slug} does not call the host-validated commit tool"
             );
         }
 
@@ -5005,6 +5007,69 @@ let x = 1;
         );
 
         let _ = std::fs::remove_dir_all(&sandbox);
+    }
+
+    /// P8-74. Safety is enforced by the host and consumed by the shipped
+    /// worker workflow, rather than existing only as prompt text.
+    #[test]
+    fn tg8_13_host_commit_safety_is_registered_and_used_by_workers() {
+        use arcana_core::recipes::defaults::{ensure_default_recipes, FLEET_WORKERS};
+        use arcana_core::recipes::parser::load_all_recipes;
+
+        let root = repo_root();
+        let bash = read_source(&root.join("arcana-core/src/agent/builtin_tools/bash.rs"));
+        let commit = read_source(&root.join("arcana-core/src/agent/builtin_tools/git_commit.rs"));
+        assert!(
+            bash.contains("contains_git_index_or_commit_mutation")
+                && bash.contains("Direct `git add` and `git commit` are blocked"),
+            "Bash must route Git mutations through the host-validated tool"
+        );
+        for invariant in [
+            "protected branch",
+            "pre-staged changes",
+            "environment secret file",
+            "sensitive value",
+            "validate_commit_message",
+        ] {
+            assert!(
+                commit.contains(invariant),
+                "host commit tool no longer enforces `{invariant}`"
+            );
+        }
+
+        let mut registry = arcana_core::agent::tool_registry::ToolRegistry::new();
+        arcana_core::agent::builtin_tools::register_for_mode(
+            &mut registry,
+            arcana_core::agent::PAMode::FastDevelopment,
+        );
+        assert!(registry.get("git_commit").is_some());
+
+        let sandbox = std::env::temp_dir().join(format!(
+            "arcana-tg8-13-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&sandbox).expect("sandbox");
+        ensure_default_recipes(&sandbox).expect("seed recipes");
+        let (recipes, errors) = load_all_recipes(&sandbox);
+        assert!(
+            errors.is_empty(),
+            "default recipes do not parse: {errors:?}"
+        );
+        for worker in FLEET_WORKERS {
+            let recipe = recipes
+                .iter()
+                .find(|recipe| recipe.agent_role.as_deref() == Some(worker))
+                .unwrap_or_else(|| panic!("missing worker recipe for {worker}"));
+            assert!(
+                recipe.instructions.contains("git_commit("),
+                "worker {worker} must consume the host commit tool"
+            );
+        }
+        std::fs::remove_dir_all(sandbox).expect("remove sandbox");
     }
 
     // ── TG8-07 · the worker-status vocabulary agrees across the seam ──────────
