@@ -6778,7 +6778,7 @@ readback.
 
 **Reason.** The production Python runtime module is Windows-only, and the current Ruff staging implementation is verified only for Windows x64. ProjectCommand is cross-platform; its unsupported branch must compile and fail closed without allowing a Bash/package-manager bypass.
 
-**Evidence.** Linux Ubuntu WSL test `agent::builtin_tools::project_command::tests::pinned_ruff_install_fails_closed_with_structured_unsupported_platform_result` passes 1/1 and asserts the categorized error, actionable guidance, and absence of HTTP detail. The Linux build also exposed an async Linux sandbox test that called `spawn` without awaiting it; the test now awaits the production launcher and passes 1/1. Both production analytics/hook active-writer tests pass on Linux (2/2).
+**Evidence.** Linux Ubuntu WSL test `agent::builtin_tools::project_command::tests::pinned_ruff_install_fails_closed_with_structured_unsupported_platform_result` passes 1/1 and asserts the categorized error, actionable guidance, and absence of HTTP detail. The Linux build also exposed an async Linux sandbox test that called `spawn` without awaiting it; the test now awaits the production launcher and passes 1/1. The Linux retention-filtered core suite passes 19/19, including both production analytics/hook active-writer tests.
 
 **Limit.** This does not implement Ruff staging on Linux/macOS or close cross-platform ProjectCommand/security gates. Linux external-read/network containment, complete ecosystem corpus, full core suite, macOS sandbox, and Windows canonicalization remain open.
 
