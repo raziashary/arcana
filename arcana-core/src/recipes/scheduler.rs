@@ -2146,6 +2146,7 @@ mod tests {
         let startup_workers = ["supervisor", "qc-agent", "worker-backend"];
         let (_, events) = crate::observability::timing::capture_json_events(|| {
             runtime.block_on(async {
+                tokio::time::pause();
                 for worker in startup_workers {
                     scheduler.start_worker(worker).unwrap_or_else(|error| {
                         panic!("start production schedule for {worker}: {error}")
@@ -2155,6 +2156,13 @@ mod tests {
                 // Startup ticks are spawned onto this current-thread runtime.
                 // Yield until their work-check events have run, then stop all
                 // schedules before the test can leave live tasks behind.
+                for _ in 0..32 {
+                    tokio::task::yield_now().await;
+                }
+
+                // Drive the actual fixed five-minute cron recovery loop,
+                // rather than invoking only its work-check helper.
+                tokio::time::advance(Duration::from_secs(310)).await;
                 for _ in 0..32 {
                     tokio::task::yield_now().await;
                 }
@@ -2192,6 +2200,18 @@ mod tests {
             assert_eq!(check["fields"]["outcome"], "idle", "worker={worker}");
             assert_eq!(check["fields"]["database"], "tasks", "worker={worker}");
             assert!(check["fields"]["duration_ns"].as_u64().is_some());
+            assert!(
+                events
+                    .iter()
+                    .filter(|event| {
+                        event["fields"]["operation"] == "scheduler_recoverable_work_check"
+                            && event["fields"]["worker"] == worker
+                            && event["fields"]["outcome"] == "idle"
+                    })
+                    .count()
+                    >= 2,
+                "{worker} must execute both startup and the real cron recovery work-check"
+            );
 
             let gate = events
                 .iter()
@@ -2203,6 +2223,98 @@ mod tests {
             assert_eq!(gate["fields"]["outcome"], "idle", "worker={worker}");
             assert_eq!(gate["fields"]["result_count"], 0, "worker={worker}");
             assert!(gate["fields"]["duration_ns"].as_u64().unwrap_or_default() > 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn production_supervisor_and_qc_provider_turns_stop_at_run_caps() {
+        ensure_isolated_test_analytics().await;
+        let home = tempfile::tempdir().unwrap();
+        let _home = crate::db::test_support::with_home(home.path());
+        crate::recipes::init().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        crate::egress_consent::WorkspaceEgressConsentDb::open()
+            .unwrap()
+            .grant(workspace.path(), "provider:google")
+            .unwrap();
+        let tasks = TasksDb::open().unwrap();
+
+        for (slug, limit) in [("supervisor", 10), ("qc-agent", 20)] {
+            let message = tasks
+                .insert_worker_message(
+                    "worker-backend",
+                    slug,
+                    "Bounded intentional work fixture",
+                    "fyi",
+                    None,
+                )
+                .unwrap();
+            let responses = (0..limit + 1)
+                .map(|turn| {
+                    vec![
+                        StreamChunk::ToolUseStart {
+                            id: format!("bounded-{slug}-{turn}"),
+                            name: "list_worker_messages".into(),
+                            block_index: 0,
+                            opaque: None,
+                        },
+                        StreamChunk::ToolInputDelta {
+                            block_index: 0,
+                            partial_json: "{}".into(),
+                        },
+                        StreamChunk::MessageDelta {
+                            stop_reason: "tool_use".into(),
+                            usage: Usage {
+                                input: 10,
+                                output: 1,
+                                ..Usage::default()
+                            },
+                        },
+                        StreamChunk::Done,
+                    ]
+                })
+                .collect();
+            let provider = Arc::new(QcInboxProvider {
+                responses: Mutex::new(responses),
+                requests: Mutex::new(Vec::new()),
+            });
+            let runner = RecipeRunner::new_with_workspace_override(
+                Arc::new(Mutex::new(crate::state::AppState {
+                    active_provider: Some("google".into()),
+                    active_model: Some("gemini-3.8-flash".into()),
+                    ..crate::state::AppState::default()
+                })),
+                Arc::new(crate::session::manager::SessionManager::new().unwrap()),
+                crate::agent::permission::new_pending_permissions(),
+                Some(workspace.path().to_string_lossy().into_owned()),
+            )
+            .with_provider_for_test(provider.clone());
+            let worker = WorkersDb::open()
+                .unwrap()
+                .get_by_slug(slug)
+                .unwrap()
+                .unwrap();
+            let recipe = load_recipe_by_id(worker.recipe_id.as_deref().unwrap())
+                .unwrap()
+                .expect("persisted worker recipe exists");
+            let result = runner.run_recipe(&recipe, slug).await;
+            assert!(
+                matches!(&result, Err(ArcanaError::BudgetExceeded(reason)) if reason == "BUDGET_EXCEEDED_TURNS"),
+                "{slug}: {result:?}"
+            );
+            // The existing pre-dispatch breaker counts the pending turn and
+            // refuses it when turns_used reaches the configured cap.
+            assert_eq!(
+                provider.request_count(),
+                limit - 1,
+                "the real {slug} engine must refuse turn {limit}"
+            );
+            assert_eq!(
+                provider.responses.lock().unwrap().len(),
+                2,
+                "the denied turn must not enter the provider"
+            );
+            assert_ne!(tasks.get_worker_message(message.id).unwrap().unwrap().status, "acknowledged", "the fixture must retain genuine recoverable work, rather than stop because its inbox emptied");
         }
     }
 

@@ -400,3 +400,7 @@ P4-50 follow-up discovered: generic structured-value redaction replaces long fix
 P4-16 stage: legacy persisted hook reader/executor refusal regression and the three-OS CI workflow step are ready for remote execution. Local saved-workflow filters and the 3/3 workflow correctness checks pass. ADR-0277 records the existing-matrix choice. Current totals remain P4 33/59, TG4 11/33 pending remote Linux/macOS desktop-reader results.
 
 CI prerequisite: run 37215943643 and baseline run 37212315656 fail the frontend timestamp test on UTC signed-zero identity (`+0` versus `-0`), before the host matrix. The equivalent offset-equation assertion now passes 53/53 frontend tests under UTC and 11/11 timestamp tests under Bangkok/New York. ADR-0279 records the test-only fix. P4-16's Linux/macOS production reader proof remains pending CI; current counts stay 33/59 and 11/33. Repository read authentication is available through the existing Git credential, without storing or printing the token.
+
+## Current continuation — P4-43 closed
+
+Production startup/cron idle-call and intentional Supervisor/QC turn-cap tests pass on Windows/Linux. The shipped pending-turn caps admit 9/19 provider entries and reject turn 10/20; the contract was measured without changing it. P4-43 is checked; evidence is `P4-43-CALL-BOUNDS-CLOSEOUT-2026-10-04.md`. Current count: **P4 34/59; TG4 11/33**. Remaining core tasks: 25 (including owner-run P4-49); expanded goal remains unread/untracked.

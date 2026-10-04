@@ -6889,3 +6889,11 @@ readback.
 **Reason.** P4-16/TG4-17 cover saved custom content as well as shipped defaults. Existing Windows proof and Linux core proof are insufficient for the desktop skill reader on Linux/macOS. Reuse the established CI matrix and dependency setup rather than inventing a parallel verification route.
 
 **Proof.** Local Windows recipe/skill/hook filters pass; Linux core filters pass, including the new production legacy-hook refusal. CI workflow correctness gates pass 3/3. Remote Linux/macOS desktop results remain required before closing P4-16/TG4-17.
+
+## ADR-LOG-RESTRUCT-0280 — Measure real recovery ticks and existing provider turn caps
+
+**Decision.** Extend P4-43's production startup test with Tokio's existing paused-clock test facility, advancing beyond the actual fixed five-minute cron boundary. Drive the persisted shipped Supervisor/QC recipes through RecipeRunner and the real engine with a deliberately continuing scripted provider, checking the existing 10/20-turn run caps.
+
+**Reason.** Prior helper and startup-only tests could not establish cron request counts or intentional work bounds. These tests use the existing production loops and policies, without a new scheduler abstraction, live credentials or provider requests.
+
+**Proof.** Windows/Linux startup and real cron recovery tests pass with zero provider entries; continuing persisted Supervisor/QC RecipeRunner runs dispatch 9/19 requests and refuse the pending turn at the existing 10/20 thresholds, returning `BUDGET_EXCEEDED_TURNS` with inbox work still present. P4-43 is proven; `_verify/P4-43-CALL-BOUNDS-CLOSEOUT-2026-10-04.md` records exact evidence. The pending-turn semantics are unchanged.

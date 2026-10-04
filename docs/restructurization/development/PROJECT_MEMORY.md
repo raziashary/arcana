@@ -1,4 +1,11 @@
-# Arcana working memory (updated 2026-10-03)
+# Arcana working memory (updated 2026-10-04)
+
+Current continuation (2026-10-04): **P4 34/59 checked; TG4 11/33 passing**.
+P4-55/TG4-29 and P4-43 are proven. Core P4 remains active; the expanded goal
+stays unread until core tasks close. P4-43 evidence is in
+`_verify/P4-43-CALL-BOUNDS-CLOSEOUT-2026-10-04.md`. Remote host-matrix proof,
+strict sandbox corpus and successful CLI Fleet completion remain open. Earlier
+dated status entries below are historical snapshots.
 
 Authoritative current scope: [ARCANA_CODING_SCOPE.md](ARCANA_CODING_SCOPE.md).
 Historical implementation tasks and invariant rules: `MASTER_DEVELOPMENT_PLAN.md`
