@@ -2215,6 +2215,85 @@ mod tests {
     }
 
     #[test]
+    fn production_mcp_consent_denial_persists_and_reads_through_tauri_logs() {
+        use arcana_core::agent::tool_trait::{AgentIdentity, Tool, ToolContext};
+        use tracing_subscriber::{filter::filter_fn, layer::SubscriberExt, Layer, Registry};
+
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::test_support::isolate_home(home.path());
+        let log_dir = home.path().join(".arcana").join("logs");
+        std::fs::create_dir_all(&log_dir).expect("create isolated structured log directory");
+        let workspace = home.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("create isolated workspace");
+
+        let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let call_id = "call-mcp-consent-denial-logs-proof";
+        let log_path = log_dir.join(format!("arcana-events.{date}.jsonl"));
+        let file = std::fs::File::create(&log_path).expect("create production structured log");
+        let (writer, guard) = tracing_appender::non_blocking(file);
+        let layer = tracing_subscriber::fmt::layer()
+            .json()
+            .with_target(true)
+            .with_ansi(false)
+            .with_current_span(true)
+            .with_span_list(true)
+            .with_writer(writer)
+            .with_filter(filter_fn(|metadata| {
+                metadata.target() == "arcana::telemetry"
+                    || metadata.target().starts_with("arcana::telemetry::")
+            }));
+        let subscriber = Registry::default().with(layer);
+        let context = ToolContext {
+            session_id: "session-mcp-consent-denial-logs-proof".into(),
+            working_dir: workspace.to_string_lossy().into_owned(),
+            call_id: call_id.into(),
+            run_id: Some("run-mcp-consent-denial-logs-proof".into()),
+            task_id: None,
+            permission_mode: arcana_core::agent::permission::PermissionMode::Autonomous,
+            depth: 0,
+            agent_role: AgentIdentity::supervisor().role,
+            run_token_budget: None,
+        };
+        let result = tracing::subscriber::with_default(subscriber, || {
+            futures::executor::block_on(
+                arcana_core::agent::builtin_tools::external_mcp::McpListToolsTool
+                    .execute(serde_json::json!({}), &context),
+            )
+        });
+        assert!(
+            result.is_error,
+            "an unconsented MCP request must fail closed"
+        );
+        assert!(result.output.contains("no active consent"));
+        drop(guard);
+
+        let persisted = super::read_structured_events(date, Some(20), Some(call_id.to_string()))
+            .expect("production Tauri Logs command reads correlated MCP denial");
+        let events = persisted
+            .content
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("valid event JSON"))
+            .collect::<Vec<_>>();
+        assert_eq!(events.len(), 1);
+        let event = &events[0]["fields"];
+        assert_eq!(event["event_type"], "mcp_call");
+        assert_eq!(event["operation"], "mcp_tools_list");
+        assert_eq!(event["connector_id"], "github-mcp");
+        assert_eq!(event["outcome"], "authorization_failed");
+        assert_eq!(event["call_id"], call_id);
+        assert!(event["elapsed_ns"].as_u64().is_some());
+
+        let mut metrics = MetricsAccumulator::default();
+        let metrics =
+            refresh_metrics_from_file_for_correlation(&log_path, &mut metrics, Some(call_id))
+                .expect("production Logs metrics reader aggregates MCP denial");
+        assert_eq!(metrics.total_events, 1);
+        assert_eq!(metrics.outcomes.get("authorization_failed"), Some(&1));
+        assert_eq!(metrics.by_event["mcp_call"].count, 1);
+        assert!(!persisted.content.contains("server_url"));
+    }
+
+    #[test]
     fn measure_metrics_refresh_tail_and_full_export_on_reproducible_jsonl() {
         use std::io::BufWriter;
         use std::time::Instant;
