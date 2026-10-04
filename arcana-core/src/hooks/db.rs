@@ -26,6 +26,15 @@ impl HooksDb {
         })
     }
 
+    /// Open the production config schema at an explicit path. Hosts use this
+    /// for isolated profiles, and integration tests use it to exercise the
+    /// same hook-log lifecycle without touching the user's config database.
+    pub fn open_at(db_path: &std::path::Path) -> Result<Self> {
+        Ok(Self {
+            conn: crate::db::config_db::open_at(db_path)?,
+        })
+    }
+
     pub fn list_all(&self) -> Result<Vec<HookConfig>> {
         let operation = OperationTimer::start("database_hooks_list").with_database("config");
         let mut stmt = self.conn.prepare(

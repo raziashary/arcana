@@ -1498,6 +1498,57 @@ mod tests {
     }
 
     #[test]
+    fn hook_retention_failure_is_visible_through_structured_logs_reader() {
+        let directory = tempfile::tempdir().expect("isolated hook retention log fixture");
+        let config_path = directory.path().join("config.db");
+        let mut hooks = arcana_core::hooks::db::HooksDb::open_at(&config_path)
+            .expect("open production hook database");
+        let config = arcana_core::db::config_db::open_at(&config_path)
+            .expect("open schema-owned config connection");
+        config
+            .execute_batch(
+                "CREATE TRIGGER reject_hook_retention
+                 BEFORE DELETE ON hook_logs
+                 BEGIN
+                     SELECT RAISE(ABORT, 'private-trigger-marker');
+                 END;
+                 INSERT INTO hook_logs (hook_id, hook_name, hook_type, outcome, executed_at)
+                 VALUES ('private-hook', 'private-name', 'pre_tool_use', 'executed', '2020-01-01T00:00:00Z');",
+            )
+            .expect("seed isolated hook cleanup failure");
+        drop(config);
+
+        let log_path = directory.path().join("arcana-events.test.jsonl");
+        let file = std::fs::File::create(&log_path).expect("create structured log fixture");
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(move || file.try_clone().expect("clone structured log writer"))
+            .finish();
+        let error = tracing::subscriber::with_default(subscriber, || {
+            hooks
+                .prune_logs_before("2026-07-06T12:00:00Z")
+                .expect_err("injected storage failure must be returned")
+        });
+        assert!(error.to_string().contains("private-trigger-marker"));
+
+        let persisted = read_full_log(&log_path).expect("read persisted production JSONL");
+        assert!(persisted.contains("database_hook_logs_retention_prune"));
+        assert!(persisted.contains("\"outcome\":\"error\""));
+        assert!(persisted.contains("\"database\":\"config\""));
+        assert!(!persisted.contains("private-trigger-marker"));
+        assert!(!persisted.contains("private-hook"));
+        assert!(!persisted.contains("private-name"));
+
+        let metrics = aggregate_event_lines(BufReader::new(persisted.as_bytes()))
+            .expect("Logs metrics reader aggregates the persisted event");
+        let retention = &metrics.by_event["operation_timing"];
+        assert_eq!(retention.count, 1);
+        assert_eq!(retention.failures, 1);
+        assert_eq!(metrics.outcomes["error"], 1);
+    }
+
+    #[test]
     fn metrics_count_build_evidence_failure_outcome_as_failure() {
         let jsonl = "{\"fields\":{\"event_type\":\"build_evidence_persistence\",\"outcome\":\"failure\",\"duration_ns\":17}}\n";
         let summary = aggregate_event_lines(BufReader::new(jsonl.as_bytes())).unwrap();

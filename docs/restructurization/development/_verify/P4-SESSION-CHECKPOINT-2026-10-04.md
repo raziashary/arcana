@@ -191,3 +191,9 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 - Added a production-path regression in the Tauri Logs command module: an isolated production `AnalyticsDb` refuses a malformed timestamp during retention, the operation error is written to a JSONL sink, and the production reader/metrics aggregator consumes it as a failed `operation_timing`.
 - The test confirms the event identifies only the fixed operation and logical database, and does not expose planted database row/component content. `cargo test -p arcana retention_cleanup_failure_is_visible_through_structured_logs_reader --locked -- --nocapture --test-threads=1` passes 1/1.
 - This closes the analytics-pruner-to-Logs-reader proof slice only. Hook-pruner error readback, full retained-detail export, cross-platform writer-contention coverage, TG4-21, and P4-59 remain open. P4/TG4 counts remain 32/59 and 10/33.
+
+## Continuation — 2026-10-04 hook retention failure Logs readback
+
+- Added `HooksDb::open_at`, reusing the existing config schema owner's path-based initializer so integration tests can open isolated production config databases.
+- The Tauri Logs test injects a SQLite delete-trigger failure into `hook_logs`, calls the production `HooksDb::prune_logs_before`, persists the resulting operation event, and proves the production reader/metrics aggregator reports one failed operation without exposing the trigger or hook fixture values. `cargo test -p arcana hook_retention_failure_is_visible_through_structured_logs_reader --locked -- --nocapture --test-threads=1` passes 1/1.
+- Together with the analytics cleanup test above, both production pruning paths now have error-to-structured-Logs reader proof. Full retained-detail export, cross-platform writer-contention coverage, TG4-21 and P4-59 remain open; counts remain P4 32/59 and TG4 10/33.
