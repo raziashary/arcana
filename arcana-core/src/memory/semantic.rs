@@ -14,6 +14,21 @@
 //                  could put a sentence in the user's mouth.
 
 use rusqlite::params;
+
+const RECALL_FACTS_SQL: &str =
+    "SELECT id, fact_text, category, confidence, source_type, source_session,
+        working_dir, tags, is_active, created_at, updated_at
+ FROM semantic_memories
+ WHERE is_active = 1 AND confidence >= 0.7
+ ORDER BY confidence DESC, julianday(updated_at) DESC, id DESC
+ LIMIT ?1";
+const USER_PREFERENCES_SQL: &str =
+    "SELECT id, fact_text, category, confidence, source_type, source_session,
+        working_dir, tags, is_active, created_at, updated_at
+ FROM semantic_memories
+ WHERE is_active = 1 AND category IN ('preference', 'user_profile')
+ ORDER BY confidence DESC, julianday(updated_at) DESC, id DESC
+ LIMIT 20";
 use tracing::{debug, info};
 use uuid::Uuid;
 
@@ -170,15 +185,7 @@ impl SemanticStore {
         let timer = crate::observability::timing::OperationTimer::start("memory_semantic_recall")
             .with_database("memory");
         let db = MemoryDb::open()?;
-        let mut stmt = db.conn.prepare(
-            "SELECT id, fact_text, category, confidence, source_type, source_session,
-                    working_dir, tags, is_active, created_at, updated_at
-             FROM   semantic_memories
-             WHERE  is_active = 1
-               AND  confidence >= 0.7
-             ORDER  BY confidence DESC, updated_at DESC
-             LIMIT  ?1",
-        )?;
+        let mut stmt = db.conn.prepare(RECALL_FACTS_SQL)?;
         let facts = map_facts(&mut stmt, params![limit])?;
         timer.with_result_count(facts.len()).succeed();
         Ok(facts)
@@ -190,15 +197,7 @@ impl SemanticStore {
             crate::observability::timing::OperationTimer::start("memory_semantic_preferences_read")
                 .with_database("memory");
         let db = MemoryDb::open()?;
-        let mut stmt = db.conn.prepare(
-            "SELECT id, fact_text, category, confidence, source_type, source_session,
-                    working_dir, tags, is_active, created_at, updated_at
-             FROM   semantic_memories
-             WHERE  is_active = 1
-               AND  category  IN ('preference', 'user_profile')
-             ORDER  BY confidence DESC, updated_at DESC
-             LIMIT  20",
-        )?;
+        let mut stmt = db.conn.prepare(USER_PREFERENCES_SQL)?;
         let facts = map_facts(&mut stmt, params![])?;
         timer.with_result_count(facts.len()).succeed();
         Ok(facts)
@@ -416,4 +415,71 @@ fn map_facts(
         .filter_map(|r| r.ok())
         .collect();
     Ok(rows)
+}
+
+#[cfg(test)]
+mod timestamp_order_tests {
+    use super::*;
+
+    #[test]
+    fn production_semantic_readers_order_mixed_timestamps_by_instant() {
+        let home = tempfile::tempdir().expect("isolated home");
+        let _home_guard = crate::db::test_support::with_home(home.path());
+        let db = MemoryDb::open().expect("open migrated MemoryDb");
+        db.conn
+            .execute_batch(
+                "WITH RECURSIVE n(value) AS (
+                    SELECT 1 UNION ALL SELECT value + 1 FROM n WHERE value < 5000
+                 )
+                 INSERT INTO semantic_memories
+                    (id,fact_text,category,confidence,source_type,tags,is_active,created_at,updated_at)
+                 SELECT 'old-' || value, 'old fact', 'preference', 0.8, 'test', '[]', 1,
+                        strftime('%Y-%m-%dT%H:%M:%fZ','now','-' || value || ' days'),
+                        strftime('%Y-%m-%dT%H:%M:%fZ','now','-' || value || ' days')
+                 FROM n;
+                 INSERT INTO semantic_memories
+                    (id,fact_text,category,confidence,source_type,tags,is_active,created_at,updated_at)
+                 VALUES
+                    ('canonical-0900','canonical fact','preference',0.99,'test','[]',1,
+                     '2026-09-02T09:00:00Z','2026-09-02T09:00:00Z'),
+                    ('legacy-1200','legacy fact','user_profile',0.99,'test','[]',1,
+                     '2026-09-02 12:00:00','2026-09-02 12:00:00');
+                 ANALYZE;",
+            )
+            .expect("seed populated mixed-format semantic facts");
+
+        for sql in [RECALL_FACTS_SQL, USER_PREFERENCES_SQL] {
+            let plan_sql = format!("EXPLAIN QUERY PLAN {sql}");
+            let mut statement = db.conn.prepare(&plan_sql).expect("prepare production plan");
+            let details = if sql.contains("?1") {
+                statement
+                    .query_map([50], |row| row.get::<_, String>(3))
+                    .expect("explain production query")
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .expect("collect query plan")
+                    .join(" | ")
+            } else {
+                statement
+                    .query_map([], |row| row.get::<_, String>(3))
+                    .expect("explain production query")
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .expect("collect query plan")
+                    .join(" | ")
+            };
+            assert!(
+                details.contains("idx_sem_active_confidence_updated_julianday"),
+                "expected the semantic instant-order index; plan was: {details}"
+            );
+        }
+        drop(db);
+
+        let recalled = SemanticStore::recall_facts(2).expect("read production fact recall");
+        assert_eq!(recalled[0].id, "legacy-1200");
+        assert_eq!(recalled[1].id, "canonical-0900");
+
+        let preferences =
+            SemanticStore::get_user_preferences().expect("read production preferences");
+        assert_eq!(preferences[0].id, "legacy-1200");
+        assert_eq!(preferences[1].id, "canonical-0900");
+    }
 }

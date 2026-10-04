@@ -521,6 +521,15 @@ impl MemoryDb {
                 ON memories(scope_key, julianday(created_at) DESC, id DESC);
         "#,
         },
+        Migration {
+            version: 5,
+            name: "semantic-fact-instant-order-index",
+            sql: r#"
+            CREATE INDEX IF NOT EXISTS idx_sem_active_confidence_updated_julianday
+                ON semantic_memories(confidence DESC, julianday(updated_at) DESC, id DESC)
+                WHERE is_active = 1;
+        "#,
+        },
     ];
 
     fn migrate(&self) -> Result<()> {

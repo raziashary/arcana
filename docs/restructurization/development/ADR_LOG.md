@@ -6755,3 +6755,17 @@ readback.
 **Limit.** This proves selected Memory consumers, not every Memory writer/reader pair. P4-57/TG4-19 remain open for full inventory and cross-platform property evidence.
 
 **Where.** `arcana-core/src/memory`, P4-57, TG4-19.
+
+## ADR-LOG-RESTRUCT-0268 — Use instant ordering for semantic Memory ties
+
+**Status.** Implemented and focused-tested on 2026-10-04.
+
+**Decision.** Keep semantic-fact priority ordered by confidence, then compare `updated_at` as a SQLite instant, with ID as a deterministic final tie-break. Add a partial expression index for active semantic facts.
+
+**Reason.** The production fact-recall and preference commands ordered equal-confidence rows by raw timestamp text. Legacy space-separated SQLite timestamps and canonical UTC strings can sort contrary to the instant they represent. Both commands share one ordering rule and production SQL constants, and the index supports their confidence/recency order.
+
+**Evidence.** `production_semantic_readers_order_mixed_timestamps_by_instant` seeds 5,000 populated semantic rows plus mixed-format preference rows in an isolated production Memory DB. It asserts both production readers return legacy noon before canonical 09:00 and both production SQL plans select `idx_sem_active_confidence_updated_julianday`. `cargo test -p arcana-core --lib production_semantic_readers_order_mixed_timestamps_by_instant --locked -- --nocapture --test-threads=1` passes 1/1.
+
+**Limit.** This closes two Memory ordering readers only. P4-57/TG4-19 remain open for full writer/reader inventory and cross-platform property evidence.
+
+**Where.** `arcana-core/src/memory/semantic.rs`, P4-57, TG4-19.
