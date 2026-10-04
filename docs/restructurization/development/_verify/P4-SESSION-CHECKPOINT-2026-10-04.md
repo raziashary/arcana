@@ -267,3 +267,9 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 - Owner reconfirmed the selected policy: retain 90 days of raw `token_usage`, `system_events`, `api_failures`, and `hook_logs`, keeping monthly summaries where useful. This matches the implemented P4-59 contract and adds no broader deletion scope.
 - `cargo test -p arcana-core --lib retention --locked -- --test-threads=1` passes 17/17 on Windows. It covers exact cutoff, invalid-timestamp refusal, aggregate preservation, active-writer serialization, scheduled cleanup, hook retention/export, and worker-stat monthly coverage.
 - Linux/macOS active-writer CI evidence remains pending; P4-59/TG4-21 stay open. No P4 task/gate count changed and the Calendar workspace was not accessed.
+
+## Continuation — P4-57 mixed-format session-list ordering
+
+- Fixed `SessionStorage::list_sessions`, which sorted `updated_at` text and could misorder a legacy SQLite space timestamp relative to canonical RFC3339 `T` timestamps. It now orders by `julianday(updated_at) DESC, id DESC`, with a matching expression index installed by additive session schema migration 3.
+- `cargo test -p arcana-core --lib production_session_list_orders_mixed_timestamp_formats_by_instant --locked -- --nocapture --test-threads=1` passes 1/1. The production session storage group passes 4/4 and proves query-plan index use, canonical/legacy parsing, and malformed-time refusal. `cargo fmt --all -- --check` passes.
+- This adds one P4-57/TG4-19 production pair; the phase count remains P4 32/59 and TG4 10/33. Full timestamp inventory and owner Calendar acceptance remain open.

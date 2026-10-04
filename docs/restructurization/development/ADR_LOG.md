@@ -6727,3 +6727,17 @@ readback.
 **Limit.** This proves the Rust provider-wrapper race only. Live desktop IPC, complete cross-consumer allow/revoke readback, and desktop smoke remain open; P4-60/TG4-16 stay open.
 
 **Where.** `arcana-core/src/egress_consent.rs`, P4-60, TG4-16.
+
+## ADR-LOG-RESTRUCT-0266 — Order session lists by timestamp instant
+
+**Status.** Implemented and focused-tested on 2026-10-04.
+
+**Decision.** Sort the production session-list query by `julianday(updated_at) DESC, id DESC` and add a matching expression index through additive session schema migration 3.
+
+**Reason.** `SessionStorage::list_sessions` previously ordered the stored timestamp text directly. Legacy space-separated SQLite timestamps and canonical RFC 3339 `T` timestamps do not sort lexically by represented instant. The repository already uses `julianday` for mixed-format chronological readers; the matching index keeps this bounded 50-row dashboard query on an indexed path and the ID tie-break makes equal instants deterministic.
+
+**Evidence.** `production_session_list_orders_mixed_timestamp_formats_by_instant` inserts through the production session writer, retains a legacy-form timestamp, reads through `list_sessions`, asserts ordering by parsed UTC instant, and verifies `EXPLAIN QUERY PLAN` selects `idx_sessions_updated_julianday`. `cargo test -p arcana-core --lib session::storage::tests:: --locked -- --test-threads=1` passes 4/4, including the existing canonical/legacy reader and malformed-time refusal checks. `cargo fmt --all -- --check` passes.
+
+**Limit.** This closes only the session-list timestamp pair. P4-57/TG4-19 remain open for the full inventory and remaining production writer/readers.
+
+**Where.** `arcana-core/src/session/storage.rs`, P4-57, TG4-19.

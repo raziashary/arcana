@@ -88,6 +88,14 @@ impl SessionStorage {
                 ON messages(session_id, julianday(created_at) ASC);
         "#,
         },
+        Migration {
+            version: 3,
+            name: "session-updated-timestamp-index",
+            sql: r#"
+            CREATE INDEX IF NOT EXISTS idx_sessions_updated_julianday
+                ON sessions(julianday(updated_at) DESC, id DESC);
+        "#,
+        },
     ];
 
     /// Columns added to `sessions` after its original `CREATE TABLE`.
@@ -279,7 +287,7 @@ impl SessionStorage {
         let timing = OperationTimer::start("database_session_list").with_database("sessions");
         let mut stmt = self.conn.prepare(
             "SELECT id, title, working_dir, provider, model, pa_mode, created_at, updated_at
-             FROM sessions ORDER BY updated_at DESC LIMIT 50",
+             FROM sessions ORDER BY julianday(updated_at) DESC, id DESC LIMIT 50",
         )?;
         let sessions: Vec<Session> = stmt
             .query_map([], |row| {
@@ -555,6 +563,69 @@ mod tests {
     }
 
     #[test]
+    fn production_session_list_orders_mixed_timestamp_formats_by_instant() {
+        let storage = in_memory_storage();
+        let canonical = Session {
+            id: "session-canonical-0900".into(),
+            title: "canonical timestamp".into(),
+            working_dir: "C:/workspace".into(),
+            provider: "google".into(),
+            model: "gemini-3.8-flash".into(),
+            pa_mode: "fast_development".into(),
+            created_at: Utc.with_ymd_and_hms(2026, 9, 1, 9, 0, 0).unwrap(),
+            updated_at: Utc.with_ymd_and_hms(2026, 9, 1, 9, 0, 0).unwrap(),
+            messages: vec![],
+        };
+        let legacy = Session {
+            id: "session-legacy-1200".into(),
+            title: "legacy timestamp".into(),
+            working_dir: "C:/workspace".into(),
+            provider: "google".into(),
+            model: "gemini-3.8-flash".into(),
+            pa_mode: "fast_development".into(),
+            created_at: Utc.with_ymd_and_hms(2026, 9, 1, 12, 0, 0).unwrap(),
+            updated_at: Utc.with_ymd_and_hms(2026, 9, 1, 12, 0, 0).unwrap(),
+            messages: vec![],
+        };
+        storage
+            .upsert_session(&canonical)
+            .expect("write canonical session");
+        storage
+            .upsert_session(&legacy)
+            .expect("write legacy session");
+        storage
+            .conn
+            .execute(
+                "UPDATE sessions SET updated_at='2026-09-01 12:00:00' WHERE id=?1",
+                [&legacy.id],
+            )
+            .expect("retain legacy timestamp representation");
+
+        let sessions = storage.list_sessions().expect("list sessions");
+        assert_eq!(sessions[0].id, legacy.id);
+        assert_eq!(sessions[0].updated_at, legacy.updated_at);
+        assert_eq!(sessions[1].id, canonical.id);
+        assert_eq!(sessions[1].updated_at, canonical.updated_at);
+
+        let plan: Vec<String> = storage
+            .conn
+            .prepare(
+                "EXPLAIN QUERY PLAN SELECT id FROM sessions
+                 ORDER BY julianday(updated_at) DESC, id DESC LIMIT 50",
+            )
+            .expect("prepare session list plan")
+            .query_map([], |row| row.get(3))
+            .expect("explain session list")
+            .collect::<rusqlite::Result<_>>()
+            .expect("collect session query plan");
+        assert!(
+            plan.iter()
+                .any(|detail| detail.contains("idx_sessions_updated_julianday")),
+            "session list should use its timestamp expression index: {plan:?}"
+        );
+    }
+
+    #[test]
     fn malformed_session_timestamps_are_not_hidden_or_replaced_with_now() {
         let storage = in_memory_storage();
         let session = Session::new("C:/workspace", "google", "gemini-3.8-flash");
@@ -598,7 +669,7 @@ mod tests {
 
         let (result, events) = crate::observability::timing::capture_json_events(|| {
             storage.migrate().expect("repeat-safe schema migration");
-            assert_eq!(storage.schema_version().expect("schema version"), 2);
+            assert_eq!(storage.schema_version().expect("schema version"), 3);
             storage.upsert_session(&session).expect("upsert session");
             storage
                 .update_session_pa_mode(&session.id, "autonomous")
