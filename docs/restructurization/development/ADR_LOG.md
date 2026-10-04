@@ -6853,3 +6853,17 @@ readback.
 **Limit.** This does not provide durable-media `fsync`; it ensures the async writer flush completed before success. P4-19/TG4-09 remain open for full artifact handoff and supported-platform proof.
 
 **Where.** `arcana-core/src/agent/builtin_tools/append_file.rs`, P4-19/P4-20, TG4-09.
+
+## ADR-LOG-RESTRUCT-0275 — Bound raw RMCP Streamable HTTP responses
+
+**Status.** Implemented and focused-tested on 2026-10-04.
+
+**Decision.** Route the configured GitHub MCP connector through an Arcana-owned RMCP `StreamableHttpClient` implementation. Reject HTTP JSON bodies above 1 MiB before deserialization and enforce a cumulative 1 MiB raw-byte cap on SSE GET/POST response streams before parsing. Retain the separate 64 KiB serialized result cap before returning MCP results to the model.
+
+**Reason.** The RMCP default reqwest adapter bounds individual SSE events but reads JSON success/error bodies without a byte limit before parsing. A post-parse result cap therefore did not bound transport memory or parser work. RMCP supports a generic client implementation, allowing Arcana to retain its existing reqwest 0.12 version and redirect-denial policy without adding a second reqwest client version.
+
+**Evidence.** Windows and Ubuntu WSL `cargo test -p arcana-core --lib mcp --locked -- --nocapture --test-threads=1` pass 14/14 each. Production-shaped tests reject oversized chunked JSON before parsing and oversized raw SSE data, and existing local RMCP discovery/call, redirect denial, AgentEngine executor, consent revocation, and cancellation-classification tests pass through the bounded backend. `cargo check -p arcana-core --locked`, workspace formatting, and diff checks pass. Direct `http` and `sse-stream` dependencies use already-locked versions; no package version was added.
+
+**Limit.** This proves bounded shared-core transport only. It does not prove remote cancellation acknowledgment, every HTTP/auth/status combination, Tauri and CLI host runtime behavior, MCP event persistence/Logs readback, successful CLI Fleet completion, or full TG4-24. P4-50/TG4-24 remain open.
+
+**Where.** `arcana-core/src/agent/builtin_tools/bounded_mcp_client.rs`, `external_mcp.rs`, P4-50, TG4-24.

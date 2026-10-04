@@ -70,6 +70,8 @@ sqlite-vec  = "0.1.9"
 # something to let float.
 fastembed = { version = "=6.0.2", optional = true }
 reqwest     = { version = "0.12", features = ["json", "stream"] }
+http        = "1"
+sse-stream  = "0.2"
 async-trait = "0.1"
 futures     = "0.3"
 uuid        = { version = "1", features = ["v4"] }

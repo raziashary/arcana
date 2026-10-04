@@ -57,6 +57,7 @@ pub mod path_lock;
 // it to refuse qc_review transitions that have no proof a build was run.
 pub mod analyze_diff_tool;
 pub mod annotate_file_tool;
+pub mod bounded_mcp_client;
 pub mod build_evidence;
 pub mod claim_task_tool;
 pub mod set_task_budget_tool;

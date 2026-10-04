@@ -12,9 +12,7 @@ use rmcp::model::{
     PaginatedRequestParams, ProtocolVersion,
 };
 use rmcp::service::{ClientLifecycleMode, ClientServiceExt, RoleClient, RunningService};
-use rmcp::transport::streamable_http_client::{
-    StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
-};
+use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use serde_json::{json, Value};
 
 use crate::agent::tool_effect::ToolEffect;
@@ -478,7 +476,9 @@ async fn connect_to_endpoint(
             token.zeroize();
         }
     }
-    let transport = StreamableHttpClientTransport::from_config(transport_config);
+    let transport = super::bounded_mcp_client::BoundedMcpHttpClient::new()
+        .map_err(|_| "Arcana could not initialize the bounded MCP HTTP client.".to_string())?
+        .transport(transport_config);
     let client_info = ClientConfig::new(
         ClientCapabilities::default(),
         Implementation::new("arcana", env!("CARGO_PKG_VERSION")),
