@@ -2974,6 +2974,27 @@ QC customization survives.\n",
         }
     }
 
+    #[test]
+    fn persisted_builtin_recipes_pass_the_production_reader_portability_check() {
+        let sandbox = tempfile::tempdir().expect("create isolated recipe directory");
+        ensure_default_recipes(sandbox.path()).expect("persist built-in recipes");
+
+        let mut recipe_count = 0;
+        for entry in std::fs::read_dir(sandbox.path()).expect("read persisted recipes") {
+            let path = entry.expect("read recipe entry").path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("yaml") {
+                continue;
+            }
+            let yaml = std::fs::read_to_string(&path).expect("read persisted recipe yaml");
+            crate::recipes::parser::parse_recipe(&yaml).unwrap_or_else(|error| {
+                panic!("{} failed production validation: {error}", path.display())
+            });
+            recipe_count += 1;
+        }
+
+        assert_eq!(recipe_count, 9, "all built-in recipes must be re-read");
+    }
+
     fn assert_inline_bash_commands_are_platform_neutral(prompt: &str, owner: &str) {
         for line in prompt.lines() {
             let Some(start) = line.find("bash('") else {

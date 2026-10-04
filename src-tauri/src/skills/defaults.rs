@@ -9,7 +9,10 @@ use std::path::Path;
 /// Write all default skills to disk. Always overwrites builtin skills.
 pub fn ensure_default_skills() -> Result<()> {
     let base = arcana_dir()?.join("skills");
+    write_default_skills(&base)
+}
 
+fn write_default_skills(base: &Path) -> Result<()> {
     // Category directories
     for cat in &["coding", "debugging", "devops", "fleet", "custom"] {
         std::fs::create_dir_all(base.join(cat))?;
@@ -992,6 +995,17 @@ Always return:
 #[cfg(test)]
 mod tg4_17_tests {
     use super::*;
+
+    #[test]
+    fn persisted_builtin_skills_are_readable_by_the_production_loader() {
+        let sandbox = tempfile::tempdir().expect("create isolated skill directory");
+        let skills_dir = sandbox.path().join("skills");
+        write_default_skills(&skills_dir).expect("persist built-in skills");
+        let loader = super::super::loader::SkillLoader::from_directory(skills_dir);
+        let skills = loader.load_all();
+        assert_eq!(skills.len(), 17, "every persisted built-in skill must load");
+        assert!(skills.iter().all(|skill| skill.is_builtin));
+    }
 
     #[test]
     fn built_in_skill_templates_do_not_embed_posix_paths_or_shell_expansion() {

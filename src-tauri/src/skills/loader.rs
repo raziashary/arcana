@@ -14,6 +14,11 @@ pub struct SkillLoader {
 }
 
 impl SkillLoader {
+    #[cfg(test)]
+    pub(super) fn from_directory(skills_dir: PathBuf) -> Self {
+        Self { skills_dir }
+    }
+
     pub fn new() -> Result<Self> {
         let dir = arcana_dir()?.join("skills");
         std::fs::create_dir_all(&dir)?;
