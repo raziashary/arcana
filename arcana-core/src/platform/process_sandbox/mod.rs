@@ -222,6 +222,7 @@ pub(crate) async fn spawn(spec: ProcessSpec, workspace: &Path) -> io::Result<San
         command.args(&spec.args);
         command
             .current_dir(&spec.cwd)
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
