@@ -6699,3 +6699,17 @@ readback.
 **Limit.** This adds initialization/migration visibility only. It does not prove complete Memory operation or SQLite coverage, live Fleet-to-Logs delivery, or end-to-end observability costs; P4-50/TG4-24 remain open.
 
 **Where.** `arcana-core/src/memory/db.rs`, P4-50, TG4-24.
+
+## ADR-LOG-RESTRUCT-0264 — Order episodic Memory timestamps by instant
+
+**Status.** Implemented and focused-tested on 2026-10-04.
+
+**Decision.** Order session timelines and recent session summaries by SQLite `julianday(created_at)` and a stable ID tie-breaker instead of comparing timestamp text.
+
+**Reason.** Episodic rows include legacy SQLite timestamps with a space separator and newer UTC RFC 3339 timestamps with `T`. Lexical order places the space-form before the `T`-form regardless of the represented instant, so consumers could observe conversation history and summaries out of chronological order.
+
+**Evidence.** `production_timeline_and_summary_readers_order_mixed_timestamp_formats_by_instant` writes the timeline through production episodic writer methods, seeds mixed-format values in the isolated production Memory database, and verifies both production readers return the correct chronological order and parsed instants. `cargo test -p arcana-core --lib production_timeline_and_summary_readers_order_mixed_timestamp_formats_by_instant --locked -- --nocapture --test-threads=1` passes 1/1.
+
+**Limit.** This proves two episodic Memory reader pairs only. It does not close the full timestamp inventory or TG4-19; remaining database defaults, triggers, and production write/read pairs still require proof.
+
+**Where.** `arcana-core/src/memory/episodic.rs`, P4-57, TG4-19.

@@ -170,7 +170,7 @@ impl EpisodicStore {
                     summary_type, metadata, created_at
              FROM   episodic_memories
              WHERE  session_id = ?1
-             ORDER  BY turn_index ASC, created_at ASC",
+             ORDER  BY turn_index ASC, julianday(created_at) ASC, id ASC",
         )?;
         let rows = map_rows(&mut stmt, params![session_id])?;
         timer.with_result_count(rows.len()).succeed();
@@ -192,7 +192,7 @@ impl EpisodicStore {
              FROM   episodic_memories
              WHERE  session_id  != ?1
                AND  summary_type = 'session_summary'
-             ORDER  BY created_at DESC
+             ORDER  BY julianday(created_at) DESC, id DESC
              LIMIT  ?2",
         )?;
         let rows = map_rows(&mut stmt, params![exclude_session, limit])?;
@@ -323,4 +323,65 @@ fn map_rows(
         .filter_map(|r| r.ok())
         .collect();
     Ok(rows)
+}
+
+#[cfg(test)]
+mod timestamp_order_tests {
+    use super::*;
+    use chrono::{DateTime, Utc};
+
+    #[test]
+    fn production_timeline_and_summary_readers_order_mixed_timestamp_formats_by_instant() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+
+        let user_id = EpisodicStore::store_user_message("session", "user", None, None)
+            .expect("write user message through production method");
+        let agent_id = EpisodicStore::store_agent_response(
+            "session", "agent", None, 0.0, 0, 0, None, None, None, None,
+        )
+        .expect("write agent response through production method");
+
+        let db = MemoryDb::open().expect("open production Memory database");
+        db.conn
+            .execute(
+                "UPDATE episodic_memories SET created_at = CASE id
+                    WHEN ?1 THEN '2026-10-04 10:00:00'
+                    WHEN ?2 THEN '2026-10-04T09:00:00Z'
+                 END WHERE id IN (?1, ?2)",
+                params![user_id, agent_id],
+            )
+            .expect("seed mixed legacy and canonical timestamps");
+        db.conn
+            .execute(
+                "INSERT INTO episodic_memories
+                    (id, session_id, turn_index, role, content, summary_type, created_at)
+                 VALUES
+                    ('summary-legacy', 'older-session', 1, 'agent', 'older', 'session_summary', '2026-10-04 10:00:00'),
+                    ('summary-canonical', 'newer-session', 1, 'agent', 'newer', 'session_summary', '2026-10-04T11:00:00Z')",
+                [],
+            )
+            .expect("seed summary timestamp variants");
+        drop(db);
+
+        let timeline = EpisodicStore::get_session_timeline("session")
+            .expect("read timeline through production method");
+        assert_eq!(timeline.len(), 2);
+        assert_eq!(timeline[0].id, agent_id);
+        assert_eq!(timeline[0].created_at, parse("2026-10-04T09:00:00Z"));
+        assert_eq!(timeline[1].id, user_id);
+        assert_eq!(timeline[1].created_at, parse("2026-10-04T10:00:00Z"));
+
+        let summaries = EpisodicStore::get_recent_summaries("session", 2)
+            .expect("read summaries through production method");
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0].id, "summary-canonical");
+        assert_eq!(summaries[0].created_at, parse("2026-10-04T11:00:00Z"));
+        assert_eq!(summaries[1].id, "summary-legacy");
+        assert_eq!(summaries[1].created_at, parse("2026-10-04T10:00:00Z"));
+    }
+
+    fn parse(value: &str) -> DateTime<Utc> {
+        crate::db::timestamps::parse_db_timestamp(value).expect("valid timestamp fixture")
+    }
 }

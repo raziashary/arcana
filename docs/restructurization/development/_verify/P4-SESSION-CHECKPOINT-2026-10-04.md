@@ -238,6 +238,12 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 - The isolated production open/migration success test and forced open-failure redaction test pass 2/2 with `cargo test -p arcana-core --lib memory_database_ --locked -- --nocapture --test-threads=1`. ADR-LOG-RESTRUCT-0263 records the contract.
 - This is one startup instrumentation slice, not complete Memory/SQLite producer coverage. TG4-24 remains open, no P4/TG4 count changes, and Calendar remains owner-run.
 
+## Continuation — episodic Memory timestamp ordering
+
+- `EpisodicStore::get_session_timeline` and `get_recent_summaries` sorted mixed legacy SQLite timestamps lexically. A legacy space separator sorts before `T`, which can place a later instant before an earlier canonical timestamp.
+- Both production readers now order with `julianday(created_at)` and a stable ID tie-breaker. A file-backed isolated test writes through the production episodic methods, seeds mixed legacy/canonical rows, and verifies parsed instants and chronological order through both production readers.
+- `cargo test -p arcana-core --lib production_timeline_and_summary_readers_order_mixed_timestamp_formats_by_instant --locked -- --nocapture --test-threads=1` passes 1/1; `cargo fmt --all -- --check` passes. This is one additional P4-57/TG4-19 reader-pair slice; the complete timestamp inventory and gate remain open. No task/gate checkbox or overall count changes.
+
 ## Continuation — 2026-10-04 P4-59 cross-platform active-writer gate
 
 - CI's existing Windows/Linux/macOS build-smoke matrix now runs one focused filter covering the production analytics and hook-log retention races against an active immediate SQLite writer transaction.
