@@ -390,3 +390,9 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 
 - Ran `cargo test -p arcana-core --lib observability::log_retention::tests --locked -- --nocapture --test-threads=1` in Ubuntu WSL. All seven tests pass, including `policy_does_not_follow_or_unlink_symlinks`, age/count pruning, active-writer continuity, and cleanup-failure logging. This provides the previously missing Unix execution for the symlink refusal clause; the same seven-test group passes on Windows.
 - Updated TG4-29, P4-55, and readiness to record the cross-platform evidence. Isolated desktop startup-order execution remains open, so the task/gate stay partial and counts are unchanged.
+
+## Current continuation — P4-55/TG4-29 closed
+
+Owner approved ADR-0276 migration serialization. Shared migration/WAL/backup fix passes 18 migration and 6 backup tests on Windows/Linux plus 213 Windows DB regressions. Real isolated desktop startup starts seven workers without migration failures; retention removes 16 expired files, preserves foreign/malformed names, writes both streams, and the CLI exports the full readable file. App and port 1420 are stopped/free. Evidence: `P4-55-RETENTION-CLOSEOUT-2026-10-04.md`. Current tallies: P4 33/59, TG4 11/33. Previous 32/59 and 10/33 entries are historical.
+
+P4-50 follow-up discovered: generic structured-value redaction replaces long fixed operation/event names with `[REDACTED_KEY]`. Owner question pending for exact registered-label preservation; do not weaken generic secret redaction. P4-16 persisted legacy-hook guard and three-OS workflow step are in progress; local Windows/Linux core tests pass, macOS/Linux desktop CI proof remains open. A requested fresh Luna High review could not spawn because the session agent-thread limit was reached; no independent-review claim is made. Expanded goal remains unread/untracked.

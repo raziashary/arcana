@@ -137,7 +137,14 @@ pub fn backup_database_in(
     // `VACUUM INTO` takes a string literal, not a bound parameter. The path is
     // ours (backup_root + a sanitised stem), never user input, but the quotes
     // are escaped anyway so a home directory containing one cannot break out.
-    let escaped = dest.to_string_lossy().replace('\'', "''");
+    // Rust canonicalization supplies Windows' extended-length prefix. A UUID
+    // in a backup name must not make a deeply nested fixture/user home exceed
+    // the legacy DOS path limit in SQLite's Windows file APIs.
+    let sqlite_dest = root
+        .canonicalize()
+        .map_err(|e| ArcanaError::Agent(format!("Cannot resolve backup directory: {e}")))?
+        .join(dest.file_name().expect("constructed backup filename"));
+    let escaped = sqlite_dest.to_string_lossy().replace('\'', "''");
     conn.execute_batch(&format!("VACUUM INTO '{escaped}'"))
         .map_err(|e| {
             ArcanaError::Agent(format!(
@@ -187,7 +194,7 @@ pub fn backup_database_in(
     // being silently re-created empty and pronounced sound.
     {
         let mut check = Connection::open_with_flags(
-            &dest,
+            &sqlite_dest,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
         .map_err(|e| ArcanaError::Agent(format!("Backup is not readable: {e}")))?;
@@ -225,9 +232,16 @@ pub fn timestamp_now() -> String {
     chrono::Local::now().format("%Y%m%d-%H%M%S").to_string()
 }
 
+/// Automatic backups must remain distinct across concurrent databases and
+/// repeated starts within the same clock tick. Explicit caller-supplied names
+/// still refuse overwrite in `backup_database_in`.
+pub(crate) fn unique_timestamp() -> String {
+    format!("{}-{}", timestamp_now(), uuid::Uuid::new_v4())
+}
+
 /// Convenience for call sites that have no reason to control the clock.
 pub fn backup_before(db_path: &Path, reason: &str) -> Result<Backup> {
-    backup_database(db_path, reason, &timestamp_now())
+    backup_database(db_path, reason, &unique_timestamp())
 }
 
 #[cfg(test)]

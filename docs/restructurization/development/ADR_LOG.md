@@ -6867,3 +6867,17 @@ readback.
 **Limit.** This proves bounded shared-core transport only. It does not prove remote cancellation acknowledgment, every HTTP/auth/status combination, Tauri and CLI host runtime behavior, MCP event persistence/Logs readback, successful CLI Fleet completion, or full TG4-24. P4-50/TG4-24 remain open.
 
 **Where.** `arcana-core/src/agent/builtin_tools/bounded_mcp_client.rs`, `external_mcp.rs`, P4-50, TG4-24.
+
+## ADR-LOG-RESTRUCT-0276 — Serialize migration version checks and isolate automatic backup names
+
+**Status.** Owner approved, implemented and production-startup-proven on 2026-10-04.
+
+**Decision.** Acquire SQLite `BEGIN IMMEDIATE` before reading `user_version` for each migration rung, recheck the version after every write reservation, and commit schema work and version together. Use the existing rusqlite transaction guard to roll back every error path. Automatic destructive backups carry a UUID suffix; explicitly supplied backup names retain their refusal-to-overwrite contract.
+
+**Reason.** Real isolated desktop startup starts seven workers concurrently. Their stale version reads re-applied trigger migrations, and different startup migrations collided on second-resolution backup names. A process-local mutex cannot cover CLI/desktop processes, whereas SQLite's writer reservation does. The owner explicitly approved this shared migration-boundary change.
+
+**Where.** `arcana-core/src/db/migrate.rs`, `arcana-core/src/db/backup.rs`; core P4 desktop startup dependency.
+
+**Proof required.** Concurrent file-backed ladder and TasksDb openers, destructive snapshot preservation and failure rollback, focused regression suites, and a real isolated desktop startup/retention smoke. No task or gate closes from implementation alone.
+
+**0276 verification.** Migration tests pass 18/18 and backup tests 6/6 on Windows and Ubuntu WSL. Windows DB regression passes 213/213; workspace check passes. First-open WAL conversion also needed a lock-only retry bounded by the existing five-second timeout. Legacy repairs reserve a writer only when no caller transaction exists. Canonical snapshot paths preserve Windows extended-length support after unique names exposed a nested-path regression; the real legacy migration test passes. Isolated desktop startup now starts all seven workers without migration failures; `_verify/P4-55-RETENTION-CLOSEOUT-2026-10-04.md` records the smoke.

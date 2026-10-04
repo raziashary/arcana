@@ -134,3 +134,5 @@ storage, then exposed read-only to the workspace AppContainer. Production
 Python Build/Test and sibling/read-write/network denial checks pass on the
 current Windows host; fallback selection and Linux/macOS runtime confinement
 remain open.
+
+Shared SQLite opening/migration path: `db::open_tuned` retries only journal-mode lock failures within its five-second budget; `migrate::ensure_columns` reserves a writer for standalone legacy repairs; `migrate::run_ladder` reserves/rechecks each rung and retains per-rung transactions. Destructive rungs snapshot committed pre-change data through a separate read-only connection; automatic backup names are unique. Seven-opener and real desktop-startup proof: ADR-0276 and `_verify/P4-55-RETENTION-CLOSEOUT-2026-10-04.md`.

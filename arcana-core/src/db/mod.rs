@@ -64,8 +64,38 @@ pub fn open_tuned(path: &std::path::Path) -> Result<rusqlite::Connection> {
     crate::observability::sqlite::install_profile(&mut conn, path);
     conn.busy_timeout(std::time::Duration::from_millis(BUSY_TIMEOUT_MS))
         .map_err(|e| ArcanaError::Agent(format!("busy_timeout on {}: {e}", path.display())))?;
-    conn.pragma_update(None, "journal_mode", "WAL")
-        .map_err(|e| ArcanaError::Agent(format!("journal_mode on {}: {e}", path.display())))?;
+    // Concurrent first opens can receive SQLITE_BUSY during the journal-mode
+    // upgrade without SQLite invoking its busy handler. Retry only lock errors
+    // within the same bounded timeout; all other failures still propagate.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(BUSY_TIMEOUT_MS);
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        conn.busy_timeout(remaining)
+            .map_err(|e| ArcanaError::Agent(format!("busy_timeout on {}: {e}", path.display())))?;
+        match conn.pragma_update(None, "journal_mode", "WAL") {
+            Ok(()) => break,
+            Err(rusqlite::Error::SqliteFailure(error, _))
+                if matches!(
+                    error.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                ) && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(
+                    deadline
+                        .saturating_duration_since(std::time::Instant::now())
+                        .min(std::time::Duration::from_millis(10)),
+                );
+            }
+            Err(e) => {
+                return Err(ArcanaError::Agent(format!(
+                    "journal_mode on {}: {e}",
+                    path.display()
+                )))
+            }
+        }
+    }
+    conn.busy_timeout(std::time::Duration::from_millis(BUSY_TIMEOUT_MS))
+        .map_err(|e| ArcanaError::Agent(format!("busy_timeout on {}: {e}", path.display())))?;
     operation.succeed();
     Ok(conn)
 }

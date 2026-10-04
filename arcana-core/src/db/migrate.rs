@@ -140,7 +140,7 @@ fn backup_before_migration(
                 &root,
                 path,
                 reason,
-                &crate::db::backup::timestamp_now(),
+                &crate::db::backup::unique_timestamp(),
             );
         }
     }
@@ -155,28 +155,36 @@ fn backup_before_migration(
 ///
 /// Each rung runs inside its own transaction together with its version stamp,
 /// so a database is never left having done the work without recording it, or
-/// having recorded it without doing the work.
+/// having recorded it without doing the work. The write reservation is acquired
+/// before reading the version, so concurrent openers never apply the same rung.
 pub fn run_ladder(conn: &Connection, db_name: &str, ladder: &[Migration]) -> Result<i32> {
     let mut operation = OperationTimer::start("database_schema_migration_ladder")
         .with_database(telemetry_database_name(db_name))
         .with_result_count(0);
     validate_ladder(db_name, ladder)?;
 
-    let current = user_version(conn)?;
     let target = ladder.last().map(|m| m.version).unwrap_or(0);
-
-    // A database from a newer build. Running an older ladder over it would
-    // apply nothing and report success, so the process would carry on against
-    // a schema it does not understand.
-    if current > target {
-        return Err(ArcanaError::Agent(format!(
-            "{db_name} is at schema version {current}, but this build only knows up to {target}. \
-             It was written by a newer version of Arcana; refusing to run against it."
-        )));
-    }
-
     let mut applied_count = 0;
-    for m in ladder.iter().filter(|m| m.version > current) {
+    loop {
+        let transaction =
+            rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
+                .map_err(|e| {
+                    ArcanaError::Agent(format!("{db_name}: reserve migration writer: {e}"))
+                })?;
+        let current = user_version(&transaction)?;
+        if current > target {
+            return Err(ArcanaError::Agent(format!(
+                "{db_name} is at schema version {current}, but this build only knows up to {target}. \
+                 It was written by a newer version of Arcana; refusing to run against it."
+            )));
+        }
+        let Some(m) = ladder.iter().find(|m| m.version > current) else {
+            transaction.commit().map_err(|e| {
+                ArcanaError::Agent(format!("{db_name}: finish migration version check: {e}"))
+            })?;
+            operation.succeed();
+            return Ok(current);
+        };
         // GAP-11 / §0.8: a migration that can destroy data is backed up first,
         // automatically. A baseline rung is `CREATE … IF NOT EXISTS` only and
         // is skipped, so the ordinary first-run path does not copy every
@@ -216,16 +224,13 @@ pub fn run_ladder(conn: &Connection, db_name: &str, ladder: &[Migration]) -> Res
             }
         }
 
-        conn.execute_batch("BEGIN")
-            .map_err(|e| ArcanaError::Agent(format!("{db_name} v{}: begin: {e}", m.version)))?;
-
-        let applied = conn
-            .execute_batch(m.sql)
-            .and_then(|_| conn.execute_batch(&format!("PRAGMA user_version = {}", m.version)));
+        let applied = transaction.execute_batch(m.sql).and_then(|_| {
+            transaction.execute_batch(&format!("PRAGMA user_version = {}", m.version))
+        });
 
         match applied {
             Ok(()) => {
-                conn.execute_batch("COMMIT").map_err(|e| {
+                transaction.commit().map_err(|e| {
                     ArcanaError::Agent(format!("{db_name} v{}: commit: {e}", m.version))
                 })?;
                 applied_count += 1;
@@ -233,10 +238,8 @@ pub fn run_ladder(conn: &Connection, db_name: &str, ladder: &[Migration]) -> Res
                 tracing::info!("[migrate] {db_name}: applied v{} ({})", m.version, m.name);
             }
             Err(e) => {
-                // Roll back before reporting, or the connection stays inside a
-                // failed transaction and every later statement fails with a
-                // confusing secondary error.
-                let _ = conn.execute_batch("ROLLBACK");
+                // The transaction guard rolls back on every error, including
+                // version reads and backup failures before applying the SQL.
                 return Err(ArcanaError::Agent(format!(
                     "{db_name}: migration v{} ({}) failed and was rolled back: {e}",
                     m.version, m.name
@@ -244,10 +247,6 @@ pub fn run_ladder(conn: &Connection, db_name: &str, ladder: &[Migration]) -> Res
             }
         }
     }
-
-    let version = user_version(conn)?;
-    operation.succeed();
-    Ok(version)
 }
 
 /// Add any of `columns` that `table` does not already have.
@@ -270,6 +269,16 @@ pub fn ensure_columns(
     table: &str,
     columns: &[(&str, &str)],
 ) -> Result<Vec<String>> {
+    // Legacy repair runs before the ladder in database openers. Protect its
+    // check/ALTER pair too; graph migrations already supply a transaction.
+    let transaction = if conn.is_autocommit() {
+        Some(
+            rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
+                .map_err(|e| ArcanaError::Agent(format!("{table}: reserve column repair: {e}")))?,
+        )
+    } else {
+        None
+    };
     let table_exists: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?1",
@@ -305,6 +314,11 @@ pub fn ensure_columns(
     if !added.is_empty() {
         tracing::info!("[migrate] {table}: added columns {added:?}");
     }
+    if let Some(transaction) = transaction {
+        transaction
+            .commit()
+            .map_err(|e| ArcanaError::Agent(format!("{table}: commit column repair: {e}")))?;
+    }
     Ok(added)
 }
 
@@ -334,6 +348,133 @@ fn validate_ladder(db_name: &str, ladder: &[Migration]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_openers_apply_a_destructive_rung_once_and_preserve_its_snapshot() {
+        const LADDER: &[Migration] = &[
+            Migration {
+                version: 1,
+                name: "baseline",
+                sql: "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT);",
+            },
+            Migration {
+                version: 2,
+                name: "remove-row-and-add-guard",
+                sql: "DELETE FROM t; CREATE TRIGGER guard AFTER INSERT ON t BEGIN SELECT 1; END;",
+            },
+        ];
+        // The backup reader must work while the writer reservation is held
+        // with both SQLite journal modes, not just the app's tuned WAL mode.
+        for mode in ["DELETE", "WAL"] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("race.db");
+            let seed = Connection::open(&path).unwrap();
+            seed.execute_batch(&format!(
+                "PRAGMA journal_mode={mode}; CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT); \
+                 INSERT INTO t VALUES (1, 'recoverable'); PRAGMA user_version=1;"
+            ))
+            .unwrap();
+            drop(seed);
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(7));
+            let handles: Vec<_> = (0..7)
+                .map(|_| {
+                    let path = path.clone();
+                    let barrier = barrier.clone();
+                    std::thread::spawn(move || {
+                        let conn = Connection::open(path).unwrap();
+                        conn.busy_timeout(std::time::Duration::from_secs(5))
+                            .unwrap();
+                        barrier.wait();
+                        run_ladder(&conn, "race.db", LADDER).unwrap()
+                    })
+                })
+                .collect();
+            for handle in handles {
+                assert_eq!(handle.join().unwrap(), 2);
+            }
+            let current = Connection::open(&path).unwrap();
+            assert_eq!(user_version(&current).unwrap(), 2);
+            assert_eq!(
+                current
+                    .query_row("SELECT COUNT(*) FROM t", [], |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+            let snapshots: Vec<_> = std::fs::read_dir(dir.path().join(".arcana/backups"))
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .collect();
+            assert_eq!(
+                snapshots.len(),
+                1,
+                "a committed destructive rung must not repeat"
+            );
+            let snapshot = Connection::open(&snapshots[0]).unwrap();
+            assert_eq!(user_version(&snapshot).unwrap(), 1);
+            assert_eq!(
+                snapshot
+                    .query_row("SELECT v FROM t", [], |r| r.get::<_, String>(0))
+                    .unwrap(),
+                "recoverable"
+            );
+        }
+    }
+
+    #[test]
+    fn concurrent_legacy_column_repairs_recheck_under_the_writer_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.db");
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY);")
+            .unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(7));
+        let handles: Vec<_> = (0..7)
+            .map(|_| {
+                let path = path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let conn = crate::db::open_tuned(&path).unwrap();
+                    barrier.wait();
+                    ensure_columns(&conn, "t", &[("b", "ALTER TABLE t ADD COLUMN b TEXT;")])
+                        .unwrap()
+                        .len()
+                })
+            })
+            .collect();
+        assert_eq!(
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .sum::<usize>(),
+            1
+        );
+    }
+
+    #[test]
+    fn concurrent_production_tasks_openers_reach_the_current_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tasks.db");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(7));
+        let handles: Vec<_> = (0..7)
+            .map(|_| {
+                let path = path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let _db = crate::db::tasks::TasksDb::open_at(&path).unwrap();
+                    user_version(&Connection::open(&path).unwrap()).unwrap()
+                })
+            })
+            .collect();
+        let versions: Vec<_> = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect();
+        assert!(versions[0] > 1);
+        assert!(versions.iter().all(|version| *version == versions[0]));
+        let _reopened = crate::db::tasks::TasksDb::open_at(&path).unwrap();
+    }
 
     fn mem() -> Connection {
         Connection::open_in_memory().expect("in-memory db")
