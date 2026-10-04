@@ -1679,11 +1679,11 @@
 15.11.5 **QC decision events as toasts** — A dedicated `qc:decision` event fires whenever the QC agent (or a reviewer subagent) approves or rejects a task. The frontend turns this into a visible toast — green check with task title for approvals, red warning with the rejection reason for rejections — so the user gets immediate feedback when the QC tier acts.
 
 ### 15.12 Log Retention & Rotation
-15.12.1 **Daily rotation** — The desktop app's main log file rolls over automatically at UTC midnight to a new dated file (`autodev-YYYY-MM-DD.log`). Old days do not interfere with today's log, and `tail` against the live file always sees just one day's worth of events.
-15.12.2 **Fourteen-day default retention** — At startup, a retention pass walks the logs folder and deletes any matching log file older than the retention window. This prevents the logs folder from quietly growing forever on a long-running install.
-15.12.3 **`AUTODEV_LOG_RETENTION_DAYS` environment override** — The retention window is a single environment variable away from being changed. Setting it to a larger value keeps more history; setting it to `0` disables deletion entirely (for example for a customer support scenario where you want logs preserved indefinitely).
-15.12.4 **Defensive filename matching** — The retention sweeper only deletes files whose names match the canonical `autodev-…log` pattern. Any other file the user happens to have stashed in the logs folder is left alone.
-15.12.5 **Single summary line** — The sweep emits one info-level line per startup: how many files were dropped, how many bytes were reclaimed, and how many errors (if any) occurred. The summary lands in the freshly opened daily file so a future debugger can correlate retention activity with whatever else happened that day.
+15.12.1 **Daily rotation** — Arcana's readable log and structured event stream roll over at UTC midnight to `arcana.YYYY-MM-DD.log` and `arcana-events.YYYY-MM-DD.jsonl`. The reader continues to recognize existing legacy filenames.
+15.12.2 **Five-file/seven-day retention** — At startup, the retention service keeps at most five files per stream and removes Arcana log files dated more than seven days ago.
+15.12.3 **Fixed local retention policy** — The seven-day maximum is enforced by the Arcana host and has no environment override or disable switch.
+15.12.4 **Defensive filename matching** — The sweeper deletes only validated Arcana daily names, skips malformed or unrelated files, and does not follow symlinks.
+15.12.5 **Single summary line** — The sweep reports removed file and byte counts plus cleanup failures in the current readable log without blocking startup.
 15.12.6 **Cron-slip warnings demoted under five seconds** — Sub-five-second scheduler slips were previously logged as warnings, polluting the INFO stream. Slips that small are now logged at DEBUG level; only genuine multi-second slips remain visible at the default verbosity.
 15.12.7 **Cached runtime config** — The runtime-configuration loader now reads from disk and logs its config exactly once per host lifetime (via a one-shot cache) instead of once per caller. This removes a noisy class of repeated info lines that previously dominated the log.
 

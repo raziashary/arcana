@@ -59,3 +59,18 @@ Formatting the whole Rust tree would be an unrelated broad rewrite.
   names did not contain provider keys; the filter needs review before
   cross-platform worker-command proof so it does not silently break a child
   process. No values were logged.
+
+## Revalidation — 2026-09-28
+
+Rust 1.98.1 (`rustc`/`cargo`), Node 24.21.0/npm 11.19.0, and Python 3.14.7
+were rechecked in the current Windows shell. `python` resolves to
+`C:\Python314\python.exe`; `py -3.14` resolves to the same executable. Both
+successfully import `sqlite3` and `ssl` without a prefix warning, and
+`py -3.14 -m pip --version` succeeds. The WindowsApps Store alias is still
+listed later by `where.exe`, but it is not the executable PowerShell resolves;
+no Python repair or PATH change was needed in this continuation.
+
+`.env.example` still documents the only opt-in live-smoke variable,
+`GOOGLE_API_KEY`, because `live_provider_smoke.rs` reads that exact name for
+Gemini. The ignored real `.env` was not read or displayed. Desktop provider
+keys remain a separate Settings/keyring setup.

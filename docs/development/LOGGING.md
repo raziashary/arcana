@@ -1,11 +1,12 @@
-# AutoDev logging
+# Arcana logging
 
 Doc 08 Phase 3. This file documents the host's logging configuration:
 where the files live, how rotation works, and how long retention is.
 
 ## Where the logs live
 
-`~/.autodev/logs/autodev-<YYYY-MM-DD>.log`
+`~/.arcana/logs/arcana.<YYYY-MM-DD>.log` and
+`~/.arcana/logs/arcana-events.<YYYY-MM-DD>.jsonl`
 
 Created by `tracing-appender` (see `src-tauri/src/logging.rs`). On
 non-Windows systems `~` resolves to `$HOME`; on Windows it resolves to
@@ -19,28 +20,25 @@ day's activity is always in one file regardless of how many times the
 host restarts.
 
 Behind the scenes: `tracing_appender::rolling::RollingFileAppender` with
-`Rotation::DAILY`, filename prefix `autodev-`, suffix `.log`.
+`Rotation::DAILY`, with separate readable and structured telemetry streams.
 
 ## Retention
 
-Default: **14 days**. Files older than the cap are pruned exactly once at
-host startup (see `src-tauri/src/observability/log_retention.rs::prune`).
-
-Override via the `AUTODEV_LOG_RETENTION_DAYS` environment variable:
-- `AUTODEV_LOG_RETENTION_DAYS=7`  → keep one week.
-- `AUTODEV_LOG_RETENTION_DAYS=30` → keep one month.
-- `AUTODEV_LOG_RETENTION_DAYS=0`  → disable pruning entirely. Useful when
-  an external rotation policy (e.g. logrotate on Linux, a Windows scheduled
-  task) is in charge.
+Retention is fixed at a maximum of **five files per stream and seven days**.
+The host prunes only recognized Arcana daily filenames at startup
+(`arcana_core::observability::log_retention::prune`). Unrelated files, malformed
+names, and symlinks are ignored. Cleanup failures are logged and do not block
+startup.
 
 The prune emits exactly one info line per host lifetime:
 
 ```
-[log_retention] policy=14d → dropped 3 file(s) reclaiming 12345678 bytes (0 error(s))
+[log_retention] policy=5-files/7-days; removed 3 file(s), reclaimed 12345678 bytes, 0 cleanup failure(s)
 ```
 
-If a file's modification time can't be read, the file is skipped and
-contributes to the `error(s)` count — never deleted.
+Files are aged using their validated date in the filename, so touching an old
+file cannot extend its retention. The current day remains eligible for live
+reads and full-date export.
 
 ## Levels
 
@@ -50,10 +48,10 @@ contributes to the `error(s)` count — never deleted.
   below threshold, non-fatal validation issues, etc.
 - **INFO** — lifecycle events: process start, recipe load, worker tick
   complete. One line per logical event; avoid spam.
-- **DEBUG** — verbose internals: SSE frame parsing, tool dispatch, etc.
-  Hidden by default; enable with `RUST_LOG=autodev_lib=debug`.
+- **DEBUG** — verbose internals: provider frame parsing, tool dispatch, etc.
+  Hidden by default; enable with `RUST_LOG=arcana_lib=debug`.
 
-`RUST_LOG` is honoured at startup; default filter is `autodev_lib=debug,info`
+`RUST_LOG` is honoured at startup; default filter is `arcana_lib=debug,info`
 (see `logging.rs::init`).
 
 ## Console output
@@ -64,13 +62,13 @@ and colour-coded by level when stderr is a TTY.
 
 ## Ops hooks
 
-When the host's running, the `~/.autodev/logs/` directory can be safely:
+When the host's running, the `~/.arcana/logs/` directory can be safely:
 
 - `tail -f`'d (the appender opens files in append mode + the non_blocking
   background writer flushes lazily; readers see new lines within ~50 ms).
 - archived externally (no exclusive locks on yesterday's file).
-- pruned externally (the host's own prune is idempotent — it skips files
-  not matching `autodev-*.log` so external rotation can coexist).
+- pruned externally (the host's own prune is idempotent and restricted to
+  recognized Arcana daily filenames).
 
 When the host's NOT running, the directory is fully owned by the operator;
 no recovery / journaling files are written here.

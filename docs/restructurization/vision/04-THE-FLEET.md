@@ -4,7 +4,7 @@
 |---|---|
 | **Parent** | `00-…-MASTER-PLAN.md` §Part 1 (INV-5, INV-6, INV-8), §Part 1B (M-11…M-16, M-31…M-34), §Part 3.4, §Part 6 (P4) |
 | **Locks** | Hands **ADR-02-01**, **ADR-02-02**, **ADR-02-04**, **ADR-02-06**, **ADR-02-07** to `00 §Part 8` |
-| **Status** | PLANNED |
+| **Status** | P4 IMPLEMENTATION ACTIVE — source and behavior re-audited 2026-09-26 |
 | **Grounding** | `_grounding/G9` (1,525 ln, 54 findings) · `G3a` (SK-01…SK-50) · `G3d` (F-02…F-55) · `G2b` (budget, subagents) · `G1 §C.4` |
 
 ---
@@ -13,7 +13,9 @@
 
 The Supervisor → Worker → QC pipeline: how work is created, decomposed, assigned, claimed, executed, verified and delivered — plus the coordination capabilities Razi has ruled are **preserved and completed, never cut** (ADR-02-06).
 
-**The finding that shapes this spec: the fleet's machinery is largely built and largely inert.** Of the six coordination capabilities audited, exactly one works end to end. The rest are complete implementations with a missing caller, a missing column, or a registration that excludes the one agent that needs them.
+**Current Arcana baseline (2026-09-26):** this document began as a pre-P8 source audit. Its dated findings below are historical evidence, not current behavior claims. P8 removed Python orchestration and the MCP HTTP server. P4 re-audited its active tasks, gates and smokes against the shipped Rust/TypeScript application; the current results and source references are in `docs/restructurization/development/_verify/P4-PREBUILD-DISPATCH-TASKS.md` and `P4-PREBUILD-DELIVERY-COORDINATION.md`.
+
+The active target remains a reliable coding fleet. Current open behaviors include owner-checked atomic claims, strict worker-status hydration, durable task-scoped build evidence, shared-workspace delivery, task-associated checkpoints, autonomous dependency unblocking, routing outcomes, and end-to-end epic use. Do not infer a current defect solely from the older numbered findings in this document.
 
 **The subtle failures this subsystem is prone to:**
 
@@ -24,21 +26,17 @@ The Supervisor → Worker → QC pipeline: how work is created, decomposed, assi
 
 ---
 
-## 1. ⚠ A collision between two decided ADRs — read this first
+## 1. Rust-native ACP identity and delivery
 
-**ADR-02-06 preserves worker↔worker messaging. ADR-03-02 deletes the MCP HTTP server. Executed in that order, messaging dies silently.**
-
-The chain (`G9 F-XCUT-01`/`F-ACP-01`, CONFIRMED):
-
-- All three ACP tools hard-refuse without a sender identity — `send_worker_message.rs:129-137`.
-- `ToolContext.agent_role` is `None` at **all three in-house construction sites** — `agent/tool_executor.rs:89`, `:252`, `:316`.
-- It is set in exactly **one** place in the entire codebase: `mcp_server/tool_adapter.rs:280`.
-
-So worker↔worker messaging functions today **only** because fleet workers reach their tools through the MCP server. Delete that server without first fixing `ToolContext`, and every ACP call begins refusing — with no error surfaced to the user, because the refusal is a tool-level response the worker simply narrates around.
-
-**Resolution, and it is a sequencing constraint on P4/P8:** `ToolContext` must carry a truthful `agent_role` from the in-house construction sites **before** the MCP server is deleted. This is already specified as M-09 / spec `01 §4` — the point here is that it is **not optional and not deferrable**, because it is what stops a preserved capability from being destroyed by an unrelated deletion.
-
-The same three hardcoded fields also disable the subagent recursion guard and the `qc_review` build-evidence gate. **One fix, three capabilities.**
+P8 removed the MCP HTTP server. The current `ToolContext.agent_role` is a
+required `String`, and the in-house `ToolExecutor` construction sites supply
+identity. P4-22/TG4-10 therefore prove the live Rust-native message path,
+including truthful sender/recipient checks, rather than redoing deleted MCP
+identity plumbing. P4-23/TG4-11 prove the durable inbox contract: delivery is
+at-least-once until acknowledgement, stale recovery can replay a message with
+the same stable ID, and the consumer applies its effect idempotently. Ack ends
+delivery. Arcana makes no exactly-once claim. The old three-site/adapter chain below this heading is retained as
+historical audit evidence only.
 
 ---
 
@@ -46,23 +44,30 @@ The same three hardcoded fields also disable the subagent recursion guard and th
 
 **Decided: (A)+(C) — event-driven dispatch, with worker state as an exhaustively-matched Rust enum, plus fixed worker/supervisor states.**
 
-### 2.1 Why the enum is the fix, not vigilance
+### 2.1 Strict state at the real database boundary
 
-`scheduler.rs:227` matches worker status as a string and fires only for `idle` / `active` / `error`. `run_recipe` writes two statuses that match neither — `fallback_idle` (`runner.rs:594`) and `mode1_idle_no_provider` (`:625`) — so they fall to a `_` arm that logs and skips. **A worker that ever enters either state never ticks again, even after the condition clears** (`SK-01`).
+The current `WorkerStatus` enum is not used by production row hydration:
+`Worker.status` is still a `String`, unknown values default to `Created`, and
+the persisted column lacks a `CHECK`. The current unconstrained writer is the
+Tauri worker-status command; the old `src-shared` second-process writer was
+removed. P4-01…03/TG4-01 require typed production boundaries, loud rejection,
+and a migrated schema, proven on isolated SQLite copies.
 
-A Rust enum with an exhaustive `match` makes this class impossible **inside Rust**: adding a variant without handling it fails compilation.
-
-⚠ **But the review is right that "structurally impossible" was an overclaim, and the qualification matters.** `workers.status` is **unconstrained `TEXT`**, and `src-shared` writes arbitrary `&str` into it **from a second process** (`airsctl`). So the enum does not eliminate the failure — **it relocates it to `FromStr`**, where an unrecognised string arrives from the database rather than from a missing match arm.
-
-The fix is therefore two parts, and the second is the one that was missing: the enum, **and** a `FromStr` that treats an unknown status as a **loud error, never a silent default**. Note `TaskPriority::from_str` already demonstrates the wrong version of this — every unrecognised string silently becomes `P2` (`G0 §5.8`). A `CHECK` constraint on the column closes it at the storage layer as well.
-
-Adjacent, and equally fatal: `scheduler.rs:220` collapses a `WorkersDb` error to `None` via `.ok().flatten()`, and `None` matches the *paused/deleted* arm, which `break`s the loop. **One transient `SQLITE_BUSY` permanently terminates a worker's schedule** while the UI still shows it as scheduled (`SK-02`).
+The scheduler also turns a worker DB read error into `None`, then treats `None`
+as paused/deleted and breaks the worker schedule. P4-05/TG4-02 require the
+worker to survive a transient error and resume on a later tick.
 
 ### 2.2 Event-driven, with a reconciler
 
-A task-assigned event kicks the worker directly. Cron is demoted to a low-frequency **reconciliation sweep** for stranded work, not the dispatch mechanism. This also removes the 4–6 full task-board reads per worker per tick that polling costs today (`SK-33`).
+A task-assigned event kicks the worker directly. Cron is demoted to the
+stranded-work reconciliation sweep: **every five minutes and on app start**,
+per MDP §14.5. The sweep is a safety net, not the dispatch mechanism.
 
-Push dispatch has its own trap to fix: `kick_inflight` is released only by the spawned task's final line, so an abort or panic **locks that worker out of push dispatch for the process lifetime** (`SK-41`), and the kicked run is awaited with no timeout (`SK-42`). Both are RAII-and-timeout fixes, matching INV-9.
+Push dispatch must release `kick_inflight` on every exit. The run has a
+10-minute hard timeout; timeout/cancellation releases the task claim for the
+reconciler. Workers are Tokio tasks inside Arcana, so S4-03 injects an
+in-process cancellation or panic and proves automatic recovery; it does not
+pretend there is a separate worker process (ADR-0068).
 
 ---
 
@@ -70,9 +75,15 @@ Push dispatch has its own trap to fix: `kick_inflight` is released only by the s
 
 ### 3.1 The claim is one atomic statement, and it names the owner
 
-`db/tasks.rs:895-902` — `claim_task_with_pid` is `UPDATE … WHERE id=? AND status='assigned'` and **never checks `assigned_worker`**. Any worker can claim a task assigned to another and overwrite the owner. `update_routing_outcome` then matches on `task_id` alone (`:990`), so `routing_history` keeps the *old* worker's name (`F-55`).
+The current `TasksDb::claim_task_with_pid` updates by task ID and status but
+does not include the assigned owner in its predicate. The fleet tool also
+prefers the row's existing owner over the caller's identity. P4-07/P4-34 and
+TG4-03/S4-05 require the actual worker tool path to reject a wrong-owner claim
+and make the load limit part of the atomic claim. Routing outcome recording
+must remain ordered after that fix.
 
-The one-task-per-worker guard is a separate, non-atomic `SELECT COUNT` that **fails open** via `.unwrap_or(0)` (`tasks.rs:877-885`).
+The current fleet claim path reads worker load separately and fails open on
+read errors. Keep the owner and one-task guard in the same claim statement.
 
 **The rule: one statement, owner in the predicate, guard in the same statement.** Currently latent only because no outcomes are recorded at all (§5) — which is exactly why it must be fixed *before* affinity is switched on, or the model trains on corrupted labels.
 
@@ -108,30 +119,42 @@ The model is a **debugger, not a judge**. The exit code of a build is a fact; on
 
 ### 4.2 Build evidence is persisted, not remembered
 
-Today it is a process-global `HashMap` with a 15-minute `Instant` TTL (`build_evidence.rs:63-66`), written only by `bash.rs:114`, read only by `update_task_status_tool.rs:141`, and **never persisted**. Restart the app and every task's proof of a passing build evaporates.
+Today build evidence remains a process-local map with a short TTL. The
+production `update_task_status` reader consumes that transient evidence before
+QC review; an app restart loses it. P4-12…14 persist evidence keyed by task and
+make the QC guard read the same durable record.
 
 **It becomes a table** — task id, command, exit code, timestamp, platform — and the `qc_review` guard reads *that*.
 
 ### 4.3 Delivery has a destination and a handoff
 
-`load_workspace_dir()` returns `""` on unset **or error**, with a docstring claiming "Never fails" — so each consumer invented a fallback: `recipes/runner.rs:175-190` → `~/.autodev/agents/<slug>/`; `mcp_server/tool_adapter.rs:70-88` → `current_dir()`. **Live artifacts exist on the development machine in `~/.autodev/agents/worker-backend/`.**
+The current setting reader still collapses unset and database error to an empty
+string; the recipe runner falls back to `~/.arcana/agents/<slug>`. MCP adapter
+fallback behavior was removed with the sidecar. P4-17/18 require one resolver
+that fails loudly and every write path to stay under its result.
 
-**One resolver that fails loudly** (INV-5), and a real handoff: reveal, open in the IDE tab, and **run** the artifact. Today `open_in_ide` emits `ide:navigate`, which has zero listeners, and `e2e_probe` boots the app and then kills it — there is no step at which the user receives something runnable.
+**One resolver that fails loudly** (INV-5), and a real handoff: reveal, open in
+the IDE tab, and **run** the artifact. The source audit found an `ide:navigate`
+emitter but no literal listener; P4-21/TG4-09 and S4-02 must prove the full
+event consumer and run-from-IDE path instead of treating that search as final
+proof.
 
 ---
 
 ## 5. The coordination capabilities (M-31…M-34, ADR-02-06)
 
-Razi: *"I want all of those capabilities in the AutoDev application."* One of six works.
+Owner direction: preserve coding capabilities in the Arcana application. The
+following table reflects the 2026-09-26 P4 audit; all verdicts require the
+consumer-backed proofs named in the active MDP and gate register.
 
 | # | Capability | Verdict | The single thing that is wrong |
 |---|---|---|---|
-| 1 | **Supervisor escalation** | ✅ **WORKS** — the strongest capability in scope. Writer → store → reader → resolver → `worker:request` event → `WorkerRequestsWidget`, and Supervisor Step 1a genuinely drains it (`defaults.rs:229-239`) | **No expiry.** One unresolvable request plus the recipe's "STOP after this step" (`:239`) **starves dispatch forever** |
-| 2 | **ACP worker↔worker messaging** | ⚠ **Works today, dies on port** | §1. Plus: `qc-agent`/`qc-dispatcher` accept mail **no recipe reads and no `workers.db` row backs**, so every broadcast leaves 2 dead rows; and listing flips `pending→read` while `list_stale_worker_messages` (`tasks.rs:799`) has **zero callers**, making delivery at-most-once while `defaults.rs:400` promises "lossless" |
-| 3 | **Routing / affinity** | ❌ **INERT** — complete machinery that has never influenced a decision | Outcomes are written **only** by the Tauri command (`task_commands.rs:51-63`); `update_task_status_tool.rs` never calls `record_outcome_auto`. In autonomous operation `outcome` is **NULL forever**, so the `>= 3` learning gate (`scorer.rs:70`) never opens |
-| 4 | **Epic / phase decomposition** | ❌ **INERT and UNREACHABLE** | `create_epic`/`create_phased_task` are registered **PA-only** (`mod.rs:222-223`) and deliberately excluded from MCP (`server.rs:140-141`) — but the Supervisor is `Mode2Only` and reaches tools **only** through MCP. **The Supervisor cannot create an epic.** Its recipe decomposes with flat `create_task` (`defaults.rs:288-294`). And `unblock_ready_tasks` has the same command-only defect as (3), so dependents never unblock and epics never auto-complete — the Supervisor reports "Board clean — idle" |
-| 5 | **Interface contracts / QC** | ⚠ **MIXED** | INTERFACE.md is advisory — nothing verifies the consumer read it. `analyze_diff` **never runs**: QC Phase 0 is gated on `repo_path` "in task metadata", and **there is no such column on `tasks`**; the dispatcher passes only `task_id` (`defaults.rs:1826`). `spawn_qc_review` is well-built but sidecar-bound |
-| 6 | **Per-task budget** | ❌ **FULLY INERT** | `with_task_budget` (`engine.rs:73-77`) has **zero callers**, so the circuit breaker (`:148-166`), usage persistence (`:216-230`), escalation (`:480-536`) and the `agent:budget-exceeded` event are all dead. Compounding it: **no recipe ever calls `set_task_budget`**, and the Settings "default worker budget" has no Rust reader at all |
+| 1 | **Supervisor escalation** | Request writer/store/reader and Supervisor consumer exist | P4-24/TG4-12 prove an unresolved request cannot starve dispatch and that the fleet continues making progress. |
+| 2 | **ACP worker↔worker messaging** | Native identity path is shipped; behavior remains open | P4-22/23 prove the production worker inbox, recipient roster, acknowledgement and stale-message recovery. The QC inbox consumer/recipient contract is grounded on the current `qc-agent` recipe, not the historical `qc-dispatcher` slug. |
+| 3 | **Routing / affinity** | Outcome learning is incomplete | Autonomous task completion must record the actual worker's outcome after owner-checked claims; P4-07/P4-25/TG4-03/TG4-13 prove the attribution and learning path. |
+| 4 | **Epic / phase decomposition** | Schemas are registered; successful Supervisor use is unproven | Epic tools are available in the FastDevelopment recipe registry, but the Supervisor recipe currently decomposes with flat `create_task`. P4-27/TG4-05 prove registration plus real epic use; P4-28/TG4-06 prove autonomous unblocking and epic progress. |
+| 5 | **Interface contracts / QC** | QC review exists; production evidence and consent are incomplete | P4-12…16/TG4-07…08 and TG3-26/TG4-16 prove task-scoped build evidence, recorded egress consent, and the deterministic no-consent fallback. |
+| 6 | **Per-task budget** | Run cap exists; task-specific behavior remains unproven | Recipe runs receive a default worker budget, but the saved advisory budget for the assigned task is not yet loaded into the worker engine. P4-29/TG4-15 retain that task-level behavior under the hard P2 daily ceiling (ADR-0068). |
 
 ### 5.1 `suggest_worker` currently recommends the Supervisor
 
@@ -147,7 +170,7 @@ Ties plus a stable sort plus `ORDER BY is_system_defined DESC, id ASC` (`db/work
 
 `workers.db` owns identity, model and state — queryable, mutable, UI-editable. The recipe file owns the prompt — versionable, diffable, shareable. `workers.db` holds a **reference** (`recipe_path`), never a copy. One owner per fact (INV-10).
 
-**Binding condition:** `recipes/defaults.rs:45` overwrites all system recipes on every launch, silently reverting user edits (`SK-49`). Personas are un-editable until that is fixed, so it is part of this work.
+**Binding condition:** `ensure_default_recipes` currently overwrites all system recipes on every launch, silently reverting user edits. P4-30 must prove an edited recipe survives initialization while required built-in defaults remain available.
 
 Seven workers ship as a **default team, user-editable** (OQ-2): Backend, Frontend, Platform, MCP Builder, Cleanup, Supervisor, QC.
 
@@ -178,15 +201,21 @@ Seven workers ship as a **default team, user-editable** (OQ-2): Backend, Fronten
 | **G-UNBLOCK** | Completing a dependency unblocks dependents and progresses the epic, in autonomous operation | F-EPI-03 |
 | **G-BUILD-EVIDENCE** | Evidence survives a restart; `qc_review` is refused without a passing record; a **passing build is never recorded as failed** | The in-memory map; the PowerShell/cmd mismatch |
 | **G-BUILD-ESCALATE** | Three consecutive failures engage the debug step; the verdict still comes from the exit code | ADR-02-02's shape |
-| **G-DELIVER** | Agent output lands under the resolved workspace, never `~/.autodev/agents/` or the CWD; the handoff opens and runs it | F-DEL |
-| **G-ACP-IDENTITY** | Worker→worker messaging works **with the MCP server deleted** | §1 — the capability-killing deletion |
-| **G-ACP-DELIVERY** | A message is delivered once and only once; unacknowledged messages are recoverable | The at-most-once/"lossless" contradiction |
+| **G-DELIVER** | Agent output lands under the resolved workspace, never `~/.arcana/agents/` or the CWD; the handoff opens and runs it | F-DEL |
+| **G-ACP-IDENTITY** | Worker→worker messaging uses truthful identity on the Rust-native path | P4-22/TG4-10 |
+| **G-ACP-DELIVERY** | A message is delivered durably at least once until acknowledged; a stale consumer receives the same stable message ID and handles its effects idempotently; acknowledged messages are not redelivered | ADR-0070 replaces the old at-most-once/"lossless" contradiction |
 | **G-ESCALATION-LIVENESS** | An unresolved request cannot starve dispatch indefinitely | The Supervisor STOP starvation |
 | **G-AFFINITY-CLOSES** | Autonomous completion records an outcome, and after N outcomes routing measurably changes | F-ROU-01 |
 | **G-SUGGEST** | `suggest_worker` never returns a system-defined agent for implementation work | F-ROU-02 |
 | **G-BUDGET-FIRES** | A task exceeding its budget trips the breaker and surfaces to the user | F-BUD-01 |
-| **G-CHECKPOINT-BLOCKS** | ⚠ **ADDED at rev 0.9 (G-08, M-43).** A **failed checkpoint blocks the write** rather than proceeding silently; per-write undo restores prior content; each task has its own worker branch, and the two systems never disagree about current state | `db/checkpoints.rs` not being compiled, and `auto_checkpoint_before_write` returning `()` so a failure is invisible |
+| **G-CHECKPOINT-BLOCKS** | A failed checkpoint blocks the write; each write carries its task identity; restoring one task's checkpoint leaves another task's writes untouched; workers keep the shared `arcana/fleet` branch | M-43, ADR-0067 |
 | **G-QC-ANALYZE** | The QC reviewer receives a repo path and `analyze_diff` actually runs — **under the workspace's recorded egress consent** (spec `06 §G-PERM-NETWORK`, corrected). With no consent recorded, QC degrades to the deterministic structural risk score and says so; it does not silently ship the diff, and it does not prompt an unattended machine | F-QC-01; and the gate collision the review caught |
+
+**Consent boundary (owner ruled 2026-09-26, ADR-0073).** Persisted workspace
+consent governs Arcana-mediated provider and diff-analysis requests, scoped to
+the canonical workspace and provider destination. Free-form shell commands can
+select arbitrary network destinations and are outside this app-mediated
+contract; they require separate OS-level network controls.
 
 ---
 
