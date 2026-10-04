@@ -2894,6 +2894,215 @@ observation.
 outcome; `S8-02` and `_verify/P8-ARCANA-CLOSEOUT-2026-09-24.md` carry the
 recorded live-turn and process-list evidence.
 
+## ADR-LOG-RESTRUCT-0067 — Keep the shared fleet branch and prove reversibility with task checkpoints
+
+**Status.** OWNER-RULED by the user's 2026-09-26 decision; the shared
+implementation is present and consumer proof remains in progress under
+TG3-26/TG4-16.
+
+**Choice.** Keep the shared `arcana/fleet` branch and shared checkout required
+by the shipped fleet protocol. Revise P4-20: do not create or switch to a
+branch per task. Prove per-task reversibility through checkpoint ownership and
+restore behavior instead.
+
+**Why.** Fleet workers operate against the same configured workspace. A
+per-task branch switch would change shared Git state underneath concurrent
+workers and contradict ADR-0040 and the P8 worker protocol. The user explicitly
+ruled that the shared branch governs and P4-20 must prove per-task
+reversibility through checkpoints.
+
+**Proof required.** The P4 task and TG4-23 must verify that each task's writes
+are associated with that task, a failed checkpoint prevents the write, and
+restoring one task's checkpoint does not revert another task's writes. Keep
+the single-checkpoint-store requirement from TG1-05. Do not treat a session ID
+as a task ID unless the production path proves that relationship.
+
+## ADR-LOG-RESTRUCT-0068 — Carry task budgets and consent through native fleet execution
+
+**Status.** OWNER-RULED by the user's 2026-09-26 decisions; implementation
+in progress as of 2026-09-26.
+
+**Choices.** Retain P4-29's saved per-task advisory budget alongside the
+existing worker-run cap. Bring the complete workspace-egress consent contract
+into P4 so QC can obey TG3-26/TG4-16: consent is recorded per workspace and
+destination, can be revoked, authorizes only that destination, and absent or
+revoked consent blocks egress without prompting unattended workers. Prove
+S4-03 with cancellation or panic of the in-process worker run, followed by
+automatic claim recovery and re-dispatch; Arcana workers are Tokio tasks, not
+separate operating-system processes.
+
+**Why.** A worker-level cap is not the product's persisted per-task budget
+behavior. The existing TG4-16 contract depends on a production consent store
+and reader that source inspection did not find; leaving it blocked on P3 would
+prevent the user-requested P4 closeout. The consent mechanism therefore needs
+its full shared persistence, decision, revocation, and enforcement path in P4,
+not a QC-only exception. For S4-03, process-level restart is not what the
+current in-process runner can claim; exercise its actual cancellation and
+recovery seam instead.
+
+**Proof required.** Per-task budget settings load for the claimed task, enforce
+the advisory breaker, and surface the result without weakening P2's hard cap.
+Consent tests cover absent, granted, destination-mismatched, revoked, and
+unattended calls; every workspace-content egress consumer reads the same
+persisted decision and records an auditable outcome. Worker-fault tests cancel
+and panic a real scheduler run, then observe claim release and subsequent
+re-dispatch without an operator action.
+
+## ADR-LOG-RESTRUCT-0069 — Keep task-board commits atomic at their behavioral boundary
+
+**Status.** DECIDED from the live task tool contract and current P4 source audit,
+2026-09-26.
+
+**Choice.** Dependency unblocking and the corresponding epic-progress update
+are one transaction. Batch assignment retains its existing per-entry
+partial-success contract; each entry atomically commits its status, assigned
+worker, and routing-history row, while failures for other entries remain
+independent. Claim metadata is set only by a successful atomic claim and is
+cleared when a task leaves a claim-bearing state or loses its owner. A budget
+overrun remains held for explicit budget/user resolution; it must not
+auto-resume merely because dependency-blocked work shares `needs_info`.
+
+**Why.** The batch tool reports independent per-entry outcomes today, so
+whole-batch rollback would replace its user-visible contract. By contrast,
+unblocking dependents and advancing their epic is one logical board mutation.
+The current lifecycle has both automated dependency waits and budget stops in
+`needs_info`; only dependency completion is an automatic resume condition.
+Claim PID/host data identifies a live in-process claim and cannot outlive that
+claim into reassignment.
+
+**Proof required.** Crash-inject every commit boundary in isolated task DBs;
+prove dependent-ready changes and epic advancement roll back together, while
+successful batch entries commit independently and failed entries leave no
+partial owner/history. Test budget-held and dependency-blocked `needs_info`
+separately, and exercise every task status writer to prove stale claim metadata
+cannot release a reassigned task.
+
+## ADR-LOG-RESTRUCT-0070 — Deliver worker messages at least once until acknowledged
+
+**Status.** OWNER-RULED by the user's 2026-09-26 decision; implementation
+in progress as of 2026-09-26.
+
+**Choice.** Worker messages are durably delivered at least once until their
+acknowledgement is committed. A stale/unacknowledged message is recoverable;
+the consumer uses the stable message ID to make repeated handling idempotent.
+Do not claim exactly-once delivery or exactly-once external effects.
+
+**Why.** The current reader changes `pending` to `read` before a separate
+acknowledgement. A consumer crash between those steps can require replay, so
+exactly-once delivery is not the behavior this persistence model can guarantee.
+The user selected at-least-once-until-ack with idempotent handling.
+
+**Proof required.** Deliver, crash the consumer before ack, recover and redeliver
+the same message ID, demonstrate idempotent handling, then ack and prove no
+further delivery. Also prove acknowledged messages are never replayed.
+
+## ADR-LOG-RESTRUCT-0071 — Keep migration tests out of the live backup directory
+
+**Status.** DECIDED, 2026-09-26.
+
+**Choice.** P4 migration behavior tests use isolated in-memory SQLite fixtures
+and run the production migration ladder against a legacy schema there. Do not
+use `open_at` with a file-backed fixture while its destructive-migration path
+unconditionally writes safety snapshots to `%USERPROFILE%\\.arcana\\backups`.
+Do not remove any files produced by an earlier test without explicit owner
+approval. This proof does not assert backup integration.
+
+**Why.** A focused P4 test attempt showed that a temporary database file still
+triggered the production backup destination in the user's Arcana directory;
+parallel tests also collided on the backup filename. The test must not
+silently mutate user state or race over snapshots. The existing migrator's
+in-memory path skips backup for a database with no file path while applying
+the same SQLite DDL and migration steps.
+
+**Proof required.** The P4 test creates the pre-migration schema in memory,
+applies the actual worker migration ladder, and verifies accepted/rejected
+statuses and resulting schema. Record backup-path integration as untested;
+retain existing backup files and report the test side effect discovered during
+the first attempt.
+
+## ADR-LOG-RESTRUCT-0072 — Preserve the existing routing-history state as found
+
+**Status.** DECIDED from a read-only inspection of the Arcana task database,
+2026-09-26.
+
+**Choice.** Preserve the existing `~/.arcana/tasks.db` without modification.
+Its `routing_history` table is absent, so there are no existing routing rows
+to repair or remove. P4 may add the missing table through the normal migration
+ladder; this is a schema repair, not a cleanup of prior history.
+
+**Why.** P4-24a required a read-only inspection before deciding whether old
+attributions needed cleanup. The actual Arcana file passed `PRAGMA
+integrity_check` and contains the expected task/worker tables, but no
+`routing_history`. The source also contains reader/writer methods without a
+table-creation statement, so routing persistence is not currently initialized
+by the shipped task database schema.
+
+**Proof.** On 2026-09-26 a Python 3.14 SQLite connection opened the actual file
+with `mode=ro` and `PRAGMA query_only=ON`. Integrity returned `ok`; a catalog
+query found no `routing_history` table. No data was read beyond schema and
+integrity metadata, and no database write, migration, or backup was performed.
+
+## ADR-LOG-RESTRUCT-0073 — Scope persisted workspace consent to Arcana-mediated egress
+
+**Status.** OWNER-RULED by the user's 2026-09-26 decision; implementation
+pending.
+
+**Choice.** Persisted, revocable workspace consent gates Arcana-mediated
+provider requests and diff-analysis requests. A grant is scoped to the
+canonical workspace and the destination (provider/service). Missing,
+mismatched, or revoked consent refuses unattended egress; the decision and
+outcome are auditable. Arbitrary network activity inside free-form shell
+commands is outside this app-mediated consent contract because Arcana cannot
+reliably infer its destination. That requires separate OS-level network
+control and is not represented as covered by TG3-26.
+
+**Why.** The owner selected “App-mediated egress.” Provider and diff calls
+have a known destination and pass through Arcana-owned code. A shell command
+can contact destinations chosen dynamically by its own program or script, so a
+workspace/provider grant must not be described as containing that path.
+
+**Proof required.** Exercise grant, absent, destination mismatch, revoke, and
+unattended behavior through the persisted production reader. Prove every
+Arcana-mediated provider and diff consumer reads the same decision and records
+an auditable outcome. Document shell network egress as outside this consent
+boundary.
+
+**Implementation progress (2026-09-28).** The shared consent tables, grant /
+revoke commands, provider wrapper, QC deterministic fallback, direct Tauri diff
+wrappers, and Settings controls are present. QC now checks consent before
+provider-key lookup; the missing/mismatched-consent path returns deterministic
+structural analysis without credentials. Focused consent-provider and
+structural-fallback tests pass. `analyze_diff_tool_executes_repository_diff_without_consent_or_provider_key`
+now drives `AnalyzeDiffTool::execute` over a real isolated repository diff,
+verifies deterministic-only output without a provider key, and reads back the
+denied audit row. TG3-26/TG4-16 remain open for the Tauri PR-diff invocation
+and full allowed/revoked desktop-consumer proof.
+
+## ADR-LOG-RESTRUCT-0074 — Make the coding harness and built-in team the product distinction
+
+**Status.** OWNER-RULED by the user's 2026-09-27 direction.
+
+**Choice.** Arcana's product goal is a capable coding harness that works side
+by side with models. Arcana owns deterministic, observable, and safe mechanics
+where the rules can be specified, including project/tool discovery, command
+construction, permission checks, task lifecycle, evidence, and recovery. Models
+own code generation and judgment where intelligence is needed. Arcana also
+ships a usable built-in development-team workflow so a user can start without
+authoring agent files, subagents, skills, or tool wiring; recipes remain the
+customization mechanism.
+
+**Why.** The owner wants Arcana to be meaningfully different from a model
+wrapper and from tools that require hours of personal workflow configuration.
+Unused registered tools and prompt-only safety instructions do not satisfy
+that goal.
+
+**Proof required.** Audit P1, P2, P3, P4, and P8 against production consumers
+and behavior evidence. For each deterministic capability, identify its source
+contract, actual caller, fail-closed behavior, and tests; prove a fresh project
+can complete a coding task through built-in defaults. Record P5–P7 and other
+later-phase findings with their owners rather than silently closing their
+gates early.
+
 ## ADR-LOG-RESTRUCT-0075 — Enforce fleet commit safety in the Arcana host
 
 **Status.** OWNER-RULED by the user's 2026-09-27 instruction to close P8
@@ -2902,10 +3111,10 @@ properly after the audit identified prompt-only commit safety.
 **Choice.** Keep the shared `arcana/fleet` branch selected for the fleet, but
 make staging and committing host-owned. Workers call the registered
 `git_commit` tool with explicit file paths and a Conventional Commit subject
-plus a descriptive body. The host refuses `main`/`master`/`trunk`, unrelated
-pre-staged changes, paths outside the repository, directories, `.env` files,
-and staged diffs redacted by Arcana's credential scanner. Bash rejects direct
-`git add` and `git commit`; branch inspection and switching remain available.
+plus a descriptive body. The host refuses `main`/`master`, pre-staged unrelated
+changes, paths outside the repository, directories, `.env` files, and staged
+diffs redacted by Arcana's credential scanner. Bash rejects direct `git add`
+and `git commit`; branch inspection and switching remain available.
 
 **Why.** The previous recipe protocol depended on model compliance. P8-38's
 smoke drove raw Git commands itself, so it proved the script worked but did not
@@ -2928,6 +3137,3453 @@ tool, and the gate/smoke evidence is in `TESTING_GATES.md` and the P4 session
 checkpoint.
 
 The 2026-09-28 closeout strengthening protects a branch literally named
-`trunk` in addition to `main` and `master`, restores the index after every
-post-staging failure, and exercises host-tool trunk refusal in S8-06 before
-proving the allowed named-file commit on `arcana/fleet`. The updated focused
+`trunk` in addition to `main` and `master`, serializes the full shared-index
+transaction among in-process workers, validates every path-array element,
+scans the exact staged blobs (including binary content), and requires the
+documented blank line before the commit body. It exercises host-tool trunk
+refusal in S8-06 before proving the allowed named-file commit on
+`arcana/fleet`. The current focused unit suite has ten passing tests. Bash
+protection covers common textual Git index/ref mutation commands; it remains a
+heuristic rather than a sandbox against arbitrary executable payloads.
+
+## ADR-LOG-RESTRUCT-0083 — Serialize shared-index commits and scan staged blobs
+
+**Status.** Accepted on 2026-09-28 as P8 closeout hardening under ADR-0075.
+
+**Choice.** `git_commit` acquires Arcana's process-wide path lock for the
+repository index before reopening Git state and holds it through staging,
+validation, commit, and rollback. It also holds sorted per-file locks through
+staging. Secret scanning reads the exact blob IDs from the staged index rather
+than reopening mutable worktree paths.
+
+**Why.** Multiple recipe workers run in-process against one checkout. Without
+serialization, a failed commit could roll back another worker's staged state;
+reading the worktree after staging could inspect bytes different from those in
+the commit tree.
+
+**Proof.** `concurrent_commits_serialize_index_staging_and_refusal_rollback`
+starts two valid commits and a secret-bearing refusal concurrently and checks
+both valid commits survive, the secret is absent, and the final index is clean.
+`commit_refuses_recognizable_credentials_embedded_in_binary_file` verifies
+binary content is checked from the staged object. TG8-13 and S8-06 pass on the
+current tree. This lock is process-local; the product's in-process fleet is the
+scope of the guarantee.
+
+## ADR-LOG-RESTRUCT-0084 — Launch fixed Windows package-manager shims via cmd
+
+**Status.** Accepted on 2026-09-28 under P4-11/TG4-18.
+
+**Choice.** On Windows, `run_resolved_command` launches resolved `.cmd` and
+`.bat` package-manager shims through `cmd.exe /d /s /c`, preserving the quoted
+shim path. The only arguments placed in that bounded shell invocation are
+fixed argv generated by the `CommandIntent` resolver; model-authored shell
+text is never used for these arguments. Other executables continue through
+direct process creation.
+
+**Why.** The Windows resolver can correctly locate `npm.cmd`, `pnpm.cmd`, or
+`yarn.cmd`, but `CreateProcessW` cannot execute a batch shim directly. The
+first production-launcher fixture exposed incorrect `/S /C` quoting for paths
+with spaces, so the invocation now has an explicit outer quote pair.
+
+**Proof.** `windows_batch_package_manager_shim_runs_with_fixed_argv` writes a
+temporary `npm.cmd` under a path containing spaces, verifies it receives the
+fixed `run build` arguments, and observes its exit code 17 through the same
+launcher used by `ProjectCommandTool`. This proves the Windows shim launch
+primitive; the three-platform project corpora remain open under TG4-18.
+
+## ADR-LOG-RESTRUCT-0076 — Retire the obsolete prose delegation proof
+
+**Status.** Accepted as a documentation reconciliation on 2026-09-27.
+
+**Choice.** The separate prose `DELEGATE` parser requirement in ADR-0059 is
+retired. Structured delegation is the supported contract: built-in tools
+create subagents, the engine executes their typed calls, and the parent
+permission mode is inherited. P8's retained proof is the structured production
+path and its behavior tests; no prose parser or parallel delegation contract
+will be recreated.
+
+**Why.** ADR-0060/0065 and P8-73 chose structured tool calls and retired prose
+delegation. Keeping ADR-0059's earlier parser test as an active obligation
+conflicts with that later contract and would reward a second, unused parser.
+
+**Proof required.** Keep the structured tool registry, permission checks,
+subagent pool, and native execution behavior tested at their consumers. The
+retired parser requirement must not be used to claim missing P8 work.
+
+## ADR-LOG-RESTRUCT-0077 — Resolve one canonical project workspace
+
+**Status.** Accepted on 2026-09-28 as the P4-17 implementation of the existing
+workspace invariant.
+
+**Choice.** Interactive sessions, fleet recipes, IDE file access, diff analysis,
+and app-mediated workspace consent resolve the configured or explicit project
+root through `platform::workspace::resolve_workspace_dir`. The resolver accepts
+only existing absolute directories, returns the canonical path, and fails when
+the setting is unset or invalid. No execution path falls back to process CWD or
+an Arcana-owned per-agent directory.
+
+**Why.** A single project root keeps all agents and app-mediated workspace
+operations scoped to the user's selected project. Silent fallback makes
+misconfiguration look like success while writes land in an unrelated directory.
+
+**Proof required.** Keep negative tests for unset, relative, missing, and
+non-directory paths; prove the production session/recipe consumers reject
+fallback and the Tauri IDE/diff/consent callers use the resolver. File-write
+  confinement and reveal/open/run handoff are separate P4-18/P4-21 obligations.
+
+## ADR-LOG-RESTRUCT-0078 — Keep escalation visible without blocking fleet dispatch
+
+**Status.** Accepted on 2026-09-28 as the P4-24 liveness implementation.
+
+**Choice.** Pending worker requests are recoverable Supervisor work, so they
+keep the Supervisor eligible for an event/recovery tick. Resolving a request
+does not short-circuit same-tick READY-task dispatch. If a request remains
+unresolved after actionable board work is handled, the Supervisor may stop
+idle; the pending request remains visible and keeps the next recovery tick
+eligible.
+
+**Why.** The previous recipe stopped after handling any request and the
+scheduler did not consider requests when deciding whether an idle Supervisor
+had work. A pending blocker could therefore suppress both immediate dispatch
+and future wake-up when it was the only Supervisor work item.
+
+**Proof.** `a_pending_escalation_keeps_supervisor_dispatch_available` leaves a
+request pending with no ready tasks, verifies the Supervisor work predicate,
+then runs the shipped batch tool and reads an unrelated task back as assigned.
+`shipped_supervisor_creates_visible_epic_and_phased_child_through_agent_engine`
+also runs the shipped instructions through AgentEngine, leaves the request
+pending, and reads back an unrelated assignment. A targeted startup migration
+updates the early-stop clause while preserving customized recipe text.
+
+## ADR-LOG-RESTRUCT-0079 — Attribute routing outcomes to one observed assignment
+
+**Status.** Accepted on 2026-09-28 as the P4-25 correctness implementation.
+
+**Choice.** A completion/reassignment outcome belongs to the newest pending
+routing row for the worker recorded on the task before the status transition.
+The status change and outcome write commit in one transaction that compares the
+observed status and owner before applying the transition; a stale completion
+after reassignment is refused. Older pending rows for prior attempts remain
+unchanged. A manually assigned task with no affinity row can still complete; it
+simply produces no routing observation. Tauri and worker-tool outcomes use the
+same transaction.
+
+**Why.** Updating every pending row for a task can train affinity on stale or
+wrong worker assignments. The task's pre-transition owner is the authoritative
+worker identity after owner-checked claim.
+
+**Proof.** `autonomous_completion_closes_only_the_current_owners_routing_row`
+uses the real status tool and checks both the selected row and task status,
+including completion of an untracked manual assignment.
+`stale_task_owner_cannot_overwrite_reassignment_or_claim_its_outcome` proves a
+delayed completion cannot change the reassigned task or attribute success to
+the old worker.
+
+## ADR-LOG-RESTRUCT-0080 — Compare-and-set automatic and manual orphan release
+
+**Status.** Accepted on 2026-09-28 for P4-40; the owner requires stale-safe
+compare-and-set for both automatic recovery and manual Tauri force-release.
+
+**Choice.** Automatic reconciliation releases a task only when its status,
+owner, PID, host and update timestamp still match the diagnosed row snapshot.
+Manual Tauri force-release compares the same observed fields against the UI's
+expected snapshot and calls the same conditional DB writer. A mismatch refuses
+release so a replacement worker keeps its claim.
+
+**Why.** Process liveness is checked after candidate selection. Without a
+compare-and-set, a new worker can acquire the task between those operations and
+then be released using the previous worker's stale PID result.
+
+**Proof.** `stale_orphan_snapshot_cannot_release_a_newer_worker_claim` captures
+the old claim, releases and reassigns the task, then proves the delayed recovery
+write leaves the new owner and PID intact. The Tauri command test
+`manual_release_command_rejects_a_stale_claim_snapshot` invokes manual release
+with that prior snapshot and proves the replacement worker remains in progress.
+SQLite migration 6 enforces claim metadata invariants. A fresh writer audit and
+an injected race between Tauri preflight and CAS remain open.
+
+## ADR-LOG-RESTRUCT-0081 — Check QC consent before provider construction
+
+**Status.** Accepted on 2026-09-28 as a P4 cross-gate correctness fix for
+TG3-26/TG4-16 under the owner-approved app-mediated egress boundary
+(ADR-0073).
+
+**Choice.** `AnalyzeDiffTool` checks persisted workspace-and-destination consent
+before resolving a provider key or constructing the provider. Without matching
+consent it returns deterministic structural analysis; with consent, the shared
+provider wrapper rechecks authorization immediately before the outbound call.
+
+**Why.** Constructing the analyzer before checking consent made the local,
+deterministic QC fallback depend on a configured provider key, even though that
+fallback is specifically the behavior for absent or mismatched consent. The
+provider wrapper remains the final egress boundary in case consent is revoked
+between the QC decision and the request.
+
+**Proof.** `qc_diff_without_matching_consent_uses_structural_review_without_provider_key`
+asserts that a mismatched grant returns `deterministic_only` without vault
+configuration. `provider_reader_blocks_without_grant_and_rechecks_revocation`
+asserts that the production wrapper blocks and rechecks outbound provider
+calls. The Tauri direct-diff path now checks and audits consent before provider
+construction; its mismatched-consent test proves the deterministic fallback
+works without a key. Full `AnalyzeDiffTool` Git-diff and Tauri PR-diff behavior
+remain open under TG3-26/TG4-16.
+
+## ADR-LOG-RESTRUCT-0082 — Discover nested project manifests deterministically
+
+**Status.** Accepted on 2026-09-28 for the P4-11 project-command path, following
+the owner's validated-selector and mixed-project fallback direction.
+
+**Choice.** `detect_toolchains` inspects manifests from the selected directory
+through workspace ancestors and recursively beneath the selected directory.
+It prunes generated/dependency trees, does not follow directory symlinks, and
+fails clearly at its 20,000-directory bound. Matching Cargo workspace members
+collapse to their workspace root so Cargo does not repeat the same workspace
+operation. A toolchain selector runs every detected project for that ecosystem;
+without a selector, each detected project runs separately. Dependency install
+remains an explicit intent.
+
+**Why.** Ancestor-only detection handled a selected nested package and a
+mixed-language root, but missed sibling projects when the workspace root was
+selected. Running only the first match for an ecosystem also silently omitted
+other projects in a monorepo.
+
+**Proof.** `workspace_discovery_finds_nested_packages_and_prunes_generated_trees`
+detects separate pnpm and yarn projects, collapses a declared Cargo member to
+the workspace root, and ignores `node_modules`. The shipped project-command
+tests assert a selector retains all matching nested projects, Arcana's mixed
+Rust/TypeScript root resolves separately, and real spawned process exits are
+reported. Three-OS runtime proof remains open under P4-11/TG4-18.
+
+## ADR-LOG-RESTRUCT-0085 — Group analytics timestamps by the user's local day
+
+**Status.** Accepted on 2026-09-28 as a correctness repair from the P1/P2
+cross-phase audit; TG2-15 remains open.
+
+**Choice.** Every `token_usage` calendar-date reader applies SQLite's
+`'localtime'` modifier before `DATE()` grouping/range filtering. Stored values
+remain UTC RFC3339 instants; dashboard activity, date queries, and rollup input
+are grouped by the machine's local calendar day.
+
+**Why.** `AnalyticsCollector` writes UTC instants, while the caller supplies
+`Local::now()` dates. `DATE(timestamp)` interprets a UTC timestamp as a UTC
+calendar date, which can place activity near local midnight on the wrong day.
+Using the local-time conversion at each reader keeps query semantics aligned
+with the dates chosen by the dashboard and daily rollup without changing stored
+timestamps or existing database rows.
+
+**Proof.** `utc_instants_are_grouped_by_the_users_local_calendar_day` writes
+isolated analytics rows one second before and one minute after local midnight,
+then checks date lookup, today's dashboard counters, and date-range totals.
+TG2-15's property matrix across UTC−12/0/+14, DST transitions, and measured
+rollup cadence is still required before that gate can close.
+
+## ADR-LOG-RESTRUCT-0086 — Retract stale P8 protected-alias audit claim
+
+**Status.** Correction recorded on 2026-09-28 after checking the live source.
+
+**Correction.** The earlier statement in `_verify/2026-09-28-P8-CLOSEOUT-AUDIT.md`
+that the shipped worker Commit Protocol and `git_commit` tool description omitted
+`trunk` was incorrect for the current tree. Both already list `main`, `master`,
+and `trunk`; the report's coordinator closeout failed to refresh that stale
+finding. The audit paragraph is struck through and the current recipe consumer
+assertion now guards against recurrence.
+
+**Evidence.** `git_commit.rs` description and exact branch check, shared Commit
+Protocol in `recipes/defaults.rs`, and TG8-13's shipped-recipe assertion.
+
+## ADR-LOG-RESTRUCT-0087 — Derive Settings providers from the factory set
+
+**Status.** Accepted on 2026-09-28 as a cross-phase P2 gate correction.
+
+**Choice.** The Settings `list_providers` command obtains selectable provider IDs
+from `provider::factory::supported_ids()` and maps each ID to a visible label.
+If a supported provider has no Settings label, listing fails instead of silently
+omitting it. TG2-14 proves the exact supported/buildable factory set and this
+Settings consumer mapping; retired IDs may remain discoverable for legacy-key
+cleanup while remaining unbuildable.
+
+**Why.** The previous hardcoded Settings vector could drift from the factory:
+a provider could become selectable while provider construction rejected it, or
+a new supported provider could remain invisible. A zero-reference string sweep
+would also remove intentional rejection and legacy-secret cleanup paths.
+
+**Proof.** `settings_provider_list_covers_the_factory_supported_set` asserts the
+Settings label mapping covers the sorted factory set. The four provider factory
+tests prove exact IDs, successful construction of supported IDs, and rejection
+of unknown/retired IDs. All five focused tests passed on 2026-09-28.
+
+## ADR-LOG-RESTRUCT-0088 — Use the workspace jail for IDE file mutations
+
+**Status.** Accepted on 2026-09-28 as a focused path-safety repair discovered
+during the P4 write-path audit.
+
+**Choice.** Tauri IDE create, delete, rename, and move operations resolve source
+and destination paths through `path_jail::validate_workspace_path`. Validate
+the final move destination as well as its directory before mutating files.
+
+**Why.** The previous helper only normalized `..` lexically, and rename/move
+destinations bypassed it. That allowed malformed or symlinked paths to escape
+the configured workspace. The canonical jail is already the shared Rust rule
+for agent file writes, so using it here closes the same boundary for the IDE
+without adding a second path policy.
+
+**Proof.** IDE path safety tests refuse traversal, accept new and existing
+workspace paths, and on Unix refuse a symlink escape. The focused Windows test
+command passed. P4-18 still governs agent/process mutation paths and remains
+open.
+
+## ADR-LOG-RESTRUCT-0089 — Run project-command corpora on the platform matrix
+
+**Status.** Accepted on 2026-09-28 to make TG4-18's existing platform-triple
+requirement executable in CI.
+
+**Choice.** Keep the checked-in Rust/Node/Python fixtures under `arcana-core`
+tests and run their supported build/test/lint/run intents through the
+production resolver and process launcher in the existing Windows/Linux/macOS
+CI build matrix. CI installs the Python test/lint tools required by those
+fixtures; runtime product flows continue to require explicit install intent.
+
+**Why.** TG4-18 already requires these three project corpora on every OS, but
+the corpora were absent and the matrix only built Arcana. Running focused
+behavior tests in that matrix makes OS-specific command and shim failures
+blocking without adding a separate CI architecture.
+
+**Proof.** The exact corpus test passes on this Windows host, including real
+Rust, npm, and Python commands through Arcana's launcher. Linux/macOS execution
+remains pending CI, and TG4-18 remains open until those results and worker-path
+evidence are recorded.
+
+## ADR-LOG-RESTRUCT-0090 — Validate persisted custom shell guidance
+
+**Status.** Accepted on 2026-09-28.
+
+**Choice.** Apply the platform portability validator to every persisted recipe
+and skill when parsed/loaded, and to shell hooks when saved and again before
+execution. This includes user-authored content; invalid existing content is
+reported and excluded from active execution.
+
+**Why.** A check limited to shipped defaults leaves user-customized fleet
+instructions and legacy hook rows able to reintroduce POSIX-only commands.
+Validation at the production reader blocks old saved data as well as new writes.
+
+**Proof.** Focused tests exercise custom recipe parse/save and skill loader
+paths, plus a legacy-hook execution refusal before spawning. TG4-17 remains open
+until the full corpus and shipped-content suites are rerun.
+
+## ADR-LOG-RESTRUCT-0091 — Contain and approve free-form Bash writes
+
+**Status.** Accepted on 2026-09-28.
+
+**Choice.** P4-18 must add OS-level write containment for autonomous processes
+and require an approval step for free-form Bash commands that may write. The
+existing Arcana-managed artifact path checks remain in place.
+
+**Why.** Restricting writes only to built-in artifact tools would remove useful
+project workflows. Process containment and command approval preserve general
+Bash capability while establishing a host-owned boundary.
+
+**Proof.** `autonomous_bash_requires_permission_before_shell_execution` drives
+an Autonomous-mode Bash write through `ToolExecutor::execute_batch`, observes
+the actual pending permission, denies it, verifies the returned tool error, and
+proves the marker file was never created and the permission entry was drained.
+This closes the per-call approval behavior proof; OS sandbox implementation,
+capability probes, and process-path workspace proofs remain outstanding.
+
+## ADR-LOG-RESTRUCT-0092 — Enforce QC build evidence through TasksDb
+
+**Status.** Accepted on 2026-09-28.
+
+**Choice.** SQLite enforces the latest task-scoped, attributable, passing
+non-smoke build evidence on every transition into `qc_review`. The shared
+`TasksDb` transition API keeps the same validation for a useful error message;
+the trigger closes direct-SQL bypasses as defense in depth.
+
+**Why.** The owner selected the SQLite transition boundary so no writer can
+bypass the rule. Keeping the shared API check gives normal callers actionable
+errors before SQLite rejects the write.
+
+**Proof.** `shared_task_status_api_rejects_qc_review_without_latest_attributable_passing_build`
+rejects missing, unattributable, and latest-failing evidence through both
+TasksDb and direct SQL, and accepts the latest attributable pass.
+`stranded_task_reconciliation_cannot_bypass_qc_build_evidence` exercises the
+real RecipeRunner reconciler with refusal and passing cases;
+`tauri_status_command_cannot_promote_without_build_evidence` proves the UI
+command surfaces the shared DB refusal. P4-14 is closed. TG4-07 remains open
+for real process-exit coverage and cross-platform worker proof.
+
+## ADR-LOG-RESTRUCT-0093 — Define the build failure streak
+
+**Status.** Accepted on 2026-09-28.
+
+**Choice.** P4-15 counts every observed nonzero exit from each Rust-spawned
+build command toward the three-failure diagnostic threshold, including multiple
+or concurrent failed commands. Any observed success resets the consecutive
+streak. Spawn failures and timeouts remain separately surfaced and do not
+invent an exit result.
+
+**Why.** The threshold must reflect the process result Arcana actually
+observed, not an inferred task failure or an unstarted process.
+
+**Proof.** The failure-streak tests must cover consecutive nonzero exits,
+success reset, spawn failure, and timeout behavior.
+
+## ADR-LOG-RESTRUCT-0094 — Retain Bash; require native QC evidence
+
+**Status.** Accepted on 2026-09-28.
+
+**Choice.** Keep general Bash available to workers. Only successful
+Rust-owned `project_command` build evidence can authorize `qc_review`.
+
+**Why.** Bash remains useful for project operations outside Arcana's supported
+deterministic command intents, but model-authored shell output must not certify
+build success.
+
+**Proof.** Tests must show Bash execution alone cannot create acceptable QC
+evidence, while the production project-command path can.
+
+## ADR-LOG-RESTRUCT-0095 — Reconcile ACP state before replay
+
+**Status.** Accepted on 2026-09-28.
+
+**Choice.** Use the existing message/task bounds for ACP storm control. Before
+retrying a replayed message, reconcile current state and its prior effect so
+delivery remains at-least-once until acknowledgement without duplicating a
+completed effect.
+
+**Why.** A stable message ID identifies replay, while reconciliation protects
+the consumer's domain state from repeating already-completed work.
+
+**Proof.** The production restart/recovery test must replay the same ID and
+demonstrate one domain effect before acknowledgement; current bounds and their
+enforcement remain part of TG4-10 evidence.
+
+## ADR-LOG-RESTRUCT-0096 — Keep explicit manual release; CAS automatic release
+
+**Status.** Accepted on 2026-09-28.
+
+**Choice.** Both automatic orphan recovery and the explicit UI/manual release
+must compare-and-set against the observed task status, owner, PID, host, and
+updated timestamp. SQLite triggers enforce the claim metadata invariant for all
+writers.
+
+**Why.** Any delayed release based only on task ID can clear a replacement
+claim. Manual intent does not make a stale UI snapshot safe, and direct SQL
+writers must not be able to manufacture or retain mismatched claim metadata.
+
+**Proof.** Tests must race a replacement claim against both release paths,
+prove stale observations fail, prove a current snapshot releases, and exercise
+the SQLite triggers against direct SQL.
+
+## ADR-LOG-RESTRUCT-0097 — Associate checkpoints with task ownership
+
+**Status.** Accepted on 2026-09-28.
+
+**Choice.** Add a nullable `task_id` to the existing config.db checkpoint
+records. Preserve session and reason metadata; worker snapshots record the
+claimed task ID while interactive session checkpoints continue to use NULL.
+
+**Why.** A shared fleet branch needs per-task reversibility without inventing a
+second checkpoint store or replacing useful session history.
+
+**Proof.** The additive migration and production write/list path must show a
+task checkpoint remains associated after reopening config.db, while legacy
+session-only rows remain readable.
+
+## ADR-LOG-RESTRUCT-0098 — Activate task budgets after atomic claim
+
+**Status.** Accepted on 2026-09-28.
+
+**Choice.** After a successful claim, load saved task caps and usage into the
+current AgentEngine run. Enforce the stricter of the task caps and the existing
+worker run cap, then persist cumulative usage from subsequent turns.
+
+**Why.** The engine is constructed before the model selects and claims a task;
+binding budgets earlier would either enforce the wrong task's saved cap or
+require rebuilding the live engine.
+
+**Proof.** A production run test must claim a budgeted task, demonstrate its cap
+blocks the next provider turn at the configured limit, and verify usage updates
+the claimed task row.
+
+## ADR-LOG-RESTRUCT-0099 — Make P4-32 routing native and auditable
+
+**Status.** Accepted on 2026-09-28.
+
+**Choice.** Rust chooses among runnable workers using task signals and routing
+history. Persist explicit assignment overrides and their reason in
+`routing_history`; exclude overridden outcomes from automatic learning.
+Runnable states are `idle`, `active`, `idle_no_provider`, and `error`.
+
+**Why.** Worker selection is deterministic orchestration that should not be
+delegated to model prose. Explicit operator decisions remain auditable without
+teaching the router that an exception was a normal match.
+
+**Proof.** Migration 8 stores automatic/override provenance and reasons.
+`automatic_batch_dispatch_uses_recorded_outcomes_without_model_worker_choice`
+drives the real batch tool with six persisted automatic outcomes and verifies
+the selected worker changes; `autonomous_completion_closes_only_the_current_owners_routing_row`
+proves the status-tool outcome belongs to the actual prior owner;
+`routing_overrides_are_audited_and_never_enter_automatic_learning` proves
+reasons persist and overrides do not train the scorer; and
+`automatic_dispatch_uses_outcomes_and_only_runnable_workers` proves only
+runnable implementation workers enter selection. All focused tests pass.
+
+## ADR-LOG-RESTRUCT-0100 — Require a real desktop-to-fleet coding smoke
+
+**Status.** Accepted on 2026-09-28.
+
+**Choice.** P4 cannot close until Arcana is launched and the user-facing PA chat
+delegates a coding task to the fleet that creates a small Google-Calendar-like
+application under `C:\Playground`, with frontend, backend, and working wiring.
+
+**Why.** Unit and scripted tests cannot establish that the shipped desktop
+workflow can delegate real project work and produce an integrated runnable
+artifact.
+
+**Proof.** Preserve the actual task, worker execution/evidence, project files,
+and a successful runnable smoke check; inspect the resulting frontend and
+backend behavior before closing P4. The isolated output folder is
+`C:\Playground\arcana-calendar`; other Playground contents remain untouched.
+
+## ADR-LOG-RESTRUCT-0101 — Keep free-form shell consent per invocation
+
+**Status.** Accepted on 2026-09-28 under P4-18/TG4-09.
+
+**Choice.** A session-wide `AllowAlways` grant never bypasses permission for a
+`FreeformShell` call. Other tool effects keep the existing session allowance.
+
+**Why.** Bash's effect is specifically defined as requiring review for each
+model-authored command because the tool name cannot bound its side effects.
+The standing-allow set previously ran before that effect policy and silently
+converted an “always allow” response into persistent approval for all later
+commands.
+
+**Proof.** `bash_standing_allowance_does_not_skip_per_call_approval` seeds the
+standing allowance, drives an autonomous Bash call through
+`ToolExecutor::execute_batch`, observes its pending approval, denies it, and
+verifies that no marker file was created. The OS process sandbox is a separate
+open P4-18 requirement.
+
+## ADR-LOG-RESTRUCT-0103 — Validate executable shell guidance, not prose mentions
+
+**Status.** Accepted on 2026-09-28 under P4-16/TG4-17.
+
+**Choice.** Apply platform checks to executable shell fences, extracted inline
+`bash('...')` examples, and saved hook commands. Allow standard file-descriptor
+redirection such as `2>&1`, which works in both supported Windows CMD and
+POSIX shell execution paths.
+
+**Why.** The first real desktop start refused saved recipes because a global
+substring scan treated explanatory text such as “never use `source .venv`” as
+an instruction, and classified portable redirection as POSIX-only. Scanning
+actual command examples preserves validation while avoiding false refusals.
+
+**Proof.** `guidance_checks_executable_examples_without_rejecting_explanatory_prose`
+proves explanatory mentions and portable redirection are accepted, while
+fenced or inline executable `/tmp`, `source .venv`, and shell-chaining
+examples are refused. Hook tests cover the same redirection and operator
+boundary. The desktop reload started four workers and refused three legacy
+saved recipes whose actual commands use `;` or `&`; nonportable commands remain
+intentionally rejected.
+
+## ADR-LOG-RESTRUCT-0102 — Start the runtime reaper inside Tauri's async runtime
+
+**Status.** Accepted on 2026-09-28 under P4-36.
+
+**Choice.** Tauri's synchronous setup callback enters `tauri::async_runtime`
+before calling `runtime_registry::spawn_reaper`.
+
+**Why.** The first real desktop launch panicked because the core reaper calls
+`tokio::spawn` but the setup callback is not itself running in a Tokio context.
+That prevented Arcana from reaching fleet startup.
+
+**Proof.** After the change, `npx tauri dev` reaches `Running target\\debug\\arcana.exe`,
+initializes analytics, and keeps the `Arcana` process/window alive without the
+runtime-reactor panic. Worker startup still reports portability failures for
+legacy saved recipe content; full desktop fleet smoke remains open.
+
+## ADR-LOG-RESTRUCT-0104 — Make the calendar acceptance observable end to end
+
+**Status.** Recorded on 2026-09-28 as an operationalization of the owner's
+P4-49 acceptance metric.
+
+**Choice.** The fleet-built calendar must support creating an event, reading it
+back after refresh from backend persistence, editing it, and deleting it. The
+acceptance record must identify the frontend request, backend response/storage
+path, returned UI state, task/build evidence, and preserve a before/after
+fingerprint of `C:\Playground` with every non-target entry unchanged.
+
+**Why.** A page that launches or a frontend-only mock does not prove the
+owner-requested frontend, backend, and wiring work together. A small CRUD
+scenario supplies an observable and repeatable end-to-end test without
+prescribing the implementation stack.
+
+**Proof.** Submit through the Windows desktop PA chat and observe the fleet
+create, verify, launch, and inspect the artifact in
+`C:\Playground\arcana-calendar`; record event create/read-after-refresh/edit/
+delete behavior and the backend round trip. CLI-only, manual, unit-only, or
+mock-only results do not satisfy P4-49.
+
+## ADR-LOG-RESTRUCT-0105 — Use Gemini 3.8 Flash for PA and fleet defaults
+
+**Status.** Accepted on 2026-09-28 at the owner's direction.
+
+**Choice.** New PA sessions, newly seeded workers, built-in fleet workers,
+QC subagents, and the app's initial Google selection use `gemini-3.8-flash`.
+Migrate only the known shipped worker defaults and prior Google default;
+preserve custom worker models and explicit alternate PA selections.
+
+**Why.** The owner specified Gemini 3.8 Flash as Arcana's PA and fleet model,
+and Arcana's initial supported provider setup is Google/Gemini. Keep this
+selection in source and saved configuration rather than relying on a prompt.
+
+**Pricing and model facts.** Google's official model page lists the ID,
+1,048,576-token input context, 65,536-token output limit, and thinking levels
+`low`, `medium`, and `high`. Google's pricing page lists standard input/output
+at $0.75/$3.75 per million through 2026-12-31 and $1.50/$7.50 from 2027-01-01;
+Arcana consumes cached-read counts but not cache-write counts from Google's
+usage response, so the price row keeps cache writes at zero.
+Sources: https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash and
+https://ai.google.dev/gemini-api/docs/pricing.
+
+**Proof.** The Rust/provider catalogue and TypeScript picker agree; the model
+has a dated standard-price row; worker migration tests cover all shipped seed
+rows and preserve a custom worker model. Live provider access still requires a
+key stored in Arcana Settings; `.env` presence alone does not enable desktop
+use.
+
+## ADR-LOG-RESTRUCT-0106 — Keep fleet run evidence usable during a busy smoke
+
+**Status.** Accepted on 2026-09-28 under the owner's calendar-run observability
+request.
+
+**Choice.** Logs tab refreshes only the newest 3,000 lines, counts appended
+lines incrementally, reports refresh latency and file size, prevents overlapping
+polls, surfaces read/export errors, and retains a separate complete-file export.
+Project commands record task-scoped intent, toolchain, exit code, duration, and
+captured output byte counts; worker recipe ticks record worker, session,
+outcome, and duration. Never log command arguments or provider secrets.
+
+**Why.** The owner will run the PA-to-fleet calendar acceptance and return its
+logs. Complete records and basic duration signals make early failures
+diagnosable and give later speed work an observable baseline.
+
+**Proof.** Parser and full-log/tail tests verify namespaced Rust targets, the
+bounded live tail, append-aware line counts, and full-file readback. The real
+desktop Logs tab remains un-smoked in this environment; the owner-run PA
+acceptance will validate the displayed/exported logs.
+
+## ADR-LOG-RESTRUCT-0107 — Make P4 observability usable for fleet acceptance
+
+**Status.** Accepted on 2026-09-28 at the owner's direction; task P4-50 and
+TG4-24 are added to the active development suite.
+
+**Choice.** P4 observability has four user-expandable UI sections: readable
+Logs, JSON-expandable Structured Events, correlated parent/child Traces with
+operation and sub-operation durations, and Metrics. The production path must
+cover PA/fleet and worker/task lifecycle, provider/model calls and reported
+tokens, tool outcomes, Rust-owned project commands/builds, graph operations,
+and MCP connector operations. Records should preserve run/task/session/worker
+correlation where known, distinguish success/failure/timeout/cancellation/retry,
+show safe result summaries, and exclude credentials, prompts, source contents,
+command arguments, and complete model responses. Filter, bounded live reads,
+complete selected-run/date export, and measured producer/UI costs are part of
+the contract. P4-50 must choose persistence and propagation boundaries from the
+existing Rust event, tracing, run, and analytics paths before implementation.
+
+**Why.** Plain log lines and isolated live events do not show what happened
+across a PA-to-fleet workflow, how nested operations relate, where time was
+spent, or whether provider/tool calls returned expected results. The owner
+needs the complete view before performing the final P4-49 calendar acceptance;
+the current Logs panel and selected duration breadcrumbs are only partial
+starting points.
+
+**Proof.** TG4-24 requires fixture-driven producer-to-persistence-to-UI
+readback, correlation and token/result reconciliation, privacy assertions,
+expandable JSON and trace trees, four-section behavior, complete export, and a
+recorded performance baseline. No implementation is claimed by this decision.
+
+## ADR-LOG-RESTRUCT-0108 — Instrument Arcana locally with the Rust tracing stack
+
+**Status.** Accepted on 2026-09-28 after official documentation research,
+under the owner's expansion of P4-50 to memory, SQLite, and CLI preflight.
+
+**Choice.** Keep `tracing` as Arcana's instrumentation API and extend the
+existing `tracing-subscriber` with newline-delimited JSON for structured event
+capture. Enable rusqlite's SQLite profile callback on production connections
+and record only the database category, safe statement class/fingerprint,
+duration, and outcome—never SQL text or bound values. Persist telemetry in
+Arcana's local data root and derive in-app metrics from those structured,
+correlated operation records and the existing provider usage records. Do not
+add an OpenTelemetry exporter or collector runtime to this desktop milestone;
+keep export compatibility as a later option.
+
+**Why.** Official Rust documentation describes `tracing` as context-aware and
+structured, documents async-safe future instrumentation, and provides a JSON
+formatter that emits newline-delimited structured events with span context.
+OpenTelemetry is a suitable interoperability direction, but the current Rust
+documentation marks its traces, metrics, and logs components Beta, while OTLP
+export targets a collector (HTTP defaults to localhost:4318). Arcana needs a
+local, self-contained view for the calendar run. Rusqlite's `trace` feature
+provides SQLite statement-profile durations, which closes a direct visibility
+gap without exposing SQL or parameters. The `metrics` crate is a facade whose
+recorder/exporter must still be supplied; Arcana's persisted operation records
+are already the correct source for per-run UI counts and latency.
+
+**Proof.** Implement and test producer → local persistence → bounded Tauri
+reader → four-panel UI, including SQLite statement timing, memory lifecycle,
+provider usage/call outcomes, safe JSON, export, and CLI preflight. Research
+sources: [`tracing::Span`](https://docs.rs/tracing/latest/tracing/struct.Span.html),
+[`tracing-subscriber` JSON](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/fmt/format/struct.Json.html),
+[rusqlite trace profiling](https://docs.rs/rusqlite/0.31.0/rusqlite/trace/index.html),
+[OpenTelemetry Rust status](https://opentelemetry.io/docs/languages/rust/),
+and [OTLP exporter configuration](https://docs.rs/opentelemetry-otlp/latest/opentelemetry_otlp/).
+Implementation and evidence remain pending.
+
+## ADR-LOG-RESTRUCT-0109 — Keep telemetry safe, correlated, and incrementally readable
+
+**Status.** Accepted on 2026-09-28 during P4-50 implementation. Its
+preflight-only CLI limitation is superseded by ADR-LOG-RESTRUCT-0122 after the
+owner expanded P4-50 to require an actual production Fleet run from the CLI;
+the telemetry schema, privacy, and incremental-read choices remain in force.
+
+**Choice.** Emit typed operational events to a dedicated telemetry target while
+keeping the existing human-readable logs. Database profiles persist only the
+database alias, fixed statement category, outcome, and elapsed nanoseconds;
+SQLite's expanded SQL is discarded because it may contain bound values.
+Provider/tool/memory/graph/command events carry only identifiers, outcomes,
+counts, token categories, and byte counts. Fleet execution spans provide parent
+context where available. Metrics aggregate appended JSONL incrementally and
+retain incomplete trailing lines until the next refresh. CLI validation remains
+a safe capability preflight: this CLI exposes worker administration but no
+production fleet-run command, so it cannot substitute for PA-to-fleet evidence.
+
+**Why.** The telemetry needs enough structure to diagnose fleet latency without
+recording prompts, memory, command arguments, tool output, SQL, or credentials.
+Re-reading an ever-growing daily file on each panel refresh would add recurring
+I/O to the observed system; caching by file size and ingesting only appended
+complete records gives bounded incremental refresh work while preserving export
+of the full date. The shipped CLI has no runner entry point, and inventing one
+would change this phase's runtime contract rather than test the existing path.
+
+**Proof.** Focused producer-to-JSON SQLite test passes with a parameterized
+statement and asserts that SQL and the bound value are absent. Metrics fixtures
+cover grouped counts, failures, malformed records, partial lines, and append
+refresh. Remaining whole-workflow and performance baseline proof belongs to
+TG4-24 and the owner-run P4-49 calendar acceptance.
+
+## ADR-LOG-RESTRUCT-0110 — Bound P4 failure retries, retention, and worker authority
+
+**Status.** Accepted on 2026-09-28 while expanding P4 from the owner's new failure-containment goal.
+
+**Choice.** Keep provider stream retries governed by the shipped P3-09 policy (three total attempts, 500 ms then 1 s, no current `Retry-After` consumption), and define worker/agent startup recovery as a separate capped Fibonacci-plus-jitter policy. Startup retries must stop before provider/tool work or other non-idempotent side effects begin; cancellation, task claim, task budget, and daily budget remain single-run scoped. Retain no more than five Arcana log files per stream and no files older than seven days. Enforce task ownership and Supervisor-only routing at Rust production boundaries. A worker may only update its own claimed task; assignment/reassignment remains Supervisor-owned. Any resumed write or command must first reconcile task-owned checkpoint/workspace state.
+
+**Why.** Provider retry is an existing P2 contract and must not be silently widened while adding a distinct worker-start retry. Bounded retention gives the local desktop telemetry a fixed file-count and age ceiling. The P4 security audit found that autonomous workers could mutate another worker's task and that checkpoint coverage could omit pre-claim and subprocess writes; model instructions alone cannot protect those state transitions.
+
+**Proof.** TG4-26 covers startup retry caps, jitter bounds, cancellation, and side-effect safety; TG4-29 covers retention and symlink refusal; TG4-30 covers cross-worker task mutation and security boundaries. P4-53/54 additionally require task-attributed checkpoint recovery and Supervisor-visible reconciliation. Current findings are not closed by this decision; implementation and gates remain required.
+
+## ADR-LOG-RESTRUCT-0111 — Merge permission masks in the AppContainer ACL lease
+
+**Status.** Accepted on 2026-09-29 during P4 security hardening.
+
+**Choice.** Cache AppContainer ACL grants by canonical path and inheritance, but
+retain the granted permission mask and widen an existing ACE when a later
+consumer requests additional rights. Never let a narrower earlier grant
+suppress a later workspace or toolchain grant; do not create duplicate ACEs for
+rights already covered.
+
+**Why.** The workspace-scoped sandbox lease intentionally reuses its AppContainer
+identity and ACL grants across child launches. The prior cache treated equal
+path/inheritance as a complete match and ignored the mask, so a read-only grant
+could make a later write-capable request appear successful without applying
+the requested rights. This violates the lease's access contract.
+
+**Proof.** `cargo test -p arcana-core --lib
+appcontainer_acl_cache_upgrades_permissions_for_an_existing_path --locked`
+passes on Windows (1 test). It exercises both read-to-workspace-rights and the
+Rustup-shaped traverse-to-read/execute upgrade, and `AccessPolicy` drops the
+temporary profile and grants during test cleanup. End-to-end sandbox
+performance remains separately unverified.
+
+## ADR-LOG-RESTRUCT-0112 — Keep the canonical active log during same-date pruning
+
+**Status.** Accepted on 2026-09-29 during P4-55 retention hardening.
+
+**Choice.** When recognized legacy and current log names have the same date,
+sort the canonical current-day readable and structured files ahead of aliases
+before applying the per-stream file cap. Use a stable filename tie-break for
+the remaining same-date files.
+
+**Why.** Retention runs after the rolling writers open the current files. A
+deterministic preference makes active-file preservation explicit even when a
+same-date alias is encountered, and avoids relying on directory enumeration
+order. The canonical current names are `arcana.YYYY-MM-DD.log` and
+`arcana-events.YYYY-MM-DD.jsonl`.
+
+**Proof.** `policy_keeps_current_files_when_legacy_names_share_the_active_date`
+passes on Windows using all supported legacy/current naming variants and a
+test-only cap of one; both canonical active names are retained. The production
+five-file/seven-day corpus, live writer/export check, and cleanup-failure
+startup proof remain open under TG4-29.
+
+## ADR-LOG-RESTRUCT-0113 — Heartbeats update liveness without undoing lifecycle state
+
+**Status.** Accepted on 2026-09-29 during P4-54 recovery hardening.
+
+**Choice.** A worker heartbeat persists `last_seen` but preserves `working`,
+`paused`, and `error` status. Newly created and existing idle workers may still
+become `active` when a heartbeat arrives. A heartbeat must never clear the scheduler's
+persisted marker for an in-progress run or implicitly unpause/recover a worker.
+
+**Why.** Interrupted-run reconciliation relies on the persisted `working`
+status. The previous heartbeat SQL replaced every non-deleted status with
+`active`, so a heartbeat could hide an interrupted run and could resume a
+paused worker without an explicit lifecycle action. Existing created-to-active
+behavior is retained.
+
+**Proof.** The focused DB test `a_heartbeat_preserves_working_paused_and_error_lifecycle_states`
+asserts status readback and `last_seen` persistence for protected lifecycle
+states. The existing `a_heartbeat_is_recorded_and_readable` test preserves the
+created-to-active contract. The 2026-09-29 P4-54 implementation now emits
+15-second RecipeRunner heartbeats, persists fleet-run/progress/interruption
+state, and exposes it through a Supervisor-only reader; see ADR-0115. Two-worker
+resume/reassignment and duplicate-effect prevention remain open.
+
+## ADR-LOG-RESTRUCT-0114 — Retry worker setup before entering the agent run
+
+**Status.** Accepted on 2026-09-29 while implementing P4-52.
+
+**Choice.** Retry only RecipeRunner's local preparation boundary: canonical
+workspace resolution, provider-key retrieval, provider construction, and
+AgentEngine construction. Use at most four attempts, Fibonacci delays from a
+200 ms base with bounded jitter, a 2.2 second per-delay cap, and a 2 second
+total elapsed cap. Treat missing configuration and unsupported providers as
+permanent; retry transient I/O, SQLite busy/locked, keychain errors, and a
+startup panic. Emit structured attempt/outcome/delay telemetry without error
+text. Keep the ephemeral session ID and runtime lease outside the retry loop,
+and call `engine.run` only after preparation succeeds.
+
+**Why.** Retrying after provider/tool work begins can duplicate paid calls or
+mutations. Keeping `engine.run` outside the retry boundary gives startup
+recovery a clear no-replay limit while leaving task-budget and claim behavior
+owned by one actual engine run.
+
+**Proof.** `cargo test -p arcana-core --lib startup_retry_tests --locked`
+passes six tests, and `cargo test -p arcana-core --lib recipes::runner::
+--locked -- --test-threads=1` passes all 13 RecipeRunner tests on Windows.
+The broader group also verifies missing workspace still fails closed before
+provider selection. The tests do not yet inject a failure after a production
+side effect or prove task claim/budget continuity; TG4-26 remains open for
+those proofs.
+
+## ADR-LOG-RESTRUCT-0115 — Reuse the run ledger for Supervisor-visible fleet health
+
+**Status.** Accepted on 2026-09-29 during P4-54.
+
+**Choice.** Keep worker health and operation history in the existing `runs.db`
+ledger instead of adding a second worker-health database. Each RecipeRunner
+tick creates one fleet run plus a worker-state row, records bounded safe tool
+operation labels in a capped history table, and updates heartbeat/run phases.
+Scheduler recovery closes those rows only after task claims have been released.
+Expose the latest roster/run/progress/checkpoint summary through a Supervisor-
+only built-in tool; do not let the health reader perform reassignment itself.
+Enforce one active run per worker in SQLite, require stale recovery to prove
+the owner PID is dead on the same host, and release only claims matching that
+run's PID and host. A checkpoint-store read failure is an explicit `unknown`
+state that blocks automated reassignment decisions.
+
+**Why.** `runs.db` already owns durable run identity and process-recovery
+semantics. A second store would split lifecycle evidence and create another
+cross-database consistency problem. The read-only Supervisor boundary keeps
+health evidence separate from the existing validated routing and claim APIs.
+Progress labels intentionally exclude prompts, tool arguments, paths, and
+outputs; recent events are capped at 500 per run and the reader returns at most
+ten per worker.
+
+**Proof.** The schema and ledger round-trip tests, the Supervisor-only tool
+readback/refusal/unknown-checkpoint tests, current-process recovery tests, the
+shipped Supervisor engine test, and the complete RecipeRunner test group pass
+on Windows. Two-worker restart/reassignment, resume after reconciliation, and
+exactly-once side-effect behavior remain open under TG4-27/28.
+
+## ADR-LOG-RESTRUCT-0116 — Do not overstate the independent daily spend ceiling
+
+**Status.** Accepted on 2026-09-29 during cross-phase audit reconciliation.
+
+**Choice.** Keep P4-29 focused on activating the saved per-task budget beside
+the worker-run cap. Describe P2's daily ceiling as a separate contract and
+leave its hard-stop claim unverified until TG2-17 closes; keep TG4-15 open for
+the interaction proof.
+
+**Why.** The P1/P2 cross-phase audit still records concurrency and persistence
+gaps in the daily-ceiling path. Calling that boundary an independently enforced
+hard stop from P4-29 would claim more than the current P2 evidence supports.
+
+**Proof.** The existing `claimed_task_budget_activates_before_the_next_provider_request`
+test proves the saved task cap enters AgentEngine after claim and blocks the
+next provider request. It does not prove interaction with the daily ceiling;
+that distinction is now explicit in P4-29 and TG4-15.
+
+## ADR-LOG-RESTRUCT-0117 — Keep source gates aligned with delegated production paths
+
+**Status.** Accepted on 2026-09-29 during the full-workspace test triage.
+
+**Choice.** Repair the failing source gates to inspect the current production
+delegation boundaries: both `execute_batch` partitions must use
+`execute_handler`, whose successful result is redacted; worker status and budget
+checks must scan past early test-only helper items instead of truncating at the
+first `#[cfg(test)]` marker. Preserve the underlying redaction, worker-status,
+and autonomous-budget requirements.
+
+**Why.** The 2026-09-29 workspace attempt reached the desktop library target:
+132 of its 135 tests passed before the three source-gate failures stopped that
+target.
+The three failures were caused by source detectors that could not express the
+current code shape, not by failing runtime behavior. Production source confirms
+the executor helper redacts successful results, the runner writes the expected
+status variants after its early test helper, and both worker and subagent
+constructors receive budgets. Leaving those detectors stale would block useful
+verification while misreporting behavior.
+
+**Proof.** `cargo fmt --all -- --check` passed. Focused `tg8_07`, `tg_p1_06`,
+and `tg_p2_03` tests passed. A fresh full workspace run remains pending; no
+phase or cross-phase gate is closed by this correction.
+
+## ADR-LOG-RESTRUCT-0118 — Preserve observability correlation and producer contracts
+
+**Status.** Accepted on 2026-09-29 during P4-50 consumer reconciliation.
+
+**Choice.** Aggregate tool-result byte metrics from the production
+`output_bytes` field while retaining compatibility with existing
+`result_bytes` records. Group trace views by their strongest available stable
+correlation identifier (`trace_id`, run, task, session, or call) and allow the
+operator to filter by that identifier. Time the cross-tier Memory search and
+aggregate stats APIs using fixed labels and count-only result metadata; report
+semantic extraction attempts, successful writes, and failures separately.
+Install SQLite profiling before connection setup pragmas. MCP observability
+must identify the connector and classify reconnect outcomes without logging
+endpoint URLs or raw request errors.
+
+**Why.** The independent P4-50 source review found that the Logs metric reader
+did not consume the tool executor's byte field, trace paths merged events by
+span name across distinct runs, Memory APIs were missing aggregate timers, and
+semantic extraction marked failed writes as successful. It also found the
+WAL setup pragma ran before SQLite profiling and MCP registration logs exposed
+the configured endpoint.
+
+**Proof.** Logs TypeScript checking and focused UI tests pass (5/5) for trace
+separation/filtering. Rust tests for metrics aggregation, Memory timings/write
+outcomes, production SQLite setup profiling, and MCP outcomes remain pending;
+these changes do not close TG4-24 or P4-50.
+
+## ADR-LOG-RESTRUCT-0119 — Keep recovery guidance outside bounded tool-error causes
+
+**Status.** Accepted on 2026-09-29 during P4 failure-path verification.
+
+**Choice.** Preserve the concise, redacted error cause within its 512-character
+bound, and provide caller-specific recovery instructions through the separate
+bounded `next_step` field. `project_command` uses this field for the third
+consecutive observed nonzero build exit, retaining the native-command-only
+diagnosis rule even when compiler output fills the cause.
+
+**Why.** The real Windows `project_command` test observed three failed Cargo
+build exits, but `ToolResult::error` truncated the serialized cause before the
+diagnostic suffix, so the model never received the recovery instruction. This
+is a producer-to-agent contract defect, not a missing failure counter.
+
+**Proof.** `bounded_error_keeps_actionable_next_step_separate_from_long_cause`
+and the production `third_observed_build_failure_exposes_diagnostic_guidance_on_the_tool_path`
+test pass. The latter ran three real Windows-isolated Cargo builds and verified
+the diagnostic in parsed JSON `next_step` despite a long compiler cause. This
+correction alone does not close TG4-25 or P4-51.
+
+## ADR-LOG-RESTRUCT-0120 — Quarantine interrupted task claims before retry
+
+**Status.** Accepted on 2026-09-29 during P4-53 recovery audit.
+
+**Choice.** When the exact owning worker process is interrupted, move its
+in-progress task to `needs_info`, clear only the matching PID/host claim, and
+preserve the assigned worker and a `[worker recovery]` reason. Wake the
+Supervisor to inspect the task and available health/checkpoint evidence. Do not
+return the task to automatic `ready` dispatch until uncertain side effects have
+been reconciled. If the current evidence cannot establish safety, leave it held
+for PA review.
+
+**Why.** The scheduler previously cleared the exact claim and returned the task
+to `ready` immediately after timeout, panic, or cancellation. The next
+Supervisor tick could replay a file, command, or other effect whose completion
+was not acknowledged. The existing run ledger keeps bounded operation labels,
+but it does not yet provide a durable mutation cursor or effect-intent ledger;
+requeueing before those records exist is unsafe.
+
+**Proof.** `p4_interrupted_run_quarantines_exact_claim_for_reconciliation`,
+`interrupted_worker_run_recovers_claim_and_persisted_worker_status`,
+`recovery_work_check_recognizes_supervisor_and_assigned_worker_tasks`,
+`panic_and_timeout_inside_guarded_runs_recover_state_and_keep_dispatch_eligible`,
+`recovered_supervisor_state_reaches_a_real_recipe_runner_on_the_next_tick`, and
+`shipped_supervisor_creates_visible_epic_and_phased_child_through_agent_engine`
+pass on 2026-09-29. These prove containment and Supervisor visibility, not
+resumable execution or side-effect reconciliation; P4-53 and TG4-27 remain
+open until a lost-acknowledgement mutation can be reconciled and resumed without
+duplication.
+
+## ADR-LOG-RESTRUCT-0121 — Separate sandbox launch measurement from setup hypotheses
+
+**Status.** Accepted on 2026-09-29 during P4-50 Windows launcher triage.
+
+**Choice.** Record the bounded-output process test as a 430.42-second
+end-to-end test measurement. Do not attribute that duration to ACL propagation,
+child startup, or pipe capture without stage-level timings. Compare cold launch
+with repeated launches under one retained workspace lease before changing ACL
+scope or cache lifetime.
+
+**Why.** The current test performs one PowerShell launch and validates draining
+and bounded capture for both streams. The code uses a workspace-scoped lease in
+production, but this isolated test does not measure a multi-launch retained
+lease or separate ACL API timing. A Luna High performance review found ACL
+inheritance over toolchain/PATH roots plausible but unmeasured; narrowing grants
+could break Cargo, build scripts, linkers, or command shims.
+
+**Proof.** `child_output_is_drained_but_captured_with_a_bounded_tail` passed
+1/1 in 430.42 seconds on 2026-09-29. This is a single cold-path observation,
+not a comparable baseline and not a measured ACL stage. The staged cold/warm
+benchmark remains open; no sandbox permission was weakened.
+
+## ADR-LOG-RESTRUCT-0122 — Share native runtime initialization across desktop and CLI
+
+**Status.** Accepted on 2026-09-29 during P4-50 CLI execution work, following
+the owner's explicit selection of a shared host initializer.
+
+**Choice.** Move host-independent Arcana runtime composition into a reusable
+initializer in `arcana-core`. Both Tauri and `arcanactl` will use it for shared
+state, provider/model hydration, sessions and permissions, subagent and
+analytics globals, and the Fleet runner/scheduler. Each host continues to own
+its event sink, logging subscriber/output policy, UI-only services, and process
+lifetime. Both hosts use the shared redacted readable/JSONL writer while
+selecting their own filters. A bounded CLI run disables the desktop's periodic
+analytics rollup, and its scheduler exposes a shutdown path that aborts and
+joins scheduled loops and one-off event kicks. The CLI Fleet command executes
+through the shared production runner/scheduler and provides a task-terminal
+completion condition plus a deadline.
+
+**Why.** P4-50/TG4-24 now requires a real production Fleet run without Tauri.
+Desktop setup currently owns several mandatory process globals, while the CLI
+only installs a null event sink and console tracing. Duplicating those globals
+in the CLI would let the two hosts drift and could skip required telemetry or
+cost accounting. The owner chose a shared initializer after reviewing this
+cross-host ownership change.
+
+**Proof.** Desktop and CLI both compile with the shared initializer; the core
+initializer selection tests pass (4/4), structured writer/redaction tests pass
+(2/2), and the Tauri log metric aggregation test passes. Focused Logs UI tests
+pass (6/6) and TypeScript typecheck passes. The real production CLI Fleet run,
+persisted event readback, injected recovery, and end-to-end shutdown proof are
+still pending; this ADR does not close P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0123 — Match personal-access-token markers as whole segments
+
+**Status.** Accepted on 2026-09-29 during the production CLI smoke.
+
+**Choice.** Detect `PAT` as a complete environment-variable name segment rather
+than using the substring check `_PAT`.
+
+**Why.** The actual CLI startup reported removal of `CODEX_MCP_NODE_PATH`,
+`CODEX_TECTONIC_PATH`, and other host path variables because `_PAT` also
+matches the prefix of `_PATH`. Those variables are not credentials; removing
+them can break tool discovery and made the startup report inaccurate. The
+segment match retains `GITHUB_PAT`/`GITLAB_PAT` protection while leaving path
+variables intact.
+
+**Proof.** Current CLI smoke exposed four false positives. Added classifier
+tests for the exact host variables and positive PAT names; `cargo test -p
+arcana-core --lib security::env_scrub::tests --locked` is the required focused
+recheck. Secret-shaped variables remain scrubbed, and the CLI smoke is isolated
+under a temporary profile/workspace.
+
+**Proof update (2026-09-29).** The focused env scrub suite passes 5/5,
+including all four host variables and positive PAT names.
+
+## ADR-LOG-RESTRUCT-0124 — Make persisted workspace consent manageable from CLI
+
+**Status.** Accepted on 2026-09-29 after the owner selected grant/revoke/status
+commands for CLI workspace consent.
+
+**Choice.** Add explicit `arcanactl consent grant|revoke|status` commands,
+requiring both a workspace path and provider. Resolve the workspace to its
+canonical path and use the same `WorkspaceEgressConsentDb` used by desktop
+Settings and provider wrappers. `fleet run` requires an explicit working
+directory and checks persisted consent before creating a task or starting
+workers.
+
+**Why.** A production CLI Fleet smoke correctly failed closed when it attempted
+Gemini egress without a matching persisted consent row, but the CLI had no way
+to manage that grant. An explicit workspace/provider command surface preserves
+the existing consent boundary; an implicit grant based on key presence or a
+Fleet invocation would weaken it.
+
+**Proof.** CLI workspace/provider validation test passes. A prior isolated
+production CLI call was denied before provider egress and wrote a `denied`
+audit row for the canonical workspace. The isolated subprocess test `cargo test -p arcanactl --test consent_cli --locked` passes persisted grant/status/revoke across separate CLI invocations. The denied live CLI attempt recorded a content-free audit row. After consent was granted, Gemini 3.8 Flash reached the Supervisor but exhausted the run budget before epic decomposition; successful Fleet completion/readback remains open.
+
+
+## ADR-LOG-RESTRUCT-0125 — Bound CLI Fleet Supervisor budget overrides
+
+**Status.** Accepted on 2026-09-29 after the owner selected an explicit per-run
+CLI budget override.
+
+**Choice.** `arcanactl fleet run` may override the Supervisor's token, USD, and
+turn caps for that invocation. Unspecified axes retain the existing Supervisor
+defaults (50,000 tokens, $0.25, 10 turns); the input is validated against the
+existing hard ceilings (1,000,000 tokens, $100, 100 turns). The shared runtime
+passes the override only to Supervisor engine runs. Worker run caps, saved task
+budgets, and the independent daily spend ceiling remain in force.
+
+**Why.** An isolated real Gemini Fleet attempt reached the production
+Supervisor but hit its default budget before it decomposed the epic. Raising a
+global default would remove the per-run choice and silently increase spend. A
+CLI-only bounded override makes the increased allowance explicit while
+preserving existing caps elsewhere.
+
+**Proof.** The CLI validates axis-specific overrides and retains defaults for
+unspecified fields; focused unit tests cover valid, partial, and over-ceiling
+inputs. The RecipeRunner budget selection test proves the override applies to
+the Supervisor and does not widen worker caps. A successful provider-backed
+Fleet run and its persisted cost readback remain pending.
+
+## ADR-LOG-RESTRUCT-0126 — Bootstrap newly seeded CLI workers before routing
+
+**Status.** Accepted on 2026-09-29 during the isolated production CLI Fleet
+smoke.
+
+**Choice.** The CLI Fleet host may start recipe-bound workers in `created`
+state. `RecipeScheduler::start_worker` first transitions those workers to
+`idle`; task assignment and subsequent worker admission continue to use only
+the runnable states (`idle`, `active`, `idle_no_provider`, and `error`).
+
+**Why.** A fresh `WorkersDb` seeds recipe-bound system workers in `created`.
+The first isolated `fleet run` correctly excluded them from routing but also
+treated them as ineligible for startup, so no worker could ever become
+runnable. Desktop startup already starts recipe-bound Created workers. The CLI
+needs the same explicit bootstrap step without making `created` itself a
+routing state.
+
+**Proof.** The isolated CLI command reached this fail-fast condition before
+creating the epic or starting workers. A focused CLI unit test now asserts
+Created is startable for bootstrap but remains unroutable; the full CLI rerun
+and worker/task readback are pending.
+
+## ADR-LOG-RESTRUCT-0127 — Use the repository `.env` key for Gemini live tests
+
+**Status.** Accepted on 2026-09-29 after the owner clarified that the new
+Gemini key in `.env` should be used for current and future tests and authorized
+replacing the saved vault value.
+
+**Choice.** Live Gemini provider tests read `GOOGLE_API_KEY` directly from the
+repository `.env` and do not fall back to ambient environment variables. The
+saved Arcana Google credential was synchronized from that same value so CLI
+and desktop production-host runs use the current key. Test output must never
+include the secret.
+
+**Why.** A previous CLI provider attempt used the older saved Windows
+credential and therefore was not evidence about the user's newly added `.env`
+key. The owner explicitly approved updating the vault; keeping the live test
+reader pinned to `.env` prevents this drift from recurring.
+
+**Proof.** A temporary sync helper stored the `.env` key through
+`VaultManager::store`, read it back for an in-memory equality check, zeroized
+both buffers, printed no key material, and was removed. The feature-gated live
+models-endpoint test passed using the `.env` reader. The focused Gemini 3.8
+stream-signature replay test currently receives repeated Google 503 Overloaded
+responses; signature replay remains unproven until the provider accepts the
+request.
+
+## ADR-LOG-RESTRUCT-0128 — Canonical UTC timestamp format for new persistence
+
+**Status.** Accepted on 2026-09-29 during P4-57/TG4-19 source inventory.
+
+**Choice.** New persisted timestamps use UTC RFC 3339 with fixed millisecond
+precision and a `Z` suffix (`YYYY-MM-DDTHH:mm:ss.sssZ`). Rust writers use one
+shared formatter; SQLite defaults, triggers, and direct SQL writers emit the
+same representation. Readers use the shared timestamp parser and continue to
+accept the older RFC 3339 offsets and offset-less SQLite UTC rows. Do not
+rewrite historical row contents solely to normalize their spelling.
+
+**Why.** The P4-57 inventory found writer splits in task/routing, worker/run,
+analytics, and configuration data; several readers bypass the shared parser;
+and analytics performs string comparisons between RFC 3339 values and
+space-separated SQLite cutoffs. Task elapsed displays and FleetChat also hand
+offset-less values directly to JavaScript `Date`. A single UTC representation
+makes new writes unambiguous, while dual-format readers preserve existing data.
+
+**Proof.** Partial implementation is underway. The shared Rust helper's
+leap-year, UTC−12/UTC+0/UTC+14, northern/southern DST-edge, and Rust-vs-SQLite
+shape tests pass. Memory/session writers use the shared formatter, and task,
+FleetChat, hook, and date-bucket UI cases pass focused tests in
+America/New_York and Australia/Sydney. Production DB defaults/triggers,
+analytics time-window query behavior, and every database write/read pair still
+need focused verification before TG4-19 can close.
+
+## ADR-LOG-RESTRUCT-0129 — Traverse exact ancestors for external toolchains
+
+**Status.** Accepted on 2026-10-01 after the production Windows
+`project_command` build test failed inside AppContainer.
+
+**Choice.** When a child needs a read/execute toolchain root outside the
+selected workspace, Arcana grants non-inheriting `FILE_TRAVERSE` on only that
+root's exact ancestors that are outside the workspace, excluding filesystem
+roots and OS-managed directories. Paths within `USERPROFILE` remain bounded to
+that profile. The toolchain root itself retains the existing inheritable
+read/execute grant; ancestor traversal never grants reading, listing, or
+writing.
+
+**Why.** The fixture built successfully outside AppContainer, but the real
+production launcher failed when Cargo invoked `link.exe` from `C:\PCI
+Geomatics`. The launcher granted read/execute at PATH roots and ancestor
+traversal only beneath `USERPROFILE`, so the external linker directory could
+not be reached. The fix preserves the user's OS-write-sandbox decision while
+granting the minimum ancestor capability needed to execute an already-selected
+toolchain binary.
+
+**Proof.** `external_toolchain_traversal_stays_on_the_selected_path_and_profile_paths_stay_scoped`
+passes its positive/negative path-shape assertions. The failed production
+`project_command` test took 229.40 seconds and confirms the host fixture builds
+outside the sandbox. Re-run the same production test and the checked-in
+ecosystem corpus before treating external toolchain execution or TG4-09 as
+proven. Keep the old abandoned temporary fixtures and user-profile AppContainer
+ACEs untouched until each is confidently attributed to a completed or
+interrupted test run.
+
+## ADR-LOG-RESTRUCT-0130 — Keep P4 observability local-first on `tracing`
+
+**Status.** Accepted on 2026-10-01 after reviewing the P4 observability
+implementation and official Rust observability documentation.
+
+**Choice.** Keep Arcana's in-process instrumentation on the existing `tracing`,
+`tracing-subscriber`, and `tracing-appender` stack, with privacy-safe JSONL as
+the durable source consumed by Arcana's Logs UI. Do not add OpenTelemetry SDK
+or OTLP exporter dependencies for P4. Reconsider an OTLP bridge only when an
+external collector/export destination is an explicit product requirement and
+its egress, failure-isolation, and local-retention behavior have an owner.
+
+**Why.** P4 requires a local four-panel Logs workflow and export that works
+without a collector, account, or network. The current `tracing` stack already
+provides structured spans/events, JSON formatting, filtering, and rolling
+writers used by that reader. Official OpenTelemetry Rust documentation
+currently labels traces, metrics, and logs Beta; the OTLP exporter sends data
+to a configured collector/backend. Adding it now would create another output
+path and egress/configuration surface without replacing the app-specific JSONL
+reader or satisfying a stated destination requirement. Sources reviewed:
+[OpenTelemetry Rust status](https://opentelemetry.io/docs/languages/rust/) and
+[OpenTelemetry OTLP exporter](https://docs.rs/opentelemetry-otlp/latest/opentelemetry_otlp/).
+
+**Proof.** Current `tracing-subscriber` supports per-layer filtering and JSON
+output, and `tracing-appender` supplies the existing rolling local sink.
+Focused structured-writer, fast-telemetry-filter, SQLite-profiling, and
+compaction-call tests pass on 2026-10-01. End-to-end producer-to-UI proof,
+telemetry failure isolation, and cost measurements remain open under P4-50 /
+TG4-24.
+
+## ADR-LOG-RESTRUCT-0131 — Grant path metadata for sandbox canonicalization
+
+**Status.** Accepted on 2026-10-01 after reproducing the production Clippy
+failure with a Rust compiler wrapper inside the Windows AppContainer.
+
+**Choice.** Grant non-inheriting `FILE_READ_ATTRIBUTES | FILE_TRAVERSE` on the
+exact ancestor directories required to resolve the selected workspace and
+selected toolchain paths. Keep read/write/execute access on the workspace and
+the existing narrowly selected toolchain roots. Ancestors do not receive file
+contents, directory-listing, or write access through this grant.
+
+**Why.** The production `cargo clippy` command failed with Windows
+`ERROR_ACCESS_DENIED` while canonicalizing `CLIPPY_CONF_DIR` and its config
+file, even though a sandboxed `cmd.exe type` could read the file. A Rust
+compiler wrapper inside the same AppContainer reproduced the denial on both
+paths. Moving the fallback config from `.arcana-cache` to the workspace root
+did not fix it and was reverted. The Windows workspace traversal grant only
+contained `FILE_TRAVERSE`; canonicalization also requires metadata access on
+ancestor directories. The added ACE is non-inheriting, limited to the exact
+path chain, and does not permit reading ancestor directory contents.
+
+**Proof.** The strengthened `production_clippy_environment_is_visible_and_readable_in_workspace_sandbox`
+test records config-directory and config-file canonicalization from a
+Rustc-wrapper process, then runs the actual fixed-argv Clippy intent. The
+updated Windows ACL scope test asserts the ancestor mask includes only path
+metadata rights. Both checks must pass before P4-11/TG4-18 can advance; Linux
+and macOS corpus results remain separate requirements.
+
+## ADR-LOG-RESTRUCT-0132 — Extend metadata grants through the selected path chain
+
+**Status.** Decision recorded on 2026-10-01; production proof pending.
+
+**Correction to ADR-LOG-RESTRUCT-0131.** The first metadata grant did not
+restore Clippy. A sandboxed Rustc wrapper still received `Access is denied`
+from `canonicalize()` for both the config directory and config file, while its
+`metadata()` call succeeded. Moving the fallback config to the workspace root
+also failed. The initial ancestor grant stopped at the current user profile,
+so it did not yet cover the full exact path chain (for example,
+`C:\Users\razia\...` also traverses `C:\Users`).
+
+**Choice.** Apply the same non-inheriting traverse-plus-metadata ACE to each
+non-OS-managed ancestor on the selected workspace or toolchain path, ending
+before the volume root. Keep the grant limited to path metadata; do not grant
+directory listing, file content, or write access to those ancestors.
+
+**Why.** The user-selected workspace may be outside the user profile, such as
+`C:\Playground\arcana-calendar`, and the sandbox must resolve that path for
+Rust tools without granting it content access to unrelated directories. The
+profile-only rule was too narrow for Windows path canonicalization.
+
+**Proof.** The Windows scope test now checks the exact parent chain for both
+the Rust toolchain and `C:\Playground\arcana-calendar`. The production Clippy
+probe asserts Rust-level path metadata/readback and runs Clippy through the
+AppContainer. Keep this decision and P4-11/TG4-18 open unless those Windows
+tests pass; Linux/macOS remain separate.
+
+## ADR-LOG-RESTRUCT-0133 — Deny autonomous child network and external project reads
+
+**Status.** Accepted on 2026-10-01 by the owner for P4-61.
+
+**Choice.** Sandboxed autonomous commands have no network access and cannot
+read arbitrary files outside their selected workspace. The host may expose
+only exact selected toolchain/runtime files or directories required to launch
+the chosen compiler/interpreter. Locked project dependency sources needed for
+the command are staged under the workspace before child launch. A missing
+dependency fails closed and requires a separate explicit host-controlled
+install/consent action; the child is never granted network access to fetch it.
+
+**Why.** The owner expanded P4-18 after the cross-phase security audit found
+that build/test children could inspect unrelated files and use outbound
+network. Preserving broad Cargo registry/git cache access would retain that
+external-read path. Platform-specific write-only confinement also did not
+enforce the requested read/network boundary.
+
+**Proof.** P4-61 / TG4-31 must demonstrate workspace read/write and exact
+runtime operation, external user-file read denial, network-denial against a
+controlled local endpoint, dependency staging from a locked fixture, and
+fail-closed behavior when a locked dependency is unavailable on Windows,
+Linux, and macOS. The real P4 launcher corpus must continue to pass under this
+contract. No P4 security task is closed by this decision record.
+
+## ADR-LOG-RESTRUCT-0134 — Correct the prior worker-timeout baseline and measure command stages
+
+**Status.** Accepted on 2026-10-01 as a correction and P4-62 implementation record.
+
+**Correction.** The P4-06 notes and TG4-02 reference a 600-second production
+push timeout. Inspection of the committed scheduler at `HEAD` shows that push
+and cron paths directly awaited `runner.run_recipe` without a production
+timeout wrapper. The 600-second statement is retracted as a source claim;
+the existing timeout-helper tests do not prove that production deadline.
+
+**Choice.** `project_command` uses a one-hour default and a two-hour per-call
+maximum; worker scheduler paths use a two-hour hard deadline. Keep the CLI
+epic deadline finite. Time command preparation, child process wait, output
+drain, and evidence persistence as separate correlated events. Use virtual
+time for a long-running scheduler/command-future test and a short real child
+test for process-tree cancellation instead of waiting eleven wall-clock
+minutes.
+
+**Why.** The owner asked to increase the capability's time after receiving a
+source-independent analysis. Bounded multi-hour values allow long project
+verification while preserving an explicit escape deadline. The analysis's
+544-second versus 0.81-second ratio lacks matched command, cache, hardware,
+platform, and timing boundaries and is not evidence of a compiler slowdown.
+Existing 430.42-second and 399.87-second Windows observations are end-to-end
+test durations without stage attribution.
+
+**Proof.** The timeout clamp test passes for the one-hour default, one-second
+override, two-hour maximum, and over-limit clamping. The production scheduler
+constant and wrapper are set to two hours. Remaining evidence is P4-62/TG4-32:
+exercise production timeout and reconciliation, cancel a real process tree,
+run a paused-clock scenario beyond ten minutes, record the new correlated
+stage timings, and compare equivalent cold/warm fixtures. The baseline
+correction does not close that gate.
+
+## ADR-LOG-RESTRUCT-0135 — Require per-call host approval for dependency installation
+
+**Status.** Accepted on 2026-10-01 by the owner.
+
+**Choice.** `project_command(intent="install")` requires an interactive,
+per-call host approval in every permission mode, including Autonomous. It
+cannot be authorized by a standing tool allowance. A headless host with no
+approval responder fails closed; no child network capability is granted to
+build/test commands.
+
+**Why.** A worker-authored install request is not host consent. Package
+installation can fetch untrusted code and execute package lifecycle/build
+scripts, so it needs a visible one-call approval even when ordinary autonomous
+project verification is allowed.
+
+**Proof.** The approval path uses the shared typed effect policy and existing
+permission event, carries the exact install intent to the host UI, and hides
+the “Allow Always” option. Focused tests must prove Autonomous mode prompts
+despite a saved `project_command` allowance and that denial prevents the
+install handler from running. A separate host-mediated staging path and the
+cross-platform read/network sandbox remain required by P4-61/TG4-31; approval
+alone does not close them.
+
+## ADR-LOG-RESTRUCT-0136 — Deny installs until locked dependency staging is implemented
+
+**Status.** Adopted on 2026-10-01 to enforce the already accepted P4-61
+security contract while staging is incomplete.
+
+**Choice.** After the per-call host approval, `project_command(intent="install")`
+still returns a structured network-capability denial before process launch
+until Arcana can stage only locked dependencies through a host-controlled
+path. Approval does not authorize a network-capable untrusted child.
+
+**Why.** Linux currently applies write-only Landlock rules, macOS still allows
+default reads/network, and Windows has not yet proved exact runtime/dependency
+staging. Launching an install process on any of those platforms would violate
+the accepted no-child-network policy or rely on unproved confinement.
+
+**Proof.** A focused tool test parses the structured denial and verifies the
+capability, deny policy, safe command identity, non-retryable state, and
+host-staging next step. The headless CLI and desktop permission tests remain
+separate; cross-platform staging and isolation proof is still required before
+this guard can be removed.
+
+## ADR-LOG-RESTRUCT-0137 — Return source-free structured project diagnostics
+
+**Status.** Accepted on 2026-10-02 by the owner.
+
+**Choice.** Failed `project_command` calls return bounded diagnostic codes and
+workspace-relative file/line/column locations when these can be extracted
+safely. They do not forward compiler messages, source snippets, raw commands,
+or absolute paths to the model-facing error envelope. Unknown formats fall back
+to a generic stable diagnostic code.
+
+**Why.** The Supervisor and worker need actionable failure information without
+turning untrusted compiler output into an unrestricted prompt/source disclosure
+path. Raw output can contain source text, credentials, or attacker-controlled
+instructions.
+
+**Proof.** Focused parser and ToolExecutor tests must prove useful compiler
+codes/locations survive while planted source, credentials, and outside-workspace
+paths do not. This does not claim compiler-message fidelity; maintainers should
+extend only the source-free parsers needed by supported toolchains.
+
+## ADR-LOG-RESTRUCT-0138 — Grant selected Windows config ancestor traversal only
+
+**Status.** Accepted on 2026-10-02 by the owner.
+
+**Choice.** For a validated Clippy configuration directory inside the selected
+workspace, Windows may add temporary, non-inheriting `FILE_TRAVERSE` and
+`FILE_READ_ATTRIBUTES` grants to that directory and its in-workspace ancestors.
+Exact file grants remain in place. Grants are revoked with the AppContainer
+lease; no listing, content-read, write, or execute capability is added by this
+ancestor allowance.
+
+**Why.** Clippy reads a selected workspace config but fails while canonicalizing
+its path inside AppContainer. The narrow path-metadata grant permits that
+operation without widening reads to sibling files or unrelated user paths.
+
+**Proof.** The Windows tests inspect exact ACL masks and inheritance, run the
+Clippy corpus, and use an AppContainer probe to deny synthetic sibling reads
+and loopback access while retaining workspace access. Linux/macOS remain
+separate target-platform proof.
+
+## ADR-LOG-RESTRUCT-0139 — Define deterministic Python build evidence
+
+**Status.** Accepted on 2026-10-02 by the owner.
+
+**Choice.** Python `project_command(intent="build")` runs
+`python -m compileall -q` over the selected project, directing bytecode into
+Arcana's workspace-local cache. Python test and lint intents remain separate;
+passing tests provide additional verification confidence but do not replace
+the deterministic build evidence needed for QC.
+
+**Why.** Python has no universal package build command, while P4's QC contract
+requires a Rust-owned observed build result for each supported ecosystem. A
+standard-library syntax compilation gives Python projects a bounded,
+dependency-free build operation with an observable exit code.
+
+**Proof.** Add production launcher fixtures for successful and failing
+compilation, confirm cache output stays within the selected workspace, and
+prove only the Rust-owned observed build result reaches task-scoped QC evidence.
+
+## ADR-LOG-RESTRUCT-0140 — Retain provider replay tokens across repeated stream updates
+
+**Status.** Accepted on 2026-10-02 as an engine-level preservation rule.
+
+**Choice.** When a streamed tool-call part is updated more than once, retain a
+provider-issued opaque replay token already observed for that same part if a
+later update omits it. A later non-empty token replaces the previous value;
+tokens are never logged or interpreted.
+
+**Why.** The Google adapter maps repeated updates to the same response-part
+index into the engine's tool-call accumulator. Replacing that accumulator with
+an unsigned update can discard metadata required to replay the call. Preserving
+provider-issued metadata is safe because the token is opaque and is required to
+be echoed unchanged.
+
+**Proof.** `repeated_gemini_stream_part_does_not_erase_its_thought_signature`
+parses repeated Gemini SSE parts, passes them through the production engine
+stream assembler, then verifies the real Gemini request builder carries the
+signature into the assistant part alongside its function response. The live
+CLI retry after this fix ended on provider `503 UNAVAILABLE` before tool
+execution, so the networked confirmation remains pending.
+
+## ADR-LOG-RESTRUCT-0141 — Correct the Python build command description
+
+**Status.** Correction recorded on 2026-10-02.
+
+**Correction.** ADR-LOG-RESTRUCT-0139 omitted two execution details. The live
+resolver runs `python -S -m compileall -q -x <generated-tree-exclusion-regex>
+.`, where `-S` disables site initialization and the workspace-local bytecode
+prefix is set by the platform launcher. Python Test remains the separate
+`python -m pytest` intent. The prior ADR remains correct about the selected
+stdlib build/test split and is corrected here rather than rewritten.
+
+**Proof.** `python_build_is_standard_library_compilation_and_keeps_tests_separate`
+asserts the exact argv and `project_command` sets `PYTHONPYCACHEPREFIX` beneath
+the workspace cache directory.
+
+## ADR-LOG-RESTRUCT-0142 — [RETRACTED] Resolve selected Windows paths through exact ancestors
+
+**Status.** Retracted on 2026-10-02 after the isolated ACL test demonstrated
+unacceptable cost and cleanup risk.
+
+**Retracted choice.** ~~A selected workspace-contained Clippy configuration may receive
+temporary `FILE_TRAVERSE | FILE_READ_ATTRIBUTES` grants on each existing
+directory in the exact absolute path chain, including parents above the
+workspace. Grants do not inherit and add no listing, content read, write, or
+execute capability. Exact config-directory/file grants remain workspace-bound.~~
+
+**Why this was retracted.** Restricting traversal to the workspace root did not let Windows
+canonicalize the absolute config path; the operation still traverses parent
+components before reaching the selected file. The prior production Clippy test
+proved readable bytes were insufficient. Exact path metadata access preserves
+the approved least-privilege contract while allowing canonicalization to be
+tested in theory, but the experiment below showed it is not operationally safe
+on this host.
+
+**Failed proof.** `selected_path_ancestors_receive_only_non_inheriting_traversal_grants`
+ran for over 60 seconds at high CPU while applying grants above the workspace.
+The interrupted test required explicit cleanup of its unique ACEs and
+AppContainer profile. No grant remains, but that cost and interruption risk
+make this path unsuitable.
+
+## ADR-LOG-RESTRUCT-0143 — Keep Windows traversal grants inside the workspace
+
+**Status.** Accepted as the operational rollback on 2026-10-02.
+
+**Choice.** Keep Windows config ancestor traversal limited to the selected
+workspace tree. Do not modify ACLs on protected user-profile or system
+ancestors to force Clippy path canonicalization. Clippy remains blocked until
+a path-resolution design can pass without expensive outer-ancestor DACL writes.
+
+**Why.** The broader experiment sustained high CPU, touched AppData/Temp
+ancestor ACLs, and was interrupted before normal RAII cleanup. It is less safe
+and less reliable than leaving Clippy unproven while preserving the narrow
+workspace security boundary.
+
+**Proof.** The unique AppContainer SID was removed from the test workspace,
+Temp, Local, AppData, and profile paths; Windows `DeleteAppContainerProfile`
+returned success and its mapping is absent. No matching ACE remains in the
+exact inspected paths. Do not rerun the broader ACL test.
+
+## ADR-LOG-RESTRUCT-0144 — Keep absent task IDs out of correlation buckets
+
+**Status.** Accepted on 2026-10-02 as a telemetry serialization correction.
+
+**Choice.** Serialize an absent task correlation as an empty string in
+structured telemetry, and treat it as unmatched by task-ID searches. Keep
+present task IDs as canonical decimal strings. Apply the same representation
+to operation timing, provider/engine events, and project-command lifecycle
+events.
+
+**Why.** A synthetic task ID of `0` makes unrelated taskless PA/project-command
+operations appear to share one task in trace grouping and correlation reads.
+The structured event contract already uses empty strings for unavailable
+correlation fields; the shared helper now makes task IDs follow that convention.
+
+**Proof.** Focused tests verify timer serialization and the Logs matcher for
+absent versus real task IDs. Current production project-command events use the
+shared helper, and spawn-error events carry their tool-call ID. Metrics,
+structured-stream listing, and quiet-filter regressions are also covered by
+focused CLI/Tauri tests. This does not prove the complete PA/Fleet producer to
+Logs UI path; P4-50 remains open.
+
+## ADR-LOG-RESTRUCT-0145 — Test worker deadlines with paused Tokio time
+
+**Status.** Accepted on 2026-10-02 as a focused test-infrastructure choice.
+
+**Choice.** Enable Tokio's existing `test-util` feature only for `arcana-core`
+tests and use its paused clock to exercise the production worker timeout
+wrapper without waiting in real time.
+
+**Why.** P4-62 explicitly requires proof that an operation longer than ten
+minutes completes before the configured two-hour worker cap. Real sleeps would
+make this regression slow and unreliable; the production code already uses
+Tokio time, so its test clock proves the same timeout boundary deterministically.
+
+**Proof.** `production_worker_deadline_allows_work_past_ten_minutes` calls the
+production `run_worker_future` with `PUSH_RUN_TIMEOUT`, advances a simulated
+10m+1s operation, and asserts successful completion and the 7200-second cap.
+Process-tree cancellation/reconciliation and stage-timing performance evidence
+remain open.
+
+## ADR-LOG-RESTRUCT-0146 — Normalize Fleet correlation and structured log discovery
+
+**Status.** Accepted on 2026-10-02 as a Logs consumer consistency fix.
+
+**Choice.** Treat `correlation_id` and `fleet_correlation_id` as one Fleet
+trace group; discover desktop log dates from valid readable `.log` and
+structured `.jsonl` files; and include the backend `failure` outcome in the
+Metrics failed-outcomes headline.
+
+**Why.** The CLI Fleet lifecycle and workers emit different field names for
+one UUID, so grouping by field name split one run into separate trace roots.
+A structured-only day was also inaccessible from the desktop date selector,
+and the failure headline omitted a backend-supported outcome. Normalizing
+these consumer contracts keeps a single Fleet view and reconciled metrics.
+
+**Proof.** Logs UI tests cover CLI/worker group unification and `failure`
+headline totals; a Tauri command helper test covers JSONL-only date discovery.
+The focused UI suite passes 9/9 and TypeScript typecheck passes. Production
+producer-to-UI proof and statement-level SQLite outcome instrumentation remain
+open under P4-50.
+## ADR-LOG-RESTRUCT-0147 — Guarantee the P4-51 suggested-action field
+
+**Status.** Accepted on 2026-10-02 during P4-51 contract audit.
+
+**Context.** P4-51 and TG4-25 require every production tool failure envelope to
+include an actionable `suggested_action`. Generic `ToolResult::error` values
+carry an actionable `next_step`, but `with_execution_context` did not project
+that value into the required field. Only handlers that already emitted
+`suggested_action` satisfied the full envelope contract.
+
+**Decision.** At the shared executor enrichment boundary, preserve an existing
+`suggested_action`; otherwise copy the already-redacted, bounded `next_step`;
+if neither is present, use the existing conservative default recovery guidance.
+Keep `next_step` for compatibility. Do not infer that an operation is safe to
+retry from the presence of guidance.
+
+**Reason.** A single result boundary covers generic, categorized, permission,
+timeout, panic, and sandbox failures before they reach the model, persistence,
+or UI. This additive field implements the named plan contract without changing
+the result's failure state or weakening retry safety.
+
+**Proof.** `cargo test -p arcana-core --lib executor_context_ --locked` passes
+five focused tests. `executor_context_promotes_generic_next_step_to_suggested_action`
+asserts generic `next_step` becomes `suggested_action`, while
+`executor_context_enriches_failures_without_changing_successes` verifies the
+sandbox handler-authored action remains intact. Full TG4-25 coverage remains
+open.
+
+## ADR-LOG-RESTRUCT-0148 — Retract an unsafe assumption in the PR-diff consent test
+
+**Status.** Correction recorded on 2026-10-02; the keychain-backed test path was
+removed before accepting evidence.
+
+**Retracted claim.** An isolated `HOME`/`USERPROFILE` made the matching-consent
+test provider-key-free and prevented network access. This was false on Windows:
+home isolation does not isolate the OS credential manager. The first test run
+failed its expected missing-key assertion after granting consent to a temporary
+workspace. It may have retrieved the stored Google key and issued one provider
+request with the synthetic test diff; local output does not establish whether
+the request reached Google or was billed. No repeated attempt was made.
+
+**Correction.** The PR-diff helper now accepts a private post-consent analyzer
+callback. Production still builds the capped `ConsentProvider`, which rechecks
+persisted consent immediately before egress. The regression supplies a local
+structural callback and proves matching consent reaches that callback; it never
+reads the vault or constructs a live provider. The unconsented test asserts the
+callback is not invoked.
+
+**Proof.** `cargo test -p arcana --lib commands::diff_commands::tests --locked`
+passes all three tests after the correction. This proves the Tauri PR-diff
+decision and audit callback path, not a live provider request or the desktop UI
+workflow; P4-60/TG4-16 remain open.
+
+## ADR-LOG-RESTRUCT-0149 — Correct the P4-55 desktop-retention status
+
+**Status.** Correction recorded on 2026-10-02 after checking the source entry
+point.
+
+**Retracted claim.** The P4-55 checkpoint and follow-on notes said desktop
+startup integration was still open. This claim was based on carrying forward
+the checkpoint without re-reading the Tauri bootstrap.
+
+**Correction.** `src-tauri/src/main.rs` calls `arcana_lib::logging::init()`
+before resolving the canonical `.arcana/logs` path and calling
+`arcana_lib::observability::log_retention::prune()`. Cleanup is best-effort and
+occurs after logging, so a cleanup failure is written to the new daily log and
+does not block startup. The P4-55 and TG4-29 records now reflect this existing
+production wiring. Isolated execution of desktop startup ordering and
+cross-platform symlink behavior remain unproven.
+
+**Proof.** Source bodies at the Tauri entry point show the call ordering; the
+core retention suite and captured cleanup-failure test pass. This corrects the
+integration status but does not close P4-55/TG4-29.
+
+## ADR-LOG-RESTRUCT-0150 — Persist task assignment before worker dispatch
+
+**Status.** Applied on 2026-10-02 to close the production ordering defect
+identified in the P4 recovery audit.
+
+**Decision.** The Tauri task-status command persists the status and owner
+transition before issuing a synchronous scheduler kick. ACP results describe
+inbox persistence and pending acknowledgement; a stored message is not reported
+as consumed merely because Arcana requested a worker tick.
+
+**Reason.** `RecipeScheduler::kick_worker` checks recoverable work immediately.
+Kicking before the task row changes can observe stale state and defer work to
+the five-minute reconciliation sweep. ACP messages are delivered at-least-once
+until acknowledgement and may remain queued when no recipe consumer is active.
+
+**Proof.** `ui_assignment_persists_before_recipe_runner_dispatch` observes the
+assigned task during the kick and reaches the real `RecipeRunner` no-provider
+boundary using an isolated workspace and no provider configuration. The
+production `send_worker_message` ToolExecutor test persists a message to an
+unbound worker, reads the stable inbox row, and proves acknowledgement removes
+it from replay. Full ACP interruption-side-effect idempotency and the live
+Calendar Fleet run remain open.
+
+## ADR-LOG-RESTRUCT-0151 — Gate query-plan assertions on representative rows
+
+**Status.** Applied on 2026-10-02 as incremental P4-58/TG4-20 work.
+
+**Decision.** The worker claim and latest worker-tick SQL are named constants
+shared by their production methods and query-plan regressions. Tests populate
+representative rows and run `ANALYZE` before asserting indexed access. For task
+claim lookup, either the status or assignment index is valid; the test records
+SQLite's observed choice instead of imposing an unmeasured composite index.
+
+**Reason.** Index selection depends on data distribution. A test should reject
+a table scan while allowing the planner to choose among applicable indexes;
+adding a composite index requires a workload measurement that demonstrates a
+benefit. The complete production query inventory remains a P4-58 obligation.
+
+**Proof.** The populated daily-cost fixture shows the date primary-key index;
+task fixtures show `idx_tasks_status` for both claim lookup and orphan-candidate
+selection; the fleet-run fixture selects `idx_worker_run_state_worker` for
+latest worker state. Each test rejects a primary-table scan. These are four
+query proofs, not complete gate evidence. The full working list is
+`_verify/P4-58-QUERY-INVENTORY.md`.
+
+## ADR-LOG-RESTRUCT-0152 — Index worker requests by status and observed time
+
+**Status.** Applied on 2026-10-02 as incremental P4-58/TG4-20 work.
+
+**Decision.** Add the additive tasks database migration
+`idx_worker_requests_status_created_at` on `(status, julianday(created_at)
+DESC, id DESC)` and make the status-filtered production query a shared SQL
+constant used by its populated-fixture plan regression.
+
+**Reason.** With 160 representative worker requests and `ANALYZE`, SQLite chose
+`SCAN worker_requests` for the production pending-status query and sorted it in
+a temporary B-tree. A temporary candidate expression index changed the same
+query plan to an indexed search and removed the temporary sort while preserving
+the existing chronological ordering semantics. The migration is justified by
+that measured plan change rather than index presence alone.
+
+**Proof.** `worker_request_status_filter_uses_an_index_with_populated_rows`
+passes against the migrated isolated database and requires the new index with
+no request-table scan. The P4-58 inventory remains incomplete.
+
+## ADR-LOG-RESTRUCT-0153 — Keep worker-stat SQL parameters numbered
+
+**Status.** Applied on 2026-10-02 while adding P4-58 analytics query-plan proof.
+
+**Decision.** Number all three worker-stat range query binds explicitly as
+`?1`, `?2`, and `?3` across the outer aggregate and latest-heartbeat subquery.
+
+**Reason.** The query-plan regression surfaced SQLite assigning anonymous
+placeholders after the highest numbered placeholder in the nested query. That
+made the production statement require six parameters although the real reader
+supplies exactly worker ID, start date, and end date.
+
+**Proof.** The parameter-count failure was reproduced in the isolated populated
+fixture. After the SQL fix, the focused analytics plan test is rerun with the
+same three values used by the production caller.
+
+## ADR-LOG-RESTRUCT-0154 — Preserve analytics timestamp semantics with indexed predicates
+
+**Status.** Applied on 2026-10-02 as incremental P4-58/TG4-20 work.
+
+**Decision.** Analytics local-day readers use UTC lexical bounds for canonical
+RFC3339 rows and legacy SQLite space-separated rows, with an explicit separator
+predicate on each branch so a canonical `T` row cannot also match the legacy
+space-bound branch. Recent failure and system-event readers split valid recent
+rows from malformed non-null timestamps with `UNION ALL`; additive
+`julianday(timestamp)` expression indexes serve both branches while preserving
+strict-reader errors for malformed data.
+
+**Reason.** The existing `DATE(timestamp, 'localtime')` and
+`julianday(timestamp)` predicates caused populated analytics reads to scan.
+An initial two-format range rewrite also double-counted canonical rows against
+the space-separated range because `T` sorts after a space. A local-midnight
+behavior test exposed that defect. The separator predicate restores one-format,
+one-branch matching without discarding legacy rows. Splitting recent valid and
+malformed paths allows SQLite to seek the expression index rather than scan the
+whole table for an `OR` predicate.
+
+**Proof.** `analytics::db::local_day_tests` verifies local-day boundaries,
+legacy/canonical cutoff behavior, and filtered system-event results.
+`dashboard_live_analytics_plans_classify_scans_and_worker_index_use` populates
+and analyzes token usage, worker stats, API failures, and system events, then
+asserts production query plans use their selected indexes. The focused
+analytics database suite passes. Full TG4-20 inventory and enforcement against
+unregistered readers remain open.
+
+## ADR-LOG-RESTRUCT-0155 — Index ready dispatch and recent automatic routing history
+
+**Status.** Applied on 2026-10-02 as incremental P4-58/TG4-20 work.
+
+**Decision.** Add a partial `idx_tasks_ready_dispatch` index for ready non-epic
+tasks ordered by creation time and ID, and use a shared `CLAIM_NEXT_READY_SQL`
+constant for atomic dispatch and its plan regression. Add a routing-history
+expression index on automatic-assignment provenance plus `julianday(assigned_at)`
+for the bounded newest-first history reader. Keep the existing worker/type
+index for affinity aggregation; do not add a redundant covering index because
+the measured production plan already groups in index order without a temporary
+sort.
+
+**Reason.** Populated pre-index dispatch plans used the status index but needed
+a temporary chronological sort. The partial index narrows the relevant ready
+non-epic set and provides its ordering while retaining the same single-statement
+active-claim guard. Recent history's `julianday(assigned_at)` reader could not
+use its existing plain timestamp index. Affinity grouping already selected
+`idx_routing_history_worker_type` with no temporary B-tree, so another index
+would increase write/storage cost without demonstrated plan improvement.
+
+**Proof.** `ready_task_claim_uses_dispatch_and_active_claim_indexes` compares
+the populated baseline and candidate plans, then verifies the oldest ready
+task is claimed and a second active claim is rejected. The routing history and
+affinity regression seeds automatic and override rows, compares the baseline
+with the migrated plans, proves automatic history uses the measured expression
+index, and confirms affinity stays on the existing worker/type index. The
+focused tests pass; TG4-20 still has remaining query families and registry
+enforcement open.
+
+## ADR-LOG-RESTRUCT-0156 — Index recent and stale ACP message readers
+
+**Status.** Applied on 2026-10-02 as incremental P4-58/TG4-20 work.
+
+**Decision.** Extract shared SQL for the recent and stale ACP readers. Express
+stale age as `julianday(created_at) <= julianday('now', ?1)` so it matches a
+partial index over pending/read messages, and add measured expression indexes
+for global recent ordering and stale-age selection. Keep recipient/status and
+task-chat indexes for the other ACP production readers.
+
+**Reason.** The previous stale predicate wrapped its column in `datetime()`
+while sorting by `julianday()`, and the recent reader had only an unaligned
+plain timestamp index. Populated baseline plans showed a table scan and/or
+temporary ordering work. The new expression indexes align with the actual
+filter and order clauses and preserve the existing SQLite UTC datetime
+semantics.
+
+**Proof.** `worker_message_inbox_and_counts_use_recipient_or_task_indexes`
+compares baseline and candidate plans after populating 360 timestamped ACP
+messages and running `ANALYZE`. Recipient/status, task, recent, stale and count
+queries select their intended indexes. The production recent/stale readers
+return bounded, status-appropriate results. The test passes; query inventory
+registration remains incomplete outside this ACP family.
+
+## ADR-LOG-RESTRUCT-0157 — Retain existing claim indexes for recovery selection
+
+**Status.** Applied on 2026-10-02 as incremental P4-58/TG4-20 work.
+
+**Decision.** Share the exact-owner interrupted-claim selection SQL with its
+populated plan regression and retain the existing task status/assignment
+indexes. The assigned-task PID claim remains a primary-key update with its
+active-owner guard; no additional composite claim index is added.
+
+**Reason.** The task recovery fixture shows the exact worker/PID/host selection
+uses an existing status or worker index and preserves nonmatching claims. The
+assigned claim point-reads by integer primary key. Adding a new index before a
+measured plan or observed latency gap would add write cost without reducing a
+base-table scan.
+
+**Proof.** `interrupted_claim_reconciliation_uses_owner_filter_index` seeds
+matching and mismatched claims, checks the indexed plan, holds only the exact
+owner IDs, and confirms other claims remain active. The extended ready-claim
+plan test confirms assigned claims point-read the task and transition through
+the production method. Remaining diagnostics/request inventory and new-reader
+registration keep TG4-20 open.
+
+## ADR-LOG-RESTRUCT-0158 — Index the dashboard workers-added-today query
+
+**Status.** Applied on 2026-10-02 as incremental P4-58/TG4-20 work.
+
+**Decision.** Share the three worker-summary SQL statements used by
+`AnalyticsQueries::get_dashboard_summary`. Add migration 5's expression index
+`idx_workers_created_date` over `date(created_at)` for the workers-added-today
+reader. Classify exact total and active worker counts as intentional full-roster
+count exceptions.
+
+**Reason.** The populated 1,000-row fixture showed the date-wrapped reader used
+the existing status index only as a covering scan and visited the roster. The
+date expression index lets SQLite seek the day directly. Total and active
+counts must inspect every current worker row because their status predicates
+define the exact roster totals; a secondary index would still require a broad
+count and would add write cost without demonstrated benefit.
+
+**Proof.** `dashboard_worker_summary_uses_date_index_and_preserves_counts`
+compares the production-shaped date query before and after adding the candidate
+index, checks both exact-count plans as registered scan exceptions, and
+verifies 800 non-deleted, 600 active, and 500 added-today results from 1,000
+rows. The focused test passes. P4-58/TG4-20 remain open pending mechanically
+enforceable query registration and final inventory audit.
+
+## ADR-LOG-RESTRUCT-0159 — Index epic and phase task-progress readers
+
+**Status.** Applied on 2026-10-02 as incremental P4-58/TG4-20 work.
+
+**Decision.** Share production SQL for `TasksDb::get_epic_tasks` and
+`get_ready_tasks_in_phase`; add migration 14 indexes for epic ordering and
+ready tasks within an epic phase.
+
+**Why.** The remaining-reader audit found both fleet progress readers absent
+from the query inventory. A populated 5,000-task plan fixture reproduced a
+full scan plus temporary sort for epic progress, and a status-index search plus
+temporary sort for ready phase work. The measured indexes allow SQLite to seek
+by epic (and phase) in the requested `phase_order, id` order. Adding indexes
+without representative populations or production-shared SQL would not prove
+the workload path.
+
+**When.** 2026-10-02 · phase P4 · triggering task `P4-58` / gate `TG4-20`
+
+**Where.** `arcana-core/src/db/tasks.rs` ·
+`docs/restructurization/development/_verify/P4-58-QUERY-INVENTORY.md` ·
+`MASTER_DEVELOPMENT_PLAN.md` · `TESTING_GATES.md` · `READINESS_MATRIX.md`
+
+**How.** Migration 14 creates `idx_tasks_epic_phase_order` and
+`idx_tasks_ready_phase_order`. `epic_progress_readers_use_measured_indexes_with_populated_tasks`
+compares pre/post `EXPLAIN QUERY PLAN` over 5,000 inserted tasks, asserts the
+production SQL selects the intended indexes without table scans or temporary
+ordering sorts, and verifies production reader results/order. The focused test
+passes. P4-58/TG4-20 remain open for the remaining scoped reader audit and an
+enforceable query registry.
+
+**Links.** MDP P4-58 · `TG4-20` · `_verify/P4-58-QUERY-INVENTORY.md`
+
+## ADR-LOG-RESTRUCT-0160 — Grant exact external ancestors for selected config canonicalization
+
+**Status.** Owner-approved on 2026-10-02; implementation and Windows proof in progress.
+
+**Supersedes.** ADR-LOG-RESTRUCT-0142 and ADR-LOG-RESTRUCT-0143's rollback boundary, following the owner's later approval to grant exact ancestor traversal for the selected config path.
+
+**Choice.** For a config file already validated inside the selected workspace, temporarily grant the AppContainer SID only non-inheriting `FILE_TRAVERSE | FILE_READ_ATTRIBUTES` on the existing directories in that exact path's ancestor chain, including ancestors above the workspace and excluding the volume root. Keep content read/execute grants confined to the selected config directory/file. Revoke the exact grants when the workspace AppContainer lease ends. Do not grant listing, file content, write, or execute on external ancestors.
+
+**Why.** The production Clippy failure remains after the config bytes became readable: its child process cannot canonicalize the selected absolute config path because Windows denies metadata/traversal on parent directories. A workspace-only chain does not satisfy canonicalization for an absolute path. The owner explicitly selected the exact-ancestor grant after the earlier experiment was rolled back; the scope remains limited to the selected path and metadata rights.
+
+**Proof.** The Windows regression must verify the grant set exactly follows the selected path through the volume root's parent, carries no inheritable bits or extra rights, and is revoked after lease teardown. An AppContainer probe must canonicalize the config directory/file and execute the production Clippy intent while continuing to deny sibling content reads and local TCP. Measure this focused test and stop/clean its child process and unique SID on every exit path. Linux/macOS remain separate requirements.
+
+**When / where.** 2026-10-02 · P4-11/P4-61 · `arcana-core/src/platform/process_sandbox/windows.rs` · `TG4-18` · `TG4-31`.
+
+## ADR-LOG-RESTRUCT-0161 — Index omitted fleet and dashboard query readers
+
+**Status.** Applied on 2026-10-02 as measured P4-58/TG4-20 work.
+
+**Decision.** Share production SQL and add populated plan/result regressions for the daily task-budget summary, stranded QC-reviewer claims, and ordered worker roster used by routing and assignment. Add migration 15's `date(created_at)` task index, migration 16's partial QC-claim index, and workers migration 6's partial active-roster ordering index.
+
+**Why.** A fresh consumer audit found these P2 readers absent from the existing fleet/dashboard inventory. The daily budget reader wrapped its timestamp in `date()`, QC reconciliation filtered sparse non-null claims without an index, and the full roster query paid a temporary ordering sort. Each candidate was compared against a populated baseline before adoption; exact full-roster and aggregate count semantics remain explicit.
+
+**Proof.** `daily_budget_summary_uses_measured_date_index_and_preserves_utc_day_totals` passes with 2,000 task rows, an observed baseline scan, indexed date seek, and exact production totals. `qc_claim_reconciliation_uses_partial_index_with_populated_tasks` passes with 2,000 rows, baseline scan, indexed sparse-claim seek, and all claim/reviewer pairs read back. `worker_roster_uses_measured_order_index_and_returns_full_non_deleted_roster` passes with 2,000 workers, baseline temporary sort, index-ordered production plan, and exact filtered/order behavior. The fresh source audit continues for any remaining readers; enforceable inventory registration remains open.
+
+**Where.** `arcana-core/src/db/tasks.rs` · `arcana-core/src/db/workers.rs` · `_verify/P4-58-QUERY-INVENTORY.md` · `MASTER_DEVELOPMENT_PLAN.md` · `TESTING_GATES.md` · `READINESS_MATRIX.md`.
+
+## ADR-LOG-RESTRUCT-0162 — Retain existing unblock and lookup indexes
+
+**Status.** Applied on 2026-10-02 as incremental P4-58/TG4-20 work; the listed focused regressions pass.
+
+**Decision.** Add production-shared SQL and populated query-plan/result coverage for task budget status, task unblocking/blocker point reads, epic completion aggregation, daily-cost point lookup, and worker lookup by slug. Keep `TasksDb::unblock_ready_tasks` on the existing task-status index; do not add a partial index unless the populated planner selects it over the existing index. Use the existing epic index, daily-cost date primary key, and unique worker-slug index. Read yesterday's dashboard daily-cost row once and reuse it for both cost and token totals.
+
+**Why.** A fresh reader audit found production consumers not represented in the P4-58 inventory. Initial plan comparison selected `idx_tasks_status` for sparse blocked-task selection and did not select the proposed partial covering index, so that migration was removed. Worker slug and daily cost are already indexed by schema. The dashboard summary previously issued the same daily-cost point query twice for one date.
+
+**Proof.** `cargo test -p arcana-core task_budget_and_unblock_readers_use_existing_indexes_with_populated_tasks --lib`, `cargo test -p arcana-core worker_roster_uses_measured_order_index_and_returns_full_non_deleted_roster --lib`, and `cargo test -p arcana-core dashboard_daily_cost_range_uses_primary_key_index_with_populated_rows --lib` each pass 1/1. The task regression checks primary-key and epic indexes, the existing status index, exact budget results, and actual dependent-task release. The worker regression checks the unique slug plan and production readback. The daily-cost regression checks the date point and range plans and production point reader.
+
+**Where.** `arcana-core/src/db/tasks.rs` · `arcana-core/src/db/workers.rs` · `arcana-core/src/analytics/db.rs` · `arcana-core/src/analytics/queries.rs` · `_verify/P4-58-QUERY-INVENTORY.md`.
+
+## ADR-LOG-RESTRUCT-0163 — Treat AppContainer DOS canonicalization as a platform boundary
+
+**Status.** Open for owner direction on the Windows sandbox architecture; no rights were widened.
+
+**Decision.** Do not attempt to solve Rust/Clippy `canonicalize()` failures by adding broader filesystem ACL grants. The owner-approved exact ancestor traversal/read-attributes grants remain the maximum approved ACL scope. The production Clippy regression confirms metadata/config reads work while `canonicalize()` is denied. Windows Rust build/test corpus proof remains open until Arcana either evaluates a different OS sandbox that preserves external-read/network denial or keeps incompatible toolchains fail-closed under AppContainer.
+
+**Why.** The failure is consistent with Windows AppContainer's DOS-volume namespace restriction, not simply a missing filesystem ACE. Rust documents Windows `std::fs::canonicalize` as using `CreateFile` and `GetFinalPathNameByHandle`; a current Microsoft STL AppContainer report reproduces `ERROR_ACCESS_DENIED` for DOS-volume resolution even with broad filesystem ACLs and describes NT-volume fallback as a workaround: https://github.com/microsoft/STL/issues/6286. Rust API documentation: https://doc.rust-lang.org/stable/std/fs/fn.canonicalize.html. A separate Cargo workspace `target` creation denial also remains to be isolated; the namespace finding does not explain that write failure.
+
+**Proof.** `production_clippy_environment_is_visible_and_readable_in_workspace_sandbox` failed after 78.29 seconds with `canonicalize()` denied for both config directory/file, metadata/content reads succeeding, and Cargo failing to create `workspace\target`. `selected_path_ancestors_receive_only_non_inheriting_traversal_grants` passes for the exact granted chain. No wider ACL experiment was run.
+
+**Where.** `arcana-core/src/platform/process_sandbox/windows.rs` · `arcana-core/src/agent/builtin_tools/project_command.rs` · `P4-11` · `P4-61` · `TG4-18` · `TG4-31` · `_verify/P4-SESSION-CHECKPOINT-2026-10-02.md`.
+
+## ADR-LOG-RESTRUCT-0164 — Preserve monthly worker-stat coverage in every reader
+
+**Status.** Applied on 2026-10-02; focused core and shared-reader tests pass. P4-59/TG4-21 remain open pending the full retention/export lifecycle proof.
+
+**Decision.** Keep the exact `covered_start` and `covered_end` for each monthly worker-stat bucket and expose those bounds plus `granularity` through the Tauri analytics response, CLI table, and JSON export. A mixed aggregate reports a monthly granularity when any contributing record is monthly.
+
+**Why.** Monthly totals cannot honestly answer a partial-month query at daily precision. Showing the dates represented by each rollup lets the operator see the actual evidence interval, while recent raw rows retain day-level detail.
+
+**Proof.** `worker_stats_accumulate_roll_up_atomically_and_read_with_coverage` passes with same-day tick accumulation, idempotent rollup, mixed daily/monthly aggregation, and exact bounds. `cargo test -p arcana-shared worker_stats --lib --locked` passes both monthly composition and legacy-schema reader tests. The Tauri response and CLI now carry/display coverage. Build checks are recorded in the active P4 checkpoint.
+
+**Where.** `arcana-core/src/analytics/db.rs` · `src-shared/src/db/analytics.rs` · `src-tauri/src/commands/analytics_commands.rs` · `src-cli/src/commands/analytics.rs` · P4-59 · TG4-21.
+
+## ADR-LOG-RESTRUCT-0165 — Reserve a conservative daily spend maximum before provider dispatch
+
+**Status.** Implementation in progress on 2026-10-02; focused reservation tests pass. P2-21/TG2-17 remain open pending provider-boundary, failure, restart, and production-consumer evidence.
+
+**Decision.** When the persisted daily cap is enabled, atomically reserve a conservative maximum in config.db before each provider request. Compute it from the selected model's full context window and output/thinking budget at the highest published input/output rates. Fail closed on unknown model/pricing, malformed cap state, or persistence error. Reconcile against reported usage; retain the full hold when a dispatched call has no reliable usage. Disabled caps do not incur model lookup or estimate work.
+
+**Why.** A read-then-call counter allows concurrent workers to overspend and previously swallowed settings failures. An immediate SQLite transaction includes outstanding holds before a request is sent. Holding the maximum after ambiguous dispatch favors the user's ceiling over reclaiming possibly spent capacity.
+
+**Proof.** Focused tests cover atomic concurrent reservations, denial at the ceiling, actual-cost reconciliation, unknown-usage retention, malformed cap rejection, the disabled setting, and re-enabling after uncapped same-day spend. The provider wrapper and production failure/restart paths still need end-to-end regressions; do not claim TG2-17 closed.
+
+**Where.** `arcana-core/src/budget/daily.rs` · `arcana-core/src/provider/capped.rs` · `arcana-core/src/db/config_db.rs` · P2-21 · TG2-17.
+
+## ADR-LOG-RESTRUCT-0166 — Record logical database outcomes after the operation returns
+
+**Status.** Applied in part on 2026-10-02; comprehensive P4-50/TG4-24 coverage remains open.
+
+**Decision.** Keep the rusqlite profile callback's statement event explicitly labeled `duration_observed`; it cannot report success or failure. Record outcome at a logical operation boundary after the Rust operation returns. Such events may include only fixed operation names, logical database identity, bounded result counts, duration, and a stable outcome.
+
+**Why.** Reporting a profiled SQL statement as successful would be unsupported. A result-aware operation event preserves an honest distinction between statement timing and a DB-backed operation's known result, without capturing SQL or bound values.
+
+**Proof.** `OperationTimer`'s captured JSON regression verifies database identity, duration, success outcome, and a zero result count. Worker-stat rollup/range, graph build plus node/edge/FTS/flush stages, and memory operation timers now emit logical database identities and result-aware outcomes. Graph producer, memory recall classification, and Logs fallback metric tests pass. This is not yet an audit of every production DB/Memory/graph operation or the Logs UI reader path.
+
+**Where.** `arcana-core/src/observability/timing.rs` · `arcana-core/src/analytics/db.rs` · `arcana-core/src/analytics/aggregator.rs` · P4-50 · TG4-24.
+
+## ADR-LOG-RESTRUCT-0167 — Fail closed when scoped SQLite reader owners are not inventoried
+
+**Status.** Initial owner-registration implementation applied on 2026-10-02 and strengthened by ADR-0168; TG4-20 remains open until discovered in-scope readers have populated plan/result proofs or explicit bounded exclusions.
+
+**Decision.** Use a `syn`-based integration test over the six P4 fleet/dashboard SQLite modules to discover production read owners, resolve SQL constants and local bindings, ignore test-only code, and fail when a discovered owner is absent from the P4-58 inventory. Replace the three internal token-group SQL interpolations with fixed allowlisted SQL constants so the source audit can identify the actual query forms.
+
+**Why.** An inventory that exists only as prose can drift while production queries change. AST discovery makes new reader owners visible in CI; the inventory then assigns plan evidence or a bounded scope decision. Source registration is explicitly separate from populated `EXPLAIN QUERY PLAN` and result behavior proof.
+
+**Proof.** The initial `cargo test -p arcana-core --test p4_query_registry --locked` passed 2/2 after listing newly discovered owners. Its owner-only coverage was insufficient for additions within an existing owner; ADR-0168 records the exact-fingerprint extension. The inventory continues to mark remaining plan/scope work open, so TG4-20 does not close on the registry test alone.
+
+**Where.** `arcana-core/tests/p4_query_registry.rs` · `arcana-core/src/analytics/db.rs` · `_verify/P4-58-QUERY-INVENTORY.md` · P4-58 · TG4-20.
+
+## ADR-LOG-RESTRUCT-0168 — Fingerprint every statically resolved production query
+
+**Status.** Applied on 2026-10-02; exact-query registry and focused production-reader tests pass. TG4-20 remains open for missing plan/result proof and scope decisions.
+
+**Decision.** Extend ADR-0167's AST inventory guard from owner presence to exact normalized SQL fingerprints. Every statically resolved `SELECT`/`WITH` read in the six scoped production modules must match a checked-in fingerprint; any new query or query-text change fails the gate until registered. Keep plan/result evidence and exclusions on the owner inventory rows, and do not treat the fingerprint table as plan proof.
+
+**Why.** Owner-only registration allows a new query inside an already-listed method to bypass the registry. Exact fingerprints close that gap without pretending that source registration proves planner behavior or consumer results.
+
+**Proof.** `cargo test -p arcana-core --test p4_query_registry --locked` passes 2/2 with 79 production query fingerprints. The inventory now records passing populated-plan/result evidence for `RunsDb::latest_worker_run_owner`, `RunsDb::latest_worker_ticks`, token aggregates/top sessions, and the exact `TasksDb::get_blocked_tasks` reader. Remaining open inventory rows continue to block TG4-20.
+
+**Where.** `arcana-core/tests/p4_query_registry.rs` · `_verify/P4-58-QUERY-INVENTORY.md` · `arcana-core/src/db/runs.rs` · `arcana-core/src/analytics/db.rs` · `arcana-core/src/db/tasks.rs` · P4-58 · TG4-20.
+
+## ADR-LOG-RESTRUCT-0169 — Scope P4-58 to production fleet/dashboard dispatch readers
+
+**Status.** Applied on 2026-10-02 after production-caller audit and isolated plan/result tests; TG4-20 remains open for other in-scope rows.
+
+**Decision.** Treat `PlansDb::claim_next_item` and `check_dependencies` as in-scope because the production planner invokes them for plan dispatch and dependency readiness. Exclude plan presentation/readback helpers with bounded reasons where their only consumers are planner detail/list/update flows, or where no production consumer exists. Exclude `RunsDb::get` and `recent` because the Rust production tree has no callers; fleet recovery uses dedicated readers. Include the worker point lookup used by worker status/model/recipe commands, but exclude slug uniqueness validation from dispatch/routing query evidence.
+
+**Why.** TG4-20 covers fleet/dashboard, dispatch, stale-recovery, task-health, and observability reads. A source inventory should not silently expand to unrelated planner presentation or admin validation paths, and public helper existence alone is not evidence of production use. Dispatch dependencies remain in scope regardless of which UI invokes them.
+
+**Proof.** Focused populated plan/result tests pass for `PlansDb::claim_next_item`, `PlansDb::check_dependencies`, and `WorkersDb::get_by_id`. Source audit identifies planner production consumers in `arcana-core/src/agent/builtin_tools/planner.rs` and worker/admin callers in `src-tauri/src/commands/worker_commands.rs`; no Rust production callers exist for `RunsDb::get`, `RunsDb::recent`, or `PlansDb::plan_exists`. Scope entries are documented in `_verify/P4-58-QUERY-INVENTORY.md`.
+
+**Where.** `arcana-core/src/db/plans.rs` · `arcana-core/src/db/workers.rs` · `arcana-core/src/agent/builtin_tools/planner.rs` · `src-tauri/src/commands/worker_commands.rs` · `_verify/P4-58-QUERY-INVENTORY.md` · P4-58 · TG4-20.
+
+## ADR-LOG-RESTRUCT-0170 — Build a separately sandboxed macOS XPC runner
+
+**Status.** Owner-approved on 2026-10-02; implementation and macOS verification remain open under P4-61/TG4-31.
+
+**Decision.** Build a separately signed App Sandbox XPC service for macOS project-command execution. The XPC service must have its own minimal entitlements, deny network, avoid broad user-file access, and be signed independently before the containing Arcana app. Keep all hosts fail-closed unless the real toolchain and descendant process tree prove the selected-workspace, exact-runtime, no-external-read, no-network, cancellation, and output contract.
+
+**Why.** The current `sandbox-exec` path is default-allow and cannot establish the required isolation boundary. Apple documents XPC services as independently sandboxed components. However, dynamically granted bookmark access is not inherited by arbitrary child processes; service-level access alone is not proof that compilers and their descendants can access only the selected workspace. The owner later approved a sandbox-owned staging/copy-back fallback under ADR-LOG-RESTRUCT-0171; that approval does not replace path, symlink, and writeback validation.
+
+**Proof.** Apple references: [XPC services](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingXPCServices.html), [App Sandbox entitlements](https://developer.apple.com/library/archive/documentation/Miscellaneous/Reference/EntitlementKeyReference/Chapters/EnablingAppSandbox.html), and [nested code signing](https://developer.apple.com/documentation/xcode/creating-distribution-signed-code-for-the-mac/). The inspected repository has no existing XPC service, helper bundle, or signing integration. A Luna architecture review mapped the `process_sandbox` integration and Tauri packaging points and identified the descendant-access limitation. No runner code or macOS verification is claimed yet.
+
+**Where.** `arcana-core/src/platform/process_sandbox/` · `src-tauri/` · `installers/dmg/` · `.github/workflows/ci.yml` · P4-61 · TG4-31.
+
+## ADR-LOG-RESTRUCT-0171 — Authorize sandbox-owned workspace staging on macOS
+
+**Status.** Owner-approved on 2026-10-02; implementation remains open under P4-61/TG4-31.
+
+**Decision.** If an App Sandbox XPC child cannot directly access the selected workspace under the least-privilege profile, Arcana may stage a validated workspace snapshot into a sandbox-owned directory and return only bounded, validated changes to paths beneath the selected workspace. Canonicalize the selected root before execution; reject symlinks, special files, traversal, retargeting, and workspace identity changes at staging and copy-back. Copy back only a bounded write set derived from the staged before/after snapshot, verify destination components without following links, and apply file replacements atomically. Never copy arbitrary untrusted paths or overwrite paths outside the original selected workspace.
+
+**Why.** The owner authorized staged execution/copy-back to address macOS's non-inheritance of dynamic bookmark access. The strict read/network denial contract remains in force, and an untrusted child must not use copy-back to write outside the selected workspace or replace protected paths.
+
+**Proof.** This is an owner-authorized design constraint, not implemented behavior. Direct workspace access and descendant behavior remain untested on macOS. Staging/copy-back must add negative tests for traversal, symlink retargeting, unrelated paths, changed workspace identity, and disallowed output, plus positive persistence of approved build outputs. The former write-only `sandbox-exec` launch is now removed from the production path and returns an unsupported error until XPC is packaged. This decision does not close TG4-31.
+
+**Where.** `arcana-core/src/platform/process_sandbox/` · macOS XPC service/package · P4-61 · TG4-31.
+
+## ADR-LOG-RESTRUCT-0172 — Index bounded worker-progress retention by run and event ID
+
+**Status.** Applied on 2026-10-02; focused plan/result test passes. TG4-20 remains open for other embedded lifecycle statements and final audit.
+
+**Decision.** Add runs database migration 3 with `idx_worker_run_events_run_id_id` on `(run_id, id DESC)` for the `record_worker_progress` retention subquery that keeps the newest 500 events per run.
+
+**Why.** The populated baseline plan scanned the full `worker_run_events` table despite the outer delete's run filter. A run-scoped descending index lets the embedded top-500 selector seek and walk only one run's rows. This index is scoped to bounded observability retention and cannot alter other runs' history.
+
+**Proof.** `worker_progress_retention_uses_run_index_and_keeps_latest_500` compares baseline and candidate plans on populated target/unrelated runs, verifies the production candidate uses the new index with no base-table scan, and reads back exactly 500 target events while preserving all 24 unrelated events. The isolated DB migration applies automatically in the fixture.
+
+**Where.** `arcana-core/src/db/runs.rs` · `_verify/P4-58-QUERY-INVENTORY.md` · P4-58 · TG4-20.
+
+## ADR-LOG-RESTRUCT-0173 — Keep Windows Cargo outputs and cleanup inside the workspace cache
+
+**Status.** Applied on Windows; the production Rust corpus passes Build and Test but remains blocked at Clippy config canonicalization under P4-11/TG4-18 and P4-61/TG4-31.
+
+**Decision.** Set sandboxed child processes' `CARGO_TARGET_DIR` to the pre-created selected-workspace `.arcana-cache/cargo-target`, disable Cargo incremental compilation for those child runs, and include the Windows `DELETE` right only in the selected workspace's inherited write capability.
+
+**Why.** The Windows production launcher first failed creating a project-local target directory, then failed moving/removing temporary object files under an explicitly workspace-scoped target directory. Redirecting outputs into Arcana's existing workspace cache avoids the first failure; disabling incremental state and granting delete only inside the same selected workspace supports Cargo's required temporary-file cleanup without extending file access outside the workspace. The direct build/test corpus reached Clippy after these changes. A volume-root ACL extension was denied by the host and was reverted; no root permission is part of this decision.
+
+**Proof.** `checked_in_ecosystem_corpora_run_real_intents_through_the_production_launcher` now completes the dependency-free Rust Build and Test intents before failing at Lint because Clippy cannot canonicalize its readable config (`Access is denied`). The focused production Clippy test confirms the earlier target-directory creation failure is gone. This is partial Windows launcher evidence; it is not TG4-31 proof, and Python/Node production and external-file/network tests remain open.
+
+**Where.** `arcana-core/src/platform/process_sandbox/windows.rs` · `arcana-core/src/agent/builtin_tools/project_command.rs` · P4-11 · P4-61 · TG4-18 · TG4-31.
+
+## ADR-LOG-RESTRUCT-0174 — Keep Windows project execution fail-closed on unsupported Home edition
+
+**Status.** Applied as the current host capability decision on 2026-10-02; P4-11/P4-61 remain open for a supported, verified Windows boundary.
+
+**Decision.** Do not use Windows Sandbox as an alternate runner on this host. Keep AppContainer-backed process execution fail-closed for operations that cannot satisfy the required workspace/toolchain policy. Re-evaluate the VM-backed option only on a supported Windows edition with an isolated staging/copy-back and output-capture design.
+
+**Why.** This machine reports Windows Home Single Language, while Microsoft documents Windows Sandbox as unsupported on Windows Home. The Windows Sandbox CLI is also documented as lacking process stdout/stderr capture and requiring an active user session for `ExistingLogin`; mapped-folder writes persist to the host. Although a staged workspace plus guest-side log/result files may be viable on supported editions, it is not an available or verified alternate on this machine.
+
+**Proof.** Local host inspection reports Windows Home Single Language, build 26200, with no `wsb.exe` or `WindowsSandbox.exe` on PATH; querying the optional feature requires elevation and was not attempted with elevation. Microsoft references: [Windows Sandbox overview and supported editions](https://learn.microsoft.com/en-us/windows/security/threat-protection/windows-sandbox/windows-sandbox-overview), [Windows Sandbox CLI and its process-I/O/session limits](https://learn.microsoft.com/en-us/windows/security/application-security/application-isolation/windows-sandbox/windows-sandbox-cli), and [Sandbox mapped-folder persistence](https://learn.microsoft.com/en-us/windows/security/application-security/application-isolation/windows-sandbox/windows-sandbox-configure-using-wsb-file).
+
+**Where.** `arcana-core/src/platform/process_sandbox/windows.rs` · `docs/restructurization/development/TESTING_GATES.md` · P4-11 · P4-61 · TG4-18 · TG4-31.
+
+## ADR-LOG-RESTRUCT-0175 — Disable the macOS write-only sandbox wrapper until XPC is packaged
+
+**Status.** Applied on 2026-10-02; macOS project-command launch now fails closed. TG4-31 remains open pending the owner-approved signed XPC/staging implementation and macOS verification.
+
+**Decision.** Remove the production `sandbox-exec` wrapper from `process_sandbox::spawn`. Return an `Unsupported` error on macOS until the separately signed App Sandbox XPC runner is integrated.
+
+**Why.** The previous profile started with `(allow default)` and restricted writes only. It did not deny unrelated reads or network, so it could not satisfy P4-61's untrusted-code contract. Leaving it active would report a sandboxed launch while violating the required capability boundary. A secure refusal is preferable until the approved XPC architecture has a real consumer.
+
+**Proof.** The macOS-only regression asserts that production `spawn` returns `Unsupported` before creating a child or workspace output. This target test has not run on the Windows host; `cargo check -p arcana-core --lib --locked` and the macOS target CI/build still need to validate cfg-specific compilation. The sandbox-owned staged workspace/copy-back policy is detailed in ADR-0171 and remains unimplemented.
+
+**Where.** `arcana-core/src/platform/process_sandbox/mod.rs` · `installers/dmg/` · P4-61 · TG4-31.
+
+## ADR-LOG-RESTRUCT-0176 — Bind QC build evidence to workspace content
+
+**Status.** Implemented on 2026-10-02; P4-14/TG4-07 remain open for the complete cross-platform production corpus.
+
+**Decision.** Bind each observed Rust-owned Build exit to the canonical selected workspace path and a deterministic SHA-256 fingerprint captured before the child starts. Require the latest attributable passing evidence to match the current workspace fingerprint both in the shared QC reader and in SQLite's `qc_review` trigger. Fingerprint failures reject QC. Timeouts and spawn errors retain their separate outcomes and do not fabricate an exit row or affect the observed-nonzero failure streak. The fingerprint skips the generated directories `.git`, `.arcana-cache`, `.arcana-tmp`, `.mypy_cache`, `.next`, `.pytest_cache`, `.ruff_cache`, `.turbo`, `.venv`, `__pycache__`, `coverage`, `dist`, `node_modules`, `target`, and `venv`; it hashes remaining paths, entry types, symlink target text, file bytes, and lengths.
+
+**Why.** The cross-phase audit found that a passing build could authorize QC after source edits followed by a timed-out command, because timeout results were not persisted as exit evidence and the trigger compared only the old exit code. Workspace binding makes any lasting change to included project inputs stale the old result while preserving the rule that only observed nonzero process exits affect build-failure diagnosis. Generated output trees are excluded so ordinary compiler output does not invalidate the input state that was verified.
+
+**Proof.** `workspace_fingerprint_tracks_workspace_inputs_but_ignores_generated_output` proves content sensitivity and generated-output exclusion. `shipped_project_command_persists_spawned_build_results_and_qc_reads_them` exercises real Cargo Build evidence, then pass → workspace mutation → bounded timeout → API/direct-SQL QC rejection, verifies the timeout created no synthetic exit, restores the exact workspace, and confirms the existing pass is valid again. `shared_task_status_api_rejects_qc_review_without_latest_attributable_passing_build` covers missing, unattributable, failed, and passing states. Focused tests pass; broader `arcana-core` verification remains open.
+
+**Where.** `arcana-core/src/platform/workspace_fingerprint.rs` · `arcana-core/src/db/tasks.rs` · `arcana-core/src/agent/builtin_tools/project_command.rs` · P4-14 · TG4-07 · TG4-20.
+
+## ADR-LOG-RESTRUCT-0177 — Keep the Clippy config path absolute under AppContainer
+
+**Status.** Rejected experiment on 2026-10-02; no production behavior changed.
+
+**Decision.** Do not replace the canonical absolute `CLIPPY_CONF_DIR` with a workspace-relative value as a workaround for the Windows AppContainer canonicalization failure.
+
+**Why.** The hypothesis was that resolving `.arcana-cache` from the selected project working directory would avoid the failing absolute-path lookup while keeping the same workspace boundary. The production child still failed with `Access is denied` when canonicalizing both `.arcana-cache` and `.clippy.toml`; changing path spelling therefore does not fix the sandbox's path-handle restriction and would leave an unproven environment contract.
+
+**Proof.** The path-shape unit test passed with the temporary relative value. The production `production_clippy_environment_is_visible_and_readable_in_workspace_sandbox` test ran for 74.53 seconds and failed with the same Windows error even though metadata and file-byte reads passed. The experiment was reverted. The corrected full `cargo test -p arcana-core --lib --locked` suite remains 804 passed / 2 failed, both at this boundary. Windows Sandbox is unavailable on this Windows 10 Home host per ADR-0174; an alternate production boundary remains unresolved.
+
+**Where.** `arcana-core/src/agent/builtin_tools/project_command.rs` · `arcana-core/src/platform/process_sandbox/windows.rs` · P4-11 · P4-61 · TG4-18 · TG4-31.
+
+## ADR-LOG-RESTRUCT-0178 — Stage the selected Windows Python runtime for sandboxed verification
+
+**Status.** Implemented and production-tested for the selected PATH `python.exe` on this Windows host. P4-11/P4-61 remain open for fallback selection, lint availability, broader external-file proof, and the cross-platform corpus.
+
+**Decision.** Copy the selected interpreter's standard library, DLL runtime, and the bounded pytest import closure into an Arcana-owned `%USERPROFILE%\\.arcana\\python-runtimes` cache. Run it with isolated startup flags and a generated `._pth` search path; expose only that exact runtime tree to AppContainer with inherited read/execute rights. Remove ambient `PYTHONHOME`, `PYTHONPATH`, `PYTHONUSERBASE`, and `PYTHONSTARTUP`, disable third-party pytest plugin autoload, and keep generated Python bytecode under the selected workspace. Reject symlinks/special files and verify staged content before reuse. A staging error remains fail-closed; fallback to a user-owned install is unavailable until there is an explicit installation selector.
+
+**Why.** The selected host interpreter's `Lib` is a junction into the user profile, and pytest is in user-site packages. Granting those trees directly would expose broad user files, while ambient `PYTHONHOME` could select an arbitrary read root. Copying the standard runtime plus pytest's import closure gives Python production commands a precise, read-only capability without granting the source installation to untrusted build/test code.
+
+**Proof.** Host isolation probe: staged Python 3.14.7 reports its own `sys.prefix`, imports staged pytest 9.1.1, and compiles the fixture. `staged_runtime_is_readable_but_not_writable_and_cannot_read_its_sibling` passes through the production AppContainer launcher with pytest import, synthetic sibling-secret denial, runtime-write denial, and controlled loopback TCP denial. `production_python_build_and_tests_use_the_staged_runtime` passes Build (`compileall`) and Test (`pytest`, 1 passed) through the production launcher. Cold and verified-cache test runs measured 42.61s and 9.14s; the latter reused the Arcana-owned runtime cache. The first run exposed host-probe-generated `.pyc` drift; disposable bytecode is excluded from the immutable-code fingerprint, cache verification rejects symlinks before ignoring generated bytecode, and the host probe disables bytecode writes.
+
+**Where.** `arcana-core/src/platform/python_runtime.rs` · `arcana-core/src/platform/process_sandbox/{mod.rs,windows.rs}` · `arcana-core/src/agent/builtin_tools/project_command.rs` · P4-11 · P4-61 · TG4-07 · TG4-31.
+
+## ADR-LOG-RESTRUCT-0179 — Verify the Windows Python executable before host inspection
+
+**Status.** Applied on 2026-10-02; Windows compile and focused sandbox verification are running. P4-11/P4-61 remain open for full runtime trust, Ruff installation/staging, and platform corpus proof.
+
+**Decision.** Before running a PATH-selected Python executable for metadata inspection, require Windows Authenticode verification through `WinVerifyTrustEx` with UI disabled and cache-only certificate retrieval. Require the executable to report a prefix that contains its standard `DLLs` tree and either an in-prefix `Lib` or the exact versioned per-user Python `Lib` junction already used by this machine. Fingerprint source runtime bytes, exclude disposable bytecode, and revalidate Arcana's staged runtime on process-cache reuse. Run all staged Python probes and commands with `-B` to prevent bytecode from mutating the verified runtime.
+
+**Why.** The independent Luna High review found host execution of the first PATH interpreter occurred before sandboxing, cache identity used only metadata, and canonicalizing `Lib` followed any junction. The owner selected signed standard installations. Verifying the executable before any host launch and constraining the one supported user-install junction closes those trust gaps while preserving this PC's valid Python layout. Content-based keys and per-use staged-cache checks prevent metadata-preserving source changes or later cache mutation from silently reusing a changed runtime.
+
+**Proof.** `stdlib_junction_must_resolve_inside_prefix_or_exact_user_runtime` rejects unrelated external targets. `staged_runtime_is_readable_but_not_writable_and_cannot_read_its_sibling` exercises signed interpreter selection, runtime integrity, staged pytest import, sibling-file denial, runtime-write denial, and loopback network denial through the production sandbox. Production Build/Test proof is `production_python_build_and_tests_use_the_staged_runtime`. The current host has Python 3.14.7 signed by PSF and no installed Ruff; the per-call install and staged Ruff closure still need an implemented host-controlled path and real proof.
+
+**Where.** `arcana-core/src/platform/python_runtime.rs` · `arcana-core/src/platform/process_sandbox/` · `arcana-core/src/agent/builtin_tools/project_command.rs` · P4-11 · P4-61 · TG4-18 · TG4-31.
+
+## ADR-LOG-RESTRUCT-0180 — Discover scoped query sources from directories
+
+**Status.** Applied on 2026-10-02; expanded registration and source-discovery regressions pass. TG4-20 remains open for populated plan/result evidence and the remaining scoped audit.
+
+**Decision.** The P4-58 AST registry discovers Rust modules beneath `arcana-core/src/db`, `arcana-core/src/analytics`, and `src-shared/src/db` at test time instead of naming each production file with `include_str!`. Enumeration and file-read errors fail the test rather than silently dropping a module. Existing settings, model-configuration, annotation, and schema-helper modules outside the owner-approved P4-58 scope remain excluded by an explicit path list. The query inventory names the rationale for every excluded module, and a regression requires those exclusions to stay documented.
+
+**Why.** A seven-file literal list allowed a new production reader module to bypass registration if maintainers forgot to update the test. Directory discovery makes new modules in the scoped roots visible by default while preserving the owner's explicit scope boundaries. It improves source-registration completeness only; an exact fingerprint does not replace populated production-result and query-plan proof.
+
+**Proof.** `scoped_source_discovery_includes_new_production_database_modules`, `query_inventory_documents_each_source_scope_exception`, and `production_readers_are_registered_in_the_p4_query_inventory` pass in `cargo test -p arcana-core --test p4_query_registry --locked -- --nocapture` (4/4). `cargo fmt --all -- --check` and `git diff --check` pass.
+
+**Where.** `arcana-core/tests/p4_query_registry.rs` · `_verify/P4-58-QUERY-INVENTORY.md` · P4-58 · TG4-20.
+
+## ADR-LOG-RESTRUCT-0181 — Stage Ruff as an explicitly approved Arcana tool
+
+**Status.** Implemented for Windows x86-64 on 2026-10-02; the signed-Python archive-extraction regression passes. The real desktop approval-to-lint path remains unproven, and unsupported host architectures fail closed.
+
+**Decision.** Keep ordinary `project_command(intent="install")` for project dependencies fail-closed. Add only the exact `intent="install", toolchain="python", package="ruff"` host-tool request. It requires the existing one-call `HostApproval` gate in every permission mode and cannot be standing-allowed; headless execution refuses before entering the handler. After approval, the Arcana host downloads Ruff 0.16.8 from the fixed PyPI file URL, enforces a 12 MiB response limit, verifies the published wheel SHA-256 before opening it, and uses the already-signature-verified standard Python's `zipfile` module to extract only the exact `ruff-0.16.8.data/scripts/ruff.exe` member. It verifies the executable SHA-256 and rechecks a local manifest and binary digest before each lint launch. The staged executable is stored under Arcana-owned tool cache and is the only extra read-only path passed to the sandboxed Python lint process; child networking remains denied.
+
+**Why.** The owner approved a pinned, host-approved Ruff install and stage because the selected Python runtime has no Ruff module. Generic project dependency installation still has no locked staging/copy path, and build/test code must stay offline. A fixed wheel/hash and exact-member extraction avoids adding a new Rust archive dependency or exposing the full wheel to the child process.
+
+**Proof.** PyPI's 0.16.8 release metadata provides the Windows x86-64 wheel URL and SHA-256; Ruff's official installation documentation confirms the supported PyPI wheel distribution. `ruff_wheel_extractor_writes_only_the_exact_expected_executable` creates a synthetic wheel with signed host Python, extracts only the allowed member, and proves a traversal member is ignored. The real Tauri permission card flow, actual pinned download/staging via a granted call, and production sandboxed lint remain to be exercised. Do not claim Python Lint or TG4-31 complete.
+
+**Where.** `arcana-core/src/platform/python_runtime.rs` · `arcana-core/src/agent/builtin_tools/project_command.rs` · P4-11 · P4-61 · TG4-18 · TG4-31.
+
+### 2026-10-02 implementation correction
+
+An independent GPT-6 Luna High review found the initial staging location and
+grant shape did not satisfy the existing Windows sandbox contract: the
+AppContainer accepts read-only grants only for directories beneath
+`python-runtimes`, while the first Ruff implementation staged under
+`python-tools` and passed a file path. Ruff is now staged in its own directory
+under `python-runtimes` and that directory is passed to the existing
+read/execute-tree grant. The downloaded executable is 26,408,448 bytes, so the
+archive member bound is 32 MiB; the extraction regression now proves a 17 MiB
+member is accepted while the exact-member/traversal checks remain in place.
+The real approved download and sandboxed lint run remain open; this correction
+does not close TG4-31.
+
+## ADR-LOG-RESTRUCT-0182 — Scope the Python process cache to the Arcana profile
+
+**Status.** Applied on 2026-10-02; the isolated-profile AppContainer test and
+the next full core-suite rerun pass this cache/profile boundary.
+
+**Decision.** Reuse the in-process staged Python runtime only when its verified
+root is beneath the active profile's canonical `python-runtimes` directory.
+When the active Arcana profile changes, discard the in-memory cache entry and
+stage or verify the runtime under that profile before launching a child. Keep
+profile-redirecting production tests under the shared `HomeGuard` lock and use
+temporary profiles so they cannot race one another or leave test runtimes in
+the user's normal Arcana data directory.
+
+**Why.** The full parallel Rust suite exposed a mismatch: one test changed the
+process-global profile while another reused a staged runtime from the previous
+profile. The Windows sandbox correctly rejected that outside-root path. The
+cache key therefore needs to include the Arcana-owned cache root, and tests
+that alter process-global profile selection need to serialize on the existing
+crate-wide guard.
+
+**Proof.** `staged_runtime_is_readable_but_not_writable_and_cannot_read_its_sibling`
+passes under an isolated temporary Arcana profile. The production AppContainer
+test grants a second staged directory under the same profile runtime root and
+verifies the child can read that explicit grant while sibling reads, runtime
+writes, and loopback network remain denied. The previous full-suite failure
+occurred when profile-global environment state changed concurrently. The
+2026-10-02 full suite passes this cache/profile boundary; its only failures are
+the separate Clippy config path canonicalization tests (809 passed / 2 failed).
+
+**Where.** `arcana-core/src/platform/python_runtime.rs` ·
+`arcana-core/src/agent/builtin_tools/project_command.rs` · P4-11 · P4-61 ·
+TG4-18 · TG4-31.
+
+## ADR-LOG-RESTRUCT-0183 — Make startup-cancellation proof clock-deterministic
+
+**Status.** Applied on 2026-10-02; focused cancellation test passes.
+
+**Decision.** Keep production startup retry delays on the existing bounded
+full-jitter policy, but route delay selection through a private internal
+closure so the cancellation test can inject a deterministic duration. Use
+Tokio's paused clock and cancel after the first retry-scheduled notification.
+
+**Why.** A full parallel core run exposed that the prior 20 ms wall-clock
+timeout could lose the race to a randomly short full-jitter delay under load,
+causing a second setup attempt before the assertion. The test was timing the
+host scheduler instead of proving cancellation during backoff. This change
+leaves production delay selection and limits unchanged while exercising the
+same retry loop at a deterministic boundary.
+
+**Proof.**
+`cargo test -p arcana-core --lib cancellation_during_backoff_stops_before_another_attempt --locked -- --nocapture`
+passes with one setup attempt and an aborted retry future during a one-second
+paused-clock backoff. The 2026-10-02 full core suite also passes this test; its
+only failures are the two Clippy config canonicalization tests.
+
+**Where.** `arcana-core/src/recipes/runner.rs` · P4-52 · TG4-26.
+
+## ADR-LOG-RESTRUCT-0184 — Start the command timeout after sandboxed child startup
+
+**Status.** Applied on 2026-10-02; focused and full-suite production timeout
+proofs pass.
+
+**Decision.** In the nested-process cancellation regression, poll the same
+production `project_command` future until the sandboxed descendant writes its
+startup marker, with a separate bounded ten-second startup deadline. Only
+then apply the selected 300 ms execution timeout and drop the command future
+before checking that the descendant stopped.
+
+**Why.** The full parallel suite exposed that timing out the whole launcher at
+300 ms could expire during AppContainer setup under load, before the child had
+started. The resulting test failed on a missing marker without exercising
+process-tree cancellation. Separating bounded startup from execution tests the
+intended behavior: a started command times out and its nested process tree is
+terminated.
+
+**Proof.**
+`cargo test -p arcana-core --lib production_command_timeout_stops_nested_process_writes --locked -- --nocapture`
+passes. The test observes the descendant startup marker within the separate
+ten-second startup bound, applies the 300 ms execution timeout, drops the
+production command future, sees no further heartbeat growth, and verifies no
+late marker. The 2026-10-02 full core suite also passes this test; its only
+failures are the two Clippy config canonicalization tests.
+
+**Where.** `arcana-core/src/agent/builtin_tools/project_command.rs` · P4-62 ·
+TG4-32.
+
+## ADR-LOG-RESTRUCT-0185 — Propagate worker run identity into task status telemetry
+
+**Status.** Applied on 2026-10-02; focused status capture and query registry tests pass.
+
+**Decision.** Carry the existing optional worker `run_id` through `ToolContext` and the task-status tool into sibling run-aware `TasksDb` transition methods. Keep the existing public transition signatures as compatibility wrappers that emit the same events without a run ID when none is available.
+
+**Why.** The worker `ToolExecutor` already owns the current run ID, but task-status telemetry lost it when constructing `ToolContext`. Adding it at that boundary provides task/run correlation where known without guessing IDs or changing existing non-worker callers. The SQL statements are unchanged; the P4-58 registry follows the new methods that now own those statements.
+
+**Proof.** `cargo test -p arcana-core --lib worker_run_id_reaches_read_and_write_tool_contexts --locked -- --nocapture --test-threads=1` proves the executor places the same run ID into both read and write tool contexts. The production consumer test `cargo test -p arcana-core --lib worker_status_tool_carries_run_id_into_committed_database_event --locked -- --nocapture --test-threads=1` invokes `UpdateTaskStatusTool`, commits a worker status change, and asserts the captured task, worker, run ID, and success fields. `cargo test -p arcana-core --lib task_claim_and_status_emit_safe_result_events --locked -- --nocapture --test-threads=1` separately covers transition result classification. `cargo test -p arcana-core --test p4_query_registry --locked -- --nocapture` passes 8/8 after its owner fingerprints were updated. `cargo check -p arcana-core --locked`, `cargo fmt --all -- --check`, and `git diff --check` pass.
+
+**Where.** `arcana-core/src/agent/tool_trait.rs`, `tool_executor.rs`, `builtin_tools/update_task_status_tool.rs`, `db/tasks.rs`, and `_verify/P4-58-QUERY-INVENTORY.md` · P4-50 · TG4-24.
+
+## ADR-LOG-RESTRUCT-0186 — Keep SQLite statement profiling at native millisecond resolution
+
+**Status.** Owner-selected on 2026-10-03.
+
+**Decision.** Keep the bundled SQLite profile callback at its native millisecond granularity. Measure logical database operations and their parent/child work with the existing nanosecond `OperationTimer` spans; do not add a higher-resolution callback per connection.
+
+**Why.** The recorded 20,000-query comparison showed that callback-only overhead was small in that fixture, while the formatter-to-sink path dominated and the callback produced only two nonzero millisecond samples. A second callback prototype is not justified by that evidence. Operation spans supply sub-millisecond timing at the meaningful database/API boundary without overstating per-statement precision.
+
+**Proof and limit.** The diagnostic fixture recorded 10.77 ms without profiling, 14.28 ms with the bundled callback, and 483.36 ms with JSON formatting to a sink. These figures are synthetic and do not establish Fleet or disk-logging cost. TG4-24 still requires representative producer, persistence, refresh, export, privacy, failure-isolation, and CLI-to-Logs evidence.
+
+**Where.** `arcana-core/src/observability/sqlite.rs`, `timing.rs`, and P4-50/TG4-24 · owner direction 2026-10-03.
+
+## ADR-LOG-RESTRUCT-0187 — Persist an explicit user-owned Python fallback
+
+**Status.** Implemented on 2026-10-03; production fallback-consumption proof remains open.
+
+**Decision.** Keep the preferred signed Python staging path first. If it fails, use a fallback only when the host selected a signed `python.exe` beneath the current user's `%LOCALAPPDATA%\\Programs\\Python` tree in Settings. Persist that selection in the existing `config.db` `app_settings` key/value store. Do not allow workers to choose or override the host interpreter path.
+
+**Why.** The P4-11/P4-61 contract requires staged exact runtime access and an explicit user-owned fallback, while the current PC's machine-level interpreter may not permit the sandbox to traverse or grant its source installation. Reusing the existing settings store and Tauri file picker keeps selection host-controlled and persistent; canonical containment and Authenticode checks make selection fail closed outside a signed per-user install.
+
+**Proof and limit.** The Windows runtime tests pass 5/5, including user-root/name validation, cache invalidation when the fallback changes, and existing staged-runtime sibling-read/network denial. `Settings.test.tsx` passes 2/2 and proves the selector calls the registered read/set/clear command contract. `cargo check -p arcana --locked`, `npm run typecheck`, format, and diff checks pass. The current user-owned Python directory has no `python.exe`, so this host cannot prove the fallback execution branch. A controlled host with a valid signed per-user installation must exercise staging through `project_command` before P4-11/P4-61 close.
+
+**Where.** `arcana-core/src/platform/python_runtime.rs`, `src-tauri/src/commands/settings_commands.rs`, `src-tauri/src/lib.rs`, and `src/tabs/Settings.tsx` · P4-11 · P4-61 · TG4-18 · TG4-31 · owner direction 2026-10-01/02.
+
+## ADR-LOG-RESTRUCT-0188 — Correct the matched Python launcher fixture inputs
+
+**Status.** Corrected on 2026-10-03 after independent GPT-6 Luna High review.
+
+**Correction.** The first P4-62 cold/warm measurement copied an existing
+`tests/__pycache__` from the fixture into sample zero, then removed it only
+after that sample. Cold and warm project inputs were therefore not guaranteed
+to match. Retract those original measurements; the plan and gate preserve the
+old numbers struck through as a correction trail. The measurement test now
+removes the fixture-owned bytecode directory immediately after copying and
+before the cold sample, and cleans generated bytecode between every run.
+
+**Proof.** The corrected ignored production-path test passed one cold plus five
+warm runs on the same profile/workspace. Corrected cold runtime/sandbox/process/
+drain was 36,386/1,030/435/<1ms; warm medians were 3,147/13/394/<1ms; warm
+total range was 3,552–3,603ms. The result is fixture-specific, not an
+application performance claim. The independent review and the exact command
+are recorded in the P4-62 checkpoint. P4-62 remains open for other gate clauses.
+
+**Where.** `arcana-core/src/agent/builtin_tools/project_command.rs` · P4-62 · TG4-32.
+
+## ADR-LOG-RESTRUCT-0189 — Revalidate QC workspace fingerprints around a build batch
+
+**Status.** Implemented on 2026-10-03; full concurrency-race closure remains unproven.
+
+**Decision.** Capture one baseline workspace fingerprint for the selected build batch and recompute after each command outcome. If any pre/post sample differs or cannot be computed, persist observed exits without a fingerprint so neither the shared QC API nor the SQLite trigger can use them. Fingerprint regular files through an open handle and verify the path still names that same file before and after reading (Windows volume/file index; Unix device/inode).
+
+**Why.** A fingerprint taken only before compilation could remain attached to a successful exit even if project code or another writer changed inputs while the command ran. Keeping the workspace hash as the QC binding requires checking that it still describes the workspace around the observed build.
+
+**Proof and limit.** `workspace_fingerprint_comparison_rejects_changed_or_unavailable_samples` passes for unchanged, changed, and unavailable samples. The existing production ProjectCommand/QC regression still passes, and the fingerprint implementation now checks open-handle identity. A build-script mutation attempt through the production Windows sandbox returned a failed Cargo exit (101), so it did not prove a successful command racing a workspace write; that attempt is not counted as proof. Directory membership and a mutation restored between the pre/post samples remain possible race windows. TG4-07 stays open for a production race test and cross-platform corpus proof.
+
+**Where.** `arcana-core/src/agent/builtin_tools/project_command.rs`, `arcana-core/src/platform/workspace_fingerprint.rs`, P4-14, TG4-07.
+
+## ADR-LOG-RESTRUCT-0190 — Reconcile interrupted worker effects before redispatch
+
+**Status.** Accepted from the owner's P4-53 continuity contract; aligned on 2026-10-03.
+
+**Decision.** P4-36/S4-03 recover interrupted in-process runs by releasing only exact-owner claims, persisting the interruption, and making uncertain work visible to the Supervisor without restarting Arcana. Do not automatically redispatch a task whose prior side effects are uncertain. Resume/reassign only after persisted operation and repository state establish that replay is safe; otherwise keep the task held for explicit reconciliation.
+
+**Why.** The owner expanded P4-53 to require reconciliation of each side effect before resuming and explicitly prohibited inferring that an unacknowledged effect did not occur. An unconditional automatic retry would contradict that safety contract and could duplicate mutations.
+
+**Proof and limit.** Focused production timeout/quarantine and Supervisor recovery tests prove exact-owner claim holding and Supervisor visibility. Durable operation outcome/cursor, repository snapshot, and safe post-reconciliation continuation are not implemented, so P4-36/S4-03 remain open. This decision narrows automatic replay to cases proven safe; it does not waive the original recovery proof.
+
+**Where.** `arcana-core/src/recipes/scheduler.rs`, `arcana-core/src/db/runs.rs`, P4-36, P4-53, S4-03, TG4-27.
+
+## ADR-LOG-RESTRUCT-0191 — Preserve repeated trace span instances in Logs
+
+**Status.** Accepted on 2026-10-03 while closing the P4-50 Logs review finding.
+
+**Decision.** The Logs trace tree keys a span by its explicit producer span ID
+when one is present. Arcana's current `tracing_subscriber` JSON formatter does
+not emit span IDs, so the UI uses a record-local span identity in that case;
+separate telemetry records with repeated span names therefore remain separate
+visible operation nodes instead of merging their durations.
+
+**Why.** The previous name-only child map conflated two same-named operations
+within the same run. The current JSON contract does not provide enough identity
+to prove that same-named spans in different records are the same live span, so
+record-local identities preserve each observed operation and its timing rather
+than suggesting unsupported cross-record identity.
+
+**Proof and limit.** A Logs UI regression supplies two same-named `worker_run`
+records under one run and proves the 1 ms and 2 ms events render under distinct
+nodes. `npm test -- --run src/tabs/Logs.test.tsx` passes 17/17. Producers that
+need cross-record span reconstruction should emit a stable explicit identity in
+a future schema change; this decision does not alter telemetry event storage.
+
+**Where.** `src/tabs/Logs.tsx`, `src/tabs/Logs.test.tsx`, P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0192 — Correlate startup retry events to the durable run
+
+**Status.** Accepted on 2026-10-03 during the P4-52 retry audit.
+
+**Decision.** Pass the worker run ID, allocated before startup preparation, into
+the bounded retry helper and include it on retry-scheduled, recovered,
+exhausted/permanent-failure, and retry-phase persistence events.
+
+**Why.** Retry attempts occur within one durable worker run. Without its ID,
+structured events cannot be joined reliably to the run row and worker health
+context, especially when one worker retries several times in a day.
+
+**Proof and limit.** The captured production retry-event regression verifies
+that the scheduled first attempt and recovered second attempt both carry the
+same run ID and correct attempt/outcome fields. The test
+`startup_retry_events_include_the_durable_worker_run_id` passes 1/1. Persisted
+Logs-reader readback and task-budget continuity remain unproven; P4-52/TG4-26
+remain partial.
+
+**Where.** `arcana-core/src/recipes/runner.rs`, P4-52/TG4-26.
+
+## ADR-LOG-RESTRUCT-0193 — Report partial Memory reads as degraded operations
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 Memory
+producer audit.
+
+**Decision.** Memory lookup/list tools and the recall access-history write emit
+fixed-label, result-aware operation events with existing run/task/call
+correlation when available. A list or procedural search that encounters
+malformed persisted data keeps valid results but reports a degraded outcome.
+`list_memories` bases `truncated` on the raw SQL lookahead (including malformed
+rows) and reports `malformed_count`; procedural search separates truly skipped
+rows from rows retained with empty tags in `malformed_tag_sets`. Not-found
+`get_memory` operations record an observed zero result with `not_found` outcome.
+Failure to persist access history remains non-fatal to the primary recall,
+while its own operation reports degradation.
+
+**Why.** SQLite statement callbacks expose statement identity and elapsed time,
+not the result or the partial row-decoding state. Treating surviving rows as an
+unqualified success hid Memory data quality and secondary-write failures from
+the Supervisor and Logs view. Fixed labels and counts preserve the privacy
+boundary: memory contents, IDs, SQL, and bound values stay out of telemetry.
+
+**Proof and limit.** Isolated production-entry tests exercise get/list Memory
+tools, malformed list lookahead, procedural row and tag degradation, and
+successful/failed access-history updates. A production detailed-search path
+with an injected history-write failure still returns the retrieved result.
+Tests assert observed-zero semantics, outcome/count, partial-result state, and
+privacy. They do not complete coverage of every P4 DB or Memory producer;
+TG4-24 remains open.
+
+**Where.** `arcana-core/src/agent/builtin_tools/get_memory.rs`,
+`list_memories.rs`, `arcana-core/src/memory/procedural.rs`,
+`recall.rs`, P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0194 — Mark operation result counts as observed or unknown
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 observability
+audit.
+
+**Decision.** Every operation timing event retains numeric `result_count` and
+`result_bytes` fields for compatibility and adds `result_count_observed` and
+`result_bytes_observed` booleans. The booleans are true only when a producer
+explicitly measured a value, including a measured zero.
+
+**Why.** A default numeric zero is ambiguous: it may mean an observed empty
+result or an operation that never reports a result count. The expanded JSON
+view needs to preserve that distinction so the Supervisor and operator do not
+infer behavior from a telemetry default.
+
+**Proof and limit.** The captured-operation tests prove explicit zero is
+observed and omitted counts/bytes are marked unknown. Existing aggregate sums
+remain numerically compatible; the flags do not add new frontend totals. Full
+producer coverage and live Fleet telemetry remain open under TG4-24.
+
+**Where.** `arcana-core/src/observability/timing.rs`, P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0195 — Report result-aware operations for config.db consumers
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 database
+producer audit.
+
+**Decision.** The app-settings, model-config, and Arcana-instructions
+repositories emit fixed-label operation events with the logical `config`
+database identity, measured row/result counts, and explicit success/error
+outcomes. Event fields never include setting keys or values, model IDs,
+repository paths, or instruction content. The SQLite callback continues to
+report per-statement duration at its native millisecond granularity; these
+logical operations provide result semantics and nanosecond duration.
+
+**Why.** The callback does not report whether a query found a row, how many
+rows a write affected, or whether it failed. These repositories own frequently
+used provider/workspace settings and agent instructions, so their outcomes
+must be visible without exposing the values that drive the behavior.
+
+**Proof and limit.** Isolated config.db tests read/write/delete settings,
+exercise model-config lookup/upsert/delete, and exercise instruction
+read/write/exists/length/delete. An injected settings trigger failure produces
+an error event without reflecting its SQL error or input values. The focused
+test groups pass 6/6, 1/1, and 1/1. This closes only these config.db producer
+paths; full database producer and Fleet-to-Logs coverage remain open under
+TG4-24.
+
+**Where.** `arcana-core/src/db/app_settings.rs`,
+`arcana-core/src/db/model_configs.rs`,
+`arcana-core/src/db/arcana_instructions.rs`, P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0196 — Keep consent and malformed Memory results observable safely
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 producer
+review.
+
+**Decision.** Workspace egress-consent DB operations emit fixed operation
+labels, the `config` database identity, observed result counts, and `allowed`
+or `denied` outcomes. They do not copy workspace paths or provider
+destinations into telemetry. Detailed Memory search carries the production
+tool's task/call/run/role correlation. An invalid persisted timestamp keeps
+the search result available with a current-time compatibility value, but
+marks the result degraded and logs only a fixed warning, never the raw stored
+value or parser error.
+
+**Why.** Consent is a production gate on app-mediated provider egress and its
+decision latency/outcome must be diagnosable. Memory search also needs the
+correlation already available to its caller, while malformed persisted values
+must not become arbitrary log content or appear as a healthy result.
+
+**Proof and limit.** Isolated production-method capture proves consent grant,
+revoke, read, allowed and denied outcomes, observed counts, and omission of
+workspace/provider identifiers (3 consent tests pass). Memory tests prove the
+production search preserves caller correlation, labels malformed timestamps
+degraded, and excludes both the malformed value and content from telemetry
+(79 Memory tests pass). These paths do not close other DB/Memory producer
+coverage or TG4-24's end-to-end Fleet-to-Logs, failure-isolation, and cost
+requirements.
+
+**Where.** `arcana-core/src/egress_consent.rs`,
+`arcana-core/src/memory/recall.rs`,
+`arcana-core/src/agent/builtin_tools/search_memory.rs`, P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0197 — Add result-aware timings to daily-cost analytics
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 producer
+audit.
+
+**Decision.** Daily-cost insert, point-read, and range-read operations emit
+fixed-label `analytics` DB timing events with explicit result counts and
+success/error outcomes. The event excludes cost values, breakdown contents,
+dates, and SQL error details.
+
+**Why.** These paths feed the operator-facing spend dashboard and exports. A
+statement-duration callback alone cannot distinguish a missing daily record,
+a populated range, or a failed writer; operation events must report those
+results without copying financial/provider labels into structured telemetry.
+
+**Proof and limit.** The isolated production-method test covers absent and
+present reads, a two-row range, successful inserts, and a trigger-injected
+insert error; it verifies result counts and privacy (1/1). Other analytics
+families and end-to-end Fleet/Logs behavior remain open under TG4-24.
+
+**Where.** `arcana-core/src/analytics/db.rs`, P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0203 — Observe task-budget persistence without budget values
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 producer
+audit.
+
+**Decision.** Task-budget set, usage update, exceeded-state write, per-task
+status read, and daily summary read emit fixed-label `tasks` operation events
+with task correlation, row/result counts, and outcomes. Limits, spend/token
+values, and free-form exceeded reasons stay out of telemetry.
+
+**Why.** P4-29 and P2 daily-cap behavior need observable persistence and reader
+outcomes, but logging budget values or user-provided reasons would turn timing
+events into a second financial/project-data store.
+
+**Proof and limit.** The isolated TasksDb test checks budget persistence and
+daily-summary readback, a trigger-injected usage-write failure, and value/reason
+privacy (1/1). This does not prove the budget interaction contract or close
+TG4-24.
+
+**Where.** `arcana-core/src/db/tasks.rs`, P4-29/P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0198 — Time high-fan-out GraphStore readers
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 producer
+audit.
+
+**Decision.** Graph file listing, paged node/edge reads, node search, and graph
+statistics emit fixed-label `graph` DB operation timings with explicit result
+counts and success/error outcomes. Node names, paths, search text, and DB paths
+are excluded from telemetry.
+
+**Why.** Graph build stages already had timing, but the UI and agent graph
+consumers also spend time on independent database reads. Without logical
+events, search and rendering latency could not be separated from graph-build
+latency, and direct inputs/rows cannot be copied into the log safely.
+
+**Proof and limit.** A seeded production GraphStore test exercises populated
+file/node/search/stats reads plus an empty edge page and verifies counts and
+privacy (1/1). Mutation methods and other database families remain open; this
+does not close TG4-24.
+
+**Where.** `arcana-core/src/graph/store.rs`, P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0199 — Time primary task-board and claim reads
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 producer
+audit.
+
+**Decision.** TasksDb creation, task-ID lookup, worker claimed-task lookup,
+board list, and worker/status list emit fixed-label `tasks` operation events
+with explicit counts and success/error outcomes. Missing ID lookup is
+`not_found`; no claimed task is `empty`. Task title, description, status
+filter, and other task text remain out of event fields; task/worker correlation
+uses only the existing typed IDs and worker identity fields.
+
+**Why.** These readers are on the Plan Board, Supervisor and worker dispatch
+paths. SQLite statement durations alone do not show whether a board returned
+rows, a task ID was missing, or a worker had no claim.
+
+**Proof and limit.** The isolated migrated TasksDb test exercises production
+create/read/list methods, empty and populated claim reads, successful task
+claim, and task-title exclusion (1/1). Build evidence, message inbox, budget,
+epic/QC methods and the complete Fleet-to-Logs path remain open under TG4-24.
+
+**Where.** `arcana-core/src/db/tasks.rs`, P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0200 — Observe the ACP inbox without recording message bodies
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 producer
+audit.
+
+**Decision.** Worker message insert/read, inbox, stale/task/recent reads,
+unread/unacknowledged counts, and acknowledgement emit fixed-label `tasks`
+database operation timings with result counts and outcomes. Duplicate or
+missing acknowledgement is `not_found`. Message bodies and message payloads
+are never copied into event fields.
+
+**Why.** ACP intentionally delivers messages at least once until acknowledgement
+and the Supervisor/worker UI must diagnose delays and replay state. The
+statement callback alone cannot distinguish empty inboxes, unacknowledged
+replays, or duplicate acknowledgements; recording the body would expose
+arbitrary project/user data.
+
+**Proof and limit.** A production TasksDb test exercises insert/read, inbox
+delivery, unread/unacknowledged counts, task/stale listing, successful ack,
+duplicate ack classification, and body privacy (1/1). This does not prove
+scheduler retry end-to-end or close TG4-24.
+
+**Where.** `arcana-core/src/db/tasks.rs`, P4-23/P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0201 — Measure Supervisor worker-request operations
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 producer
+audit.
+
+**Decision.** Worker-request create/read/list/update operations emit fixed-label
+`tasks` DB timings with observed counts and outcomes. Available task and worker
+identities are attached through the existing typed correlation fields;
+request payload and resolution note are excluded.
+
+**Why.** Worker-to-Supervisor escalation is part of Fleet dispatch and recovery.
+Without operation results, the Supervisor cannot distinguish an empty queue,
+a persisted pending request, and a successfully resolved request. Payloads can
+contain project data, so the event records lifecycle results only.
+
+**Proof and limit.** An isolated production-method capture covers creation,
+readback, pending/completed queue reads, resolution, counts, and payload/note
+privacy (1/1). Other task database families and TG4-24's full reader/UI and
+failure-isolation requirements remain open.
+
+**Where.** `arcana-core/src/db/tasks.rs`, P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0202 — Time legacy analytics failure/event repositories safely
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 producer
+audit.
+
+**Decision.** API-failure and system-event insert/read operations emit fixed-
+label `analytics` DB timing with explicit counts and success/error outcomes.
+Provider IDs, error text/type/request IDs, event message/component/type, and
+metadata stay out of these operation events.
+
+**Why.** These records contain arbitrary provider and project diagnostics and
+feed analytics views. The operation span needs to show write failures and
+reader volume while preserving the source record as the only place where
+diagnostic details are stored and access-controlled.
+
+**Proof and limit.** An isolated AnalyticsDb test covers insert and filtered
+readback for both tables, an injected SQL failure, counts, outcomes, and
+privacy markers (1/1). It does not complete remaining AnalyticsDb coverage or
+TG4-24 end-to-end observability.
+
+**Where.** `arcana-core/src/analytics/db.rs`, P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0204 — Observe build evidence and routing history safely
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 producer
+audit.
+
+**Decision.** Task-scoped build-evidence batches/readback and routing-history
+insert, update, list, and aggregate methods emit fixed-label `tasks` operation
+timings with available typed task/worker/session correlation, measured counts,
+and error/not-found outcomes. Commands, workspace paths/fingerprints, titles,
+and arbitrary outcome values remain excluded.
+
+**Why.** These records authorize QC and feed automatic worker-affinity
+decisions. Their duration and persistence result should be observable without
+copying project or task content into telemetry.
+
+**Proof and limit.** Production-method tests cover build evidence insert/read,
+rollback-on-trigger-error, routing assignment/outcome/history/statistic
+readback, missing outcome targets, and content/SQL-error privacy (1/1 each).
+This does not resolve the pending P4-14 batch-completeness contract or close
+TG4-24.
+
+**Where.** `arcana-core/src/db/tasks.rs`, P4-14/P4-50/TG4-07/TG4-24.
+
+## ADR-LOG-RESTRUCT-0205 — Observe hook persistence without hook content
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 producer
+audit.
+
+**Decision.** HooksDb configuration CRUD, hook-type reads, execution-log
+insert, and execution-log reads emit fixed-label `config` operation timings
+with result counts and success/error/not-found outcomes. Hook identifiers,
+names, actions, shell commands, working directories, output and error text
+remain excluded.
+
+**Why.** Hook lookup and log persistence are part of relevant agent tool/loop
+paths, and the UI reads those persisted outcomes. Timing should be available
+when optional hook logging fails without exposing executable content or tool
+results.
+
+**Proof and limit.** An isolated production-config DB test covers hook
+insert/list/read/toggle/delete and execution-log write/readback plus a
+trigger-injected logging failure and privacy markers (1/1). This does not prove
+logging failure isolation in a live AgentEngine path or close TG4-24.
+
+**Where.** `arcana-core/src/hooks/db.rs`, P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0206 — Observe run lifecycle and recovery ledger operations
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 producer
+audit.
+
+**Decision.** Generic RunsDb begin/finish/read/recent/open operations and
+worker-tick interruption/dead-run reaping emit fixed-label `runs` operation
+timings with result counts and run/worker correlation where an existing record
+supplies a trusted identifier. A missing run lookup does not echo its input as
+a correlation key. Actor, run detail, failure code, and database path remain
+excluded.
+
+**Why.** These APIs support CLI/desktop lifecycle and scheduler recovery, and
+their outcomes are needed to distinguish empty, interrupted, reaped and failed
+run paths without duplicating user-provided run details into telemetry.
+
+**Proof and limit.** `run_ledger_lifecycle_and_recovery_emit_private_result_spans`
+passes 1/1 against an isolated migrated DB, including begin/read/finish,
+not-found and duplicate finish, worker-tick interruption, dead-process reaping,
+and an injected insert failure. This is producer proof only; it does not close
+TG4-24 or prove recovery event readback in a live Fleet run.
+
+**Where.** `arcana-core/src/db/runs.rs`, P4-36/P4-50/P4-53/TG4-24.
+
+## ADR-LOG-RESTRUCT-0207 — Observe worker registry persistence safely
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 producer
+audit.
+
+**Decision.** Worker registry lookup/create/update/soft-delete and slug
+existence operations emit fixed-label `workers` DB timings with observed result
+counts and not-found/error outcomes. A stored worker slug may be used as the
+stable worker correlation; names, models, repository paths, recipes and
+descriptions remain excluded.
+
+**Why.** Worker setup and lifecycle feed Fleet dispatch, settings, CLI, and
+recovery. Safe operation timings make those paths diagnosable while preserving
+private configuration and repository information.
+
+**Proof and limit.** `worker_registry_crud_operations_emit_private_result_spans`
+passes 1/1 against the migrated isolated worker DB, covering create/read/model
+and repository update/recipe bind/slug checks/soft-delete and an injected
+create failure. This does not close TG4-24 or prove full desktop/CLI producer
+readback.
+
+**Where.** `arcana-core/src/db/workers.rs`, P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0206 — Observe run lifecycle and recovery ledger operations
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 producer
+audit.
+
+**Decision.** Generic RunsDb begin/finish/read/recent/open operations and
+worker-tick interruption/dead-run reaping emit fixed-label `runs` operation
+timings with result counts and run/worker correlation where an existing record
+supplies a trusted identifier. A missing run lookup does not echo its input as
+a correlation key. Actor, run detail, failure code, and database path remain
+excluded.
+
+**Why.** These APIs support CLI/desktop lifecycle and scheduler recovery, and
+their outcomes are needed to distinguish empty, interrupted, reaped and failed
+run paths without duplicating user-provided run details into telemetry.
+
+**Proof and limit.** `run_ledger_lifecycle_and_recovery_emit_private_result_spans`
+passes 1/1 against an isolated migrated DB, including begin/read/finish,
+not-found and duplicate finish, worker-tick interruption, dead-process reaping,
+and an injected insert failure. This is producer proof only; it does not close
+TG4-24 or prove recovery event readback in a live Fleet run.
+
+**Where.** `arcana-core/src/db/runs.rs`, P4-36/P4-50/P4-53/TG4-24.
+
+## ADR-LOG-RESTRUCT-0207 — Observe worker registry persistence safely
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 producer
+audit.
+
+**Decision.** Worker registry lookup/create/update/soft-delete and slug
+existence operations emit fixed-label `workers` DB timings with observed result
+counts and not-found/error outcomes. A stored worker slug may be used as the
+stable worker correlation; names, models, repository paths, recipes and
+descriptions remain excluded.
+
+**Why.** Worker setup and lifecycle feed Fleet dispatch, settings, CLI, and
+recovery. Safe operation timings make those paths diagnosable while preserving
+private configuration and repository information.
+
+**Proof and limit.** `worker_registry_crud_operations_emit_private_result_spans`
+passes 1/1 against the migrated isolated worker DB, covering create/read/model
+and repository update/recipe bind/slug checks/soft-delete and an injected
+create failure. This does not close TG4-24 or prove full desktop/CLI producer
+readback.
+
+**Where.** `arcana-core/src/db/workers.rs`, P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0208 — Instrument graph and session persistence without payloads
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 producer audit.
+
+**Decision.** Reuse the existing `OperationTimer` for fixed-label spans across public `GraphStore` and `SessionStorage` DB operations. Emit only the logical database identity, duration, measured result count/bytes, and existing safe task/session correlation. Keep graph names, source paths, query text, snapshot JSON, session titles, provider/model IDs, message/tool payloads, and DB filesystem paths out of telemetry. Remove the pre-existing GraphStore open diagnostics that rendered its filesystem path in ordinary logs.
+
+**Why.** SQLite statement callback samples retain native millisecond precision; logical operation spans expose nanosecond elapsed time across connection setup, transactions, row mapping, and returned payload handling. Structured payload capture would create unnecessary privacy exposure and unbounded cardinality.
+
+**Proof and limit.** `graph::store::timestamp_tests` passes 3/3, including operation coverage, persisted reads, not-found results, and a trigger-injected batch write failure. `session::storage::tests` passes 3/3, including CRUD/readback, schema migration/version, missing rows, and a trigger-injected update failure. Capture tests assert private graph/session content, paths, and SQL failure details are absent. This does not close TG4-24 or prove a live Fleet-to-Logs path.
+
+**Where.** `arcana-core/src/graph/store.rs`, `arcana-core/src/session/storage.rs`, P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0209 — Observe QC claim lifecycle without reviewer payloads
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 producer audit.
+
+**Decision.** Instrument TasksDb QC claim try/release/upgrade/list and cost-add operations with fixed-label `tasks` spans, task ID correlation, measured row counts, and explicit not-claimed/not-found/skipped/error outcomes. Do not emit reviewer/subagent IDs, task content, cost values, or SQL error details.
+
+**Why.** QC anti-double-spawn claims and reconciliation are production Fleet control paths. Their latency and conflict/recovery outcomes need visibility while reviewer handles and cost payloads remain private.
+
+**Proof and limit.** `qc_claim_and_cost_operations_emit_private_result_spans` passes 1/1 against a migrated isolated TasksDb, covering duplicate claim refusal, upgrade/list/release, missing rows, zero-cost no-op, and trigger-injected update failure. This adds producer evidence but does not close TG4-24 or prove full Fleet-to-Logs consumption.
+
+**Where.** `arcana-core/src/db/tasks.rs`, P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0210 — Observe epic and phase task persistence safely
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 producer audit.
+
+**Decision.** Instrument epic creation, phased-task creation, epic task listing, phase summaries, and phase-ready task selection with fixed-label `tasks` spans. Emit the inserted task's integer ID only after it is read back successfully; do not emit epic identifiers, phase names, titles, criteria, milestones, descriptions, or creator values.
+
+**Why.** PA and Supervisor planning workflows create and inspect phased work through TasksDb. The fixed labels and result counts expose persistence latency and empty/failure outcomes without making user planning content part of logs.
+
+**Proof and limit.** `epic_phase_operations_emit_private_result_spans` passes 1/1 against a migrated isolated TasksDb, including create/readback, phase summary/ready selection, empty epic results, and a trigger-injected create failure. This does not close TG4-24 or prove live Fleet-to-Logs readback.
+
+**Where.** `arcana-core/src/db/tasks.rs`, P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0211 — Observe task retry and destructive board operations safely
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 producer audit.
+
+**Decision.** Instrument TasksDb retry increment/count read, diff-analysis persistence, single-task deletion, and clear-board operations with fixed-label result spans. The clear-board path retains backup-before-delete and emits a structured backup event containing only a fixed operation, reason, and byte count; do not log the backup path, diff payload, retry values, or SQL error details.
+
+**Why.** Retry and diff persistence are part of worker diagnosis, while deletion and clear-board are operationally significant. Their outcomes and duration should be visible without turning user data or filesystem paths into telemetry. The clear-board event must also preserve backup-first behavior while replacing the prior path-bearing log.
+
+**Proof and limit.** `task_retry_diff_and_delete_operations_emit_private_result_spans` and `clearing_the_board_backs_up_first_and_the_backup_holds_the_tasks` pass 1/1 each against isolated production TasksDb methods, including injected SQL failures, result readback, backup-first behavior, and privacy assertions. This does not close TG4-24 or prove live Fleet-to-Logs consumption.
+
+**Where.** `arcana-core/src/db/tasks.rs`, P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0212 — Attribute token analytics subquery latency
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 producer audit.
+
+**Decision.** Add fixed operation labels and observed result counts for token usage grouped by model, provider, and agent type, plus the top-session reader. Keep the parent date-range operation and emit no grouping values, session identifiers, provider/model labels, or SQL detail.
+
+**Why.** The dashboard range operation runs several sequential aggregate queries. A parent duration alone cannot identify which query dominates latency; child spans make those sub-operations visible without high-cardinality or private fields.
+
+**Proof and limit.** `worker_stats_and_live_token_aggregates_emit_safe_result_spans` passes 1/1 and checks the four child spans, observed counts, and privacy. This does not close TG4-24 or establish end-to-end dashboard cost.
+
+**Where.** `arcana-core/src/analytics/db.rs`, P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0213 — Measure shared SQLite migration ladders safely
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 producer audit.
+
+**Decision.** Time the shared `run_ladder` operation with a fixed operation label, allowlisted logical database identity, applied-rung count, and result outcome. Unknown database labels map to `other`. Do not include database paths, arbitrary names, migration names, SQL, or failure strings in this operation event.
+
+**Why.** SQLite statement sampling shows individual statements at millisecond precision, but cannot show the complete migration/startup duration or classify a failed/no-op ladder. The logical operation complements statement timings without copying migration input into telemetry.
+
+**Proof and limit.** `migration_ladder_emits_safe_result_span` passes 1/1 for migrations applied, a current schema, an empty ladder, and a failing SQL rung. It verifies outcome/count semantics and path/name/SQL exclusion. This does not close TG4-24 or provide startup cost evidence from a real Fleet run.
+
+**Where.** `arcana-core/src/db/migrate.rs`, P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0214 — Record spend-cap decisions and orphan scan failures
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 producer audit.
+
+**Decision.** Emit fixed-label config-operation outcomes for atomic spend reservation and settlement, including grant/deny/disabled/settled/not-found/error states. Instrument the orphan-candidate selector with an observed row count and distinguish empty from success and error. Never emit reservation IDs, spend values, task content, SQL errors, or paths.
+
+**Why.** A provider cap is a control boundary whose transaction-level outcome is not visible through statement timings. Orphan reconciliation previously could turn a failed candidate scan into an empty result, obscuring a recovery failure from the Supervisor. These events make both decisions visible while keeping private values out of telemetry.
+
+**Proof and limit.** `provider_budget_reservation_emits_decisions_without_private_values` and `orphan_candidate_scan_distinguishes_empty_rows_and_database_failure` pass 1/1 each against isolated databases, including injected insert/query failures, no-op/empty cases, and privacy assertions. This does not close TG4-24 or prove live Fleet-to-Logs readback.
+
+**Where.** `arcana-core/src/budget/daily.rs`, `arcana-core/src/db/tasks.rs`, P2/TG2-17 and P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0215 — Time checkpoint recovery operations safely
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 producer audit.
+
+**Decision.** Add fixed-label operation timings to checkpoint create, restore, list, compare, delete, and automatic pre-write creation. Keep safe session/task correlation; record observed result counts/bytes and distinguish empty/not-found results. Do not log checkpoint IDs, file/snapshot paths, reasons, or file/diff contents.
+
+**Why.** Checkpoints are the durable rollback boundary around agent file mutations. They combine database and filesystem work, so SQLite statement timings cannot represent recovery-operation latency or identify missing/empty results.
+
+**Proof and limit.** `checkpoint_lifecycle_operations_emit_private_result_spans` passes 1/1 over the production API with snapshot comparison, listing, restore, delete and auto-checkpoint behavior. It verifies restored file content and asserts path/content/reason/ID privacy. This does not close TG4-24 or prove worker recovery from the Logs UI.
+
+**Where.** `arcana-core/src/git/checkpoint.rs`, P4-50/TG4-24 and P4-53.
+
+## ADR-LOG-RESTRUCT-0216 — Keep CLI analytics telemetry at the host boundary
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 producer audit.
+
+**Decision.** Emit result-aware operation spans from the `arcanactl` analytics command boundary for cost, token, worker-stat and export reads. Keep `arcana-shared` as a dependency-light reader and avoid adding a dependency from it to `arcana-core`. Export records a parent event and fixed child operations; none includes user filter values, row contents, worker IDs, output paths, or error strings.
+
+**Why.** A direct core dependency in the shared query crate would invert its existing host dependency boundary. The production consumer already links both crates, so telemetry belongs at the CLI boundary without coupling the reusable reader layer.
+
+**Proof and limit.** `analytics_query_wrapper_emits_safe_success_empty_and_error_spans` passes 1/1 and verifies result and privacy fields. Existing profiled connection coverage remains separate. This does not close TG4-24 or prove a full CLI Fleet-to-Logs workflow.
+
+**Where.** `src-cli/src/commands/analytics.rs`, P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0217 — Observe IDE and GitHub MCP configuration reads safely
+
+**Status.** Accepted and implemented on 2026-10-03 during the P4-50 producer audit.
+
+**Decision.** Instrument persisted IDE workspace-state load/save and GitHub MCP connector configuration read/write operations with fixed labels, logical database identity, measured counts, and result outcomes. Malformed IDE state remains a safe empty fallback but is reported as degraded. Do not emit workspace paths, serialized state, connector endpoints, organization/repository identifiers, SQL errors, or configuration payloads.
+
+**Why.** IDE state and connector configuration are user-visible control-plane operations backed by SQLite; statement-level sampling alone does not explain their operation duration or whether the API returned empty, degraded, or failed state.
+
+**Proof and limit.** `workspace_state_operations_emit_safe_result_spans` and `github_mcp_configuration_operations_emit_private_result_spans` pass 1/1 each against isolated storage, covering default/empty, populated, malformed, and injected storage failure states with privacy assertions. This is producer coverage only and does not prove connector invocation telemetry or full TG4-24.
+
+**Where.** `arcana-core/src/ide/workspace.rs`, `src-tauri/src/commands/github_mcp_commands.rs`, P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0218 — Require complete project-command batches for QC
+
+**Status.** Owner-approved contract; implementation and focused proof added on 2026-10-03. P4-14/TG4-07 remain open for production mixed-project failure coverage and the cross-platform process corpus.
+
+**Decision.** Persist one task-scoped `running` batch record before any selected `project_command` build child starts, then finalize that same record atomically with observed child exits. QC may use build evidence only when the latest batch is finalized, every selected command has an observed successful result, and the batch workspace provenance still matches the selected workspace. A timeout, spawn failure, cancellation, process loss, missing result, or failed command leaves the batch ineligible; a crash before finalization leaves the durable row `running` and blocks any older pass. Preserve actual per-command observations; never synthesize process exit codes. The same `TasksDb` transition contract and SQLite boundary must refuse `qc_review` when the latest batch is incomplete or failing.
+
+**Why.** Per-command passing rows let one successful project in a multi-project selection authorize QC while a sibling command timed out or failed to spawn. One batch-level finalization makes completeness explicit and durable across API and direct-SQL transitions.
+
+**Proof and limit.** Migration 19 adds the durable batch table, observed-count/evidence linkage and batch-aware SQLite QC triggers for both UPDATE and direct INSERT. `project_build_batches_block_partial_and_interrupted_qc_until_complete_pass` proves an observed passing sibling plus a missing child stays blocked through both the shared API and direct SQL; a still-running row survives DB reopen and blocks QC; a complete two-project passing batch with a current fingerprint is accepted. `shipped_project_command_persists_spawned_build_results_and_qc_reads_them` exercises the production command path through pass, workspace mutation, timeout, API/direct-SQL refusal, a fresh passing rerun and acceptance. The direct INSERT guard regression also passes. The production mixed-project timeout/spawn/cancel matrix and cross-platform command corpus remain open; no timeout or spawn exit is fabricated.
+
+**Where.** `arcana-core/src/agent/builtin_tools/project_command.rs`, `arcana-core/src/db/tasks.rs`, P4-14/TG4-07.
+
+## ADR-LOG-RESTRUCT-0219 — Persist operation continuity in a dedicated RunsDb journal
+
+**Status.** Accepted by the owner on 2026-10-03; journal migration, production writer/reader, and cancellation behavior are partially implemented and focused-tested. Recovery/reassignment proof remains pending.
+
+**Decision.** Add a dedicated append-only operation journal table to the existing `runs.db`, linked to durable worker run and task IDs. Keep the bounded `worker_run_events` table as a summary stream. Journal deterministic operation intent before execution, then append observed outcome or `unknown` when acknowledgement is lost; retain a durable operation cursor, safe changed-path references, and reconciliation state needed by replacement/resumed workers. Treat a lost acknowledgement as an uncertain side effect and reconcile against current task/workspace/Git state before replay. Do not store raw tool arguments, source contents, or unbounded provider results.
+
+**Why.** The current recovery ledger can identify interrupted runs but cannot say which mutations completed, where to continue, or which side effects remain uncertain. A separate append-only table avoids rebuilding the bounded summary event schema and preserves audit history.
+
+**Proof and limit.** Migration v4, append-only intent/outcome/reconciliation rows, cursor paging, bounded workspace-relative targets, and the production `ToolExecutor` writer plus Supervisor-only `list_worker_health` reader are implemented. Focused RunsDb paging/migration/bounds tests, producer failure/unknown-outcome tests, Supervisor journal readback tests, and `cancellation_drops_inflight_run_side_effect_and_leaves_unknown_journal_intent` pass. Cancellation drops the in-flight effect and leaves an unresolved intent for the Supervisor. Still required: cancellation or panic after multiple mutations, lost-ack reconciliation against task/workspace/Git state without duplicate effects, replacement-worker continuation, and task-scoped snapshot/restore safety. No automated replay or resume is claimed.
+
+**Where.** `arcana-core/src/db/runs.rs`, P4-36/P4-53/P4-54 and TG4-26/TG4-33.
+
+**2026-10-03 continuation.** A structured `outcome_unknown` marker on tool errors is now consumed by the journal writer; the regression proves it persists `Unknown` and does not retry the effect (1/1). Bash/project-command timeouts and post-dispatch MCP errors set the marker. Supervisor reads now accept independent cursors keyed by worker run; the reader suite passes 6/6, and the focused journal tests pass 6/6. These changes correct outcome attribution and paging only. Actual state reconciliation, replacement-worker continuation, and no-duplicate recovery are still open.
+
+## ADR-LOG-RESTRUCT-0220 — Add consent-gated external MCP invocation to P4
+
+**Status.** Accepted by the owner on 2026-10-03; shared-core tools, consent/audit integration, and local Streamable HTTP protocol proof are partially implemented. Desktop/CLI full consumer and resilience proof remain pending.
+
+**Decision.** Add an external MCP client to the shared Rust runtime so both desktop and CLI Fleet turns can discover and call tools from configured Streamable HTTP connectors. Use the official Rust MCP SDK `rmcp` pinned to version `3.5.0` with only the Streamable HTTP client features needed by the configured endpoint contract; do not launch stdio servers because the current persisted connector configuration has no executable/argument contract. Register bounded, connector-namespaced proxy tools in each agent engine. Immediately before each call, require and durably audit workspace-scoped consent for that connector; fail closed on absent, revoked, or unreadable consent. Preserve existing interactive `Network` approval behavior. Apply finite deadlines and cancellation, never automatically retry an ambiguous call, bound results before any tool-result consumer, and record safe correlated outcome/duration/size telemetry without arguments, results, credentials, endpoint URLs, or raw remote errors.
+
+**Why.** P4-50/TG4-24 explicitly requires MCP call outcomes, but current Arcana code only stores connector settings and performs HTTP health probes. Shared-core ownership makes the production path consistent for Tauri and CLI without duplicating invocation logic.
+
+**Research.** The official Rust SDK documents `rmcp`'s Streamable HTTP client transport, lifecycle client, and cancellation behavior; the current tool specification requires user-visible tool use, validation, timeout and audit handling. Sources: [official Rust SDK](https://github.com/modelcontextprotocol/rust-sdk/blob/main/crates/rmcp/README.md), [official client example](https://github.com/modelcontextprotocol/rust-sdk/blob/main/examples/clients/src/streamable_http.rs), [MCP tools specification](https://modelcontextprotocol.io/specification/2026-07-28/server/tools), [Streamable HTTP specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http).
+
+**Proof and limit.** Exact `rmcp` 3.5.0 client dependency and Streamable HTTP transport are pinned. Shared-core `mcp_list_tools`/`mcp_call_tool` tools use the configured GitHub HTTP endpoint, per-call workspace egress-consent audit, `Network` permission effects, bounded metadata/arguments/results, no ambiguous automatic replay, fixed-label result telemetry, and explicit stdio refusal. `streamable_http_client_discovers_and_invokes_a_local_mcp_tool` exercises the real Rust SDK client against a local protocol fixture (1/1); endpoint/size policy tests pass (4/4 MCP tests total). `configured_mcp_destination_is_scoped_granted_revoked_and_audited` proves denied/granted/revoked audit readback (1/1). Shared core check passes with `--locked`. Still required: production configured-tool execution through AgentEngine in both desktop and CLI, permission-mode/timeout/cancel/error and oversized-wire response cases, telemetry persistence/Logs readback, and credential/host scope review. Stdio remains fail-closed.
+
+**Where.** `arcana-core/src/agent/engine.rs`, `arcana-core/src/agent/tool_executor.rs`, shared MCP module, consent/runtime wiring, P4-50/TG4-24/TG4-25/TG4-26.
+
+**2026-10-03 continuation.** MCP call telemetry now also records bounded invalid-input, authorization-failure, connection-failure, and result-rejection outcomes, besides timeout, protocol, remote-tool and success results. The local MCP suite passes 6/6, including a captured failure event that excludes remote tool names and private context markers; workspace Rust check passes. Actual configured desktop/CLI AgentEngine invocation and telemetry persistence/Logs readback remain open. The owner has been asked whether to add an RMCP pre-parse body-cap transport and whether GitHub org/repository scope must be enforced by the client; those security-contract choices remain pending.
+
+**2026-10-03 revocation-race proof.** Shared MCP invocation now performs an authorization/audit check immediately before `tools/call`, after the connection handshake. The local real-RMCP fixture allows one call, simulates revocation before a second call, and asserts the second call never reaches the server; focused test 1/1, MCP module 6/6. This closes that race in the helper path only. Configured desktop/CLI AgentEngine exercise, bounded raw response bodies, remote cancellation, connector scope, and telemetry persistence/Logs remain open.
+**2026-10-03 persisted revocation regression.** The fixture now uses an isolated real SQLite consent store: it grants, completes an MCP handshake, revokes the persisted grant, and exercises the production authorization gate; the server observes no second `tools/call`. The consent decision and audit record are written in one immediate transaction. Commit is the authorization decision point; a revoke after commit does not retroactively cancel an authorized in-flight request. Focused fixture 1/1, MCP module 6/6, and consent module 4/4 pass. Full desktop/CLI consumer, wire-body cap, remote cancellation, scope, and Logs proof remain open.
+
+**2026-10-04 redirect regression.** `streamable_http_client_does_not_follow_endpoint_redirects` drives Arcana's production `connect_to_endpoint` through a local HTTP fixture that responds with a redirect to a second local listener. The MCP handshake fails and the redirect target receives no connection; all 9 focused MCP tests pass. This proves redirect refusal for the pinned RMCP production adapter without a remote server or credential. Raw response-body limits before parsing, desktop/CLI MCP Logs readback, and the other listed host/security cases remain open.
+
+**2026-10-03 claim-attribution correction.** Worker engines begin with no task ID, while `claim_task` commits ownership before the engine can bind the claimed task into `ToolContext`. The operation-intent writer now derives a positive task ID from the validated-shaped `claim_task.task_id` input for journal attribution, falling back to runtime context where available; unrelated tools continue using only the runtime task ID. If the claim succeeds but the follow-up budget read fails, the tool now marks the result `outcome_unknown` so the journal does not record a definite failure for an already-committed claim. A production RunsDb-backed executor regression verifies the pre-handler claim intent stores the requested task ID (1/1).
+
+**2026-10-03 correction.** ~~This fixes attribution and failure classification only; it does not implement the reconciliation action or unblock/reassignment guard required by P4-53.~~ The later task side-effect recovery continuation added an immediate-transaction unresolved-intent barrier before ToolExecutor dispatch and a unique one-decision-per-intent constraint. Current revalidation passes `unresolved_task_effect_blocks_new_intents_until_reconciled`, `operation_reconciliation_has_one_durable_winner`, and `unresolved_prior_task_effect_blocks_executor_handler_until_reconciled` (1/1 each). This closes the atomic side-effect redispatch bypass. A production Supervisor/host action for inspecting and resolving journal state, filesystem/Git/checkpoint reconciliation, complete mutation capture, and replacement-worker continuation/no-duplicate proof remain open.
+
+## ADR-LOG-RESTRUCT-0221 — Correct the P4 gate count
+
+**Status.** Accepted correction on 2026-10-03.
+
+**Retraction.** ~~TG4-01–32 has 9 passed and 23 open, with TG4-33 also passing.~~
+
+**Correction.** The active `TESTING_GATES.md` checkboxes show **8 passed and 24 open among TG4-01–32**. TG4-33 is a separately listed passing scheduler/QC-worker smoke gate; it is not part of that 32-gate range.
+
+**Why.** The prior recount added the separately listed TG4-33 to the first 32-gate denominator while counting pass states, creating an off-by-one error in the status report. The plan's TG4 range and checked rows were re-counted directly.
+
+**Effect.** No task or gate status changes. P4 remains open; the readiness report and user-facing count use 8/32 plus TG4-33 separately.
+
+**Where.** `docs/restructurization/development/TESTING_GATES.md`, `READINESS_MATRIX.md`, P4 closeout status.
+
+## ADR-LOG-RESTRUCT-0222 — Record cancellation of in-flight MCP operations
+
+**Status.** Accepted and implemented on 2026-10-03; focused MCP telemetry suite passes 8/8.
+
+**Decision.** When the AgentEngine drops an in-flight MCP handler because its run is cancelled, emit one bounded `mcp_call` event with `outcome=cancelled`, safe operation identity, known run/task/call/role correlation, and elapsed nanoseconds. Do not record the endpoint, remote tool name, arguments, response, or cancellation error text. Normal completed outcomes continue to use their existing result event and must not emit a second cancellation record.
+
+**Why.** Arcana treats MCP calls as potentially mutating external side effects and does not retry ambiguous outcomes. A cancellation currently drops the handler future before its normal result instrumentation, leaving the MCP-specific trace without an outcome even though the general tool journal records an unknown effect.
+
+**Proof and limit.** `aborted_mcp_handler_emits_one_safe_cancelled_outcome` aborts the tracked handler future and verifies one cancellation event with known safe correlation and without session/workspace markers. `completed_mcp_handler_does_not_emit_a_second_cancellation_outcome` proves normal completion adds no duplicate cancellation record. The complete focused MCP module passes 8/8. `streamable_http_client_discovers_and_invokes_a_local_mcp_tool` invokes the actual `McpListToolsTool.execute` and `McpCallTool.execute` handlers using isolated production connector/consent databases against a local RMCP endpoint (1/1). This proves shared-core tool-handler execution, not a provider-driven AgentEngine turn. Remote-server cancellation acknowledgement, configured desktop/CLI AgentEngine execution, and persisted Logs readback remain open.
+
+**Where.** `arcana-core/src/agent/builtin_tools/external_mcp.rs`, P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0223 — Preserve permission outcomes and filter echoed tool arguments in failures
+
+**Status.** Accepted and implemented for the shared production ToolExecutor; all-builtin and full privacy audit remain open.
+
+**Decision.** Keep explicit user denial, approval timeout, session cancellation, and a dropped approval listener as separate versioned JSON errors (`permission_denied`, `permission_timed_out`, `operation_cancelled`, and `permission_channel_closed`). Every non-allow path remains fail-closed and returns a failed tool result with executor-owned operation/tool and call correlation. Before a handler failure reaches event, persistence, or model consumers, remove exact echoed command, prompt, source, and path argument values from bounded cause text, corrective guidance, and diagnostic path fields; retain safe Arcana-generated command identity and stable correlation fields.
+
+**Why.** Collapsing timeout/cancellation into user denial makes the Supervisor misclassify a transient or terminal run state. Builtin handlers also often format invalid input and OS failures into prose; bounded truncation and credential-pattern redaction alone do not prevent exact prompt/source/command/path echo. The production executor has the raw tool input at the one shared failure boundary, so this filter covers read and write handlers without changing each tool's successful output contract.
+
+**Proof and limit.** `approval_cancellation_is_not_reported_as_user_denial` drives a real ToolExecutor cancellation and proves a correlated cancellation envelope, no handler invocation, and pending-approval cleanup. `approval_timeout_and_closed_listener_have_distinct_decisions` proves the separate timeout and listener outcomes. `executor_context_removes_echoed_command_prompt_source_and_path_arguments` plants all four value types and verifies they are absent while the error and call correlation remain. `agent::tool_trait::tool_result_error_tests` passes 8/8, `agent::tool_executor::p8_execution_registry_tests` passes 15/15, the production AgentEngine unknown-tool consumer test passes 1/1, `cargo check -p arcana-core --locked`, `cargo fmt --all -- --check`, and `git diff --check` pass. This is not the every-builtin/provider error matrix, complete short-argument/OS-error privacy proof, or retry-safety audit required to close P4-51/TG4-25.
+
+**Where.** `arcana-core/src/agent/tool_trait.rs`, `arcana-core/src/agent/tool_executor.rs`, P4-51/TG4-25, GOAL and P4 checkpoint.
+
+## ADR-LOG-RESTRUCT-0224 — Gate task side effects on operation reconciliation
+
+**Status.** Implemented on 2026-10-03; focused RunsDb and production ToolExecutor regressions pass.
+
+**Decision.** Before any run-scoped non-board side effect with a task ID, acquire SQLite's immediate write transaction, check for an earlier unknown operation whose reconciliation remains unresolved or do-not-retry, then append the new intent in that same transaction. If one exists, return a structured `operation_reconciliation_required` result and do not call the handler. A retry-safe or reconciled decision allows the next intent. Enforce one reconciliation row per intent with a partial unique index in RunsDb migration 5. Continue to treat unavailable journal storage as fail-closed.
+
+**Why.** The earlier claim-time check allowed a later path to reach the ToolExecutor without rechecking, and a check performed outside intent insertion could race with another writer. The tool executor's durable intent boundary is immediately before handler dispatch, and an immediate SQLite transaction serializes the check-and-append across connections. A reconciliation decision must also have one durable winner; appending conflicting decisions would make recovery depend on whichever row a reader happened to select last.
+
+**Proof and limit.** `unresolved_prior_task_effect_blocks_executor_handler_until_reconciled` verifies the actual production ToolExecutor withholds a replacement worker's handler, emits a structured recovery code without the private path, and permits the handler after an explicit retry-safe record. `unresolved_task_effect_blocks_new_intents_until_reconciled`, `concurrent_task_intents_allow_at_most_one_unresolved_side_effect`, and `operation_reconciliation_has_one_durable_winner` cover the DB contract and race. The P4-53 gate remains open: no operator/Supervisor reconciliation consumer, repository snapshot comparison, complete changed-path capture, replacement-worker continuation, multi-mutation lost-ack proof, or no-duplicate end-to-end recovery has been established.
+
+## ADR-LOG-RESTRUCT-0225 — Prefer runtime-probed PSEC for strict Windows process confinement
+
+**Status.** Accepted and partially implemented on 2026-10-03 under the owner's prior approval to evaluate and build an alternate Windows sandbox runner. Focused PSEC behavior is proven; the full Windows toolchain/canonicalization contract is not.
+
+**Decision.** Add a runtime-probed Process Security Environment (PSEC) launch path using Microsoft's `CreateProcessSecurityEnvironment` plus the `PROC_THREAD_ATTRIBUTE_SECURITY_ENVIRONMENT` attribute on the existing `CreateProcessW` flow. Keep Arcana's suspended launch, explicit inherited-handle list, stdout/stderr pipes, and kill-on-close Job Object. Express only the selected workspace as read/write, exact staged runtime/toolchain roots as read-only, explicitly deny known external user-data roots, and set network egress default to deny. Select this backend only if the host exposes the required API and reports the required schema/security support; otherwise fail closed. Do not widen AppContainer ACLs or silently use an unrestricted child.
+
+**Why.** Production Windows tests confirmed AppContainer denies canonicalizing an allowed Clippy config path despite exact read/traversal grants. Microsoft's PSEC process security environment attaches to ordinary `CreateProcessW`, preserving the process/pipe lifecycle that `Experimental_CreateProcessInSandbox` cannot currently provide because that API requires `inheritHandles=FALSE`. The current host exposes PSEC create/close/support-query exports. PSEC must still prove sibling/user-data read denial, selected workspace access, network denial, output capture, timeout/cancellation descendant cleanup, and supported runtime/toolchain behavior before production selection.
+
+**Source basis.** Microsoft's `mxc` repository provides the PSEC wire schema at `external/windows-sdk/ProcessSecurityEnvironment.fbs` and uses the same processmodel exports and process attribute in `src/backends/process_container/common/src/secenv.rs`; the repository schema is MIT-licensed. The API is dynamically loaded and required support is checked at runtime. The host currently reports Windows 11 25H2 build 26200.9457 and exports the PSEC APIs, but export presence alone is not capability proof.
+
+**Where.** `arcana-core/src/platform/process_sandbox/windows.rs`, P4-11/P4-61/P4-62 and TG4-18/TG4-31.
+
+**2026-10-03 implementation evidence.** PSEC now backs production Windows child creation; old production AppContainer ACL writes were removed. Host support query reports PSEC v1.0 and filesystem-deny flags `0x3`, without v1.1 enumeration-only traversal. Windows-target check passes; focused production tests pass for staged Python Build/Test, selected MSVC Cargo Build, `.cmd` stdout/exit capture, sibling-read/loopback denial, and PSEC serialization. Clippy still fails because OS error 5 is returned when the confined process canonicalizes the selected workspace root. This proves the unresolved issue is parent traversal under the available PSEC contract; do not widen access. The owner subsequently approved guarded Windows workspace staging/copy-back; its implementation and production proof remain open. The latest full core result is 916 tests: 913 passed, 2 failed, 1 ignored.
+
+## ADR-LOG-RESTRUCT-0226 — Name egress controls by destination
+
+**Status.** Implemented and verified on 2026-10-03.
+
+**Decision.** Give each workspace-egress consent button a destination-specific accessible name, so provider and MCP grants remain independently discoverable by assistive technology and reliable in UI tests when both destinations have the same current action.
+
+**Why.** A shared label such as `Allow egress` makes two different external destinations indistinguishable to accessibility queries and keyboard/screen-reader users.
+
+**Proof and limit.** The focused Settings test passes 2/2 and the full frontend suite passes 51/51; `npx tsc --noEmit` and `npm run build` pass. Vite still reports existing mixed dynamic/static import and large bundle-size warnings. This UI evidence does not prove live desktop IPC or persisted consent behavior.
+
+**Where.** `src/tabs/Settings.tsx`, `src/tabs/Settings.test.tsx`, workspace egress consent.
+
+## ADR-LOG-RESTRUCT-0227 — Revalidate the protected commit target after lock waits
+
+**Status.** Implemented on 2026-10-03; P8-74/TG8-13 remain open for stale-claim and production-path proof.
+
+**Decision.** `git_commit` captures the validated branch ref and target commit after acquiring the shared index lock. After all awaited file locks and immediately before creating the commit, it rechecks that HEAD still names that ref and that its target has not moved. The final commit updates only the captured ref; it never resolves a fresh HEAD ref after the host has approved a different branch.
+
+**Why.** Independent Luna High review found that an external Git action could switch HEAD to `main` while the host waited on a worker file lock. The old flow selected the now-current ref after that wait, so an earlier `arcana/fleet` decision could authorize a commit on protected `main`. Capturing identity, refusing when the identity changes, and targeting only the captured ref prevents the reviewed bypass.
+
+**Proof and limit.** `commit_refuses_head_switch_to_protected_branch_while_waiting_for_file_locks` injects a switch from `arcana/fleet` to `main` after file-lock acquisition and proves refusal without moving either branch; all 13 `git_commit::tests` pass. This does not make a multi-process Git lock around HEAD, prove task-claim ownership remains current across the same wait, or exercise a model-produced call through AgentEngine/RecipeRunner/scheduler. TG8-13/P8-74 remain open.
+
+**Where.** `arcana-core/src/agent/builtin_tools/git_commit.rs`, P8-74/TG8-13.
+
+## ADR-LOG-RESTRUCT-0228 — Match the expanded tool-failure envelope at the dispatch boundary
+
+**Status.** Implemented on 2026-10-03; full builtin/provider matrix and privacy audit remain open.
+
+**Decision.** Shared `ToolResult::with_execution_context` now emits the expanded goal contract at the JSON envelope level: `error_code`, `category`, `message`, operation/tool identity, retryability and `retry_after_ms`, cause/action, context, run/agent/task correlation, and timestamp. It retains the established nested `error` object and `code` alias so existing consumers remain compatible.
+
+**Why.** The expanded P4 goal names these fields as the common model/UI/observability contract. Before this change, the executor emitted a nested `error.code` and nested correlation, so a consumer following the documented top-level shape could not read the required fields consistently.
+
+**Proof and limit.** The real shared executor privacy test asserts both top-level contract fields and nested compatibility fields, including explicit null retry delay and correlation IDs; `agent::tool_trait::tool_result_error_tests` passes 8/8. This does not establish every builtin/provider error category, retry semantics, or complete privacy coverage; P4-51/TG4-25 remain open.
+
+**Where.** `arcana-core/src/agent/tool_trait.rs`, P4-51/TG4-25, expanded P4 goal §3.1.
+
+## ADR-LOG-RESTRUCT-0229 — Use guarded Windows workspace staging for PSEC traversal failures
+
+**Status.** Owner-approved on 2026-10-03; implementation and production proof remain open.
+
+**Decision.** When the confined Windows child cannot traverse/canonicalize the selected workspace directly, execute against a guarded stage and copy approved changes back beneath the originally selected workspace only if the stage's own location is proven usable by the selected sandbox backend. Preserve denied external-read/network boundaries; do not solve traversal errors with broad read grants or ACL mutation. Reuse validated path/symlink/workspace-identity protections, reject conflicting host edits, and fail closed when staging or safe copy-back cannot be proven. A plain move to the ordinary OS temporary directory is not sufficient: the 2026-10-03 production Clippy probe failed with the same OS error 5 there.
+
+**Why.** PSEC v1.0 on the current host denies canonicalization of an allowed workspace root/config with OS error 5, preventing supported toolchain operations such as Clippy. The failure is not resolved by reading exact config bytes or by relocating the workspace to an ordinary OS temporary directory. Guarded staging remains the approved direction, but its location/backend must first be shown to support required traversal while retaining untrusted-code isolation.
+
+**Proof and limit.** This records the owner's selected direction, not implemented behavior. The Windows copy/copy-back path must be tested through Rust, Node, and Python launchers, including a sandbox-approved stage location, workspace mutation persistence, unrelated-path and symlink denial, deletion/rename handling, command failure and timeout, descendant cleanup, conflict refusal, and refusal on workspace identity changes. The ordinary-temp experiment reproduced Clippy's denial; the checked-in production Clippy test remains intentionally red acceptance evidence until a usable stage/backend is implemented. P4-11/P4-61/TG4-18/TG4-31 remain open; latest full core result is 913 passed, 2 failed, 1 ignored, with both failures in Clippy canonicalization.
+
+**Where.** `arcana-core/src/platform/process_sandbox/windows.rs`, P4-11/P4-61, TG4-18/TG4-31.
+
+## ADR-LOG-RESTRUCT-0230 — Reserve run-token budget before provider dispatch
+
+**Status.** Owner-approved direction on 2026-10-03; reservation design and integration remain open.
+
+**Decision.** Enforce the Supervisor's run-token cap through conservative pre-dispatch reservations. Do not rely only on usage reconciliation after a provider response. Apply the cap across every physical provider attempt, including retries, compaction calls, and child-agent work, and reconcile actual usage against the reservation when returned.
+
+**Why.** Isolated CLI runs exceeded a 100,000-token run cap by reporting 106,667 tokens because accounting occurred after responses. Another provider request before bounded pre-dispatch enforcement could exceed the user's configured cap.
+
+**Proof and limit.** This records the selected policy, not working enforcement. The implementation must define and test a safe request bound, atomic concurrent reservations, failure/unknown-usage settlement, persisted-budget interaction after task claim, retry/compaction coverage, and shared parent/child accounting. No live provider call is authorized by this ADR; defer it until the bound is enforced and focused production-path tests pass.
+
+**Where.** `arcana-core/src/agent/engine.rs`, provider dispatch/retry/compaction paths, P4-15/P4-50, TG4 budget gates.
+
+## ADR-LOG-RESTRUCT-0231 — Time the production Fleet work-availability gate
+
+**Status.** Implemented and focused-tested on 2026-10-03; P4-43 remains open.
+
+**Decision.** Emit fixed-label operation timings at both shared scheduler boundaries: `worker_has_recoverable_work` records the recoverable-work query used by startup, cron, and event-kick callers; `run_if_recoverable_work_with_timeout` records idle, already-running, and completed dispatch decisions plus total run duration. Record the `tasks` database identity for the query, worker slug, and bounded result counts only. Leave read/open and dispatched-run failures at the timer's explicit error default. Do not include task titles, criteria, request payloads, or message content.
+
+**Why.** Empty-work checks are the deterministic gate that prevents unnecessary provider calls. Timing the query and shared dispatch helper makes idle cost, skipped duplicate work, actual dispatched runs, and failures visible without adding model calls or duplicating measurements at each scheduler caller.
+
+**Proof and limit.** `production_work_gate_emits_safe_idle_and_work_timing` proves query outcomes, duration, DB/worker identity, and task-content privacy (1/1). `startup_and_event_dispatch_gate_records_idle_and_completed_runs` proves the shared dispatch helper's idle and dispatched outcomes/durations and that the work closure executes once (1/1). `empty_startup_and_qc_recovery_checks_do_not_poll_the_provider` continues to prove the empty queue does not execute its provider closure. This does not count physical provider requests or measure every real cron/event lifecycle; P4-43 remains open.
+
+**Where.** `arcana-core/src/recipes/scheduler.rs`, P4-43 and P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0232 — Preflight Gemini input tokens before run-budget reservation
+
+**Status.** Owner-approved and implemented on 2026-10-03; local fixtures and live countTokens preflight pass. Successful CLI Fleet completion remains open.
+
+**Decision.** For Gemini generation requests, call the official `models.countTokens` endpoint with the same serialized `GenerateContentRequest` used for generation, then atomically reserve the returned input token count plus that request's `maxOutputTokens` against one shared run ledger before each physical generation attempt. Reconcile with returned usage after completion; retain the full reservation when dispatch occurred but usage is unavailable. Apply this to streaming, unary completion, retries, compaction, and child-agent calls. Fail closed when preflight, model identity, reservation storage, or output bounds cannot be established. The preflight is a separate provider operation: record its duration/outcome and do not count it as a generation attempt or token usage.
+
+**Why.** CLI runs observed 106,667 tokens against a 100,000 run cap because usage was only reconciled after responses. Reserving the full 1,048,576-token Gemini context would reject every call under Arcana's current 1,000,000-token CLI ceiling. Google's current official API contract accepts `generateContentRequest` at `models.countTokens` and returns input `totalTokens`; `maxOutputTokens` bounds generation output. Source: [Gemini token-counting API](https://ai.google.dev/api/tokens) and [GenerateContent API](https://ai.google.dev/api/generate-content).
+
+**Proof and limit.** Local HTTP fixtures prove request-body parity including the required nested model resource, malformed/error denial, safe normalized error summaries, and streaming rejection beyond 16 KiB. A live synthetic request through the current Google key returns 200 with the production-shaped model/system/tools/generation configuration. The production CLI initially exposed a missing `generateContentRequest.model`: the preflight returned 400 even though `countTokens` accepted a simple `contents` request. The production request now sets `model` to `models/{id}` and the CLI proceeds through preflight and generation. Run-token tests prove atomic reservations, no generation dispatch on preflight denial, delayed usage settlement after an empty finish frame, and full reservation retention when usage is unknown. An AgentEngine claim test seeds 2,000 persisted tokens under a 10,000-token task cap and proves that the next 8,192-token output reservation is denied and escalated to `needs_info`. Provider decorators are wired across unary/stream, retries, compaction, and child engines. The isolated CLI Fleet run then stopped safely at its 100,000-token cap before decomposition; no successful coding run is proven.
+
+**Where.** `arcana-core/src/provider/google.rs`, `provider/traits.rs`, run-scoped provider/budget wrapper, `agent/engine.rs`, `agent/compaction.rs`, `subagent/native_runner.rs`, P4-29/P4-50 and the expanded run-token cap contract.
+
+## ADR-LOG-RESTRUCT-0233 — Require a single-use Supervisor approval after build diagnosis
+
+**Status.** Owner-approved and implemented with focused DB, production-tool, scripted Supervisor-recipe, concurrent/reopen, and Windows mixed-project proof on 2026-10-03; supported-platform variants and successful CLI Fleet execution remain open.
+
+**Decision.** After three consecutive observed nonzero Rust-owned build exits, stop automatic build execution and present the worker's safe diagnosis to the Supervisor. A Supervisor may authorize exactly one subsequent `project_command` build batch for that task. Persist the decision with task, assigned worker, Supervisor identity, reason, issue time, and consumed state; consume it atomically before the batch starts. Bind the grant to the exact latest failed/incomplete diagnostic batch reviewed, then recheck that batch identity at approval and consumption. The SQLite insert trigger requires a connection-scoped host authorization function in addition to the Supervisor identity, so direct SQL cannot forge approval by writing the string `supervisor`. Do not infer approval from free-form messages or request-resolution notes. Missing, stale, mismatched, reused, or unreadable approval state remains denied. Passing observed build evidence resets the failure streak; spawn failures and timeouts remain separate.
+
+**Why.** The existing guard correctly blocks a fourth build but has no path for the owner's selected Supervisor decision. One-use durable authorization makes that decision explicit and auditable while preventing workers, repeated requests, or multi-process races from bypassing the cap.
+
+**Proof and limit.** The database test proves observed failure thresholds, forged-SQL and worker self-approval rejection, Supervisor reason/actor audit, diagnostic-batch binding, atomic consumption, and reuse denial. Production ProjectCommandTool tests run three failed Cargo builds, process the typed worker request and Supervisor approval, allow one additional batch, and reject reuse. `shipped_supervisor_recipe_approves_one_diagnosed_build_retry` drives the persisted Supervisor recipe through RecipeRunner/AgentEngine with a scripted provider, then proves exactly one of two concurrent consumers succeeds after reopening TasksDb. `production_mixed_batch_stops_after_third_observed_failure` proves on Windows that the cutoff suppresses the later Python child, then an approved batch runs Cargo and Python, both pass, and the production QC transition succeeds. Cross-platform variants and successful CLI Fleet execution remain open; P4-15/TG4-08 are not closed.
+
+**Where.** `arcana-core/src/db/tasks.rs`, `project_command.rs`, worker-request/Supervisor tools and recipe, P4-15/TG4-08.
+
+## ADR-LOG-RESTRUCT-0234 — Supervisor-authored operation reconciliation
+
+**Status.** Owner-goal implementation in progress, 2026-10-03.
+
+**Decision.** A task-attributed non-Board operation whose durable outcome is unknown stays quarantined until a Supervisor records one append-only reconciliation decision in `runs.db`. The decision names the exact `run_id` and intent cursor, uses one of `reconciled`, `retry_safe`, or `do_not_retry`, records a bounded reason code and the Supervisor actor, and is single-winner. `retry_safe` and `reconciled` permit a later claim; `do_not_retry` remains quarantined. SQLite must reject decision rows without the host authorization function, correct Supervisor identity, valid reason code, an unknown non-Board intent, and no previous reconciliation. Workers cannot reconcile their own effects. The shipped Supervisor flow must inspect the health/journal record and task/workspace/Git evidence before using the tool; this action records the decision but does not claim that Arcana independently verified model-provided reasoning.
+
+**Why.** The existing executor and claim boundary safely hold uncertain work, but there is no production Supervisor tool to release that hold. A durable, exact-intent decision makes the existing recovery contract actionable while preserving the fail-closed default and preventing concurrent or forged approvals.
+
+**Where.** `arcana-core/src/db/runs.rs`, new Supervisor builtin reconciliation tool, shared tool registry, shipped Supervisor recipe, TG4-27/TG4-28.
+
+**2026-10-03 proof update.** `shipped_supervisor_recipe_keeps_uncertain_operation_quarantined` drives the real shipped Supervisor recipe through RecipeRunner/AgentEngine, reads the task board, request queue, inbox, active journal entry and exact held task, then invokes the registered tool. After reopening the stores, it proves `do_not_retry` and its Supervisor/reason audit fields persist while the task remains quarantined and the retry barrier stays active. `reconcile_worker_operation` tests pass 2/2, including an injected SQLite append failure followed by direct-SQL forgery rejection, proving the host authorization guard is reset on failure. The connection-scoped authorization now resets by RAII across ordinary error and unwinding. This proves the conservative hold decision only; verified-complete/safe-retry reconciliation, workspace/Git/checkpoint comparison, complete mutation capture, and replacement-worker continuation/no-duplicate proof remain open.
+
+## ADR-LOG-RESTRUCT-0235 — Preserve guarded workspace changes after stopped project commands
+
+**Status.** Owner-approved on 2026-10-03; Windows staged copy-back implementation and proof remain open.
+
+**Decision.** When P4-61 runs a project command against a guarded workspace stage, copy back conflict-free, validated changes after any command outcome, including nonzero exit, timeout, or cancellation, but only after the full child process tree is confirmed stopped. Preserve the observed process exit or incomplete/timeout classification independently; a copied change never turns failed or incomplete build evidence into a pass. Reject copy-back on changed workspace identity, symlink/reparse escape, or conflicting host edits.
+
+**Why.** A failed build can still produce intentional workspace changes or useful partial progress. Discarding all stage changes on failure would lose work, while copying before descendants stop or overwriting concurrent host edits would create unsafe or surprising mutations. Keeping copy-back and build evidence as separate outcomes preserves both user work and QC correctness.
+
+**Proof and limit.** This is the selected policy, not implemented behavior. Tests must prove copy-back after success, nonzero exit, timeout, and cancellation; process-tree termination precedes copy-back; conflicts and path/identity violations refuse to modify the original workspace; and incomplete commands never authorize QC. P4-11/P4-61/TG4-18/TG4-31 remain open.
+
+**Where.** `arcana-core/src/agent/builtin_tools/project_command.rs`, `platform/process_sandbox`, P4-11/P4-61, TG4-18/TG4-31.
+
+## ADR-LOG-RESTRUCT-0236 — Windows sandbox bridge without inherited handles
+
+**Status.** Owner-approved on 2026-10-04; Windows bridge implementation has focused production-path proof, while full P4-61/TG4-31 proof remains open.
+
+**Decision.** The Windows sandbox runner may add an Arcana-owned bridge execution mode so the experimental OS sandbox API is called with handle inheritance disabled, while the bridge captures bounded stdout/stderr for the validated project command. The bridge must remain inside the same OS-enforced sandbox and process-tree job boundary; it may launch only the already validated executable, argv, cwd, and scrubbed environment supplied by the host. It must not grant network access or broader filesystem paths to make output capture work. Output transport, bridge executable resolution, and packaged CLI/Tauri startup must be tested against missing binary/runtime, launch failure, oversized output, timeout/cancellation, and descendant termination; any incomplete setup fails closed. This approval does not claim the experimental runner is production-ready or authorize any reduced read/network policy.
+
+**Why.** Microsoft documents `Experimental_CreateProcessInSandbox` as experimental and requires `inheritHandles = FALSE`; the current Windows launcher uses inherited standard handles for output pipes. A bridge provides a place to create child pipes without asking the experimental API to inherit host handles, while preserving Arcana's bounded output and process-tree cancellation contracts.
+
+**Where.** `arcana-core/src/platform/process_sandbox/windows.rs`, Windows sandbox runtime, CLI and Tauri entrypoints, TG4-31/P4-61. Microsoft API contract: https://learn.microsoft.com/en-us/windows/win32/secauthz/createprocessinsandbox.
+
+**2026-10-04 implementation evidence.** `Experimental_CreateProcessInSandbox` now starts the real `arcanactl.exe` bridge with `inheritHandles = FALSE`; the bridge validates its bounded request, launches the fixed argv with an explicit child-handle list, keeps the command tree in a kill-on-close job, captures 256 KiB tails per stream, and returns bounded result metadata through workspace-local temporary files. The production dispatcher uses this runner on Windows and both CLI/Tauri entrypoints check the private bridge mode before normal startup. The runner checks for Windows 11 build 22000+ and the required processmodel export. On this host, the SBOX AppContainer bridge passes real workspace-write, sibling-read denial, sibling-write denial, loopback denial, and stdout/stderr capture. All 13 focused Windows process-sandbox tests pass, including a direct Clippy-config file-read probe (not production Cargo Clippy), staged CPython, `.cmd`, timeout and descendant cleanup cases. `cargo check -p arcana-core`, `cargo check -p arcanactl`, `cargo check -p arcana --bin arcana`, and `cargo build -p arcanactl` passed during integration. The bridge currently uses the selected original workspace directly; the separately owner-approved guarded stage/copy-back behavior is still missing. Linux Landlock production proof, signed macOS XPC/staging, packaged Tauri runtime smoke, OS-build coverage, dependency-stage proof, and user-owned Python fallback execution remain open. TG4-31/P4-61 remain unchecked.
+
+**2026-10-04 validation correction.** ~~The 13 focused tests prove Clippy config access on the production command path.~~ They prove only a direct config-file read probe; production Cargo Clippy still fails canonicalizing the selected workspace/config path (OS error 5). `cargo fmt --all -- --check`, `cargo check -p arcana-core --locked`, and the 13-test Windows sandbox suite pass. The full core run discovered 956 tests but was interrupted after the staged-Python isolation test remained CPU-bound for more than ten minutes, so no full-suite pass is claimed. A per-launch ancestor-ACL experiment did not fix the path failure and was removed after a 185-second attempt. No P4 task or gate closes from this evidence.
+
+**Host mitigation note.** Setting `disallow_win32k_system_calls` in the SBOX specification makes the Arcana bridge fail during process initialization on this Windows build (`0xC0000142`); the passing runner specification leaves that optional mitigation off. AppContainer path restrictions, explicit default-deny network policy, no inherited host handles, and job-scoped descendant termination remain enabled. This changes only the optional Win32k mitigation and is recorded as a host compatibility limitation, not as a filesystem/network policy relaxation.
+
+## ADR-LOG-RESTRUCT-0237 — Do not stage Windows projects until confined path resolution works
+
+**Status.** Evidence recorded 2026-10-04; guarded stage/copy-back remains approved but is not implementable on the current SBOX path contract without another proven resolution mechanism.
+
+**Finding.** A disposable production SBOX child was given one exact read-only stage root. It could read a staged `.clippy.toml` and obtain directory/file metadata, but Rust `Path::canonicalize()` returned Windows error 5. `GetFinalPathNameByHandleW` with DOS-volume mode returned error 5; NT-volume mode returned `\Device\HarddiskVolume3\...`, which Rust metadata/canonicalization could not reopen (error 3). Prefixing the NT path with `\\?\GLOBALROOT` allowed metadata but canonicalization still returned error 5. The same `GetFinalPathNameByHandleW` failure occurred for an ordinary temporary workspace and reproduces in the real Cargo Clippy production test.
+
+**Decision.** Do not treat workspace relocation, a read-only stage grant, an NT device path, or `GLOBALROOT` as a safe fix. Keep P4-11/P4-61 and TG4-18/TG4-31 open and fail closed for affected Windows commands. Continue evaluating a supported path-resolution/sandbox backend that preserves external-read and network denial before implementing stage/copy-back. Do not weaken the policy with broad filesystem grants or assume copy-back is safe until the child can execute against and resolve the stage.
+
+**Proof and limit.** The direct config read and metadata succeeded in the focused disposable child; DOS final-path resolution and Rust canonicalization did not. `production_clippy_environment_is_visible_and_readable_in_workspace_sandbox` remains a reproduced failing acceptance test. This is a current-host finding, not a claim that every Windows build behaves identically. The exploratory test harness was removed after recording its output; no production code or sandbox policy was relaxed.
+
+**Where.** `arcana-core/src/platform/process_sandbox/windows.rs`, `project_command.rs`, ADR-LOG-RESTRUCT-0229/0235, P4-11/P4-61, TG4-18/TG4-31.
+
+## ADR-LOG-RESTRUCT-0238 — Trace Python runtime staging phases
+
+**Status.** Implemented on 2026-10-04; the timing helper and core check pass. The cold Windows isolation test did not return within ten minutes and was stopped; phase-duration evidence from that test is unavailable.
+
+**Decision.** Keep the existing runtime staging and trust/cache behavior, but emit bounded `OperationTimer` events for interpreter validation and inspection, source fingerprinting, interpreter/DLL/stdlib/pytest copying, staged fingerprinting, cached-runtime verification, and runtime probes. Fixed operation names carry duration and success/error only; paths, file contents, and exception strings remain excluded. This decomposes the existing total runtime-preparation duration so slow cold launches can be localized before optimization.
+
+**Why.** A full `arcana-core` test run stalled in the staged-Python isolation case on this Windows host. The staging function previously emitted only one aggregate preparation duration, so it did not distinguish source scans, copies, integrity hashing, cache checks, or the probe.
+
+**Proof and limit.** `python_runtime_phase_timing_records_success_and_failure` verifies the timing helper emits duration and result state without error text; the production isolation test now asserts the expected phase labels. `cargo check -p arcana-core --locked` passes. The isolation test itself remained active for ten minutes, with its isolated runtime tree copied, then was interrupted while no Python child was present; therefore its production phase assertions are unverified, the Windows cold-stage latency is unresolved, and no optimization or gate closure is claimed.
+
+**Where.** `arcana-core/src/platform/python_runtime.rs`, P4-11/P4-62 and TG4-18/TG4-32.
+
+## ADR-LOG-RESTRUCT-0239 — Keep Windows sandbox setup off async executor threads
+
+**Status.** Implemented on 2026-10-04; Windows launcher, cancellation, CLI, Tauri, and production command-timeout checks pass.
+
+**Decision.** Run the synchronous Windows SBOX workspace/profile/process setup on Tokio's blocking pool instead of the async executor. Limit concurrent setup jobs to four with a process-wide semaphore; cancellation while waiting for a permit exits immediately, while cancellation during an OS call detaches only that bounded blocking job. Keep its permit until the OS call returns. If it returns a child after the async caller has timed out, dropping the unobserved result invokes the child's kill-on-close process-tree cleanup. Linux's async child-spawn behavior and macOS's fail-closed path remain unchanged.
+
+**Why.** A cold staged-Python isolation test remained inside host setup for ten minutes before it was stopped. The previous synchronous `process_sandbox::spawn` ran before the command's first `await`, so the worker timeout could not be polled during a slow SBOX call. Offloading setup lets the command deadline and other runtime work progress while bounding concurrent stuck setup calls.
+
+**Proof and limit.** `cancelled_windows_launch_returns_and_drops_a_late_child` proves timeout returns promptly and a value produced after cancellation is dropped. `production_command_timeout_stops_nested_process_writes_and_records_stage_time` passes 1/1 after the async change; the Windows launcher suite passes 13/13. `cargo check -p arcanactl --locked` and `cargo check -p arcana --bin arcana --locked` pass. A blocking OS call itself cannot be forcibly interrupted; it retains one of four slots until it returns. The staged-Python cold isolation test was interrupted at ten minutes before this change and has not yet been rerun, so that stall and phase timing assertions remain open.
+
+**Where.** `arcana-core/src/platform/process_sandbox/mod.rs`, its Bash/ProjectCommand/Python callers, P4-11/P4-62, TG4-18/TG4-32.
+
+## ADR-LOG-RESTRUCT-0240 — Correct the stale daily-spend observability gap report
+
+**Status.** Correction recorded on 2026-10-04 after checking the live source and tests.
+
+**Retracted claim.** ~~The daily-spend reserve and settle transactions have no operation-level observability.~~ This finding came from a stale read-only audit and is false for the current working tree.
+
+**Observed behavior.** `reserve_provider_call_at_estimated` in `arcana-core/src/budget/daily.rs` emits `daily_budget_provider_call_reserve` with `database=config` and `disabled`, `denied`, or `granted` outcomes; early errors default to `error`. `settle_provider_call_at` emits `daily_budget_provider_call_settle` with `settled`, `settled_unknown_usage`, or `not_found`. The existing `provider_budget_reservation_emits_decisions_without_private_values` test verifies grant, denial, disabled cap, injected DB failure, known settlement, duplicate settlement, durations, and identifier/error privacy. No production instrumentation is added for this correction.
+
+**Follow-up verification.** The reservation telemetry test now includes unknown-usage settlement and verifies the `settled_unknown_usage` outcome while confirming private reservation markers remain absent; the focused test passes. No production instrumentation was added for this correction. `orphan_candidate_scan` likewise already has result-aware operation timing and empty/error tests in live `orphan`/`TasksDb` sources, contradicting the stale audit's second finding.
+
+**Where.** `arcana-core/src/budget/daily.rs`, `arcana-core/src/orphan/mod.rs`, `arcana-core/src/db/tasks.rs`, P2-21/TG2-17 and P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0241 — Probe AppContainer-private staging for canonical workspace paths
+
+**Status.** Rejected as a production staging root on 2026-10-04; no production path or readiness change is authorized by this probe.
+
+**Decision.** Do not use the documented AppContainer Local AppData folder as the P4 staging root. A direct SBOX child reproduced the Rust `Path::canonicalize()` failure on its working directory, so this location does not resolve the production Clippy blocker. Retain fail-closed behavior for incompatible Windows toolchains and evaluate a different supported sandbox/path-resolution mechanism before implementing stage manifests or copy-back.
+
+**Why.** The production Clippy probe can read and stat an explicitly granted workspace config, but Rust path canonicalization still fails with OS error 5. Microsoft's AppContainer documentation identifies a per-container Local AppData folder accessible to that AppContainer and exposes `GetAppContainerFolderPath`; this gives a more precise candidate than another ordinary temporary directory. This remains a hypothesis until the SBOX child test proves canonicalization and sibling/network denial at the same boundary.
+
+**Security bounds.** Any future staging backend must stage only the selected project tree, pass only that staged root as writable, preserve default-deny network and the exact runtime allowlist, and never copy through symlinks/reparse points. Production copy-back remains gated on process-tree-stop confirmation, original workspace identity checks, per-path baseline conflict checks, and all-or-nothing preparation of the validated change set. This ADR does not authorize a broader ACL grant or a relaxed policy.
+
+**Sources and proof.** Microsoft documents `GetAppContainerFolderPath` as returning the local app-data directory for the supplied AppContainer SID and documents that an AppContainer can access files created specifically for it: https://learn.microsoft.com/en-us/windows/win32/api/userenv/nf-userenv-getappcontainerfolderpath and https://learn.microsoft.com/en-us/windows/win32/secauthz/appcontainer-isolation. These documents support the probe location only; they do not prove `Experimental_CreateProcessInSandbox` path canonicalization, staging performance, or safe copy-back. P4-11/P4-61/TG4-18/TG4-31 remain open.
+
+**Probe update — 2026-10-04.** The test harness first placed its probe executable inside the writable workspace, which correctly triggered the SBOX rule against overlapping writable and read-only roots; it was moved into its own unique read-only runtime directory. An initial bridge run used a stale CLI executable and is not evidence. After rebuilding the bridge, its child could not read the host-created request file (`stage=request_read os_code=3`). A direct SBOX launch then bypassed bridge transport and ran a tiny Rust probe from the AppContainer-private Local AppData directory; it exited `52`, which the probe maps specifically to `current_dir().canonicalize()` failure. This reproduces the Clippy path-resolution gap independently of bridge I/O. An additional test-only attempt to add non-inheriting traversal/read-attributes ACEs to every ancestor did not complete promptly while changing protected parent ACLs. The test was stopped; its two exact SID grants were removed and verified absent, and both disposable AppContainer profiles were deleted. The ACL-mutation probe was removed from source. No production staging or copy-back behavior has been added; Windows SBOX/Clippy and TG4-31 remain open.
+
+**Where.** `arcana-core/src/platform/process_sandbox/windows.rs`, `windows_sbox.rs`, ADR-LOG-RESTRUCT-0229/0235/0237, P4-11/P4-61, TG4-18/TG4-31.
+
+## ADR-LOG-RESTRUCT-0242 — Correct the staged-Python isolation stall diagnosis
+
+**Status.** Test fix verified 2026-10-04; no sandbox policy change.
+
+**Correction.** The earlier claim that the production SBOX launcher stalled before a Python child appeared was wrong. The isolation test had called `read_to_end()` on stdout and stderr before invoking `WindowsSandboxChild::wait()`. This bridge only closes its output streams while `wait()` finalizes the bridge result, so the test deadlocked even though the child had completed.
+
+**Evidence.** The interrupted run's bounded bridge result JSON recorded exit code 0 and the expected isolation output. The test now drains stdout, stderr and `child.wait()` concurrently with `tokio::join!`. The exact staged-runtime sibling-read/runtime-write/staged-tool/loopback/pytest isolation test passes 1/1 in 38.46s. The complete focused Windows sandbox test group passes 16/16 in 96.37s. Two additional launch probes pass from an OS-temp workspace and with an explicitly granted external read root.
+
+**Disposition.** Strike the earlier “no child appeared”/“sandbox launch stalled” claims in the P4 checkpoint, MDP, gates and readiness notes. Keep the full core suite open until rerun. This correction does not resolve the separate production Cargo Clippy path-canonicalization failure (Windows OS error 5), guarded stage/copy-back, locked dependency staging, packaged Tauri smoke, Linux Landlock, or macOS XPC/staging requirements.
+
+**Where.** `arcana-core/src/platform/python_runtime.rs`, `arcana-core/src/platform/process_sandbox/windows.rs`, MDP P4-11/P4-61/P4-62, TG4-18/TG4-31/TG4-32.
+
+## ADR-LOG-RESTRUCT-0243 — Record full core rerun and remove ineffective Clippy config stage
+
+**Status.** Verified 2026-10-04; Windows Clippy gate remains open.
+
+**Decision.** Keep the production sandbox fail-closed. Do not stage Clippy configuration in a separate read-only directory as a workaround; retain the direct failure as evidence until a supported path-resolution solution passes the production command.
+
+**Evidence.** The full `arcana-core` library run completed 962 tests: 959 passed, 2 failed, 1 ignored in 645.51s. Both failures are production Clippy paths (the explicit Clippy test and the project-command ecosystem corpus) returning OS error 5 during canonicalization. A temporary config stage under Arcana's own profile was granted as an explicit read-only SBOX root; a child could read and stat the file but could not canonicalize either it or the directory. That experiment was removed. The other two failures from the first full run were test/metric date defects: the journal fixture attempted to reconcile an already-successful operation (reconciliation is for unknown effects), and the dashboard compared UTC timestamps against the local Bangkok date. The test now uses an unknown outcome; the dashboard compares the worker date against UTC. Both focused tests pass.
+
+**Disposition.** P4 remains 32/59 and TG4 remains 10/33. No task, gate, or readiness score changes. P4-11/P4-61/TG4-18/TG4-31 remain open; full core validation is red until a secure path-resolution backend works.
+
+**Where.** `arcana-core/src/agent/builtin_tools/list_worker_health.rs`, `arcana-core/src/analytics/queries.rs`, `arcana-core/src/agent/builtin_tools/project_command.rs`, P4-11/P4-61, TG4-18/TG4-31.
+
+**Vendor contract note.** Microsoft describes the Windows SBOX API as experimental, and its documentation says explicit `fs_read_write`/`fs_read_only` directory grants apply recursively under AppContainer. On this Windows 11 build 26200, the production child can read and stat the explicitly granted file but Rust `Path::canonicalize()` still returns OS error 5. This is an observed host/API limitation, not a documented guarantee that canonicalization must succeed. Keep the real production regression and fail closed until an implementation passes it without weakening the filesystem or network boundary. [Microsoft SBOX API](https://learn.microsoft.com/en-us/windows/win32/secauthz/createprocessinsandbox).
+
+## ADR-LOG-RESTRUCT-0244 — Reject read-only drive-root grant for SBOX path resolution
+
+**Status.** Rejected on 2026-10-04; production sandbox policy restored to exact workspace/runtime roots.
+
+**Retracted hypothesis.** ~~Microsoft's SBOX contract describes a drive-root grant as applying to the root itself rather than recursively to its contents. A read-only `C:\` grant might therefore allow volume-anchor path resolution without allowing sibling-file reads.~~ I incorrectly applied the documented `fs_read_write` drive-root exception to the separate `fs_read_only` field.
+
+**Evidence.** The schema test confirmed the canonical drive-root path was serialized, but the real production `production_clippy_environment_is_visible_and_readable_in_workspace_sandbox` still failed: Cargo Clippy returned Windows OS error 5 finding its configuration file. The granted root did not resolve the production failure. The focused test fails with the same error observed before the experiment.
+
+**Decision.** Remove the unneeded drive-root grant and helper. Do not retain extra volume-root capability without a demonstrated need and production negative tests for outside reads, writes and network. Keep the Clippy regression and sandbox fail-closed; P4-11/P4-61 and TG4-18/TG4-31 remain open.
+
+**Where.** `arcana-core/src/platform/process_sandbox/windows_sbox.rs`, P4-11/P4-61, TG4-18/TG4-31.
+
+## ADR-LOG-RESTRUCT-0245 — Correct the SBOX drive-root permission interpretation
+
+**Status.** Correction recorded on 2026-10-04 after checking Microsoft's current API documentation.
+
+**Retracted claim.** ~~The SBOX read-only `C:\` grant used by ADR-LOG-RESTRUCT-0244 was root-only and did not broaden access to files below the volume root.~~ The drive-root exception applies to `fs_read_write`; the docs state that `fs_read_only` applies recursively below its directory.
+
+**Observed test scope.** The experimental `fs_read_only: ["C:\\"]` policy was present for one run of `production_clippy_environment_is_visible_and_readable_in_workspace_sandbox`. That run executed Cargo Clippy on the test's generated dependency-free probe crate. The production test still failed with OS error 5. No network capability was granted, the SBOX policy is default-deny for egress, and the command did not execute arbitrary application dependencies; however, the test did run with a broader read boundary than intended. No evidence shows that unrelated user-file contents were read or disclosed. The broad grant was removed immediately after the failed production test; the current policy again lists only the selected workspace and exact runtime roots.
+
+**Decision and prevention.** Treat `fs_read_write` and `fs_read_only` as separate policy contracts; never transfer exceptions between fields without a field-specific source and negative production tests. Do not add a drive-root `fs_read_only` grant. Keep the exact-path boundary and Clippy path-canonicalization regression open.
+
+**Sources.** Microsoft's [SBOX API documentation](https://learn.microsoft.com/en-us/windows/win32/secauthz/createprocessinsandbox) explicitly scopes the non-recursive drive-root exception to `fs_read_write`; its `fs_read_only` section says the grant applies recursively to files and subdirectories. The local production runner test is `production_clippy_environment_is_visible_and_readable_in_workspace_sandbox`.
+
+**Where.** `arcana-core/src/platform/process_sandbox/windows_sbox.rs`, ADR-LOG-RESTRUCT-0244, P4-11/P4-61, TG4-18/TG4-31.
+
+## ADR-LOG-RESTRUCT-0246 — Exact ancestor traversal grants do not resolve SBOX canonicalization
+
+**Status.** Rejected as a Windows path-resolution fix on 2026-10-04; production sandbox permissions unchanged.
+
+**Question.** Can Arcana grant only `FILE_TRAVERSE | FILE_READ_ATTRIBUTES` with inheritance disabled on accessible ancestors of a selected workspace, allowing Rust `Path::canonicalize()` while sibling reads remain denied?
+
+**Evidence.** A disposable Rust child ran through the production `Experimental_CreateProcessInSandbox` bridge with those exact temporary ACL grants from a user-owned `C:\arcana\target\p4-acl-tests` workspace. The child reported `workspace_resolves=false` while `sibling_read_denied=true`; the focused test failed after 90.07 seconds. A separate probe to add the same non-inheriting ACE directly to `C:\` failed with Windows OS error 5 before changing its DACL, confirming that this process cannot grant access to the volume root. The ACL helper and test-only identity override were removed after the run. `cargo fmt --all -- --check`, `cargo check -p arcana-core --locked`, and `git diff --check` pass after cleanup.
+
+**Decision.** Do not broaden filesystem grants or retain per-launch ancestor ACL mutation for this workaround. It does not resolve canonicalization on this host, adds significant launch/setup cost, and cannot satisfy the production Clippy regression. Keep the Windows SBOX boundary fail-closed and P4-11/P4-61/TG4-18/TG4-31 open. No task or gate is closed.
+
+**Where.** `arcana-core/src/platform/process_sandbox/windows.rs`, P4-11/P4-61, TG4-18/TG4-31, ADR-LOG-RESTRUCT-0245.
+
+## ADR-LOG-RESTRUCT-0247 — Correct stale run-token pre-dispatch gap
+
+**Status.** Correction recorded on 2026-10-04 after tracing the production provider path and running its focused tests.
+
+**Retracted claim.** ~~Run-token usage is still accounted only after the response, so a pre-dispatch run-token bound is an unresolved gap.~~ This claim remained in GOAL.md and the MDP after `RunTokenBudgetProvider` was wired into AgentEngine.
+
+**Observed production path.** `AgentEngine::run` wraps the consented provider in `RunTokenBudgetProvider`. With a finite run limit, the wrapper asks the underlying provider for an input-token upper bound, adds `CompletionRequest.max_tokens`, and atomically reserves that amount in the shared `RunTokenLedger` before calling `complete` or `stream`. Gemini's upper-bound implementation sends the actual built request, including tools and system instruction, to `countTokens`. Failed preflight and denied reservation do not dispatch generation; known usage settles the reservation, while unknown or dropped streams retain the conservative amount.
+
+**Evidence.** `cargo test -p arcana-core --lib provider::run_budget::tests:: --locked -- --test-threads=1` passes 4/4, including dispatch denial and preflight failure; prior recorded isolated CLI evidence shows a later request denied before provider generation at projected 100,266 tokens. `arcanactl` tests pass 15/15 in this continuation.
+
+**Remaining scope.** The historical 106,667-token response against a 100,000 cap occurred on the earlier pre-reservation implementation and is not erased. This correction does not prove successful CLI Fleet completion, provider quota handling, or durable reconciliation of an in-flight unknown generation across process restart; daily USD reservation coverage under TG2-17 also remains open. Do not start another paid Fleet run without a newly bounded decision.
+
+**Where.** `arcana-core/src/provider/run_budget.rs`, `arcana-core/src/budget/run_tokens.rs`, `arcana-core/src/agent/engine.rs`, `docs/restructurization/development/GOAL.md`, P2-21/TG2-17, P4-50/TG4-24.
+
+## ADR-LOG-RESTRUCT-0248 — Cancel in-flight concurrent read tools with their session
+
+**Status.** Implemented and focused-tested on 2026-10-04; broad cancellation gate remains open.
+
+**Decision.** Every concurrently executed `ToolEffect::Read` races its handler future against the existing session cancellation signal. If cancellation wins, drop that read future, return the normal correlated structured `operation_cancelled` failure, and continue the executor's regular end-event and active-tool cleanup path. The write/side-effect partition retains its existing unknown-outcome journal contract.
+
+**Reason.** The parallel read partition previously awaited every spawned handler without observing session cancellation. A stuck read could therefore keep the AgentEngine turn and worker recovery open after the user cancelled the session. Reusing the existing session signal keeps one cancellation source and makes the read partition consistent with the serial operation wait.
+
+**Evidence.** `cancelling_session_drops_inflight_concurrent_read_and_returns_correlated_failure` blocks a real read-tool future, cancels the registered session, and verifies bounded batch completion, future drop, structured category/code and call correlation, and active-registry cleanup. `cargo test -p arcana-core --lib p8_execution_registry_tests --locked -- --test-threads=1` passes 17/17.
+
+**Limit.** This proves one blocked read in the production executor, not every builtin/provider cancellation class, remote cancellation acknowledgement, or the full TG4-25/TG4-27 recovery matrix. No P4 task or gate closes from this evidence alone.
+
+**Where.** `arcana-core/src/agent/tool_executor.rs`, P4-51/P4-53, TG4-25/TG4-27.
+
+## ADR-LOG-RESTRUCT-0249 — Redact readable log records across writer calls
+
+**Status.** Implemented and focused-tested on 2026-10-04; complete telemetry privacy gate remains open.
+
+**Decision.** The readable log sink retains each record until its newline or writer finalization, then applies free-text redaction to the whole record. A record above 256 KiB is omitted and replaced with a fixed marker. `flush()` does not emit an incomplete fragment, so a credential split around flush remains available to the next write for redaction.
+
+**Reason.** Redacting each `Write::write` buffer independently allowed a recognized credential shape to cross the buffer boundary and evade every pattern. Unbounded whole-record buffering would create an avoidable memory risk, so oversized records fail closed.
+
+**Evidence.** `cargo test -p arcana-core --lib observability::logging::tests::readable_writer --locked -- --test-threads=1` passes 3/3, covering ordinary credentials, split writes with an intervening flush, and oversized-record omission.
+
+**Limit.** This proves the sink wrapper cases; complete planted-input coverage across all readable/structured producers and live Logs readback remain open. No P4 task or gate closes from this change alone.
+
+**Where.** `arcana-core/src/observability/logging.rs`, P4-50, TG4-24/TG4-30.
+
+## ADR-LOG-RESTRUCT-0250 — Preserve the active log during count pruning
+
+**Status.** Implemented and focused-tested on 2026-10-04; CLI retention startup remains open.
+
+**Decision.** Within each readable/structured stream, retention sorts the current active filename ahead of date order before applying the per-stream file count. Age pruning still applies to files older than the configured seven-day maximum.
+
+**Reason.** Valid future-dated filenames could previously rank above today's open log and cause count pruning to unlink the appender's active file.
+
+**Evidence.** `cargo test -p arcana-core --lib observability::log_retention::tests --locked -- --test-threads=1` passes 6/6. The new regression keeps today's file open while five future-dated recognized logs are pruned, then appends and reads back the same active path.
+
+**Limit.** The test covers the pure production pruning function. CLI startup still does not invoke the shared retention policy; no P4 gate closes here.
+
+**Where.** `arcana-core/src/observability/log_retention.rs`, P4-50/P4-59, TG4-21/TG4-24.
+
+## ADR-LOG-RESTRUCT-0251 — Apply log retention in the headless CLI host
+
+**Status.** Implemented and production-consumer-tested on 2026-10-04; P4-50/TG4-24 remain open.
+
+**Decision.** Expose one shared `prune_default()` entry point and call it after logger initialization in both Tauri and `arcanactl`. It resolves the same `USERPROFILE`/`HOME/.arcana/logs` location used by Arcana's default profile.
+
+**Reason.** The desktop startup applied the five-file/seven-day policy, but CLI-only use wrote into the same log streams without running that policy.
+
+**Evidence.** `cargo test -p arcanactl --test consent_cli cli_startup_prunes_both_shared_log_streams_and_keeps_today_active --locked -- --exact --test-threads=1` passes 1/1. It starts the built CLI under a temporary profile containing six recognized files per stream, checks that each stream is reduced to five, and verifies today's active paths survive.
+
+**Limit.** This proves CLI startup invokes daily-log cleanup. Required database-table retention, every telemetry producer/reader, live Fleet-to-Logs UI proof and remaining TG4-24 clauses stay open; no gate closes here.
+
+**Where.** `arcana-core/src/observability/log_retention.rs`, `src-cli/src/main.rs`, `src-tauri/src/main.rs`, P4-50, TG4-24.
+
+## ADR-LOG-RESTRUCT-0252 — Record result-aware SQLite setup operation spans
+
+**Status.** Implemented and focused-tested on 2026-10-04.
+
+**Decision.** Emit fixed-label, privacy-safe parent operation timing for generic tuned SQLite connection setup, full workers database migration/repair/seed initialization, and daily-cap save through transaction commit. Mark success only after the complete operation succeeds; early returns and commit failures remain `error`.
+
+**Reason.** Statement callbacks expose SQL timings but cannot attribute final operation success or failure. These setup and persistence flows need a parent result event so the Logs/trace consumers can distinguish successful initialization and committed settings from partial work.
+
+**Evidence.** `cargo test -p arcana-core --lib db::tests::tuned_connection_open_records_success_and_failure_without_paths --locked -- --exact --test-threads=1`, `cargo test -p arcana-core --lib db::workers::tests::worker_database_initializer_span_covers_seed_result_without_paths --locked -- --exact --test-threads=1`, and `cargo test -p arcana-core --lib budget::daily::tests::daily_cap_save_span_reports_committed_value_and_rejects_invalid_input --locked -- --exact --test-threads=1` pass. The tests cover successful and failing real isolated paths, assert result outcomes, prove the saved value is read back through `DailyCap::load`, and verify paths/config values are absent from telemetry.
+
+**Limit.** This does not complete all database operation spans or P4-59 retention. No P4 task or gate closes from the instrumentation slice alone.
+
+**Where.** `arcana-core/src/db/mod.rs`, `arcana-core/src/db/workers.rs`, `arcana-core/src/budget/daily.rs`, P4-50/P4-59, TG4-24.
+
+## ADR-LOG-RESTRUCT-0253 — Include bounded task recovery state in Supervisor health
+
+**Status.** Implemented and focused-tested on 2026-10-04.
+
+**Decision.** Extend `list_worker_health` with each worker's configured model and a task-state summary read through the existing `TasksDb::get_by_id` API. The summary includes only status, retry count, assignee, epic/phase identity, dependency IDs, and budget-exceeded state; it excludes task text and criteria. A database-open/read failure is represented as `unknown` with a safe fixed error class rather than empty or failed-overall health.
+
+**Reason.** The Supervisor's durable health response already joined worker runs but omitted the task retry and epic/phase state it needs before retry/reassignment. The fields already exist in WorkersDb/TasksDb, so the change reuses the authoritative store and adds no schema or parallel lifecycle state.
+
+**Evidence.** `cargo test -p arcana-core --lib agent::builtin_tools::list_worker_health::tests --locked -- --test-threads=1` passes 8/8. The new focused test exercises the production TasksDb reader with an isolated epic/child, two retries, a blocked dependency, and planted private text; another test verifies store errors remain an `unknown` state with no raw SQLite details. The existing full tool test reads the configured model. Together they prove persisted fields while confirming private task prose is omitted.
+
+**Limit.** This does not yet expose provider token aggregates, parent/child worker links, or replacement-worker continuation. No P4 task or gate closes from this slice alone.
+
+**Where.** `arcana-core/src/agent/builtin_tools/list_worker_health.rs`, P4-54, TG4-24.
+
+## ADR-LOG-RESTRUCT-0254 — Read provider usage by worker session in Supervisor health
+
+**Status.** Implemented and focused-tested on 2026-10-04; P4-54 remains open.
+
+**Decision.** Add a fixed indexed analytics query for aggregate request count, prompt/completion/thinking/total tokens, and cost by the durable worker-run session ID. Include only those totals in Supervisor health; omit the session ID and all per-request/provider prompt content. If analytics cannot be opened or queried, report `unknown` with a fixed error class.
+
+**Reason.** P4-54 requires model/token usage in the Supervisor's recovery view. `worker_run_state` already persists the session ID, `token_usage` already indexes that key, and the shared AnalyticsDb owns the usage records; a direct exact-session aggregate therefore avoids a new table, migration, or duplicate accounting path.
+
+**Evidence.** `worker_session_token_usage_uses_session_index_and_returns_persisted_totals` populates 502 sessions, proves the production SQL uses `idx_token_usage_session` without scanning `token_usage`, reads exact totals back through the production method, and verifies a missing session produces a known zero aggregate. `supervisor_reads_roster_and_latest_worker_run_state` inserts production token rows into an isolated home and verifies the real Supervisor tool returns only the run session totals, excluding a larger unrelated session. `session_usage_failure_is_unknown_without_database_details_or_session_id` checks fail-safe output. `cargo test -p arcana-core --lib agent::builtin_tools::list_worker_health::tests --locked -- --test-threads=1` passes 9/9; `cargo test -p arcana-core --lib worker_session_token_usage_uses_session_index_and_returns_persisted_totals --locked -- --test-threads=1` passes 1/1.
+
+**Limit.** The P4-58 registry audit currently reports this new fingerprint plus other unregistered P4-14/P4-53 production reads and one stale entry; the token reader is listed with its populated plan, but the registry gate must be reconciled and rerun before closure. Worker parent/child linkage, failure attribution, and safe recovery continuation remain open. No P4 task or gate closes from this slice alone.
+
+**Where.** `arcana-core/src/analytics/db.rs`, `arcana-core/src/analytics/types.rs`, `arcana-core/src/agent/builtin_tools/list_worker_health.rs`, P4-54, P4-58, TG4-20, TG4-27.
+
+## ADR-LOG-RESTRUCT-0255 — Index task-scoped operation-journal recovery lookups
+
+**Status.** Implemented and focused-tested on 2026-10-04.
+
+**Decision.** Add an additive RunsDb migration with a partial descending `(task_id, id)` index for intent rows with a non-null task ID. The index must support unresolved-side-effect lookup and its atomic intent barrier while preserving append-only journal semantics. Do not treat a full or broad index scan as a bounded exception.
+
+**Reason.** The P4-58 populated fixture showed task recovery filtering 181 intents through `idx_operation_journal_run_cursor` rather than searching by task; this journal has no task_id index and can grow across runs. Its latest-intent ordering is also by descending journal ID. An index shaped for the actual predicate/order avoids scanning the journal as it grows.
+
+**Evidence.** Migration 7 adds the partial `(task_id, id DESC)` index for task-bound intents. `operation_journal_v7_upgrade_and_append_only_guards` creates a simulated v6 database with a persisted intent, opens it through the production migration ladder, verifies v7 and intent readback, then proves the lookup selects `idx_operation_journal_task_cursor`. `operation_journal_query_plans_use_populated_indexes_and_preserve_guards` passes with the new index and asserts both task-scoped recovery readers avoid a journal scan. The full query-registry suite passes 8/8 after registering every current owner/fingerprint pair. These are isolated temporary databases; no user data was modified.
+
+**Limit.** This is a measured index choice for the two task-scoped recovery readers only. P4-58/TG4-20 query-registry evidence is restored; unrelated P4 platform, Fleet, telemetry, and recovery work remains open.
+
+**Where.** `arcana-core/src/db/runs.rs`, `_verify/P4-58-QUERY-INVENTORY.md`, P4-53/P4-58, TG4-20/TG4-27.
