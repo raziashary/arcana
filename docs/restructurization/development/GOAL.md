@@ -1,7 +1,7 @@
 # Arcana goal (updated 2026-10-05)
 
-Current continuation (2026-10-05): **P4 35/59 checked; TG4 11/33 passing**.
-P4-55/TG4-29, P4-43 and P4-40 are proven. Core P4 remains active; 24 tasks
+Current continuation (2026-10-05): **P4 36/59 checked; TG4 13/33 passing**.
+P4-55/TG4-29, P4-43, P4-40 and P4-23/TG4-10/11 are proven. Core P4 remains active; 23 tasks
 remain, including owner-run P4-49. The expanded goal stays unread until core
 P4 closes. Claim-safety proof is in
 `_verify/P4-40-CLAIM-SAFETY-CLOSEOUT-2026-10-05.md`. Remote host-matrix proof,

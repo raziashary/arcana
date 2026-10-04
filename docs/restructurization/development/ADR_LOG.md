@@ -6940,3 +6940,12 @@ readback.
 **Why / when / where.** On 2026-10-05 CI run 37218542575 passed desktop unit tests and core library tests, then stopped on the old assertion requiring an inline hydration call in `src-tauri/src/main.rs`. Startup hydration moved to the approved shared host initializer; the runtime still calls it. This is a test ownership correction, not a spending-policy change.
 
 **Proof.** S2-06 integration suite passes 9/9 on Windows/Linux. The shared hydration helper restores the prior instance's persisted cost/token counts and discards an old-day stamp; runtime group passes 5/5 on Linux and within the Windows 11/11 runtime-filter group (which also includes Python runtime tests). Workspace check and format check pass. The remote host matrix remains pending until upstream workspace tests pass.
+
+
+## ADR-LOG-RESTRUCT-0284 — Prove ACP replay after a completed domain effect
+
+**Decision.** Extend the existing scheduler scripted-provider fixture with an opt-in pause after its response script. Drive the saved Supervisor inbox recipe through the real scheduler, stop it after a task cancellation succeeds but before message acknowledgement, then redispatch via a newly constructed scheduler. The second run reads the same message ID and current task state before acknowledging without repeating the effect.
+
+**Why / when / where.** On 2026-10-05 P4-23/TG4-11 still lack interruption-to-replay side-effect proof despite existing stable-ID inbox and stale-message QC recovery tests. Count actual task-status mutations with an audit trigger in the isolated test database; no production table, runner seam or API change is introduced. Record the provider's actual tool-result inputs to prove reconciliation state reaches the consumer.
+
+**Proof.** Those behaviors pass on Windows/Linux; the captured consumer receives the persisted domain-state result and saved replay policy, and an isolated status-audit trigger counts one effect. Native backend sender → saved QC recipe acknowledgement and stale-message nudge recovery also pass. Details: `_verify/P4-23-ACP-REPLAY-CLOSEOUT-2026-10-05.md`. The fixture was corrected to use the live tool/Usage field names, request a full JSON task result rather than compact output plus hint, and compare distinct durable run IDs because `latest_worker_ticks` intentionally returns one latest row per worker; no production bug was inferred from those test mistakes.

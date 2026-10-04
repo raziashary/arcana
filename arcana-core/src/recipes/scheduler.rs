@@ -1056,6 +1056,7 @@ mod tests {
     struct QcInboxProvider {
         responses: Mutex<VecDeque<Vec<StreamChunk>>>,
         requests: Mutex<Vec<CompletionRequest>>,
+        pause_after_script: Option<Arc<tokio::sync::Notify>>,
     }
 
     impl QcInboxProvider {
@@ -1107,6 +1108,7 @@ mod tests {
             Self {
                 responses: Mutex::new(responses),
                 requests: Mutex::new(Vec::new()),
+                pause_after_script: None,
             }
         }
 
@@ -1146,8 +1148,14 @@ mod tests {
                 .responses
                 .lock()
                 .expect("provider script lock")
-                .pop_front()
-                .expect("one scripted response per AgentEngine turn");
+                .pop_front();
+            if response.is_none() {
+                if let Some(paused) = &self.pause_after_script {
+                    paused.notify_one();
+                    return std::future::pending().await;
+                }
+            }
+            let response = response.expect("one scripted response per AgentEngine turn");
             Ok(Box::pin(stream::iter(response.into_iter().map(Ok))))
         }
 
@@ -1204,15 +1212,27 @@ mod tests {
             .update_status(qc_worker.id, WorkerStatus::Idle)
             .expect("make the QC worker runnable");
 
+        let mut sender = crate::agent::tool_executor::ToolExecutor::new(
+            crate::agent::permission::PermissionMode::Autonomous,
+            crate::agent::permission::new_pending_permissions(),
+            "backend-inbox-sender".into(),
+            home.path().to_string_lossy().into_owned(),
+            crate::agent::tool_trait::AgentIdentity::worker("worker-backend"),
+        );
+        let sent = sender.execute_batch(vec![(
+            Arc::new(crate::agent::builtin_tools::send_worker_message::SendWorkerMessageTool),
+            json!({"to": "qc-agent", "body": "Please review the backend result.", "kind": "fyi"}),
+            "backend-to-qc".into(),
+        )]).await.expect("native worker sends to persistent QC recipient");
+        assert!(!sent[0].1.is_error, "{}", sent[0].1.output);
+        let sent_payload: serde_json::Value = serde_json::from_str(&sent[0].1.output).unwrap();
         let stale_message = tasks
-            .insert_worker_message(
-                "worker-backend",
-                "qc-agent",
-                "This QC inbox item has remained unacknowledged.",
-                "fyi",
-                None,
-            )
-            .expect("persist stale inbox work");
+            .get_worker_message(sent_payload["persisted_message_ids"][0].as_i64().unwrap())
+            .unwrap()
+            .expect("native sender's row persists");
+        assert_eq!(stale_message.from_slug, "worker-backend");
+        assert_eq!(stale_message.to_slug, "qc-agent");
+        drop(sender);
         let tasks_path = home.path().join(".arcana").join("tasks.db");
         rusqlite::Connection::open(&tasks_path)
             .expect("open isolated task DB for old-timestamp fixture")
@@ -1352,6 +1372,253 @@ mod tests {
         );
         assert_eq!(provider.request_count(), 5);
         assert_eq!(tasks.count_unacknowledged_for("qc-agent").unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn scheduler_replays_inbox_after_completed_effect_without_duplicate_mutation() {
+        use crate::provider::types::MessageContent;
+
+        ensure_isolated_test_analytics().await;
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        crate::recipes::init().expect("persist shipped Supervisor recipe and worker");
+        let tasks = TasksDb::open().unwrap();
+        let task_id = new_ready_task(&tasks, "cancel obsolete inbox task");
+        let message = tasks
+            .insert_worker_message(
+                "worker-backend",
+                "supervisor",
+                "Cancel this obsolete task and acknowledge after handling it.",
+                "fyi",
+                Some(task_id),
+            )
+            .unwrap();
+        let audit = rusqlite::Connection::open(home.path().join(".arcana/tasks.db")).unwrap();
+        audit
+            .execute_batch(
+                "CREATE TABLE test_status_effects(task_id INTEGER NOT NULL);
+             CREATE TRIGGER test_count_status_effect AFTER UPDATE OF status ON tasks
+             WHEN OLD.status != NEW.status BEGIN
+                 INSERT INTO test_status_effects(task_id) VALUES(NEW.id);
+             END;",
+            )
+            .unwrap();
+        let workers = WorkersDb::open().unwrap();
+        let worker = workers.get_by_slug("supervisor").unwrap().unwrap();
+        workers
+            .update_status(worker.id, WorkerStatus::Idle)
+            .unwrap();
+        let workspace = tempfile::tempdir().expect("isolated selected workspace");
+        crate::egress_consent::WorkspaceEgressConsentDb::open()
+            .unwrap()
+            .grant(workspace.path(), "provider:google")
+            .unwrap();
+        let call = |id: &str, name: &str, input: serde_json::Value| {
+            vec![
+                StreamChunk::ToolUseStart {
+                    id: id.into(),
+                    name: name.into(),
+                    block_index: 0,
+                    opaque: None,
+                },
+                StreamChunk::ToolInputDelta {
+                    block_index: 0,
+                    partial_json: input.to_string(),
+                },
+                StreamChunk::MessageDelta {
+                    stop_reason: "tool_use".into(),
+                    usage: Usage {
+                        input: 10,
+                        output: 1,
+                        ..Usage::default()
+                    },
+                },
+                StreamChunk::Done,
+            ]
+        };
+        let paused = Arc::new(tokio::sync::Notify::new());
+        let first_provider = Arc::new(QcInboxProvider {
+            responses: Mutex::new(VecDeque::from([
+                call("first-inbox", "list_worker_messages", json!({})),
+                call(
+                    "completed-effect",
+                    "update_task_status",
+                    json!({
+                    "id": task_id, "status": "cancelled",
+                    }),
+                ),
+            ])),
+            requests: Mutex::new(Vec::new()),
+            pause_after_script: Some(paused.clone()),
+        });
+        let make_scheduler = |provider: Arc<QcInboxProvider>| {
+            let state = Arc::new(Mutex::new(crate::state::AppState {
+                active_provider: Some("google".into()),
+                active_model: Some("gemini-3.8-flash".into()),
+                ..crate::state::AppState::default()
+            }));
+            RecipeScheduler::new(Arc::new(
+                RecipeRunner::new_with_workspace_override(
+                    state,
+                    Arc::new(crate::session::manager::SessionManager::new().unwrap()),
+                    crate::agent::permission::new_pending_permissions(),
+                    Some(workspace.path().to_string_lossy().into_owned()),
+                )
+                .with_provider_for_test(provider),
+            ))
+        };
+        let first_scheduler = make_scheduler(first_provider.clone());
+        first_scheduler.kick_worker("supervisor");
+        let first_tick = first_scheduler
+            .kick_handles
+            .lock()
+            .unwrap()
+            .remove("supervisor")
+            .expect("first inbox work is dispatched");
+        tokio::time::timeout(Duration::from_secs(10), paused.notified())
+            .await
+            .expect("provider reached post-effect/pre-ack interruption point");
+        assert_eq!(
+            tasks.get_by_id(task_id).unwrap().unwrap().status,
+            crate::db::tasks::TaskStatus::Cancelled
+        );
+        assert_eq!(
+            tasks
+                .get_worker_message(message.id)
+                .unwrap()
+                .unwrap()
+                .status,
+            "read"
+        );
+        first_tick.abort();
+        assert!(first_tick.await.unwrap_err().is_cancelled());
+        assert!(!kick_inflight().lock().unwrap().contains("supervisor"));
+        assert_eq!(
+            workers.get_by_slug("supervisor").unwrap().unwrap().status,
+            WorkerStatus::Idle
+        );
+        assert!(worker_has_recoverable_work("supervisor").unwrap());
+        let runs_db = crate::db::runs::RunsDb::open().unwrap();
+        let interrupted = runs_db.latest_worker_tick("supervisor").unwrap().unwrap();
+        assert_eq!(interrupted.phase, "interrupted");
+        drop(first_scheduler);
+
+        let replay_provider = Arc::new(QcInboxProvider {
+            responses: Mutex::new(VecDeque::from([
+                call("replay-inbox", "list_worker_messages", json!({})),
+                call(
+                    "reconcile-state",
+                    "list_tasks",
+                    json!({"status": "cancelled", "compact": false}),
+                ),
+                call(
+                    "ack-reconciled",
+                    "acknowledge_worker_message",
+                    json!({"id": message.id}),
+                ),
+                vec![
+                    StreamChunk::TextDelta {
+                        text: "Cancellation already persisted; inbox acknowledged.".into(),
+                        block_index: 0,
+                    },
+                    StreamChunk::MessageDelta {
+                        stop_reason: "end_turn".into(),
+                        usage: Usage {
+                            input: 10,
+                            output: 1,
+                            ..Usage::default()
+                        },
+                    },
+                    StreamChunk::Done,
+                ],
+            ])),
+            requests: Mutex::new(Vec::new()),
+            pause_after_script: None,
+        });
+        let second_scheduler = make_scheduler(replay_provider.clone());
+        second_scheduler.kick_worker("supervisor");
+        let replay_tick = second_scheduler
+            .kick_handles
+            .lock()
+            .unwrap()
+            .remove("supervisor")
+            .expect("persisted unacked message is redispatched");
+        tokio::time::timeout(Duration::from_secs(10), replay_tick)
+            .await
+            .unwrap()
+            .unwrap();
+        let requests = replay_provider.requests.lock().unwrap();
+        assert!(
+            requests[0]
+                .system
+                .as_deref()
+                .unwrap()
+                .contains("check current domain state and confirm that effect is still needed"),
+            "the saved Supervisor replay policy must reach the real engine request"
+        );
+        let result_for = |call_id: &str| {
+            requests
+                .iter()
+                .flat_map(|request| &request.messages)
+                .flat_map(|message| &message.content)
+                .find_map(|content| match content {
+                    MessageContent::ToolResult {
+                        tool_use_id,
+                        content,
+                        is_error,
+                        ..
+                    } if tool_use_id == call_id => {
+                        assert!(!is_error);
+                        Some(serde_json::from_str::<serde_json::Value>(content).unwrap())
+                    }
+                    _ => None,
+                })
+                .expect("production tool result reaches the replay consumer")
+        };
+        let inbox = result_for("replay-inbox");
+        assert_eq!(inbox["messages"][0]["id"], message.id);
+        assert_eq!(inbox["messages"][0]["status"], "read");
+        let state = result_for("reconcile-state");
+        assert_eq!(state["tasks"][0]["id"], task_id);
+        assert_eq!(state["tasks"][0]["status"], "cancelled");
+        drop(requests);
+        let effects: i64 = audit
+            .query_row(
+                "SELECT count(*) FROM test_status_effects WHERE task_id=?1",
+                [task_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            effects, 1,
+            "replay must not repeat the already-persisted domain effect"
+        );
+        assert_eq!(
+            tasks
+                .get_worker_message(message.id)
+                .unwrap()
+                .unwrap()
+                .status,
+            "acknowledged"
+        );
+        assert_eq!(tasks.count_unacknowledged_for("supervisor").unwrap(), 0);
+        let completed = runs_db.latest_worker_tick("supervisor").unwrap().unwrap();
+        assert_ne!(completed.run_id, interrupted.run_id);
+        assert_eq!(completed.phase, "completed");
+        assert!(runs_db
+            .get(&interrupted.run_id)
+            .unwrap()
+            .unwrap()
+            .ended_at
+            .is_some());
+        second_scheduler.kick_worker("supervisor");
+        assert!(!second_scheduler
+            .kick_handles
+            .lock()
+            .unwrap()
+            .contains_key("supervisor"));
+        assert_eq!(replay_provider.request_count(), 4);
+        assert_eq!(first_provider.request_count(), 3);
     }
 
     fn new_ready_task(db: &TasksDb, title: &str) -> i64 {
@@ -2277,6 +2544,7 @@ mod tests {
             let provider = Arc::new(QcInboxProvider {
                 responses: Mutex::new(responses),
                 requests: Mutex::new(Vec::new()),
+                pause_after_script: None,
             });
             let runner = RecipeRunner::new_with_workspace_override(
                 Arc::new(Mutex::new(crate::state::AppState {
