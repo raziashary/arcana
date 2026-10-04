@@ -1865,6 +1865,148 @@ fn main() {
         );
     }
 
+    #[tokio::test]
+    async fn production_multi_project_spawn_failure_cannot_be_hidden_by_passing_sibling() {
+        let root = tempfile::tempdir().expect("isolated profile and workspace");
+        let home = root.path().join("home");
+        let workspace = root.path().join("workspace");
+        let passing_project = workspace.join("a-passing");
+        let unavailable_project = workspace.join("z-unavailable");
+        std::fs::create_dir_all(&home).expect("create isolated profile");
+        std::fs::create_dir_all(passing_project.join("src")).expect("create first Rust project");
+        std::fs::create_dir_all(unavailable_project.join("src"))
+            .expect("create second Rust project");
+        let _home = crate::db::test_support::with_home(&home);
+        std::fs::write(
+            passing_project.join("Cargo.toml"),
+            "[package]\nname = \"spawn-barrier-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\nbuild = \"build.rs\"\n",
+        )
+        .expect("write first fixture manifest");
+        std::fs::write(passing_project.join("src/main.rs"), "fn main() {}\n")
+            .expect("write first fixture source");
+        std::fs::write(
+            passing_project.join("build.rs"),
+            r#"
+use std::{env, fs, path::PathBuf, thread, time::Duration};
+
+fn main() {
+    let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    fs::write(out.join("ready"), "ready").unwrap();
+    while !out.join("continue").is_file() {
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+"#,
+        )
+        .expect("write first fixture synchronization script");
+        std::fs::write(
+            unavailable_project.join("Cargo.toml"),
+            "[package]\nname = \"unavailable-build-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .expect("write second fixture manifest");
+        std::fs::write(unavailable_project.join("src/main.rs"), "fn main() {}\n")
+            .expect("write second fixture source");
+
+        let db = crate::db::tasks::TasksDb::open().expect("open isolated TasksDb");
+        let task = db
+            .create(crate::db::tasks::CreateTaskInput {
+                title: "partial build spawn failure blocks QC".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "a passing sibling cannot hide a spawn failure".into(),
+                created_by: Some("p4-14-spawn-failure-test".into()),
+            })
+            .expect("create task");
+        db.update_status(task.id, "assigned", Some("worker-backend"))
+            .expect("assign task");
+        db.claim_task_with_pid(task.id, "worker-backend", std::process::id())
+            .expect("claim task");
+        drop(db);
+
+        let context = ToolContext {
+            session_id: "multi-spawn-failure-session".into(),
+            working_dir: workspace.to_string_lossy().into_owned(),
+            call_id: "multi-spawn-failure-call".into(),
+            run_id: None,
+            task_id: Some(task.id),
+            permission_mode: crate::agent::permission::PermissionMode::Autonomous,
+            depth: 0,
+            agent_role: "worker-backend".into(),
+            run_token_budget: None,
+        };
+        let command = tokio::spawn(async move {
+            ProjectCommandTool
+                .execute(json!({"intent": "build", "toolchain": "cargo"}), &context)
+                .await
+        });
+        let out_dir = tokio::time::timeout(Duration::from_secs(120), async {
+            loop {
+                let build_dir = workspace.join(".arcana-cache/cargo-target/debug/build");
+                if let Ok(entries) = std::fs::read_dir(build_dir) {
+                    if let Some(out_dir) = entries
+                        .flatten()
+                        .map(|entry| entry.path().join("out"))
+                        .find(|candidate| candidate.join("ready").is_file())
+                    {
+                        break out_dir;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("first production project reaches its controlled build barrier");
+
+        let moved_project = workspace.join("z-unavailable-moved");
+        std::fs::rename(&unavailable_project, &moved_project)
+            .expect("remove the second selected project directory before its spawn");
+        std::fs::write(out_dir.join("continue"), "continue")
+            .expect("release the first project build barrier");
+        let result = tokio::time::timeout(Duration::from_secs(120), command)
+            .await
+            .expect("multi-project operation finishes after the second spawn failure")
+            .expect("project command task completes");
+        assert!(
+            result.is_error,
+            "a selected spawn failure must fail the batch"
+        );
+        let output: Value = serde_json::from_str(&result.output).expect("structured tool error");
+        assert_eq!(output["error"]["code"], "command_spawn_failed");
+
+        let db = crate::db::tasks::TasksDb::open().expect("reopen isolated TasksDb");
+        let (outcome, expected, observed, passing, ..) = db
+            .latest_project_build_batch_status(task.id)
+            .expect("read persisted batch")
+            .expect("batch survives database reopen");
+        assert_eq!(outcome, "incomplete");
+        assert_eq!(expected, 2);
+        assert_eq!(observed, 1, "the spawn failure has no fabricated exit");
+        assert_eq!(passing, 1, "the first observed pass remains attributable");
+        assert_eq!(db.get_retry_count(task.id).expect("read retry streak"), 0);
+        assert!(
+            db.update_status_with_workspace_and_run_id(
+                task.id,
+                "qc_review",
+                Some("worker-backend"),
+                None,
+                None,
+                &workspace,
+            )
+            .is_err(),
+            "the shared QC transition must reject a passing sibling plus spawn failure"
+        );
+        assert!(
+            db.conn
+                .execute(
+                    "UPDATE tasks SET status='qc_review' WHERE id=?1",
+                    rusqlite::params![task.id]
+                )
+                .is_err(),
+            "SQLite must reject direct SQL QC over a partial spawn-failed batch"
+        );
+    }
+
     #[cfg(windows)]
     #[tokio::test]
     async fn production_mixed_batch_timeout_cannot_be_hidden_by_passing_sibling() {
