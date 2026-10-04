@@ -375,3 +375,8 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 - Focused validation: `cargo test -p arcana-core --lib production_startup_tick_skips_empty_worker_without_provider_call --locked -- --nocapture --test-threads=1` passes 1/1 on Windows; `cargo fmt --all -- --check` passes.
 - The first compile exposed an existing test-build cfg error in `windows::bridge_executable`: its `#[cfg(not(test))]` final expression disappears for test builds, leaving a unit-returning function. The narrow fix preserves the explicit shipped-CLI fallback for test harnesses and returns `current_exe()` otherwise. The focused test now compiles and passes.
 - This adds one real startup idle-worker proof only. P4-43 remains open for Supervisor/QC startup and cron/recovery provider-call counts, a general intentional-turn bound, and cross-platform validation. P4/TG4 tallies remain unchanged. `P4_EXPANDED_GOAL.md` remains untouched and untracked until core P4 closes.
+
+### P4-43 startup proof expanded
+
+- Expanded the production startup regression to the shipped Supervisor, QC, and backend workers in one isolated home. It verifies idle work-check and dispatch-gate timing for all three roles, zero total provider requests, and clean stop/removal of all scheduler handles.
+- The final test is `production_startup_idle_workers_skip_provider_and_record_gate`; focused test passes 1/1 on Windows. This supersedes the immediately preceding backend-only test name/evidence. P4-43 still lacks cron/recovery request counts, a general intentional-turn bound, and cross-platform startup proof.

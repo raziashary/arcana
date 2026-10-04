@@ -2116,7 +2116,7 @@ mod tests {
     }
 
     #[test]
-    fn production_startup_tick_skips_empty_worker_without_provider_call() {
+    fn production_startup_idle_workers_skip_provider_and_record_gate() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -2143,29 +2143,34 @@ mod tests {
         .with_provider_for_test(provider.clone());
         let scheduler = RecipeScheduler::new(Arc::new(runner));
 
+        let startup_workers = ["supervisor", "qc-agent", "worker-backend"];
         let (_, events) = crate::observability::timing::capture_json_events(|| {
             runtime.block_on(async {
-                scheduler
-                    .start_worker("worker-backend")
-                    .expect("start production worker schedule");
+                for worker in startup_workers {
+                    scheduler.start_worker(worker).unwrap_or_else(|error| {
+                        panic!("start production schedule for {worker}: {error}")
+                    });
+                }
 
-                // The startup tick is spawned onto this current-thread runtime.
-                // Yield until its work-check event appears, then stop the worker
-                // before the test can leave a live scheduler task behind.
+                // Startup ticks are spawned onto this current-thread runtime.
+                // Yield until their work-check events have run, then stop all
+                // schedules before the test can leave live tasks behind.
                 for _ in 0..32 {
                     tokio::task::yield_now().await;
                 }
 
-                scheduler
-                    .stop_worker("worker-backend")
-                    .expect("stop production worker schedule");
+                for worker in startup_workers {
+                    scheduler.stop_worker(worker).unwrap_or_else(|error| {
+                        panic!("stop production schedule for {worker}: {error}")
+                    });
+                }
             })
         });
 
         assert_eq!(
             provider.request_count(),
             0,
-            "the production startup tick must stop before provider resolution when no work exists"
+            "production Supervisor/QC/backend startup ticks must stop before provider resolution when no work exists"
         );
         assert!(
             scheduler
@@ -2176,27 +2181,29 @@ mod tests {
             "the schedule handle must be removed after stop"
         );
 
-        let check = events
-            .iter()
-            .find(|event| {
-                event["fields"]["operation"] == "scheduler_recoverable_work_check"
-                    && event["fields"]["worker"] == "worker-backend"
-            })
-            .expect("the production startup tick records its work check");
-        assert_eq!(check["fields"]["outcome"], "idle");
-        assert_eq!(check["fields"]["database"], "tasks");
-        assert!(check["fields"]["duration_ns"].as_u64().is_some());
+        for worker in startup_workers {
+            let check = events
+                .iter()
+                .find(|event| {
+                    event["fields"]["operation"] == "scheduler_recoverable_work_check"
+                        && event["fields"]["worker"] == worker
+                })
+                .unwrap_or_else(|| panic!("the {worker} startup tick records its work check"));
+            assert_eq!(check["fields"]["outcome"], "idle", "worker={worker}");
+            assert_eq!(check["fields"]["database"], "tasks", "worker={worker}");
+            assert!(check["fields"]["duration_ns"].as_u64().is_some());
 
-        let gate = events
-            .iter()
-            .find(|event| {
-                event["fields"]["operation"] == "scheduler_worker_dispatch_gate"
-                    && event["fields"]["worker"] == "worker-backend"
-            })
-            .expect("the startup dispatch gate records its idle outcome");
-        assert_eq!(gate["fields"]["outcome"], "idle");
-        assert_eq!(gate["fields"]["result_count"], 0);
-        assert!(gate["fields"]["duration_ns"].as_u64().unwrap_or_default() > 0);
+            let gate = events
+                .iter()
+                .find(|event| {
+                    event["fields"]["operation"] == "scheduler_worker_dispatch_gate"
+                        && event["fields"]["worker"] == worker
+                })
+                .unwrap_or_else(|| panic!("the {worker} startup dispatch gate is recorded"));
+            assert_eq!(gate["fields"]["outcome"], "idle", "worker={worker}");
+            assert_eq!(gate["fields"]["result_count"], 0, "worker={worker}");
+            assert!(gate["fields"]["duration_ns"].as_u64().unwrap_or_default() > 0);
+        }
     }
 
     #[test]
