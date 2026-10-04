@@ -6671,3 +6671,17 @@ readback.
 **Limit.** This closes CLI retained-detail export coverage on Windows. Cross-platform writer contention and the remaining TG4-21 platform proof stay open; this does not close P4-59/TG4-21.
 
 **Where.** `src-shared/src/db/analytics.rs`, `src-cli/src/commands/analytics.rs`, `src-cli/tests/analytics_export.rs`, `arcana-core/src/hooks/db.rs`, P4-59, TG4-21.
+
+## ADR-LOG-RESTRUCT-0262 — Keep Windows project execution fail-closed on Home
+
+**Status.** Evaluation recorded 2026-10-04; no production backend change.
+
+**Decision.** Keep the current experimental Windows process sandbox fail-closed when it cannot canonicalize the selected workspace or toolchain path. Do not grant broader filesystem access or use the original workspace without the approved guarded staging/copy-back boundary. Windows Sandbox is not an available fallback on this host because it runs Windows 11 Home Single Language; evaluate that VM-backed candidate only on a supported Windows edition or dedicated runner.
+
+**Reason.** Repeated exact-path, staged-config, private-stage, and ancestor-traversal probes still fail Rust path canonicalization with OS error 5 while direct file reads may succeed. Microsoft documents Windows Sandbox as unsupported on Home. Its mapped-folder write access persists to the host, so the approved stage/outbox/copy-back protocol would still need implementation and proof even on an eligible edition.
+
+**Evidence.** The current host reports Windows 11 Home Single Language, build 26200. Official requirements list Windows Pro, Enterprise, Pro Education/SE, and Education as supported editions and state Home is unsupported. Configuration supports disabled networking, mapped folders, and logon commands, but writable mapped folders persist changes. The existing Windows bridge and full-core evidence remain as recorded under P4-11/P4-61 and TG4-18/TG4-31; no filesystem/network policy was relaxed during this evaluation.
+
+**Limit.** This does not solve guarded staging/copy-back, locked dependency staging, Windows production Cargo canonicalization, Linux Landlock production proof, or signed macOS XPC/staging. P4-11/P4-61 and TG4-18/TG4-31 remain open.
+
+**Where.** `arcana-core/src/platform/process_sandbox/`, P4-11/P4-61, TG4-18/TG4-31. References: [Windows Sandbox editions](https://learn.microsoft.com/en-us/windows/security/application-security/application-isolation/windows-sandbox/), [Windows Sandbox configuration](https://learn.microsoft.com/en-us/windows/security/application-security/application-isolation/windows-sandbox/windows-sandbox-configure-using-wsb-file), [Create Process in Sandbox API](https://learn.microsoft.com/en-us/windows/win32/secauthz/createprocessinsandbox).
