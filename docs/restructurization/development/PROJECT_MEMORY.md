@@ -1,7 +1,7 @@
 # Arcana working memory (updated 2026-10-05)
 
-Current continuation (2026-10-05): **P4 37/59 checked; TG4 14/33 passing**.
-P4-55/TG4-29, P4-43, P4-40, P4-23/TG4-10/11 and P4-29/TG4-15 are proven. Core P4 remains active; 22 tasks
+Current continuation (2026-10-05): **P4 38/59 checked; TG4 15/33 passing**.
+P4-55/TG4-29, P4-43, P4-40, P4-23/TG4-10/11 and P4-29/TG4-15 are proven. P4-16/TG4-17 is also proven on all three CI hosts. Core P4 remains active; 21 tasks
 remain, including owner-run P4-49. The expanded goal stays unread until core
 P4 closes. Claim-safety proof is in
 `_verify/P4-40-CLAIM-SAFETY-CLOSEOUT-2026-10-05.md`; budget interaction is in `_verify/P4-29-BUDGET-INTERACTION-CLOSEOUT-2026-10-05.md`. Remote host-matrix proof,
@@ -943,3 +943,7 @@ Cross-stack closeout for this continuation: workspace `cargo check --workspace -
 - Do not read `P4_EXPANDED_GOAL.md` until all core P4 engineering tasks/gates close; then execute it before the final owner Calendar acceptance.
 
 Current 2026-10-04 checkpoint: P4-55/TG4-29 closed with real isolated desktop startup, production full readable export and clean shutdown; core P4 is 33/59 and TG4 is 11/33. ADR-0276 fixes concurrent migration/version checks, legacy column repairs, WAL initialization contention and automatic backup collisions. See `_verify/P4-55-RETENTION-CLOSEOUT-2026-10-04.md`. Long fixed operation/event names are over-redacted in structured JSONL; this newly observed P4-50 defect remains open. Expanded goal remains unread until core P4 closes.
+
+2026-10-05 resumed audit: HEAD 0926c6f is pushed; core tally 37/59, TG4 14/33. Fresh Luna High reports identify actual timestamp reader defects (Memory stats, Runs chronology/owner, Fleet Chat) and partial daily-cost overwrite during pruning; main-session regressions reproduce them. Tests remain dirty/red pending owner disposition, not phase proof. CLI Fleet cleanup currently disabled: earlier desktop+CLI lifecycle narrative corrected. Populated-file migration proof is a separate unit. Details/answers pending in the 2026-10-05 checkpoint; expanded goal stays unread.
+
+2026-10-05 verified checkpoint: populated analytics/config upgrades pass Windows/Linux 2/2 and are committed as 0df119a. Workflow portability closes on Windows/Linux/macOS. Sandbox corpus fails on Windows CI without processmodel.dll (OS error 126), and macOS correctly refuses execution pending the signed XPC runner. These are distinct from the passing TG4-17 gate. Timestamp/cost-history fixes, startup deadline, correlation UUID and live smoke owner decisions remain pending.

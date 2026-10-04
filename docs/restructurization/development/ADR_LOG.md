@@ -6998,6 +6998,14 @@ readback.
 
 **Proof.** Existing CI correctness gates pass 3/3 on Windows; workspace compilation/formatting passes and the exact CLI prerequisite builds locally. The added step is conditioned only on Windows and precedes all production command tests. The remote Windows corpus must still execute and may expose the separately recorded sandbox/toolchain failures. A bridge prerequisite fix does not prove P4-11 or the strict read/network contract.
 
+## ADR-LOG-RESTRUCT-0291 — Reproduce timestamp-audit consumer failures before owner disposition
+
+**Decision.** Add isolated regression cases for Memory stats and Fleet Chat hydration from TG4-19's legacy UTC chronology contract. Production fixes and the proposed additive RunsDb expression index await owner disposition under §0.2c.
+
+**Why / when / where.** 2026-10-05 fresh GPT-6 Luna High static audit identifies raw-text ordering in Memory stats, RunsDb recent/owner selection, and Fleet Chat hydration. Main-session source reads confirm the three consumers. Existing shared parsers already accept legacy SQLite UTC timestamps. No live state or provider is used; tests exercise the production Memory writer/reader and actual Zustand store with IPC fixtures.
+
+**Proof.** Windows regressions reproduce Memory last_updated=None for a legacy noon row, reversed recent/open RunsDb ordering, wrong latest worker/owner/roster selection, and Fleet Chat order [3,2,1] instead of [1,2,3]. These six consumer paths are now executable failing checks; no production fix is applied while audit disposition is pending. TypeScript check and workspace check pass. P4-57/TG4-19 stays open for fixes, complete pair inventory and platform proof. Initial new Memory fixture imports/signature mistakes were corrected before the genuine failing readback; no product bug is inferred from compiler errors.
+
 ## ADR-LOG-RESTRUCT-0292 — Prove populated retention-schema upgrade preservation
 
 **Decision.** Add a file-backed regression built from the production baseline analytics migration, populate every existing analytics table, open through the production latest-schema constructor, and compare each old row plus daily-cost/token production-reader results. No production migration or retention behavior changes.
@@ -7005,3 +7013,17 @@ readback.
 **Why / when / where.** 2026-10-05 P4-59/TG4-21 explicitly requires migration preservation. Fresh Luna High audit found the current legacy-default and older-reader fixtures do not prove a populated production upgrade. Use an owned disposable directory; the migration framework's backups remain within it. A second populated config-schema upgrade opens through HooksDb and verifies historical hook logs through both production log readers. Cost-summary overwrite and Fleet cleanup wiring remain pending owner disposition.
 
 **Proof.** The populated analytics/config upgrade filter passes 2/2 on Windows (0.23s) and Ubuntu WSL (0.55s), comparing existing row values and reading upgraded data through production consumers. Workspace check and formatting pass. No production schema or retention behavior changes; cost-summary coverage and owned CLI maintenance remain open. Evidence: _verify/P4-59-MIGRATION-PRESERVATION-2026-10-05.md.
+
+## ADR-LOG-RESTRUCT-0293 — Record advancing-cutoff cost loss and CLI cleanup mismatch
+
+**Finding / disposition pending.** 2026-10-05 fresh GPT-6 Luna High audit identifies a retention correctness defect: prune_append_only_before groups only currently expired token rows by local date, then replaces daily_costs. Normal rollup can already have written that full local-day summary. Advancing hourly UTC cutoffs overwrite it with separate partial batches. Simply summing prior totals would double count overlapping rows and distinct sessions; an additive durable coverage/reconciliation boundary needs owner direction.
+
+**Main-session proof.** Two isolated production prune/read regressions fail: without and with a pre-existing full-day summary, two one-row batches leave 5 tokens instead of the expected 10. The cases also assert exact cost, provider/agent breakdowns, messages, unique sessions and idempotence after correction. No real user database or live provider was accessed. Pending async owner decision requests durable coverage and exact reconciliation.
+
+**Other audit findings.** Populated upgrade preservation receives ADR-0292 tests. CLI Fleet sets CoreRuntimeOptions.start_analytics_rollup=false; therefore prior narrative claiming the scheduled job currently runs on both desktop and CLI is retracted. Intended owned Fleet maintenance remains required; enabling it waits for the retention fix and owner audit disposition. At audit time macOS writer proof was pending; subsequent CI run 37226796142 passes that contention filter (ADR-0294). Source report: _verify/P4-59-LUNA-CLOSEOUT-AUDIT-2026-10-05.md. No P4/TG4 closure or score change.
+
+## ADR-LOG-RESTRUCT-0294 — Close persisted workflow portability from the three-host consumers
+
+**Decision / why / when.** On 2026-10-05, close P4-16/TG4-17 from authenticated CI run 37226796142 at 0926c6f: all six required production-reader/validator filters pass on Windows, Linux and macOS (16 checks each). Previously missing macOS evidence is now present; actual command spawning remains a separate contract. No implementation or policy changes.
+
+**Proof / limitations.** 2026-10-05 closeout: all six TG4-17 filters pass on Windows, Linux and macOS in CI run 37226796142 at 0926c6f (16 checks per host). Production saved recipe/skill/hook readers and writers accept portable guidance and refuse prohibited executable examples before process launch. P4-16/TG4-17 are checked; command execution portability remains independently open. Proof: _verify/P4-16-WORKFLOW-PORTABILITY-CLOSEOUT-2026-10-05.md. Active-writer retention also passes on all three hosts, but known cost-history/lifecycle defects keep P4-59 open. Windows corpus fails loading absent processmodel.dll, while macOS fails closed pending signed XPC. No phase closeout or new readiness percentage is claimed.
