@@ -112,3 +112,9 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 - `cargo test -p arcana-shared cli_analytics_readers_use_populated_indexes_and_return_production_results --locked -- --test-threads=1` passes 1/1 with mixed legacy/canonical rows, actual-instant order, and global/filtered EXPLAIN index assertions. `cargo test -p arcana-core --lib session::storage::tests::session_and_message_round_trip_canonical_timestamps_and_legacy_rows --locked -- --exact --test-threads=1` passes 1/1 with chronological readback and its EXPLAIN index assertion.
 - The first query-registry scan correctly failed after the SQL fingerprint changed. Updated both current fingerprints and removed both stale forms; the focused registry test passes 1/1 against current source.
 - ADR-LOG-RESTRUCT-0256 records the existing `julianday` convention and additive index decision. P4-57/TG4-19 remain open for all remaining production timestamp pairs.
+
+## Continuation — P4-57 hook execution timestamp readback
+
+- Extended the production HooksDb operation test to verify the `config.db` trigger-created `hook_logs.executed_at` value is fixed-millisecond UTC and can be parsed by the shared timestamp reader after `HooksDb::get_logs` reads it back.
+- `cargo fmt --all -- --check` and `cargo test -p arcana-core --lib hooks::db::observability_tests::hook_configuration_and_execution_log_operations_emit_private_result_spans --locked -- --exact --test-threads=1` pass; the focused test passes 1/1.
+- This adds one production write/read pair to P4-57 evidence. All other database pairs remain in the inventory gap; no task or gate closes.

@@ -415,6 +415,10 @@ mod observability_tests {
         assert!(observed.3.is_none());
         assert_eq!(observed.4.len(), 1);
         assert_eq!(observed.5.len(), 1);
+        assert_eq!(observed.4[0].executed_at.len(), 24);
+        assert!(observed.4[0].executed_at.ends_with('Z'));
+        crate::db::timestamps::parse_db_timestamp(&observed.4[0].executed_at)
+            .expect("production hook-log default is readable by the shared timestamp parser");
         assert!(observed.6);
         let operations: Vec<_> = events
             .iter()
