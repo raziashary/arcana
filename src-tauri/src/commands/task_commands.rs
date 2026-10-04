@@ -27,39 +27,71 @@ pub fn get_task(id: i64) -> Result<Option<Task>> {
 /// Used by Supervisor (assigns), Workers (in_progress → done), and QC (qc_review → done/failed).
 #[tauri::command]
 pub fn update_task_status(id: i64, status: String, assigned_worker: Option<String>) -> Result<()> {
-    let db = TasksDb::open()?;
-    db.update_status(id, &status, assigned_worker.as_deref())?;
+    update_task_status_with_kick(id, status, assigned_worker, crate::recipes::scheduler::kick)
+}
 
-    // Phase 3.0 R1 — push-based dispatch for UI-driven status edits (drag a
-    // task back to Ready, reassign via kanban, etc.). Same semantics as the
-    // agent tool path so the fleet behaves uniformly regardless of who moved
-    // the task.
-    match status.as_str() {
-        "qc_review" => crate::recipes::scheduler::kick("qc-agent"),
-        "assigned" => {
-            if let Some(ref w) = assigned_worker {
-                crate::recipes::scheduler::kick(w);
-            }
-        }
-        _ => {}
+fn update_task_status_with_kick(
+    id: i64,
+    status: String,
+    assigned_worker: Option<String>,
+    mut kick_worker: impl FnMut(&str),
+) -> Result<()> {
+    let db = TasksDb::open()?;
+    let previous_task = db.get_by_id(id)?;
+
+    // Record only the prior owner's newest pending routing row. A new
+    // `assigned_worker` is not the worker whose preceding run produced this
+    // completion/reassignment outcome.
+    let routing_outcome = match (status.as_str(), previous_task.as_ref()) {
+        ("done", Some(task)) => task
+            .assigned_worker
+            .as_deref()
+            .map(|worker| (worker, "success")),
+        ("failed", Some(task)) => task
+            .assigned_worker
+            .as_deref()
+            .map(|worker| (worker, "failure")),
+        ("assigned", Some(task)) => task
+            .assigned_worker
+            .as_deref()
+            .filter(|previous| Some(*previous) != assigned_worker.as_deref())
+            .map(|worker| (worker, "reassigned")),
+        _ => None,
+    };
+    if status == "qc_review" {
+        let workspace = arcana_core::platform::workspace::resolve_workspace_dir(None)?;
+        db.update_status_with_workspace_and_run_id(
+            id,
+            &status,
+            assigned_worker.as_deref(),
+            None,
+            None,
+            &workspace,
+        )?;
+    } else if let (Some(task), Some((worker, outcome))) = (previous_task.as_ref(), routing_outcome)
+    {
+        db.update_status_with_routing_outcome(
+            id,
+            task.status.as_str(),
+            worker,
+            &status,
+            assigned_worker.as_deref(),
+            None,
+            outcome,
+        )?;
+    } else {
+        db.update_status(id, &status, assigned_worker.as_deref())?;
     }
 
-    // Ruflo Feature 1 — record routing outcome when a task reaches a terminal state.
-    // `record_outcome_auto` computes duration_ms as now - assigned_at from the
-    // pending routing_history row, so the affinity scorer ranks workers by both
-    // success rate AND speed. Token counts remain 0 here (the recipe runner
-    // tracks per-tick tokens separately via analytics::record_token_usage).
-    let task_id_str = id.to_string();
+    // Persist the transition before waking a worker. The scheduler checks for
+    // recoverable work synchronously; kicking first could let it observe the
+    // old status and leave this assignment waiting for periodic reconciliation.
     match status.as_str() {
-        "done" => {
-            let _ = crate::routing::TaskRouter::record_outcome_auto(&task_id_str, "success");
-        }
-        "failed" => {
-            let _ = crate::routing::TaskRouter::record_outcome_auto(&task_id_str, "failure");
-        }
+        "qc_review" => kick_worker("qc-agent"),
         "assigned" => {
-            // Reassignment — mark any pending routing row as reassigned
-            let _ = crate::routing::TaskRouter::record_outcome_auto(&task_id_str, "reassigned");
+            if let Some(ref worker) = assigned_worker {
+                kick_worker(worker);
+            }
         }
         _ => {}
     }
@@ -189,6 +221,152 @@ pub fn list_worker_requests(status: Option<String>) -> Result<Vec<WorkerRequest>
 pub fn resolve_worker_request(id: i64, action: String, note: Option<String>) -> Result<()> {
     let db = TasksDb::open()?;
     db.update_worker_request_status(id, &action, note.as_deref())
+}
+
+#[cfg(test)]
+mod qc_evidence_tests {
+    use super::*;
+
+    #[test]
+    fn tauri_status_command_cannot_promote_without_build_evidence() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::test_support::isolate_home(home.path());
+        let workspace = tempfile::tempdir().expect("isolated task workspace");
+        arcana_core::db::app_settings::set(
+            arcana_core::db::app_settings::WORKSPACE_KEY,
+            workspace.path().to_string_lossy().as_ref(),
+        )
+        .expect("configure task workspace");
+        let db = TasksDb::open().expect("open isolated task DB");
+        let task = db
+            .create(crate::db::tasks::CreateTaskInput {
+                title: "Tauri QC evidence gate".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "the Tauri status route uses the SQLite evidence guard".into(),
+                created_by: Some("tg4-07-test".into()),
+            })
+            .expect("create task");
+        db.update_status(task.id, "assigned", Some("worker-backend"))
+            .expect("assign task");
+        db.claim_task_with_pid(task.id, "worker-backend", 992)
+            .expect("claim task");
+
+        let error = update_task_status(task.id, "qc_review".into(), Some("worker-backend".into()))
+            .expect_err("Tauri must not bypass the database QC evidence guard");
+        assert!(
+            error
+                .to_string()
+                .contains("without a persisted project build batch"),
+            "Tauri should surface the actionable shared TasksDb refusal: {error}"
+        );
+        assert_eq!(
+            db.get_by_id(task.id).unwrap().unwrap().status,
+            arcana_core::db::tasks::TaskStatus::InProgress
+        );
+    }
+
+    #[tokio::test]
+    async fn ui_assignment_persists_before_recipe_runner_dispatch() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::test_support::isolate_home(home.path());
+        let db = TasksDb::open().expect("open isolated task DB");
+        let slug = "worker-ui-dispatch-order-test";
+        let workers =
+            arcana_core::db::workers::WorkersDb::open().expect("open isolated worker roster");
+        let worker_id = workers
+            .create(
+                "UI dispatch test worker",
+                slug,
+                "backend",
+                "gemini-3.8-flash",
+                &[],
+                120,
+                None,
+            )
+            .expect("create worker");
+        let recipe_id = "ui-dispatch-order-test";
+        workers
+            .bind_recipe(worker_id, recipe_id)
+            .expect("bind test recipe");
+        let recipes_dir = arcana_core::recipes::recipes_dir().expect("resolve isolated recipes");
+        std::fs::create_dir_all(&recipes_dir).expect("create recipes directory");
+        arcana_core::recipes::parser::save_recipe(
+            &recipes_dir,
+            &arcana_core::recipes::types::Recipe {
+                version: "1.0.0".into(),
+                id: recipe_id.into(),
+                title: "UI dispatch ordering test".into(),
+                description: None,
+                schedule: Some("*/5 * * * *".into()),
+                permission_mode: arcana_core::recipes::types::RecipePermissionMode::Autonomous,
+                instructions: "Inspect the task board.".into(),
+                agent_role: None,
+                model: Some("gemini-3.8-flash".into()),
+                is_system: false,
+            },
+        )
+        .expect("save isolated recipe");
+        let runner = arcana_core::recipes::runner::RecipeRunner::new_with_workspace_override(
+            std::sync::Arc::new(std::sync::Mutex::new(
+                arcana_core::state::AppState::default(),
+            )),
+            std::sync::Arc::new(
+                arcana_core::session::manager::SessionManager::new()
+                    .expect("create isolated session manager"),
+            ),
+            arcana_core::agent::permission::new_pending_permissions(),
+            Some(home.path().to_string_lossy().into_owned()),
+        );
+        let scheduler =
+            arcana_core::recipes::scheduler::RecipeScheduler::new(std::sync::Arc::new(runner));
+        let task = db
+            .create(crate::db::tasks::CreateTaskInput {
+                title: "Assignment dispatch ordering".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "the recipe runner sees persisted assignment at kick time"
+                    .into(),
+                created_by: Some("p4-04-test".into()),
+            })
+            .expect("create task");
+
+        let mut kicked = false;
+        update_task_status_with_kick(task.id, "assigned".into(), Some(slug.into()), |worker| {
+            assert_eq!(worker, slug);
+            let persisted = TasksDb::open()
+                .expect("reopen task DB at kick time")
+                .get_by_id(task.id)
+                .expect("read task at kick time")
+                .expect("assigned task exists");
+            assert_eq!(
+                persisted.status,
+                arcana_core::db::tasks::TaskStatus::Assigned
+            );
+            assert_eq!(persisted.assigned_worker.as_deref(), Some(worker));
+            kicked = true;
+            scheduler.kick_worker(worker);
+        })
+        .expect("update status");
+
+        assert!(kicked, "assignment should kick its worker after commit");
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let worker = workers
+                    .get_by_slug(slug)
+                    .expect("read worker after dispatch")
+                    .expect("test worker remains registered");
+                if worker.status == arcana_core::db::workers::WorkerStatus::IdleNoProvider {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("real RecipeRunner should reach the no-provider boundary");
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════

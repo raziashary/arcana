@@ -101,6 +101,13 @@ impl SkillLoader {
                 path.display()
             ))
         })?;
+        arcana_core::platform::shell_portability::validate_persisted_agent_guidance(
+            &fm.description,
+        )
+        .and_then(|_| {
+            arcana_core::platform::shell_portability::validate_persisted_agent_guidance(&template)
+        })
+        .map_err(|e| ArcanaError::Agent(format!("Skill file {} {e}", path.display())))?;
 
         let category = if fm.category.is_empty() {
             SkillCategory::from_str(category_hint)
@@ -135,5 +142,43 @@ impl SkillLoader {
 impl Default for SkillLoader {
     fn default() -> Self {
         Self::new().expect("SkillLoader: cannot determine home directory")
+    }
+}
+
+#[cfg(test)]
+mod portability_tests {
+    use super::*;
+
+    fn loader() -> SkillLoader {
+        SkillLoader {
+            skills_dir: std::env::temp_dir().join("arcana-skill-portability-tests"),
+        }
+    }
+
+    #[test]
+    fn saved_custom_skill_is_refused_by_loader_when_shell_guidance_is_posix_only() {
+        let loader = loader();
+        let path = loader.skills_dir.join("custom").join("portable-check.md");
+        let content = "---\nname: check\ndescription: portable check\ncategory: custom\nversion: '1'\n---\n```bash\nnpm test && npm lint\n```\n";
+        assert!(loader.parse_skill_file(&path, content, "custom").is_err());
+    }
+
+    #[test]
+    fn saved_custom_skill_is_refused_when_persisted_guidance_mentions_posix_temp_path() {
+        let loader = loader();
+        let path = loader.skills_dir.join("custom").join("portable-check.md");
+        let content = "---\nname: check\ndescription: portable check\ncategory: custom\nversion: '1'\n---\nSave temporary output under /tmp/build.\n";
+        let error = loader
+            .parse_skill_file(&path, content, "custom")
+            .expect_err("persisted skills must reject hardcoded POSIX temporary paths");
+        assert!(error.to_string().contains("hardcoded POSIX temporary path"));
+    }
+
+    #[test]
+    fn saved_custom_skill_with_portable_guidance_loads() {
+        let loader = loader();
+        let path = loader.skills_dir.join("custom").join("portable-check.md");
+        let content = "---\nname: check\ndescription: portable check\ncategory: custom\nversion: '1'\n---\nUse project_command to verify the project.\n";
+        assert!(loader.parse_skill_file(&path, content, "custom").is_ok());
     }
 }

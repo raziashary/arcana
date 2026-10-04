@@ -18,7 +18,9 @@ use windows_sys::Win32::System::LibraryLoader::{
 };
 
 #[path = "psec_generated/ProcessSecurityEnvironment_generated.rs"]
-mod generated;
+#[allow(non_snake_case)]
+mod ProcessSecurityEnvironment_generated;
+use self::ProcessSecurityEnvironment_generated as generated;
 
 type CreatePsec = unsafe extern "system" fn(*const c_void, u32, u32, *mut HANDLE) -> i32;
 type ClosePsec = unsafe extern "system" fn(HANDLE);

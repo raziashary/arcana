@@ -3,7 +3,7 @@
 // Phase 2:   start/stop now wired to the real RecipeScheduler (cron engine).
 // See: DEVELOPMENT_PLAN.md Phase 2 — Recipe Execution Engine
 
-use crate::db::workers::{slugify, Worker, WorkersDb};
+use crate::db::workers::{slugify, Worker, WorkerStatus, WorkersDb};
 use crate::errors::{ArcanaError, Result};
 use crate::recipes::scheduler::RecipeScheduler;
 
@@ -91,25 +91,26 @@ pub fn create_worker(input: CreateWorkerInput) -> Result<CreateWorkerOutput> {
 
 #[tauri::command]
 pub fn update_worker_status(worker_id: i64, status: String) -> Result<()> {
+    let status = WorkerStatus::try_from_str(&status).map_err(ArcanaError::Agent)?;
     let db = WorkersDb::open()?;
     // Resolve slug for the status push event before mutating so a missing
     // worker row still surfaces as a clean error without a phantom emit.
     let worker = db
         .get_by_id(worker_id)?
         .ok_or_else(|| ArcanaError::Agent(format!("Worker id={worker_id} not found")))?;
-    db.update_status(worker_id, &status)?;
+    db.update_status(worker_id, status)?;
     // Phase 3.0 R2 — mirror UI-driven status edits through the push channel
     // so any other subscriber (another open window, a future mobile client)
     // sees the change instantly.
     crate::events::emit_worker_status(crate::events::WorkerStatusPayload {
         slug: worker.slug,
-        status,
+        status: status.as_str().to_string(),
         previous_status: None,
         reason: None,
         cooldown_seconds: None,
         tick_duration_ms: None,
         last_outcome: None,
-        timestamp: chrono::Utc::now().to_rfc3339(),
+        timestamp: arcana_core::db::timestamps::now_rfc3339(),
     });
     Ok(())
 }
@@ -261,5 +262,22 @@ mod model_provider_tests {
     fn an_unknown_model_is_refused_rather_than_guessed() {
         assert_eq!(model_to_provider("totally-made-up"), None);
         assert_eq!(model_to_provider(""), None);
+    }
+}
+
+#[cfg(test)]
+mod worker_status_tests {
+    use super::*;
+
+    #[test]
+    fn status_command_rejects_unknown_values_before_opening_the_database() {
+        let error = update_worker_status(1, "not_a_worker_status".to_string())
+            .expect_err("unknown command status must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("unknown worker status 'not_a_worker_status'"),
+            "unexpected command error: {error}"
+        );
     }
 }

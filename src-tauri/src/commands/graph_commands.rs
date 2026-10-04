@@ -94,8 +94,33 @@ pub struct BuildProgressPayload {
     pub percent: u8,
 }
 
+fn graph_phase<T>(
+    trace_id: &str,
+    phase: &'static str,
+    run: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let started = std::time::Instant::now();
+    let result = run();
+    if result.is_err() {
+        tracing::warn!(
+            target: "arcana::telemetry",
+            event_type = "graph_build_phase",
+            trace_id,
+            phase,
+            duration_ns = started.elapsed().as_nanos() as u64,
+            outcome = "failure",
+            error_code = "graph_phase_failed",
+            "Graph build phase failed"
+        );
+    }
+    result
+}
+
 #[tauri::command]
 pub async fn build_graph(app: AppHandle, repo_path: Option<String>) -> Result<BuildStats> {
+    let graph_run_id = uuid::Uuid::new_v4().to_string();
+    let mut graph_timer = arcana_core::observability::timing::OperationTimer::start("graph_build")
+        .with_trace_id(&graph_run_id);
     // Validate repo_path — must be provided and not "."
     let repo_path = repo_path
         .and_then(|p| if p.is_empty() || p == "." { None } else { Some(p) })
@@ -138,7 +163,17 @@ pub async fn build_graph(app: AppHandle, repo_path: Option<String>) -> Result<Bu
     tracing::info!("[GraphBuild] Detecting code files in: {}", repo_path);
     let detect_start = std::time::Instant::now();
     let detector = crate::graph::detect::CodeDetector::new(repo_dir);
-    let code_files = detector.detect_files()?;
+    let code_files = graph_phase(&graph_run_id, "detect", || detector.detect_files())?;
+    tracing::info!(
+        target: "arcana::telemetry",
+        event_type = "graph_build_phase",
+        trace_id = %graph_run_id,
+        phase = "detect",
+        item_count = code_files.len(),
+        duration_ns = detect_start.elapsed().as_nanos() as u64,
+        outcome = "success",
+        "Graph build detection phase completed"
+    );
     tracing::info!(
         "[GraphBuild] Detected {} code files ({}ms)",
         code_files.len(),
@@ -154,6 +189,7 @@ pub async fn build_graph(app: AppHandle, repo_path: Option<String>) -> Result<Bu
     );
 
     if code_files.is_empty() {
+        graph_timer.succeed();
         tracing::warn!(
             "[GraphBuild] No code files found in repository: {}",
             repo_path
@@ -202,6 +238,18 @@ pub async fn build_graph(app: AppHandle, repo_path: Option<String>) -> Result<Bu
     }
 
     tracing::info!(
+        target: "arcana::telemetry",
+        event_type = "graph_build_phase",
+        trace_id = %graph_run_id,
+        phase = "extract",
+        item_count = extraction_results.len(),
+        error_count = extraction_errors,
+        duration_ns = extract_start.elapsed().as_nanos() as u64,
+        outcome = if extraction_errors == 0 { "success" } else { "partial" },
+        "Graph build extraction phase completed"
+    );
+
+    tracing::info!(
         "[GraphBuild] Extracted {} files ({} errors) in {}ms",
         extraction_results.len(),
         extraction_errors,
@@ -234,7 +282,20 @@ pub async fn build_graph(app: AppHandle, repo_path: Option<String>) -> Result<Bu
         },
     );
     let build_start = std::time::Instant::now();
-    let build_stats = crate::graph::build::build(extraction_results, &store, None, None)?;
+    let build_stats = graph_phase(&graph_run_id, "build", || {
+        crate::graph::build::build(extraction_results, &store, None, None)
+    })?;
+    tracing::info!(
+        target: "arcana::telemetry",
+        event_type = "graph_build_phase",
+        trace_id = %graph_run_id,
+        phase = "build",
+        nodes = build_stats.nodes_upserted,
+        edges = build_stats.edges_upserted,
+        duration_ns = build_start.elapsed().as_nanos() as u64,
+        outcome = "success",
+        "Graph build database phase completed"
+    );
     tracing::info!(
         "[GraphBuild] Graph built: {} nodes, {} edges in {}ms",
         build_stats.nodes_upserted,
@@ -264,7 +325,17 @@ pub async fn build_graph(app: AppHandle, repo_path: Option<String>) -> Result<Bu
         },
     );
     let cluster_start = std::time::Instant::now();
-    let communities = run_clustering(&store)?;
+    let communities = graph_phase(&graph_run_id, "cluster", || run_clustering(&store))?;
+    tracing::info!(
+        target: "arcana::telemetry",
+        event_type = "graph_build_phase",
+        trace_id = %graph_run_id,
+        phase = "cluster",
+        community_count = communities.len(),
+        duration_ns = cluster_start.elapsed().as_nanos() as u64,
+        outcome = "success",
+        "Graph clustering phase completed"
+    );
     tracing::info!(
         "[GraphBuild] Clustering complete: {} communities ({}ms)",
         communities.len(),
@@ -292,6 +363,19 @@ pub async fn build_graph(app: AppHandle, repo_path: Option<String>) -> Result<Bu
     );
 
     let total_elapsed = start.elapsed().as_millis() as u64;
+    graph_timer.succeed();
+    tracing::info!(
+        target: "arcana::telemetry",
+        event_type = "graph_build_result",
+        trace_id = %graph_run_id,
+        files_detected = code_files.len(),
+        nodes_extracted = build_stats.nodes_upserted,
+        edges_extracted = build_stats.edges_upserted,
+        communities_detected = communities.len(),
+        duration_ns = start.elapsed().as_nanos() as u64,
+        outcome = "success",
+        "Graph build completed"
+    );
     tracing::info!(
         "[GraphBuild] ✅ Graph build complete in {}ms",
         total_elapsed
@@ -405,6 +489,60 @@ pub async fn update_graph(app: AppHandle, repo_path: Option<String>) -> Result<U
     let mut stats = stats;
     stats.elapsed_ms = start.elapsed().as_millis() as u64;
     Ok(stats)
+}
+
+#[cfg(test)]
+mod observability_tests {
+    use super::{graph_phase, Result};
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("capture graph telemetry")
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn failed_graph_phase_emits_safe_correlated_failure_event() {
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let writer_output = Arc::clone(&output);
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(move || SharedWriter(Arc::clone(&writer_output)))
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            let result: Result<()> = graph_phase("graph-run-test", "detect", || {
+                Err(anyhow::anyhow!("sensitive underlying detail").into())
+            });
+            assert!(result.is_err());
+        });
+
+        let output = String::from_utf8(output.lock().expect("capture output").clone())
+            .expect("UTF-8 JSON event");
+        let event = output
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("JSON event"))
+            .find(|event| event["fields"]["event_type"] == "graph_build_phase")
+            .expect("phase failure event");
+        assert_eq!(event["fields"]["trace_id"], "graph-run-test");
+        assert_eq!(event["fields"]["phase"], "detect");
+        assert_eq!(event["fields"]["outcome"], "failure");
+        assert_eq!(event["fields"]["error_code"], "graph_phase_failed");
+        assert!(!output.contains("sensitive underlying detail"));
+    }
 }
 
 // ============================================================================

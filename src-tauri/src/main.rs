@@ -1,20 +1,18 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use arcana_core::state::lock::LockTolerant;
 use arcana_lib::agent::builtin_tools;
-use arcana_lib::agent::permission::new_pending_permissions;
 use arcana_lib::agent::ToolRegistry;
 use arcana_lib::mcp::health::McpHealthMonitor;
-use arcana_lib::recipes::runner::RecipeRunner;
-use arcana_lib::recipes::scheduler::RecipeScheduler;
-use arcana_lib::session::manager::SessionManager;
 use arcana_lib::skills::SkillRegistry;
-use arcana_lib::state::AppState;
 use arcana_lib::updater::{start_background_check, UpdateChannel, UpdaterState};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tauri::Manager;
 
 fn main() {
+    if let Some(exit_code) = arcana_core::platform::process_sandbox::run_bridge_entrypoint() {
+        std::process::exit(exit_code);
+    }
+
     // 🔴 `P8-64`. A `dotenvy::dotenv()` call stood here, in the SHIPPED binary.
     //
     // It existed to read two path variables that pointed at the deleted
@@ -62,23 +60,18 @@ fn main() {
     // silent log loss from that point on.
     let _log_guard = arcana_lib::logging::init();
 
-    // Doc 08 Phase 3 — prune logs older than the configured retention cap
-    // (default 14d, override via ARCANA_LOG_RETENTION_DAYS env var).
+    // P4-55 — enforce the five-file/seven-day log-retention cap.
     // Idempotent and best-effort; failures log a warning but never block
     // startup. Runs AFTER logging::init so the prune result lands in the
     // new daily file.
-    if let Some(home) = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .ok()
-    {
-        let log_dir = std::path::PathBuf::from(home).join(".arcana").join("logs");
-        arcana_lib::observability::log_retention::prune(&log_dir);
-    }
+    arcana_lib::observability::log_retention::prune_default();
 
-    // Initialise recipes (writes default system recipes if absent)
-    if let Err(e) = arcana_lib::recipes::init() {
-        eprintln!("Warning: Failed to initialise recipes: {e}");
-    }
+    // Desktop and CLI share one host-independent production runtime. The
+    // desktop retains its Tauri event/UI services below.
+    let core_runtime = tauri::async_runtime::block_on(arcana_core::runtime::initialize(
+        arcana_core::runtime::CoreRuntimeOptions::default(),
+    ))
+    .expect("Failed to initialise Arcana core runtime");
 
     // Initialise skills (writes default builtin skills to ~/.arcana/skills/)
     if let Err(e) = arcana_lib::skills::ensure_default_skills() {
@@ -101,72 +94,13 @@ fn main() {
     builtin_tools::register_all(&mut mcp_registry);
     let mcp_registry = Arc::new(mcp_registry);
 
-    let app_state: Arc<Mutex<AppState>> = Arc::new(Mutex::new(AppState::new()));
-
-    // Publish it for core-side callers that hold no state of their own.
-    // `analyze_diff_tool` builds a provider straight from the vault, and a tool
-    // receives a ToolContext rather than application state — without this it
-    // would be the one path a provider call could take without meeting the
-    // daily ceiling (P2-21). TG-P2-04 asserts this line exists.
-    arcana_lib::state::app_state::set_global(app_state.clone());
-
-    // P2-26. Restore the user's provider and model choice. Without this the
-    // selection lived only in memory: they picked a model, used it, quit, and
-    // came back to an empty picker with no indication why.
-    //
-    // A saved model that has since been retired is discarded rather than
-    // restored — see `hydrate_active_provider`.
-    // S2-06. Restore today's spend BEFORE anything can call a provider.
-    //
-    // These counters lived only in memory, so the daily ceiling saw zero on
-    // every launch: a user who reached the cap could close the app, reopen it,
-    // and carry on spending. A cap that resets on restart is a per-session cap
-    // describing itself as daily.
-    {
-        let mut s = app_state.lock_tolerant();
-        s.hydrate_today();
-    }
-
-    arcana_lib::commands::settings_commands::hydrate_active_provider(&app_state);
+    let app_state = core_runtime.state.clone();
     let skill_registry_managed = skill_registry.clone();
     let skill_registry_for_watch = skill_registry.clone();
 
-    let session_mgr: Arc<SessionManager> =
-        Arc::new(SessionManager::new().expect("Failed to initialise session database"));
-
-    // Shared pending permissions: call_id → oneshot sender.
-    // Used by AgentEngine (tool executor) and respond_to_permission command.
-    let pending_permissions = new_pending_permissions();
-
-    // Subagent registry. Subagents run in-process on a nested AgentEngine, so
-    // the manager needs app state and the permission channel rather than an
-    // HTTP client (ADR-LOG-RESTRUCT-0001). Installed globally so the spawn
-    // builtin tools can reach it without Tauri `State<>` plumbing.
-    let subagent_mgr = arcana_lib::subagent::SubagentManager::new(
-        arcana_lib::subagent::native_runner::RunnerDeps {
-            state: app_state.clone(),
-            pending: pending_permissions.clone(),
-        },
-    );
-    arcana_lib::subagent::manager::install_global(subagent_mgr.clone());
-
-    // ─── Analytics singleton ─────────────────────────────────────────────────
-    // The Dashboard, the agent cost recorder and every worker tick all read
-    // and write through `analytics::global()`. Without this `install_global`
-    // call, that accessor panics (intentionally — silent in-memory fallbacks
-    // have already cost one audit cycle, see docs/endtoendrun/14may2026/02).
-    //
-    // `AnalyticsManager::new()` is async (opens & migrates ~/.arcana/analytics.db)
-    // but we're still on the synchronous main thread before Tauri's runtime
-    // starts, so block until the DB is ready. After install, kick the hourly +
-    // daily rollup background thread.
-    let analytics_mgr =
-        tauri::async_runtime::block_on(arcana_lib::analytics::AnalyticsManager::new())
-            .expect("Failed to initialise analytics DB at ~/.arcana/analytics.db");
-    let analytics_mgr = Arc::new(analytics_mgr);
-    arcana_lib::analytics::install_global(analytics_mgr.clone());
-    analytics_mgr.start_aggregation_job();
-    eprintln!("[Arcana] analytics: installed global manager + started rollup job");
+    let session_mgr = core_runtime.sessions.clone();
+    let pending_permissions = core_runtime.pending_permissions.clone();
+    let subagent_mgr = core_runtime.subagents.clone();
 
     // Phase 5.3 — auto-updater state
     let updater_state = UpdaterState::new();
@@ -177,9 +111,7 @@ fn main() {
     let mcp_health_monitor = Arc::new(McpHealthMonitor::new(30, 3, 10));
 
     // Clone Arcs for the setup hook (setup runs after app handle is available)
-    let app_state_for_setup = app_state.clone();
-    let session_mgr_for_setup = session_mgr.clone();
-    let pending_for_setup = pending_permissions.clone();
+    let scheduler = core_runtime.recipe_scheduler.clone();
     let subagent_mgr_for_setup = subagent_mgr.clone();
     let updater_state_for_setup = updater_state.clone();
     let mcp_health_for_setup = mcp_health_monitor.clone();
@@ -201,7 +133,12 @@ fn main() {
             .setup(move |app| {
                 // Own lightweight native runtime admission state for the
                 // process lifetime; the periodic task only reaps idle leases.
-                arcana_core::state::runtime_registry::spawn_reaper();
+                // Tauri's setup callback is synchronous and does not run
+                // inside Tokio. Enter its managed async runtime before the
+                // core reaper calls tokio::spawn, or desktop startup panics.
+                tauri::async_runtime::spawn(async {
+                    arcana_core::state::runtime_registry::spawn_reaper();
+                });
 
                 // Startup progress state machine — drives the loading overlay.
                 // Attached to SidecarManager so spawn/health transitions + log
@@ -254,7 +191,7 @@ fn main() {
                             arcana_lib::events::WorkspaceMismatchPayload {
                                 current_dir: current,
                                 configured_workspace: configured,
-                                timestamp: chrono::Utc::now().to_rfc3339(),
+                                timestamp: arcana_core::db::timestamps::now_rfc3339(),
                             }
                         );
                     }
@@ -296,20 +233,6 @@ fn main() {
                 // P8-53 — Demo Mode's flag is gone too: it existed to NOT spawn
                 // the sidecars, and there are none.
 
-                // Build RecipeRunner + RecipeScheduler now that we have AppHandle
-                let runner = Arc::new(RecipeRunner::new(
-                    app_state_for_setup,
-                    session_mgr_for_setup,
-                    pending_for_setup,
-                ));
-                let scheduler = Arc::new(RecipeScheduler::new(runner));
-
-                // Phase 3.0 R1 — expose the scheduler to the task-board tools
-                // via a module-level OnceLock so `create_task`, `assign_task`,
-                // and `update_task_status` can fire push-based kicks without
-                // needing Tauri `State<>` access.
-                arcana_lib::recipes::scheduler::install_global(scheduler.clone());
-
                 // P8-08 — the sidecar auto-start block is DELETED: the
                 // watchdog, both spawn paths, the health polling, and the
                 // thirteen-phase startup narration that went with them.
@@ -346,7 +269,11 @@ fn main() {
                     if let Ok(db) = arcana_lib::db::workers::WorkersDb::open() {
                         for worker in db.list().unwrap_or_default() {
                             let has_recipe = worker.recipe_id.is_some();
-                            let is_active  = worker.status != "paused" && worker.status != "deleted";
+                            let is_active = !matches!(
+                                worker.status,
+                                arcana_lib::db::workers::WorkerStatus::Paused
+                                    | arcana_lib::db::workers::WorkerStatus::Deleted
+                            );
                             if has_recipe && is_active {
                                 if let Err(e) = scheduler_clone.start_worker(&worker.slug) {
                                     eprintln!("[Arcana] Auto-start worker '{}' failed: {e}", worker.slug);

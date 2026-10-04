@@ -174,7 +174,10 @@ mod tests {
     /// Write bytes to a uniquely-named file under the OS temp dir.
     /// Avoids adding a `tempfile` dev-dependency for four tests.
     fn temp_file(tag: &str, contents: &[u8]) -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!("arcana-verify-test-{tag}.bin"));
+        let path = std::env::temp_dir().join(format!(
+            "arcana-verify-test-{tag}-{}.bin",
+            uuid::Uuid::new_v4()
+        ));
         let mut f = std::fs::File::create(&path).expect("create temp file");
         f.write_all(contents).expect("write temp file");
         path

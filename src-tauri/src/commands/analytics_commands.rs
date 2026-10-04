@@ -130,7 +130,15 @@ pub fn get_worker_analytics(
     // Otherwise, build a summary across all workers that appear in the DB.
     let worker_stats = if let Some(ref wid) = worker_id {
         let agg = db.get_worker_stats_range(wid, start_date, end_date)?;
+        let coverage = agg.as_ref().map(|r| {
+            serde_json::json!({
+                "start": r.coverage_start,
+                "end": r.coverage_end,
+                "granularity": r.granularity,
+            })
+        });
         let (completed, failed, success_rate, cost, time_min, avg_dur) = agg
+            .as_ref()
             .map(|r| {
                 (
                     r.tasks_completed,
@@ -141,11 +149,12 @@ pub fn get_worker_analytics(
                     r.avg_task_duration_minutes,
                 )
             })
-            .unwrap_or((0, 0, 0.0, 0.0, 0, 0));
+            .unwrap_or((0, 0, 0.0, 0.0, 0, 0.0));
 
         serde_json::json!({
             "worker_id": worker_id,
             "date_range": { "start": start, "end": end },
+            "coverage": coverage,
             "stats": {
                 "tasks_completed": completed,
                 "tasks_failed": failed,
@@ -164,10 +173,22 @@ pub fn get_worker_analytics(
             .unwrap_or_default();
 
         let mut per_worker = Vec::new();
+        let mut coverage_start: Option<NaiveDate> = None;
+        let mut coverage_end: Option<NaiveDate> = None;
+        let mut has_monthly_coverage = false;
         for w in &workers {
             let agg = db.get_worker_stats_range(&w.slug, start_date, end_date)?;
             let (completed, failed, success_rate, cost, time_min, avg_dur) = agg
+                .as_ref()
                 .map(|r| {
+                    coverage_start = Some(
+                        coverage_start
+                            .map_or(r.coverage_start, |current| current.min(r.coverage_start)),
+                    );
+                    coverage_end = Some(
+                        coverage_end.map_or(r.coverage_end, |current| current.max(r.coverage_end)),
+                    );
+                    has_monthly_coverage |= r.granularity == "month";
                     (
                         r.tasks_completed,
                         r.tasks_failed,
@@ -177,7 +198,7 @@ pub fn get_worker_analytics(
                         r.avg_task_duration_minutes,
                     )
                 })
-                .unwrap_or((0, 0, 0.0, 0.0, 0, 0));
+                .unwrap_or((0, 0, 0.0, 0.0, 0, 0.0));
 
             per_worker.push(serde_json::json!({
                 "worker_id": w.slug,
@@ -186,7 +207,12 @@ pub fn get_worker_analytics(
                 "success_rate": success_rate,
                 "avg_task_duration_minutes": avg_dur,
                 "cost_usd": cost,
-                "total_time_minutes": time_min
+                "total_time_minutes": time_min,
+                "coverage": agg.as_ref().map(|r| serde_json::json!({
+                    "start": r.coverage_start,
+                    "end": r.coverage_end,
+                    "granularity": r.granularity,
+                }))
             }));
         }
 
@@ -214,6 +240,11 @@ pub fn get_worker_analytics(
         serde_json::json!({
             "worker_id": null,
             "date_range": { "start": start, "end": end },
+            "coverage": coverage_start.zip(coverage_end).map(|(start, end)| serde_json::json!({
+                "start": start,
+                "end": end,
+                "granularity": if has_monthly_coverage { "month" } else { "day" }
+            })),
             "stats": {
                 "tasks_completed": total_completed,
                 "tasks_failed": total_failed,
@@ -248,7 +279,7 @@ pub fn get_system_logs(
         .map(|r| {
             serde_json::json!({
                 "id":         r.id,
-                "timestamp":  r.timestamp.to_rfc3339(),
+                "timestamp":  arcana_core::db::timestamps::format_utc_timestamp(r.timestamp),
                 "component":  r.component,
                 "event_type": r.event_type,
                 "message":    r.message,

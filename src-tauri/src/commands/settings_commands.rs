@@ -25,12 +25,29 @@ pub struct ProviderInfo {
 
 #[tauri::command]
 pub async fn list_providers(_state: State<'_, Arc<Mutex<AppState>>>) -> Result<Vec<ProviderInfo>> {
-    let providers = vec![
-        build_provider_info("anthropic", "Anthropic")?,
-        build_provider_info("openai", "OpenAI")?,
-        build_provider_info("google", "Google")?,
-    ];
-    Ok(providers)
+    supported_provider_labels()?
+        .into_iter()
+        .map(|(id, name)| build_provider_info(id, name))
+        .collect()
+}
+
+fn supported_provider_labels() -> Result<Vec<(&'static str, &'static str)>> {
+    arcana_core::provider::factory::supported_ids()
+        .into_iter()
+        .map(|id| {
+            let name = match id {
+                "anthropic" => "Anthropic",
+                "openai" => "OpenAI",
+                "google" => "Google",
+                other => {
+                    return Err(ArcanaError::Provider(format!(
+                        "Settings has no display label for supported provider '{other}'"
+                    )))
+                }
+            };
+            Ok((id, name))
+        })
+        .collect()
 }
 
 fn build_provider_info(id: &str, name: &str) -> Result<ProviderInfo> {
@@ -79,6 +96,42 @@ pub async fn test_provider_connection(provider: String) -> Result<ProviderStatus
     }
 }
 
+/// Read the host-selected user-owned Python fallback used only when staging
+/// the preferred signed interpreter fails. The executable path is not secret.
+#[tauri::command]
+pub fn get_python_user_fallback() -> Result<Option<String>> {
+    #[cfg(windows)]
+    {
+        return arcana_core::platform::python_runtime::get_user_python_fallback()
+            .map(|path| path.map(|path| path.to_string_lossy().into_owned()))
+            .map_err(|error| ArcanaError::Agent(error.to_string()));
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(None)
+    }
+}
+
+/// Persist an explicitly selected, signed Python executable under the current
+/// user's `%LOCALAPPDATA%\\Programs\\Python` installation tree.
+#[tauri::command]
+pub fn set_python_user_fallback(path: Option<String>) -> Result<Option<String>> {
+    #[cfg(windows)]
+    {
+        let path = path.map(std::path::PathBuf::from);
+        return arcana_core::platform::python_runtime::set_user_python_fallback(path.as_deref())
+            .map(|path| path.map(|path| path.to_string_lossy().into_owned()))
+            .map_err(|error| ArcanaError::Agent(error.to_string()));
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        Err(ArcanaError::Agent(
+            "User-selected Python fallback is available only on Windows".into(),
+        ))
+    }
+}
+
 #[tauri::command]
 pub fn set_active_provider(
     provider: String,
@@ -120,8 +173,30 @@ pub fn hydrate_active_provider(state: &Arc<Mutex<AppState>>) {
         .ok()
         .flatten();
 
-    let (Some(provider), Some(model)) = (provider, model) else {
-        return;
+    let (provider, model) = match (provider, model) {
+        (Some(provider), Some(model)) => (provider, model),
+        (None, None) => {
+            let mut s = state.lock_tolerant();
+            s.active_provider = Some("google".into());
+            s.active_model = Some("gemini-3.8-flash".into());
+            return;
+        }
+        _ => return,
+    };
+
+    // The owner selected Gemini 3.8 Flash as the PA and fleet default. Move a
+    // saved Google selection from the previous default, while preserving any
+    // explicit alternative model selection.
+    let model = if provider == "google" && model == "gemini-3.7-flash" {
+        if let Err(error) = arcana_core::db::app_settings::set(ACTIVE_MODEL_KEY, "gemini-3.8-flash")
+        {
+            tracing::warn!("Could not update the saved Google model default: {error}");
+            model
+        } else {
+            "gemini-3.8-flash".to_owned()
+        }
+    } else {
+        model
     };
 
     if arcana_core::provider::catalogue::entry(&model).is_none() {
@@ -181,4 +256,21 @@ pub fn set_system_prompt(
 #[tauri::command]
 pub fn get_default_system_prompt() -> Result<String> {
     Ok(ContextBuilder::default_system_prompt().to_string())
+}
+
+#[cfg(test)]
+mod provider_list_tests {
+    use super::supported_provider_labels;
+
+    #[test]
+    fn settings_provider_list_covers_the_factory_supported_set() {
+        assert_eq!(
+            supported_provider_labels().expect("Settings provider labels"),
+            vec![
+                ("anthropic", "Anthropic"),
+                ("google", "Google"),
+                ("openai", "OpenAI"),
+            ]
+        );
+    }
 }

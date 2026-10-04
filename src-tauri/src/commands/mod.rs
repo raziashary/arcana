@@ -9,6 +9,7 @@ pub mod arcana_instructions_commands;
 pub mod browser_commands;
 pub mod budget_commands;
 pub mod diff_commands;
+pub mod egress_consent_commands;
 pub mod file_commands;
 pub mod git_commands;
 pub mod github_mcp_commands;

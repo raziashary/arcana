@@ -36,6 +36,8 @@ pub mod plan;
 pub mod plugin;
 #[cfg(test)]
 mod reachability_gate;
+#[cfg(test)]
+mod test_support;
 
 // Phase-P0 spec-invariant gates over repository files (TG0-02/03/04).
 #[cfg(test)]
@@ -70,6 +72,10 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
             set_daily_cap, set_default_worker_budget,
         },
         diff_commands::{analyze_diff, analyze_pr_diff},
+        egress_consent_commands::{
+            get_workspace_egress_consent, grant_workspace_egress_consent,
+            revoke_workspace_egress_consent,
+        },
         file_commands::search_workspace_files,
         git_commands::{
             compare_checkpoints, create_checkpoint, delete_checkpoint, git_blame,
@@ -97,7 +103,9 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
             set_ide_workspace_state,
         },
         log_commands::{
-            clear_log_files, export_log_file, list_log_files, read_log_file, read_log_file_full,
+            clear_log_files, export_log_file, export_observability_bundle, list_log_files,
+            read_log_file, read_log_file_full, read_structured_events, read_structured_events_full,
+            summarize_observability_events,
         },
         // P8-51 — the three MCP-client commands, kept. The other fourteen
         // were sidecar lifecycle and are deleted with it (`P8-06`).
@@ -132,8 +140,9 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
             set_session_pa_mode, update_session_title,
         },
         settings_commands::{
-            get_active_provider, get_cost_today, get_default_system_prompt, get_system_prompt,
-            list_providers, set_active_provider, set_system_prompt, test_provider_connection,
+            get_active_provider, get_cost_today, get_default_system_prompt,
+            get_python_user_fallback, get_system_prompt, list_providers, set_active_provider,
+            set_python_user_fallback, set_system_prompt, test_provider_connection,
         },
         skill_commands::{
             execute_skill, get_skill, import_skill, list_skills, reload_skills, search_skills,
@@ -210,6 +219,8 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         get_system_prompt,
         set_system_prompt,
         get_default_system_prompt,
+        get_python_user_fallback,
+        set_python_user_fallback,
         // Vault
         set_provider_key,
         has_provider_key,
@@ -277,7 +288,11 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         list_log_files,
         read_log_file,
         read_log_file_full,
+        read_structured_events,
+        read_structured_events_full,
+        summarize_observability_events,
         export_log_file,
+        export_observability_bundle,
         clear_log_files,
         // P8-06/P8-07 — the fourteen sidecar-lifecycle commands are gone.
         // A registration surviving its command is a compile error, which is
@@ -446,6 +461,9 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         force_release_task,
         // Diff Risk Scoring (Ruflo Feature 3)
         analyze_diff,
+        get_workspace_egress_consent,
+        grant_workspace_egress_consent,
+        revoke_workspace_egress_consent,
         analyze_pr_diff,
         // Budget Circuit Breaker (Ruflo Feature 4)
         cmd_set_task_budget,

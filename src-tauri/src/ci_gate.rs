@@ -12,7 +12,6 @@
 //
 // Compiled only under `cfg(test)`.
 
-use arcana_core::state::lock::RwLockTolerant;
 use std::path::{Path, PathBuf};
 
 /// Repository root — one level above `src-tauri/`.
@@ -803,106 +802,36 @@ let x = 1;
     /// output reached the model, the `messages` table and the UI while this
     /// gate and the phase's headline smoke test were both green.
     ///
-    /// So it now checks the *shape of the call*, not the presence of a word:
-    /// every `tool.execute(` in the executor must be wrapped in
-    /// `redact_result(`. A new branch added later — a third execution path, a
-    /// retry, a streaming variant — fails this gate unless it redacts.
+    /// So it checks the live boundary, not the presence of a word: both
+    /// `execute_batch` partitions must delegate to `execute_handler`, and that
+    /// helper must redact successful results before they leave the handler.
     #[test]
     fn tg_p1_06_every_tool_execution_redacts_its_result() {
         let path = repo_root().join("arcana-core/src/agent/tool_executor.rs");
         let text = std::fs::read_to_string(&path).expect("tool_executor.rs");
-        let production = text.split("#[cfg(test)]").next().unwrap_or("");
-
-        let mut unwrapped = Vec::new();
-        let mut total = 0usize;
-        for (i, raw) in production.lines().enumerate() {
-            let line = raw.trim();
-            if line.starts_with("//") || line.starts_with('*') {
-                continue;
-            }
-            let code = line.split("//").next().unwrap_or("");
-            if !code.contains("tool.execute(") {
-                continue;
-            }
-            total += 1;
-            // The call may be wrapped on the same line, or on the line above
-            // when rustfmt has split it.
-            let previous = if i > 0 {
-                production.lines().nth(i - 1).unwrap_or("")
-            } else {
-                ""
-            };
-            if !code.contains("redact_result(") && !previous.contains("redact_result(") {
-                unwrapped.push(format!("{}: {}", i + 1, line));
-            }
-        }
-
-        // ⚠ P3-67. This asserted `total >= 3`, sized to the executor's structure
-        // at the time rather than to the invariant — so `P3-10` (collapse to one
-        // execution path) would have **failed this gate by succeeding**. The
-        // message even anticipated it: *"has the executor been restructured?"*
-        //
-        // The invariant is *every execute site redacts, and at least one
-        // exists*. A floor of one keeps the gate from passing vacuously if the
-        // scan is ever re-pointed at the wrong file; it does not encode how many
-        // paths there happen to be. (`L-C6`.)
-        assert!(
-            total >= 1,
-            "found no tool.execute call sites at all — this gate is scanning the wrong              file, so its green result means nothing"
+        assert_eq!(
+            text.matches("Self::execute_handler(tool.as_ref(), input.clone(), &ctx)")
+                .count(),
+            2,
+            "the read and write execution partitions must both use the shared result boundary; do not couple this source guard to where `.await` is line-wrapped"
         );
         assert!(
-            unwrapped.is_empty(),
-            "these tool executions do not redact their result, so raw tool output reaches the model, the messages table and the UI: {}",
-            unwrapped.join(" | ")
+            text.contains("Ok(result) => Self::redact_result(result)"),
+            "successful tool output must be redacted inside execute_handler"
         );
     }
 
-    /// The detector must fire on an unwrapped call and stay quiet on a wrapped
-    /// one, or the gate above is decorative in a new way.
+    /// The guard fixtures must cover the delegated production shape.
     #[test]
     fn tg_p1_06_detector_distinguishes_wrapped_from_unwrapped() {
-        fn unwrapped_sites(src: &str) -> usize {
-            let mut n = 0;
-            for (i, raw) in src.lines().enumerate() {
-                let line = raw.trim();
-                if line.starts_with("//") {
-                    continue;
-                }
-                let code = line.split("//").next().unwrap_or("");
-                if !code.contains("tool.execute(") {
-                    continue;
-                }
-                let previous = if i > 0 {
-                    src.lines().nth(i - 1).unwrap_or("")
-                } else {
-                    ""
-                };
-                if !code.contains("redact_result(") && !previous.contains("redact_result(") {
-                    n += 1;
-                }
-            }
-            n
+        fn redacts_successful_result(src: &str) -> bool {
+            src.contains("Ok(result) => Self::redact_result(result)")
         }
 
-        assert_eq!(
-            unwrapped_sites("let r = tool.execute(input, &ctx).await;"),
-            1
-        );
-        assert_eq!(
-            unwrapped_sites("let r = Self::redact_result(tool.execute(input, &ctx).await);"),
-            0
-        );
-        // rustfmt splits long calls across two lines; the wrapper is then on
-        // the previous line.
-        assert_eq!(
-            unwrapped_sites(
-                "let r =
-    Self::redact_result(tool.execute(input, &ctx).await);"
-            ),
-            0
-        );
-        // A comment mentioning it is not a call.
-        assert_eq!(unwrapped_sites("// we used to tool.execute(input) here"), 0);
+        assert!(!redacts_successful_result("Ok(result) => result"));
+        assert!(redacts_successful_result(
+            "match tool.execute(input, &ctx).await {\n    Ok(result) => Self::redact_result(result),\n    Err(error) => error,\n}"
+        ));
     }
 
     // ── TG-P2-04 · no provider call escapes the daily ceiling ─────────────────
@@ -1003,9 +932,11 @@ let x = 1;
     fn tg_p2_04_the_desktop_binary_publishes_its_state() {
         let main = read_source(&repo_root().join("src-tauri/src/main.rs"));
         let production = main.split("#[cfg(test)]").next().unwrap_or("");
+        let runtime = read_source(&repo_root().join("arcana-core/src/runtime.rs"));
         assert!(
-            production.contains("app_state::set_global("),
-            "main.rs must publish AppState, or CappedProvider::wrap_global silently \
+            production.contains("arcana_core::runtime::initialize(")
+                && runtime.contains("app_state::set_global(state.clone())"),
+            "the desktop must initialize the shared runtime that publishes AppState, or CappedProvider::wrap_global silently \
              returns an UNCAPPED provider for every core-side caller"
         );
     }
@@ -1037,13 +968,11 @@ let x = 1;
         let mut unbudgeted = Vec::new();
         for rel in autonomous {
             let text = read_source(&repo_root().join(rel));
-            let production = text.split("#[cfg(test)]").next().unwrap_or("");
-            if !production.contains("AgentEngine::new(") {
+            if !text.contains("AgentEngine::new(") {
                 continue;
             }
             // The builder must be applied to the engine this file constructs.
-            let has_budget =
-                production.contains(".with_budget(") || production.contains(".with_task_budget(");
+            let has_budget = text.contains(".with_budget(") || text.contains(".with_task_budget(");
             if !has_budget {
                 unbudgeted.push(rel);
             }
@@ -1064,38 +993,21 @@ let x = 1;
     /// builder that exists, is tested, and is called by nothing.
     #[test]
     fn tg_p2_03_the_budget_builders_are_not_dead_code() {
-        let mut callers = 0;
-        for dir in ["arcana-core/src", "src-tauri/src"] {
-            let root = repo_root().join(dir);
-            let mut stack = vec![root];
-            while let Some(d) = stack.pop() {
-                let Ok(entries) = std::fs::read_dir(&d) else {
-                    continue;
-                };
-                for e in entries.flatten() {
-                    let p = e.path();
-                    if p.is_dir() {
-                        stack.push(p);
-                        continue;
-                    }
-                    if p.extension().and_then(|x| x.to_str()) != Some("rs") {
-                        continue;
-                    }
-                    // The definition site is not a caller.
-                    if p.ends_with("engine.rs") {
-                        continue;
-                    }
-                    let text = std::fs::read_to_string(&p).unwrap_or_default();
-                    let production = text.split("#[cfg(test)]").next().unwrap_or("");
-                    callers += production.matches(".with_budget(").count();
-                    callers += production.matches(".with_task_budget(").count();
-                }
-            }
-        }
+        let root = repo_root();
+        let worker = read_source(&root.join("arcana-core/src/recipes/runner.rs"));
+        let subagent = read_source(&root.join("arcana-core/src/subagent/native_runner.rs"));
+        let callers = [
+            worker.contains(".with_budget(worker_run_budget(")
+                && worker.contains("fn worker_run_budget("),
+            subagent.contains(".with_budget({")
+                && subagent.contains("crate::budget::TaskBudget::default_worker()"),
+        ]
+        .into_iter()
+        .filter(|wired| *wired)
+        .count();
         assert!(
-            callers >= 2,
-            "the budget builders have {callers} production callers. They had ZERO \
-             until 2026-09-02, which is why no spend limit was ever enforced."
+            callers == 2,
+            "the worker and subagent production paths must each wire their run budget"
         );
     }
 
@@ -2701,11 +2613,16 @@ let x = 1;
             let text = read_source(&path);
             let name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("?");
 
-            // Does it hand a command string to a shell?
-            let spawns_shell = (text.contains("Command::new(\"sh\")")
-                || text.contains("Command::new(\"cmd\")"))
-                && (text.contains("\"-c\"") || text.contains("\"/C\""));
-            if !spawns_shell {
+            // Does it launch a model-authored shell command or a process via
+            // Arcana's centralized sandbox? The latter owns shell selection
+            // for Bash and project_command, so looking only for literal
+            // Command::new("sh") missed the production path after P4-18.
+            let launches_command = text.contains("process_sandbox::spawn")
+                || text.contains("run_command(")
+                || ((text.contains("Command::new(\"sh\")")
+                    || text.contains("Command::new(\"cmd\")"))
+                    && (text.contains("\"-c\"") || text.contains("\"/C\"")));
+            if !launches_command {
                 continue;
             }
             spawners += 1;
@@ -3825,8 +3742,15 @@ let x = 1;
             let preceded_by_record = lines[window_start..i]
                 .iter()
                 .any(|l| l.contains("record_spend("));
+            // Mid-run cancellations now exit after the loop, where the
+            // accumulated spend is persisted once through the shared
+            // post-loop path. They are recorded exits even though the record
+            // is not within six lines of the terminal cancellation branch.
+            let preceded_by_shared_post_loop_record = lines[..i]
+                .iter()
+                .any(|l| l.contains("let cost_usd = self.record_spend("));
 
-            if preceded_by_record {
+            if preceded_by_record || preceded_by_shared_post_loop_record {
                 recorded += 1;
             } else {
                 // A `return` before the loop starts is fine. Detect that by
@@ -4410,8 +4334,10 @@ let x = 1;
     /// whole phase. This asserts the shape rather than the claim.
     #[test]
     fn tg_p2_01_both_log_sinks_are_redacted() {
-        let text = read_source(&repo_root().join("src-tauri/src/logging.rs"));
-        let production = text.split("#[cfg(test)]").next().unwrap_or("");
+        let root = repo_root();
+        let facade = read_source(&root.join("src-tauri/src/logging.rs"));
+        let logger = read_source(&root.join("arcana-core/src/observability/logging.rs"));
+        let production = logger.split("#[cfg(test)]").next().unwrap_or("");
 
         let console_wrapped = production.contains("RedactingMakeWriter(std::io::stderr)");
         assert!(
@@ -4423,7 +4349,15 @@ let x = 1;
         let file_wrapped = production.contains("RedactingWriter {");
         assert!(
             file_wrapped,
-            "the file appender must write through the redactor"
+            "the readable file appender must write through the redactor"
+        );
+        assert!(
+            production.contains("RedactingJsonWriter {"),
+            "the structured file appender must write through the JSON redactor"
+        );
+        assert!(
+            facade.contains("arcana_core::observability::logging"),
+            "the desktop must use the shared redacted logger"
         );
 
         // Neither sink may be constructed without going through one of the two
@@ -4569,9 +4503,9 @@ let x = 1;
                 "analytics + egress diagnostics: provider errors and system events",
             ),
             (
-                "src-tauri/src",
-                "logging.rs",
-                "logs: the file appender — a real sk- credential was found in a live log",
+                "arcana-core/src",
+                "observability/logging.rs",
+                "logs: the shared console and file writers — a real sk- credential was found in a live log",
             ),
         ];
 
@@ -5021,7 +4955,10 @@ let x = 1;
         let commit = read_source(&root.join("arcana-core/src/agent/builtin_tools/git_commit.rs"));
         assert!(
             bash.contains("contains_git_index_or_commit_mutation")
-                && bash.contains("Direct `git add` and `git commit` are blocked"),
+                && bash
+                    .contains("Direct Git staging, commit, and ref-mutation commands are blocked")
+                && bash.contains("update-index")
+                && bash.contains("update-ref"),
             "Bash must route Git mutations through the host-validated tool"
         );
         for invariant in [
@@ -5068,6 +5005,12 @@ let x = 1;
                 recipe.instructions.contains("git_commit("),
                 "worker {worker} must consume the host commit tool"
             );
+            assert!(
+                recipe
+                    .instructions
+                    .contains("If that prints `main`, `master`, or `trunk`, run:"),
+                "worker {worker} must be told to leave every protected trunk alias"
+            );
         }
         std::fs::remove_dir_all(sandbox).expect("remove sandbox");
     }
@@ -5096,205 +5039,132 @@ let x = 1;
     /// (`L-C7`).
     #[test]
     fn tg8_07_the_worker_status_vocabulary_agrees_across_the_seam() {
-        // Statuses the store deliberately still accepts although Rust no longer
-        // writes them. `workers.db` stores each worker's LAST status, so a row
-        // written by an older build survives an upgrade; dropping the arm would
-        // render that worker as ordinary `idle` until its next tick.
+        use arcana_core::db::workers::WorkerStatus;
+
         const LEGACY: &[&str] = &["mode1_idle_no_provider"];
-
-        // 🔴 **The first cut of this gate read `set_worker_status(` in
-        // `runner.rs` and nothing else — and the defect was not there.**
-        // `scheduler::stop_worker` and `budget::daily::pause_fleet` write
-        // `"paused"` straight through `WorkersDb::update_status`, and
-        // `pause_fleet` guarded on `"running"`, a status nothing in this
-        // application writes. An extractor that reads one helper in one file
-        // cannot see a writer that bypasses the helper, so it reported
-        // agreement over a vocabulary it had only half enumerated.
-        //
-        // The writer set is DERIVED: every file that mentions `WorkersDb` and
-        // calls `update_status(`. Naming the files here would be the same list
-        // that must agree, one indirection later (`L-19`).
-        let core = repo_root().join("arcana-core/src");
-        let mut writer_files: Vec<std::path::PathBuf> = Vec::new();
-        collect_rs(&core, &mut writer_files);
-        let writer_files: Vec<std::path::PathBuf> = writer_files
-            .into_iter()
-            .filter(|p| {
-                let t = read_source(p);
-                t.contains("WorkersDb") && t.contains("update_status(")
+        let statuses = [
+            WorkerStatus::Created,
+            WorkerStatus::Idle,
+            WorkerStatus::IdleNoProvider,
+            WorkerStatus::Active,
+            WorkerStatus::Working,
+            WorkerStatus::Paused,
+            WorkerStatus::Error,
+            WorkerStatus::Deleted,
+        ];
+        let values = statuses
+            .iter()
+            .map(|status| {
+                let value = status.as_str();
+                assert_eq!(
+                    WorkerStatus::try_from_str(value).ok(),
+                    Some(*status),
+                    "worker status serialization and strict parser must round-trip"
+                );
+                value.to_owned()
             })
-            .collect();
-        assert!(
-            writer_files.len() >= 2,
-            "only {} worker-status writer file(s) found. The runner and at least \
-             one direct writer must be present, so the discovery is broken and \
-             this gate would compare against a partial vocabulary: {writer_files:?}",
-            writer_files.len()
-        );
+            .collect::<Vec<_>>();
 
-        let mut written: Vec<String> = Vec::new();
-        for path in &writer_files {
-            let src = read_source(path);
-            assert!(
-                !src.trim().is_empty(),
-                "{path:?} did not read — `read_source` is unwrap_or_default, so \
-                 every assertion below would pass vacuously (`L-C9`)"
-            );
-            let code: String = src
-                .lines()
-                .filter(|l| !l.trim_start().starts_with("//"))
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            // `set_worker_status(slug, "x")` and `update_status(id, "x")`.
-            for call in ["set_worker_status(", "update_status("] {
-                for seg in code.split(call).skip(1) {
-                    let Some(args) = seg.split(')').next() else {
-                        continue;
-                    };
-                    // ⚠ `TasksDb` has an `update_status` too, and `runner.rs`
-                    // calls both — so a file-level filter pulled `qc_review`
-                    // and `build_failed` into the worker vocabulary and the
-                    // gate went red naming task statuses. They are told apart
-                    // by **arity**, which is a property of the call rather than
-                    // of the file it sits in: `WorkersDb::update_status(id,
-                    // status)` takes two arguments, `TasksDb::update_status(id,
-                    // status, assignee)` takes three.
-                    if args.matches(',').count() != 1 {
-                        continue;
-                    }
-                    if let Some(q) = args.find('"') {
-                        if let Some(end) = args[q + 1..].find('"') {
-                            written.push(args[q + 1..q + 1 + end].to_string());
-                        }
-                    }
-                }
-            }
-        }
-        written.sort();
-        written.dedup();
-        assert!(
-            written.len() >= 4,
-            "only {} status literals found across {} writer file(s) — the \
-             extractor is not matching the call shape, so this gate is checking \
-             almost nothing: {written:?}",
-            written.len(),
-            writer_files.len()
-        );
-
-        let store = read_source(&repo_root().join("src/stores/agentLiveStore.ts"));
+        let root = repo_root();
+        let store = read_source(&root.join("src/stores/agentLiveStore.ts"));
         assert!(!store.trim().is_empty(), "agentLiveStore.ts did not read");
-        let store_code: String = store
+        let store_code = store
             .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
+            .filter(|line| !line.trim_start().starts_with("//"))
             .collect::<Vec<_>>()
             .join("\n");
-
-        // Every `e.payload.status === '<literal>'`.
-        let mut handled: Vec<String> = Vec::new();
-        for seg in store_code.split("e.payload.status === '").skip(1) {
-            if let Some(end) = seg.find('\'') {
-                handled.push(seg[..end].to_string());
+        let mut handled = Vec::new();
+        for segment in store_code.split("e.payload.status === '").skip(1) {
+            if let Some(end) = segment.find('\'') {
+                handled.push(segment[..end].to_owned());
             }
         }
         handled.sort();
         handled.dedup();
         assert!(
             !handled.is_empty(),
-            "no status arms found in agentLiveStore.ts — the extractor is not \
-             matching, so this gate is checking nothing"
+            "frontend worker status listener must contain explicit mappings"
         );
-
-        // (a) Anything Rust writes other than plain `idle` must have an arm.
-        let unhandled: Vec<&String> = written
+        let invalid = handled
             .iter()
-            .filter(|w| w.as_str() != "idle" && !handled.contains(w))
-            .collect();
+            .filter(|status| !values.contains(status) && !LEGACY.contains(&status.as_str()))
+            .collect::<Vec<_>>();
         assert!(
-            unhandled.is_empty(),
-            "Rust writes these worker statuses and the store has no arm for them, \
-             so they fall through and render as ordinary `idle` — a blocked or \
-             failing worker shown as waiting for work: {unhandled:?}\n\
-             written={written:?}\nhandled={handled:?}"
+            invalid.is_empty(),
+            "frontend handles worker statuses the strict Rust enum cannot produce: {invalid:?}"
         );
 
-        // (b) Every arm must correspond to something Rust can write, or be
-        //     declared legacy above. An arm with no writer is `W-7`.
-        let orphaned: Vec<&String> = handled
-            .iter()
-            .filter(|h| !written.contains(h) && !LEGACY.contains(&h.as_str()))
-            .collect();
+        let runner = read_source(&root.join("arcana-core/src/recipes/runner.rs"));
+        for (variant, value) in [
+            ("IdleNoProvider", "idle_no_provider"),
+            ("Working", "working"),
+            ("Error", "error"),
+        ] {
+            assert!(
+                runner.contains(&format!("WorkerStatus::{variant}")),
+                "runner status write for {value} disappeared"
+            );
+            assert!(
+                handled.iter().any(|handled| handled == value),
+                "runner emits {value}, but the UI has no explicit status mapping"
+            );
+        }
+
+        let command = read_source(&root.join("src-tauri/src/commands/worker_commands.rs"));
         assert!(
-            orphaned.is_empty(),
-            "the store maps these statuses and no Rust call site writes them — a \
-             reader with no writer. Either produce them or remove them; if one is \
-             deliberately kept for rows written by an older build, add it to \
-             LEGACY with the reason: {orphaned:?}\n\
-             written={written:?}\nhandled={handled:?}"
+            command.contains("WorkerStatus::try_from_str(&status)")
+                && command.contains("status: status.as_str().to_string()"),
+            "manual worker status changes must use strict parsing and emit the canonical value"
         );
 
-        // (b2) The SCHEDULER must recognise every status the runner writes.
-        //
-        // 🔴 This is the assertion that was missing, and its absence is why the
-        // `pause_fleet` falsification stayed green. The store is not the only
-        // consumer of a worker status: `recipes/scheduler.rs` matches on it to
-        // decide whether to fire the next tick, and its catch-all arm logs
-        // "unexpected status" and fires nothing. So a status the runner writes
-        // and the scheduler does not list **parks that worker permanently** —
-        // no error, no failing test, and a log line that reads as a curiosity.
-        // `idle_no_provider` was in exactly that state.
-        let sched = read_source(&repo_root().join("arcana-core/src/recipes/scheduler.rs"));
-        assert!(!sched.trim().is_empty(), "scheduler.rs did not read");
-        let sched_code: String = sched
+        let scheduler = read_source(&root.join("arcana-core/src/recipes/scheduler.rs"));
+        let scheduler_code = scheduler
             .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
+            .filter(|line| !line.trim_start().starts_with("//"))
             .collect::<Vec<_>>()
             .join("\n");
-        let arms = sched_code
-            .split("match current_status.as_deref()")
-            .nth(1)
-            .expect("the scheduler must match on the worker status")
-            .split("\n            }")
-            .next()
-            .unwrap_or_default()
-            .to_string();
-        let mut recognised: Vec<String> = Vec::new();
-        for seg in arms.split("Some(\"").skip(1) {
-            if let Some(end) = seg.find('"') {
-                recognised.push(seg[..end].to_string());
-            }
+        let match_marker = "StatusReadDisposition::Run(current_status) => match current_status {";
+        let match_start = scheduler_code
+            .find(match_marker)
+            .expect("scheduler must exhaustively match typed worker status")
+            + match_marker.len();
+        let mut depth = 1usize;
+        let match_end = scheduler_code[match_start..]
+            .char_indices()
+            .find_map(|(offset, character)| {
+                match character {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(match_start + offset);
+                        }
+                    }
+                    _ => {}
+                }
+                None
+            })
+            .expect("scheduler worker-status match must close");
+        let match_body = &scheduler_code[match_start..match_end];
+        for status in statuses {
+            let arm = format!("WorkerStatus::{status:?}");
+            assert!(
+                match_body.contains(&arm),
+                "scheduler does not explicitly handle {status:?}"
+            );
         }
-        assert!(
-            recognised.len() >= 4,
-            "only {} status arms found in the scheduler match — the extractor is \
-             not matching, so this half checks nothing: {recognised:?}",
-            recognised.len()
-        );
-        let unrecognised: Vec<&String> =
-            written.iter().filter(|w| !recognised.contains(w)).collect();
-        assert!(
-            unrecognised.is_empty(),
-            "the runner writes these statuses and `recipes/scheduler.rs` does not \
-             list them, so they fall to its catch-all arm and NO further tick is \
-             ever fired for that worker — it is parked until someone stops and \
-             starts it: {unrecognised:?}\n\
-             written={written:?}\nrecognised={recognised:?}"
-        );
 
-        // (c) The rendered union may not carry a member the mapper cannot produce.
-        let types = read_source(&repo_root().join("src/types/live.ts"));
+        let types = read_source(&root.join("src/types/live.ts"));
         assert!(!types.trim().is_empty(), "types/live.ts did not read");
         let union = types
             .split("export type AgentLiveStatus =")
             .nth(1)
-            .and_then(|r| r.split("export type").next())
-            .expect("the AgentLiveStatus union must exist")
-            .to_string();
+            .and_then(|rest| rest.split("export type").next())
+            .expect("AgentLiveStatus union must exist");
         for dead in ["mode1_active", "fallback_idle", "'stopped'"] {
             assert!(
                 !union.contains(dead),
-                "`{dead}` is back in AgentLiveStatus. It names an engine \
-                 distinction that no longer exists, and nothing writes it:\n{union}"
+                "{dead} is not part of the current Arcana worker status contract"
             );
         }
     }

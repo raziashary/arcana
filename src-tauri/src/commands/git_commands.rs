@@ -209,23 +209,34 @@ pub fn git_stash_drop(repo_path: String, index: usize) -> Result<()> {
 #[tauri::command]
 pub fn create_checkpoint(
     session_id: String,
+    task_id: Option<i64>,
     file_path: String,
     reason: String,
 ) -> Result<Option<CheckpointInfo>> {
-    checkpoint::create(&session_id, &file_path, &reason)
+    checkpoint::create_within_workspace(
+        &session_id,
+        task_id,
+        &file_path,
+        &reason,
+        &crate::commands::workspace_commands::load_workspace_dir(),
+    )
 }
 
 #[tauri::command]
 pub fn restore_checkpoint(checkpoint_id: String) -> Result<RestoreResult> {
-    checkpoint::restore(&checkpoint_id)
+    checkpoint::restore_within_workspace(
+        &checkpoint_id,
+        &crate::commands::workspace_commands::load_workspace_dir(),
+    )
 }
 
 #[tauri::command]
 pub fn list_checkpoints(
     file_path: Option<String>,
     session_id: Option<String>,
+    task_id: Option<i64>,
 ) -> Result<Vec<CheckpointInfo>> {
-    checkpoint::list(file_path.as_deref(), session_id.as_deref())
+    checkpoint::list(file_path.as_deref(), session_id.as_deref(), task_id)
 }
 
 #[tauri::command]

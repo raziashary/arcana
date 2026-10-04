@@ -952,14 +952,16 @@ First verify Playwright is installed:
 ```bash
 npx playwright --version
 ```
-If not installed, run: `npx playwright install chromium`
+If Playwright is missing, report that prerequisite and ask before installing it.
 
 ## Screenshot (if screenshot = true)
 Take a full-page screenshot of {{url}}:
 ```bash
-npx playwright screenshot --full-page {{url}} /tmp/arcana-screenshot-$(date +%s).png
+npx playwright screenshot --full-page {{url}} arcana-screenshot.png
 ```
-Report the saved path in your response.
+The output path is relative to the project workspace. Check that the filename
+is unused before running; if it already exists, choose another workspace-relative
+filename. Report the saved path in your response.
 
 ## Visual Regression / E2E Tests
 {{#if test_file}}
@@ -986,3 +988,61 @@ Always return:
 3. For each failure: the test name, selector used, expected value, and actual value
 4. Overall verdict: PASS or FAIL
 "#;
+
+#[cfg(test)]
+mod tg4_17_tests {
+    use super::*;
+
+    #[test]
+    fn built_in_skill_templates_do_not_embed_posix_paths_or_shell_expansion() {
+        let templates = [
+            FEATURE_IMPLEMENTATION,
+            API_ENDPOINT,
+            REFACTORING,
+            CODE_REVIEW,
+            TEST_ADDITION,
+            DATABASE_MIGRATION,
+            ERROR_INVESTIGATION,
+            PERFORMANCE_OPTIMIZATION,
+            RACE_CONDITION_DEBUG,
+            DOCKER_SETUP,
+            CI_PIPELINE_FIX,
+            DEPENDENCY_UPDATE,
+            WORKER_TASK_EXECUTION,
+            SUPERVISOR_ORCHESTRATION,
+            QC_REVIEW,
+            EPIC_BREAKDOWN,
+            BROWSER_TEST,
+        ];
+        for template in templates {
+            assert!(
+                !template.contains("/tmp/"),
+                "built-in skill contains a hardcoded POSIX temporary path"
+            );
+            assert!(
+                !template.contains("$(") && !template.contains("$?"),
+                "built-in skill contains POSIX shell substitution or exit syntax"
+            );
+            assert!(
+                !template.contains("2>&1") && !template.contains("| tee "),
+                "built-in skill contains a shell redirection or pipeline"
+            );
+            let mut in_shell_block = false;
+            for line in template.lines() {
+                let line = line.trim();
+                if line == "```bash" || line == "```sh" {
+                    in_shell_block = true;
+                } else if in_shell_block && line == "```" {
+                    in_shell_block = false;
+                } else if in_shell_block {
+                    for fragment in ["&&", ";", "`", "$?", "$(", "2>&1", "| tee ", "&"] {
+                        assert!(
+                            !line.contains(fragment),
+                            "built-in skill embeds non-portable shell command fragment {fragment:?}: {line}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

@@ -7,11 +7,7 @@
 // Stored as a plain path string in ~/.arcana/config.db (app_settings table).
 // See: DEVELOPMENT_PLAN.md — Workspace Folder feature
 
-use crate::db::arcana_dir;
-use crate::errors::{ArcanaError, Result};
-use rusqlite::{params, Connection, OptionalExtension};
-
-const WORKSPACE_KEY: &str = "workspace_dir";
+use crate::errors::Result;
 
 // ─── Storage helpers ──────────────────────────────────────────────────────────
 
@@ -26,37 +22,22 @@ const WORKSPACE_KEY: &str = "workspace_dir";
 /// Returns an empty string if none is set.
 #[tauri::command]
 pub fn get_workspace_dir() -> Result<String> {
-    let conn = crate::db::app_settings::open()?;
-    let row: Option<String> = conn
-        .query_row(
-            "SELECT value FROM app_settings WHERE key = ?1",
-            params![WORKSPACE_KEY],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(|e| ArcanaError::Agent(format!("get_workspace_dir: {e}")))?;
-
-    Ok(row.unwrap_or_default())
+    Ok(crate::db::app_settings::get(crate::db::app_settings::WORKSPACE_KEY)?.unwrap_or_default())
 }
 
 /// Persist the workspace directory path.
 /// Pass an empty string to clear the workspace.
 #[tauri::command]
 pub fn set_workspace_dir(path: String) -> Result<()> {
-    let conn = crate::db::app_settings::open()?;
     if path.is_empty() {
-        conn.execute(
-            "DELETE FROM app_settings WHERE key = ?1",
-            params![WORKSPACE_KEY],
-        )
-        .map_err(|e| ArcanaError::Agent(format!("clear_workspace_dir: {e}")))?;
+        crate::db::app_settings::delete(crate::db::app_settings::WORKSPACE_KEY)?;
     } else {
-        conn.execute(
-            "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![WORKSPACE_KEY, &path],
-        )
-        .map_err(|e| ArcanaError::Agent(format!("set_workspace_dir: {e}")))?;
+        let resolved = arcana_core::platform::workspace::resolve_workspace_dir(Some(&path))?;
+        let canonical_path = resolved.to_string_lossy();
+        crate::db::app_settings::set(
+            crate::db::app_settings::WORKSPACE_KEY,
+            canonical_path.as_ref(),
+        )?;
     }
     Ok(())
 }
@@ -73,14 +54,15 @@ pub async fn pick_workspace_dir() -> Result<Option<String>> {
     Ok(handle.map(|f| f.path().to_string_lossy().into_owned()))
 }
 
-// ─── Internal helper (used by RecipeRunner + agent_commands) ──────────────────
+// ─── Compatibility helper for UI display/search consumers ────────────────────
 
 /// The configured workspace directory, or an empty string when unset.
 ///
 /// Delegates to `arcana_core::db::app_settings`, the single owner of
 /// `config.db`'s `app_settings` table. This function used to hold its own copy
 /// of the query, which is how a database accessor came to live in the command
-/// layer and put `recipes/` behind `commands/` (ADR-LOG-RESTRUCT-0015).
+/// layer and put `recipes/` behind `commands/` (ADR-LOG-RESTRUCT-0015). Agent
+/// execution must use the strict platform workspace resolver instead.
 pub fn load_workspace_dir() -> String {
     arcana_core::db::app_settings::load_workspace_dir()
 }

@@ -173,13 +173,22 @@ pub fn restore_recipe_backup(recipe_id: String, backup_filename: String) -> Resu
         )));
     }
 
-    // Before restoring, backup current version
-    backup_recipe_file(&recipe_id)?;
+    // Validate the backed-up artifact before replacing a working recipe.
+    // Backups are persisted user content and may predate portability checks.
+    let yaml = std::fs::read_to_string(&backup_path)?;
+    let recipe = parse_recipe(&yaml)?;
+    if recipe.id != recipe_id {
+        return Err(ArcanaError::Agent(format!(
+            "Backup recipe id '{}' does not match requested recipe '{recipe_id}'",
+            recipe.id
+        )));
+    }
 
+    // Before restoring, back up current version. save_recipe performs the same
+    // validation at the final write boundary.
+    backup_recipe_file(&recipe_id)?;
     let dir = recipes_dir()?;
-    let dst = dir.join(format!("{recipe_id}.yaml"));
-    std::fs::copy(&backup_path, &dst)?;
-    Ok(())
+    save_recipe(&dir, &recipe)
 }
 
 // ─── AI-Assisted Recipe Generation ────────────────────────────────────────────

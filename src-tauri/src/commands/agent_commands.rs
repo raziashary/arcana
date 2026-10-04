@@ -1,16 +1,12 @@
 // Agent commands — send messages, cancel, respond to permission dialogs.
 
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, State};
+use tauri::State;
 use tracing::info;
 
 use crate::agent::engine::AgentEngine;
 use crate::agent::permission::{PendingPermissions, PermissionMode, PermissionResponse};
 use crate::errors::{ArcanaError, Result};
-use crate::provider::anthropic::AnthropicProvider;
-use crate::provider::google::GoogleProvider;
-use crate::provider::openai::OpenAIProvider;
-use crate::provider::traits::Provider;
 use crate::session::{manager::SessionManager, types::Message};
 use crate::state::AppState;
 use crate::vault::keychain::{provider_key, VaultManager};
@@ -95,7 +91,6 @@ pub async fn send_message(
     // difference is not the VALUE, it is whether a human just chose it, and
     // only the caller knows that. So the caller says so, in a separate field.
     pa_mode_override: Option<String>,
-    app: AppHandle,
     state: State<'_, Arc<Mutex<AppState>>>,
     session_mgr: State<'_, Arc<SessionManager>>,
     pending_perms: State<'_, PendingPermissions>,
@@ -172,7 +167,6 @@ pub async fn send_message(
     let history = build_history(&session.messages);
 
     // Spawn agent in background; events streamed to frontend
-    let app_clone = app.clone();
     let state_clone = state.inner().clone();
     let session_mgr_clone = session_mgr.inner().clone();
     let session_id_c = session_id.clone();
@@ -257,7 +251,8 @@ pub async fn send_message(
             // shipped recipes give it (recipes/defaults.rs:217).
             crate::agent::tool_trait::AgentIdentity::supervisor(),
         )
-        .with_session_manager(session_mgr_clone.clone());
+        .with_session_manager(session_mgr_clone.clone())
+        .with_workspace_egress_consent();
 
         // ── P3-02/P3-03 · the turn is contained, and the flag always clears ──
         //

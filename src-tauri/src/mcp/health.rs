@@ -90,6 +90,7 @@ impl McpHealthMonitor {
     /// Register an external MCP server for health monitoring.
     /// If endpoint starts with "http" it will be polled; otherwise it's treated as stdio.
     pub async fn register_server(&self, name: &str, endpoint: &str) {
+        let started = Instant::now();
         let transport = if endpoint.starts_with("http") {
             "http"
         } else {
@@ -115,16 +116,33 @@ impl McpHealthMonitor {
             .write()
             .await
             .insert(name.to_string(), health);
-        info!(
-            "[mcp-health] registered '{}' ({} {})",
-            name, transport, endpoint
+        info!("[mcp-health] registered '{}' ({})", name, transport);
+        tracing::info!(
+            target: "arcana::telemetry",
+            event_type = "mcp_connector_lifecycle",
+            server_name = %name,
+            transport,
+            operation = "registered",
+            duration_ns = started.elapsed().as_nanos() as u64,
+            outcome = "success",
+            "MCP connector registered"
         );
     }
 
     /// Remove a server from the registry (e.g. when user removes it from Settings).
     pub async fn unregister_server(&self, name: &str) {
+        let started = Instant::now();
         self.connections.write().await.remove(name);
         info!("[mcp-health] unregistered '{}'", name);
+        tracing::info!(
+            target: "arcana::telemetry",
+            event_type = "mcp_connector_lifecycle",
+            server_name = %name,
+            operation = "unregistered",
+            duration_ns = started.elapsed().as_nanos() as u64,
+            outcome = "success",
+            "MCP connector unregistered"
+        );
     }
 
     /// Return the current health snapshot of all registered servers.
@@ -135,11 +153,21 @@ impl McpHealthMonitor {
     /// Trigger a single reconnect attempt for the named server.
     /// Called by the `force_reconnect_mcp` Tauri command.
     pub async fn force_reconnect(&self, name: &str, app: &AppHandle) {
+        let started = Instant::now();
         let endpoint = {
             let guard = self.connections.read().await;
             guard.get(name).map(|h| h.endpoint.clone())
         };
         if let Some(ep) = endpoint {
+            tracing::info!(
+                target: "arcana::telemetry",
+                event_type = "mcp_connector_lifecycle",
+                server_name = %name,
+                operation = "force_reconnect_requested",
+                duration_ns = started.elapsed().as_nanos() as u64,
+                outcome = "requested",
+                "MCP connector reconnect requested"
+            );
             // Reset failure count so the next ping won't immediately re-disconnect
             {
                 let mut guard = self.connections.write().await;
@@ -185,6 +213,7 @@ impl McpHealthMonitor {
     // ── Ping ────────────────────────────────────────────────────────────────────
 
     async fn ping_server(&self, name: &str) -> Result<PingResult, PingError> {
+        let started = Instant::now();
         let (endpoint, transport) = {
             let guard = self.connections.read().await;
             match guard.get(name) {
@@ -195,6 +224,15 @@ impl McpHealthMonitor {
 
         if transport == "stdio" {
             // Cannot ping stdio — consider healthy by assumption
+            tracing::info!(
+                target: "arcana::telemetry",
+                event_type = "mcp_health_check",
+                server_name = %name,
+                transport = "stdio",
+                duration_ns = started.elapsed().as_nanos() as u64,
+                outcome = "not_monitored",
+                "MCP health check skipped for stdio transport"
+            );
             return Ok(PingResult { latency_ms: 0 });
         }
 
@@ -205,12 +243,11 @@ impl McpHealthMonitor {
             format!("{}/health", endpoint)
         };
 
-        let start = Instant::now();
-        match self.http_client.get(&url).send().await {
+        let result = match self.http_client.get(&url).send().await {
             Ok(resp) if resp.status().is_success() || resp.status().as_u16() == 404 => {
                 // 404 on /health = server is up but has no health endpoint (fine)
                 Ok(PingResult {
-                    latency_ms: start.elapsed().as_millis() as u64,
+                    latency_ms: started.elapsed().as_millis() as u64,
                 })
             }
             Ok(resp) => Err(PingError::InvalidResponse(format!(
@@ -219,8 +256,21 @@ impl McpHealthMonitor {
             ))),
             Err(e) if e.is_timeout() => Err(PingError::Timeout),
             Err(e) if e.is_connect() => Err(PingError::ConnectionRefused),
-            Err(e) => Err(PingError::InvalidResponse(e.to_string())),
-        }
+            // Reqwest errors can include the full endpoint URL, including
+            // userinfo or query credentials. Keep the visible failure useful
+            // without reflecting connection strings into health events.
+            Err(_) => Err(PingError::InvalidResponse("request failed".into())),
+        };
+        tracing::info!(
+            target: "arcana::telemetry",
+            event_type = "mcp_health_check",
+            server_name = %name,
+            transport = "http",
+            duration_ns = started.elapsed().as_nanos() as u64,
+            outcome = result.as_ref().err().map(ping_error_code).unwrap_or("success"),
+            "MCP health check completed"
+        );
+        result
     }
 
     // ── Process ping result ──────────────────────────────────────────────────────
@@ -231,7 +281,7 @@ impl McpHealthMonitor {
         result: Result<PingResult, PingError>,
         app: &AppHandle,
     ) {
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = arcana_core::db::timestamps::now_rfc3339();
 
         let mut guard = self.connections.write().await;
         let health = match guard.get_mut(name) {
@@ -310,7 +360,11 @@ impl McpHealthMonitor {
                     PingError::ConnectionRefused => "connection refused".to_string(),
                     PingError::InvalidResponse(s) => s.clone(),
                 };
-                debug!("[mcp-health] ping '{}' failed: {}", name, err_str);
+                debug!(
+                    "[mcp-health] ping '{}' failed ({})",
+                    name,
+                    ping_error_code(&e)
+                );
 
                 health.last_ping_at = Some(now);
                 health.error_message = Some(err_str.clone());
@@ -335,7 +389,6 @@ impl McpHealthMonitor {
                         crate::events::EVT_MCP_CONNECTION_LOST,
                         &serde_json::json!({
                             "server_name":           name_owned,
-                            "endpoint":              endpoint,
                             "consecutive_failures":  threshold,
                         }),
                     );
@@ -414,12 +467,25 @@ impl McpHealthMonitor {
         };
 
         let start = Instant::now();
-        let ok = match http_client.get(&url).send().await {
-            Ok(resp) => resp.status().is_success() || resp.status().as_u16() == 404,
-            Err(_) => false,
+        let result = match http_client.get(&url).send().await {
+            Ok(resp) if resp.status().is_success() || resp.status().as_u16() == 404 => Ok(()),
+            Ok(_) => Err("http_status"),
+            Err(error) if error.is_timeout() => Err("timeout"),
+            Err(error) if error.is_connect() => Err("connection_refused"),
+            Err(_) => Err("request_error"),
         };
 
-        if ok {
+        tracing::info!(
+            target: "arcana::telemetry",
+            event_type = "mcp_reconnect_attempt",
+            server_name = %name,
+            attempt = 1_u64,
+            duration_ns = start.elapsed().as_nanos() as u64,
+            outcome = result.as_ref().err().copied().unwrap_or("success"),
+            "MCP reconnect attempt completed"
+        );
+
+        if result.is_ok() {
             let latency = start.elapsed().as_millis() as u64;
             let mut guard = connections.write().await;
             if let Some(h) = guard.get_mut(name) {
@@ -427,7 +493,7 @@ impl McpHealthMonitor {
                 h.consecutive_failures = 0;
                 h.error_message = None;
                 h.avg_latency_ms = latency as f64;
-                h.last_success_at = Some(chrono::Utc::now().to_rfc3339());
+                h.last_success_at = Some(arcana_core::db::timestamps::now_rfc3339());
             }
             drop(guard);
             let _ = app.emit(
@@ -445,5 +511,33 @@ impl McpHealthMonitor {
                 }),
             );
         }
+    }
+}
+
+fn ping_error_code(error: &PingError) -> &'static str {
+    match error {
+        PingError::Timeout => "timeout",
+        PingError::ConnectionRefused => "connection_refused",
+        PingError::InvalidResponse(_) => "invalid_response",
+    }
+}
+
+#[cfg(test)]
+mod observability_tests {
+    use super::*;
+
+    #[test]
+    fn ping_telemetry_uses_bounded_error_categories() {
+        assert_eq!(ping_error_code(&PingError::Timeout), "timeout");
+        assert_eq!(
+            ping_error_code(&PingError::ConnectionRefused),
+            "connection_refused"
+        );
+        assert_eq!(
+            ping_error_code(&PingError::InvalidResponse(
+                "https://connector.invalid?token=private".into()
+            )),
+            "invalid_response"
+        );
     }
 }
