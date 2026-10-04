@@ -810,6 +810,162 @@ impl AnalyticsDb {
         Ok(changed)
     }
 
+    /// Prune raw analytics detail older than `cutoff` while keeping the
+    /// already-produced daily cost history intact. Invalid timestamps fail
+    /// closed so cleanup cannot silently misclassify row age.
+    pub fn prune_append_only_before(&self, cutoff: &str) -> Result<usize> {
+        let mut operation =
+            OperationTimer::start("database_analytics_retention_prune").with_database("analytics");
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| ArcanaError::Agent(format!("Mutex lock failed: {e}")))?;
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(ArcanaError::Database)?;
+        let invalid_rows: i64 = tx
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM token_usage WHERE julianday(timestamp) IS NULL)
+                      + (SELECT COUNT(*) FROM system_events WHERE julianday(timestamp) IS NULL)
+                      + (SELECT COUNT(*) FROM api_failures WHERE julianday(timestamp) IS NULL)",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(ArcanaError::Database)?;
+        if invalid_rows > 0 {
+            return Err(ArcanaError::Agent(
+                "Analytics retention refused rows with invalid timestamps".into(),
+            ));
+        }
+
+        struct DailySummary {
+            sessions: i64,
+            total_cost: f64,
+            total_tokens: i64,
+            message_count: i64,
+            tool_call_count: i64,
+            provider_costs: HashMap<String, f64>,
+            agent_costs: HashMap<String, f64>,
+        }
+        let mut daily_summaries = HashMap::<String, DailySummary>::new();
+        {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT date(timestamp, 'localtime'), SUM(cost_usd), SUM(total_tokens),
+                            COUNT(DISTINCT session_id), COUNT(*),
+                            SUM(CASE WHEN request_type = 'tool_use' THEN 1 ELSE 0 END)
+                       FROM token_usage
+                      WHERE julianday(timestamp) < julianday(?1)
+                      GROUP BY date(timestamp, 'localtime')",
+                )
+                .map_err(ArcanaError::Database)?;
+            let rows = stmt
+                .query_map([cutoff], |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, f64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                    ))
+                })
+                .map_err(ArcanaError::Database)?;
+            for row in rows {
+                let (date, total_cost, total_tokens, sessions, message_count, tool_calls) =
+                    row.map_err(ArcanaError::Database)?;
+                let date = date.ok_or_else(|| {
+                    ArcanaError::Agent(
+                        "Analytics retention could not derive token usage date".into(),
+                    )
+                })?;
+                daily_summaries.insert(
+                    date,
+                    DailySummary {
+                        sessions,
+                        total_cost,
+                        total_tokens,
+                        message_count,
+                        tool_call_count: tool_calls,
+                        provider_costs: HashMap::new(),
+                        agent_costs: HashMap::new(),
+                    },
+                );
+            }
+        }
+        for (column, target) in [("provider", true), ("agent_type", false)] {
+            let sql = format!(
+                "SELECT date(timestamp, 'localtime'), {column}, SUM(cost_usd)
+                   FROM token_usage
+                  WHERE julianday(timestamp) < julianday(?1)
+                  GROUP BY date(timestamp, 'localtime'), {column}"
+            );
+            let mut stmt = tx.prepare(&sql).map_err(ArcanaError::Database)?;
+            let rows = stmt
+                .query_map([cutoff], |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, f64>(2)?,
+                    ))
+                })
+                .map_err(ArcanaError::Database)?;
+            for row in rows {
+                let (date, key, cost) = row.map_err(ArcanaError::Database)?;
+                let date = date.ok_or_else(|| {
+                    ArcanaError::Agent(
+                        "Analytics retention could not derive token usage date".into(),
+                    )
+                })?;
+                let summary = daily_summaries.get_mut(&date).ok_or_else(|| {
+                    ArcanaError::Agent("Analytics retention summary was inconsistent".into())
+                })?;
+                let breakdown = if target {
+                    &mut summary.provider_costs
+                } else {
+                    &mut summary.agent_costs
+                };
+                breakdown.insert(key, cost);
+            }
+        }
+        for (date, summary) in daily_summaries {
+            let provider_breakdown = serde_json::to_string(&summary.provider_costs)
+                .map_err(|e| ArcanaError::Agent(format!("Analytics retention summary: {e}")))?;
+            let agent_breakdown = serde_json::to_string(&summary.agent_costs)
+                .map_err(|e| ArcanaError::Agent(format!("Analytics retention summary: {e}")))?;
+            tx.execute(
+                "INSERT OR REPLACE INTO daily_costs
+                    (date, total_cost_usd, total_tokens, session_count, message_count,
+                     tool_call_count, provider_breakdown, agent_type_breakdown)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    date,
+                    summary.total_cost,
+                    summary.total_tokens,
+                    summary.sessions,
+                    summary.message_count,
+                    summary.tool_call_count,
+                    provider_breakdown,
+                    agent_breakdown,
+                ],
+            )
+            .map_err(ArcanaError::Database)?;
+        }
+
+        let mut deleted = 0usize;
+        for sql in [
+            "DELETE FROM token_usage WHERE julianday(timestamp) < julianday(?1)",
+            "DELETE FROM system_events WHERE julianday(timestamp) < julianday(?1)",
+            "DELETE FROM api_failures WHERE julianday(timestamp) < julianday(?1)",
+        ] {
+            deleted += tx.execute(sql, [cutoff]).map_err(ArcanaError::Database)?;
+        }
+        tx.commit().map_err(ArcanaError::Database)?;
+        operation = operation.with_result_count(deleted);
+        operation.succeed();
+        Ok(deleted)
+    }
+
     /// Aggregate worker stats for a single worker over a date range.
     /// Returns summed tasks_completed, tasks_failed, time_spent_minutes, cost_usd
     /// and a calculated success_rate. Returns None if no rows exist for the range.
@@ -1476,6 +1632,200 @@ fn parse_optional_timestamp(
 }
 
 #[cfg(test)]
+mod append_only_retention_tests {
+    use super::*;
+
+    async fn database() -> (tempfile::TempDir, AnalyticsDb) {
+        let directory = tempfile::tempdir().expect("isolated analytics database directory");
+        let db = AnalyticsDb::new_at(&directory.path().join("analytics.db"))
+            .await
+            .expect("open production analytics database");
+        (directory, db)
+    }
+
+    fn insert_rows(db: &AnalyticsDb, table: &str, timestamp: &str) {
+        let conn = db.conn.lock().expect("analytics connection");
+        match table {
+            "token_usage" => {
+                conn.execute(
+                    "INSERT INTO token_usage (timestamp, session_id, agent_type, provider, model,
+                         prompt_tokens, completion_tokens, total_tokens, cost_usd, request_type)
+                     VALUES (?1, 'session', 'worker', 'google', 'gemini', 2, 3, 5, 0.01, 'chat')",
+                    [timestamp],
+                )
+                .expect("insert token usage");
+            }
+            "system_events" => {
+                conn.execute(
+                    "INSERT INTO system_events (timestamp, component, event_type, message, severity)
+                     VALUES (?1, 'test', 'event', 'detail', 'info')",
+                    [timestamp],
+                )
+                .expect("insert system event");
+            }
+            "api_failures" => {
+                conn.execute(
+                    "INSERT INTO api_failures (timestamp, provider, error_type, error_message)
+                     VALUES (?1, 'google', 'test', 'detail')",
+                    [timestamp],
+                )
+                .expect("insert API failure");
+            }
+            _ => panic!("unhandled test table"),
+        }
+    }
+
+    #[tokio::test]
+    async fn raw_analytics_retention_prunes_strictly_before_cutoff_and_keeps_daily_history() {
+        let (_directory, db) = database().await;
+        let cutoff = "2026-07-06T12:00:00Z";
+        for table in ["token_usage", "system_events", "api_failures"] {
+            insert_rows(&db, table, "2026-07-06T11:59:59Z");
+            insert_rows(&db, table, cutoff);
+            insert_rows(&db, table, "2026-07-06T12:00:01Z");
+        }
+        db.conn
+            .lock()
+            .expect("analytics connection")
+            .execute(
+                "INSERT INTO daily_costs (date, total_cost_usd, total_tokens, session_count,
+                    message_count, tool_call_count) VALUES ('2026-01-01', 0.01, 5, 1, 1, 0)",
+                [],
+            )
+            .expect("seed historical daily cost aggregate");
+
+        assert_eq!(
+            db.prune_append_only_before(cutoff).expect("prune raw data"),
+            3
+        );
+        let conn = db.conn.lock().expect("analytics connection");
+        for table in ["token_usage", "system_events", "api_failures"] {
+            let count: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .expect("count retained rows");
+            assert_eq!(count, 2, "cutoff and newer rows remain in {table}");
+        }
+        let historical_cost: i64 = conn
+            .query_row("SELECT COUNT(*) FROM daily_costs", [], |row| row.get(0))
+            .expect("read historical aggregates");
+        assert_eq!(
+            historical_cost, 2,
+            "daily historical cost remains exportable"
+        );
+        let local_date: String = conn
+            .query_row(
+                "SELECT date('2026-07-06T11:59:59Z', 'localtime')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("derive fixture's production local day");
+        let (cost, tokens, sessions, messages): (f64, i64, i64, i64) = conn
+            .query_row(
+                "SELECT total_cost_usd, total_tokens, session_count, message_count
+                   FROM daily_costs WHERE date = ?1",
+                [&local_date],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("read the backfilled daily token summary");
+        assert_eq!((cost, tokens, sessions, messages), (0.01, 5, 1, 1));
+        drop(conn);
+        assert_eq!(
+            db.prune_append_only_before(cutoff)
+                .expect("repeat cleanup idempotently"),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn analytics_retention_serializes_with_an_active_database_writer() {
+        let directory = tempfile::tempdir().expect("isolated analytics database directory");
+        let path = directory.path().join("analytics.db");
+        let db = std::sync::Arc::new(
+            AnalyticsDb::new_at(&path)
+                .await
+                .expect("open production analytics database"),
+        );
+        let mut writer = crate::db::open_tuned(&path).expect("open concurrent writer");
+        let tx = writer
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .expect("begin active writer transaction");
+        tx.execute(
+            "INSERT INTO token_usage (timestamp, session_id, agent_type, provider, model,
+                prompt_tokens, completion_tokens, total_tokens, cost_usd, request_type)
+             VALUES ('2020-01-01T00:00:00Z', 'session', 'worker', 'google', 'gemini',
+                2, 3, 5, 0.01, 'chat')",
+            [],
+        )
+        .expect("write expired token row while holding writer lock");
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let prune_db = db.clone();
+        let pruner = std::thread::spawn(move || {
+            started_tx.send(()).expect("signal pruning thread start");
+            prune_db.prune_append_only_before("2026-07-06T12:00:00Z")
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("pruning thread started");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(
+            !pruner.is_finished(),
+            "cleanup waits for the active SQLite writer transaction"
+        );
+        tx.commit().expect("commit active writer");
+        assert_eq!(pruner.join().expect("join retention worker").unwrap(), 1);
+        let remaining: i64 = db
+            .conn
+            .lock()
+            .expect("analytics connection")
+            .query_row("SELECT COUNT(*) FROM token_usage", [], |row| row.get(0))
+            .expect("read after concurrent retention");
+        assert_eq!(
+            remaining, 0,
+            "the committed expired row is summarized then pruned"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_timestamp_aborts_all_analytics_retention_deletes() {
+        let (_directory, db) = database().await;
+        for table in ["token_usage", "system_events", "api_failures"] {
+            insert_rows(&db, table, "2020-01-01T00:00:00Z");
+        }
+        db.conn
+            .lock()
+            .expect("analytics connection")
+            .execute(
+                "INSERT INTO system_events (timestamp, component, event_type, message, severity)
+                 VALUES ('malformed', 'test', 'event', 'detail', 'info')",
+                [],
+            )
+            .expect("insert malformed timestamp fixture");
+
+        let (error, events) = crate::observability::timing::capture_json_events(|| {
+            db.prune_append_only_before("2026-07-06T12:00:00Z")
+                .expect_err("unknown row age fails closed")
+        });
+        assert!(error.to_string().contains("invalid timestamps"));
+        assert!(events.iter().any(|event| {
+            event["fields"]["operation"] == "database_analytics_retention_prune"
+                && event["fields"]["outcome"] == "error"
+                && event["fields"]["database"] == "analytics"
+        }));
+        let conn = db.conn.lock().expect("analytics connection");
+        for table in ["token_usage", "system_events", "api_failures"] {
+            let count: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .expect("count after aborted cleanup");
+            assert!(count >= 1, "cleanup remains atomic for {table}");
+        }
+    }
+}
+
+#[cfg(test)]
 mod token_usage_observability_tests {
     use super::*;
 
@@ -2075,7 +2425,7 @@ mod worker_stats_retention_tests {
     }
 
     #[tokio::test]
-    async fn analytics_manager_runs_worker_retention_on_startup() {
+    async fn analytics_manager_runs_append_only_and_worker_retention_on_startup() {
         let home = tempfile::tempdir().expect("isolated Arcana home");
         let _home = crate::db::test_support::with_home(home.path());
         let manager = crate::analytics::AnalyticsManager::new()
@@ -2102,6 +2452,48 @@ mod worker_stats_retention_tests {
         ))
         .expect("insert exact-cutoff daily row");
 
+        let raw_old = (Utc::now() - Duration::days(91)).to_rfc3339();
+        let raw_current = Utc::now().to_rfc3339();
+        {
+            let conn = db.conn.lock().expect("analytics connection");
+            conn.execute(
+                "INSERT INTO token_usage (timestamp, session_id, agent_type, provider, model,
+                    prompt_tokens, completion_tokens, total_tokens, cost_usd, request_type)
+                 VALUES (?1, 'old-session', 'worker', 'google', 'gemini', 2, 3, 5, 0.01, 'chat')",
+                [&raw_old],
+            )
+            .expect("seed old token usage");
+            conn.execute(
+                "INSERT INTO token_usage (timestamp, session_id, agent_type, provider, model,
+                    prompt_tokens, completion_tokens, total_tokens, cost_usd, request_type)
+                 VALUES (?1, 'current-session', 'worker', 'google', 'gemini', 2, 3, 5, 0.01, 'chat')",
+                [&raw_current],
+            )
+            .expect("seed current token usage");
+            conn.execute(
+                "INSERT INTO system_events (timestamp, component, event_type, message, severity)
+                 VALUES (?1, 'test', 'old', 'old', 'info'), (?2, 'test', 'current', 'current', 'info')",
+                rusqlite::params![&raw_old, &raw_current],
+            )
+            .expect("seed system event retention fixtures");
+            conn.execute(
+                "INSERT INTO api_failures (timestamp, provider, error_type, error_message)
+                 VALUES (?1, 'google', 'old', 'old'), (?2, 'google', 'current', 'current')",
+                rusqlite::params![&raw_old, &raw_current],
+            )
+            .expect("seed API failure retention fixtures");
+        }
+        let config = crate::db::config_db::open_at(&home.path().join(".arcana/config.db"))
+            .expect("open isolated config database");
+        config
+            .execute(
+                "INSERT INTO hook_logs (hook_id, hook_name, hook_type, outcome, executed_at)
+                 VALUES ('old', 'old', 'pre_tool_use', 'executed', ?1),
+                        ('current', 'current', 'pre_tool_use', 'executed', ?2)",
+                rusqlite::params![&raw_old, &raw_current],
+            )
+            .expect("seed hook-log retention fixtures");
+
         manager.start_aggregation_job();
         tokio::time::timeout(std::time::Duration::from_secs(3), async {
             loop {
@@ -2115,7 +2507,33 @@ mod worker_stats_retention_tests {
                         |row| row.get(0),
                     )
                     .expect("read rollup written by scheduled job");
-                if monthly_count == 1 {
+                let token_count: i64 = db
+                    .conn
+                    .lock()
+                    .expect("analytics connection")
+                    .query_row("SELECT COUNT(*) FROM token_usage", [], |row| row.get(0))
+                    .expect("read token usage retention result");
+                let event_count: i64 = db
+                    .conn
+                    .lock()
+                    .expect("analytics connection")
+                    .query_row("SELECT COUNT(*) FROM system_events", [], |row| row.get(0))
+                    .expect("read event retention result");
+                let failure_count: i64 = db
+                    .conn
+                    .lock()
+                    .expect("analytics connection")
+                    .query_row("SELECT COUNT(*) FROM api_failures", [], |row| row.get(0))
+                    .expect("read API failure retention result");
+                let hook_count: i64 = config
+                    .query_row("SELECT COUNT(*) FROM hook_logs", [], |row| row.get(0))
+                    .expect("read hook-log retention result");
+                if monthly_count == 1
+                    && token_count == 1
+                    && event_count == 1
+                    && failure_count == 1
+                    && hook_count == 1
+                {
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -2133,6 +2551,31 @@ mod worker_stats_retention_tests {
             .get_worker_stats("worker-a", cutoff)
             .expect("read cutoff daily point")
             .is_some());
+        assert_eq!(
+            db.get_system_events_recent(None, None, 168)
+                .expect("read retained current system event")
+                .len(),
+            1
+        );
+        assert_eq!(
+            db.get_api_failures_recent(168)
+                .expect("read retained current API failure")
+                .len(),
+            1
+        );
+        assert!(
+            db.get_daily_costs_range(old_date, old_date)
+                .expect("read daily aggregate from expired token row")
+                .iter()
+                .any(|row| row.total_tokens == 5),
+            "old token history is visible after raw detail pruning"
+        );
+        let hook_logs = crate::hooks::db::HooksDb::open()
+            .expect("open production hook-log reader")
+            .get_logs(None, 10)
+            .expect("read retained current hook log");
+        assert_eq!(hook_logs.len(), 1);
+        assert_eq!(hook_logs[0].hook_name, "current");
         let range = db
             .get_worker_stats_range("worker-a", old_date, old_date)
             .expect("read rolled historical point")

@@ -1,4 +1,7 @@
-use arcana_core::analytics::{db::AnalyticsDb, types::WorkerStatsRecord};
+use arcana_core::analytics::{
+    db::AnalyticsDb,
+    types::{TokenUsageRecord, WorkerStatsRecord},
+};
 use chrono::{NaiveDate, Utc};
 use std::process::Command;
 
@@ -29,6 +32,24 @@ async fn analytics_cli_export_reads_pruned_worker_history_with_monthly_coverage(
     let db = AnalyticsDb::new_at(&analytics_path)
         .await
         .expect("open production analytics schema");
+    let historical_usage_timestamp = chrono::DateTime::parse_from_rfc3339("2025-01-05T12:00:00Z")
+        .expect("historical usage fixture timestamp")
+        .with_timezone(&Utc);
+    db.insert_token_usage(&TokenUsageRecord {
+        id: None,
+        timestamp: historical_usage_timestamp,
+        session_id: "expired-token-session".into(),
+        agent_type: "Worker".into(),
+        provider: "google".into(),
+        model: "gemini-3.8-flash".into(),
+        prompt_tokens: 100,
+        completion_tokens: 25,
+        total_tokens: 125,
+        thinking_tokens: Some(5),
+        cost_usd: 0.0125,
+        request_type: "chat".into(),
+    })
+    .expect("write production token-usage detail");
     db.insert_worker_stats(&WorkerStatsRecord {
         worker_id: "worker-retention-proof".into(),
         date: NaiveDate::from_ymd_opt(2025, 1, 5).expect("fixture date"),
@@ -65,6 +86,14 @@ async fn analytics_cli_export_reads_pruned_worker_history_with_monthly_coverage(
         .expect("roll up old daily row"),
         1
     );
+    assert_eq!(
+        db.prune_append_only_before(&(Utc::now() - chrono::Duration::days(90)).to_rfc3339())
+            .expect("apply production append-only retention"),
+        1
+    );
+    let expected_usage_date = historical_usage_timestamp
+        .with_timezone(&chrono::Local)
+        .date_naive();
     drop(db);
 
     let output_path = profile.0.join("analytics-export.json");
@@ -85,6 +114,20 @@ async fn analytics_cli_export_reads_pruned_worker_history_with_monthly_coverage(
         &std::fs::read(&output_path).expect("read CLI-produced export file"),
     )
     .expect("parse exported analytics JSON");
+    assert!(
+        exported["token_usage"].as_array().unwrap().is_empty(),
+        "expired per-request token detail is pruned from full export"
+    );
+    let historical_cost = exported["cost_summary"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["date"] == expected_usage_date.to_string())
+        .expect("CLI export retains the daily summary for pruned token usage");
+    assert_eq!(historical_cost["total_cost_usd"], 0.0125);
+    assert_eq!(historical_cost["total_tokens"], 125);
+    assert_eq!(historical_cost["session_count"], 1);
+    assert_eq!(historical_cost["message_count"], 1);
     let rows = exported["worker_stats"]
         .as_array()
         .expect("worker stats export array");

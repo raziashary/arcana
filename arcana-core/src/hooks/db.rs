@@ -164,6 +164,40 @@ impl HooksDb {
         Ok(())
     }
 
+    /// Prune raw execution details strictly older than the retention cutoff.
+    /// Invalid timestamps fail closed and are reported to the owning lifecycle.
+    pub fn prune_logs_before(&mut self, cutoff: &str) -> Result<usize> {
+        let mut operation =
+            OperationTimer::start("database_hook_logs_retention_prune").with_database("config");
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| ArcanaError::Agent(format!("Hook log retention transaction: {e}")))?;
+        let invalid_rows: i64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM hook_logs WHERE julianday(executed_at) IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| ArcanaError::Agent(format!("Hook log retention validation: {e}")))?;
+        if invalid_rows > 0 {
+            return Err(ArcanaError::Agent(
+                "Hook log retention refused rows with invalid timestamps".into(),
+            ));
+        }
+        let deleted = tx
+            .execute(
+                "DELETE FROM hook_logs WHERE julianday(executed_at) < julianday(?1)",
+                [cutoff],
+            )
+            .map_err(|e| ArcanaError::Agent(format!("Hook log retention prune: {e}")))?;
+        tx.commit()
+            .map_err(|e| ArcanaError::Agent(format!("Hook log retention commit: {e}")))?;
+        operation = operation.with_result_count(deleted);
+        operation.succeed();
+        Ok(deleted)
+    }
+
     pub fn get_logs(&self, hook_id: Option<&str>, limit: usize) -> Result<Vec<HookExecutionLog>> {
         let operation =
             OperationTimer::start("database_hook_execution_logs_read").with_database("config");
@@ -473,5 +507,106 @@ mod observability_tests {
                 "leaked {private_value}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+
+    fn database() -> (tempfile::TempDir, HooksDb) {
+        let directory = tempfile::tempdir().expect("isolated config database directory");
+        let db = HooksDb {
+            conn: crate::db::config_db::open_at(&directory.path().join("config.db"))
+                .expect("open production config database"),
+        };
+        (directory, db)
+    }
+
+    fn insert_log(db: &HooksDb, timestamp: &str) {
+        db.conn
+            .execute(
+                "INSERT INTO hook_logs (hook_id, hook_name, hook_type, outcome, executed_at)
+                 VALUES ('hook', 'name', 'pre_tool_use', 'executed', ?1)",
+                [timestamp],
+            )
+            .expect("insert hook log fixture");
+    }
+
+    #[test]
+    fn hook_log_retention_keeps_the_exact_cutoff_and_newer_rows() {
+        let (_directory, mut db) = database();
+        let cutoff = "2026-07-06T12:00:00Z";
+        insert_log(&db, "2026-07-06T11:59:59Z");
+        insert_log(&db, cutoff);
+        insert_log(&db, "2026-07-06T12:00:01Z");
+
+        assert_eq!(db.prune_logs_before(cutoff).expect("prune old logs"), 1);
+        assert_eq!(db.get_logs(None, 10).expect("read retained logs").len(), 2);
+    }
+
+    #[test]
+    fn invalid_hook_log_timestamp_fails_closed_without_pruning_valid_rows() {
+        let (_directory, mut db) = database();
+        insert_log(&db, "2020-01-01T00:00:00Z");
+        insert_log(&db, "malformed");
+
+        let (error, events) = crate::observability::timing::capture_json_events(|| {
+            db.prune_logs_before("2026-07-06T12:00:00Z")
+                .expect_err("unknown age fails closed")
+        });
+        assert!(error.to_string().contains("invalid timestamps"));
+        assert!(events.iter().any(|event| {
+            event["fields"]["operation"] == "database_hook_logs_retention_prune"
+                && event["fields"]["outcome"] == "error"
+                && event["fields"]["database"] == "config"
+        }));
+        assert_eq!(
+            db.get_logs(None, 10)
+                .expect("read rows after refusal")
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn hook_log_retention_serializes_with_an_active_database_writer() {
+        let directory = tempfile::tempdir().expect("isolated config database directory");
+        let path = directory.path().join("config.db");
+        let db = HooksDb {
+            conn: crate::db::config_db::open_at(&path).expect("open production config database"),
+        };
+        let mut writer = crate::db::open_tuned(&path).expect("open concurrent writer");
+        let tx = writer
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .expect("begin active writer transaction");
+        tx.execute(
+            "INSERT INTO hook_logs (hook_id, hook_name, hook_type, outcome, executed_at)
+             VALUES ('hook', 'name', 'pre_tool_use', 'executed', '2020-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("write expired hook row while holding writer lock");
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let pruner = std::thread::spawn(move || {
+            let mut db = db;
+            started_tx.send(()).expect("signal pruning thread start");
+            let deleted = db.prune_logs_before("2026-07-06T12:00:00Z");
+            (db, deleted)
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("pruning thread started");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(
+            !pruner.is_finished(),
+            "cleanup waits for the active SQLite writer transaction"
+        );
+        tx.commit().expect("commit active writer");
+        let (db, deleted) = pruner.join().expect("join retention worker");
+        assert_eq!(deleted.expect("prune after writer commits"), 1);
+        assert!(db
+            .get_logs(None, 10)
+            .expect("read after concurrent retention")
+            .is_empty());
     }
 }

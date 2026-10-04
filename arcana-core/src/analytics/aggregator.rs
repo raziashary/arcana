@@ -38,6 +38,11 @@ impl AnalyticsAggregator {
         let mut operation =
             crate::observability::timing::OperationTimer::start("database_daily_analytics_rollup")
                 .with_database("analytics");
+        let now = chrono::Utc::now();
+        let raw_cutoff = (now - chrono::Duration::days(90)).to_rfc3339();
+        self.db.prune_append_only_before(&raw_cutoff)?;
+        crate::hooks::db::HooksDb::open()?.prune_logs_before(&raw_cutoff)?;
+
         let worker_cutoff = Local::now().date_naive() - chrono::Duration::days(90);
         self.db
             .rollup_and_prune_worker_stats_before(worker_cutoff)?;

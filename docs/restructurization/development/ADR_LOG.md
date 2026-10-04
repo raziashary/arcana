@@ -6601,3 +6601,17 @@ readback.
 **Limit.** This closes two timestamp ordering pairs only. All other database writer/reader pairs, defaults/triggers and the complete TG4-19 inventory remain open. The schema changes are additive indexes; existing values remain unchanged.
 
 **Where.** `src-shared/src/db/analytics.rs`, `arcana-core/src/analytics/db.rs`, `arcana-core/src/session/storage.rs`, P4-57/P4-58, TG4-19/TG4-20.
+
+## ADR-LOG-RESTRUCT-0257 — Bound append-only database retention
+
+**Status.** Implemented and focused-tested on 2026-10-04; P4-59/TG4-21 remain open.
+
+**Decision.** Retain raw `token_usage`, `system_events`, `api_failures`, and `hook_logs` for 90 days. Before deleting old token rows, transactionally refresh their existing daily cost summaries so long-offline periods do not lose historical cost/token totals; keep worker-stat monthly summaries as the other historical aggregate. Do not invent monthly summaries for operational event/failure/hook detail, whose production readers expose recent bounded records. Run cleanup through the shared runtime's owned analytics maintenance job and report cleanup failures through structured logs.
+
+**Reason.** The token usage writer already produces daily cost snapshots consumed by cost-history readers, but the daily job may be offline for longer than 90 days. Refreshing summaries from still-retained raw rows before pruning preserves that history. API-failure and system-event consumers request recent windows, while hook-log consumers read a limited recent list. Keeping raw rows indefinitely is unbounded; adding rollups without a historical aggregate consumer would create a writer-only data path.
+
+**Evidence.** Owner-selected policy: “90-day raw; monthly summaries where useful.” Source review of `AnalyticsQueries`, `AnalyticsReader`, and `HooksDb::get_logs` confirmed the existing historical readers and recent-detail boundaries. Analytics and hook retention suites pass 3/3 each for exact cutoff, invalid-timestamp refusal, and active-writer serialization; the shared maintenance lifecycle passes 1/1 with production reader readback. The real CLI export test passes 1/1, proving expired token detail is removed while its daily cost/token aggregate remains exportable with monthly worker history and today's row.
+
+**Limit.** This policy preserves existing `daily_costs` and `worker_stats_monthly` history; it does not preserve per-request token detail beyond 90 days. Cross-platform writer-contention coverage, full export coverage for all retained stores, and cleanup-failure log/UI readback remain open. No pruning is run against a live user database during implementation.
+
+**Where.** `arcana-core/src/analytics/db.rs`, `arcana-core/src/analytics/aggregator.rs`, `arcana-core/src/hooks/db.rs`, P4-59, TG4-21.

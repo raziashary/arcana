@@ -149,3 +149,24 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 - Extended `model_produced_commit_runs_through_recipe_runner_and_host_guard` with one injected setup failure before the first provider request and a persisted task advisory budget. The actual shipped backend recipe then reaches AgentEngine once, claims the assigned task, applies its budget, and commits the scripted change once through the production host guard.
 - `cargo test -p arcana-core --lib model_produced_commit_runs_through_recipe_runner_and_host_guard --locked -- --test-threads=1` passes 1/1; the task remains assigned to the same worker, has a nonzero bounded turn count, and is not marked budget-exceeded. An initial overly strict `--exact` filter matched zero tests; rerunning with the unique test-name filter selected and passed the intended test.
 - Updated P4-52/TG4-26/Readiness evidence. This is a pre-provider retry followed by a single task/budget workflow; daily-budget reservation continuity, retry-event Logs readback, post-side-effect fault recovery, and successful CLI Fleet proof remain open. No checklist checkbox changed.
+
+
+## Continuation — 2026-10-04 append-only retention decision and implementation
+
+- Owner selected 90-day raw retention, monthly summaries where useful. ADR-LOG-RESTRUCT-0257 records the table-specific policy: preserve token-cost history by refreshing existing daily summaries before deleting expired token details; retain worker monthly rollups; avoid rollups for recent-only API failure/system event/hook detail.
+- `AnalyticsDb::prune_append_only_before` applies the UTC cutoff transactionally across token usage, system events and API failures. It backfills daily costs/tokens from all expired token rows, including after long offline periods; exactly-at-cutoff rows remain. Invalid timestamps abort the whole transaction. `HooksDb::prune_logs_before` applies the same boundary and failure behavior. The shared hourly maintenance job invokes both plus the existing worker-stat rollup, covering desktop and CLI runtime owners.
+- Focused tests pass: analytics retention 2/2; hook retention 2/2; shared production manager lifecycle 1/1. `cargo fmt --all -- --check` and `git diff --check` pass. The first manager-test invocation used an over-specific `--exact` filter and ran zero tests; the corrected unique-name invocation passed 1/1.
+- P4-59/TG4-21 remain open for cross-platform writer-contention coverage, complete export of retained/pruned history, visible cleanup-failure log readback and target-platform proof. No live user DB was pruned.
+
+## Continuation — 2026-10-04 CLI Fleet observability result
+
+- The real `arcanactl fleet run` executed under a temporary profile/workspace using the verified current Gemini key, Google `gemini-3.8-flash`, explicit workspace consent, and a $0.25/50,000-token/10-turn Supervisor cap. It created an epic and seven recipe workers and made one successful provider call. A later retryable provider failure was retried; the next conservative pre-dispatch reservation was denied, so the CLI exited 1 and the epic stayed incomplete. Raw provider text is intentionally excluded from this record.
+- Real `arcanactl logs export` and `arcanactl analytics export` read back two log streams, one token-usage row and one worker-stat row. This is useful failure-path telemetry and export evidence, but not the successful CLI Fleet proof needed by TG4-24. Artifacts are preserved in `%TEMP%\arcana-p4-cli-fleet-7adb0d516d854f66a4696b824b28a015`. No P4 count changed.
+
+
+## Continuation — 2026-10-04 retention contention and export consumer proof
+
+- Analytics and hook cleanup each pass exact-cutoff, malformed-time, and concurrent active-writer tests (3/3 per suite). Cleanup waits for a committing SQLite writer transaction, then prunes the now-visible expired row. The test currently runs on Windows; cross-platform contention remains open.
+- The scheduled production maintenance test now reads back current system events, API failures, and hook logs through the real APIs, and confirms expired token rows survive as daily cost/token summaries.
+- Extended the real CLI export subprocess fixture: after production retention prunes a 2025 token call, its raw row is absent from `token_usage`, but its daily cost and token totals remain in exported `cost_summary`. Existing worker monthly coverage and current-day daily row remain included. `cargo test -p arcanactl --test analytics_export --locked -- --exact --test-threads=1` passes 1/1.
+- TG4-21 remains open for platform coverage, full cleanup-failure log export/readback, and remaining phase-level checks.
