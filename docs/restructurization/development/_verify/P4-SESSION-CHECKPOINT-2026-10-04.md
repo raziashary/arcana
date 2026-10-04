@@ -231,3 +231,9 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 - Kept the current experimental process sandbox fail-closed when Rust cannot canonicalize a selected workspace/config path. No broader filesystem grant or live-workspace fallback was introduced. ADR-LOG-RESTRUCT-0262 records the disposition and official Microsoft documentation.
 - Re-ran `cargo test -p arcana-core --lib analytics_retention_serializes_with_an_active_database_writer --locked -- --nocapture --test-threads=1` and `cargo test -p arcana-core --lib hook_log_retention_serializes_with_an_active_database_writer --locked -- --nocapture --test-threads=1`; each passes 1/1 on Windows. These tests already existed and remain platform-neutral, but this host run is not non-Windows execution evidence.
 - P4-11/P4-61 and TG4-18/TG4-31 remain open for guarded staging/copy-back, locked dependency staging, Windows production Cargo path resolution, Linux production isolation, and signed macOS XPC/staging. P4/TG4 totals remain 32/59 and 10/33. The owner Calendar workspace was not accessed.
+
+## Continuation — 2026-10-04 Memory database startup observability
+
+- Added result-aware `memory_database_initialize` and `memory_database_migrate` operation timings around the production Memory database opener and schema ladder. Both use the fixed logical label `database=memory`; no paths or error prose are emitted.
+- The isolated production open/migration success test and forced open-failure redaction test pass 2/2 with `cargo test -p arcana-core --lib memory_database_ --locked -- --nocapture --test-threads=1`. ADR-LOG-RESTRUCT-0263 records the contract.
+- This is one startup instrumentation slice, not complete Memory/SQLite producer coverage. TG4-24 remains open, no P4/TG4 count changes, and Calendar remains owner-run.

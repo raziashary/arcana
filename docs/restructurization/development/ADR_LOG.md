@@ -6685,3 +6685,17 @@ readback.
 **Limit.** This does not solve guarded staging/copy-back, locked dependency staging, Windows production Cargo canonicalization, Linux Landlock production proof, or signed macOS XPC/staging. P4-11/P4-61 and TG4-18/TG4-31 remain open.
 
 **Where.** `arcana-core/src/platform/process_sandbox/`, P4-11/P4-61, TG4-18/TG4-31. References: [Windows Sandbox editions](https://learn.microsoft.com/en-us/windows/security/application-security/application-isolation/windows-sandbox/), [Windows Sandbox configuration](https://learn.microsoft.com/en-us/windows/security/application-security/application-isolation/windows-sandbox/windows-sandbox-configure-using-wsb-file), [Create Process in Sandbox API](https://learn.microsoft.com/en-us/windows/win32/secauthz/createprocessinsandbox).
+
+## ADR-LOG-RESTRUCT-0263 — Trace Memory database initialization and migration
+
+**Status.** Implemented and focused-tested on 2026-10-04.
+
+**Decision.** Emit result-aware operation timings around the production Memory database initialization and schema-migration boundaries. Use fixed operation labels and the logical database name `memory`; never include the database path or migration error text in these events.
+
+**Reason.** Memory query and mutation paths already report operation timings, and SQLite profile callbacks report statement categories and durations, but the real `MemoryDb::open()` and schema ladder had no parent result events. Without those events, slow startup and migration failures could not be separated from individual SQL statement timings in Logs.
+
+**Evidence.** `memory_database_initialization_and_migration_emit_result_spans_without_paths` verifies successful initialization and migration events, duration fields, database identity, and path omission. `memory_database_initialization_failure_emits_a_redacted_error_span` forces the production open path to fail before creating the DB and verifies a result-aware error without the path. `cargo test -p arcana-core --lib memory_database_ --locked -- --nocapture --test-threads=1` passes 2/2.
+
+**Limit.** This adds initialization/migration visibility only. It does not prove complete Memory operation or SQLite coverage, live Fleet-to-Logs delivery, or end-to-end observability costs; P4-50/TG4-24 remain open.
+
+**Where.** `arcana-core/src/memory/db.rs`, P4-50, TG4-24.

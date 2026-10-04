@@ -35,6 +35,9 @@ impl MemoryDb {
     }
 
     pub fn open() -> Result<Self> {
+        let mut operation =
+            crate::observability::timing::OperationTimer::start("memory_database_initialize")
+                .with_database("memory");
         // ⚠ P3-30. BEFORE `open_tuned`, deliberately. `sqlite3_auto_extension`
         // installs a hook that only affects connections opened AFTER it runs —
         // registering after the open would leave THIS connection without
@@ -50,6 +53,7 @@ impl MemoryDb {
         let conn = crate::db::open_tuned(&path)?;
         let db = Self { conn };
         db.migrate()?;
+        operation.succeed();
         Ok(db)
     }
 
@@ -512,6 +516,9 @@ impl MemoryDb {
     ];
 
     fn migrate(&self) -> Result<()> {
+        let mut operation =
+            crate::observability::timing::OperationTimer::start("memory_database_migrate")
+                .with_database("memory");
         // ⚠ `sqlite3_auto_extension` only affects connections opened AFTER it
         // runs, so registering here — before the ladder, on a connection this
         // function is about to migrate — is not sufficient on its own; the
@@ -526,7 +533,59 @@ impl MemoryDb {
             .execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")
             .map_err(|e| ArcanaError::Agent(format!("memory.db pragmas: {e}")))?;
         migrate::run_ladder(&self.conn, "memory.db", Self::LADDER)?;
+        operation.succeed();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod observability_tests {
+    use super::MemoryDb;
+
+    #[test]
+    fn memory_database_initialization_and_migration_emit_result_spans_without_paths() {
+        let directory = tempfile::tempdir().expect("isolated memory database home");
+        let _home = crate::db::test_support::with_home(directory.path());
+        let (_, events) = crate::observability::timing::capture_json_events(|| {
+            MemoryDb::open().expect("open and migrate production Memory database")
+        });
+
+        for operation in ["memory_database_initialize", "memory_database_migrate"] {
+            let event = events
+                .iter()
+                .find(|event| {
+                    event["fields"]["event_type"] == "operation_timing"
+                        && event["fields"]["operation"] == operation
+                })
+                .unwrap_or_else(|| panic!("missing operation timing for {operation}"));
+            assert_eq!(event["fields"]["outcome"], "success");
+            assert_eq!(event["fields"]["database"], "memory");
+            assert!(event["fields"]["duration_ns"].as_u64().is_some());
+        }
+        let output = serde_json::to_string(&events).expect("serialize captured telemetry");
+        assert!(!output.contains(&directory.path().to_string_lossy().to_string()));
+    }
+
+    #[test]
+    fn memory_database_initialization_failure_emits_a_redacted_error_span() {
+        let directory = tempfile::tempdir().expect("isolated memory database home");
+        std::fs::write(directory.path().join(".arcana"), "block directory creation")
+            .expect("plant a file where the database directory belongs");
+        let _home = crate::db::test_support::with_home(directory.path());
+        let (result, events) = crate::observability::timing::capture_json_events(MemoryDb::open);
+        assert!(result.is_err());
+
+        let event = events
+            .iter()
+            .find(|event| {
+                event["fields"]["event_type"] == "operation_timing"
+                    && event["fields"]["operation"] == "memory_database_initialize"
+            })
+            .expect("initialization failure timing");
+        assert_eq!(event["fields"]["outcome"], "error");
+        assert_eq!(event["fields"]["database"], "memory");
+        let output = serde_json::to_string(&events).expect("serialize captured telemetry");
+        assert!(!output.contains(&directory.path().to_string_lossy().to_string()));
     }
 }
 
