@@ -185,3 +185,9 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 - Google generation, stream, and countTokens error handling now classifies from a bounded body and returns HTTP status, typed `ErrorClass`, and the existing validated safe summary only. Oversized or unreadable error bodies produce a bounded unavailable-details summary and fail closed as `Fatal`; quota and retry classes remain distinguishable when a complete bounded body is available. The two generation paths now honor the injected API base for deterministic loopback tests.
 - `cargo test -p arcana-core --lib provider::google::google_tests --locked -- --test-threads=1` passes 19/19; the production AgentEngine no-retry/analytics regression passes 1/1; `cargo check -p arcana-core --locked`, `cargo fmt --all -- --check`, and `git diff --check` pass.
 - ADR-LOG-RESTRUCT-0258 records the boundary. This does not close P4-51 or TG4-24: other providers, full runner-to-system-event/Logs readback, and the real successful CLI Fleet workflow remain unproven. Overall counts remain P4 32/59 and TG4 10/33.
+
+## Continuation — 2026-10-04 retention failure Logs readback
+
+- Added a production-path regression in the Tauri Logs command module: an isolated production `AnalyticsDb` refuses a malformed timestamp during retention, the operation error is written to a JSONL sink, and the production reader/metrics aggregator consumes it as a failed `operation_timing`.
+- The test confirms the event identifies only the fixed operation and logical database, and does not expose planted database row/component content. `cargo test -p arcana retention_cleanup_failure_is_visible_through_structured_logs_reader --locked -- --nocapture --test-threads=1` passes 1/1.
+- This closes the analytics-pruner-to-Logs-reader proof slice only. Hook-pruner error readback, full retained-detail export, cross-platform writer-contention coverage, TG4-21, and P4-59 remain open. P4/TG4 counts remain 32/59 and 10/33.

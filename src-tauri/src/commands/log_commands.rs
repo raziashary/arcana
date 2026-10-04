@@ -1452,6 +1452,51 @@ mod tests {
         assert_eq!(provider_model.result_blocks_total, 4);
     }
 
+    #[tokio::test]
+    async fn retention_cleanup_failure_is_visible_through_structured_logs_reader() {
+        let directory = tempfile::tempdir().expect("isolated retention log fixture");
+        let db =
+            arcana_core::analytics::db::AnalyticsDb::new_at(&directory.path().join("analytics.db"))
+                .await
+                .expect("open production analytics database");
+        db.conn
+            .lock()
+            .expect("analytics connection")
+            .execute(
+                "INSERT INTO system_events (timestamp, component, event_type, message, severity)
+                 VALUES ('malformed', 'private-component', 'private-event', 'private-row-marker', 'info')",
+                [],
+            )
+            .expect("insert malformed retention fixture");
+
+        let log_path = directory.path().join("arcana-events.test.jsonl");
+        let file = std::fs::File::create(&log_path).expect("create structured log fixture");
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(move || file.try_clone().expect("clone structured log writer"))
+            .finish();
+        let error = tracing::subscriber::with_default(subscriber, || {
+            db.prune_append_only_before("2026-07-06T12:00:00Z")
+                .expect_err("malformed timestamps must fail closed")
+        });
+        assert!(error.to_string().contains("invalid timestamps"));
+
+        let persisted = read_full_log(&log_path).expect("read persisted production JSONL");
+        assert!(persisted.contains("database_analytics_retention_prune"));
+        assert!(persisted.contains("\"outcome\":\"error\""));
+        assert!(persisted.contains("\"database\":\"analytics\""));
+        assert!(!persisted.contains("private-row-marker"));
+        assert!(!persisted.contains("private-component"));
+
+        let metrics = aggregate_event_lines(BufReader::new(persisted.as_bytes()))
+            .expect("Logs metrics reader aggregates the persisted event");
+        let retention = &metrics.by_event["operation_timing"];
+        assert_eq!(retention.count, 1);
+        assert_eq!(retention.failures, 1);
+        assert_eq!(metrics.outcomes["error"], 1);
+    }
+
     #[test]
     fn metrics_count_build_evidence_failure_outcome_as_failure() {
         let jsonl = "{\"fields\":{\"event_type\":\"build_evidence_persistence\",\"outcome\":\"failure\",\"duration_ns\":17}}\n";
