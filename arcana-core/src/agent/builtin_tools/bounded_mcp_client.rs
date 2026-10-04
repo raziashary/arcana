@@ -448,6 +448,63 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
+    async fn post_with_response(
+        response: Vec<u8>,
+        session_id: Option<Arc<str>>,
+    ) -> Result<StreamableHttpPostResponse, StreamableHttpError<McpHttpError>> {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                let count = socket.read(&mut buffer).await.unwrap();
+                assert_ne!(count, 0);
+                request.extend_from_slice(&buffer[..count]);
+            }
+            let header_end = request
+                .windows(4)
+                .position(|part| part == b"\r\n\r\n")
+                .unwrap()
+                + 4;
+            let content_length = String::from_utf8_lossy(&request[..header_end])
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or_default();
+            while request.len() < header_end + content_length {
+                let count = socket.read(&mut buffer).await.unwrap();
+                assert_ne!(count, 0);
+                request.extend_from_slice(&buffer[..count]);
+            }
+            socket.write_all(&response).await.unwrap();
+        });
+
+        let client = BoundedMcpHttpClient::new().unwrap();
+        let request: ClientJsonRpcMessage = serde_json::from_value(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "ping"
+        }))
+        .unwrap();
+        let result = client
+            .post_message(
+                Arc::from(format!("http://{address}/mcp")),
+                request,
+                session_id,
+                None,
+                HashMap::new(),
+            )
+            .await;
+        server.await.unwrap();
+        result
+    }
+
     #[test]
     fn response_length_guard_accepts_boundary_and_rejects_larger_body() {
         assert!(ensure_content_length(
@@ -460,6 +517,73 @@ mod tests {
             MAX_MCP_HTTP_RESPONSE_BYTES
         )
         .is_err());
+    }
+
+    #[tokio::test]
+    async fn streamable_http_transport_preserves_authentication_outcomes_without_body_data() {
+        let unauthorized = post_with_response(
+            b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Bearer realm=arcana\r\nContent-Length: 12\r\nConnection: close\r\n\r\nprivate-body"
+                .to_vec(),
+            None,
+        )
+        .await
+        .expect_err("401 must be surfaced as an authentication outcome");
+        assert!(matches!(unauthorized, StreamableHttpError::AuthRequired(_)));
+        assert!(!unauthorized.to_string().contains("private-body"));
+
+        let forbidden = post_with_response(
+            b"HTTP/1.1 403 Forbidden\r\nWWW-Authenticate: Bearer error=insufficient_scope\r\nContent-Length: 12\r\nConnection: close\r\n\r\nprivate-body"
+                .to_vec(),
+            None,
+        )
+        .await
+        .expect_err("403 must be surfaced as an insufficient-scope outcome");
+        assert!(matches!(
+            forbidden,
+            StreamableHttpError::InsufficientScope(_)
+        ));
+        assert!(!forbidden.to_string().contains("private-body"));
+    }
+
+    #[tokio::test]
+    async fn streamable_http_transport_classifies_http_and_session_failures_safely() {
+        let unavailable = post_with_response(
+            b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 12\r\nConnection: close\r\n\r\nprivate-body"
+                .to_vec(),
+            None,
+        )
+        .await
+        .expect_err("503 must be surfaced as an HTTP failure");
+        assert!(unavailable.to_string().contains("HTTP 503"));
+        assert!(!unavailable.to_string().contains("private-body"));
+
+        let expired = post_with_response(
+            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+            Some(Arc::from("session-1")),
+        )
+        .await
+        .expect_err("404 for an active session must require session recovery");
+        assert!(matches!(expired, StreamableHttpError::SessionExpired));
+
+        let content_type = post_with_response(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello"
+                .to_vec(),
+            None,
+        )
+        .await
+        .expect_err("unexpected successful response content type must be rejected");
+        assert!(matches!(
+            content_type,
+            StreamableHttpError::UnexpectedContentType(_)
+        ));
+
+        let accepted = post_with_response(
+            b"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+            None,
+        )
+        .await
+        .expect("202 is a valid acknowledgement");
+        assert!(matches!(accepted, StreamableHttpPostResponse::Accepted));
     }
 
     #[tokio::test]
