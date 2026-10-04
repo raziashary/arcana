@@ -138,3 +138,8 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 - This proves the CLI export consumer reads the retention rollup. P4-59/TG4-21 remain open for migration preservation, active-writer safety, current-date export evidence, and policies/lifecycle proofs for the other append-only tables. No user data or live credentials were used.
 - Extended the export fixture with a row dated to the current UTC day. The same CLI export now verifies the current daily row remains alongside the historical monthly rollup; rerun passes 1/1.
 - A first pre-RAII failed CLI-export fixture left its own temp profile at `C:\Users\razia\AppData\Local\Temp\arcana-analytics-export-7d79fcec-eadb-40b7-8073-b220657c891d`; it contains only test-generated analytics data. It was preserved rather than removed. The passing fixture now uses an RAII profile guard.
+
+## Continuation — P4-50 GraphStore timing assertion and timestamp suite
+
+- The timestamp-filtered core suite found a stale GraphStore timing assertion. `production_graph_readers_emit_private_result_spans` captured 10 timing events because nested statement timings are also emitted, but it expected only five named public graph operations. The test now selects those five expected operation labels while preserving result/privacy assertions.
+- The focused regression passes 1/1, and `cargo test -p arcana-core --lib timestamp --locked -- --test-threads=1` passes 30/30. No P4/TG4 checkbox changes.

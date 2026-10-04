@@ -90,9 +90,7 @@ async fn analytics_cli_export_reads_pruned_worker_history_with_monthly_coverage(
         .expect("worker stats export array");
     let monthly = rows
         .iter()
-        .find(|row| {
-            row["worker_id"] == "worker-retention-proof" && row["granularity"] == "month"
-        })
+        .find(|row| row["worker_id"] == "worker-retention-proof" && row["granularity"] == "month")
         .expect("CLI export reads the retained monthly summary");
     assert_eq!(monthly["granularity"], "month");
     assert_eq!(monthly["date"], "2025-01");

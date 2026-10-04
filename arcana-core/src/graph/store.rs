@@ -953,10 +953,6 @@ mod timestamp_tests {
             assert_eq!(store.get_stats().unwrap().node_count, 1);
         });
 
-        let observed: Vec<_> = events
-            .iter()
-            .filter(|event| event["fields"]["event_type"] == "operation_timing")
-            .collect();
         let expected = [
             ("graph_file_nodes_read", 1),
             ("graph_nodes_page_read", 1),
@@ -964,6 +960,15 @@ mod timestamp_tests {
             ("graph_node_search", 1),
             ("graph_stats_read", 1),
         ];
+        let observed: Vec<_> = events
+            .iter()
+            .filter(|event| {
+                event["fields"]["event_type"] == "operation_timing"
+                    && expected
+                        .iter()
+                        .any(|(operation, _)| event["fields"]["operation"] == *operation)
+            })
+            .collect();
         assert_eq!(observed.len(), expected.len());
         for (event, (operation, count)) in observed.iter().zip(expected) {
             assert_eq!(event["fields"]["operation"], operation);
