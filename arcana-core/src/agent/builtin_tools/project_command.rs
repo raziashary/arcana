@@ -1706,17 +1706,27 @@ mod tests {
         let home = root.path().join("home");
         let workspace = root.path().join("workspace");
         std::fs::create_dir_all(&home).expect("create isolated profile");
-        std::fs::create_dir_all(workspace.join("src")).expect("create Rust project");
+        let passing_project = workspace.join("a-passing");
+        let cancelled_project = workspace.join("z-cancelled");
+        std::fs::create_dir_all(passing_project.join("src")).expect("create first Rust project");
+        std::fs::create_dir_all(cancelled_project.join("src")).expect("create second Rust project");
         let _home = crate::db::test_support::with_home(&home);
         std::fs::write(
-            workspace.join("Cargo.toml"),
+            passing_project.join("Cargo.toml"),
+            "[package]\nname = \"passing-build-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .expect("write first fixture manifest");
+        std::fs::write(passing_project.join("src/main.rs"), "fn main() {}\n")
+            .expect("write first fixture source");
+        std::fs::write(
+            cancelled_project.join("Cargo.toml"),
             "[package]\nname = \"cancelled-build-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\nbuild = \"build.rs\"\n",
         )
-        .expect("write fixture manifest");
-        std::fs::write(workspace.join("src/main.rs"), "fn main() {}\n")
-            .expect("write fixture source");
+        .expect("write second fixture manifest");
+        std::fs::write(cancelled_project.join("src/main.rs"), "fn main() {}\n")
+            .expect("write second fixture source");
         std::fs::write(
-            workspace.join("build.rs"),
+            cancelled_project.join("build.rs"),
             r#"
 use std::{
     env, fs,
@@ -1789,7 +1799,7 @@ fn main() {
                 .execute(json!({"intent": "build", "toolchain": "cargo"}), &context)
                 .await
         });
-        let child_started = workspace.join("cancel-child-started");
+        let child_started = cancelled_project.join("cancel-child-started");
         tokio::time::timeout(Duration::from_secs(120), async {
             loop {
                 if child_started.is_file() {
@@ -1799,7 +1809,7 @@ fn main() {
             }
         })
         .await
-        .expect("production sandboxed build must start its descendant");
+        .expect("production batch must finish the first crate and start the second");
 
         command.abort();
         assert!(
@@ -1813,14 +1823,14 @@ fn main() {
             .expect("read cancelled batch")
             .expect("batch persisted before child spawn");
         assert_eq!(outcome, "incomplete");
-        assert_eq!(expected, 1);
-        assert_eq!(observed, 0);
-        assert_eq!(passing, 0);
+        assert_eq!(expected, 2);
+        assert_eq!(observed, 1, "the first project's observed pass is retained");
+        assert_eq!(passing, 1);
         assert_eq!(db.get_retry_count(task.id).expect("read retry streak"), 0);
-        let first_heartbeat = std::fs::read(workspace.join("cancel-heartbeat"))
+        let first_heartbeat = std::fs::read(cancelled_project.join("cancel-heartbeat"))
             .expect("descendant wrote its initial heartbeat");
         tokio::time::sleep(Duration::from_millis(100)).await;
-        let stopped_heartbeat = std::fs::read(workspace.join("cancel-heartbeat"))
+        let stopped_heartbeat = std::fs::read(cancelled_project.join("cancel-heartbeat"))
             .expect("read descendant heartbeat after cancellation");
         assert_eq!(
             first_heartbeat, stopped_heartbeat,
@@ -1831,6 +1841,27 @@ fn main() {
                 .expect("QC gate reads cancelled batch")
                 .is_some(),
             "an incomplete batch must never authorize QC"
+        );
+        assert!(
+            db.update_status_with_workspace_and_run_id(
+                task.id,
+                "qc_review",
+                Some("worker-backend"),
+                None,
+                None,
+                &workspace,
+            )
+            .is_err(),
+            "the shared TasksDb transition must reject cancellation after a passing sibling"
+        );
+        assert!(
+            db.conn
+                .execute(
+                    "UPDATE tasks SET status='qc_review' WHERE id=?1",
+                    rusqlite::params![task.id]
+                )
+                .is_err(),
+            "SQLite must reject direct SQL QC over a partial multi-project batch"
         );
     }
 

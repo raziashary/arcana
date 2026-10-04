@@ -118,3 +118,9 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 - Extended the production HooksDb operation test to verify the `config.db` trigger-created `hook_logs.executed_at` value is fixed-millisecond UTC and can be parsed by the shared timestamp reader after `HooksDb::get_logs` reads it back.
 - `cargo fmt --all -- --check` and `cargo test -p arcana-core --lib hooks::db::observability_tests::hook_configuration_and_execution_log_operations_emit_private_result_spans --locked -- --exact --test-threads=1` pass; the focused test passes 1/1.
 - This adds one production write/read pair to P4-57 evidence. All other database pairs remain in the inventory gap; no task or gate closes.
+
+## Continuation — P4-14 multi-project cancellation after a passing child
+
+- Expanded the production cancellation regression to select two independent Cargo projects in sorted order. The first completes successfully; the second starts a build-script descendant before the caller is cancelled.
+- `cargo test -p arcana-core --lib agent::builtin_tools::project_command::tests::cancelling_production_project_command_stops_descendant_and_closes_batch --locked -- --exact --test-threads=1` passes 1/1 in 33.96s. After TasksDb reopen, the batch is incomplete with expected=2, observed=1, passing=1. The descendant stops, and both workspace-bound TasksDb QC transition and direct SQL reject `qc_review`.
+- This closes only multi-project partial-cancellation proof. Spawn-failure and cross-platform production command coverage remain open; P4-14/TG4-07 and overall readiness counts do not change. Full core suite still has the two Windows Clippy path-canonicalization failures. Calendar was not run.
