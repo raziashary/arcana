@@ -464,6 +464,8 @@ Call `list_worker_messages` to read messages addressed to the Supervisor. For ea
 - A worker `fyi` / `nudge` that doesn't require a reply → just `acknowledge_worker_message(id)`.
 - Anything that needs cross-worker coordination → consider sending a `broadcast` (you are the only agent allowed to broadcast) or routing a follow-up task via `create_task` + `assign_task`.
 
+Messages replay with the same stable ID until acknowledged. Before repeating an answer or task/workspace effect, check current domain state and confirm that effect is still needed; skip completed effects and acknowledge only after reconciling and handling the message.
+
 You may also briefly inspect the rest of the fleet's conversations if you suspect a stuck thread: messages older than 5 minutes that are still `pending` or `read` (un-acked) belong to a stuck conversation; nudge the addressee to act, or reassign the task. Use `list_stale_worker_messages(older_than_minutes=5)` to find those exact messages. A read does not acknowledge them; nudge the addressee or route the stalled task, and leave acknowledgement to its owner.
 
 ### Step 1c — Read fleet health before recovery or reassignment
@@ -665,6 +667,7 @@ Call `list_worker_messages` to read messages addressed to you. For each:
 - `nudge` / `fyi` that affects your current task → fold the info into your plan, then `acknowledge_worker_message(id)`.
 - `nudge` you can't act on right now (no matching task, ambiguous) → `acknowledge_worker_message(id)` with the message body summarized in ARCANA_PROGRESS.md.
 Inbox is async and lossless — do NOT spawn delegations or out-of-band runs. Process the messages inline within this tick.
+Messages replay with the same stable ID until acknowledged. Before repeating an answer or task/workspace effect, check current domain state and confirm that effect is still needed; skip completed effects and acknowledge only after reconciling and handling the message.
 
 ### Step 2 — Claim or resume
 - Assigned: claim_task(task_id=<id>)
@@ -883,6 +886,7 @@ Call `list_worker_messages` to read messages addressed to you. For each:
 - `nudge` like "INTERFACE.md changed — re-check your consumers" → re-read INTERFACE.md before writing any consumer, then `acknowledge_worker_message(id)`.
 - `fyi` you can't act on right now → `acknowledge_worker_message(id)`.
 Inbox is async — do NOT delegate or invoke another worker out-of-band. Process inline within this tick.
+Messages replay with the same stable ID until acknowledged. Before repeating an answer or task/workspace effect, check current domain state and confirm that effect is still needed; skip completed effects and acknowledge only after reconciling and handling the message.
 
 ### Step 2 — Claim or resume
 - Assigned: claim_task(task_id=<id>)
@@ -1090,6 +1094,7 @@ Call `list_tasks`. Look for:
 
 ### Step 1.5 — Drain your ACP inbox
 Call `list_worker_messages`. Reply to questions with `send_worker_message(to=<sender>, kind='answer', body=…, task_id=…)`; acknowledge each via `acknowledge_worker_message(id)` once handled. Process inline; do NOT spawn out-of-band runs.
+Messages replay with the same stable ID until acknowledged. Before repeating an answer or task/workspace effect, check current domain state and confirm that effect is still needed; skip completed effects and acknowledge only after reconciling and handling the message.
 
 ### Step 2 — Claim
 claim_task(task_id=<id>)
@@ -1217,6 +1222,7 @@ Check ARCANA_PROGRESS.md for context from previous sessions.
 
 ### Step 1.5 — Drain your ACP inbox
 Call `list_worker_messages`. Reply to questions with `send_worker_message(to=<sender>, kind='answer', body=…, task_id=…)`; acknowledge each via `acknowledge_worker_message(id)` once handled. Process inline.
+Messages replay with the same stable ID until acknowledged. Before repeating an answer or task/workspace effect, check current domain state and confirm that effect is still needed; skip completed effects and acknowledge only after reconciling and handling the message.
 
 ### Step 2 — Claim or resume
 - Assigned: claim_task(task_id=<id>)
@@ -1408,6 +1414,7 @@ Call `list_tasks`. Look for:
 
 ### Step 1.5 — Drain your ACP inbox
 Call `list_worker_messages`. Reply to questions with `send_worker_message(to=<sender>, kind='answer', body=…, task_id=…)`; acknowledge each via `acknowledge_worker_message(id)` once handled. Process inline; do NOT delegate.
+Messages replay with the same stable ID until acknowledged. Before repeating an answer or task/workspace effect, check current domain state and confirm that effect is still needed; skip completed effects and acknowledge only after reconciling and handling the message.
 
 ### Step 2 — Claim
 claim_task(task_id=<id>)
@@ -2128,6 +2135,7 @@ Call `list_worker_messages` as your first action on every tick. Reply to a relev
 question with `send_worker_message`, then call `acknowledge_worker_message` for
 each handled message. Acknowledge FYI/nudge messages once handled. The persistent recipient is `qc-agent`;
 `qc-dispatcher` is a recipe ID, not a worker address.
+Messages replay with the same stable ID until acknowledged. Before repeating an answer or task/workspace effect, check current domain state and confirm that effect is still needed; skip completed effects and acknowledge only after reconciling and handling the message.
 
 After draining the inbox, call `list_tasks` with status='qc_review'. Never rely
 on memory.
@@ -2313,6 +2321,33 @@ mod worker_command_protocol_tests {
         assert!(protocol.contains("A passing build resets this streak"));
         assert!(protocol.contains("Spawn failures\n  and timeouts are separate outcomes"));
         assert!(!protocol.contains("If any detected build fails, stop and report"));
+    }
+
+    #[test]
+    fn shipped_inbox_consumers_reconcile_state_before_repeating_effects() {
+        let replay_rule = "check current domain state and confirm that effect is still needed";
+        let recipes = [
+            supervisor_recipe(),
+            worker_backend_recipe(),
+            worker_frontend_recipe(),
+            worker_platform_recipe(),
+            worker_mcp_recipe(),
+            worker_cleanup_recipe(),
+            qc_dispatcher_recipe(),
+        ];
+
+        for recipe in recipes {
+            assert!(
+                recipe.instructions.contains(replay_rule),
+                "{} must reconcile state before replaying an inbox side effect",
+                recipe.title
+            );
+            assert!(
+                recipe.instructions.contains("acknowledge_worker_message"),
+                "{} must acknowledge handled inbox messages",
+                recipe.title
+            );
+        }
     }
 
     #[tokio::test]
