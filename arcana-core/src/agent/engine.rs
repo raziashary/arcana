@@ -2571,7 +2571,7 @@ mod procedural_memory_tests {
         }
 
         fn models(&self) -> Vec<ModelInfo> {
-            Vec::new()
+            crate::provider::catalogue::models_for(&self.provider_id)
         }
 
         async fn input_token_upper_bound(&self, _request: &CompletionRequest) -> Result<u64> {
@@ -3444,6 +3444,195 @@ mod procedural_memory_tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn saved_task_breaker_works_with_enabled_daily_reservations() {
+        run_task_daily_budget_interaction(false).await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn daily_reservation_denial_preserves_the_unclaimed_saved_task_budget() {
+        run_task_daily_budget_interaction(true).await;
+    }
+
+    async fn run_task_daily_budget_interaction(deny_daily: bool) {
+        ensure_isolated_test_analytics().await;
+        let home = tempfile::tempdir().unwrap();
+        let _home = crate::db::test_support::with_home(home.path());
+        let tasks = crate::db::tasks::TasksDb::open().unwrap();
+        let task = tasks
+            .create(crate::db::tasks::CreateTaskInput {
+                title: "independent budget breakers".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "each cap enforces its own boundary".into(),
+                created_by: Some("task-daily-budget-test".into()),
+            })
+            .unwrap();
+        tasks
+            .update_status(task.id, "assigned", Some("worker-backend"))
+            .unwrap();
+        tasks
+            .set_task_budget(task.id, Some(100_000), Some(5.0), Some(1))
+            .unwrap();
+        let workers = crate::db::workers::WorkersDb::open().unwrap();
+        let backend = workers.get_by_slug("worker-backend").unwrap().unwrap();
+        workers
+            .update_status(backend.id, crate::db::workers::WorkerStatus::Active)
+            .unwrap();
+        crate::budget::daily::DailyCap {
+            enabled: true,
+            limit_usd: if deny_daily { 0.000001 } else { 100.0 },
+        }
+        .save()
+        .unwrap();
+        let provider = Arc::new(ScriptedProvider {
+            provider_id: "google".into(),
+            requests: Mutex::new(Vec::new()),
+            fail_next_attempt: Mutex::new(None),
+            cancel_on_stream: None,
+            input_token_bound: Some(10),
+            responses: Mutex::new(VecDeque::from([vec![
+                StreamChunk::ToolUseStart {
+                    id: "claim-with-daily-cap".into(),
+                    name: "claim_task".into(),
+                    block_index: 0,
+                    opaque: None,
+                },
+                StreamChunk::ToolInputDelta {
+                    block_index: 0,
+                    partial_json: serde_json::json!({"task_id":task.id}).to_string(),
+                },
+                StreamChunk::MessageDelta {
+                    stop_reason: "tool_use".into(),
+                    usage: Usage {
+                        input: 10,
+                        output: 1,
+                        ..Usage::default()
+                    },
+                },
+                StreamChunk::Done,
+            ]])),
+        });
+        let state = Arc::new(Mutex::new(crate::state::AppState::default()));
+        let capped = crate::provider::capped::CappedProvider::wrap(provider.clone(), state.clone());
+        let engine = AgentEngine::new(
+            capped,
+            super::super::permission::PermissionMode::Autonomous,
+            super::super::PAMode::FastDevelopment,
+            state,
+            super::super::permission::new_pending_permissions(),
+            super::super::tool_trait::AgentIdentity::worker("worker-backend"),
+        )
+        .with_budget(crate::budget::TaskBudget::default_worker());
+        let workspace = tempfile::tempdir().unwrap();
+        let result = engine
+            .run(
+                "task-daily-budget-interaction",
+                workspace.path().to_str().unwrap(),
+                "gemini-3.8-flash",
+                Vec::new(),
+                "Claim the assigned task.",
+                Some("Worker instructions."),
+            )
+            .await;
+        let Err(ArcanaError::BudgetExceeded(reason)) = result else {
+            panic!("both enabled policies must surface a budget refusal");
+        };
+        assert!(reason.contains(if deny_daily {
+            "Daily spend ceiling"
+        } else {
+            "BUDGET_EXCEEDED_TURNS"
+        }));
+        assert_eq!(
+            provider.requests.lock().unwrap().len(),
+            if deny_daily { 0 } else { 1 }
+        );
+        let task = tasks.get_by_id(task.id).unwrap().unwrap();
+        assert_eq!(
+            (
+                task.budget_max_tokens,
+                task.budget_max_usd,
+                task.budget_max_turns
+            ),
+            (Some(100_000), Some(5.0), Some(1))
+        );
+        if deny_daily {
+            assert_eq!(task.status, crate::db::tasks::TaskStatus::Assigned);
+            assert!(!task.budget_exceeded);
+            assert_eq!(
+                (
+                    task.budget_tokens_used,
+                    task.budget_turns_used,
+                    task.budget_cost_usd
+                ),
+                (0, 0, 0.0)
+            );
+            assert!(task.claimed_by_pid.is_none() && task.claim_host.is_none());
+            assert_eq!(
+                workers
+                    .get_by_slug("worker-backend")
+                    .unwrap()
+                    .unwrap()
+                    .status,
+                crate::db::workers::WorkerStatus::Paused
+            );
+        } else {
+            assert_eq!(task.status, crate::db::tasks::TaskStatus::NeedsInfo);
+            assert!(task.budget_exceeded);
+            assert_eq!(task.budget_turns_used, 1);
+            assert!(task.budget_cost_usd > 0.0);
+            assert_ne!(
+                workers
+                    .get_by_slug("worker-backend")
+                    .unwrap()
+                    .unwrap()
+                    .status,
+                crate::db::workers::WorkerStatus::Paused
+            );
+        }
+        let config = crate::db::config_db::open().unwrap();
+        let holds: i64 = config
+            .query_row(
+                "SELECT count(*) FROM daily_budget_reservations",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            holds, 0,
+            "denied calls do not reserve; known usage settles exactly once"
+        );
+        let spent: i64 = config
+            .query_row(
+                "SELECT coalesce(sum(spent_micros),0) FROM daily_budget_totals",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let expected_cost = crate::cost::pricing::cost_usd(
+            "gemini-3.8-flash",
+            &Usage {
+                input: 10,
+                output: 1,
+                ..Usage::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            spent,
+            if deny_daily {
+                0
+            } else {
+                (expected_cost * 1_000_000.0).ceil() as i64
+            },
+            "daily ledger settles observed usage, never the conservative maximum"
+        );
+        assert!(
+            (task.budget_cost_usd - if deny_daily { 0.0 } else { expected_cost }).abs() < 1e-12
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn claimed_task_budget_activates_before_the_next_provider_request() {
         ensure_isolated_test_analytics().await;
         let home = tempfile::tempdir().expect("isolated Arcana home");
@@ -3518,7 +3707,7 @@ mod procedural_memory_tests {
         assert_eq!(
             provider.requests.lock().expect("request lock").len(),
             1,
-            "the saved one-turn task cap must block another provider request"
+            "the saved token cap must block another provider request"
         );
         let claimed = task_db.get_by_id(task.id).unwrap().unwrap();
         assert_eq!(claimed.status, crate::db::tasks::TaskStatus::NeedsInfo);

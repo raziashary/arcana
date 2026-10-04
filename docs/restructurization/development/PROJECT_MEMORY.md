@@ -1,10 +1,10 @@
 # Arcana working memory (updated 2026-10-05)
 
-Current continuation (2026-10-05): **P4 36/59 checked; TG4 13/33 passing**.
-P4-55/TG4-29, P4-43, P4-40 and P4-23/TG4-10/11 are proven. Core P4 remains active; 23 tasks
+Current continuation (2026-10-05): **P4 37/59 checked; TG4 14/33 passing**.
+P4-55/TG4-29, P4-43, P4-40, P4-23/TG4-10/11 and P4-29/TG4-15 are proven. Core P4 remains active; 22 tasks
 remain, including owner-run P4-49. The expanded goal stays unread until core
 P4 closes. Claim-safety proof is in
-`_verify/P4-40-CLAIM-SAFETY-CLOSEOUT-2026-10-05.md`. Remote host-matrix proof,
+`_verify/P4-40-CLAIM-SAFETY-CLOSEOUT-2026-10-05.md`; budget interaction is in `_verify/P4-29-BUDGET-INTERACTION-CLOSEOUT-2026-10-05.md`. Remote host-matrix proof,
 strict sandbox corpus and successful CLI Fleet completion remain open. Earlier
 dated status entries below are historical snapshots.
 

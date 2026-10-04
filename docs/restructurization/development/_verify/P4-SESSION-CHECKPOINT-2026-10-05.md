@@ -4,7 +4,7 @@
 
 Complete core P4 in the MDP, testing gates and readiness first, committing/pushing logical units; only afterward read and finish the user-owned untracked `P4_EXPANDED_GOAL.md`. Owner alone runs final Calendar desktop acceptance; do not access that workspace. All subagents must use GPT-6 Luna High. Existing agent thread limit prevented a fresh review; no independent phase-review claim is made.
 
-Current counts: **36/59 P4 tasks; 13/33 TG4 gates**. P4-55/TG4-29, P4-43 and now P4-40 closed since the earlier 32/59, 10/33 baseline. Remaining core tasks: 23 including owner Calendar P4-49. Full phase remains open.
+Current counts: **37/59 P4 tasks; 14/33 TG4 gates**. P4-55/TG4-29, P4-43 and now P4-40 closed since the earlier 32/59, 10/33 baseline. Remaining core tasks: 22 including owner Calendar P4-49. Full phase remains open.
 
 ## Completed claim-safety unit
 
@@ -39,3 +39,9 @@ P4-52 next: ADR-0286 adds test-only exhausted startup budget/reservation preserv
 ADR-0286 worker preservation/post-commit group passes Windows 3/3 (4.85s), Linux 3/3 (4.67s). Policy group passes 9/9 on both; real redacting writer → actual CLI export reader passes 1/1 on both (1.44s/1.34s). Workspace check and format pass. Source changes are test-only. P4-52/TG4-26 remains open because the synchronous setup closure can exceed the two-second limit (ADR-0287); owner question is pending. Counts remain 36/59, 13/33.
 
 ACP `8ff0b5f` and fixture `0f18f53` are pushed to established origin/main. Remote CI 37224469153 is running at that checkpoint: frontend and CLI green, Rust workspace tests pending. Do not cancel that portability attempt with incidental pushes. Reused timestamp agent could not verify its own model restriction and stopped without writing; no fresh model-compliant review is claimed. Next independent bounded work: saved-task/daily-cap interaction under P4-29/TG4-15, then remaining core task/gate milestones.
+
+## P4-29 / TG4-15 closeout
+
+Saved-task and daily-budget interaction is proven (ADR-0288): production Engine/ClaimTaskTool/CappedProvider exact-cost/refusal/persisted-reader cases pass within the 10/10 engine group on Windows/Linux; workspace check passes. Task29/gate15 are checked; tally 37/59, 14/33. TG2-17 remains separately open. Proof: `P4-29-BUDGET-INTERACTION-CLOSEOUT-2026-10-05.md`.
+
+Remote run37224469153 passed Rust workspace, frontend and CLI. macOS then fails compiling the old synchronous refusal test because spawn is async. ADR-0289 changes only that fixture to Tokio async + await; no macOS execution capability is enabled. Windows/Linux saved-workflow matrix steps were still running at the last check. Retry unit `5e4a5f7` is committed locally, not pushed while the matrix is active. Owner decisions pending: hard startup deadline versus retry admission semantics, canonical correlation UUID preservation, and one new bounded live CLI Fleet smoke ($1/120k/20 turns/10-minute epic). Do not spend while that new live approval is pending.

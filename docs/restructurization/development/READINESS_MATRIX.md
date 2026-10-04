@@ -435,3 +435,8 @@ Post-format revalidation update: `cargo fmt --all -- --check` passes. The same p
 | Date | Scope | Evidence | Remaining contract |
 |---|---|---|---|
 | 2026-10-05 | P4-52 startup preservation and post-effect boundary | Windows/Linux shipped-worker group 3/3, retry policy 9/9 and actual redacting writer → CLI export integration 1/1 on each host. Exhaustion retains the saved task/daily ledger; failure after a real commit quarantines the task without replay. | P4-52/TG4-26 remain open: synchronous setup can exceed the two-second retry-admission limit. ADR-0287 asks for the deadline contract; no hard total deadline, global daily-cap closeout, full recovery or successful live Fleet claim. |
+
+
+| Date | Scope | Evidence | Limits |
+|---|---|---|---|
+| 2026-10-05 | P4-29 / TG4-15 closeout | Real claimed-task cap under enabled daily ceiling, daily pre-claim reservation denial, exact observed-cost settlement, zero holds and worker pause/status readback pass. Engine consumer group 10/10 Windows/Linux. | P4 37/59, TG4 14/33. TG2-17 remains separately open; no global cap, live Fleet or Calendar claim. Budget proof is `_verify/P4-29-BUDGET-INTERACTION-CLOSEOUT-2026-10-05.md`. |
