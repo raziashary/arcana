@@ -59,6 +59,53 @@ pub struct Usage {
     pub tool: u32,
 }
 
+#[cfg(test)]
+pub(crate) fn test_error_server(body: String) -> (String, tokio::task::JoinHandle<()>) {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind provider error fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::task::spawn_blocking(move || {
+        let (mut stream, _) = listener.accept().expect("accept provider request");
+        let mut reader = BufReader::new(stream.try_clone().expect("clone fixture stream"));
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("read request line");
+        loop {
+            line.clear();
+            reader.read_line(&mut line).expect("read request header");
+            if line == "\r\n" || line.is_empty() {
+                break;
+            }
+        }
+        let _ = write!(
+            stream,
+            "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = stream.flush();
+    });
+    (format!("http://{address}"), server)
+}
+
+#[cfg(test)]
+pub(crate) fn test_completion_request() -> crate::provider::types::CompletionRequest {
+    crate::provider::types::CompletionRequest {
+        model: "provider-test-model".to_string(),
+        messages: vec![],
+        system: None,
+        tools: vec![],
+        max_tokens: 128,
+        temperature: None,
+        top_p: None,
+        reasoning_effort: None,
+        thinking_budget_tokens: None,
+        cache: CachePolicy::Off,
+        clear_tool_uses: None,
+    }
+}
+
 impl Usage {
     /// Every input token the request was billed for, cached or not.
     ///
@@ -223,6 +270,53 @@ pub enum ErrorClass {
     QuotaExhausted,
     Deferred,
     Fatal,
+}
+
+/// Maximum response bytes inspected for provider failure classification.
+/// Provider errors can echo submitted prompts, so callers must never return
+/// the inspected body to model-facing or user-visible consumers.
+pub(crate) const MAX_PROVIDER_ERROR_BODY_BYTES: usize = 16 * 1024;
+
+/// Read a complete provider error body only while it remains within the
+/// classification bound. `None` means the response was oversized or unreadable.
+pub(crate) async fn read_bounded_error_body(response: reqwest::Response) -> Option<Vec<u8>> {
+    let mut response = response;
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        if body.len().saturating_add(chunk.len()) > MAX_PROVIDER_ERROR_BODY_BYTES {
+            return None;
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Some(body)
+}
+
+/// Classify only a fully read, bounded provider body. Missing/oversized bodies
+/// fail closed because a truncated HTTP 429 cannot distinguish quota from rate
+/// limiting safely.
+pub(crate) fn classify_bounded_error_body(
+    provider: &str,
+    status: u16,
+    body: Option<&[u8]>,
+) -> ErrorClass {
+    body.map(|body| ErrorClass::classify(provider, status, &String::from_utf8_lossy(body)))
+        .unwrap_or(ErrorClass::Fatal)
+}
+
+/// Classify an HTTP provider error without returning response-controlled text.
+pub(crate) async fn safe_error_response(
+    provider: &str,
+    status: reqwest::StatusCode,
+    response: reqwest::Response,
+) -> (ErrorClass, &'static str) {
+    let body = read_bounded_error_body(response).await;
+    let class = classify_bounded_error_body(provider, status.as_u16(), body.as_deref());
+    let summary = if body.is_some() {
+        "provider_error_response"
+    } else {
+        "provider_error_details_unavailable"
+    };
+    (class, summary)
 }
 
 impl ErrorClass {

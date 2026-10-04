@@ -339,3 +339,36 @@ fn a_frame_carrying_arguments_and_a_stop_reason_yields_both() {
         "the stop reason was dropped, so the loop would not know the turn ended: {chunks:?}"
     );
 }
+
+#[tokio::test]
+async fn provider_error_body_is_not_forwarded_to_openai_consumers() {
+    use super::openai::OpenAIProvider;
+    use super::traits::Provider;
+    use super::usage::{test_completion_request, test_error_server};
+
+    let body = r#"{"error":{"type":"insufficient_quota","message":"private-request-marker"}}"#;
+    let (api_base, server) = test_error_server(body.to_string());
+    let provider = OpenAIProvider::new_at("test-key".into(), api_base);
+    let error = provider
+        .complete(test_completion_request())
+        .await
+        .expect_err("provider HTTP error")
+        .to_string();
+    assert!(error.contains("[QuotaExhausted]"), "{error}");
+    assert!(error.contains("provider_error_response"), "{error}");
+    assert!(!error.contains("private-request-marker"), "{error}");
+    server.await.expect("OpenAI fixture");
+
+    let (api_base, server) = test_error_server(body.to_string());
+    let provider = OpenAIProvider::new_at("test-key".into(), api_base);
+    let error = provider
+        .stream(test_completion_request())
+        .await
+        .err()
+        .expect("provider stream HTTP error")
+        .to_string();
+    assert!(error.contains("[QuotaExhausted]"), "{error}");
+    assert!(error.contains("provider_error_response"), "{error}");
+    assert!(!error.contains("private-request-marker"), "{error}");
+    server.await.expect("OpenAI stream fixture");
+}

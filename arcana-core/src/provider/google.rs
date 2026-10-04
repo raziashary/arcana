@@ -11,13 +11,12 @@ use super::traits::{Provider, StreamResult};
 use super::types::{
     CompletionRequest, CompletionResponse, MessageContent, ModelInfo, ProviderStatus, StreamChunk,
 };
-use super::usage::{ErrorClass, Usage};
+use super::usage::{classify_bounded_error_body, read_bounded_error_body, ErrorClass, Usage};
 use crate::errors::{ArcanaError, Result};
 use crate::state::lock::LockTolerant;
 
 const GOOGLE_API_BASE: &str = "https://generativelanguage.googleapis.com";
 const MAX_COUNT_TOKENS_RESPONSE_BYTES: usize = 16 * 1024;
-const MAX_PROVIDER_ERROR_BODY_BYTES: usize = 16 * 1024;
 
 /// Extract only Google's machine-readable status and validated field paths.
 /// Provider error messages can echo submitted content, so they are never
@@ -69,32 +68,12 @@ fn safe_google_error_summary(bytes: &[u8]) -> String {
     summary
 }
 
-async fn read_bounded_error_body(response: reqwest::Response) -> Option<Vec<u8>> {
-    let mut stream = response.bytes_stream();
-    let mut body = Vec::new();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.ok()?;
-        if body.len().saturating_add(chunk.len()) > MAX_PROVIDER_ERROR_BODY_BYTES {
-            return None;
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Some(body)
-}
-
 async fn safe_google_error_details(
     status: reqwest::StatusCode,
     response: reqwest::Response,
 ) -> (ErrorClass, String) {
     let body = read_bounded_error_body(response).await;
-    let class = match body.as_deref() {
-        Some(body) => {
-            ErrorClass::classify("google", status.as_u16(), &String::from_utf8_lossy(body))
-        }
-        // Without a bounded complete body, fail closed instead of guessing
-        // that a 429 is transient rather than a non-retryable quota failure.
-        None => ErrorClass::Fatal,
-    };
+    let class = classify_bounded_error_body("google", status.as_u16(), body.as_deref());
     let summary = body
         .as_deref()
         .map(safe_google_error_summary)

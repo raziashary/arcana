@@ -440,4 +440,38 @@ mod p3_25_wire_tests {
              emit would fail every request"
         );
     }
+
+    #[tokio::test]
+    async fn provider_error_body_is_not_forwarded_to_anthropic_consumers() {
+        use super::super::anthropic::AnthropicProvider;
+        use super::super::traits::Provider;
+        use super::super::usage::{test_completion_request, test_error_server};
+
+        let body =
+            r#"{"error":{"type":"rate_limit_error","message":"private quota exceeded marker"}}"#;
+        let (api_base, server) = test_error_server(body.to_string());
+        let provider = AnthropicProvider::new_at("test-key".into(), api_base);
+        let error = provider
+            .complete(test_completion_request())
+            .await
+            .expect_err("provider HTTP error")
+            .to_string();
+        assert!(error.contains("[QuotaExhausted]"), "{error}");
+        assert!(error.contains("provider_error_response"), "{error}");
+        assert!(!error.contains("private quota exceeded marker"), "{error}");
+        server.await.expect("Anthropic fixture");
+
+        let (api_base, server) = test_error_server(body.to_string());
+        let provider = AnthropicProvider::new_at("test-key".into(), api_base);
+        let error = provider
+            .stream(test_completion_request())
+            .await
+            .err()
+            .expect("provider stream HTTP error")
+            .to_string();
+        assert!(error.contains("[QuotaExhausted]"), "{error}");
+        assert!(error.contains("provider_error_response"), "{error}");
+        assert!(!error.contains("private quota exceeded marker"), "{error}");
+        server.await.expect("Anthropic stream fixture");
+    }
 }

@@ -1,7 +1,7 @@
 // OpenAI provider — direct API calls to api.openai.com.
 // Implements the Provider trait with streaming support.
 
-use super::usage::CachePolicy;
+use super::usage::{safe_error_response, CachePolicy};
 use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;
@@ -21,6 +21,7 @@ const OPENAI_API_BASE: &str = "https://api.openai.com/v1";
 pub struct OpenAIProvider {
     api_key: String,
     client: Client,
+    api_base: String,
 }
 
 impl OpenAIProvider {
@@ -28,6 +29,18 @@ impl OpenAIProvider {
         Self {
             api_key,
             client: Client::new(),
+            api_base: OPENAI_API_BASE.to_string(),
+        }
+    }
+
+    /// Construct a provider against a configured API base. Tests use a local
+    /// fixture server; production callers use [`Self::new`].
+    #[cfg(test)]
+    pub(crate) fn new_at(api_key: String, api_base: String) -> Self {
+        Self {
+            api_key,
+            client: Client::new(),
+            api_base,
         }
     }
 
@@ -274,7 +287,7 @@ impl Provider for OpenAIProvider {
 
         let resp = self
             .client
-            .post(format!("{OPENAI_API_BASE}/chat/completions"))
+            .post(format!("{}/chat/completions", self.api_base))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -283,14 +296,12 @@ impl Provider for OpenAIProvider {
 
         let status = resp.status();
         if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
+            let (class, summary) = safe_error_response("openai", status, resp).await;
             // P2-67/68. Classified here, where the body is available: a 429
             // from a spend cap and a 429 from a rate limit are the same
             // status, and only the body separates them.
-            let class =
-                crate::provider::usage::ErrorClass::classify("openai", status.as_u16(), &text);
             return Err(ArcanaError::Provider(format!(
-                "OpenAI {status} [{class:?}]: {text}"
+                "OpenAI {status} [{class:?}]: {summary}"
             )));
         }
 
@@ -304,7 +315,7 @@ impl Provider for OpenAIProvider {
 
         let resp = self
             .client
-            .post(format!("{OPENAI_API_BASE}/chat/completions"))
+            .post(format!("{}/chat/completions", self.api_base))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -313,15 +324,13 @@ impl Provider for OpenAIProvider {
 
         let status = resp.status();
         if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
+            let (class, summary) = safe_error_response("openai", status, resp).await;
             // P2-67/68. The class is attached rather than left to be
             // re-derived downstream: a 429 from a spend cap and a 429 from a
             // rate limit are the same status and only the body tells them
             // apart, so the one place that has the body is the place to decide.
-            let class =
-                crate::provider::usage::ErrorClass::classify("openai", status.as_u16(), &text);
             return Err(ArcanaError::Provider(format!(
-                "OpenAI stream {status} [{class:?}]: {text}"
+                "OpenAI stream {status} [{class:?}]: {summary}"
             )));
         }
 
@@ -358,7 +367,7 @@ impl Provider for OpenAIProvider {
         // Use models endpoint to validate key
         let resp = self
             .client
-            .get(format!("{OPENAI_API_BASE}/models"))
+            .get(format!("{}/models", self.api_base))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .send()
             .await;

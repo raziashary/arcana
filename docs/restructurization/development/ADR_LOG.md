@@ -6629,3 +6629,17 @@ readback.
 **Limit.** This decision covers the Google adapter observed in the current Gemini production path. Other providers require separate source-grounded privacy review; it does not close P4-51 or TG4-24.
 
 **Where.** `arcana-core/src/provider/google.rs`, `arcana-core/src/provider/google_tests.rs`, P4-51, TG4-24.
+
+## ADR-LOG-RESTRUCT-0259 — Bound HTTP error bodies across provider adapters
+
+**Status.** Implemented and focused-tested on 2026-10-04.
+
+**Decision.** All three shipped HTTP provider adapters (Google, OpenAI, Anthropic) consume non-success response bodies through one 16 KiB bounded reader for classification. Preserve the existing typed quota/retry class when a complete bounded body is available; return only a validated Google summary or a static provider-error summary. Oversized or unreadable bodies fail closed as `Fatal`; raw response text is never returned in `ArcanaError`.
+
+**Reason.** OpenAI and Anthropic previously returned the complete provider response body from both unary and streaming failures. Such bodies can echo submitted prompts. Keeping body classification in the adapters preserves the non-retryable quota distinction while preventing those contents from flowing into RecipeRunner, worker outcomes, scheduler events, or logs.
+
+**Evidence.** Local HTTP fixtures drive OpenAI and Anthropic unary and streaming methods with planted private response text and quota error bodies; `cargo test -p arcana-core --lib provider_error_body_is_not_forwarded --locked -- --test-threads=1` passes 2/2. The Google adapter suite passes 19/19, including a bounded oversized-body failure, and the production AgentEngine no-retry/analytics test passes 1/1. `cargo check -p arcana-core --locked`, workspace formatting, and diff checks pass.
+
+**Limit.** This covers HTTP non-success bodies for the three shipped adapters only. Transport failures, malformed successful responses, in-stream provider errors, timeout/cancellation behavior, and the full ToolExecutor failure matrix remain in P4-51/TG4-25; no task or gate closes here.
+
+**Where.** `arcana-core/src/provider/usage.rs`, `arcana-core/src/provider/google.rs`, `arcana-core/src/provider/openai.rs`, `arcana-core/src/provider/anthropic.rs`, their adapter tests, P4-51, TG4-25.

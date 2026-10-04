@@ -1,7 +1,7 @@
 // Anthropic provider — direct API calls to api.anthropic.com.
 // Implements the Provider trait with streaming support.
 
-use super::usage::CachePolicy;
+use super::usage::{safe_error_response, CachePolicy};
 use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;
@@ -34,6 +34,7 @@ const ANTHROPIC_CONTEXT_MGMT_BETA: &str = "context-management-2025-06-27";
 pub struct AnthropicProvider {
     api_key: String,
     client: Client,
+    api_base: String,
 }
 
 impl AnthropicProvider {
@@ -41,6 +42,18 @@ impl AnthropicProvider {
         Self {
             api_key,
             client: Client::new(),
+            api_base: ANTHROPIC_API_BASE.to_string(),
+        }
+    }
+
+    /// Construct a provider against a configured API base. Tests use a local
+    /// fixture server; production callers use [`Self::new`].
+    #[cfg(test)]
+    pub(crate) fn new_at(api_key: String, api_base: String) -> Self {
+        Self {
+            api_key,
+            client: Client::new(),
+            api_base,
         }
     }
 
@@ -281,7 +294,7 @@ impl Provider for AnthropicProvider {
 
         let mut builder = self
             .client
-            .post(format!("{ANTHROPIC_API_BASE}/messages"))
+            .post(format!("{}/messages", self.api_base))
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
             .header("content-type", "application/json");
@@ -294,15 +307,13 @@ impl Provider for AnthropicProvider {
 
         let status = resp.status();
         if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
+            let (class, summary) = safe_error_response("anthropic", status, resp).await;
             // P2-67/68. The class is attached rather than left to be
             // re-derived downstream: a 429 from a spend cap and a 429 from a
             // rate limit are the same status and only the body tells them
             // apart, so the one place that has the body is the place to decide.
-            let class =
-                crate::provider::usage::ErrorClass::classify("anthropic", status.as_u16(), &text);
             return Err(ArcanaError::Provider(format!(
-                "Anthropic {status} [{class:?}]: {text}"
+                "Anthropic {status} [{class:?}]: {summary}"
             )));
         }
 
@@ -317,7 +328,7 @@ impl Provider for AnthropicProvider {
 
         let mut builder = self
             .client
-            .post(format!("{ANTHROPIC_API_BASE}/messages"))
+            .post(format!("{}/messages", self.api_base))
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
             .header("content-type", "application/json");
@@ -330,15 +341,13 @@ impl Provider for AnthropicProvider {
 
         let status = resp.status();
         if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
+            let (class, summary) = safe_error_response("anthropic", status, resp).await;
             // P2-67/68. The class is attached rather than left to be
             // re-derived downstream: a 429 from a spend cap and a 429 from a
             // rate limit are the same status and only the body tells them
             // apart, so the one place that has the body is the place to decide.
-            let class =
-                crate::provider::usage::ErrorClass::classify("anthropic", status.as_u16(), &text);
             return Err(ArcanaError::Provider(format!(
-                "Anthropic stream {status} [{class:?}]: {text}"
+                "Anthropic stream {status} [{class:?}]: {summary}"
             )));
         }
 
@@ -379,7 +388,7 @@ impl Provider for AnthropicProvider {
         // Use models endpoint — minimal cost, validates the key
         let resp = self
             .client
-            .get(format!("{ANTHROPIC_API_BASE}/models"))
+            .get(format!("{}/models", self.api_base))
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
             .send()
