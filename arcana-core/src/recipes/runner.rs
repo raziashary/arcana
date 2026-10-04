@@ -1271,6 +1271,7 @@ mod production_git_commit_recipe_tests {
 
     struct CommitPathProvider {
         task_id: i64,
+        fail_after_commit: bool,
         turn: Mutex<usize>,
         requests: Mutex<Vec<CompletionRequest>>,
     }
@@ -1400,6 +1401,11 @@ mod production_git_commit_recipe_tests {
                         !commit,
                         "the host commit tool should accept the safe named file"
                     );
+                    if self.fail_after_commit {
+                        return Err(ArcanaError::Agent(
+                            "synthetic failure after committed effect".into(),
+                        ));
+                    }
                     Self::final_answer()
                 }
                 _ => panic!("unexpected provider request after scripted task completion"),
@@ -1414,6 +1420,161 @@ mod production_git_commit_recipe_tests {
 
     #[tokio::test]
     async fn model_produced_commit_runs_through_recipe_runner_and_host_guard() {
+        run_commit_recipe(false).await;
+    }
+
+    #[tokio::test]
+    async fn failure_after_host_commit_does_not_restart_or_replay_the_effect() {
+        run_commit_recipe(true).await;
+    }
+
+    #[tokio::test]
+    async fn exhausted_startup_preserves_assigned_task_budget_and_daily_reservation() {
+        use crate::budget::daily::{DailyCap, ReservationDecision};
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("isolated workspace");
+        let tasks = TasksDb::open().unwrap();
+        let task = tasks
+            .create(CreateTaskInput {
+                title: "preserve startup identity".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "no effect during failed setup".into(),
+                created_by: Some("startup-budget-test".into()),
+            })
+            .unwrap();
+        tasks
+            .update_status(task.id, "assigned", Some("worker-backend"))
+            .unwrap();
+        tasks
+            .set_task_budget(task.id, Some(1000), Some(0.75), Some(5))
+            .unwrap();
+        tasks
+            .update_task_budget_usage(task.id, 37, 0.125, 1)
+            .unwrap();
+        let before = tasks.get_by_id(task.id).unwrap().unwrap();
+        let mut app_state = AppState {
+            active_provider: Some("google".into()),
+            active_model: Some("gemini-3.8-flash".into()),
+            ..AppState::default()
+        };
+        app_state.add_cost(0.25, 31, 7);
+        DailyCap {
+            enabled: true,
+            limit_usd: 2.0,
+        }
+        .save()
+        .unwrap();
+        let hold = crate::budget::daily::reserve_provider_call("existing-startup-hold".into(), 0.1)
+            .unwrap();
+        assert!(matches!(hold, ReservationDecision::Granted(_)));
+        let budget_snapshot = || {
+            let db = crate::db::config_db::open().unwrap();
+            let spent: Vec<(String, i64)> = db
+                .prepare(
+                    "SELECT local_date, spent_micros FROM daily_budget_totals ORDER BY local_date",
+                )
+                .unwrap()
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap();
+            let holds: Vec<(String, String, i64, String)> = db.prepare("SELECT id, local_date, amount_micros, created_at FROM daily_budget_reservations ORDER BY id").unwrap()
+                .query_map([], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+            (spent, holds)
+        };
+        let before_daily = budget_snapshot();
+        let state = Arc::new(Mutex::new(app_state));
+        let provider = Arc::new(CommitPathProvider {
+            task_id: task.id,
+            fail_after_commit: false,
+            turn: Mutex::new(0),
+            requests: Mutex::new(Vec::new()),
+        });
+        let runner = RecipeRunner::new_with_workspace_override(
+            state.clone(),
+            Arc::new(SessionManager::new().unwrap()),
+            crate::agent::permission::new_pending_permissions(),
+            Some(workspace.path().to_string_lossy().into_owned()),
+        )
+        .with_provider_for_test(provider.clone())
+        .with_startup_failures_for_test(STARTUP_MAX_ATTEMPTS as usize);
+        let recipes = home.path().join(".arcana/recipes");
+        crate::recipes::defaults::ensure_default_recipes(&recipes).unwrap();
+        let recipe: Recipe = serde_yaml::from_str(
+            &std::fs::read_to_string(recipes.join("worker-backend-poll.yaml")).unwrap(),
+        )
+        .unwrap();
+        assert!(runner.run_recipe(&recipe, "worker-backend").await.is_err());
+        assert!(
+            provider.requests.lock().unwrap().is_empty(),
+            "startup cannot dispatch the provider"
+        );
+        assert_eq!(*provider.turn.lock().unwrap(), 0);
+        let after = tasks.get_by_id(task.id).unwrap().unwrap();
+        assert_eq!(after.status, before.status);
+        assert_eq!(after.assigned_worker, before.assigned_worker);
+        assert_eq!(
+            (after.claimed_by_pid, after.claim_host),
+            (before.claimed_by_pid, before.claim_host)
+        );
+        assert_eq!(
+            (
+                after.budget_max_tokens,
+                after.budget_max_usd,
+                after.budget_max_turns
+            ),
+            (
+                before.budget_max_tokens,
+                before.budget_max_usd,
+                before.budget_max_turns
+            )
+        );
+        assert_eq!(
+            (
+                after.budget_tokens_used,
+                after.budget_cost_usd,
+                after.budget_turns_used,
+                after.budget_exceeded
+            ),
+            (
+                before.budget_tokens_used,
+                before.budget_cost_usd,
+                before.budget_turns_used,
+                before.budget_exceeded
+            )
+        );
+        assert_eq!(
+            budget_snapshot(),
+            before_daily,
+            "same durable reservation and spend after retries"
+        );
+        let state = state.lock().unwrap();
+        assert_eq!(
+            (
+                state.cost_today_usd,
+                state.tokens_in_today,
+                state.tokens_out_today
+            ),
+            (0.25, 31, 7)
+        );
+        let runs = crate::db::runs::RunsDb::open().unwrap();
+        let run = runs.latest_worker_tick("worker-backend").unwrap().unwrap();
+        assert_eq!(run.phase, "failed");
+        assert!(runs
+            .operation_journal_page(&run.run_id, 0, 20)
+            .unwrap()
+            .entries
+            .is_empty());
+        assert!(std::fs::read_dir(workspace.path())
+            .unwrap()
+            .next()
+            .is_none());
+    }
+
+    async fn run_commit_recipe(fail_after_commit: bool) {
         let home = tempfile::tempdir().expect("isolated Arcana home");
         let _home = crate::db::test_support::with_home(home.path());
         let analytics = Arc::new(
@@ -1505,6 +1666,7 @@ mod production_git_commit_recipe_tests {
 
         let provider = Arc::new(CommitPathProvider {
             task_id,
+            fail_after_commit,
             turn: Mutex::new(0),
             requests: Mutex::new(Vec::new()),
         });
@@ -1540,7 +1702,14 @@ mod production_git_commit_recipe_tests {
                     .expect("open worker run ledger")
                     .latest_worker_tick("worker-backend")
                     .expect("read worker tick")
-                    .is_some_and(|run| run.phase == "completed");
+                    .is_some_and(|run| {
+                        run.phase
+                            == if fail_after_commit {
+                                "failed"
+                            } else {
+                                "completed"
+                            }
+                    });
                 if completed {
                     break;
                 }
@@ -1581,7 +1750,14 @@ mod production_git_commit_recipe_tests {
             .collect::<Vec<_>>();
         assert_eq!(changed_paths, ["change.txt"]);
         let task = tasks.get_by_id(task_id).unwrap().unwrap();
-        assert_eq!(task.status, crate::db::tasks::TaskStatus::InProgress);
+        assert_eq!(
+            task.status,
+            if fail_after_commit {
+                crate::db::tasks::TaskStatus::NeedsInfo
+            } else {
+                crate::db::tasks::TaskStatus::InProgress
+            }
+        );
         assert_eq!(task.assigned_worker.as_deref(), Some("worker-backend"));
         assert!(
             task.budget_turns_used > 0 && task.budget_turns_used <= 3,
@@ -1603,14 +1779,46 @@ mod production_git_commit_recipe_tests {
             .latest_worker_tick("worker-backend")
             .expect("read latest worker tick")
             .expect("production runner should persist a tick");
-        assert_eq!(latest.phase, "completed");
+        assert_eq!(
+            latest.phase,
+            if fail_after_commit {
+                "failed"
+            } else {
+                "completed"
+            }
+        );
         let journal = runs
             .operation_journal_page(&latest.run_id, 0, 20)
             .expect("read commit operation journal");
-        assert!(journal.entries.iter().any(|entry| {
-            entry.operation == "git_commit"
-                && entry.outcome == crate::db::runs::OperationOutcome::Ok
-        }));
+        assert_eq!(
+            journal
+                .entries
+                .iter()
+                .filter(|entry| {
+                    entry.operation == "git_commit"
+                        && entry.outcome == crate::db::runs::OperationOutcome::Ok
+                })
+                .count(),
+            1,
+            "exactly one durable committed effect"
+        );
+        assert_eq!(
+            committed.parent(0).unwrap().id(),
+            initial,
+            "no replayed commit"
+        );
+        if fail_after_commit {
+            assert!(task.claimed_by_pid.is_none() && task.claim_host.is_none());
+            let before = provider.requests.lock().unwrap().len();
+            scheduler.kick_worker("worker-backend");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            scheduler.shutdown().await;
+            assert_eq!(
+                provider.requests.lock().unwrap().len(),
+                before,
+                "held task must not automatically restart after its effect"
+            );
+        }
     }
 }
 
