@@ -45,6 +45,7 @@ struct PathBeneathAttr {
 pub(super) struct LandlockGuard {
     _ruleset: OwnedFd,
     _workspace: OwnedFd,
+    _null_device: OwnedFd,
 }
 
 pub(super) fn confine(command: &mut Command, workspace: &Path) -> io::Result<LandlockGuard> {
@@ -97,6 +98,26 @@ pub(super) fn confine(command: &mut Command, workspace: &Path) -> io::Result<Lan
     if add_rule != 0 {
         return Err(io::Error::last_os_error());
     }
+    // Standard Unix runtimes and package-manager shims commonly redirect
+    // diagnostics to /dev/null. Permit writes to this single character device
+    // while all other writes remain confined to the selected workspace.
+    let null_device = open_path("/dev/null")?;
+    let null_rule = PathBeneathAttr {
+        allowed_access: LANDLOCK_ACCESS_FS_WRITE_FILE,
+        parent_fd: null_device.as_raw_fd(),
+    };
+    let add_null_rule = unsafe {
+        libc::syscall(
+            libc::SYS_landlock_add_rule,
+            ruleset.as_raw_fd(),
+            LANDLOCK_RULE_PATH_BENEATH,
+            &null_rule,
+            0u32,
+        )
+    };
+    if add_null_rule != 0 {
+        return Err(io::Error::last_os_error());
+    }
 
     let ruleset_fd = ruleset.as_raw_fd();
     unsafe {
@@ -116,11 +137,16 @@ pub(super) fn confine(command: &mut Command, workspace: &Path) -> io::Result<Lan
     Ok(LandlockGuard {
         _ruleset: ruleset,
         _workspace: workspace_fd,
+        _null_device: null_device,
     })
 }
 
 fn open_workspace(workspace: &Path) -> io::Result<OwnedFd> {
-    let path = std::ffi::CString::new(workspace.as_os_str().as_bytes())
+    open_path(workspace.as_os_str())
+}
+
+fn open_path(path: impl AsRef<std::ffi::OsStr>) -> io::Result<OwnedFd> {
+    let path = std::ffi::CString::new(path.as_ref().as_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "workspace path contains NUL"))?;
     let fd = unsafe { libc::open(path.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
     if fd < 0 {
@@ -145,7 +171,7 @@ mod tests {
         std::fs::create_dir(&outside).unwrap();
         symlink(&outside, workspace.join("outside-link")).unwrap();
 
-        let script = "printf ok > allowed; printf denied > outside-link/marker; sh -c 'printf child-denied > ../outside/child-marker'";
+        let script = "printf ok > allowed; printf discard >/dev/null; printf denied > outside-link/marker; sh -c 'printf child-denied > ../outside/child-marker'";
         let child = spawn(
             ProcessSpec {
                 program: "sh".into(),

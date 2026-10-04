@@ -412,13 +412,12 @@ mod p3_15_tests {
         // first version of this test failed because the LITERAL was mangled in
         // transit while the code under test was correct. Concatenation removes
         // that ambiguity.
-        let bs = std::path::MAIN_SEPARATOR;
-        let input = format!("{bs}{bs}?{bs}UNC{bs}server{bs}share{bs}dir{bs}f.txt");
-        let out = strip_verbatim_prefix(std::path::Path::new(&input));
+        let input = r"\\?\UNC\server\share\dir\f.txt";
+        let out = strip_verbatim_prefix(std::path::Path::new(input));
         let text = out.to_string_lossy().to_string();
 
         assert!(
-            text.starts_with(&format!("{bs}{bs}")),
+            text.starts_with(r"\\"),
             "a de-verbatimised UNC path must keep its network root, got {text}"
         );
         assert!(
@@ -432,13 +431,9 @@ mod p3_15_tests {
     fn a_verbatim_drive_path_still_strips_cleanly() {
         // The no-fire half: the common Windows case must be unchanged, or every
         // path on Windows stops matching its own workspace.
-        let bs = std::path::MAIN_SEPARATOR;
-        let input = format!("{bs}{bs}?{bs}C:{bs}work{bs}repo{bs}src{bs}main.rs");
-        let out = strip_verbatim_prefix(std::path::Path::new(&input));
+        let input = r"\\?\C:\work\repo\src\main.rs";
+        let out = strip_verbatim_prefix(std::path::Path::new(input));
 
-        assert_eq!(
-            out.to_string_lossy(),
-            format!("C:{bs}work{bs}repo{bs}src{bs}main.rs")
-        );
+        assert_eq!(out.to_string_lossy(), r"C:\work\repo\src\main.rs");
     }
 }

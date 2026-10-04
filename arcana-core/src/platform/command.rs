@@ -191,6 +191,13 @@ pub fn resolve(toolchain: Toolchain, intent: CommandIntent) -> Option<ResolvedCo
 pub fn resolve_program(toolchain: Toolchain) -> String {
     let base = toolchain.program();
 
+    #[cfg(unix)]
+    if toolchain == Toolchain::Python {
+        if let Some(path) = find_unix_program("python3") {
+            return path.to_string_lossy().into_owned();
+        }
+    }
+
     #[cfg(windows)]
     {
         if toolchain.is_windows_shim() {
@@ -201,6 +208,17 @@ pub fn resolve_program(toolchain: Toolchain) -> String {
     }
 
     base.to_string()
+}
+
+#[cfg(unix)]
+fn find_unix_program(name: &str) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::env::split_paths(&std::env::var_os("PATH")?).find_map(|directory| {
+        let candidate = directory.join(name);
+        let metadata = candidate.metadata().ok()?;
+        (metadata.is_file() && metadata.permissions().mode() & 0o111 != 0).then_some(candidate)
+    })
 }
 
 /// Find `name.<ext>` on PATH, trying each extension in order.

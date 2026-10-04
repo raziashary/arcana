@@ -196,7 +196,16 @@ pub fn run_ladder(conn: &Connection, db_name: &str, ladder: &[Migration]) -> Res
             {
                 let reason = format!("{db_name}-v{}-{}", m.version, m.name);
                 match backup_before_migration(&path, &reason) {
-                    Ok(b) => tracing::info!("[migrate] {}", b.describe()),
+                    Ok(b) => tracing::info!(
+                        target: "arcana::telemetry",
+                        event_type = "database_migration_backup_created",
+                        operation = "database_migration_backup",
+                        database = db_name,
+                        migration_version = m.version,
+                        bytes = b.bytes,
+                        outcome = "success",
+                        "Database backup created before migration"
+                    ),
                     Err(e) => {
                         return Err(ArcanaError::Agent(format!(
                             "{db_name}: refusing to apply destructive migration v{} ({}) because no backup could be taken: {e}",

@@ -16,15 +16,20 @@ async fn append_all<W>(writer: &mut W, bytes: &[u8]) -> Result<(), ToolResult>
 where
     W: AsyncWrite + Unpin,
 {
-    writer.write_all(bytes).await.map_err(|_| {
+    let unknown_outcome = || {
         ToolResult::categorized_error(
             "append_outcome_unknown",
             "side_effect_outcome_unknown",
-            "The append write failed after it started; some or all bytes may have been written.",
+            "The append write or flush failed after it started; some or all bytes may have been written.",
             "Reconcile the file contents against the task checkpoint before retrying this append.",
         )
         .with_unknown_side_effect_outcome()
-    })
+    };
+    writer
+        .write_all(bytes)
+        .await
+        .map_err(|_| unknown_outcome())?;
+    writer.flush().await.map_err(|_| unknown_outcome())
 }
 
 pub struct AppendFileTool;

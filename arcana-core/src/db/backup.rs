@@ -44,8 +44,7 @@ pub fn backup_root() -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// A completed backup. Returned so callers can name it in an error message or
-/// a log line — a backup nobody can find is not much better than none.
+/// A completed backup. Returned so callers can name it in an error message.
 #[derive(Debug, Clone)]
 pub struct Backup {
     /// Absolute path of the snapshot.
@@ -210,7 +209,14 @@ pub fn backup_database_in(
         reason: reason.to_string(),
         bytes,
     };
-    tracing::info!("[backup] {}", backup.describe());
+    tracing::info!(
+        target: "arcana::telemetry",
+        event_type = "database_backup_created",
+        operation = "database_backup",
+        outcome = "success",
+        bytes = backup.bytes,
+        "Database backup created"
+    );
     Ok(backup)
 }
 

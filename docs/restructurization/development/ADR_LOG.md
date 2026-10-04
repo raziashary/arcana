@@ -6783,3 +6783,73 @@ readback.
 **Limit.** This does not implement Ruff staging on Linux/macOS or close cross-platform ProjectCommand/security gates. Linux external-read/network containment, complete ecosystem corpus, full core suite, macOS sandbox, and Windows canonicalization remain open.
 
 **Where.** `arcana-core/src/agent/builtin_tools/project_command.rs`, `arcana-core/src/platform/process_sandbox/linux.rs`, P4-11/P4-61, TG4-18/TG4-31.
+
+## ADR-LOG-RESTRUCT-0270 — Keep absolute SQLite paths out of backup telemetry
+
+**Status.** Implemented and focused-tested on 2026-10-04.
+
+**Decision.** Emit structured backup success events with fixed operation labels, outcome, and byte count. Do not put source or destination filesystem paths in logs. Keep the concrete backup path available on the returned `Backup` value and in operation-specific user-facing error messages where it is needed to recover.
+
+**Reason.** The complete Linux core suite showed that migration and Clear Board backup logs serialize absolute temporary database paths. That violates the existing observability privacy contract and caused three path-redaction regressions. Structured telemetry can show that a recoverable backup was made and its size without exposing a user's home or project path.
+
+**Evidence.** The Linux full core run exposed the three redaction assertions. After the change, the WorkersDb initializer, Memory DB initializer/migration, and Clear Board backup path-redaction tests pass on both Ubuntu WSL and Windows (3/3 per host). The backup API still returns its concrete path to its caller; telemetry carries outcome and byte count only.
+
+**Limit.** This closes only backup success-event path leakage. Other errors that include paths must continue to be reviewed at their consumer boundary; P4-50/TG4-24 remain open.
+
+**Where.** `arcana-core/src/db/backup.rs`, `arcana-core/src/db/migrate.rs`, P4-50, TG4-24.
+
+## ADR-LOG-RESTRUCT-0271 — Keep Linux Cargo caches and targets in the workspace
+
+**Status.** Implemented and production-tested on 2026-10-04.
+
+**Decision.** Set `CARGO_HOME` and `CARGO_TARGET_DIR` to Arcana-managed cache directories under the selected workspace for Linux child processes.
+
+**Reason.** A production Cargo fixture failed because inherited `CARGO_TARGET_DIR` pointed outside the selected workspace, where Landlock correctly denied the build lock write. Rust cache state must be explicit and scoped to the task workspace; this also avoids writing to a shared host cache during autonomous execution.
+
+**Evidence.** `cargo_cache_and_build_output_are_isolated_inside_the_selected_workspace` passes on Linux. The production Rust ProjectCommand build/QC test, mixed-project spawn-failure test, cancellation/descendant cleanup test, and checked-in Rust/Node/Python-build corpus pass on Linux with the staged host toolchains.
+
+**Limit.** This isolates cache writes; it does not stage locked dependencies or constrain filesystem reads/network access. P4-11/P4-61 and TG4-18/TG4-31 remain open.
+
+**Where.** `arcana-core/src/platform/process_sandbox/mod.rs`, P4-11/P4-61, TG4-18/TG4-31.
+
+## ADR-LOG-RESTRUCT-0272 — Allow Linux children to write only to `/dev/null`
+
+**Status.** Implemented and focused-tested on 2026-10-04.
+
+**Decision.** Add a single Landlock write rule for `/dev/null` alongside the selected workspace write rule, and retain its file descriptor until child restriction is installed.
+
+**Reason.** The Linux production fixture uses the host npm launcher, which writes redirections to `/dev/null`; write confinement denied this harmless runtime operation. A precise device exception supports conventional toolchains without opening general external writes.
+
+**Evidence.** `confined_child_can_write_workspace_and_cannot_escape_via_symlink_or_child` passes on Linux with the `/dev/null` redirection, workspace write, and external symlink/descendant denial assertions.
+
+**Limit.** This is only a write exception for one device. It does not implement the approved external-read/network denial contract or complete runtime allowlisting; P4-11/P4-61 and TG4-18/TG4-31 remain open.
+
+**Where.** `arcana-core/src/platform/process_sandbox/linux.rs`, P4-11/P4-61, TG4-18/TG4-31.
+
+## ADR-LOG-RESTRUCT-0273 — Resolve Python through the Unix `python3` convention
+
+**Status.** Implemented and production-tested on 2026-10-04.
+
+**Decision.** On Unix hosts, resolve the Python toolchain to an executable `python3` found on PATH when available, and keep the existing `python` fallback. Preserve Windows' signed/staged Python runtime path.
+
+**Reason.** The Linux production corpus reached Python after Rust and Node execution, then failed to spawn because Ubuntu provides `python3` while Arcana selected the Windows-oriented `python` name. This host convention can be resolved deterministically without shell invocation or automatic dependency installation.
+
+**Evidence.** The checked-in ecosystem corpus passes on Ubuntu WSL with the host's `/usr/bin/python3` Build intent. The test project currently lacks pytest; this dependency is not installed implicitly, and staged Windows-runtime tests remain the pytest execution proof.
+
+**Limit.** This only resolves the interpreter executable. It does not install pytest/Ruff or stage project dependencies; P4-11/P4-61 and TG4-18/TG4-31 remain open.
+
+**Where.** `arcana-core/src/platform/command.rs`, P4-11/P4-61, TG4-18/TG4-31.
+
+## ADR-LOG-RESTRUCT-0274 — Flush appended bytes before reporting success
+
+**Status.** Implemented and focused-tested on 2026-10-04.
+
+**Decision.** Require `append_file` to complete an async flush before it reports a successful append. If either writing or flushing fails after side effects start, return the existing `append_outcome_unknown` result and instruct reconciliation against the checkpoint.
+
+**Reason.** A full Linux core run intermittently observed an empty file after the production tool returned success. The isolated append checkpoint test also reproduced once; awaiting a flush gives the tool a completion boundary before a consumer reads the file and avoids reporting success while buffered work may remain.
+
+**Evidence.** After the change, the production task-checkpoint append and partial-write unknown-outcome tests pass together (2/2) on Ubuntu WSL and Windows. The complete Linux `arcana-core` library suite passes 966/966 with the native Linux toolchain environment.
+
+**Limit.** This does not provide durable-media `fsync`; it ensures the async writer flush completed before success. P4-19/TG4-09 remain open for full artifact handoff and supported-platform proof.
+
+**Where.** `arcana-core/src/agent/builtin_tools/append_file.rs`, P4-19/P4-20, TG4-09.

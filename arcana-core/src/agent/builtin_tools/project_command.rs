@@ -2572,11 +2572,11 @@ fn main() {
             (
                 "fx-repo-python",
                 Toolchain::Python,
-                &[
-                    CommandIntent::Build,
-                    CommandIntent::Test,
-                    CommandIntent::Lint,
-                ][..],
+                // The portable corpus proves the standard-library build
+                // intent. Pytest and Ruff are dependencies: their production
+                // paths are covered by the Windows staged-runtime test and
+                // must not be installed implicitly on the Linux host.
+                &[CommandIntent::Build][..],
             ),
         ];
 

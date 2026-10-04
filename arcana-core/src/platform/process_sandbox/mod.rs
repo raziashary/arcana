@@ -348,6 +348,8 @@ fn workspace_cache_environment(workspace: &Path) -> io::Result<Vec<(OsString, Os
         ("TMP", temp_dir.clone()),
         ("TEMP", temp_dir),
         ("XDG_CACHE_HOME", cache_dir.join("xdg")),
+        ("CARGO_HOME", cache_dir.join("cargo")),
+        ("CARGO_TARGET_DIR", cache_dir.join("cargo-target")),
         ("NPM_CONFIG_CACHE", cache_dir.join("npm")),
         ("YARN_CACHE_FOLDER", cache_dir.join("yarn")),
         ("PNPM_HOME", cache_dir.join("pnpm")),
@@ -360,6 +362,31 @@ fn workspace_cache_environment(workspace: &Path) -> io::Result<Vec<(OsString, Os
     .into_iter()
     .map(|(key, path)| (OsString::from(key), path.into_os_string()))
     .collect())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_cache_environment_tests {
+    use super::workspace_cache_environment;
+    use tempfile::tempdir;
+
+    #[test]
+    fn cargo_cache_and_build_output_are_isolated_inside_the_selected_workspace() {
+        let workspace = tempdir().expect("isolated workspace");
+        let variables =
+            workspace_cache_environment(workspace.path()).expect("workspace cache environment");
+        for (key, suffix) in [
+            ("CARGO_HOME", ".arcana-cache/cargo"),
+            ("CARGO_TARGET_DIR", ".arcana-cache/cargo-target"),
+        ] {
+            let path = variables
+                .iter()
+                .find(|(name, _)| name == key)
+                .map(|(_, value)| std::path::PathBuf::from(value))
+                .unwrap_or_else(|| panic!("{key} override"));
+            assert!(path.starts_with(workspace.path()), "{key}={path:?}");
+            assert!(path.ends_with(suffix), "{key}={path:?}");
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
