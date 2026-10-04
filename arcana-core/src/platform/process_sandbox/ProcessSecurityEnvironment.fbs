@@ -1,0 +1,38 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+// Source: microsoft/mxc external/windows-sdk/ProcessSecurityEnvironment.fbs
+// Commit: 2044eac07ad819319e924ae3d3a5f427a79c9afb
+// PSEC wire contract for CreateProcessSecurityEnvironment.
+
+namespace ProcessSecurityEnvironmentLayout;
+
+struct SchemaVersion {
+  major:ushort;
+  minor:ushort;
+}
+
+table ProcessSecurityEnvironment {
+  version:SchemaVersion (required);
+  capabilities:string;
+  disallow_win32k_system_calls:bool = false;
+  ui_restrictions:ulong = 0;
+  fs_read_write:[string];
+  fs_read_only:[string];
+  fs_deny:[string];
+  network_policy:NetworkPolicy;
+  fs_enumerate:[string];
+}
+
+table ProxyInfo { url:string; }
+enum FilterAction : byte { deny, allow }
+enum IpProtocol : byte { any, tcp, udp, icmpv4, icmpv6 }
+table IpSubnet { address:string; prefix_length:ubyte = 0; }
+table DestinationRule { subnet:IpSubnet; except:[IpSubnet]; }
+table PortRule { protocol:IpProtocol = any; port:ushort = 0; end_port:ushort = 0; }
+table EndpointRule { destinations:[DestinationRule]; ports:[PortRule]; }
+table EndpointPolicy { default_action:FilterAction = deny; allow:[EndpointRule]; deny:[EndpointRule]; }
+table IngressPolicy { default_action:FilterAction = deny; host_loopback:FilterAction = deny; }
+table NetworkPolicy { proxy:ProxyInfo; egress:EndpointPolicy; allowed_appcontainer_peer:string; ingress:IngressPolicy; }
+
+root_type ProcessSecurityEnvironment;
+file_identifier "PSEC";

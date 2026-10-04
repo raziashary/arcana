@@ -6,6 +6,7 @@ use super::types::{
     AddHookInput, HookAction, HookConditions, HookConfig, HookExecutionLog, HookOutcome, HookType,
 };
 use crate::errors::{ArcanaError, Result};
+use crate::observability::timing::OperationTimer;
 use rusqlite::{params, Connection};
 
 pub struct HooksDb {
@@ -26,6 +27,7 @@ impl HooksDb {
     }
 
     pub fn list_all(&self) -> Result<Vec<HookConfig>> {
+        let operation = OperationTimer::start("database_hooks_list").with_database("config");
         let mut stmt = self.conn.prepare(
             "SELECT id, name, hook_type, enabled, priority, conditions, action, created_at, updated_at
              FROM hooks ORDER BY priority ASC"
@@ -33,10 +35,14 @@ impl HooksDb {
         let rows = stmt
             .query_map([], row_to_hook)
             .map_err(|e| ArcanaError::Agent(format!("HooksDb query: {e}")))?;
-        rows.filter_map(|r| r.ok()).collect::<Vec<_>>().pipe(Ok)
+        let hooks = rows.filter_map(|r| r.ok()).collect::<Vec<_>>();
+        operation.with_result_count(hooks.len()).succeed();
+        Ok(hooks)
     }
 
     pub fn list_by_type(&self, hook_type: &HookType) -> Result<Vec<HookConfig>> {
+        let operation =
+            OperationTimer::start("database_hooks_by_type_read").with_database("config");
         let type_str = hook_type.as_str();
         let mut stmt = self.conn.prepare(
             "SELECT id, name, hook_type, enabled, priority, conditions, action, created_at, updated_at
@@ -45,10 +51,13 @@ impl HooksDb {
         let rows = stmt
             .query_map(params![type_str], row_to_hook)
             .map_err(|e| ArcanaError::Agent(format!("HooksDb query: {e}")))?;
-        rows.filter_map(|r| r.ok()).collect::<Vec<_>>().pipe(Ok)
+        let hooks = rows.filter_map(|r| r.ok()).collect::<Vec<_>>();
+        operation.with_result_count(hooks.len()).succeed();
+        Ok(hooks)
     }
 
     pub fn get(&self, id: &str) -> Result<Option<HookConfig>> {
+        let operation = OperationTimer::start("database_hook_read").with_database("config");
         let mut stmt = self.conn.prepare(
             "SELECT id, name, hook_type, enabled, priority, conditions, action, created_at, updated_at
              FROM hooks WHERE id = ?1"
@@ -56,10 +65,30 @@ impl HooksDb {
         let mut rows = stmt
             .query_map(params![id], row_to_hook)
             .map_err(|e| ArcanaError::Agent(format!("HooksDb query: {e}")))?;
-        Ok(rows.next().and_then(|r| r.ok()))
+        let hook = rows.next().and_then(|r| r.ok());
+        if hook.is_some() {
+            operation.with_result_count(1).succeed();
+        } else {
+            operation.with_result_count(0).set_outcome("not_found");
+        }
+        Ok(hook)
     }
 
     pub fn insert(&self, input: &AddHookInput) -> Result<HookConfig> {
+        let operation = OperationTimer::start("database_hook_insert").with_database("config");
+        if let HookAction::Shell {
+            command,
+            working_dir,
+            ..
+        } = &input.action
+        {
+            crate::platform::shell_portability::validate_shell_command(command)
+                .map_err(|e| ArcanaError::Agent(format!("Hook command {e}")))?;
+            if let Some(working_dir) = working_dir {
+                crate::platform::shell_portability::validate_working_directory(working_dir)
+                    .map_err(|e| ArcanaError::Agent(format!("Hook working directory {e}")))?;
+            }
+        }
         let id = uuid::Uuid::new_v4().to_string();
         let enabled = input.enabled.unwrap_or(true) as i64;
         let priority = input.priority.unwrap_or(100);
@@ -77,28 +106,51 @@ impl HooksDb {
             )
             .map_err(|e| ArcanaError::Agent(format!("HooksDb insert: {e}")))?;
 
-        self.get(&id)?
-            .ok_or_else(|| ArcanaError::Agent("HooksDb: insert+get failed".into()))
+        let hook = self
+            .get(&id)?
+            .ok_or_else(|| ArcanaError::Agent("HooksDb: insert+get failed".into()))?;
+        operation.with_result_count(1).succeed();
+        Ok(hook)
     }
 
     pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<()> {
-        self.conn
+        let mut operation =
+            OperationTimer::start("database_hook_enable_update").with_database("config");
+        let updated_at = crate::db::timestamps::now_rfc3339();
+        let changed = self
+            .conn
             .execute(
-                "UPDATE hooks SET enabled = ?1, updated_at = datetime('now') WHERE id = ?2",
-                params![enabled as i64, id],
+                "UPDATE hooks SET enabled = ?1, updated_at = ?2 WHERE id = ?3",
+                params![enabled as i64, updated_at, id],
             )
             .map_err(|e| ArcanaError::Agent(format!("HooksDb set_enabled: {e}")))?;
+        operation = operation.with_result_count(changed);
+        if changed == 0 {
+            operation.set_outcome("not_found");
+        } else {
+            operation.succeed();
+        }
         Ok(())
     }
 
     pub fn delete(&self, id: &str) -> Result<()> {
-        self.conn
+        let mut operation = OperationTimer::start("database_hook_delete").with_database("config");
+        let changed = self
+            .conn
             .execute("DELETE FROM hooks WHERE id = ?1", params![id])
             .map_err(|e| ArcanaError::Agent(format!("HooksDb delete: {e}")))?;
+        operation = operation.with_result_count(changed);
+        if changed == 0 {
+            operation.set_outcome("not_found");
+        } else {
+            operation.succeed();
+        }
         Ok(())
     }
 
     pub fn insert_log(&self, log: &HookExecutionLog) -> Result<()> {
+        let operation =
+            OperationTimer::start("database_hook_execution_log_insert").with_database("config");
         let outcome = format!("{:?}", log.outcome).to_lowercase();
         self.conn.execute(
             "INSERT INTO hook_logs (hook_id, hook_name, hook_type, outcome, output, error, duration_ms)
@@ -108,10 +160,13 @@ impl HooksDb {
                 outcome, log.output, log.error, log.duration_ms as i64,
             ],
         ).map_err(|e| ArcanaError::Agent(format!("HooksDb insert_log: {e}")))?;
+        operation.with_result_count(1).succeed();
         Ok(())
     }
 
     pub fn get_logs(&self, hook_id: Option<&str>, limit: usize) -> Result<Vec<HookExecutionLog>> {
+        let operation =
+            OperationTimer::start("database_hook_execution_logs_read").with_database("config");
         let lim = limit as i64;
         let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<HookExecutionLog> {
             let outcome_str: String = row.get(4)?;
@@ -142,7 +197,9 @@ impl HooksDb {
             let rows = stmt
                 .query_map(params![id, lim], map_row)
                 .map_err(|e| ArcanaError::Agent(format!("HooksDb get_logs query: {e}")))?;
-            rows.filter_map(|r| r.ok()).collect::<Vec<_>>().pipe(Ok)
+            let logs = rows.filter_map(|r| r.ok()).collect::<Vec<_>>();
+            operation.with_result_count(logs.len()).succeed();
+            Ok(logs)
         } else {
             let mut stmt = self.conn.prepare(
                 "SELECT id, hook_id, hook_name, hook_type, outcome, output, error, executed_at, duration_ms
@@ -151,7 +208,9 @@ impl HooksDb {
             let rows = stmt
                 .query_map(params![lim], map_row)
                 .map_err(|e| ArcanaError::Agent(format!("HooksDb get_logs query: {e}")))?;
-            rows.filter_map(|r| r.ok()).collect::<Vec<_>>().pipe(Ok)
+            let logs = rows.filter_map(|r| r.ok()).collect::<Vec<_>>();
+            operation.with_result_count(logs.len()).succeed();
+            Ok(logs)
         }
     }
 }
@@ -215,13 +274,200 @@ fn parse_hook_type(s: &str) -> HookType {
     }
 }
 
-// Helper trait to allow `.pipe(Ok)` on Vec
-trait Pipe: Sized {
-    fn pipe<F, U>(self, f: F) -> U
-    where
-        F: FnOnce(Self) -> U,
-    {
-        f(self)
+#[cfg(test)]
+mod portability_tests {
+    use super::*;
+
+    fn db() -> HooksDb {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE hooks (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, hook_type TEXT NOT NULL,
+                enabled INTEGER NOT NULL, priority INTEGER NOT NULL,
+                conditions TEXT NOT NULL, action TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );",
+        )
+        .unwrap();
+        HooksDb { conn }
+    }
+
+    #[test]
+    fn file_backed_defaults_and_set_enabled_reader_use_canonical_timestamps() {
+        let dir = tempfile::tempdir().expect("isolated config DB directory");
+        let conn = crate::db::config_db::open_at(&dir.path().join("config.db"))
+            .expect("production config DB opener");
+        let db = HooksDb { conn };
+        let inserted = db
+            .insert(&AddHookInput {
+                name: "timestamp hook".into(),
+                hook_type: HookType::PreToolUse,
+                enabled: Some(true),
+                priority: None,
+                conditions: None,
+                action: HookAction::Block { message: None },
+            })
+            .expect("production hook writer and reader");
+        assert!(inserted.created_at.ends_with('Z'));
+        assert_eq!(inserted.created_at.len(), 24);
+        assert_eq!(inserted.updated_at, inserted.created_at);
+
+        db.set_enabled(&inserted.id, false).expect("update hook");
+        let updated = db.get(&inserted.id).expect("read updated hook").unwrap();
+        assert!(updated.updated_at.ends_with('Z'));
+        assert_eq!(updated.updated_at.len(), 24);
+    }
+
+    #[test]
+    fn custom_shell_hook_writer_rejects_nonportable_command_before_persisting() {
+        let db = db();
+        let input = AddHookInput {
+            name: "custom hook".into(),
+            hook_type: HookType::PreToolUse,
+            enabled: Some(true),
+            priority: None,
+            conditions: None,
+            action: HookAction::Shell {
+                command: "npm test && npm lint".into(),
+                working_dir: None,
+                timeout_secs: None,
+            },
+        };
+        let error = db
+            .insert(&input)
+            .expect_err("writer must validate saved command");
+        assert!(error.to_string().contains("non-portable shell operator"));
+        let count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM hooks", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }
-impl<T> Pipe for Vec<T> {}
+
+#[cfg(test)]
+mod observability_tests {
+    use super::*;
+
+    #[test]
+    fn hook_configuration_and_execution_log_operations_emit_private_result_spans() {
+        let directory = tempfile::tempdir().expect("isolated config database directory");
+        let db = HooksDb {
+            conn: crate::db::config_db::open_at(&directory.path().join("config.db"))
+                .expect("open production config database"),
+        };
+        let input = AddHookInput {
+            name: "private-hook-name-marker".into(),
+            hook_type: HookType::PreToolUse,
+            enabled: Some(true),
+            priority: Some(50),
+            conditions: None,
+            action: HookAction::Block {
+                message: Some("private-hook-action-marker".into()),
+            },
+        };
+
+        let (observed, events) = crate::observability::timing::capture_json_events(|| {
+            let inserted = db.insert(&input).expect("insert hook");
+            let all = db.list_all().expect("list hooks");
+            let by_type = db
+                .list_by_type(&HookType::PreToolUse)
+                .expect("list hooks by type");
+            let fetched = db.get(&inserted.id).expect("read hook");
+            let missing = db
+                .get("private-missing-hook-id-marker")
+                .expect("missing hook");
+            db.set_enabled(&inserted.id, false).expect("disable hook");
+            db.set_enabled("private-missing-hook-id-marker", false)
+                .expect("disable missing hook");
+            let execution = HookExecutionLog {
+                id: 0,
+                hook_id: inserted.id.clone(),
+                hook_name: "private-log-hook-name-marker".into(),
+                hook_type: "pre_tool_use".into(),
+                outcome: HookOutcome::Failed,
+                output: Some("private-hook-output-marker".into()),
+                error: Some("private-hook-error-marker".into()),
+                executed_at: String::new(),
+                duration_ms: 37,
+            };
+            db.insert_log(&execution).expect("insert execution log");
+            let by_hook = db
+                .get_logs(Some(&inserted.id), 10)
+                .expect("read hook execution logs");
+            let recent = db.get_logs(None, 10).expect("read recent execution logs");
+            db.conn
+                .execute_batch(
+                    "CREATE TRIGGER reject_test_hook_log BEFORE INSERT ON hook_logs
+                     BEGIN SELECT RAISE(ABORT, 'private-hook-trigger-marker'); END;",
+                )
+                .expect("install isolated failure trigger");
+            let failed_log = db.insert_log(&execution).is_err();
+            db.delete(&inserted.id).expect("delete hook");
+            db.delete(&inserted.id).expect("delete absent hook");
+            (all, by_type, fetched, missing, by_hook, recent, failed_log)
+        });
+
+        assert_eq!(observed.0.len(), 1);
+        assert_eq!(observed.1.len(), 1);
+        assert!(observed.2.is_some());
+        assert!(observed.3.is_none());
+        assert_eq!(observed.4.len(), 1);
+        assert_eq!(observed.5.len(), 1);
+        assert!(observed.6);
+        let operations: Vec<_> = events
+            .iter()
+            .filter(|event| event["fields"]["event_type"] == "operation_timing")
+            .collect();
+        for operation in [
+            "database_hook_insert",
+            "database_hooks_list",
+            "database_hooks_by_type_read",
+            "database_hook_read",
+            "database_hook_enable_update",
+            "database_hook_execution_log_insert",
+            "database_hook_execution_logs_read",
+            "database_hook_delete",
+        ] {
+            assert!(
+                operations
+                    .iter()
+                    .any(|event| event["fields"]["operation"] == operation),
+                "missing hook database span {operation}"
+            );
+        }
+        let not_found = operations
+            .iter()
+            .find(|event| {
+                event["fields"]["operation"] == "database_hook_read"
+                    && event["fields"]["outcome"] == "not_found"
+            })
+            .expect("missing hook read is distinguishable");
+        assert_eq!(not_found["fields"]["result_count"], 0);
+        let failed = operations
+            .iter()
+            .find(|event| {
+                event["fields"]["operation"] == "database_hook_execution_log_insert"
+                    && event["fields"]["outcome"] == "error"
+            })
+            .expect("hook-log database error span");
+        assert_eq!(failed["fields"]["result_count_observed"], false);
+
+        let serialized = serde_json::to_string(&events).expect("serialize hook telemetry");
+        for private_value in [
+            "private-hook-name-marker",
+            "private-hook-action-marker",
+            "private-missing-hook-id-marker",
+            "private-log-hook-name-marker",
+            "private-hook-output-marker",
+            "private-hook-error-marker",
+            "private-hook-trigger-marker",
+        ] {
+            assert!(
+                !serialized.contains(private_value),
+                "leaked {private_value}"
+            );
+        }
+    }
+}

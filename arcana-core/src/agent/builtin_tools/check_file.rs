@@ -321,9 +321,9 @@ mod p8_33_t28_tests {
     // passed run alone and failed in the full suite -- `L-30`: my own tests are
     // the first concurrent users of anything process-global.
     fn tmp_py(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("arcana-p8-33-t28-{tag}"));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("mkdir");
+        let dir =
+            std::env::temp_dir().join(format!("arcana-p8-33-t28-{tag}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).expect("create unique isolated test directory");
         let f = dir.join("ok.py");
         std::fs::write(&f, "x = 1\n").expect("write");
         f
@@ -337,9 +337,13 @@ mod p8_33_t28_tests {
             session_id: "s1".into(),
             working_dir: dir.to_string_lossy().to_string(),
             call_id: "c1".into(),
+            run_id: None,
+            task_id: None,
             permission_mode: crate::agent::permission::PermissionMode::Autonomous,
             depth: 0,
             agent_role: "supervisor".into(),
+
+            run_token_budget: None,
         }
     }
 

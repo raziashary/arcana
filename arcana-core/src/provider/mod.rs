@@ -10,6 +10,7 @@ pub mod google;
 pub mod openai;
 pub mod retry;
 pub mod routing;
+pub mod run_budget;
 pub mod streaming;
 pub mod traits;
 pub mod types;

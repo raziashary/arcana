@@ -140,6 +140,17 @@ pub struct SessionTokenUsage {
     pub agent_type: String,
 }
 
+/// Aggregate provider usage attributed to one durable fleet session.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionTokenUsageSummary {
+    pub request_count: i64,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub total_tokens: i64,
+    pub thinking_tokens: Option<i64>,
+    pub cost_usd: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerAnalytics {
     pub worker_id: Option<String>,

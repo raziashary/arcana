@@ -8,7 +8,7 @@ pub mod patterns;
 pub mod scorer;
 
 use crate::db::tasks::{RoutingHistoryEntry, Task, TasksDb};
-use crate::db::workers::WorkersDb;
+use crate::db::workers::{Worker, WorkerStatus, WorkersDb};
 use crate::errors::Result;
 pub use scorer::AffinityScore;
 use serde::{Deserialize, Serialize};
@@ -33,35 +33,74 @@ pub struct TaskRouter;
 impl TaskRouter {
     /// Suggest the best worker for a task based on static patterns + history.
     pub fn suggest_worker(task: &Task) -> Result<AffinityScore> {
-        let static_match =
-            patterns::match_static(&task.title, task.description.as_deref().unwrap_or(""));
-
         let task_db = TasksDb::open()?;
         let history = task_db.get_routing_history(200)?;
-
         let workers_db = WorkersDb::open()?;
         let workers = workers_db.list()?;
+        Self::select_runnable_worker(task, &history, &workers).ok_or_else(|| {
+            anyhow::anyhow!("No non-system implementation workers are available for routing").into()
+        })
+    }
 
-        let scores = scorer::score_workers(task, &history, &workers);
-        Ok(scorer::select_worker(scores, static_match))
+    pub fn select_worker_for_dispatch(task: &Task) -> Result<AffinityScore> {
+        let task_db = TasksDb::open()?;
+        let history = task_db.get_routing_history(200)?;
+        let workers = WorkersDb::open()?.list()?;
+        Self::select_runnable_worker(task, &history, &workers).ok_or_else(|| {
+            anyhow::anyhow!("No started, runnable implementation workers are available").into()
+        })
+    }
+
+    /// Choose among started, runnable implementation workers using only
+    /// deterministic task signals and automatic assignment history.
+    pub fn select_runnable_worker(
+        task: &Task,
+        history: &[RoutingHistoryEntry],
+        workers: &[Worker],
+    ) -> Option<AffinityScore> {
+        let runnable = workers
+            .iter()
+            .filter(|worker| Self::is_runnable_implementation_worker(worker))
+            .cloned()
+            .collect::<Vec<_>>();
+        let static_match =
+            patterns::match_static(&task.title, task.description.as_deref().unwrap_or(""));
+        let scores = scorer::score_workers(task, history, &runnable);
+        scorer::select_worker(scores, static_match)
+    }
+
+    pub fn is_runnable_implementation_worker(worker: &Worker) -> bool {
+        !worker.is_system_defined
+            && matches!(
+                worker.status,
+                WorkerStatus::Idle
+                    | WorkerStatus::Active
+                    | WorkerStatus::IdleNoProvider
+                    | WorkerStatus::Error
+            )
     }
 
     /// Record a new assignment in routing_history (outcome = NULL / pending).
     pub fn record_assignment(task: &Task, worker_slug: &str) -> Result<()> {
-        let entry = RoutingHistoryEntry {
+        let entry = Self::assignment_entry(task, worker_slug);
+        let db = TasksDb::open()?;
+        db.insert_routing_history(&entry)
+    }
+
+    /// Build the history row used by the atomic task assignment transaction.
+    pub fn assignment_entry(task: &Task, worker_slug: &str) -> RoutingHistoryEntry {
+        RoutingHistoryEntry {
             id: uuid::Uuid::new_v4().to_string(),
             task_id: task.id.to_string(),
             task_title: task.title.clone(),
             task_type: task.task_type.as_str().to_string(),
             worker_slug: worker_slug.to_string(),
-            assigned_at: chrono::Utc::now().to_rfc3339(),
+            assigned_at: crate::db::timestamps::now_rfc3339(),
             outcome: None,
             outcome_at: None,
             duration_ms: None,
             tokens_used: None,
-        };
-        let db = TasksDb::open()?;
-        db.insert_routing_history(&entry)
+        }
     }
 
     /// Update the pending routing_history row for a task with its final outcome.
@@ -75,30 +114,16 @@ impl TaskRouter {
         db.update_routing_outcome(task_id, outcome, duration_ms, tokens)
     }
 
-    /// Like `record_outcome` but computes `duration_ms` automatically as
-    /// `now - assigned_at` from the pending routing_history row. Called from
-    /// `update_task_status` so the affinity scorer has real timing data
-    /// instead of the previous hardcoded 0. Token counts still default to 0
-    /// because task_commands doesn't see the per-task token totals — token
-    /// data is folded in by the recipe runner's own cost-tracking path.
-    pub fn record_outcome_auto(task_id: &str, outcome: &str) -> Result<()> {
+    /// Record an outcome against the newest pending assignment for the worker
+    /// who owned the task before its status changed. Manual assignments with
+    /// no routing-history row remain valid and simply have nothing to learn.
+    pub fn record_outcome_auto_for_worker(
+        task_id: &str,
+        worker_slug: &str,
+        outcome: &str,
+    ) -> Result<bool> {
         let db = TasksDb::open()?;
-        // Walk recent history rows; the first pending row for this task_id
-        // is the one we want to update. 200 is generous — assignment-to-done
-        // typically spans <10 tasks of history.
-        let history = db.get_routing_history(200).unwrap_or_default();
-        let duration_ms = history
-            .iter()
-            .find(|h| h.task_id == task_id && h.outcome.is_none())
-            .and_then(|h| crate::db::timestamps::parse_db_timestamp(&h.assigned_at).ok())
-            .map(|assigned| {
-                chrono::Utc::now()
-                    .signed_duration_since(assigned)
-                    .num_milliseconds()
-            })
-            .filter(|ms| *ms >= 0)
-            .unwrap_or(0);
-        db.update_routing_outcome(task_id, outcome, duration_ms, 0)
+        db.update_latest_routing_outcome_for_worker(task_id, worker_slug, outcome)
     }
 
     /// Return per-worker, per-task-type affinity stats for the dashboard panel.

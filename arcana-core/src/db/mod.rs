@@ -56,12 +56,17 @@ pub const BUSY_TIMEOUT_MS: u64 = 5_000;
 /// A caller needing different flags (read-only, URI) opens directly; this is
 /// the ordinary read-write path.
 pub fn open_tuned(path: &std::path::Path) -> Result<rusqlite::Connection> {
-    let conn = rusqlite::Connection::open(path)
+    let mut operation =
+        crate::observability::timing::OperationTimer::start("database_connection_open")
+            .with_database("sqlite");
+    let mut conn = rusqlite::Connection::open(path)
         .map_err(|e| ArcanaError::Agent(format!("opening {}: {e}", path.display())))?;
+    crate::observability::sqlite::install_profile(&mut conn, path);
     conn.busy_timeout(std::time::Duration::from_millis(BUSY_TIMEOUT_MS))
         .map_err(|e| ArcanaError::Agent(format!("busy_timeout on {}: {e}", path.display())))?;
     conn.pragma_update(None, "journal_mode", "WAL")
         .map_err(|e| ArcanaError::Agent(format!("journal_mode on {}: {e}", path.display())))?;
+    operation.succeed();
     Ok(conn)
 }
 
@@ -82,9 +87,9 @@ mod tests {
 
     #[test]
     fn open_tuned_sets_both_pragmas_that_matter() {
-        let dir = std::env::temp_dir().join("arcana-open-tuned-test");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("mkdir");
+        let dir =
+            std::env::temp_dir().join(format!("arcana-open-tuned-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).expect("create unique isolated directory");
         let path = dir.join("t.db");
 
         let conn = open_tuned(&path).expect("open");
@@ -119,5 +124,35 @@ mod tests {
 
         drop(plain);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tuned_connection_open_records_success_and_failure_without_paths() {
+        let dir =
+            std::env::temp_dir().join(format!("arcana-open-tuned-span-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).expect("create isolated directory");
+        let valid_path = dir.join("valid.db");
+        let invalid_path = dir.join("missing").join("invalid.db");
+        let ((opened, failed), events) = crate::observability::timing::capture_json_events(|| {
+            let opened = open_tuned(&valid_path).is_ok();
+            let failed = open_tuned(&invalid_path).is_err();
+            (opened, failed)
+        });
+        assert!(opened && failed);
+        let spans = events
+            .iter()
+            .filter(|event| event["fields"]["operation"] == "database_connection_open")
+            .collect::<Vec<_>>();
+        assert_eq!(spans.len(), 2);
+        assert!(spans
+            .iter()
+            .any(|event| event["fields"]["outcome"] == "success"));
+        assert!(spans
+            .iter()
+            .any(|event| event["fields"]["outcome"] == "error"));
+        let serialized = events.iter().map(ToString::to_string).collect::<String>();
+        assert!(!serialized.contains(valid_path.to_string_lossy().as_ref()));
+        assert!(!serialized.contains(invalid_path.to_string_lossy().as_ref()));
+        std::fs::remove_dir_all(dir).expect("remove isolated fixture");
     }
 }

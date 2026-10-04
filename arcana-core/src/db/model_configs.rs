@@ -50,7 +50,9 @@ impl ModelConfigsDb {
     // ─── Queries ──────────────────────────────────────────────────────────────
 
     pub fn get(&self, model_id: &str) -> Result<Option<ModelConfig>> {
-        self.conn.query_row(
+        let mut timing = crate::observability::timing::OperationTimer::start("config_model_read")
+            .with_database("config");
+        let result = self.conn.query_row(
             "SELECT model_id, temperature, top_p, reasoning_effort, thinking_enabled, thinking_budget \
              FROM model_configs WHERE model_id = ?1",
             params![model_id],
@@ -63,10 +65,24 @@ impl ModelConfigsDb {
                 thinking_budget:  row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
             }),
         ).optional()
-         .map_err(|e| ArcanaError::Agent(format!("model_configs get: {e}")))
+         .map_err(|e| ArcanaError::Agent(format!("model_configs get: {e}")));
+        match &result {
+            Ok(Some(_)) => {
+                timing = timing.with_result_count(1);
+                timing.succeed();
+            }
+            Ok(None) => {
+                timing = timing.with_result_count(0);
+                timing.succeed();
+            }
+            Err(_) => {}
+        }
+        result
     }
 
     pub fn upsert(&self, cfg: &ModelConfig) -> Result<()> {
+        let mut timing = crate::observability::timing::OperationTimer::start("config_model_write")
+            .with_database("config");
         self.conn.execute(
             "INSERT INTO model_configs (model_id, temperature, top_p, reasoning_effort, thinking_enabled, thinking_budget)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -85,16 +101,70 @@ impl ModelConfigsDb {
                 cfg.thinking_budget.map(|v| v as i64),
             ],
         ).map_err(|e| ArcanaError::Agent(format!("model_configs upsert: {e}")))?;
+        timing = timing.with_result_count(1);
+        timing.succeed();
         Ok(())
     }
 
     pub fn delete(&self, model_id: &str) -> Result<()> {
-        self.conn
+        let mut timing = crate::observability::timing::OperationTimer::start("config_model_delete")
+            .with_database("config");
+        let affected = self
+            .conn
             .execute(
                 "DELETE FROM model_configs WHERE model_id = ?1",
                 params![model_id],
             )
             .map_err(|e| ArcanaError::Agent(format!("model_configs delete: {e}")))?;
+        timing = timing.with_result_count(affected);
+        timing.succeed();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod observability_tests {
+    use super::*;
+
+    #[test]
+    fn model_config_operations_report_observed_rows_without_identifiers() {
+        let directory = tempfile::tempdir().expect("isolated config directory");
+        let db = ModelConfigsDb {
+            conn: crate::db::config_db::open_at(&directory.path().join("config.db"))
+                .expect("open isolated config database"),
+        };
+        let config = ModelConfig {
+            model_id: "private-model-id".into(),
+            temperature: Some(0.4),
+            top_p: None,
+            reasoning_effort: Some("high".into()),
+            thinking_enabled: false,
+            thinking_budget: None,
+        };
+
+        let (_, events) = crate::observability::timing::capture_json_events(|| {
+            assert!(db.get("missing-model").expect("missing config").is_none());
+            db.upsert(&config).expect("upsert config");
+            assert!(db.get("private-model-id").expect("read config").is_some());
+            db.delete("private-model-id").expect("delete config");
+        });
+
+        let operations = events
+            .iter()
+            .filter(|event| event["fields"]["event_type"] == "operation_timing")
+            .collect::<Vec<_>>();
+        assert_eq!(operations.len(), 4);
+        for event in &operations {
+            assert_eq!(event["fields"]["database"], "config");
+            assert_eq!(event["fields"]["outcome"], "success");
+            assert_eq!(event["fields"]["result_count_observed"], true);
+        }
+        assert!(operations.iter().any(|event| {
+            event["fields"]["operation"] == "config_model_read"
+                && event["fields"]["result_count"] == 0
+        }));
+        let serialized = serde_json::to_string(&events).expect("serialize telemetry");
+        assert!(!serialized.contains("private-model-id"));
+        assert!(!serialized.contains("high"));
     }
 }

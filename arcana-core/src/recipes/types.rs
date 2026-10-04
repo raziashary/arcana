@@ -126,6 +126,7 @@ mod p3_65_66_tests {
             ToolEffect::Network.requires_prompt(&mode),
             "Supervised must prompt before sending data off the machine"
         );
+        assert!(ToolEffect::HostApproval.requires_prompt(&mode));
     }
 
     #[test]
@@ -148,6 +149,8 @@ mod p3_65_66_tests {
                  work depends on it"
             );
         }
+        assert!(ToolEffect::FreeformShell.requires_prompt(&mode));
+        assert!(ToolEffect::HostApproval.requires_prompt(&mode));
     }
 
     #[test]

@@ -93,6 +93,43 @@ pub trait RetrievalBackend: Send + Sync {
 /// FTS5 + BM25 over `memories`, with scope applied as a SQL pre-filter.
 pub struct LexicalBackend;
 
+/// Return the lexical leg when semantic retrieval cannot produce a query
+/// embedding. Kept as a named production path so its scope and result behavior
+/// can be exercised without downloading the optional embedding model.
+#[cfg(any(test, all(feature = "embeddings", not(target_os = "macos"))))]
+pub(crate) fn lexical_fallback(conn: &Connection, q: &RetrievalQuery) -> Result<Vec<Candidate>> {
+    LexicalBackend.search(conn, q)
+}
+
+/// Per-recall state used when a selected vector backend loses its embedding
+/// capability after selection. Shared outside the optional model feature so
+/// the degradation contract stays testable in default builds.
+#[derive(Default)]
+#[cfg(any(test, all(feature = "embeddings", not(target_os = "macos"))))]
+pub(crate) struct VectorAvailability {
+    degraded: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(any(test, all(feature = "embeddings", not(target_os = "macos"))))]
+impl VectorAvailability {
+    pub(crate) fn mark_degraded(&self) {
+        self.degraded
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub(crate) fn is_degraded(&self) -> bool {
+        self.degraded.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub(crate) fn degraded_reason(&self) -> Option<String> {
+        self.is_degraded().then(|| {
+            "Semantic (vector) search became unavailable for this recall; results are keyword-matched only, \
+             so a differently worded memory may not have surfaced."
+                .to_string()
+        })
+    }
+}
+
 impl LexicalBackend {
     /// Turn arbitrary user text into a **safe** FTS5 MATCH expression.
     ///
@@ -417,6 +454,49 @@ mod tests {
             why.to_lowercase().contains("keyword"),
             "the reason must say what is actually limited: {why}"
         );
+    }
+
+    #[test]
+    fn semantic_unavailability_fallback_returns_scoped_lexical_matches() {
+        // This is the production fallback used by VectorBackend when a model
+        // was selected but inference becomes unavailable during a recall.
+        let c = db();
+        insert(
+            &c,
+            "mine",
+            "semantic",
+            "project:/a",
+            "calendar event storage",
+        );
+        insert(
+            &c,
+            "theirs",
+            "semantic",
+            "project:/b",
+            "calendar event storage",
+        );
+
+        let results = lexical_fallback(&c, &q("calendar storage", &["project:/a"]))
+            .expect("lexical fallback should remain available");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "mine");
+        assert!(results[0].vector_distance.is_none());
+    }
+
+    #[test]
+    fn selected_vector_backend_can_publish_degradation_after_inference_failure() {
+        let availability = VectorAvailability::default();
+        assert!(!availability.is_degraded());
+        assert!(availability.degraded_reason().is_none());
+
+        availability.mark_degraded();
+
+        assert!(availability.is_degraded());
+        assert!(availability
+            .degraded_reason()
+            .expect("degraded reason")
+            .contains("keyword-matched"));
     }
 
     #[test]

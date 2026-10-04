@@ -22,7 +22,8 @@ pub use queries::AnalyticsQueries;
 pub use types::*;
 
 use crate::errors::Result;
-use std::sync::Arc;
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread::JoinHandle;
 
 /// Global analytics manager — singleton for event collection and queries
 pub struct AnalyticsManager {
@@ -31,6 +32,7 @@ pub struct AnalyticsManager {
     aggregator: Arc<AnalyticsAggregator>,
     queries: Arc<AnalyticsQueries>,
     exporter: Arc<AnalyticsExporter>,
+    aggregation_job: Mutex<Option<(mpsc::Sender<()>, JoinHandle<()>)>>,
 }
 
 impl AnalyticsManager {
@@ -48,6 +50,7 @@ impl AnalyticsManager {
             aggregator,
             queries,
             exporter,
+            aggregation_job: Mutex::new(None),
         })
     }
 
@@ -89,17 +92,40 @@ impl AnalyticsManager {
     /// The hourly rollup is gone entirely; see `aggregator.rs` for why it was
     /// deleted rather than implemented.
     pub fn start_aggregation_job(&self) {
+        let mut job = self
+            .aggregation_job
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if job.is_some() {
+            return;
+        }
         let aggregator = self.aggregator.clone();
-        std::thread::spawn(move || loop {
-            // Before the sleep, not after.
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let handle = std::thread::spawn(move || loop {
+            // Before the wait, not after.
             if let Err(e) = aggregator.run_daily_rollup() {
-                // `tracing`, not `eprintln!`: stderr bypasses the log layer
-                // entirely, so this never reached the log file and — until
-                // 2026-09-02 — never passed the redactor either.
                 tracing::error!("Daily aggregation failed: {e}");
             }
-            std::thread::sleep(std::time::Duration::from_secs(3600));
+            match stop_rx.recv_timeout(std::time::Duration::from_secs(3600)) {
+                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+            }
         });
+        *job = Some((stop_tx, handle));
+    }
+
+    /// Stop the optional background rollup and wait for it to exit.
+    /// Headless bounded commands call this before releasing their log guards.
+    pub fn stop_aggregation_job(&self) {
+        let job = self
+            .aggregation_job
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some((stop_tx, handle)) = job {
+            let _ = stop_tx.send(());
+            let _ = handle.join();
+        }
     }
 }
 
@@ -127,4 +153,10 @@ pub fn global() -> Arc<AnalyticsManager> {
              Arcana cannot run without a real analytics DB — see \
              docs/endtoendrun/14may2026/02-dashboard-not-live.md.",
     )
+}
+
+/// Get the installed manager when available. Best-effort telemetry callers
+/// use this to avoid turning an initialization/test seam into a task failure.
+pub fn try_global() -> Option<Arc<AnalyticsManager>> {
+    ANALYTICS_MANAGER.get().cloned()
 }

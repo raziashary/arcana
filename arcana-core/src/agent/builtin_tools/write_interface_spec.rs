@@ -158,6 +158,7 @@ impl Tool for WriteInterfaceSpecTool {
             Ok(canonical) => canonical,
             Err(e) => return ToolResult::error(e),
         };
+        let _lock_guard = super::path_lock::acquire_for(&path, &ctx.working_dir).await;
 
         // Read existing file when in merge mode.
         let existing = if mode == "merge" && path.exists() {
@@ -215,6 +216,18 @@ impl Tool for WriteInterfaceSpecTool {
         };
 
         // ── Write the file ────────────────────────────────────────────────────
+        if let Err(message) = ctx.require_current_task_claim() {
+            return ToolResult::error(message);
+        }
+        if let Err(e) = crate::git::checkpoint::auto_checkpoint_before_write(
+            &ctx.session_id,
+            ctx.task_id,
+            &path.to_string_lossy(),
+        ) {
+            return ToolResult::error(format!(
+                "Interface spec write refused because its recovery checkpoint failed: {e}"
+            ));
+        }
         if let Err(e) = std::fs::write(&path, &final_body) {
             return ToolResult::error(&format!(
                 "Could not write INTERFACE.md to '{}': {e}",

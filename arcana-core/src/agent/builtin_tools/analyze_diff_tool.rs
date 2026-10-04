@@ -4,10 +4,10 @@
 
 use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 use crate::diff_analysis::DiffAnalyzer;
-use crate::provider::traits::Provider;
 use crate::vault::keychain::{provider_key, VaultManager};
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::sync::Arc;
 
 pub struct AnalyzeDiffTool;
 
@@ -98,12 +98,6 @@ impl Tool for AnalyzeDiffTool {
             }
         };
 
-        // Build analyzer using active provider from vault
-        let analyzer = match build_analyzer_from_vault() {
-            Ok(a) => a,
-            Err(e) => return ToolResult::error(format!("Failed to initialize analyzer: {e}")),
-        };
-
         // Generate branch diff
         let patch = match crate::git::diff::branch_diff(repo_path, base_branch, head_branch) {
             Ok(p) => p,
@@ -129,10 +123,19 @@ impl Tool for AnalyzeDiffTool {
             ));
         }
 
-        match analyzer.analyze(&patch).await {
+        let analysis =
+            analyze_patch_with_workspace_consent(&patch, std::path::Path::new(&ctx.working_dir))
+                .await;
+
+        match analysis {
             Ok(result) => {
                 let summary = format!(
-                    "Risk: {} ({:.2}) | Classification: {:?} | Files: {} | +{} -{}",
+                    "{} | Risk: {} ({:.2}) | Classification: {:?} | Files: {} | +{} -{}",
+                    if result.analysis_mode == "deterministic_only" {
+                        "Deterministic-only: workspace consent is missing, mismatched, or revoked"
+                    } else {
+                        "Provider-assisted"
+                    },
                     result.risk_level,
                     result.risk_score,
                     result.classification,
@@ -269,7 +272,35 @@ fn detect_interface_drift(patch: &str) -> InterfaceDrift {
     }
 }
 
-fn build_analyzer_from_vault() -> crate::errors::Result<DiffAnalyzer> {
+fn active_provider_destination() -> crate::errors::Result<String> {
+    let provider_id =
+        crate::db::app_settings::get("active_provider")?.unwrap_or_else(|| "anthropic".to_string());
+    crate::egress_consent::provider_destination(&provider_id)
+}
+
+async fn analyze_patch_with_workspace_consent(
+    patch: &str,
+    workspace: &std::path::Path,
+) -> crate::errors::Result<crate::diff_analysis::DiffAnalysisResult> {
+    let destination = active_provider_destination()?;
+    let egress_allowed = crate::egress_consent::WorkspaceEgressConsentDb::open()?
+        .authorize_and_audit(workspace, &destination, "qc_diff_analysis")?;
+    if !egress_allowed {
+        // The deterministic review must remain usable without a provider key.
+        // Consent is checked before vault lookup or provider construction.
+        return DiffAnalyzer::analyze_structural(patch);
+    }
+
+    let analyzer = build_analyzer_from_vault(workspace)?;
+    match analyzer.analyze(patch).await {
+        Err(crate::errors::ArcanaError::EgressDenied { .. }) => {
+            DiffAnalyzer::analyze_structural(patch)
+        }
+        result => result,
+    }
+}
+
+fn build_analyzer_from_vault(workspace: &std::path::Path) -> crate::errors::Result<DiffAnalyzer> {
     use crate::errors::ArcanaError;
 
     // ── P2-31 · this tool used to bypass model selection entirely ────────────
@@ -316,6 +347,152 @@ fn build_analyzer_from_vault() -> crate::errors::Result<DiffAnalyzer> {
     // cap through the process-global handle. Without it this would be the one
     // path a call could take without meeting the ceiling (P2-21).
     let provider = crate::provider::factory::build(&provider_id, api_key)?;
+    let provider = Arc::new(crate::egress_consent::ConsentProvider::wrap(
+        provider, workspace,
+    ));
 
     Ok(DiffAnalyzer::new(provider, model))
+}
+
+#[cfg(test)]
+mod consent_tests {
+    use super::*;
+    use git2::{Repository, Signature};
+    use std::fs;
+    use std::path::Path;
+
+    fn commit_file(repo: &Repository, path: &str, contents: &str, message: &str) {
+        let repo_path = repo.workdir().expect("test repository worktree");
+        fs::write(repo_path.join(path), contents).expect("write test fixture file");
+        let mut index = repo.index().expect("open index");
+        index.add_path(Path::new(path)).expect("stage fixture file");
+        index.write().expect("write index");
+        let tree_id = index.write_tree().expect("write fixture tree");
+        let tree = repo.find_tree(tree_id).expect("read fixture tree");
+        let signature = Signature::now("Arcana Test", "arcana-test@example.invalid")
+            .expect("fixture signature");
+        let parent = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
+        let parents = parent.iter().collect::<Vec<_>>();
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            message,
+            &tree,
+            &parents,
+        )
+        .expect("commit fixture change");
+    }
+
+    #[tokio::test]
+    async fn qc_diff_without_matching_consent_uses_structural_review_without_provider_key() {
+        let home = tempfile::tempdir().expect("isolated Arcana data root");
+        let _home = crate::db::test_support::with_home(home.path());
+        let patch =
+            "diff --git a/src/lib.rs b/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n";
+        let workspace = home.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+
+        // A different provider grant must not authorize the active provider.
+        let consent = crate::egress_consent::WorkspaceEgressConsentDb::open()
+            .expect("open isolated consent store");
+        consent
+            .grant(&workspace, "provider:google")
+            .expect("grant mismatched destination");
+
+        let result = analyze_patch_with_workspace_consent(patch, &workspace)
+            .await
+            .expect("deterministic QC review should work without a provider key");
+        assert_eq!(result.analysis_mode, "deterministic_only");
+        assert!(result.file_count > 0);
+    }
+
+    #[tokio::test]
+    async fn analyze_diff_tool_executes_repository_diff_without_consent_or_provider_key() {
+        let home = tempfile::tempdir().expect("isolated Arcana data root");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = home.path().join("workspace");
+        let repo_path = workspace.join("repo");
+        fs::create_dir_all(&repo_path).expect("create test workspace");
+        let mut options = git2::RepositoryInitOptions::new();
+        options.initial_head("main");
+        let repo = Repository::init_opts(&repo_path, &options).expect("initialize repo");
+        let mut config = repo.config().expect("read test git config");
+        config
+            .set_str("user.name", "Arcana Test")
+            .expect("set fixture author");
+        config
+            .set_str("user.email", "arcana-test@example.invalid")
+            .expect("set fixture email");
+        commit_file(&repo, "README.md", "Calendar baseline\n", "base");
+        let base = repo
+            .head()
+            .expect("base head")
+            .peel_to_commit()
+            .expect("base commit");
+        let feature = repo
+            .branch("feature/calendar", &base, false)
+            .expect("feature branch");
+        repo.set_head(feature.get().name().expect("feature ref"))
+            .expect("checkout feature ref");
+        repo.checkout_head(None).expect("checkout feature worktree");
+        commit_file(
+            &repo,
+            "README.md",
+            "Calendar baseline\nAdded event planning\n",
+            "feature",
+        );
+
+        let context = ToolContext {
+            session_id: "analyze-diff-consent-test".into(),
+            working_dir: workspace.to_string_lossy().into_owned(),
+            call_id: "analyze-diff-call".into(),
+            run_id: None,
+            task_id: None,
+            permission_mode: crate::agent::permission::PermissionMode::Autonomous,
+            depth: 0,
+            agent_role: "qc-agent".into(),
+
+            run_token_budget: None,
+        };
+        let result = AnalyzeDiffTool
+            .execute(
+                json!({
+                    "repo_path": repo_path,
+                    "base_branch": "main",
+                    "head_branch": "feature/calendar"
+                }),
+                &context,
+            )
+            .await;
+        assert!(
+            !result.is_error,
+            "local structural analysis should work: {}",
+            result.output
+        );
+        assert!(
+            result.output.contains("deterministic_only"),
+            "tool result should identify its local-only analysis mode: {}",
+            result.output
+        );
+        assert!(
+            result
+                .hint
+                .as_deref()
+                .unwrap_or_default()
+                .contains("workspace consent is missing"),
+            "tool result should explain why provider analysis was skipped"
+        );
+
+        let config = crate::db::config_db::open().expect("open isolated config DB");
+        let denied: i64 = config
+            .query_row(
+                "SELECT COUNT(*) FROM workspace_egress_audit
+                 WHERE outcome = 'denied' AND operation = 'qc_diff_analysis'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read actual tool egress audit");
+        assert_eq!(denied, 1, "the production diff tool must audit the refusal");
+    }
 }

@@ -90,7 +90,7 @@ pub fn looks_like_a_credential(key: &str) -> bool {
         || k.starts_with("AWS_")
         || k.starts_with("AZURE_")
         || k.starts_with("GCP_")
-        || k.contains("_PAT")
+        || k.split(['_', '-', '.']).any(|segment| segment == "PAT")
         || k == "GITHUB_TOKEN"
 }
 
@@ -135,8 +135,32 @@ mod tests {
 
     #[test]
     fn ordinary_variables_are_left_alone() {
-        for k in ["PATH", "HOME", "USERPROFILE", "LANG", "TERM", "CARGO_HOME"] {
+        for k in [
+            "PATH",
+            "HOME",
+            "USERPROFILE",
+            "LANG",
+            "TERM",
+            "CARGO_HOME",
+            "CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS",
+            "CODEX_APP_TOOLS_PIPE_PATH",
+            "CODEX_MCP_NODE_PATH",
+            "CODEX_TECTONIC_PATH",
+        ] {
             assert!(!looks_like_a_credential(k), "{k} should not be scrubbed");
+        }
+    }
+
+    #[test]
+    fn personal_access_token_names_are_detected_without_matching_path_suffixes() {
+        for key in ["GITHUB_PAT", "GITLAB_PAT", "CODEX_PERSONAL_PAT"] {
+            assert!(looks_like_a_credential(key), "{key} should be scrubbed");
+        }
+        for key in ["CODEX_NODE_PATH", "APP_PATH", "PROJECT_PATH"] {
+            assert!(
+                !looks_like_a_credential(key),
+                "{key} is a path, not a secret"
+            );
         }
     }
 

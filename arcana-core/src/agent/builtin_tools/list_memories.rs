@@ -52,6 +52,14 @@ impl Tool for ListMemoriesTool {
     }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
+        let mut timing = crate::observability::timing::OperationTimer::start("memory_tool_list")
+            .with_database("memory")
+            .with_session_id(&ctx.session_id)
+            .with_task_id(ctx.task_id)
+            .with_call_context(&ctx.call_id, &ctx.agent_role);
+        if let Some(run_id) = ctx.run_id.as_deref() {
+            timing = timing.with_run_id(run_id);
+        }
         let db = match crate::memory::db::MemoryDb::open() {
             Ok(db) => db,
             Err(e) => return ToolResult::error(format!("memory unavailable: {e}")),
@@ -113,14 +121,32 @@ impl Tool for ListMemoriesTool {
             }))
         });
 
-        let mut items: Vec<Value> = match rows {
-            Ok(it) => it.filter_map(|r| r.ok()).collect(),
+        let mut skipped_rows = 0usize;
+        let mut raw_rows_seen = 0usize;
+        let mut items: Vec<Value> = Vec::new();
+        match rows {
+            Ok(it) => {
+                for row in it {
+                    raw_rows_seen += 1;
+                    match row {
+                        Ok(item) => items.push(item),
+                        Err(_) => skipped_rows += 1,
+                    }
+                }
+            }
             Err(e) => return ToolResult::error(format!("Failed to list memories: {e}")),
-        };
+        }
 
-        let truncated = items.len() as i64 > limit;
+        // The SQL lookahead counts persisted rows, including malformed ones.
+        // A corrupt row must not make a partially returned page look complete.
+        let truncated = raw_rows_seen as i64 > limit;
         items.truncate(limit as usize);
         let count = items.len();
+        if skipped_rows == 0 {
+            timing.with_result_count(count).succeed();
+        } else {
+            timing.with_result_count(count).set_outcome("degraded");
+        }
 
         ToolResult::success(
             json!({
@@ -129,9 +155,120 @@ impl Tool for ListMemoriesTool {
                 // Named plainly: a caller that cannot tell a full page from the
                 // end of the list will read the first as the second.
                 "truncated": truncated,
+                "degraded": skipped_rows > 0,
+                "malformed_count": skipped_rows,
                 "scopes_searched": scopes,
             })
             .to_string(),
         )
+    }
+}
+
+#[cfg(test)]
+mod observability_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn production_list_memory_reports_partial_rows_as_degraded_without_content() {
+        let home = tempfile::tempdir().expect("isolated home");
+        let _home_guard = crate::db::test_support::with_home(home.path());
+        let db = crate::memory::db::MemoryDb::open().expect("open migrated MemoryDb");
+        for (id, content, confidence) in [
+            ("valid-id", "safe result content", "0.8"),
+            ("corrupt-id", "private corrupt row", "invalid-confidence"),
+        ] {
+            db.conn
+                .execute(
+                    "INSERT INTO memories (id, tier, scope, scope_ref, scope_key, content, source, confidence, created_at, updated_at)
+                     VALUES (?1, 'semantic', 'global', '', 'global', ?2, 'test', ?3, '2026-10-03T00:00:00Z', '2026-10-03T00:00:00Z')",
+                    rusqlite::params![id, content, confidence],
+                )
+                .expect("seed memory row");
+        }
+        drop(db);
+
+        let context = ToolContext {
+            session_id: "session-fixture".into(),
+            working_dir: home.path().to_string_lossy().into_owned(),
+            call_id: "call-fixture".into(),
+            run_id: Some("run-fixture".into()),
+            task_id: Some(18),
+            permission_mode: crate::agent::permission::PermissionMode::Autonomous,
+            depth: 0,
+            agent_role: "supervisor".into(),
+
+            run_token_budget: None,
+        };
+        let runtime = tokio::runtime::Runtime::new().expect("test runtime");
+        let (result, events) = crate::observability::timing::capture_json_events(|| {
+            runtime.block_on(ListMemoriesTool.execute(json!({"limit":10}), &context))
+        });
+        assert!(!result.is_error);
+        let output: Value = serde_json::from_str(&result.output).expect("tool JSON result");
+        assert_eq!(output["count"], 1);
+        assert_eq!(output["degraded"], true);
+        assert_eq!(output["malformed_count"], 1);
+        let event = events
+            .iter()
+            .find(|event| event["fields"]["operation"] == "memory_tool_list")
+            .expect("production tool operation event");
+        assert_eq!(event["fields"]["database"], "memory");
+        assert_eq!(event["fields"]["run_id"], "run-fixture");
+        assert_eq!(event["fields"]["outcome"], "degraded");
+        assert_eq!(event["fields"]["result_count"], 1);
+        let telemetry = serde_json::to_string(&events).expect("serialize safe events");
+        assert!(!telemetry.contains("safe result content"));
+        assert!(!telemetry.contains("private corrupt row"));
+        assert!(!telemetry.contains("invalid-confidence"));
+    }
+
+    #[test]
+    fn malformed_lookahead_does_not_hide_that_more_raw_rows_exist() {
+        let home = tempfile::tempdir().expect("isolated home");
+        let _home_guard = crate::db::test_support::with_home(home.path());
+        let db = crate::memory::db::MemoryDb::open().expect("open migrated MemoryDb");
+        for (id, content, confidence, created_at) in [
+            (
+                "newest-corrupt",
+                "private corrupt row",
+                "invalid",
+                "2026-10-03T03:00:00Z",
+            ),
+            ("valid-one", "first valid", "0.8", "2026-10-03T02:00:00Z"),
+            ("valid-two", "second valid", "0.8", "2026-10-03T01:00:00Z"),
+        ] {
+            db.conn
+                .execute(
+                    "INSERT INTO memories (id, tier, scope, scope_ref, scope_key, content, source, confidence, created_at, updated_at)
+                     VALUES (?1, 'semantic', 'global', '', 'global', ?2, 'test', ?3, ?4, ?4)",
+                    rusqlite::params![id, content, confidence, created_at],
+                )
+                .expect("seed memory row");
+        }
+        drop(db);
+
+        let context = ToolContext {
+            session_id: "session-fixture".into(),
+            working_dir: home.path().to_string_lossy().into_owned(),
+            call_id: "call-fixture".into(),
+            run_id: None,
+            task_id: None,
+            permission_mode: crate::agent::permission::PermissionMode::Autonomous,
+            depth: 0,
+            agent_role: "supervisor".into(),
+
+            run_token_budget: None,
+        };
+        let runtime = tokio::runtime::Runtime::new().expect("test runtime");
+        let result = runtime.block_on(ListMemoriesTool.execute(json!({"limit":1}), &context));
+        let output: Value = serde_json::from_str(&result.output).expect("tool JSON result");
+
+        assert!(!result.is_error);
+        assert_eq!(output["count"], 1);
+        assert_eq!(output["memories"][0]["id"], "valid-one");
+        assert_eq!(output["truncated"], true);
+        assert_eq!(output["degraded"], true);
+        assert_eq!(output["malformed_count"], 1);
     }
 }

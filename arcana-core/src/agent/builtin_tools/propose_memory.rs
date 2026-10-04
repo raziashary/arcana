@@ -159,9 +159,13 @@ mod tests {
             session_id: "s1".into(),
             working_dir: "/proj".into(),
             call_id: "c1".into(),
+            run_id: None,
+            task_id: None,
             depth: 0,
             agent_role: role.into(),
             permission_mode: crate::agent::permission::PermissionMode::Autonomous,
+
+            run_token_budget: None,
         }
     }
 

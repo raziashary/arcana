@@ -537,6 +537,38 @@ mod p3_43_45_tests {
 }
 
 #[cfg(test)]
+mod tg4_17_portability_tests {
+    use super::{BASE_SYSTEM_PROMPT, DELEGATE_SYSTEM_PROMPT, REVIEW_SYSTEM_PROMPT};
+
+    #[test]
+    fn shipped_interactive_prompts_do_not_embed_posix_shell_or_tmp_commands() {
+        for (name, prompt) in [
+            ("base", BASE_SYSTEM_PROMPT),
+            ("review", REVIEW_SYSTEM_PROMPT),
+            ("delegate", DELEGATE_SYSTEM_PROMPT),
+        ] {
+            for fragment in ["/tmp/", "$?", "$(", "2>&1", "| tee ", "source .venv"] {
+                assert!(
+                    !prompt.contains(fragment),
+                    "the shipped {name} system prompt contains platform-specific guidance {fragment:?}"
+                );
+            }
+            for (line_number, line) in prompt.lines().enumerate() {
+                if line.contains("bash(") {
+                    for fragment in ["&&", ";", "`", "$?", "$(", "2>&1", "| tee ", "&"] {
+                        assert!(
+                            !line.contains(fragment),
+                            "the shipped {name} system prompt has non-portable shell at line {}: {line}",
+                            line_number + 1
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod p8_live_prompt_tests {
     use super::*;
 
@@ -568,7 +600,7 @@ mod p8_live_prompt_tests {
                 None,
             )
             .expect("register worker to retire");
-        db.update_status(deleted_id, "deleted")
+        db.update_status(deleted_id, crate::db::workers::WorkerStatus::Deleted)
             .expect("soft-delete worker");
 
         let builder = ContextBuilder::new("/project").with_workers_db(db);

@@ -3,11 +3,194 @@ use super::types::*;
 use crate::db::arcana_dir;
 use crate::db::migrate::{self, Migration};
 use crate::errors::{ArcanaError, Result};
-use chrono::{NaiveDate, Utc};
+use crate::observability::timing::OperationTimer;
+use chrono::{Local, NaiveDate, TimeZone, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Mutex;
+
+const DAILY_COSTS_RANGE_SQL: &str =
+    "SELECT date, total_cost_usd, total_tokens, session_count, message_count,
+             tool_call_count, provider_breakdown, agent_type_breakdown
+             FROM daily_costs WHERE date BETWEEN ?1 AND ?2 ORDER BY date ASC";
+const DAILY_COST_BY_DATE_SQL: &str =
+    "SELECT date, total_cost_usd, total_tokens, session_count, message_count,
+             tool_call_count, provider_breakdown, agent_type_breakdown
+             FROM daily_costs WHERE date = ?1";
+const TOKEN_USAGE_BY_LOCAL_DATE_SQL: &str =
+    "SELECT id, timestamp, session_id, agent_type, provider, model, prompt_tokens,
+             completion_tokens, total_tokens, thinking_tokens, cost_usd, request_type
+       FROM (
+         SELECT id, timestamp, session_id, agent_type, provider, model, prompt_tokens,
+                completion_tokens, total_tokens, thinking_tokens, cost_usd, request_type
+           FROM token_usage
+          WHERE timestamp >= ?1 AND timestamp < ?2 AND substr(timestamp,11,1) = 'T'
+         UNION ALL
+         SELECT id, timestamp, session_id, agent_type, provider, model, prompt_tokens,
+                completion_tokens, total_tokens, thinking_tokens, cost_usd, request_type
+           FROM token_usage
+          WHERE timestamp >= ?3 AND timestamp < ?4 AND substr(timestamp,11,1) = ' '
+         UNION ALL
+         SELECT id, timestamp, session_id, agent_type, provider, model, prompt_tokens,
+                completion_tokens, total_tokens, thinking_tokens, cost_usd, request_type
+           FROM token_usage WHERE timestamp IS NOT NULL AND julianday(timestamp) IS NULL
+       ) ORDER BY julianday(timestamp) DESC";
+const TOKEN_TOTALS_RANGE_SQL: &str = "SELECT COALESCE(SUM(total_tokens),0), \
+                    COALESCE(SUM(prompt_tokens),0), \
+                    COALESCE(SUM(completion_tokens),0), \
+                    SUM(thinking_tokens) \
+             FROM token_usage \
+             WHERE (timestamp >= ?1 AND timestamp < ?2 AND substr(timestamp,11,1) = 'T') \
+                OR (timestamp >= ?3 AND timestamp < ?4 AND substr(timestamp,11,1) = ' ')";
+const TOKEN_ACTIVITY_SESSIONS_SQL: &str = "SELECT COUNT(DISTINCT session_id) FROM token_usage \
+     WHERE (timestamp >= ?1 AND timestamp < ?2 AND substr(timestamp,11,1) = 'T') \
+        OR (timestamp >= ?3 AND timestamp < ?4 AND substr(timestamp,11,1) = ' ')";
+const TOKEN_ACTIVITY_MESSAGES_SQL: &str = "SELECT COUNT(*) FROM token_usage \
+     WHERE (timestamp >= ?1 AND timestamp < ?2 AND substr(timestamp,11,1) = 'T') \
+        OR (timestamp >= ?3 AND timestamp < ?4 AND substr(timestamp,11,1) = ' ')";
+const TOKEN_ACTIVITY_TOOL_CALLS_SQL: &str = "SELECT COUNT(*) FROM token_usage \
+             WHERE ((timestamp >= ?1 AND timestamp < ?2 AND substr(timestamp,11,1) = 'T') \
+                 OR (timestamp >= ?3 AND timestamp < ?4 AND substr(timestamp,11,1) = ' ')) \
+               AND request_type IN ('tool_use', 'tool', 'function_call')";
+const TOKEN_TOP_SESSIONS_SQL: &str = "SELECT session_id, \
+                    COALESCE(SUM(total_tokens),0) AS tokens, \
+                    COALESCE(SUM(cost_usd),0.0)   AS cost, \
+                    MAX(agent_type)               AS agent_type \
+             FROM token_usage \
+             WHERE (timestamp >= ?1 AND timestamp < ?2 AND substr(timestamp,11,1) = 'T') \
+                OR (timestamp >= ?3 AND timestamp < ?4 AND substr(timestamp,11,1) = ' ') \
+             GROUP BY session_id \
+             ORDER BY tokens DESC LIMIT 10";
+const TOKEN_USAGE_FOR_SESSION_SQL: &str = "SELECT COUNT(*), \
+                    COALESCE(SUM(prompt_tokens),0), \
+                    COALESCE(SUM(completion_tokens),0), \
+                    COALESCE(SUM(total_tokens),0), \
+                    SUM(thinking_tokens), \
+                    COALESCE(SUM(cost_usd),0.0) \
+             FROM token_usage WHERE session_id = ?1";
+const WORKER_STATS_RANGE_SQL: &str = "SELECT
+                 worker_id,
+                 SUM(tasks_completed)        AS tasks_completed,
+                 SUM(tasks_failed)           AS tasks_failed,
+                 SUM(time_spent_minutes)     AS time_spent_minutes,
+                 SUM(cost_usd)               AS cost_usd,
+                 AVG(avg_task_duration_minutes) AS avg_duration,
+                 (SELECT history.last_heartbeat FROM worker_stats history
+                  WHERE history.worker_id = worker_stats.worker_id
+                    AND history.date BETWEEN ?2 AND ?3
+                    AND history.last_heartbeat IS NOT NULL
+                  ORDER BY julianday(history.last_heartbeat) DESC LIMIT 1) AS last_heartbeat
+             FROM worker_stats
+             WHERE worker_id = ?1 AND date BETWEEN ?2 AND ?3
+             GROUP BY worker_id";
+const API_FAILURES_RECENT_SQL: &str =
+    "SELECT id, timestamp, provider, error_type, error_message, request_id, retry_count, resolved
+             FROM (
+               SELECT id, timestamp, provider, error_type, error_message, request_id, retry_count, resolved
+                 FROM api_failures WHERE julianday(timestamp) > julianday('now', ?1 || ' hours')
+               UNION ALL
+               SELECT id, timestamp, provider, error_type, error_message, request_id, retry_count, resolved
+                 FROM api_failures WHERE timestamp IS NOT NULL AND julianday(timestamp) IS NULL
+             ) ORDER BY julianday(timestamp) DESC";
+const SYSTEM_EVENTS_RECENT_SQL: &str =
+    "SELECT id, timestamp, component, event_type, message, severity, metadata \
+             FROM ( \
+               SELECT id, timestamp, component, event_type, message, severity, metadata \
+                 FROM system_events WHERE julianday(timestamp) > julianday('now', ?1) \
+               UNION ALL \
+               SELECT id, timestamp, component, event_type, message, severity, metadata \
+                 FROM system_events WHERE timestamp IS NOT NULL AND julianday(timestamp) IS NULL \
+             ) ORDER BY julianday(timestamp) DESC LIMIT 500";
+const SYSTEM_EVENTS_RECENT_BY_COMPONENT_SQL: &str =
+    "SELECT id, timestamp, component, event_type, message, severity, metadata \
+             FROM ( \
+               SELECT id, timestamp, component, event_type, message, severity, metadata \
+                 FROM system_events WHERE julianday(timestamp) > julianday('now', ?1) AND component = ?2 \
+               UNION ALL \
+               SELECT id, timestamp, component, event_type, message, severity, metadata \
+                 FROM system_events WHERE timestamp IS NOT NULL AND julianday(timestamp) IS NULL AND component = ?2 \
+             ) ORDER BY julianday(timestamp) DESC LIMIT 500";
+const SYSTEM_EVENTS_RECENT_BY_SEVERITY_SQL: &str =
+    "SELECT id, timestamp, component, event_type, message, severity, metadata \
+             FROM ( \
+               SELECT id, timestamp, component, event_type, message, severity, metadata \
+                 FROM system_events WHERE julianday(timestamp) > julianday('now', ?1) AND severity = ?2 \
+               UNION ALL \
+               SELECT id, timestamp, component, event_type, message, severity, metadata \
+                 FROM system_events WHERE timestamp IS NOT NULL AND julianday(timestamp) IS NULL AND severity = ?2 \
+             ) ORDER BY julianday(timestamp) DESC LIMIT 500";
+const SYSTEM_EVENTS_RECENT_BY_COMPONENT_AND_SEVERITY_SQL: &str =
+    "SELECT id, timestamp, component, event_type, message, severity, metadata \
+             FROM ( \
+               SELECT id, timestamp, component, event_type, message, severity, metadata \
+                 FROM system_events WHERE julianday(timestamp) > julianday('now', ?1) AND component = ?2 AND severity = ?3 \
+               UNION ALL \
+               SELECT id, timestamp, component, event_type, message, severity, metadata \
+                 FROM system_events WHERE timestamp IS NOT NULL AND julianday(timestamp) IS NULL AND component = ?2 AND severity = ?3 \
+             ) ORDER BY julianday(timestamp) DESC LIMIT 500";
+
+#[cfg(test)]
+fn system_events_recent_sql(has_component: bool, has_severity: bool) -> &'static str {
+    match (has_component, has_severity) {
+        (false, false) => SYSTEM_EVENTS_RECENT_SQL,
+        (true, false) => SYSTEM_EVENTS_RECENT_BY_COMPONENT_SQL,
+        (false, true) => SYSTEM_EVENTS_RECENT_BY_SEVERITY_SQL,
+        (true, true) => SYSTEM_EVENTS_RECENT_BY_COMPONENT_AND_SEVERITY_SQL,
+    }
+}
+
+fn local_boundary_utc(date: NaiveDate) -> Option<chrono::DateTime<Utc>> {
+    let midnight = date.and_hms_opt(0, 0, 0)?;
+    for minute in 0..=24 * 60 {
+        let local = midnight.checked_add_signed(chrono::Duration::minutes(minute))?;
+        match Local.from_local_datetime(&local) {
+            chrono::LocalResult::Single(value) => return Some(value.with_timezone(&Utc)),
+            chrono::LocalResult::Ambiguous(first, second) => {
+                return Some(std::cmp::min(first, second).with_timezone(&Utc));
+            }
+            chrono::LocalResult::None => {}
+        }
+    }
+    None
+}
+
+/// Produce lexical UTC timestamp ranges for both canonical RFC3339 and legacy
+/// SQLite `CURRENT_TIMESTAMP` rows. Both formats are written from UTC instants;
+/// using a local calendar boundary keeps the previous `DATE(..., 'localtime')`
+/// behavior while allowing the timestamp index to serve the query.
+fn local_date_range_bounds(start: &str, end: &str) -> Option<[String; 4]> {
+    let start = NaiveDate::parse_from_str(start, "%Y-%m-%d").ok()?;
+    let end = NaiveDate::parse_from_str(end, "%Y-%m-%d")
+        .ok()?
+        .succ_opt()?;
+    if end <= start {
+        return None;
+    }
+    let start = local_boundary_utc(start)?.naive_utc();
+    let end = local_boundary_utc(end)?.naive_utc();
+    Some([
+        start.format("%Y-%m-%dT%H:%M:%S").to_string(),
+        end.format("%Y-%m-%dT%H:%M:%S").to_string(),
+        start.format("%Y-%m-%d %H:%M:%S").to_string(),
+        end.format("%Y-%m-%d %H:%M:%S").to_string(),
+    ])
+}
+
+const TOKEN_USAGE_BY_MODEL_SQL: &str = "SELECT model, COALESCE(SUM(total_tokens),0) \
+     FROM token_usage \
+     WHERE (timestamp >= ?1 AND timestamp < ?2 AND substr(timestamp,11,1) = 'T') \
+        OR (timestamp >= ?3 AND timestamp < ?4 AND substr(timestamp,11,1) = ' ') \
+     GROUP BY model ORDER BY 2 DESC";
+const TOKEN_USAGE_BY_PROVIDER_SQL: &str = "SELECT provider, COALESCE(SUM(total_tokens),0) \
+     FROM token_usage \
+     WHERE (timestamp >= ?1 AND timestamp < ?2 AND substr(timestamp,11,1) = 'T') \
+        OR (timestamp >= ?3 AND timestamp < ?4 AND substr(timestamp,11,1) = ' ') \
+     GROUP BY provider ORDER BY 2 DESC";
+const TOKEN_USAGE_BY_AGENT_TYPE_SQL: &str = "SELECT agent_type, COALESCE(SUM(total_tokens),0) \
+     FROM token_usage \
+     WHERE (timestamp >= ?1 AND timestamp < ?2 AND substr(timestamp,11,1) = 'T') \
+        OR (timestamp >= ?3 AND timestamp < ?4 AND substr(timestamp,11,1) = ' ') \
+     GROUP BY agent_type ORDER BY 2 DESC";
 
 pub struct AnalyticsDb {
     pub conn: Mutex<Connection>,
@@ -15,6 +198,26 @@ pub struct AnalyticsDb {
     // diagnostic log can answer "is this hitting the right DB?" without
     // re-deriving arcana_dir().
     pub path: std::path::PathBuf,
+}
+
+/// Aggregate returned by the production Tauri worker-range reader.
+/// `granularity == "month"` means one or more monthly buckets overlap the
+/// requested range; coverage bounds describe the actual rolled data and can
+/// extend beyond a partial range request.
+#[derive(Debug, Clone)]
+pub struct WorkerStatsRange {
+    pub worker_id: String,
+    pub date: NaiveDate,
+    pub tasks_completed: i64,
+    pub tasks_failed: i64,
+    pub time_spent_minutes: i64,
+    pub cost_usd: f64,
+    pub avg_task_duration_minutes: f64,
+    pub success_rate: f64,
+    pub last_heartbeat: Option<chrono::DateTime<Utc>>,
+    pub coverage_start: NaiveDate,
+    pub coverage_end: NaiveDate,
+    pub granularity: &'static str,
 }
 
 impl AnalyticsDb {
@@ -49,13 +252,14 @@ impl AnalyticsDb {
     /// Run migrations to create tables if they don't exist
     /// `analytics.db`'s ladder. `v1` is the schema as it stands, created
     /// idempotently, so an existing database is stamped without being altered.
-    const LADDER: &[Migration] = &[Migration {
-        version: 1,
-        name: "analytics-baseline",
-        sql: r#"
+    const LADDER: &[Migration] = &[
+        Migration {
+            version: 1,
+            name: "analytics-baseline",
+            sql: r#"
             CREATE TABLE IF NOT EXISTS token_usage (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
                 session_id TEXT NOT NULL,
                 agent_type TEXT NOT NULL,
                 provider TEXT NOT NULL,
@@ -83,7 +287,7 @@ impl AnalyticsDb {
                 tool_call_count INTEGER NOT NULL,
                 provider_breakdown TEXT,
                 agent_type_breakdown TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
             );
 
             CREATE TABLE IF NOT EXISTS worker_stats (
@@ -102,7 +306,7 @@ impl AnalyticsDb {
 
             CREATE TABLE IF NOT EXISTS api_failures (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
                 provider TEXT NOT NULL,
                 error_type TEXT NOT NULL,
                 error_message TEXT NOT NULL,
@@ -113,7 +317,7 @@ impl AnalyticsDb {
 
             CREATE TABLE IF NOT EXISTS system_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
                 component TEXT NOT NULL,
                 event_type TEXT NOT NULL,
                 message TEXT NOT NULL,
@@ -130,7 +334,64 @@ impl AnalyticsDb {
             CREATE INDEX IF NOT EXISTS idx_worker_stats_worker ON worker_stats(worker_id);
             CREATE INDEX IF NOT EXISTS idx_system_events_timestamp ON system_events(timestamp);
         "#,
-    }];
+        },
+        Migration {
+            version: 2,
+            name: "canonical-utc-timestamp-defaults",
+            sql: r#"
+            CREATE TRIGGER IF NOT EXISTS analytics_token_usage_timestamp_default
+            AFTER INSERT ON token_usage
+            WHEN NEW.timestamp = datetime('now')
+            BEGIN UPDATE token_usage SET timestamp = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = NEW.id; END;
+            CREATE TRIGGER IF NOT EXISTS analytics_api_failures_timestamp_default
+            AFTER INSERT ON api_failures
+            WHEN NEW.timestamp = datetime('now')
+            BEGIN UPDATE api_failures SET timestamp = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = NEW.id; END;
+            CREATE TRIGGER IF NOT EXISTS analytics_system_events_timestamp_default
+            AFTER INSERT ON system_events
+            WHEN NEW.timestamp = datetime('now')
+            BEGIN UPDATE system_events SET timestamp = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = NEW.id; END;
+            CREATE TRIGGER IF NOT EXISTS analytics_daily_costs_created_default
+            AFTER INSERT ON daily_costs
+            WHEN NEW.created_at = datetime('now')
+            BEGIN UPDATE daily_costs SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE date = NEW.date; END;
+        "#,
+        },
+        Migration {
+            version: 3,
+            name: "recent-event-julianday-indexes",
+            sql: r#"
+            CREATE INDEX IF NOT EXISTS idx_api_failures_julianday
+                ON api_failures(julianday(timestamp) DESC);
+            CREATE INDEX IF NOT EXISTS idx_system_events_julianday
+                ON system_events(julianday(timestamp) DESC);
+            CREATE INDEX IF NOT EXISTS idx_token_usage_julianday
+                ON token_usage(julianday(timestamp) DESC);
+        "#,
+        },
+        Migration {
+            version: 4,
+            name: "worker-stats-monthly-rollups",
+            sql: r#"
+            CREATE TABLE IF NOT EXISTS worker_stats_monthly (
+                worker_id TEXT NOT NULL,
+                month TEXT NOT NULL,
+                covered_start TEXT NOT NULL,
+                covered_end TEXT NOT NULL,
+                tasks_completed INTEGER NOT NULL,
+                tasks_failed INTEGER NOT NULL,
+                time_spent_minutes INTEGER NOT NULL,
+                cost_usd REAL NOT NULL,
+                avg_task_duration_minutes REAL NOT NULL,
+                success_rate REAL NOT NULL,
+                last_heartbeat TEXT,
+                PRIMARY KEY (worker_id, month)
+            );
+            CREATE INDEX IF NOT EXISTS idx_worker_stats_monthly_coverage
+                ON worker_stats_monthly(covered_start, covered_end);
+        "#,
+        },
+    ];
 
     async fn migrate(&self) -> Result<()> {
         let conn = self
@@ -146,7 +407,10 @@ impl AnalyticsDb {
     // ═══════════════════════════════════════════════════════════════════════════
 
     pub fn insert_token_usage(&self, record: &TokenUsageRecord) -> Result<i64> {
-        let mut conn = self
+        let mut operation =
+            crate::observability::timing::OperationTimer::start("database_token_usage_insert")
+                .with_database("analytics");
+        let conn = self
             .conn
             .lock()
             .map_err(|e| ArcanaError::Agent(format!("Mutex lock failed: {}", e)))?;
@@ -155,7 +419,7 @@ impl AnalyticsDb {
              prompt_tokens, completion_tokens, total_tokens, thinking_tokens, cost_usd, request_type)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             params![
-                record.timestamp.to_rfc3339(),
+                crate::db::timestamps::format_utc_timestamp(record.timestamp),
                 record.session_id,
                 record.agent_type,
                 record.provider,
@@ -169,55 +433,53 @@ impl AnalyticsDb {
             ],
         ).map_err(|e| ArcanaError::Database(e))?;
 
-        Ok(conn.last_insert_rowid())
+        let id = conn.last_insert_rowid();
+        operation = operation.with_result_count(1);
+        operation.succeed();
+        Ok(id)
     }
 
     pub fn get_token_usage_by_date(&self, date: NaiveDate) -> Result<Vec<TokenUsageRecord>> {
+        let mut operation =
+            crate::observability::timing::OperationTimer::start("database_token_usage_date_read")
+                .with_database("analytics");
         let conn = self
             .conn
             .lock()
             .map_err(|e| ArcanaError::Agent(format!("Mutex lock failed: {}", e)))?;
+        let bounds = local_date_range_bounds(&date.to_string(), &date.to_string())
+            .ok_or_else(|| ArcanaError::Agent("Invalid local date for token query".into()))?;
         let mut stmt = conn
-            .prepare(
-                "SELECT id, timestamp, session_id, agent_type, provider, model, prompt_tokens, 
-             completion_tokens, total_tokens, thinking_tokens, cost_usd, request_type
-             FROM token_usage WHERE DATE(timestamp) = ? ORDER BY timestamp DESC",
-            )
+            .prepare(TOKEN_USAGE_BY_LOCAL_DATE_SQL)
             .map_err(|e| ArcanaError::Database(e))?;
 
-        let date_str = date.to_string();
         let records = stmt
-            .query_map(params![date_str], |row| {
-                let ts_str: String = row.get(1)?;
-                let timestamp =
-                    crate::db::timestamps::parse_db_timestamp(&ts_str).unwrap_or_else(|e| {
-                        // Substituting "now" makes an unreadable record look
-                        // brand new, which is worse than useless in a cost or
-                        // failure report. The fallback stays — these records
-                        // are display-only and a hard error would lose the rest
-                        // of the row — but it is no longer silent.
-                        tracing::warn!("[analytics] unreadable timestamp {ts_str:?}: {e}");
-                        Utc::now()
-                    });
-                Ok(TokenUsageRecord {
-                    id: row.get(0)?,
-                    timestamp,
-                    session_id: row.get(2)?,
-                    agent_type: row.get(3)?,
-                    provider: row.get(4)?,
-                    model: row.get(5)?,
-                    prompt_tokens: row.get(6)?,
-                    completion_tokens: row.get(7)?,
-                    total_tokens: row.get(8)?,
-                    thinking_tokens: row.get(9)?,
-                    cost_usd: row.get(10)?,
-                    request_type: row.get(11)?,
-                })
-            })
+            .query_map(
+                params![&bounds[0], &bounds[1], &bounds[2], &bounds[3]],
+                |row| {
+                    let timestamp = crate::db::timestamps::parse_row_timestamp(row, 1)?;
+                    Ok(TokenUsageRecord {
+                        id: row.get(0)?,
+                        timestamp,
+                        session_id: row.get(2)?,
+                        agent_type: row.get(3)?,
+                        provider: row.get(4)?,
+                        model: row.get(5)?,
+                        prompt_tokens: row.get(6)?,
+                        completion_tokens: row.get(7)?,
+                        total_tokens: row.get(8)?,
+                        thinking_tokens: row.get(9)?,
+                        cost_usd: row.get(10)?,
+                        request_type: row.get(11)?,
+                    })
+                },
+            )
             .map_err(|e| ArcanaError::Database(e))?
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| ArcanaError::Database(e))?;
 
+        operation = operation.with_result_count(records.len());
+        operation.succeed();
         Ok(records)
     }
 
@@ -226,7 +488,10 @@ impl AnalyticsDb {
     // ═══════════════════════════════════════════════════════════════════════════
 
     pub fn insert_daily_cost(&self, record: &DailyCostRecord) -> Result<()> {
-        let mut conn = self
+        let mut operation =
+            crate::observability::timing::OperationTimer::start("database_daily_cost_insert")
+                .with_database("analytics");
+        let conn = self
             .conn
             .lock()
             .map_err(|e| ArcanaError::Agent(format!("Mutex lock failed: {}", e)))?;
@@ -251,20 +516,21 @@ impl AnalyticsDb {
             ],
         ).map_err(|e| ArcanaError::Database(e))?;
 
+        operation = operation.with_result_count(1);
+        operation.succeed();
         Ok(())
     }
 
     pub fn get_daily_cost(&self, date: NaiveDate) -> Result<Option<DailyCostRecord>> {
+        let mut operation =
+            crate::observability::timing::OperationTimer::start("database_daily_cost_read")
+                .with_database("analytics");
         let conn = self
             .conn
             .lock()
             .map_err(|e| ArcanaError::Agent(format!("Mutex lock failed: {}", e)))?;
         let mut stmt = conn
-            .prepare(
-                "SELECT date, total_cost_usd, total_tokens, session_count, message_count, 
-             tool_call_count, provider_breakdown, agent_type_breakdown
-             FROM daily_costs WHERE date = ?",
-            )
+            .prepare(DAILY_COST_BY_DATE_SQL)
             .map_err(|e| ArcanaError::Database(e))?;
 
         let date_str = date.to_string();
@@ -287,6 +553,8 @@ impl AnalyticsDb {
             .optional()
             .map_err(|e| ArcanaError::Database(e))?;
 
+        operation = operation.with_result_count(usize::from(record.is_some()));
+        operation.succeed();
         Ok(record)
     }
 
@@ -295,16 +563,15 @@ impl AnalyticsDb {
         start: NaiveDate,
         end: NaiveDate,
     ) -> Result<Vec<DailyCostRecord>> {
+        let mut operation =
+            crate::observability::timing::OperationTimer::start("database_daily_cost_range_read")
+                .with_database("analytics");
         let conn = self
             .conn
             .lock()
             .map_err(|e| ArcanaError::Agent(format!("Mutex lock failed: {}", e)))?;
         let mut stmt = conn
-            .prepare(
-                "SELECT date, total_cost_usd, total_tokens, session_count, message_count, 
-             tool_call_count, provider_breakdown, agent_type_breakdown
-             FROM daily_costs WHERE date BETWEEN ? AND ? ORDER BY date ASC",
-            )
+            .prepare(DAILY_COSTS_RANGE_SQL)
             .map_err(|e| ArcanaError::Database(e))?;
 
         let start_str = start.to_string();
@@ -329,6 +596,8 @@ impl AnalyticsDb {
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| ArcanaError::Database(e))?;
 
+        operation = operation.with_result_count(records.len());
+        operation.succeed();
         Ok(records)
     }
 
@@ -337,14 +606,47 @@ impl AnalyticsDb {
     // ═══════════════════════════════════════════════════════════════════════════
 
     pub fn insert_worker_stats(&self, record: &WorkerStatsRecord) -> Result<()> {
-        let mut conn = self
+        let operation =
+            OperationTimer::start("database_worker_stats_insert").with_database("analytics");
+        let conn = self
             .conn
             .lock()
             .map_err(|e| ArcanaError::Agent(format!("Mutex lock failed: {}", e)))?;
         conn.execute(
-            "INSERT OR REPLACE INTO worker_stats (worker_id, date, tasks_completed, tasks_failed, 
+            "INSERT INTO worker_stats (worker_id, date, tasks_completed, tasks_failed,
              time_spent_minutes, cost_usd, avg_task_duration_minutes, success_rate, last_heartbeat)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(worker_id, date) DO UPDATE SET
+                tasks_completed = worker_stats.tasks_completed + excluded.tasks_completed,
+                tasks_failed = worker_stats.tasks_failed + excluded.tasks_failed,
+                time_spent_minutes = worker_stats.time_spent_minutes + excluded.time_spent_minutes,
+                cost_usd = worker_stats.cost_usd + excluded.cost_usd,
+                avg_task_duration_minutes = CASE
+                    WHEN worker_stats.tasks_completed + worker_stats.tasks_failed
+                       + excluded.tasks_completed + excluded.tasks_failed > 0
+                    THEN (
+                        worker_stats.avg_task_duration_minutes
+                          * (worker_stats.tasks_completed + worker_stats.tasks_failed)
+                        + excluded.avg_task_duration_minutes
+                          * (excluded.tasks_completed + excluded.tasks_failed)
+                    ) * 1.0 / (
+                        worker_stats.tasks_completed + worker_stats.tasks_failed
+                        + excluded.tasks_completed + excluded.tasks_failed
+                    )
+                    ELSE 0 END,
+                success_rate = CASE
+                    WHEN worker_stats.tasks_completed + worker_stats.tasks_failed
+                       + excluded.tasks_completed + excluded.tasks_failed > 0
+                    THEN (worker_stats.tasks_completed + excluded.tasks_completed) * 1.0 /
+                         (worker_stats.tasks_completed + worker_stats.tasks_failed
+                          + excluded.tasks_completed + excluded.tasks_failed)
+                    ELSE 0 END,
+                last_heartbeat = CASE
+                    WHEN excluded.last_heartbeat IS NULL THEN worker_stats.last_heartbeat
+                    WHEN worker_stats.last_heartbeat IS NULL
+                      OR julianday(excluded.last_heartbeat) > julianday(worker_stats.last_heartbeat)
+                    THEN excluded.last_heartbeat
+                    ELSE worker_stats.last_heartbeat END",
             params![
                 record.worker_id,
                 record.date.to_string(),
@@ -353,13 +655,151 @@ impl AnalyticsDb {
                 record.time_spent_minutes,
                 record.cost_usd,
                 record.avg_task_duration_minutes,
-                record.success_rate,
-                record.last_heartbeat.map(|dt| dt.to_rfc3339()),
+                if record.tasks_completed + record.tasks_failed > 0 {
+                    record.tasks_completed as f64
+                        / (record.tasks_completed + record.tasks_failed) as f64
+                } else {
+                    0.0
+                },
+                record
+                    .last_heartbeat
+                    .map(crate::db::timestamps::format_utc_timestamp),
             ],
         )
         .map_err(|e| ArcanaError::Database(e))?;
 
+        operation.with_result_count(1).succeed();
         Ok(())
+    }
+
+    /// Move worker days older than `cutoff` into idempotent monthly buckets,
+    /// then prune those raw rows in the same write transaction.
+    pub fn rollup_and_prune_worker_stats_before(&self, cutoff: NaiveDate) -> Result<usize> {
+        let mut operation =
+            crate::observability::timing::OperationTimer::start("database_worker_stats_rollup")
+                .with_database("analytics");
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| ArcanaError::Agent(format!("Mutex lock failed: {}", e)))?;
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(ArcanaError::Database)?;
+        let cutoff = cutoff.to_string();
+        let rolled_rows = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT worker_id, strftime('%Y-%m', date) AS month,
+                            MIN(date), MAX(date), SUM(tasks_completed), SUM(tasks_failed),
+                            SUM(time_spent_minutes), SUM(cost_usd),
+                            CASE WHEN SUM(tasks_completed + tasks_failed) > 0
+                                 THEN SUM(avg_task_duration_minutes
+                                          * (tasks_completed + tasks_failed)) * 1.0
+                                      / SUM(tasks_completed + tasks_failed)
+                                 ELSE 0 END,
+                            CASE WHEN SUM(tasks_completed + tasks_failed) > 0
+                                 THEN SUM(tasks_completed) * 1.0
+                                      / SUM(tasks_completed + tasks_failed)
+                                 ELSE 0 END,
+                            (SELECT history.last_heartbeat FROM worker_stats history
+                              WHERE history.worker_id = source.worker_id
+                                AND strftime('%Y-%m', history.date) = strftime('%Y-%m', source.date)
+                                AND history.date < ?1 AND history.last_heartbeat IS NOT NULL
+                              ORDER BY julianday(history.last_heartbeat) DESC LIMIT 1)
+                       FROM worker_stats source
+                      WHERE date < ?1
+                      GROUP BY worker_id, strftime('%Y-%m', date)",
+                )
+                .map_err(ArcanaError::Database)?;
+            let rows = stmt
+                .query_map([&cutoff], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, f64>(7)?,
+                        row.get::<_, f64>(8)?,
+                        row.get::<_, f64>(9)?,
+                        row.get::<_, Option<String>>(10)?,
+                    ))
+                })
+                .map_err(ArcanaError::Database)?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(ArcanaError::Database)?
+        };
+
+        let mut changed = 0;
+        for row in rolled_rows {
+            let (
+                worker_id,
+                month,
+                covered_start,
+                covered_end,
+                completed,
+                failed,
+                time,
+                cost,
+                avg_duration,
+                success_rate,
+                heartbeat,
+            ) = row;
+            let month = month.ok_or_else(|| {
+                ArcanaError::Agent(format!(
+                    "cannot roll up worker stats with invalid date coverage {covered_start}..{covered_end}"
+                ))
+            })?;
+            tx.execute(
+                "INSERT INTO worker_stats_monthly
+                    (worker_id, month, covered_start, covered_end, tasks_completed, tasks_failed,
+                     time_spent_minutes, cost_usd, avg_task_duration_minutes, success_rate, last_heartbeat)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                 ON CONFLICT(worker_id, month) DO UPDATE SET
+                    covered_start = MIN(worker_stats_monthly.covered_start, excluded.covered_start),
+                    covered_end = MAX(worker_stats_monthly.covered_end, excluded.covered_end),
+                    tasks_completed = worker_stats_monthly.tasks_completed + excluded.tasks_completed,
+                    tasks_failed = worker_stats_monthly.tasks_failed + excluded.tasks_failed,
+                    time_spent_minutes = worker_stats_monthly.time_spent_minutes + excluded.time_spent_minutes,
+                    cost_usd = worker_stats_monthly.cost_usd + excluded.cost_usd,
+                    avg_task_duration_minutes = CASE
+                        WHEN worker_stats_monthly.tasks_completed + worker_stats_monthly.tasks_failed
+                           + excluded.tasks_completed + excluded.tasks_failed > 0
+                        THEN (worker_stats_monthly.avg_task_duration_minutes
+                                * (worker_stats_monthly.tasks_completed + worker_stats_monthly.tasks_failed)
+                              + excluded.avg_task_duration_minutes
+                                * (excluded.tasks_completed + excluded.tasks_failed)) * 1.0
+                             / (worker_stats_monthly.tasks_completed + worker_stats_monthly.tasks_failed
+                                + excluded.tasks_completed + excluded.tasks_failed)
+                        ELSE 0 END,
+                    success_rate = CASE
+                        WHEN worker_stats_monthly.tasks_completed + worker_stats_monthly.tasks_failed
+                           + excluded.tasks_completed + excluded.tasks_failed > 0
+                        THEN (worker_stats_monthly.tasks_completed + excluded.tasks_completed) * 1.0
+                             / (worker_stats_monthly.tasks_completed + worker_stats_monthly.tasks_failed
+                                + excluded.tasks_completed + excluded.tasks_failed)
+                        ELSE 0 END,
+                    last_heartbeat = CASE
+                        WHEN excluded.last_heartbeat IS NULL THEN worker_stats_monthly.last_heartbeat
+                        WHEN worker_stats_monthly.last_heartbeat IS NULL
+                          OR julianday(excluded.last_heartbeat) > julianday(worker_stats_monthly.last_heartbeat)
+                        THEN excluded.last_heartbeat
+                        ELSE worker_stats_monthly.last_heartbeat END",
+                params![worker_id, month, covered_start, covered_end, completed, failed, time,
+                    cost, avg_duration, success_rate, heartbeat],
+            )
+            .map_err(ArcanaError::Database)?;
+            changed += 1;
+        }
+
+        tx.execute("DELETE FROM worker_stats WHERE date < ?1", [&cutoff])
+            .map_err(ArcanaError::Database)?;
+        tx.commit().map_err(ArcanaError::Database)?;
+        operation = operation.with_result_count(changed);
+        operation.succeed();
+        Ok(changed)
     }
 
     /// Aggregate worker stats for a single worker over a date range.
@@ -370,58 +810,172 @@ impl AnalyticsDb {
         worker_id: &str,
         start: NaiveDate,
         end: NaiveDate,
-    ) -> Result<Option<WorkerStatsRecord>> {
+    ) -> Result<Option<WorkerStatsRange>> {
+        let mut operation =
+            crate::observability::timing::OperationTimer::start("database_worker_stats_range_read")
+                .with_database("analytics");
         let conn = self
             .conn
             .lock()
             .map_err(|e| ArcanaError::Agent(format!("Mutex lock failed: {}", e)))?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT
-                 worker_id,
-                 SUM(tasks_completed)        AS tasks_completed,
-                 SUM(tasks_failed)           AS tasks_failed,
-                 SUM(time_spent_minutes)     AS time_spent_minutes,
-                 SUM(cost_usd)               AS cost_usd,
-                 AVG(avg_task_duration_minutes) AS avg_duration,
-                 MAX(last_heartbeat)         AS last_heartbeat
-             FROM worker_stats
-             WHERE worker_id = ? AND date BETWEEN ? AND ?
-             GROUP BY worker_id",
-            )
-            .map_err(|e| ArcanaError::Database(e))?;
-
         let start_str = start.to_string();
         let end_str = end.to_string();
-        let record = stmt
-            .query_row(params![worker_id, start_str, end_str], |row| {
-                let tasks_completed: i32 = row.get(1)?;
-                let tasks_failed: i32 = row.get(2)?;
-                let total = tasks_completed + tasks_failed;
-                let success_rate = if total > 0 {
-                    tasks_completed as f64 / total as f64
-                } else {
-                    0.0
-                };
-                let hb_str: Option<String> = row.get(6)?;
-                let last_heartbeat =
-                    hb_str.and_then(|s| crate::db::timestamps::parse_db_timestamp(&s).ok());
-                Ok(WorkerStatsRecord {
-                    worker_id: row.get(0)?,
-                    date: end, // range end as the "as of" date
-                    tasks_completed,
-                    tasks_failed,
-                    time_spent_minutes: row.get(3)?,
-                    cost_usd: row.get(4)?,
-                    avg_task_duration_minutes: row.get::<_, f64>(5).unwrap_or(0.0) as i32,
-                    success_rate,
-                    last_heartbeat,
-                })
-            })
-            .optional()
-            .map_err(|e| ArcanaError::Database(e))?;
+        let mut tasks_completed = 0i64;
+        let mut tasks_failed = 0i64;
+        let mut time_spent_minutes = 0i64;
+        let mut cost_usd = 0.0;
+        let mut duration_weighted_sum = 0.0;
+        let mut duration_weight = 0i64;
+        let mut last_heartbeat: Option<chrono::DateTime<Utc>> = None;
+        let mut coverage_start: Option<NaiveDate> = None;
+        let mut coverage_end: Option<NaiveDate> = None;
+        let mut has_rows = false;
+        let mut has_monthly = false;
 
-        Ok(record)
+        {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT date, tasks_completed, tasks_failed, time_spent_minutes, cost_usd,
+                            avg_task_duration_minutes, last_heartbeat
+                       FROM worker_stats
+                      WHERE worker_id = ?1 AND date BETWEEN ?2 AND ?3",
+                )
+                .map_err(ArcanaError::Database)?;
+            let rows = stmt
+                .query_map(params![worker_id, start_str, end_str], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, f64>(4)?,
+                        row.get::<_, f64>(5)?,
+                        parse_optional_timestamp(row, 6)?,
+                    ))
+                })
+                .map_err(ArcanaError::Database)?;
+            for row in rows {
+                let (date, completed, failed, time, cost, avg_duration, heartbeat) =
+                    row.map_err(ArcanaError::Database)?;
+                let date = NaiveDate::parse_from_str(&date, "%Y-%m-%d")
+                    .map_err(|e| ArcanaError::Agent(format!("invalid worker stats date: {e}")))?;
+                has_rows = true;
+                tasks_completed += completed;
+                tasks_failed += failed;
+                time_spent_minutes += time;
+                cost_usd += cost;
+                let weight = completed + failed;
+                duration_weighted_sum += avg_duration * weight as f64;
+                duration_weight += weight;
+                coverage_start = Some(coverage_start.map_or(date, |current| current.min(date)));
+                coverage_end = Some(coverage_end.map_or(date, |current| current.max(date)));
+                if heartbeat.is_some_and(|heartbeat| {
+                    last_heartbeat
+                        .as_ref()
+                        .is_none_or(|current| heartbeat > *current)
+                }) {
+                    last_heartbeat = heartbeat;
+                }
+            }
+        }
+
+        {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT covered_start, covered_end, tasks_completed, tasks_failed,
+                            time_spent_minutes, cost_usd, avg_task_duration_minutes, last_heartbeat
+                       FROM worker_stats_monthly
+                      WHERE worker_id = ?1 AND covered_end >= ?2 AND covered_start <= ?3",
+                )
+                .map_err(ArcanaError::Database)?;
+            let rows = stmt
+                .query_map(params![worker_id, start_str, end_str], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, f64>(5)?,
+                        row.get::<_, f64>(6)?,
+                        parse_optional_timestamp(row, 7)?,
+                    ))
+                })
+                .map_err(ArcanaError::Database)?;
+            for row in rows {
+                let (
+                    covered_start,
+                    covered_end,
+                    completed,
+                    failed,
+                    time,
+                    cost,
+                    avg_duration,
+                    heartbeat,
+                ) = row.map_err(ArcanaError::Database)?;
+                let covered_start =
+                    NaiveDate::parse_from_str(&covered_start, "%Y-%m-%d").map_err(|e| {
+                        ArcanaError::Agent(format!("invalid worker stats coverage start: {e}"))
+                    })?;
+                let covered_end =
+                    NaiveDate::parse_from_str(&covered_end, "%Y-%m-%d").map_err(|e| {
+                        ArcanaError::Agent(format!("invalid worker stats coverage end: {e}"))
+                    })?;
+                has_rows = true;
+                has_monthly = true;
+                tasks_completed += completed;
+                tasks_failed += failed;
+                time_spent_minutes += time;
+                cost_usd += cost;
+                let weight = completed + failed;
+                duration_weighted_sum += avg_duration * weight as f64;
+                duration_weight += weight;
+                coverage_start = Some(
+                    coverage_start.map_or(covered_start, |current| current.min(covered_start)),
+                );
+                coverage_end =
+                    Some(coverage_end.map_or(covered_end, |current| current.max(covered_end)));
+                if heartbeat.is_some_and(|heartbeat| {
+                    last_heartbeat
+                        .as_ref()
+                        .is_none_or(|current| heartbeat > *current)
+                }) {
+                    last_heartbeat = heartbeat;
+                }
+            }
+        }
+
+        if !has_rows {
+            operation = operation.with_result_count(0);
+            operation.succeed();
+            return Ok(None);
+        }
+        let total = tasks_completed + tasks_failed;
+        let stats = WorkerStatsRange {
+            worker_id: worker_id.to_string(),
+            date: end,
+            tasks_completed,
+            tasks_failed,
+            time_spent_minutes,
+            cost_usd,
+            avg_task_duration_minutes: if duration_weight > 0 {
+                duration_weighted_sum / duration_weight as f64
+            } else {
+                0.0
+            },
+            success_rate: if total > 0 {
+                tasks_completed as f64 / total as f64
+            } else {
+                0.0
+            },
+            last_heartbeat,
+            coverage_start: coverage_start.expect("rows establish a coverage start"),
+            coverage_end: coverage_end.expect("rows establish a coverage end"),
+            granularity: if has_monthly { "month" } else { "day" },
+        };
+        operation = operation.with_result_count(1);
+        operation.succeed();
+        Ok(Some(stats))
     }
 
     pub fn get_worker_stats(
@@ -429,6 +983,8 @@ impl AnalyticsDb {
         worker_id: &str,
         date: NaiveDate,
     ) -> Result<Option<WorkerStatsRecord>> {
+        let operation =
+            OperationTimer::start("database_worker_stats_point_read").with_database("analytics");
         let conn = self
             .conn
             .lock()
@@ -443,9 +999,7 @@ impl AnalyticsDb {
         let record = stmt
             .query_row(params![worker_id, date_str], |row| {
                 let date_str: String = row.get(1)?;
-                let hb_str: Option<String> = row.get(8)?;
-                let last_heartbeat =
-                    hb_str.and_then(|s| crate::db::timestamps::parse_db_timestamp(&s).ok());
+                let last_heartbeat = parse_optional_timestamp(row, 8)?;
                 Ok(WorkerStatsRecord {
                     worker_id: row.get(0)?,
                     date: NaiveDate::parse_from_str(&date_str, "%Y-%m-%d").unwrap_or(date),
@@ -461,6 +1015,11 @@ impl AnalyticsDb {
             .optional()
             .map_err(|e| ArcanaError::Database(e))?;
 
+        if record.is_some() {
+            operation.with_result_count(1).succeed();
+        } else {
+            operation.with_result_count(0).set_outcome("not_found");
+        }
         Ok(record)
     }
 
@@ -469,7 +1028,10 @@ impl AnalyticsDb {
     // ═══════════════════════════════════════════════════════════════════════════
 
     pub fn insert_api_failure(&self, record: &ApiFailureRecord) -> Result<i64> {
-        let mut conn = self
+        let mut operation =
+            crate::observability::timing::OperationTimer::start("database_api_failure_insert")
+                .with_database("analytics");
+        let conn = self
             .conn
             .lock()
             .map_err(|e| ArcanaError::Agent(format!("Mutex lock failed: {}", e)))?;
@@ -477,7 +1039,7 @@ impl AnalyticsDb {
             "INSERT INTO api_failures (timestamp, provider, error_type, error_message, request_id, retry_count, resolved)
              VALUES (?, ?, ?, ?, ?, ?, ?)",
             params![
-                record.timestamp.to_rfc3339(),
+                crate::db::timestamps::format_utc_timestamp(record.timestamp),
                 record.provider,
                 record.error_type,
                 record.error_message,
@@ -487,32 +1049,28 @@ impl AnalyticsDb {
             ],
         ).map_err(|e| ArcanaError::Database(e))?;
 
-        Ok(conn.last_insert_rowid())
+        let id = conn.last_insert_rowid();
+        operation = operation.with_result_count(1);
+        operation.succeed();
+        Ok(id)
     }
 
     pub fn get_api_failures_recent(&self, hours: i32) -> Result<Vec<ApiFailureRecord>> {
+        let mut operation = crate::observability::timing::OperationTimer::start(
+            "database_api_failures_recent_read",
+        )
+        .with_database("analytics");
         let conn = self
             .conn
             .lock()
             .map_err(|e| ArcanaError::Agent(format!("Mutex lock failed: {}", e)))?;
-        let mut stmt = conn.prepare(
-            "SELECT id, timestamp, provider, error_type, error_message, request_id, retry_count, resolved
-             FROM api_failures WHERE timestamp > datetime('now', ? || ' hours') ORDER BY timestamp DESC"
-        ).map_err(|e| ArcanaError::Database(e))?;
+        let mut stmt = conn
+            .prepare(API_FAILURES_RECENT_SQL)
+            .map_err(|e| ArcanaError::Database(e))?;
 
         let records = stmt
             .query_map(params![format!("-{}", hours)], |row| {
-                let ts_str: String = row.get(1)?;
-                let timestamp =
-                    crate::db::timestamps::parse_db_timestamp(&ts_str).unwrap_or_else(|e| {
-                        // Substituting "now" makes an unreadable record look
-                        // brand new, which is worse than useless in a cost or
-                        // failure report. The fallback stays — these records
-                        // are display-only and a hard error would lose the rest
-                        // of the row — but it is no longer silent.
-                        tracing::warn!("[analytics] unreadable timestamp {ts_str:?}: {e}");
-                        Utc::now()
-                    });
+                let timestamp = crate::db::timestamps::parse_row_timestamp(row, 1)?;
                 Ok(ApiFailureRecord {
                     id: row.get(0)?,
                     timestamp,
@@ -528,6 +1086,8 @@ impl AnalyticsDb {
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| ArcanaError::Database(e))?;
 
+        operation = operation.with_result_count(records.len());
+        operation.succeed();
         Ok(records)
     }
 
@@ -540,38 +1100,63 @@ impl AnalyticsDb {
     /// has today's data without waiting for the overnight rollup.
     /// Returns `(sessions_today, messages_today, tool_calls_today)`.
     pub fn get_today_activity(&self) -> (i32, i32, i32) {
+        let operation =
+            OperationTimer::start("database_today_activity_read").with_database("analytics");
         let today_str = chrono::Local::now().naive_local().date().to_string();
+        let Some(bounds) = local_date_range_bounds(&today_str, &today_str) else {
+            operation.with_result_count(0).set_outcome("fallback");
+            return (0, 0, 0);
+        };
         let conn = match self.conn.lock() {
             Ok(c) => c,
-            Err(_) => return (0, 0, 0),
+            Err(_) => {
+                operation.with_result_count(0).set_outcome("fallback");
+                return (0, 0, 0);
+            }
         };
 
-        let sessions: i32 = conn
-            .query_row(
-                "SELECT COUNT(DISTINCT session_id) FROM token_usage WHERE DATE(timestamp) = ?1",
-                params![today_str],
-                |r| r.get(0),
-            )
-            .unwrap_or(0);
+        let mut degraded = false;
+        let sessions: i32 = match conn.query_row(
+            TOKEN_ACTIVITY_SESSIONS_SQL,
+            params![&bounds[0], &bounds[1], &bounds[2], &bounds[3]],
+            |r| r.get(0),
+        ) {
+            Ok(value) => value,
+            Err(_) => {
+                degraded = true;
+                0
+            }
+        };
 
-        let messages: i32 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM token_usage WHERE DATE(timestamp) = ?1",
-                params![today_str],
-                |r| r.get(0),
-            )
-            .unwrap_or(0);
+        let messages: i32 = match conn.query_row(
+            TOKEN_ACTIVITY_MESSAGES_SQL,
+            params![&bounds[0], &bounds[1], &bounds[2], &bounds[3]],
+            |r| r.get(0),
+        ) {
+            Ok(value) => value,
+            Err(_) => {
+                degraded = true;
+                0
+            }
+        };
 
-        let tool_calls: i32 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM token_usage \
-             WHERE DATE(timestamp) = ?1 \
-               AND request_type IN ('tool_use', 'tool', 'function_call')",
-                params![today_str],
-                |r| r.get(0),
-            )
-            .unwrap_or(0);
+        let tool_calls: i32 = match conn.query_row(
+            TOKEN_ACTIVITY_TOOL_CALLS_SQL,
+            params![&bounds[0], &bounds[1], &bounds[2], &bounds[3]],
+            |r| r.get(0),
+        ) {
+            Ok(value) => value,
+            Err(_) => {
+                degraded = true;
+                0
+            }
+        };
 
+        if degraded {
+            operation.with_result_count(3).set_outcome("fallback");
+        } else {
+            operation.with_result_count(3).succeed();
+        }
         (sessions, messages, tool_calls)
     }
 
@@ -593,6 +1178,8 @@ impl AnalyticsDb {
         HashMap<String, i64>,
         Vec<SessionTokenUsage>,
     )> {
+        let operation =
+            OperationTimer::start("database_token_usage_range_read").with_database("analytics");
         let s = start.to_string();
         let e = end.to_string();
         let totals = self.token_totals(&s, &e);
@@ -601,6 +1188,7 @@ impl AnalyticsDb {
         let by_agent = self.token_by_group("agent_type", &s, &e)?;
         let top_sessions = self.token_top_sessions(&s, &e)?;
         let (total, prompt, completion, thinking) = totals;
+        operation.with_result_count(top_sessions.len()).succeed();
         Ok((
             total,
             prompt,
@@ -613,83 +1201,156 @@ impl AnalyticsDb {
         ))
     }
 
+    /// Read provider usage attributed to one durable fleet session.
+    pub fn get_token_usage_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<SessionTokenUsageSummary> {
+        let mut operation =
+            OperationTimer::start("database_token_usage_session_read").with_database("analytics");
+        let result = (|| {
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|error| ArcanaError::Agent(format!("Mutex lock failed: {error}")))?;
+            conn.query_row(TOKEN_USAGE_FOR_SESSION_SQL, [session_id], |row| {
+                Ok(SessionTokenUsageSummary {
+                    request_count: row.get(0)?,
+                    prompt_tokens: row.get(1)?,
+                    completion_tokens: row.get(2)?,
+                    total_tokens: row.get(3)?,
+                    thinking_tokens: row.get(4)?,
+                    cost_usd: row.get(5)?,
+                })
+            })
+            .map_err(ArcanaError::Database)
+        })();
+        match result {
+            Ok(summary) => {
+                operation
+                    .with_result_count(summary.request_count as usize)
+                    .succeed();
+                Ok(summary)
+            }
+            Err(error) => {
+                operation.set_outcome("error");
+                Err(error)
+            }
+        }
+    }
+
     // ── private helpers — one lock/stmt per function (mirrors existing methods) ──
 
     fn token_totals(&self, start: &str, end: &str) -> (i64, i64, i64, Option<i64>) {
+        let operation =
+            OperationTimer::start("database_token_usage_totals_read").with_database("analytics");
+        let Some(bounds) = local_date_range_bounds(start, end) else {
+            operation.with_result_count(0).set_outcome("fallback");
+            return (0, 0, 0, None);
+        };
         let conn = match self.conn.lock() {
             Ok(c) => c,
-            Err(_) => return (0, 0, 0, None),
+            Err(_) => {
+                operation.with_result_count(0).set_outcome("fallback");
+                return (0, 0, 0, None);
+            }
         };
-        conn.query_row(
-            "SELECT COALESCE(SUM(total_tokens),0), \
-                    COALESCE(SUM(prompt_tokens),0), \
-                    COALESCE(SUM(completion_tokens),0), \
-                    SUM(thinking_tokens) \
-             FROM token_usage \
-             WHERE DATE(timestamp) BETWEEN ?1 AND ?2",
-            params![start, end],
+        let totals = conn.query_row(
+            TOKEN_TOTALS_RANGE_SQL,
+            params![&bounds[0], &bounds[1], &bounds[2], &bounds[3]],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-        )
-        .unwrap_or((0, 0, 0, None))
+        );
+        match totals {
+            Ok(totals) => {
+                operation.with_result_count(1).succeed();
+                totals
+            }
+            Err(_) => {
+                operation.with_result_count(0).set_outcome("fallback");
+                (0, 0, 0, None)
+            }
+        }
     }
 
     fn token_by_group(&self, col: &str, start: &str, end: &str) -> Result<HashMap<String, i64>> {
-        // `col` is always a trusted internal string ("model" | "provider" | "agent_type"),
-        // never user input, so safe to interpolate into the query.
-        let sql = format!(
-            "SELECT {col}, COALESCE(SUM(total_tokens),0) \
-             FROM token_usage \
-             WHERE DATE(timestamp) BETWEEN ?1 AND ?2 \
-             GROUP BY {col} ORDER BY 2 DESC"
-        );
+        let operation_name = match col {
+            "model" => "database_token_usage_by_model_read",
+            "provider" => "database_token_usage_by_provider_read",
+            "agent_type" => "database_token_usage_by_agent_read",
+            _ => "database_token_usage_by_unsupported_group_read",
+        };
+        let operation = OperationTimer::start(operation_name).with_database("analytics");
+        // Use fixed SQL for the three internal grouping dimensions so the
+        // query-plan registry can prove each production form directly.
+        if !matches!(col, "model" | "provider" | "agent_type") {
+            return Err(ArcanaError::Agent(
+                "Unsupported token usage grouping dimension".into(),
+            ));
+        }
+        let sql = if col == "model" {
+            TOKEN_USAGE_BY_MODEL_SQL
+        } else if col == "provider" {
+            TOKEN_USAGE_BY_PROVIDER_SQL
+        } else if col == "agent_type" {
+            TOKEN_USAGE_BY_AGENT_TYPE_SQL
+        } else {
+            // The allowlist check above makes this branch unreachable; keep
+            // the SQL expression statically resolvable for source auditing.
+            TOKEN_USAGE_BY_AGENT_TYPE_SQL
+        };
+        let bounds = local_date_range_bounds(start, end).ok_or_else(|| {
+            ArcanaError::Agent("Invalid local date range for token aggregation".into())
+        })?;
         let conn = self
             .conn
             .lock()
             .map_err(|e| ArcanaError::Agent(format!("Mutex lock failed: {e}")))?;
         let mut stmt = conn.prepare(&sql).map_err(|e| ArcanaError::Database(e))?;
         let rows = stmt
-            .query_map(params![start, end], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
-            })
+            .query_map(
+                params![&bounds[0], &bounds[1], &bounds[2], &bounds[3]],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+            )
             .map_err(|e| ArcanaError::Database(e))?
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| ArcanaError::Database(e))?;
+        operation.with_result_count(rows.len()).succeed();
         Ok(rows.into_iter().collect())
     }
 
     fn token_top_sessions(&self, start: &str, end: &str) -> Result<Vec<SessionTokenUsage>> {
+        let operation = OperationTimer::start("database_token_usage_top_sessions_read")
+            .with_database("analytics");
+        let bounds = local_date_range_bounds(start, end).ok_or_else(|| {
+            ArcanaError::Agent("Invalid local date range for token aggregation".into())
+        })?;
         let conn = self
             .conn
             .lock()
             .map_err(|e| ArcanaError::Agent(format!("Mutex lock failed: {e}")))?;
         let mut stmt = conn
-            .prepare(
-                "SELECT session_id, \
-                    COALESCE(SUM(total_tokens),0) AS tokens, \
-                    COALESCE(SUM(cost_usd),0.0)   AS cost, \
-                    MAX(agent_type)               AS agent_type \
-             FROM token_usage \
-             WHERE DATE(timestamp) BETWEEN ?1 AND ?2 \
-             GROUP BY session_id \
-             ORDER BY tokens DESC LIMIT 10",
-            )
+            .prepare(TOKEN_TOP_SESSIONS_SQL)
             .map_err(|e| ArcanaError::Database(e))?;
         // Collect into an owned Vec before stmt/conn drop — same pattern as
         // get_daily_costs_range and other methods in this file.
         let rows = stmt
-            .query_map(params![start, end], |r| {
-                Ok(SessionTokenUsage {
-                    session_id: r.get(0)?,
-                    tokens: r.get(1)?,
-                    cost_usd: r.get(2)?,
-                    agent_type: r
-                        .get::<_, Option<String>>(3)?
-                        .unwrap_or_else(|| "unknown".into()),
-                })
-            })
+            .query_map(
+                params![&bounds[0], &bounds[1], &bounds[2], &bounds[3]],
+                |r| {
+                    Ok(SessionTokenUsage {
+                        session_id: r.get(0)?,
+                        tokens: r.get(1)?,
+                        cost_usd: r.get(2)?,
+                        agent_type: r
+                            .get::<_, Option<String>>(3)?
+                            .unwrap_or_else(|| "unknown".into()),
+                    })
+                },
+            )
             .map_err(|e| ArcanaError::Database(e))?
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| ArcanaError::Database(e))?;
+        operation.with_result_count(rows.len()).succeed();
         Ok(rows)
     }
 
@@ -705,6 +1366,10 @@ impl AnalyticsDb {
         severity: Option<&str>,
         hours: i32,
     ) -> Result<Vec<SystemEventRecord>> {
+        let mut operation = crate::observability::timing::OperationTimer::start(
+            "database_system_events_recent_read",
+        )
+        .with_database("analytics");
         let conn = self
             .conn
             .lock()
@@ -714,45 +1379,25 @@ impl AnalyticsDb {
         // command layer so this format is safe to embed in SQL.
         let cutoff = format!("-{hours} hours");
 
-        // Optional filters — embed as literal strings in the WHERE clause.
-        // Values come from internal Tauri commands (not user web input) so SQL
-        // injection risk is low; we additionally sanitise by rejecting non-ASCII
-        // and stripping quotes.
-        let sanitize = |s: &str| -> String {
-            s.chars()
-                .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
-                .collect()
+        let sql = match (component.is_some(), severity.is_some()) {
+            (false, false) => SYSTEM_EVENTS_RECENT_SQL,
+            (true, false) => SYSTEM_EVENTS_RECENT_BY_COMPONENT_SQL,
+            (false, true) => SYSTEM_EVENTS_RECENT_BY_SEVERITY_SQL,
+            (true, true) => SYSTEM_EVENTS_RECENT_BY_COMPONENT_AND_SEVERITY_SQL,
         };
-
-        let component_filter = component
-            .map(|c| format!(" AND component = '{}'", sanitize(c)))
-            .unwrap_or_default();
-        let severity_filter = severity
-            .map(|s| format!(" AND severity = '{}'", sanitize(s)))
-            .unwrap_or_default();
-
-        let sql = format!(
-            "SELECT id, timestamp, component, event_type, message, severity, metadata \
-             FROM system_events \
-             WHERE timestamp > datetime('now', ?){component_filter}{severity_filter} \
-             ORDER BY timestamp DESC LIMIT 500"
-        );
+        let mut values = vec![rusqlite::types::Value::Text(cutoff)];
+        if let Some(component) = component {
+            values.push(rusqlite::types::Value::Text(component.to_owned()));
+        }
+        if let Some(severity) = severity {
+            values.push(rusqlite::types::Value::Text(severity.to_owned()));
+        }
 
         let mut stmt = conn.prepare(&sql).map_err(|e| ArcanaError::Database(e))?;
 
         let records = stmt
-            .query_map(params![cutoff], |row| {
-                let ts_str: String = row.get(1)?;
-                let timestamp =
-                    crate::db::timestamps::parse_db_timestamp(&ts_str).unwrap_or_else(|e| {
-                        // Substituting "now" makes an unreadable record look
-                        // brand new, which is worse than useless in a cost or
-                        // failure report. The fallback stays — these records
-                        // are display-only and a hard error would lose the rest
-                        // of the row — but it is no longer silent.
-                        tracing::warn!("[analytics] unreadable timestamp {ts_str:?}: {e}");
-                        Utc::now()
-                    });
+            .query_map(rusqlite::params_from_iter(values.iter()), |row| {
+                let timestamp = crate::db::timestamps::parse_row_timestamp(row, 1)?;
                 Ok(SystemEventRecord {
                     id: row.get(0)?,
                     timestamp,
@@ -767,11 +1412,16 @@ impl AnalyticsDb {
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| ArcanaError::Database(e))?;
 
+        operation = operation.with_result_count(records.len());
+        operation.succeed();
         Ok(records)
     }
 
     pub fn insert_system_event(&self, record: &SystemEventRecord) -> Result<i64> {
-        let mut conn = self
+        let mut operation =
+            crate::observability::timing::OperationTimer::start("database_system_event_insert")
+                .with_database("analytics");
+        let conn = self
             .conn
             .lock()
             .map_err(|e| ArcanaError::Agent(format!("Mutex lock failed: {}", e)))?;
@@ -779,7 +1429,7 @@ impl AnalyticsDb {
             "INSERT INTO system_events (timestamp, component, event_type, message, severity, metadata)
              VALUES (?, ?, ?, ?, ?, ?)",
             params![
-                record.timestamp.to_rfc3339(),
+                crate::db::timestamps::format_utc_timestamp(record.timestamp),
                 record.component,
                 record.event_type,
                 record.message,
@@ -788,6 +1438,1835 @@ impl AnalyticsDb {
             ],
         ).map_err(|e| ArcanaError::Database(e))?;
 
-        Ok(conn.last_insert_rowid())
+        let id = conn.last_insert_rowid();
+        operation = operation.with_result_count(1);
+        operation.succeed();
+        Ok(id)
+    }
+}
+
+fn parse_optional_timestamp(
+    row: &rusqlite::Row<'_>,
+    column: usize,
+) -> rusqlite::Result<Option<chrono::DateTime<Utc>>> {
+    use rusqlite::types::Type;
+
+    let raw: Option<String> = row.get(column)?;
+    raw.map(|raw| {
+        crate::db::timestamps::parse_db_timestamp(&raw).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                column,
+                Type::Text,
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    error.to_string(),
+                )),
+            )
+        })
+    })
+    .transpose()
+}
+
+#[cfg(test)]
+mod token_usage_observability_tests {
+    use super::*;
+
+    fn daily_cost(date: &str) -> DailyCostRecord {
+        DailyCostRecord {
+            date: NaiveDate::parse_from_str(date, "%Y-%m-%d").expect("fixture date"),
+            total_cost_usd: 12.34,
+            total_tokens: 1234,
+            session_count: 3,
+            message_count: 8,
+            tool_call_count: 5,
+            provider_breakdown: HashMap::from([("provider-private-marker".into(), 12.34)]),
+            agent_type_breakdown: HashMap::from([("agent-private-marker".into(), 12.34)]),
+        }
+    }
+
+    #[tokio::test]
+    async fn daily_cost_production_operations_emit_safe_result_spans() {
+        let temp = tempfile::tempdir().expect("isolated analytics directory");
+        let db = AnalyticsDb::new_at(&temp.path().join("analytics.db"))
+            .await
+            .expect("open isolated analytics database");
+        let first = daily_cost("2026-10-01");
+        let second = daily_cost("2026-10-02");
+
+        let (observed, events) = crate::observability::timing::capture_json_events(|| {
+            let missing = db
+                .get_daily_cost(first.date)
+                .expect("read absent daily cost");
+            db.insert_daily_cost(&first)
+                .expect("insert first daily cost");
+            db.insert_daily_cost(&second)
+                .expect("insert second daily cost");
+            let present = db.get_daily_cost(first.date).expect("read daily cost");
+            let range = db
+                .get_daily_costs_range(first.date, second.date)
+                .expect("read cost range");
+            db.conn
+                .lock()
+                .expect("analytics connection")
+                .execute_batch(
+                    "CREATE TRIGGER reject_test_daily_cost BEFORE INSERT ON daily_costs
+                     BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
+                )
+                .expect("install isolated failure trigger");
+            let failed = db.insert_daily_cost(&daily_cost("2026-10-03")).is_err();
+            (missing, present, range, failed)
+        });
+
+        assert!(observed.0.is_none());
+        assert!(observed.1.is_some());
+        assert_eq!(observed.2.len(), 2);
+        assert!(observed.3);
+        let operation_events: Vec<_> = events
+            .iter()
+            .filter(|event| event["fields"]["event_type"] == "operation_timing")
+            .collect();
+        let expected = [
+            ("database_daily_cost_read", "success", 0),
+            ("database_daily_cost_insert", "success", 1),
+            ("database_daily_cost_insert", "success", 1),
+            ("database_daily_cost_read", "success", 1),
+            ("database_daily_cost_range_read", "success", 2),
+            ("database_daily_cost_insert", "error", 0),
+        ];
+        assert_eq!(operation_events.len(), expected.len());
+        for (event, (operation, outcome, count)) in operation_events.iter().zip(expected) {
+            assert_eq!(event["fields"]["operation"], operation);
+            assert_eq!(event["fields"]["outcome"], outcome);
+            assert_eq!(event["fields"]["database"], "analytics");
+            assert_eq!(event["fields"]["result_count"], count);
+            assert_eq!(
+                event["fields"]["result_count_observed"],
+                outcome != "error" || count > 0
+            );
+        }
+        let serialized = serde_json::to_string(&events).expect("serialize events");
+        assert!(!serialized.contains("provider-private-marker"));
+        assert!(!serialized.contains("agent-private-marker"));
+        assert!(!serialized.contains("injected failure"));
+    }
+
+    #[tokio::test]
+    async fn analytics_failure_and_system_event_paths_emit_private_spans() {
+        let temp = tempfile::tempdir().expect("isolated analytics directory");
+        let db = AnalyticsDb::new_at(&temp.path().join("analytics.db"))
+            .await
+            .expect("open isolated analytics database");
+        let api_failure = ApiFailureRecord {
+            id: None,
+            timestamp: Utc::now(),
+            provider: "provider-private-marker".into(),
+            error_type: "private-error-type".into(),
+            error_message: "private-error-message".into(),
+            request_id: Some("private-request-id".into()),
+            retry_count: 2,
+            resolved: false,
+        };
+        let system_event = SystemEventRecord {
+            id: None,
+            timestamp: Utc::now(),
+            component: "component-private-marker".into(),
+            event_type: "event-private-marker".into(),
+            message: "private-system-message".into(),
+            severity: "warning".into(),
+            metadata: Some("private-system-metadata".into()),
+        };
+
+        let (observed, events) = crate::observability::timing::capture_json_events(|| {
+            let api_id = db
+                .insert_api_failure(&api_failure)
+                .expect("insert API failure");
+            let api_rows = db
+                .get_api_failures_recent(24)
+                .expect("read recent API failures");
+            let system_id = db
+                .insert_system_event(&system_event)
+                .expect("insert system event");
+            let system_rows = db
+                .get_system_events_recent(Some("component-private-marker"), None, 24)
+                .expect("read recent filtered system events");
+            db.conn
+                .lock()
+                .expect("analytics connection")
+                .execute_batch(
+                    "CREATE TRIGGER reject_test_api_failure BEFORE INSERT ON api_failures
+                     BEGIN SELECT RAISE(ABORT, 'private-trigger-error'); END;",
+                )
+                .expect("install isolated failure trigger");
+            let failed_write = db.insert_api_failure(&api_failure).is_err();
+            (api_id, api_rows, system_id, system_rows, failed_write)
+        });
+
+        assert!(observed.0 > 0);
+        assert_eq!(observed.1.len(), 1);
+        assert!(observed.2 > 0);
+        assert_eq!(observed.3.len(), 1);
+        assert!(observed.4);
+        let operation_events: Vec<_> = events
+            .iter()
+            .filter(|event| event["fields"]["event_type"] == "operation_timing")
+            .collect();
+        let expected = [
+            ("database_api_failure_insert", "success", 1),
+            ("database_api_failures_recent_read", "success", 1),
+            ("database_system_event_insert", "success", 1),
+            ("database_system_events_recent_read", "success", 1),
+            ("database_api_failure_insert", "error", 0),
+        ];
+        assert_eq!(operation_events.len(), expected.len());
+        for (event, (operation, outcome, count)) in operation_events.iter().zip(expected) {
+            assert_eq!(event["fields"]["operation"], operation);
+            assert_eq!(event["fields"]["outcome"], outcome);
+            assert_eq!(event["fields"]["database"], "analytics");
+            assert_eq!(event["fields"]["result_count"], count);
+            assert_eq!(event["fields"]["result_count_observed"], outcome != "error");
+        }
+        let serialized = serde_json::to_string(&events).expect("serialize events");
+        for private in [
+            "provider-private-marker",
+            "private-error-type",
+            "private-error-message",
+            "private-request-id",
+            "component-private-marker",
+            "event-private-marker",
+            "private-system-message",
+            "private-system-metadata",
+            "private-trigger-error",
+        ] {
+            assert!(!serialized.contains(private), "telemetry leaked {private}");
+        }
+    }
+
+    #[tokio::test]
+    async fn token_usage_writes_and_reads_emit_safe_result_spans() {
+        let temp = tempfile::tempdir().expect("isolated analytics directory");
+        let db = AnalyticsDb::new_at(&temp.path().join("analytics.db"))
+            .await
+            .expect("open isolated analytics database");
+        let date = Local::now().date_naive();
+        let record = TokenUsageRecord {
+            id: None,
+            timestamp: Local::now().with_timezone(&Utc),
+            session_id: "sensitive-session-marker".into(),
+            agent_type: "PA".into(),
+            provider: "test-provider-marker".into(),
+            model: "test-model-marker".into(),
+            prompt_tokens: 11,
+            completion_tokens: 7,
+            total_tokens: 18,
+            thinking_tokens: Some(3),
+            cost_usd: 0.01,
+            request_type: "chat".into(),
+        };
+
+        let (observed, events) = crate::observability::timing::capture_json_events(|| {
+            let id = db.insert_token_usage(&record).expect("insert token usage");
+            let rows = db
+                .get_token_usage_by_date(date)
+                .expect("read token usage through production reader");
+            db.conn
+                .lock()
+                .expect("analytics connection")
+                .execute_batch(
+                    "CREATE TRIGGER reject_test_token_usage BEFORE INSERT ON token_usage
+                     BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
+                )
+                .expect("install isolated failure trigger");
+            let failed = db.insert_token_usage(&record).is_err();
+            (id, rows, failed)
+        });
+
+        assert!(observed.0 > 0);
+        assert_eq!(observed.1.len(), 1);
+        assert!(
+            observed.2,
+            "the injected writer failure must remain visible"
+        );
+        let operation_events: Vec<_> = events
+            .iter()
+            .filter(|event| event["fields"]["event_type"] == "operation_timing")
+            .collect();
+        assert_eq!(operation_events.len(), 3);
+        let insert_success = operation_events
+            .iter()
+            .find(|event| {
+                event["fields"]["operation"] == "database_token_usage_insert"
+                    && event["fields"]["outcome"] == "success"
+            })
+            .expect("successful insert result span");
+        assert_eq!(insert_success["fields"]["database"], "analytics");
+        assert_eq!(insert_success["fields"]["result_count"], 1);
+        assert!(insert_success["fields"]["duration_ns"].as_u64().is_some());
+        let read = operation_events
+            .iter()
+            .find(|event| event["fields"]["operation"] == "database_token_usage_date_read")
+            .expect("reader result span");
+        assert_eq!(read["fields"]["outcome"], "success");
+        assert_eq!(read["fields"]["result_count"], 1);
+        let failed_insert = operation_events
+            .iter()
+            .find(|event| {
+                event["fields"]["operation"] == "database_token_usage_insert"
+                    && event["fields"]["outcome"] == "error"
+            })
+            .expect("failed insert result span");
+        assert_eq!(failed_insert["fields"]["database"], "analytics");
+        let serialized = serde_json::to_string(&events).expect("serialize captured events");
+        for sensitive in [
+            "sensitive-session-marker",
+            "test-provider-marker",
+            "test-model-marker",
+        ] {
+            assert!(
+                !serialized.contains(sensitive),
+                "telemetry leaked {sensitive}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn worker_stats_and_live_token_aggregates_emit_safe_result_spans() {
+        let temp = tempfile::tempdir().expect("isolated analytics directory");
+        let db = AnalyticsDb::new_at(&temp.path().join("analytics.db"))
+            .await
+            .expect("open isolated analytics database");
+        let date = Local::now().date_naive();
+        let worker = WorkerStatsRecord {
+            worker_id: "private-worker-id-marker".into(),
+            date,
+            tasks_completed: 2,
+            tasks_failed: 1,
+            time_spent_minutes: 30,
+            cost_usd: 0.75,
+            avg_task_duration_minutes: 10,
+            success_rate: 2.0 / 3.0,
+            last_heartbeat: None,
+        };
+        let token = TokenUsageRecord {
+            id: None,
+            timestamp: Local::now().with_timezone(&Utc),
+            session_id: "private-session-id-marker".into(),
+            agent_type: "private-agent-marker".into(),
+            provider: "private-provider-marker".into(),
+            model: "private-model-marker".into(),
+            prompt_tokens: 10,
+            completion_tokens: 5,
+            total_tokens: 15,
+            thinking_tokens: Some(2),
+            cost_usd: 0.02,
+            request_type: "tool_use".into(),
+        };
+
+        let (observed, events) = crate::observability::timing::capture_json_events(|| {
+            db.insert_worker_stats(&worker)
+                .expect("insert worker stats");
+            let present = db
+                .get_worker_stats(&worker.worker_id, date)
+                .expect("read worker stats");
+            let missing = db
+                .get_worker_stats("private-missing-worker-id-marker", date)
+                .expect("read absent worker stats");
+            db.insert_token_usage(&token).expect("insert token usage");
+            let activity = db.get_today_activity();
+            let range = db
+                .get_token_usage_for_range(date, date)
+                .expect("read token aggregates");
+            db.conn
+                .lock()
+                .expect("analytics connection")
+                .execute_batch(
+                    "CREATE TRIGGER reject_test_worker_stats BEFORE INSERT ON worker_stats
+                     BEGIN SELECT RAISE(ABORT, 'private-worker-stats-trigger-marker'); END;",
+                )
+                .expect("install isolated failure trigger");
+            let failed_write = db.insert_worker_stats(&worker).is_err();
+            (present, missing, activity, range, failed_write)
+        });
+
+        assert_eq!(observed.0.as_ref().map(|row| row.tasks_completed), Some(2));
+        assert!(observed.1.is_none());
+        assert_eq!(observed.2, (1, 1, 1));
+        assert_eq!(observed.3 .0, 15);
+        assert_eq!(observed.3 .1, 10);
+        assert_eq!(observed.3 .2, 5);
+        assert_eq!(observed.3 .7.len(), 1);
+        assert!(observed.4);
+
+        let operations: Vec<_> = events
+            .iter()
+            .filter(|event| event["fields"]["event_type"] == "operation_timing")
+            .collect();
+        for operation in [
+            "database_worker_stats_insert",
+            "database_worker_stats_point_read",
+            "database_today_activity_read",
+            "database_token_usage_insert",
+            "database_token_usage_range_read",
+            "database_token_usage_totals_read",
+            "database_token_usage_by_model_read",
+            "database_token_usage_by_provider_read",
+            "database_token_usage_by_agent_read",
+            "database_token_usage_top_sessions_read",
+        ] {
+            assert!(
+                operations
+                    .iter()
+                    .any(|event| event["fields"]["operation"] == operation),
+                "missing analytics span {operation}"
+            );
+        }
+        assert!(operations.iter().any(|event| {
+            event["fields"]["operation"] == "database_worker_stats_point_read"
+                && event["fields"]["outcome"] == "not_found"
+                && event["fields"]["result_count"] == 0
+        }));
+        assert!(operations.iter().any(|event| {
+            event["fields"]["operation"] == "database_worker_stats_insert"
+                && event["fields"]["outcome"] == "error"
+        }));
+        assert!(operations.iter().any(|event| {
+            event["fields"]["operation"] == "database_today_activity_read"
+                && event["fields"]["outcome"] == "success"
+                && event["fields"]["result_count"] == 3
+        }));
+        for operation in [
+            "database_token_usage_by_model_read",
+            "database_token_usage_by_provider_read",
+            "database_token_usage_by_agent_read",
+            "database_token_usage_top_sessions_read",
+        ] {
+            assert!(operations.iter().any(|event| {
+                event["fields"]["operation"] == operation
+                    && event["fields"]["outcome"] == "success"
+                    && event["fields"]["result_count"].as_u64().is_some()
+            }));
+        }
+        let serialized = serde_json::to_string(&events).expect("serialize analytics telemetry");
+        for private_value in [
+            "private-worker-id-marker",
+            "private-missing-worker-id-marker",
+            "private-session-id-marker",
+            "private-agent-marker",
+            "private-provider-marker",
+            "private-model-marker",
+            "private-worker-stats-trigger-marker",
+        ] {
+            assert!(
+                !serialized.contains(private_value),
+                "leaked {private_value}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod worker_stats_retention_tests {
+    use super::*;
+    use chrono::{Datelike, Duration, Local, Timelike};
+
+    fn record(
+        date: &str,
+        completed: i32,
+        failed: i32,
+        duration: i32,
+        heartbeat: &str,
+    ) -> WorkerStatsRecord {
+        WorkerStatsRecord {
+            worker_id: "worker-a".into(),
+            date: NaiveDate::parse_from_str(date, "%Y-%m-%d").expect("fixture date"),
+            tasks_completed: completed,
+            tasks_failed: failed,
+            time_spent_minutes: duration * (completed + failed),
+            cost_usd: 0.25,
+            avg_task_duration_minutes: duration,
+            success_rate: 0.0,
+            last_heartbeat: Some(
+                chrono::DateTime::parse_from_rfc3339(heartbeat)
+                    .expect("fixture heartbeat")
+                    .with_timezone(&Utc),
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn worker_stats_accumulate_roll_up_atomically_and_read_with_coverage() {
+        let temp = tempfile::tempdir().expect("isolated analytics directory");
+        let db = AnalyticsDb::new_at(&temp.path().join("analytics.db"))
+            .await
+            .expect("open isolated analytics database");
+
+        db.insert_worker_stats(&record("2025-01-05", 1, 0, 10, "2025-01-05T10:00:00Z"))
+            .expect("insert first daily tick");
+        db.insert_worker_stats(&record("2025-01-05", 0, 1, 20, "2025-01-05T11:00:00Z"))
+            .expect("accumulate second tick on same day");
+        db.insert_worker_stats(&record("2025-01-10", 2, 0, 30, "2025-01-10T12:00:00Z"))
+            .expect("insert another daily row in the same month");
+        db.insert_worker_stats(&record("2025-02-02", 1, 0, 5, "2025-02-02T12:00:00Z"))
+            .expect("insert a recent raw row");
+
+        let daily = db
+            .get_worker_stats("worker-a", NaiveDate::from_ymd_opt(2025, 1, 5).unwrap())
+            .expect("read accumulated worker day")
+            .expect("daily row exists");
+        assert_eq!((daily.tasks_completed, daily.tasks_failed), (1, 1));
+        assert_eq!(daily.avg_task_duration_minutes, 15);
+        assert_eq!(daily.success_rate, 0.5);
+        assert_eq!(daily.last_heartbeat.unwrap().hour(), 11);
+
+        let cutoff = NaiveDate::from_ymd_opt(2025, 2, 1).expect("fixture cutoff");
+        assert_eq!(db.rollup_and_prune_worker_stats_before(cutoff).unwrap(), 1);
+        assert_eq!(db.rollup_and_prune_worker_stats_before(cutoff).unwrap(), 0);
+
+        let conn = db.conn.lock().expect("analytics connection");
+        let (completed, failed, coverage_start, coverage_end, avg_duration): (
+            i64,
+            i64,
+            String,
+            String,
+            f64,
+        ) = conn
+            .query_row(
+                "SELECT tasks_completed, tasks_failed, covered_start, covered_end,
+                        avg_task_duration_minutes
+                   FROM worker_stats_monthly WHERE worker_id = 'worker-a' AND month = '2025-01'",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .expect("read monthly rollup from the fixture database");
+        assert_eq!((completed, failed), (3, 1));
+        assert_eq!(
+            (coverage_start.as_str(), coverage_end.as_str()),
+            ("2025-01-05", "2025-01-10")
+        );
+        assert!((avg_duration - 22.5).abs() < f64::EPSILON);
+        let raw_old: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM worker_stats WHERE date < ?1",
+                [cutoff.to_string()],
+                |row| row.get(0),
+            )
+            .expect("count pruned raw rows");
+        assert_eq!(raw_old, 0);
+        drop(conn);
+
+        let full_month = db
+            .get_worker_stats_range(
+                "worker-a",
+                NaiveDate::from_ymd_opt(2025, 1, 7).unwrap(),
+                NaiveDate::from_ymd_opt(2025, 2, 3).unwrap(),
+            )
+            .expect("read mixed monthly and daily worker stats")
+            .expect("combined rows exist");
+        assert_eq!(
+            (full_month.tasks_completed, full_month.tasks_failed),
+            (4, 1)
+        );
+        assert_eq!(full_month.granularity, "month");
+        assert_eq!(
+            full_month.coverage_start,
+            NaiveDate::from_ymd_opt(2025, 1, 5).unwrap()
+        );
+        assert_eq!(
+            full_month.coverage_end,
+            NaiveDate::from_ymd_opt(2025, 2, 2).unwrap()
+        );
+        assert!((full_month.avg_task_duration_minutes - 19.0).abs() < f64::EPSILON);
+        assert_eq!(full_month.last_heartbeat.unwrap().day(), 2);
+    }
+
+    #[tokio::test]
+    async fn worker_stats_rollup_failure_is_atomic_and_preserves_cutoff_day() {
+        let temp = tempfile::tempdir().expect("isolated analytics directory");
+        let db = AnalyticsDb::new_at(&temp.path().join("analytics.db"))
+            .await
+            .expect("open isolated analytics database");
+        let cutoff = NaiveDate::from_ymd_opt(2025, 3, 1).expect("fixture cutoff");
+
+        db.insert_worker_stats(&record("2025-01-31", 1, 0, 10, "2025-01-31T10:00:00Z"))
+            .expect("insert January row before cutoff");
+        db.insert_worker_stats(&record("2025-02-28", 0, 1, 20, "2025-02-28T10:00:00Z"))
+            .expect("insert February row before cutoff");
+        db.insert_worker_stats(&record("2025-03-01", 2, 0, 5, "2025-03-01T10:00:00Z"))
+            .expect("insert exact-cutoff row");
+
+        {
+            let conn = db.conn.lock().expect("analytics connection");
+            conn.execute_batch(
+                "CREATE TRIGGER fail_february_rollup
+                 BEFORE INSERT ON worker_stats_monthly
+                 WHEN NEW.month = '2025-02'
+                 BEGIN SELECT RAISE(ABORT, 'injected February rollup failure'); END;",
+            )
+            .expect("install second-month failure injection");
+        }
+
+        assert!(db.rollup_and_prune_worker_stats_before(cutoff).is_err());
+        {
+            let conn = db.conn.lock().expect("analytics connection");
+            let daily_rows: i64 = conn
+                .query_row("SELECT COUNT(*) FROM worker_stats", [], |row| row.get(0))
+                .expect("count daily rows after failed transaction");
+            let monthly_rows: i64 = conn
+                .query_row("SELECT COUNT(*) FROM worker_stats_monthly", [], |row| {
+                    row.get(0)
+                })
+                .expect("count monthly rows after failed transaction");
+            assert_eq!(daily_rows, 3, "failed rollup must preserve all source rows");
+            assert_eq!(
+                monthly_rows, 0,
+                "failed rollup must not leave a partial month"
+            );
+            conn.execute_batch("DROP TRIGGER fail_february_rollup")
+                .expect("remove failure injection");
+        }
+
+        assert_eq!(
+            db.rollup_and_prune_worker_stats_before(cutoff)
+                .expect("retry the complete rollup"),
+            2,
+            "both old month buckets should be committed"
+        );
+        let conn = db.conn.lock().expect("analytics connection");
+        let retained_cutoff_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM worker_stats WHERE date >= ?1",
+                [cutoff.to_string()],
+                |row| row.get(0),
+            )
+            .expect("count rows on or after the cutoff");
+        let old_daily_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM worker_stats WHERE date < ?1",
+                [cutoff.to_string()],
+                |row| row.get(0),
+            )
+            .expect("count rows before the cutoff");
+        let monthly_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM worker_stats_monthly", [], |row| {
+                row.get(0)
+            })
+            .expect("count committed monthly rows");
+        assert_eq!(retained_cutoff_rows, 1, "cutoff-day data remains daily");
+        assert_eq!(
+            old_daily_rows, 0,
+            "only rows strictly before cutoff are pruned"
+        );
+        assert_eq!(monthly_rows, 2, "both prior months were rolled up");
+    }
+
+    #[tokio::test]
+    async fn analytics_manager_runs_worker_retention_on_startup() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let manager = crate::analytics::AnalyticsManager::new()
+            .await
+            .expect("open production analytics manager");
+        let db = manager.db();
+        let cutoff = Local::now().date_naive() - Duration::days(90);
+        let old_date = cutoff - Duration::days(1);
+
+        db.insert_worker_stats(&record(
+            &old_date.to_string(),
+            1,
+            0,
+            10,
+            "2025-01-01T10:00:00Z",
+        ))
+        .expect("insert old row to be rolled up");
+        db.insert_worker_stats(&record(
+            &cutoff.to_string(),
+            0,
+            1,
+            20,
+            "2025-01-02T10:00:00Z",
+        ))
+        .expect("insert exact-cutoff daily row");
+
+        manager.start_aggregation_job();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let monthly_count: i64 = db
+                    .conn
+                    .lock()
+                    .expect("analytics connection")
+                    .query_row(
+                        "SELECT COUNT(*) FROM worker_stats_monthly WHERE worker_id = 'worker-a'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .expect("read rollup written by scheduled job");
+                if monthly_count == 1 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("startup rollup should finish within the test bound");
+        manager.stop_aggregation_job();
+
+        assert!(db
+            .get_worker_stats("worker-a", old_date)
+            .expect("read old daily point")
+            .is_none());
+        assert!(db
+            .get_worker_stats("worker-a", cutoff)
+            .expect("read cutoff daily point")
+            .is_some());
+        let range = db
+            .get_worker_stats_range("worker-a", old_date, old_date)
+            .expect("read rolled historical point")
+            .expect("monthly historical coverage exists");
+        assert_eq!(range.granularity, "month");
+        assert_eq!(range.coverage_start, old_date);
+        assert_eq!(range.coverage_end, old_date);
+    }
+}
+
+#[cfg(test)]
+mod local_day_tests {
+    use super::*;
+    use chrono::{Duration, Local, Timelike};
+
+    fn local_day_start_utc(date: NaiveDate) -> UtcDateTime {
+        for minute in 0..=180 {
+            let local_time = date.and_hms_opt(0, 0, 0).expect("valid local midnight")
+                + Duration::minutes(minute);
+            match local_time.and_local_timezone(Local) {
+                chrono::LocalResult::Single(value) => return value.with_timezone(&Utc),
+                chrono::LocalResult::Ambiguous(first, _) => return first.with_timezone(&Utc),
+                chrono::LocalResult::None => continue,
+            }
+        }
+        panic!("could not find the first valid local instant for {date}");
+    }
+
+    type UtcDateTime = chrono::DateTime<Utc>;
+
+    fn token_usage(
+        timestamp: UtcDateTime,
+        session_id: &str,
+        request_type: &str,
+    ) -> TokenUsageRecord {
+        TokenUsageRecord {
+            id: None,
+            timestamp,
+            session_id: session_id.into(),
+            agent_type: "worker".into(),
+            provider: "google".into(),
+            model: "gemini-test".into(),
+            prompt_tokens: 4,
+            completion_tokens: 3,
+            total_tokens: 7,
+            thinking_tokens: None,
+            cost_usd: 0.01,
+            request_type: request_type.into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn utc_instants_are_grouped_by_the_users_local_calendar_day() {
+        let temp = tempfile::tempdir().expect("isolated analytics database directory");
+        let db = AnalyticsDb::new_at(&temp.path().join("analytics.db"))
+            .await
+            .expect("create isolated analytics database");
+        let today = Local::now().date_naive();
+        let start = local_day_start_utc(today);
+        let inside_today = start + Duration::minutes(1);
+        let previous_local_day = start - Duration::seconds(1);
+        let today_id = db
+            .insert_token_usage(&token_usage(inside_today, "today-session", "tool_use"))
+            .expect("insert usage after local midnight");
+        let previous_id = db
+            .insert_token_usage(&token_usage(previous_local_day, "previous-session", "chat"))
+            .expect("insert usage before local midnight");
+
+        let today_records = db
+            .get_token_usage_by_date(today)
+            .expect("read current local day");
+        assert_eq!(today_records.len(), 1);
+        assert_eq!(today_records[0].id, Some(today_id));
+        assert_eq!(
+            db.get_token_usage_by_date(today - Duration::days(1))
+                .expect("read previous local day")
+                .iter()
+                .map(|row| row.id)
+                .collect::<Vec<_>>(),
+            vec![Some(previous_id)]
+        );
+
+        assert_eq!(db.get_today_activity(), (1, 1, 1));
+        let (today_tokens, ..) = db
+            .get_token_usage_for_range(today, today)
+            .expect("aggregate current local day");
+        let (previous_tokens, ..) = db
+            .get_token_usage_for_range(today - Duration::days(1), today - Duration::days(1))
+            .expect("aggregate previous local day");
+        assert_eq!(today_tokens, 7);
+        assert_eq!(previous_tokens, 7);
+    }
+
+    #[tokio::test]
+    async fn recent_failure_reader_handles_legacy_rows_and_old_new_cutover() {
+        let temp = tempfile::tempdir().expect("isolated analytics database directory");
+        let db = AnalyticsDb::new_at(&temp.path().join("analytics.db"))
+            .await
+            .expect("create isolated analytics database");
+        let now = Utc::now();
+        // Pick a cutoff that leaves room before midnight so the deliberately
+        // old RFC3339 row shares the cutoff's calendar date. That is the case
+        // where lexical comparison with SQLite's space-separated cutoff fails.
+        let (hours, cutoff) = (1..=168)
+            .map(|hours| (hours, now - Duration::hours(hours as i64)))
+            .find(|(_, cutoff)| cutoff.hour() >= 2 && cutoff.hour() < 23)
+            .expect("a suitable recent cutoff exists");
+        let old_canonical = cutoff - Duration::minutes(1);
+        let recent_legacy = cutoff + Duration::minutes(1);
+        let recent_canonical = cutoff + Duration::minutes(2);
+        let conn = db.conn.lock().expect("analytics connection");
+        for (timestamp, id) in [
+            (
+                crate::db::timestamps::format_utc_timestamp(old_canonical),
+                "old",
+            ),
+            (
+                recent_legacy.format("%Y-%m-%d %H:%M:%S").to_string(),
+                "legacy",
+            ),
+            (
+                crate::db::timestamps::format_utc_timestamp(recent_canonical),
+                "new",
+            ),
+        ] {
+            conn.execute(
+                "INSERT INTO api_failures (timestamp, provider, error_type, error_message, request_id)
+                 VALUES (?1, 'google', 'test', ?2, ?2)",
+                params![timestamp, id],
+            )
+            .expect("seed representation boundary");
+        }
+        drop(conn);
+
+        let rows = db
+            .get_api_failures_recent(hours)
+            .expect("production recent-window reader");
+        assert_eq!(rows.len(), 2, "old RFC3339 row must be outside cutoff");
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.request_id.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("new"), Some("legacy")],
+            "rows: {:?}",
+            rows.iter()
+                .map(|row| (row.request_id.as_deref(), row.timestamp))
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    #[tokio::test]
+    async fn existing_analytics_default_is_normalized_by_startup_trigger() {
+        let temp = tempfile::tempdir().expect("isolated analytics database directory");
+        let path = temp.path().join("analytics.db");
+        {
+            let conn = Connection::open(&path).expect("create legacy analytics DB");
+            conn.execute_batch(
+                "CREATE TABLE api_failures (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    provider TEXT NOT NULL, error_type TEXT NOT NULL,
+                    error_message TEXT NOT NULL, request_id TEXT,
+                    retry_count INTEGER NOT NULL DEFAULT 0,
+                    resolved BOOLEAN NOT NULL DEFAULT 0
+                );
+                PRAGMA user_version = 0;",
+            )
+            .expect("legacy schema");
+        }
+
+        let db = AnalyticsDb::new_at(&path)
+            .await
+            .expect("production analytics opener");
+        db.conn
+            .lock()
+            .expect("analytics connection")
+            .execute(
+                "INSERT INTO api_failures (provider, error_type, error_message)
+                 VALUES ('google', 'test', 'default timestamp')",
+                [],
+            )
+            .expect("insert using existing legacy default");
+        let timestamp: String = db
+            .conn
+            .lock()
+            .expect("analytics connection")
+            .query_row("SELECT timestamp FROM api_failures", [], |row| row.get(0))
+            .expect("read default timestamp");
+        assert_eq!(timestamp.len(), 24);
+        assert!(timestamp.ends_with('Z'));
+        assert_eq!(db.get_api_failures_recent(168).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn malformed_recent_timestamp_is_returned_as_a_reader_error() {
+        let temp = tempfile::tempdir().expect("isolated analytics database directory");
+        let db = AnalyticsDb::new_at(&temp.path().join("analytics.db"))
+            .await
+            .expect("create isolated analytics database");
+        db.conn
+            .lock()
+            .expect("analytics connection")
+            .execute(
+                "INSERT INTO api_failures (timestamp, provider, error_type, error_message)
+                 VALUES ('not-a-timestamp', 'google', 'test', 'malformed')",
+                [],
+            )
+            .expect("seed malformed persisted value");
+
+        let error = db
+            .get_api_failures_recent(24)
+            .expect_err("malformed timestamp must not become a plausible current time");
+        assert!(error.to_string().contains("unrecognised timestamp"));
+    }
+
+    #[tokio::test]
+    async fn recent_system_events_keep_time_window_and_filters() {
+        let temp = tempfile::tempdir().expect("isolated analytics database directory");
+        let db = AnalyticsDb::new_at(&temp.path().join("analytics.db"))
+            .await
+            .expect("create isolated analytics database");
+        let now = Utc::now();
+        for (timestamp, component) in [
+            (now - Duration::days(2), "provider"),
+            (now - Duration::minutes(10), "provider"),
+            (now - Duration::minutes(5), "fleet"),
+        ] {
+            db.insert_system_event(&SystemEventRecord {
+                id: None,
+                timestamp,
+                component: component.into(),
+                event_type: "test".into(),
+                message: "fixture".into(),
+                severity: "info".into(),
+                metadata: None,
+            })
+            .expect("insert fixture system event");
+        }
+
+        let rows = db
+            .get_system_events_recent(Some("provider"), Some("info"), 24)
+            .expect("read recent filtered system events");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].component, "provider");
+        assert_eq!(rows[0].message, "fixture");
+    }
+
+    #[tokio::test]
+    async fn recent_system_event_filter_variants_bind_values_and_return_exact_rows() {
+        let temp = tempfile::tempdir().expect("isolated analytics database directory");
+        let db = AnalyticsDb::new_at(&temp.path().join("analytics.db"))
+            .await
+            .expect("create isolated analytics database");
+        let now = Utc::now();
+        for (component, severity) in [
+            ("provider", "info"),
+            ("provider", "error"),
+            ("fleet", "info"),
+            ("fleet", "error"),
+        ] {
+            db.insert_system_event(&SystemEventRecord {
+                id: None,
+                timestamp: now,
+                component: component.into(),
+                event_type: "fixture".into(),
+                message: "recent".into(),
+                severity: severity.into(),
+                metadata: None,
+            })
+            .expect("insert recent event variant");
+        }
+        db.insert_system_event(&SystemEventRecord {
+            id: None,
+            timestamp: now - Duration::days(2),
+            component: "provider".into(),
+            event_type: "fixture".into(),
+            message: "outside window".into(),
+            severity: "error".into(),
+            metadata: None,
+        })
+        .expect("insert old event");
+
+        assert_eq!(
+            db.get_system_events_recent(None, None, 24).unwrap().len(),
+            4
+        );
+        assert_eq!(
+            db.get_system_events_recent(Some("provider"), None, 24)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            db.get_system_events_recent(None, Some("error"), 24)
+                .unwrap()
+                .len(),
+            2
+        );
+        let filtered = db
+            .get_system_events_recent(Some("provider"), Some("error"), 24)
+            .unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].component, "provider");
+        assert_eq!(filtered[0].severity, "error");
+        assert!(db
+            .get_system_events_recent(Some("provider' OR 1=1 --"), None, 24)
+            .unwrap()
+            .is_empty());
+    }
+}
+
+#[cfg(test)]
+mod query_plan_tests {
+    use super::*;
+    use chrono::Duration;
+    use rusqlite::ToSql;
+
+    fn explain(connection: &Connection, sql: &str, values: &[&dyn ToSql]) -> Vec<String> {
+        let explain_sql = format!("EXPLAIN QUERY PLAN {sql}");
+        let mut statement = connection
+            .prepare(&explain_sql)
+            .expect("prepare production query plan");
+        statement
+            .query_map(values, |row| row.get::<_, String>(3))
+            .expect("explain production query")
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .expect("collect query plan")
+    }
+
+    #[tokio::test]
+    async fn worker_session_token_usage_uses_session_index_and_returns_persisted_totals() {
+        let directory = tempfile::tempdir().expect("isolated analytics directory");
+        let db = AnalyticsDb::new_at(&directory.path().join("analytics.db"))
+            .await
+            .expect("open isolated analytics database");
+        let connection = db.conn.lock().expect("analytics connection");
+        for index in 0..500 {
+            connection
+                .execute(
+                    "INSERT INTO token_usage
+                     (timestamp, session_id, agent_type, provider, model, prompt_tokens,
+                      completion_tokens, total_tokens, thinking_tokens, cost_usd, request_type)
+                     VALUES ('2025-01-01T00:00:00Z', ?1, 'worker', 'google',
+                             'gemini-3.8-flash', 2, 3, 5, 1, 0.02, 'chat')",
+                    [format!("session-{index}")],
+                )
+                .expect("populate session-index fixture");
+        }
+        connection
+            .execute(
+                "INSERT INTO token_usage
+                 (timestamp, session_id, agent_type, provider, model, prompt_tokens,
+                  completion_tokens, total_tokens, thinking_tokens, cost_usd, request_type)
+                 VALUES ('2025-01-01T00:00:00Z', 'worker-session', 'worker', 'google',
+                         'gemini-3.8-flash', 11, 7, 18, 2, 0.12, 'chat')",
+                [],
+            )
+            .expect("insert first worker session usage");
+        connection
+            .execute(
+                "INSERT INTO token_usage
+                 (timestamp, session_id, agent_type, provider, model, prompt_tokens,
+                  completion_tokens, total_tokens, thinking_tokens, cost_usd, request_type)
+                 VALUES ('2025-01-01T00:01:00Z', 'worker-session', 'worker', 'google',
+                         'gemini-3.8-flash', 5, 4, 9, NULL, 0.08, 'tool_use')",
+                [],
+            )
+            .expect("insert second worker session usage");
+        connection
+            .execute_batch("ANALYZE")
+            .expect("analyze populated session index");
+
+        let details = explain(
+            &connection,
+            TOKEN_USAGE_FOR_SESSION_SQL,
+            &[&"worker-session"],
+        );
+        assert!(
+            details.iter().any(|detail| {
+                detail.contains("SEARCH token_usage") && detail.contains("idx_token_usage_session")
+            }),
+            "worker token reader must use the session index; plan: {details:?}"
+        );
+        assert!(
+            !details
+                .iter()
+                .any(|detail| detail.contains("SCAN token_usage")),
+            "worker token reader scanned token_usage; plan: {details:?}"
+        );
+        drop(connection);
+
+        assert_eq!(
+            db.get_token_usage_for_session("worker-session")
+                .expect("read through production worker-health consumer"),
+            SessionTokenUsageSummary {
+                request_count: 2,
+                prompt_tokens: 16,
+                completion_tokens: 11,
+                total_tokens: 27,
+                thinking_tokens: Some(2),
+                cost_usd: 0.20,
+            }
+        );
+        assert_eq!(
+            db.get_token_usage_for_session("missing-session")
+                .expect("empty session is a known zero aggregate"),
+            SessionTokenUsageSummary {
+                request_count: 0,
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                total_tokens: 0,
+                thinking_tokens: None,
+                cost_usd: 0.0,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn dashboard_daily_cost_range_uses_primary_key_index_with_populated_rows() {
+        let directory = tempfile::tempdir().expect("isolated analytics directory");
+        let db = AnalyticsDb::new_at(&directory.path().join("analytics.db"))
+            .await
+            .expect("open isolated analytics database");
+        let connection = db.conn.lock().expect("analytics connection");
+        let start = NaiveDate::from_ymd_opt(2025, 1, 1).expect("fixture date");
+        for offset in 0..180 {
+            let date = start + Duration::days(offset);
+            connection
+                .execute(
+                    "INSERT INTO daily_costs
+                     (date, total_cost_usd, total_tokens, session_count, message_count,
+                      tool_call_count, provider_breakdown, agent_type_breakdown)
+                     VALUES (?1, 1.0, 10, 1, 1, 0, '{}', '{}')",
+                    [date.to_string()],
+                )
+                .expect("populate dashboard daily costs");
+        }
+        connection
+            .execute_batch("ANALYZE")
+            .expect("analyze fixture");
+
+        let explain_sql = format!("EXPLAIN QUERY PLAN {DAILY_COSTS_RANGE_SQL}");
+        let mut statement = connection
+            .prepare(&explain_sql)
+            .expect("prepare production dashboard query plan");
+        let details = statement
+            .query_map(
+                [start.to_string(), (start + Duration::days(89)).to_string()],
+                |row| row.get::<_, String>(3),
+            )
+            .expect("explain production daily costs query")
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .expect("collect query plan");
+
+        assert!(
+            details.iter().any(|detail| {
+                detail.contains("SEARCH daily_costs")
+                    && (detail.contains("sqlite_autoindex_daily_costs_1")
+                        || detail.contains("PRIMARY KEY"))
+            }),
+            "daily-cost range query should use the date primary key; plan: {details:?}"
+        );
+        assert!(
+            !details
+                .iter()
+                .any(|detail| detail.contains("SCAN daily_costs")),
+            "daily-cost range query scanned the dashboard table; plan: {details:?}"
+        );
+        drop(statement);
+
+        let point_plan_sql = format!("EXPLAIN QUERY PLAN {DAILY_COST_BY_DATE_SQL}");
+        let mut point_statement = connection
+            .prepare(&point_plan_sql)
+            .expect("prepare point daily-cost plan");
+        let point_details = point_statement
+            .query_map([start.to_string()], |row| row.get::<_, String>(3))
+            .expect("explain point daily-cost query")
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .expect("collect point daily-cost plan");
+        assert!(
+            point_details.iter().any(|detail| {
+                detail.contains("SEARCH daily_costs")
+                    && (detail.contains("sqlite_autoindex_daily_costs_1")
+                        || detail.contains("PRIMARY KEY"))
+            }),
+            "daily-cost point lookup should use the date primary key: {point_details:?}"
+        );
+        drop(point_statement);
+        drop(connection);
+        let record = db
+            .get_daily_cost(start)
+            .expect("production daily-cost point lookup")
+            .expect("populated daily-cost row");
+        assert_eq!(record.total_tokens, 10);
+        assert_eq!(record.session_count, 1);
+    }
+
+    #[tokio::test]
+    async fn dashboard_live_analytics_plans_classify_scans_and_worker_index_use() {
+        let directory = tempfile::tempdir().expect("isolated analytics directory");
+        let db = AnalyticsDb::new_at(&directory.path().join("analytics.db"))
+            .await
+            .expect("open isolated analytics database");
+        let connection = db.conn.lock().expect("analytics connection");
+        let start = NaiveDate::from_ymd_opt(2025, 1, 1).expect("fixture date");
+        // Keep the requested window selective enough that SQLite's cost model
+        // should choose the timestamp index over a full scan.
+        let end = start + Duration::days(2);
+        let timestamp_start = chrono::DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
+            .expect("fixture timestamp")
+            .with_timezone(&Utc);
+
+        for offset in 0..2400 {
+            let instant = timestamp_start + Duration::hours(offset);
+            let timestamp = if offset % 17 == 0 {
+                instant.format("%Y-%m-%d %H:%M:%S").to_string()
+            } else {
+                crate::db::timestamps::format_utc_timestamp(instant)
+            };
+            connection
+                .execute(
+                    "INSERT INTO token_usage
+                     (timestamp, session_id, agent_type, provider, model, prompt_tokens,
+                      completion_tokens, total_tokens, cost_usd, request_type)
+                     VALUES (?1, ?2, ?3, ?4, ?5, 4, 3, 7, 0.01, ?6)",
+                    params![
+                        timestamp,
+                        format!("session-{}", offset % 60),
+                        format!("agent-{}", offset % 4),
+                        format!("provider-{}", offset % 3),
+                        format!("model-{}", offset % 8),
+                        if offset % 5 == 0 { "tool_use" } else { "chat" },
+                    ],
+                )
+                .expect("populate token usage");
+        }
+
+        let now = Utc::now();
+        for offset in 0..1200 {
+            let date = start + Duration::days(offset / 12);
+            let heartbeat =
+                crate::db::timestamps::format_utc_timestamp(now - Duration::minutes(offset as i64));
+            connection
+                .execute(
+                    "INSERT INTO worker_stats
+                     (worker_id, date, tasks_completed, tasks_failed, time_spent_minutes,
+                      cost_usd, avg_task_duration_minutes, success_rate, last_heartbeat)
+                     VALUES (?1, ?2, 1, 0, 5, 0.1, 5, 1.0, ?3)",
+                    params![
+                        format!("worker-{}", offset % 12),
+                        date.to_string(),
+                        heartbeat
+                    ],
+                )
+                .expect("populate worker stats");
+        }
+
+        for offset in 0..1200 {
+            let timestamp =
+                crate::db::timestamps::format_utc_timestamp(now - Duration::minutes(offset as i64));
+            connection
+                .execute(
+                    "INSERT INTO api_failures
+                     (timestamp, provider, error_type, error_message, request_id)
+                     VALUES (?1, 'provider', 'test', 'fixture', ?2)",
+                    params![timestamp, format!("failure-{offset}")],
+                )
+                .expect("populate API failures");
+            connection
+                .execute(
+                    "INSERT INTO system_events
+                     (timestamp, component, event_type, message, severity)
+                     VALUES (?1, 'analytics', 'test', 'fixture', 'info')",
+                    [timestamp],
+                )
+                .expect("populate system events");
+        }
+
+        connection
+            .execute_batch("ANALYZE")
+            .expect("analyze populated analytics fixture");
+
+        let start_text = start.to_string();
+        let end_text = end.to_string();
+        let range_bounds = local_date_range_bounds(&start_text, &end_text)
+            .expect("resolve local-date query bounds");
+        let range_parameters: [&dyn ToSql; 4] = [
+            &range_bounds[0],
+            &range_bounds[1],
+            &range_bounds[2],
+            &range_bounds[3],
+        ];
+        let token_detail_plan = explain(
+            &connection,
+            TOKEN_USAGE_BY_LOCAL_DATE_SQL,
+            &range_parameters,
+        );
+        assert!(
+            token_detail_plan
+                .iter()
+                .any(|detail| detail.contains("idx_token_usage_timestamp")),
+            "local-day token detail should seek the timestamp index for canonical/legacy rows; plan: {token_detail_plan:?}"
+        );
+        assert!(
+            token_detail_plan
+                .iter()
+                .any(|detail| detail.contains("idx_token_usage_julianday")),
+            "local-day token detail should find malformed rows through its expression index; plan: {token_detail_plan:?}"
+        );
+        assert!(
+            !token_detail_plan
+                .iter()
+                .any(|detail| detail.contains("SCAN token_usage")),
+            "local-day token detail scanned the table; plan: {token_detail_plan:?}"
+        );
+        for (name, sql) in [
+            ("token totals", TOKEN_TOTALS_RANGE_SQL),
+            ("top sessions", TOKEN_TOP_SESSIONS_SQL),
+        ] {
+            let details = explain(&connection, sql, &range_parameters);
+            assert!(
+                details.iter().any(|detail| {
+                    detail.contains("idx_token_usage_timestamp")
+                        && (detail.contains("SEARCH") || detail.contains("INDEX") )
+                }),
+                "{name} should use the token timestamp index for local-day ranges; plan: {details:?}"
+            );
+            assert!(
+                !details.iter().any(|detail| detail.contains("SCAN token_usage")),
+                "{name} scanned token_usage instead of using its timestamp index; plan: {details:?}"
+            );
+        }
+
+        for (column, sql) in [
+            ("model", TOKEN_USAGE_BY_MODEL_SQL),
+            ("provider", TOKEN_USAGE_BY_PROVIDER_SQL),
+            ("agent_type", TOKEN_USAGE_BY_AGENT_TYPE_SQL),
+        ] {
+            let details = explain(&connection, &sql, &range_parameters);
+            assert!(
+                details.iter().any(|detail| {
+                    detail.contains("idx_token_usage_timestamp")
+                        && (detail.contains("SEARCH") || detail.contains("INDEX"))
+                }),
+                "token grouping by {column} should use the timestamp index; plan: {details:?}"
+            );
+            assert!(
+                details
+                    .iter()
+                    .any(|detail| detail.contains("USE TEMP B-TREE")),
+                "token grouping by {column} requires a grouping/order temporary B-tree; plan: {details:?}"
+            );
+        }
+
+        let today = chrono::Local::now().naive_local().date().to_string();
+        let today_bounds = local_date_range_bounds(&today, &today).expect("resolve today bounds");
+        let today_parameters: [&dyn ToSql; 4] = [
+            &today_bounds[0],
+            &today_bounds[1],
+            &today_bounds[2],
+            &today_bounds[3],
+        ];
+        for (name, sql) in [
+            ("today sessions", TOKEN_ACTIVITY_SESSIONS_SQL),
+            ("today messages", TOKEN_ACTIVITY_MESSAGES_SQL),
+            ("today tool calls", TOKEN_ACTIVITY_TOOL_CALLS_SQL),
+        ] {
+            let details = explain(&connection, sql, &today_parameters);
+            assert!(
+                details.iter().any(|detail| {
+                    detail.contains("idx_token_usage_timestamp")
+                        && (detail.contains("SEARCH") || detail.contains("INDEX"))
+                }),
+                "{name} should use the token timestamp index; plan: {details:?}"
+            );
+            assert!(
+                !details.iter().any(|detail| detail.contains("SCAN token_usage")),
+                "{name} scanned token_usage instead of using its timestamp index; plan: {details:?}"
+            );
+        }
+
+        let worker_id = "worker-3";
+        let worker_details = explain(
+            &connection,
+            WORKER_STATS_RANGE_SQL,
+            &[&worker_id, &start_text, &end_text],
+        );
+        assert!(
+            worker_details.iter().any(|detail| {
+                detail.contains("SEARCH worker_stats")
+                    && (detail.contains("idx_worker_stats_worker")
+                        || detail.contains("sqlite_autoindex_worker_stats"))
+            }),
+            "worker stats range should use its worker lookup index; plan: {worker_details:?}"
+        );
+        assert!(
+            !worker_details
+                .iter()
+                .any(|detail| detail.contains("SCAN worker_stats")),
+            "worker stats range must not scan the worker_stats table; plan: {worker_details:?}"
+        );
+
+        let hours = "-168";
+        let failure_details = explain(&connection, API_FAILURES_RECENT_SQL, &[&hours]);
+        assert!(
+            failure_details
+                .iter()
+                .any(|detail| detail.contains("idx_api_failures_julianday")),
+            "recent API failures should use the julianday expression index; plan: {failure_details:?}"
+        );
+        assert!(
+            !failure_details
+                .iter()
+                .any(|detail| detail.contains("SCAN api_failures")),
+            "recent API failures scanned the table; plan: {failure_details:?}"
+        );
+
+        let cutoff = "-168 hours";
+        let component = "analytics";
+        let severity = "info";
+        for (has_component, has_severity) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
+            let mut parameters: Vec<&dyn ToSql> = vec![&cutoff];
+            if has_component {
+                parameters.push(&component);
+            }
+            if has_severity {
+                parameters.push(&severity);
+            }
+            let event_details = explain(
+                &connection,
+                system_events_recent_sql(has_component, has_severity),
+                &parameters,
+            );
+            assert!(
+                event_details
+                    .iter()
+                    .any(|detail| detail.contains("idx_system_events_julianday")),
+                "recent system event variant ({has_component}, {has_severity}) should use the julianday expression index; plan: {event_details:?}"
+            );
+            assert!(
+                event_details
+                    .iter()
+                    .any(|detail| detail.contains("USE TEMP B-TREE FOR ORDER BY")),
+                "recent system event variant ({has_component}, {has_severity}) requires a temporary timestamp sort; plan: {event_details:?}"
+            );
+        }
+
+        // Exercise the same production consumer used by the live token
+        // analytics reader. These isolated August rows avoid the larger
+        // January plan fixture, making every expected aggregate explicit.
+        for (
+            timestamp,
+            session,
+            agent,
+            provider,
+            model,
+            prompt,
+            completion,
+            total,
+            thinking,
+            cost,
+        ) in [
+            (
+                "2025-08-01T12:00:00Z",
+                "session-a",
+                "builder",
+                "openai",
+                "gpt-x",
+                6,
+                4,
+                10,
+                Some(2),
+                0.10,
+            ),
+            (
+                "2025-08-01T13:00:00Z",
+                "session-a",
+                "builder",
+                "anthropic",
+                "claude",
+                5,
+                5,
+                10,
+                Some(1),
+                0.20,
+            ),
+            (
+                "2025-08-01T14:00:00Z",
+                "session-b",
+                "planner",
+                "openai",
+                "gpt-x",
+                20,
+                10,
+                30,
+                None,
+                0.30,
+            ),
+            (
+                "2025-08-01T15:00:00Z",
+                "session-c",
+                "coder",
+                "google",
+                "gemini",
+                7,
+                3,
+                10,
+                Some(4),
+                0.40,
+            ),
+            // Adjacent-day data proves the consumer applies the requested range.
+            (
+                "2025-08-03T12:00:00Z",
+                "outside",
+                "other",
+                "other",
+                "other",
+                100,
+                100,
+                200,
+                Some(9),
+                9.00,
+            ),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO token_usage
+                     (timestamp, session_id, agent_type, provider, model, prompt_tokens,
+                      completion_tokens, total_tokens, thinking_tokens, cost_usd, request_type)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'chat')",
+                    params![
+                        timestamp, session, agent, provider, model, prompt, completion, total,
+                        thinking, cost,
+                    ],
+                )
+                .expect("insert explicit token analytics fixture");
+        }
+        drop(connection);
+
+        let analytics = db
+            .get_token_usage_for_range(
+                NaiveDate::from_ymd_opt(2025, 8, 1).expect("consumer start date"),
+                NaiveDate::from_ymd_opt(2025, 8, 1).expect("consumer end date"),
+            )
+            .expect("read token analytics through production consumer");
+        let (total, prompt, completion, thinking, by_agent, by_model, by_provider, top_sessions) =
+            analytics;
+        assert_eq!((total, prompt, completion, thinking), (60, 38, 22, Some(7)));
+        assert_eq!(
+            by_agent,
+            HashMap::from([
+                ("builder".to_string(), 20),
+                ("planner".to_string(), 30),
+                ("coder".to_string(), 10),
+            ])
+        );
+        assert_eq!(
+            by_model,
+            HashMap::from([
+                ("gpt-x".to_string(), 40),
+                ("claude".to_string(), 10),
+                ("gemini".to_string(), 10),
+            ])
+        );
+        assert_eq!(
+            by_provider,
+            HashMap::from([
+                ("openai".to_string(), 40),
+                ("anthropic".to_string(), 10),
+                ("google".to_string(), 10),
+            ])
+        );
+        assert_eq!(
+            top_sessions
+                .iter()
+                .map(|session| (
+                    session.session_id.as_str(),
+                    session.tokens,
+                    session.agent_type.as_str()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("session-b", 30, "planner"),
+                ("session-a", 20, "builder"),
+                ("session-c", 10, "coder"),
+            ]
+        );
+        for (session, expected_cost) in top_sessions.iter().zip([0.30, 0.30, 0.40]) {
+            assert!((session.cost_usd - expected_cost).abs() < 1e-9);
+        }
+    }
+
+    #[tokio::test]
+    async fn worker_stats_readers_use_populated_indexes_and_bound_daily_monthly_results() {
+        let directory = tempfile::tempdir().expect("isolated analytics directory");
+        let db = AnalyticsDb::new_at(&directory.path().join("analytics.db"))
+            .await
+            .expect("open isolated migrated analytics database");
+        let connection = db.conn.lock().expect("analytics connection");
+
+        // Populate enough rows for SQLite's planner to choose selective worker
+        // indexes, while keeping the target worker's expected results explicit.
+        let noise_start = NaiveDate::from_ymd_opt(2023, 1, 1).expect("noise start");
+        for offset in 0..1200 {
+            let date = noise_start + Duration::days(offset / 12);
+            connection
+                .execute(
+                    "INSERT INTO worker_stats
+                     (worker_id, date, tasks_completed, tasks_failed, time_spent_minutes,
+                      cost_usd, avg_task_duration_minutes, success_rate, last_heartbeat)
+                     VALUES (?1, ?2, 1, 0, 5, 0.1, 5, 1.0, '2023-01-01T00:00:00Z')",
+                    params![format!("noise-worker-{}", offset % 12), date.to_string()],
+                )
+                .expect("populate worker-stat plan fixture");
+        }
+        let recent_noise_start = NaiveDate::from_ymd_opt(2025, 1, 12).expect("recent noise start");
+        for offset in 0..1200 {
+            let date = recent_noise_start + Duration::days(offset / 12);
+            connection
+                .execute(
+                    "INSERT INTO worker_stats
+                     (worker_id, date, tasks_completed, tasks_failed, time_spent_minutes,
+                      cost_usd, avg_task_duration_minutes, success_rate, last_heartbeat)
+                     VALUES (?1, ?2, 1, 0, 5, 0.1, 5, 1.0, '2025-01-12T00:00:00Z')",
+                    params![format!("noise-worker-{}", offset % 12), date.to_string()],
+                )
+                .expect("populate retained worker-stat plan fixture");
+        }
+
+        let worker_id = "worker-target";
+        let target_rows = [
+            ("2025-01-02", 2, 1, 30, 0.2, 10, "2025-01-02T10:00:00Z"),
+            ("2025-01-05", 1, 1, 10, 0.1, 20, "2025-01-05T11:00:00Z"),
+            ("2025-01-10", 3, 0, 60, 0.3, 30, "2025-01-10T12:00:00Z"),
+            ("2025-02-02", 4, 1, 10, 0.5, 12, "2025-02-02T13:00:00Z"),
+            ("2025-02-04", 90, 0, 900, 9.0, 90, "2025-02-04T14:00:00Z"),
+        ];
+        for (date, completed, failed, minutes, cost, avg_duration, heartbeat) in target_rows {
+            connection
+                .execute(
+                    "INSERT INTO worker_stats
+                     (worker_id, date, tasks_completed, tasks_failed, time_spent_minutes,
+                      cost_usd, avg_task_duration_minutes, success_rate, last_heartbeat)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    params![
+                        worker_id,
+                        date,
+                        completed,
+                        failed,
+                        minutes,
+                        cost,
+                        avg_duration,
+                        if completed + failed > 0 {
+                            completed as f64 / (completed + failed) as f64
+                        } else {
+                            0.0
+                        },
+                        heartbeat,
+                    ],
+                )
+                .expect("insert target worker-stat row");
+        }
+        connection
+            .execute(
+                "INSERT INTO worker_stats
+                 (worker_id, date, tasks_completed, tasks_failed, time_spent_minutes,
+                  cost_usd, avg_task_duration_minutes, success_rate, last_heartbeat)
+                 VALUES ('worker-other', '2025-02-02', 700, 0, 700, 7.0, 70, 1.0,
+                         '2025-02-02T14:00:00Z')",
+                [],
+            )
+            .expect("insert other worker row inside requested date range");
+        connection
+            .execute_batch("ANALYZE")
+            .expect("analyze populated worker-stat daily fixture");
+
+        let point_date = NaiveDate::from_ymd_opt(2025, 1, 5).expect("point date");
+        let point_sql =
+            "SELECT worker_id, date, tasks_completed, tasks_failed, time_spent_minutes, cost_usd,
+             avg_task_duration_minutes, success_rate, last_heartbeat
+             FROM worker_stats WHERE worker_id = ? AND date = ?";
+        let point_plan = explain(
+            &connection,
+            point_sql,
+            &[&worker_id, &point_date.to_string()],
+        );
+        assert!(
+            point_plan.iter().any(|detail| {
+                detail.contains("SEARCH worker_stats")
+                    && detail.contains("sqlite_autoindex_worker_stats")
+            }),
+            "worker/date point lookup should use the UNIQUE(worker_id, date) index; plan: {point_plan:?}"
+        );
+        assert!(
+            !point_plan
+                .iter()
+                .any(|detail| detail.contains("SCAN worker_stats")),
+            "worker/date point lookup must not scan worker_stats; plan: {point_plan:?}"
+        );
+
+        let daily_range_sql =
+            "SELECT date, tasks_completed, tasks_failed, time_spent_minutes, cost_usd,
+                            avg_task_duration_minutes, last_heartbeat
+                       FROM worker_stats
+                      WHERE worker_id = ?1 AND date BETWEEN ?2 AND ?3";
+        let start = NaiveDate::from_ymd_opt(2025, 1, 7).expect("range start");
+        let end = NaiveDate::from_ymd_opt(2025, 2, 3).expect("range end");
+        let daily_plan = explain(
+            &connection,
+            daily_range_sql,
+            &[&worker_id, &start.to_string(), &end.to_string()],
+        );
+        assert!(
+            daily_plan.iter().any(|detail| {
+                detail.contains("SEARCH worker_stats")
+                    && (detail.contains("idx_worker_stats_worker")
+                        || detail.contains("sqlite_autoindex_worker_stats"))
+            }),
+            "daily range reader should seek a worker index before applying its date bounds; plan: {daily_plan:?}"
+        );
+        assert!(
+            !daily_plan
+                .iter()
+                .any(|detail| detail.contains("SCAN worker_stats")),
+            "daily range reader must not scan worker_stats; plan: {daily_plan:?}"
+        );
+
+        drop(connection);
+
+        let exact_day = db
+            .get_worker_stats(worker_id, point_date)
+            .expect("read worker/day through production reader")
+            .expect("populated worker/day exists");
+        assert_eq!(exact_day.worker_id, worker_id);
+        assert_eq!(exact_day.date, point_date);
+        assert_eq!((exact_day.tasks_completed, exact_day.tasks_failed), (1, 1));
+        assert_eq!(exact_day.time_spent_minutes, 10);
+        assert_eq!(exact_day.cost_usd, 0.1);
+        assert!(
+            db.get_worker_stats("worker-other", point_date)
+                .expect("read other worker point")
+                .is_none(),
+            "point lookup must not return another worker's same-date row"
+        );
+        assert!(
+            db.get_worker_stats(worker_id, end + Duration::days(2))
+                .expect("read absent point")
+                .is_none(),
+            "point lookup must return None when the worker/date pair is absent"
+        );
+
+        assert!(
+            db.rollup_and_prune_worker_stats_before(
+                NaiveDate::from_ymd_opt(2025, 1, 12).expect("rollup cutoff")
+            )
+            .expect("roll old worker days into monthly summaries")
+                > 0,
+            "old populated worker days should produce monthly rows"
+        );
+
+        let connection = db.conn.lock().expect("analytics connection");
+        connection
+            .execute_batch("ANALYZE")
+            .expect("analyze populated daily and monthly worker-stat fixtures");
+        let monthly_range_sql = "SELECT covered_start, covered_end, tasks_completed, tasks_failed,
+                            time_spent_minutes, cost_usd, avg_task_duration_minutes, last_heartbeat
+                       FROM worker_stats_monthly
+                      WHERE worker_id = ?1 AND covered_end >= ?2 AND covered_start <= ?3";
+        let monthly_plan = explain(
+            &connection,
+            monthly_range_sql,
+            &[&worker_id, &start.to_string(), &end.to_string()],
+        );
+        assert!(
+            monthly_plan.iter().any(|detail| {
+                detail.contains("SEARCH worker_stats_monthly")
+                    && detail.contains("sqlite_autoindex_worker_stats_monthly")
+            }),
+            "monthly range reader should use the (worker_id, month) primary key to select the worker; plan: {monthly_plan:?}"
+        );
+        assert!(
+            !monthly_plan
+                .iter()
+                .any(|detail| detail.contains("SCAN worker_stats_monthly")),
+            "monthly range reader must not scan worker_stats_monthly; plan: {monthly_plan:?}"
+        );
+        drop(connection);
+
+        let monthly_and_daily = db
+            .get_worker_stats_range(worker_id, start, end)
+            .expect("read bounded worker range through production reader")
+            .expect("monthly and daily worker rows overlap the range");
+        assert_eq!(monthly_and_daily.worker_id, worker_id);
+        assert_eq!(
+            (
+                monthly_and_daily.tasks_completed,
+                monthly_and_daily.tasks_failed
+            ),
+            (10, 3),
+            "the intersecting January rollup and in-range February day are included"
+        );
+        assert_eq!(monthly_and_daily.time_spent_minutes, 110);
+        assert!((monthly_and_daily.cost_usd - 1.1).abs() < f64::EPSILON);
+        assert_eq!(
+            (
+                monthly_and_daily.coverage_start,
+                monthly_and_daily.coverage_end
+            ),
+            (
+                NaiveDate::from_ymd_opt(2025, 1, 2).expect("monthly coverage start"),
+                NaiveDate::from_ymd_opt(2025, 2, 2).expect("daily coverage end"),
+            ),
+            "monthly coverage retains its actual bounds even when the request starts mid-month"
+        );
+        assert_eq!(monthly_and_daily.granularity, "month");
+        assert_eq!(
+            monthly_and_daily.last_heartbeat.unwrap().date_naive(),
+            end - Duration::days(1)
+        );
+        let other_worker = db
+            .get_worker_stats_range("worker-other", start, end)
+            .expect("read range for another worker")
+            .expect("other worker row is inside the date range");
+        assert_eq!(other_worker.tasks_completed, 700);
+        assert_eq!(other_worker.tasks_failed, 0);
+        assert!(
+            db.get_worker_stats_range(
+                worker_id,
+                NaiveDate::from_ymd_opt(2025, 3, 1).expect("empty range start"),
+                NaiveDate::from_ymd_opt(2025, 3, 2).expect("empty range end"),
+            )
+            .expect("read empty date range")
+            .is_none(),
+            "range query must return None when neither daily nor monthly coverage overlaps"
+        );
+        assert!(
+            db.get_worker_stats(worker_id, point_date)
+                .expect("read pruned point")
+                .is_none(),
+            "the point reader reads retained daily rows only after rollup pruning"
+        );
     }
 }

@@ -130,7 +130,7 @@ impl GetGraphStatsTool {
             "total_edges": all_edges.len(),
             "by_kind": kind_counts,
             "by_language": language_counts,
-            "last_updated": chrono::Local::now().to_rfc3339()
+            "last_updated": crate::db::timestamps::now_rfc3339()
         }))
     }
 }
@@ -893,7 +893,7 @@ impl GetGraphStatusTool {
             "status": "success",
             "node_count": all_nodes.len(),
             "edge_count": all_edges.len(),
-            "timestamp": chrono::Local::now().to_rfc3339()
+            "timestamp": crate::db::timestamps::now_rfc3339()
         }))
     }
 }

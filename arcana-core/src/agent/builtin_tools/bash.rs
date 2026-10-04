@@ -1,13 +1,13 @@
 use async_trait::async_trait;
 use serde_json::json;
+use std::ffi::OsString;
 use std::path::PathBuf;
-use std::process::Stdio;
 use std::time::Duration;
-use tokio::process::Command;
 use tokio::time::timeout;
 
 use super::path_jail::validate_workspace_path;
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
+use crate::platform::process_sandbox::{self, ProcessSpec};
 
 /// The floor and ceiling for a model-supplied `timeout_secs` (`T-6`).
 ///
@@ -25,7 +25,7 @@ pub struct BashTool;
 #[async_trait]
 impl Tool for BashTool {
     fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
-        crate::agent::tool_effect::ToolEffect::Execute
+        crate::agent::tool_effect::ToolEffect::FreeformShell
     }
 
     fn name(&self) -> &str {
@@ -61,6 +61,11 @@ impl Tool for BashTool {
             Some(c) => c.to_string(),
             None => return ToolResult::error("Missing required field: command"),
         };
+        if contains_git_index_or_commit_mutation(&command) {
+            return ToolResult::error(
+                "Direct Git staging, commit, and ref-mutation commands are blocked in Bash. Use `git_commit` with explicit changed file paths and a Conventional Commit subject, blank line, and descriptive body.",
+            );
+        }
         // T-6 (P8-33) - clamp the model-supplied timeout into a usable range.
         //
         // This was a bare `unwrap_or(DEFAULT)`, so `timeout_secs: 0` was
@@ -77,31 +82,10 @@ impl Tool for BashTool {
             .unwrap_or(DEFAULT_TIMEOUT_SECS)
             .clamp(MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS);
 
-        // ⚠ G-4 (post-phase gap hunt). This block was commented as the
-        // **workspace path-jail** — "the shell cwd MUST be inside the
-        // configured workspace", guarding against a `ctx.working_dir` that had
-        // "drifted away from the configured workspace".
-        //
-        // 🔴 It is not a jail and never was. Both arguments below are the SAME
-        // VALUE, so the comparison is trivially satisfied; the only way it can
-        // fail is if the path does not canonicalise. It is an **existence and
-        // canonicalisation check** wearing a jail's description — and both
-        // `check_redirect_targets`'s docstring and `builtin_tools/mod.rs`
-        // deferred to it as the load-bearing defence.
-        //
-        // It cannot be made into a jail here: there is no separately
-        // configured workspace root anywhere in `AppState` to compare against,
-        // so the drift it claims to detect is undetectable from this position.
-        // Introducing one is an architectural decision, flagged rather than
-        // invented (`ADR-LOG-RESTRUCT-0029`).
-        //
-        // **What actually bounds `bash`:** it declares `ToolEffect::Execute`,
-        // so it is prompted in every mode but `Autonomous` — consent, not
-        // containment. `check_redirect_targets` is a secondary heuristic over
-        // `>` / `>>` / `tee` tokens and does not see `copy`, `curl -o`, or
-        // `python -c "open(...,'w')"`. A shell tool is bounded by the user
-        // saying yes, and saying otherwise in a comment is how a reader comes
-        // to believe otherwise.
+        // The shared resolver requires an existing absolute workspace and
+        // canonicalizes it before the shell starts. The redirect scan below is
+        // only a heuristic; free-form shell code can still write elsewhere, so
+        // permission policy and OS-level isolation remain separate controls.
         let cwd_path = PathBuf::from(&ctx.working_dir);
         if let Err(msg) = validate_workspace_path(&cwd_path, &ctx.working_dir) {
             // A working directory that cannot canonicalise is a configuration
@@ -111,12 +95,9 @@ impl Tool for BashTool {
         }
 
         // 2. Best-effort scan for `>` / `>>` / `tee` redirect targets that
-        //    point outside the workspace. This is heuristic — shell
-        //    redirection has many forms (here-docs, process substitution,
-        //    eval, dynamic vars) we cannot statically extract. The cwd jail
-        //    above is NOT a load-bearing check (G-4: it compares the working
-        //    directory against itself). Consent is what bounds this tool;
-        //    this scanner catches the easy cases on top of that.
+        //    point outside the workspace. Shell redirection has many forms
+        //    (here-docs, process substitution, eval, dynamic vars) we cannot
+        //    statically extract, so this only catches the easy cases.
         if let Some(err) = check_redirect_targets(&command, &ctx.working_dir) {
             return ToolResult::error(err);
         }
@@ -135,14 +116,10 @@ impl Tool for BashTool {
             command
         };
 
-        let mut shell_cmd = if cfg!(target_os = "windows") {
-            let mut cmd = Command::new("cmd");
-            cmd.args(["/C", &command]);
-            cmd
+        let (shell_program, shell_args) = if cfg!(target_os = "windows") {
+            ("cmd", vec![OsString::from("/C"), OsString::from(&command)])
         } else {
-            let mut cmd = Command::new("sh");
-            cmd.args(["-c", &command]);
-            cmd
+            ("sh", vec![OsString::from("-c"), OsString::from(&command)])
         };
 
         // ⚠ F-8, defence in depth — applied to BOTH shells, once.
@@ -156,30 +133,47 @@ impl Tool for BashTool {
         //
         // The first version of this landed in the Windows branch only, which is
         // its own small lesson about two-branch fixes.
-        for (key, _) in std::env::vars() {
-            if crate::security::env_scrub::looks_like_a_credential(&key) {
-                shell_cmd.env_remove(&key);
-            }
-        }
+        let env_remove = std::env::vars()
+            .filter_map(|(key, _)| {
+                crate::security::env_scrub::looks_like_a_credential(&key)
+                    .then(|| OsString::from(key))
+            })
+            .collect();
+        let shell_spec = ProcessSpec {
+            program: OsString::from(shell_program),
+            args: shell_args,
+            raw_arg: None,
+            cwd: cwd_path.clone(),
+            env_remove,
+            env_set: Vec::new(),
+            #[cfg(windows)]
+            read_only_paths: Vec::new(),
+        };
 
+        if let Err(message) = ctx.require_current_task_claim() {
+            return ToolResult::error(message);
+        }
         let result = timeout(
             Duration::from_secs(timeout_secs),
-            run_command(shell_cmd, &ctx.working_dir),
+            run_command(shell_spec, &ctx.working_dir),
         )
         .await;
 
         match result {
-            Err(_) => ToolResult::error(format!(
-                "Command timed out after {timeout_secs}s: {command}"
-            )),
-            Ok(Err(e)) => ToolResult::error(format!("Failed to spawn command: {e}")),
+            Err(_) => ToolResult::categorized_error(
+                "operation_timed_out",
+                "timeout",
+                format!("Shell operation timed out after {timeout_secs} seconds; command text is omitted from the failure record."),
+                "Inspect the workspace and process state before retrying; a timed-out command may have completed side effects.",
+            )
+            .with_unknown_side_effect_outcome(),
+            Ok(Err(_)) => ToolResult::categorized_error(
+                "process_spawn_failed",
+                "infrastructure",
+                "Arcana could not start the shell operation.",
+                "Verify the workspace and available shell/toolchain, then retry only after checking task state.",
+            ),
             Ok(Ok((stdout, stderr, exit_code))) => {
-                // Doc 09 T2.4 — record build-like invocations into the
-                // module-level evidence tracker so update_task_status can
-                // gate qc_review transitions. Side-effect only — no impact
-                // on the tool's return value or output.
-                super::build_evidence::record(&ctx.session_id, &command, exit_code);
-
                 // K.1 — Label stdout and stderr separately so agents can
                 // distinguish build warnings (stderr) from program output.
                 let mut output = String::new();
@@ -241,19 +235,20 @@ impl Tool for BashTool {
                     // PowerShell cmdlet and cannot run under `cmd /C` -- the same
                     // syntax `rewrite_for_windows` was substituting, so following
                     // the advice reproduced the failure exactly. `P8-26`.
-                    let suggestion = format!(
-                        "{output}\n\n[SUGGESTION] The shell here is Windows CMD, not PowerShell, and a \
-                        cmd pipeline whose right-hand command cannot be resolved does not run the \
-                        left-hand one either -- so this command did NOT execute. \
-                        Re-run it WITHOUT the pipe: this tool already returns full stdout and stderr, \
-                        so `| head` / `| tail` are rarely needed. If you must filter, use `findstr` \
-                        (cmd's grep) or `more`. Do NOT use `Select-Object` or `Select-String` -- \
-                        those are PowerShell cmdlets and are not available."
+                    return ToolResult::categorized_error(
+                        "process_exit_nonzero",
+                        "command_exit",
+                        "Windows CMD could not resolve a pipeline command; command output is omitted from the failure record.",
+                        "Use CMD-compatible tools such as findstr or more, or use project_command for supported build/test operations.",
                     );
-                    return ToolResult::error(suggestion);
                 }
                 if is_error {
-                    ToolResult::error(output)
+                    ToolResult::categorized_error(
+                        "process_exit_nonzero",
+                        "command_exit",
+                        format!("Shell operation exited with code {exit_code}; command text and output are omitted from the failure record."),
+                        "Use project_command for supported build/test operations or run a narrower diagnostic.",
+                    )
                 } else {
                     ToolResult::success(output)
                 }
@@ -262,8 +257,132 @@ impl Tool for BashTool {
     }
 }
 
+/// Keep common shell-authored Git index/ref mutations on the host-validated
+/// `git_commit` path. This is a textual guard, not a process sandbox: encoded
+/// programs and arbitrary subprocess code remain outside its guarantee.
+fn contains_git_index_or_commit_mutation(command: &str) -> bool {
+    command
+        .split(['&', '|', ';', '\n'])
+        .map(str::trim)
+        .any(|segment| {
+            let normalized = segment
+                .replace(['(', ')', '[', ']', ','], " ")
+                .replace(['"', '\'', '`'], "");
+            let words = normalized.split_whitespace().collect::<Vec<_>>();
+            let Some(executable) = words.first().copied() else {
+                return false;
+            };
+            let executable = executable
+                .rsplit(['\\', '/'])
+                .next()
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            // Text-search commands routinely inspect examples containing these
+            // words; they do not execute the quoted text as a Git command.
+            if matches!(
+                executable.as_str(),
+                "rg" | "grep" | "egrep" | "fgrep" | "findstr"
+            ) {
+                return false;
+            }
+
+            // Shells can wrap a Git command (`cmd /c`, `sh -c`, PowerShell),
+            // or a script can invoke it through a subprocess API. Inspect the
+            // complete shell segment after token cleanup, not just argv[0].
+            // This is a guard over shell-authored command text; executable
+            // semantics remain arbitrary by design, so the registered
+            // `git_commit` tool is still the only supported commit path.
+            let words = words
+                .iter()
+                .map(|word| word.to_ascii_lowercase())
+                .collect::<Vec<_>>();
+            let is_git_mutation = |argument: &str| {
+                matches!(
+                    argument,
+                    "add"
+                        | "commit"
+                        | "commit-tree"
+                        | "update-index"
+                        | "update-ref"
+                        | "symbolic-ref"
+                        | "read-tree"
+                        | "write-tree"
+                        | "fast-import"
+                        | "apply"
+                        | "am"
+                        | "stash"
+                        | "reset"
+                        | "merge"
+                        | "rebase"
+                        | "cherry-pick"
+                        | "revert"
+                )
+            };
+            let has_mutation_argument =
+                |arguments: &[String]| arguments.iter().any(|argument| is_git_mutation(argument));
+
+            // An executable supplied through a shell variable can resolve to
+            // Git even though the segment contains no literal `git` token:
+            // `G=git; $G commit ...`. Refuse variable-selected executables
+            // when followed by a Git index/ref mutation. This remains a
+            // conservative textual guard; process confinement is the other
+            // boundary, and host-side commits still use `git_commit`.
+            let dynamic_executable = executable.starts_with('$');
+            if dynamic_executable && has_mutation_argument(&words[1..]) {
+                return true;
+            }
+
+            words.iter().enumerate().any(|(index, word)| {
+                (word == "git"
+                    || word == "git.exe"
+                    || word
+                        .split_once('=')
+                        .is_some_and(|(_, value)| value == "git" || value == "git.exe"))
+                    && has_mutation_argument(&words[index + 1..])
+            })
+        })
+}
+
+#[cfg(test)]
+mod git_mutation_guard_tests {
+    use super::contains_git_index_or_commit_mutation;
+
+    #[test]
+    fn direct_git_add_and_commit_are_blocked_but_inspection_is_allowed() {
+        for command in [
+            "git add src/main.rs",
+            "git add -A",
+            "git commit -m \"fix: change\"",
+            "cargo test && git.exe commit -m \"fix: change\"",
+            "git -C C:\\repo add .",
+            "git -C . -c a=b -c c=d -c e=f commit -m bypass",
+            "git --git-dir .git -c core.hooksPath=hooks -c user.name=worker commit -m bypass",
+            "cmd /c \"git add -A\"",
+            "sh -c 'git commit -m test'",
+            "python -c \"subprocess.run(['git', 'add', '-A'])\"",
+            "git update-index --add src/main.rs",
+            "git update-ref refs/heads/main deadbeef",
+            "git commit-tree HEAD^{tree} -m bypass",
+            "G=git; $G commit -m bypass",
+            "G=git; $G add -A",
+            "git apply --cached patch.diff",
+            "git reset --mixed HEAD~1",
+        ] {
+            assert!(contains_git_index_or_commit_mutation(command), "{command}");
+        }
+        for command in [
+            "git status --short --branch",
+            "git diff --cached",
+            "git switch arcana/fleet",
+            "rg \"git commit\" docs/",
+        ] {
+            assert!(!contains_git_index_or_commit_mutation(command), "{command}");
+        }
+    }
+}
+
 async fn run_command(
-    mut cmd: Command,
+    spec: ProcessSpec,
     working_dir: &str,
 ) -> std::io::Result<(String, String, i32)> {
     // Normalize the path to handle spaces and special characters on Windows
@@ -282,26 +401,40 @@ async fn run_command(
         ));
     }
 
-    cmd.current_dir(&normalized_path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        // P8-27: kill the child when this future is dropped.
-        //
-        // The caller wraps this in `timeout(..)`. Without `kill_on_drop`, a
-        // timeout drops the future and LEAVES THE CHILD RUNNING: a timed-out
-        // `cargo build` keeps `target/.cargo-lock`, so every later build in
-        // the session times out too, and the agent sees a machine that has
-        // silently stopped being able to build.
-        //
-        // `validate.rs:281` and `e2e_probe.rs:418` both set this. The one
-        // executor that runs MODEL-AUTHORED commands was the only one without
-        // it -- the inverse of where the guard is most needed.
-        .kill_on_drop(true);
-
-    let output = cmd.output().await?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let exit_code = output.status.code().unwrap_or(-1);
+    let mut child = process_sandbox::spawn(spec, &normalized_path).await?;
+    let mut stdout = child.take_stdout().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "sandboxed child stdout was not captured",
+        )
+    })?;
+    let mut stderr = child.take_stderr().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "sandboxed child stderr was not captured",
+        )
+    })?;
+    let stdout_reader = tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).await?;
+        Ok::<_, std::io::Error>(bytes)
+    });
+    let stderr_reader = tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes).await?;
+        Ok::<_, std::io::Error>(bytes)
+    });
+    let exit_code = child.wait().await?;
+    let stdout = stdout_reader
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))??;
+    let stderr = stderr_reader
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))??;
+    let stdout = String::from_utf8_lossy(&stdout).to_string();
+    let stderr = String::from_utf8_lossy(&stderr).to_string();
     Ok((stdout, stderr, exit_code))
 }
 
@@ -707,33 +840,39 @@ mod p8_26_tests {
         use std::time::Duration;
         use tokio::time::{sleep, timeout};
 
-        let dir = std::env::temp_dir().join("arcana-p8-27-killtest");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("mkdir");
+        let dir =
+            std::env::temp_dir().join(format!("arcana-p8-27-killtest-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).expect("create unique isolated directory");
         let marker = dir.join("survived.txt");
 
         let script = if cfg!(target_os = "windows") {
-            // `timeout /t` needs a console; `ping` is the portable sleep on cmd.
-            "ping -n 5 127.0.0.1 >nul & echo survived > survived.txt"
+            // Avoid `ping`: the AppContainer intentionally denies network
+            // access, so it exits immediately instead of exercising timeout.
+            "for /l %i in (1,1,100000000) do @rem & echo survived > survived.txt"
         } else {
             "sleep 4; echo survived > survived.txt"
         };
 
-        let mut cmd = if cfg!(target_os = "windows") {
-            let mut c = Command::new("cmd");
-            c.args(["/C", script]);
-            c
+        let (program, args) = if cfg!(target_os = "windows") {
+            ("cmd", vec![OsString::from("/C"), OsString::from(script)])
         } else {
-            let mut c = Command::new("sh");
-            c.args(["-c", script]);
-            c
+            ("sh", vec![OsString::from("-c"), OsString::from(script)])
         };
-        cmd.current_dir(&dir);
+        let spec = ProcessSpec {
+            program: OsString::from(program),
+            args,
+            raw_arg: None,
+            cwd: dir.clone(),
+            env_remove: Vec::new(),
+            env_set: Vec::new(),
+            #[cfg(windows)]
+            read_only_paths: Vec::new(),
+        };
 
         // Time out long before the child would write its marker.
         let outcome = timeout(
             Duration::from_millis(400),
-            run_command(cmd, dir.to_str().expect("utf-8 temp path")),
+            run_command(spec, dir.to_str().expect("utf-8 temp path")),
         )
         .await;
         assert!(outcome.is_err(), "the fixture must actually time out");
@@ -750,5 +889,125 @@ mod p8_26_tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod process_sandbox_tests {
+    use super::*;
+    use crate::agent::permission::PermissionMode;
+    use crate::agent::tool_trait::{Tool, ToolContext};
+
+    #[tokio::test]
+    async fn nonzero_shell_exit_is_a_structured_failure_without_command_output() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let context = ToolContext {
+            session_id: "bash-structured-error-test".into(),
+            working_dir: workspace.path().to_string_lossy().into_owned(),
+            call_id: "bash-structured-error-call".into(),
+            run_id: None,
+            task_id: None,
+            permission_mode: PermissionMode::Autonomous,
+            depth: 0,
+            agent_role: "supervisor".into(),
+
+            run_token_budget: None,
+        };
+        let command = if cfg!(windows) {
+            "echo PRIVATE_COMMAND_OUTPUT & exit /b 17"
+        } else {
+            "printf PRIVATE_COMMAND_OUTPUT; exit 17"
+        };
+        let result = BashTool
+            .execute(serde_json::json!({"command": command}), &context)
+            .await;
+        let envelope: serde_json::Value =
+            serde_json::from_str(&result.output).expect("shell failure has valid JSON");
+
+        assert!(result.is_error);
+        assert_eq!(envelope["schema_version"], 1);
+        assert_eq!(envelope["ok"], false);
+        assert_eq!(envelope["error"]["code"], "process_exit_nonzero");
+        assert_eq!(envelope["error"]["category"], "command_exit");
+        assert!(!result.output.contains("PRIVATE_COMMAND_OUTPUT"));
+        assert!(!result.output.contains(command));
+    }
+
+    #[tokio::test]
+    async fn worker_process_is_refused_before_a_task_claim() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let context = ToolContext {
+            session_id: "bash-unclaimed-test".into(),
+            working_dir: workspace.path().to_string_lossy().into_owned(),
+            call_id: "bash-unclaimed-call".into(),
+            run_id: None,
+            task_id: None,
+            permission_mode: PermissionMode::Autonomous,
+            depth: 0,
+            agent_role: "worker-backend".into(),
+
+            run_token_budget: None,
+        };
+        let result = BashTool
+            .execute(
+                serde_json::json!({"command": "mkdir must-not-run"}),
+                &context,
+            )
+            .await;
+
+        assert!(result.is_error);
+        assert!(!workspace.path().join("must-not-run").exists());
+    }
+
+    #[tokio::test]
+    async fn bash_tool_process_can_write_inside_but_not_to_a_sibling_directory() {
+        let parent = tempfile::tempdir().expect("temporary parent");
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = parent.path().join("workspace");
+        let outside = parent.path().join("outside");
+        std::fs::create_dir(&workspace).expect("workspace");
+        let db = crate::db::tasks::TasksDb::open().expect("open task database");
+        let task = db
+            .create(crate::db::tasks::CreateTaskInput {
+                title: "sandboxed shell task".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "shell writes stay in the workspace".into(),
+                created_by: Some("sandbox-test".into()),
+            })
+            .expect("create task");
+        db.update_status(task.id, "assigned", Some("worker-backend"))
+            .expect("assign task");
+        db.claim_task_with_pid(task.id, "worker-backend", std::process::id())
+            .expect("claim task");
+        let command = if cfg!(windows) {
+            "mkdir inside-dir & mkdir ..\\outside"
+        } else {
+            "mkdir inside-dir; mkdir ../outside"
+        };
+        let context = ToolContext {
+            session_id: "bash-sandbox-test".into(),
+            working_dir: workspace.to_string_lossy().into_owned(),
+            call_id: "bash-sandbox-write-boundary".into(),
+            run_id: None,
+            task_id: Some(task.id),
+            permission_mode: PermissionMode::Autonomous,
+            depth: 0,
+            agent_role: "worker-backend".into(),
+
+            run_token_budget: None,
+        };
+
+        let result = BashTool
+            .execute(serde_json::json!({"command": command}), &context)
+            .await;
+
+        assert!(workspace.join("inside-dir").is_dir(), "{result:?}");
+        assert!(
+            !outside.exists(),
+            "Bash process escaped its workspace boundary: {result:?}"
+        );
     }
 }

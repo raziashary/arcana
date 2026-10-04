@@ -16,10 +16,75 @@ use crate::errors::{ArcanaError, Result};
 use crate::state::lock::LockTolerant;
 
 const GOOGLE_API_BASE: &str = "https://generativelanguage.googleapis.com";
+const MAX_COUNT_TOKENS_RESPONSE_BYTES: usize = 16 * 1024;
+
+/// Extract only Google's machine-readable status and validated field paths.
+/// Provider error messages can echo submitted content, so they are never
+/// copied into Arcana errors or telemetry.
+fn safe_google_error_summary(bytes: &[u8]) -> String {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return "provider_error_details_unavailable".to_string();
+    };
+    let status = value
+        .pointer("/error/status")
+        .and_then(serde_json::Value::as_str)
+        .filter(|status| {
+            !status.is_empty()
+                && status.len() <= 48
+                && status
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte == b'_' || byte.is_ascii_digit())
+        });
+    let mut fields = value
+        .pointer("/error/details")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .flat_map(|detail| {
+            detail
+                .get("fieldViolations")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .filter_map(|violation| violation.get("field").and_then(serde_json::Value::as_str))
+        .filter(|field| {
+            !field.is_empty()
+                && field.len() <= 128
+                && field.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'[' | b']')
+                })
+        })
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    fields.sort();
+    fields.dedup();
+
+    let mut summary = status.unwrap_or("PROVIDER_REJECTED_REQUEST").to_string();
+    if !fields.is_empty() {
+        summary.push_str(" fields=");
+        summary.push_str(&fields.join(","));
+    }
+    summary
+}
+
+async fn read_bounded_error_body(response: reqwest::Response) -> Option<Vec<u8>> {
+    let mut stream = response.bytes_stream();
+    let mut body = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.ok()?;
+        if body.len().saturating_add(chunk.len()) > MAX_COUNT_TOKENS_RESPONSE_BYTES {
+            return None;
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Some(body)
+}
 
 pub struct GoogleProvider {
     api_key: String,
     client: Client,
+    api_base: String,
 }
 
 impl GoogleProvider {
@@ -27,6 +92,16 @@ impl GoogleProvider {
         Self {
             api_key,
             client: Client::new(),
+            api_base: GOOGLE_API_BASE.to_string(),
+        }
+    }
+
+    #[cfg(test)]
+    fn new_at(api_key: String, api_base: String) -> Self {
+        Self {
+            api_key,
+            client: Client::new(),
+            api_base,
         }
     }
 
@@ -198,6 +273,39 @@ impl GoogleProvider {
         // that cannot fire is worse than no guard — it reads as a condition.
         body["generationConfig"] = serde_json::Value::Object(gen_config);
 
+        // Gemini 3 requires the signature on the first function-call part in
+        // each current step. Record only safe metadata (role, call name, and
+        // signature presence) so a live 400 can be diagnosed without logging
+        // provider-issued signature bytes, arguments, or user content.
+        let signature_inventory = body["contents"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .flat_map(|(message_index, message)| {
+                message["parts"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .enumerate()
+                    .filter_map(move |(part_index, part)| {
+                        let call = part.get("functionCall")?.as_object()?;
+                        Some((
+                            message_index,
+                            part_index,
+                            call.get("name")?.as_str()?.to_string(),
+                            part.get("thoughtSignature").is_some(),
+                        ))
+                    })
+            })
+            .collect::<Vec<_>>();
+        debug!(
+            target: "arcana::provider::google",
+            model = %req.model,
+            function_call_signature_presence = ?signature_inventory,
+            "Prepared Gemini function-call history"
+        );
+
         body
     }
 }
@@ -212,6 +320,70 @@ impl Provider for GoogleProvider {
     }
     fn models(&self) -> Vec<ModelInfo> {
         Self::models_static()
+    }
+
+    async fn input_token_upper_bound(&self, request: &CompletionRequest) -> Result<u64> {
+        let mut timer =
+            crate::observability::timing::OperationTimer::start("provider_input_token_preflight");
+        // CountTokensRequest's GenerateContentRequest requires its own model
+        // resource field even though the endpoint path also names the model.
+        // Google returns INVALID_ARGUMENT without this nested field.
+        let mut generate_request = self.build_body(request);
+        generate_request["model"] = json!(format!("models/{}", request.model));
+        let body = json!({"generateContentRequest": generate_request});
+        let url = format!(
+            "{}/v1beta/models/{}:countTokens",
+            self.api_base, request.model
+        );
+        let response = self
+            .client
+            .post(&url)
+            .header("x-goog-api-key", &self.api_key)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let summary = read_bounded_error_body(response)
+                .await
+                .map(|body| safe_google_error_summary(&body))
+                .unwrap_or_else(|| "provider_error_details_unavailable".to_string());
+            timer.set_outcome("error");
+            let class = crate::provider::usage::ErrorClass::classify("google", status.as_u16(), "");
+            return Err(ArcanaError::Provider(format!(
+                "Google countTokens {status} [{class:?}]: token preflight failed ({summary})"
+            )));
+        }
+        let mut response_stream = response.bytes_stream();
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response_stream.next().await {
+            let chunk = chunk?;
+            if bytes.len().saturating_add(chunk.len()) > MAX_COUNT_TOKENS_RESPONSE_BYTES {
+                timer.set_outcome("response_too_large");
+                return Err(ArcanaError::Provider(
+                    "Google countTokens response exceeded the safe response bound".to_string(),
+                ));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        let data: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| {
+            timer.set_outcome("invalid_response");
+            ArcanaError::Provider("Google countTokens returned invalid JSON".to_string())
+        })?;
+        let token_count = data
+            .get("totalTokens")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| {
+                timer.set_outcome("missing_token_count");
+                ArcanaError::Provider(
+                    "Google countTokens response did not include totalTokens".to_string(),
+                )
+            })?;
+        timer
+            .with_result_count(token_count.min(usize::MAX as u64) as usize)
+            .succeed();
+        Ok(token_count)
     }
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
@@ -367,7 +539,7 @@ impl Provider for GoogleProvider {
     }
 }
 
-fn parse_google_sse_line(line: &str) -> Result<Vec<StreamChunk>> {
+pub(crate) fn parse_google_sse_line(line: &str) -> Result<Vec<StreamChunk>> {
     let line = line.trim();
     if line.is_empty() || line.starts_with(':') {
         return Ok(Vec::new());
@@ -416,6 +588,26 @@ fn parse_google_chunk(v: &serde_json::Value) -> Result<Vec<StreamChunk>> {
     // `parts` may be absent on a pure finish/usage frame. That is not a reason
     // to return — the usage below is exactly what such a frame carries.
     if let Some(parts) = candidate["content"]["parts"].as_array() {
+        let part_metadata = parts
+            .iter()
+            .enumerate()
+            .map(|(index, part)| {
+                let kind = if part.get("functionCall").is_some() {
+                    "function_call"
+                } else if part.get("text").is_some() {
+                    "text"
+                } else {
+                    "other"
+                };
+                (index, kind, thought_signature(part).is_some())
+            })
+            .collect::<Vec<_>>();
+        debug!(
+            target: "arcana::provider::google",
+            response_part_metadata = ?part_metadata,
+            "Parsed Gemini response part metadata"
+        );
+
         for (idx, part) in parts.iter().enumerate() {
             if let Some(text) = part["text"].as_str() {
                 let block_index = idx as u64;
@@ -445,9 +637,10 @@ fn parse_google_chunk(v: &serde_json::Value) -> Result<Vec<StreamChunk>> {
                 // calls in one message collide in the engine's correlation map,
                 // and made the id collide whenever one tool was called twice.
                 let block_index = idx as u64;
-                // ⚠ Captured, not ignored. Gemini attaches a `thoughtSignature`
-                // to the PART (not to the functionCall object) and **rejects
-                // the turn with a 400** when a replayed call is missing it:
+                // Preserve the provider token attached to this PART (not the
+                // functionCall object). Gemini requires the signature on the
+                // first call in a tool-call step; parallel calls may leave
+                // later parts unsigned. Keep signatures at their original part.
                 //
                 //   "Function call is missing a thought_signature in
                 //    functionCall parts. This is required for tools to work
@@ -457,10 +650,7 @@ fn parse_google_chunk(v: &serde_json::Value) -> Result<Vec<StreamChunk>> {
                 // on the second request. Found by the live smoke; no fixture
                 // could have caught it, because the captured payloads predate
                 // the requirement and go on passing forever.
-                let opaque = part
-                    .get("thoughtSignature")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string);
+                let opaque = thought_signature(part);
 
                 out.push(StreamChunk::ToolUseStart {
                     id: format!("gemini-{name}-{block_index}"),
@@ -566,10 +756,7 @@ fn parse_completion_response(data: serde_json::Value) -> Result<CompletionRespon
                         input: args,
                         // Must be echoed back verbatim on the next request or
                         // Gemini rejects the turn — see the streaming path.
-                        opaque: part
-                            .get("thoughtSignature")
-                            .and_then(|v| v.as_str())
-                            .map(str::to_string),
+                        opaque: thought_signature(part),
                     });
                 }
             }
@@ -583,6 +770,16 @@ fn parse_completion_response(data: serde_json::Value) -> Result<CompletionRespon
         usage,
         model: "gemini".to_string(),
     })
+}
+
+/// Read Google's provider-issued replay token from either JSON spelling used
+/// by REST payloads and normalized stream fixtures. Emit the canonical
+/// `thoughtSignature` spelling when constructing the next request.
+fn thought_signature(part: &serde_json::Value) -> Option<String> {
+    part.get("thoughtSignature")
+        .or_else(|| part.get("thought_signature"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
 }
 
 #[cfg(test)]

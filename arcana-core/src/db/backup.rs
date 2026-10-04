@@ -128,11 +128,12 @@ pub fn backup_database_in(
     }
 
     // Read-only on the source: VACUUM INTO neither checkpoints nor writes to it.
-    let conn = Connection::open_with_flags(
+    let mut conn = Connection::open_with_flags(
         db_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
     )
     .map_err(|e| ArcanaError::Agent(format!("Cannot open {}: {e}", db_path.display())))?;
+    crate::observability::sqlite::install_profile(&mut conn, db_path);
 
     // `VACUUM INTO` takes a string literal, not a bound parameter. The path is
     // ours (backup_root + a sanitised stem), never user input, but the quotes
@@ -186,11 +187,12 @@ pub fn backup_database_in(
     // that vanished between `VACUUM INTO` and this line fails rather than
     // being silently re-created empty and pronounced sound.
     {
-        let check = Connection::open_with_flags(
+        let mut check = Connection::open_with_flags(
             &dest,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
         .map_err(|e| ArcanaError::Agent(format!("Backup is not readable: {e}")))?;
+        crate::observability::sqlite::install_profile_for(&mut check, "backup_snapshot");
         let ok: String = check
             .query_row("PRAGMA integrity_check", [], |r| r.get(0))
             .map_err(|e| ArcanaError::Agent(format!("Backup integrity check failed: {e}")))?;
@@ -227,9 +229,9 @@ mod tests {
     use super::*;
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("arcana-backup-test-{tag}"));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("mkdir");
+        let dir =
+            std::env::temp_dir().join(format!("arcana-backup-test-{tag}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).expect("create unique isolated directory");
         dir
     }
 

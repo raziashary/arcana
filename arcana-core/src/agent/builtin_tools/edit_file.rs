@@ -202,10 +202,18 @@ impl Tool for EditFileTool {
         let new_lines = new_content.lines().count();
 
         // Phase 3.3 — snapshot current contents before overwriting.
-        crate::git::checkpoint::auto_checkpoint_before_write(
+        if let Err(message) = ctx.require_current_task_claim() {
+            return ToolResult::error(message);
+        }
+        if let Err(e) = crate::git::checkpoint::auto_checkpoint_before_write(
             &ctx.session_id,
+            ctx.task_id,
             &file_path.to_string_lossy(),
-        );
+        ) {
+            return ToolResult::error(format!(
+                "Edit refused because its recovery checkpoint failed: {e}"
+            ));
+        }
 
         if let Err(e) = fs::write(&file_path, &new_content).await {
             return ToolResult::error(format!(
@@ -275,16 +283,20 @@ mod empty_old_string_tests {
             session_id: "s1".into(),
             working_dir: dir.to_string_lossy().to_string(),
             call_id: "c1".into(),
+            run_id: None,
+            task_id: None,
             permission_mode: PermissionMode::Autonomous,
             depth: 0,
             agent_role: "supervisor".into(),
+
+            run_token_budget: None,
         }
     }
 
     fn sandbox(tag: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("arcana-editfile-{tag}"));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
+        let d =
+            std::env::temp_dir().join(format!("arcana-editfile-{tag}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&d).expect("create unique isolated test directory");
         d
     }
 
@@ -297,6 +309,8 @@ mod empty_old_string_tests {
     /// `pos + 0`), and it is closed by the same guard this asserts.
     #[tokio::test]
     async fn an_empty_old_string_is_refused_rather_than_shredding_the_file() {
+        let home = tempfile::tempdir().expect("isolated Arcana data root");
+        let _home = crate::db::test_support::with_home(home.path());
         let dir = sandbox("shred");
         let file = dir.join("src.rs");
         let original = "fn main() {\n    println!(\"hello\");\n}\n";
@@ -334,6 +348,8 @@ mod empty_old_string_tests {
     /// breaking the tool.
     #[tokio::test]
     async fn an_ordinary_edit_still_applies() {
+        let home = tempfile::tempdir().expect("isolated Arcana data root");
+        let _home = crate::db::test_support::with_home(home.path());
         let dir = sandbox("ok");
         let file = dir.join("src.rs");
         std::fs::write(&file, "let x = 1;\n").unwrap();

@@ -12,14 +12,22 @@ fn context(path: &Path) -> ToolContext {
         session_id: "s8-git-safety".into(),
         working_dir: path.to_string_lossy().into_owned(),
         call_id: "s8-git-safety-call".into(),
+        run_id: None,
         permission_mode: PermissionMode::Autonomous,
         depth: 0,
-        agent_role: "worker-backend".into(),
+        // This suite isolates the host-side Git safety boundary. Worker
+        // authorization is tested through claimed tasks in the P4 tool path.
+        agent_role: "supervisor".into(),
+        task_id: None,
+
+        run_token_budget: None,
     }
 }
 
 fn init_repo(dir: &Path) -> (Repository, String) {
-    let repo = Repository::init(dir).expect("initialize isolated repository");
+    let mut options = git2::RepositoryInitOptions::new();
+    options.initial_head("main");
+    let repo = Repository::init_opts(dir, &options).expect("initialize isolated repository");
     let mut config = repo.config().expect("repository config");
     config
         .set_str("user.name", "Arcana Smoke")
@@ -59,7 +67,10 @@ fn s8_06_host_git_tool_refuses_trunk_and_commits_only_explicit_safe_files() {
         .expect("test runtime");
     let sandbox = tempfile::tempdir().expect("isolated Git sandbox");
     let (repo, trunk) = init_repo(sandbox.path());
-    assert!(matches!(trunk.as_str(), "main" | "master"));
+    assert_eq!(
+        trunk, "main",
+        "fixture must not depend on host Git defaults"
+    );
     let trunk_before = repo.head().unwrap().target().unwrap();
 
     fs::write(sandbox.path().join("app.rs"), "fn main() { safe(); }\n").expect("write task change");
@@ -80,6 +91,26 @@ fn s8_06_host_git_tool_refuses_trunk_and_commits_only_explicit_safe_files() {
         blocked.output.contains("git_commit"),
         "give the safe path: {}",
         blocked.output
+    );
+    let alias_blocked =
+        runtime.block_on(bash.execute(json!({"command":"G=git; $G commit -m bypass"}), &ctx));
+    assert!(
+        alias_blocked.is_error,
+        "Bash must block Git mutation through a shell variable"
+    );
+    let global_options_blocked = runtime.block_on(bash.execute(
+        json!({"command":"git -C . -c a=b -c c=d -c e=f commit -m bypass"}),
+        &ctx,
+    ));
+    assert!(
+        global_options_blocked.is_error,
+        "Git global options must not hide a mutating subcommand from the host guard"
+    );
+    let plumbing_blocked =
+        runtime.block_on(bash.execute(json!({"command":"git update-index --add app.rs"}), &ctx));
+    assert!(
+        plumbing_blocked.is_error,
+        "Git index plumbing must use the same host boundary"
     );
 
     let tool = GitCommitTool;

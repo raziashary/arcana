@@ -7,6 +7,7 @@ use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 use crate::db::annotations::{AnnotationsDb, CreateAnnotationInput};
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::path::{Component, Path};
 
 pub struct AnnotateFileTool;
 
@@ -65,6 +66,10 @@ impl Tool for AnnotateFileTool {
                 return ToolResult::error("'file_path' is required and must be a non-empty string")
             }
         };
+        let file_path = match resolve_annotation_path(&file_path, &ctx.working_dir) {
+            Ok(path) => path,
+            Err(error) => return ToolResult::error(error),
+        };
         let start_line = match input["start_line"].as_i64() {
             Some(n) if n >= 1 => n,
             _ => return ToolResult::error("'start_line' must be an integer >= 1"),
@@ -113,5 +118,63 @@ impl Tool for AnnotateFileTool {
             },
             Err(e) => ToolResult::error(format!("Failed to open annotations DB: {e}")),
         }
+    }
+}
+
+fn resolve_annotation_path(file_path: &str, working_dir: &str) -> Result<String, String> {
+    let workspace = crate::platform::workspace::resolve_workspace_dir(Some(working_dir))
+        .map_err(|error| format!("Annotation workspace is unavailable: {error}"))?;
+    let supplied = Path::new(file_path);
+    if supplied.is_absolute() {
+        return Err("Annotation path must be relative to the configured workspace".into());
+    }
+    let mut normalized_parts = Vec::new();
+    for component in supplied.components() {
+        match component {
+            Component::Normal(part) => normalized_parts.push(part.to_string_lossy().into_owned()),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err("Annotation path must stay inside the configured workspace".into());
+            }
+        }
+    }
+    if normalized_parts.is_empty() {
+        return Err("Annotation path must name a file inside the configured workspace".into());
+    }
+    let normalized_input = normalized_parts.join("/");
+    super::path_jail::validate_workspace_path(
+        &workspace.join(&normalized_input),
+        &workspace.to_string_lossy(),
+    )?;
+    Ok(normalized_input)
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::*;
+
+    #[test]
+    fn annotation_paths_are_workspace_relative_and_confined() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        assert_eq!(
+            resolve_annotation_path("src/main.rs", &workspace.path().to_string_lossy()).unwrap(),
+            "src/main.rs"
+        );
+        assert!(
+            resolve_annotation_path("../outside.rs", &workspace.path().to_string_lossy()).is_err()
+        );
+        assert!(
+            resolve_annotation_path("src/../outside.rs", &workspace.path().to_string_lossy())
+                .is_err()
+        );
+        assert!(resolve_annotation_path(
+            &workspace.path().join("outside.rs").to_string_lossy(),
+            &workspace.path().to_string_lossy()
+        )
+        .unwrap_err()
+        .contains("must be relative"));
+        assert!(resolve_annotation_path("src/main.rs", ".")
+            .unwrap_err()
+            .contains("must be absolute"));
     }
 }

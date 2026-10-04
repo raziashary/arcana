@@ -211,6 +211,10 @@ impl Tool for E2eProbeTool {
         if let Err(msg) = validate_probe_url(&probe_url) {
             return ToolResult::error(msg);
         }
+        let workspace = match resolve_probe_workspace(&ctx.working_dir) {
+            Ok(workspace) => workspace,
+            Err(error) => return ToolResult::error(error),
+        };
 
         let expected = match input["expected_text"].as_str() {
             Some(s) if !s.trim().is_empty() => s.to_string(),
@@ -231,7 +235,7 @@ impl Tool for E2eProbeTool {
         // Run the whole probe under a single timeout. The teardown runs even
         // on timeout because the spawned children are owned by this future.
         let probe = run_probe(
-            ctx.working_dir.clone(),
+            workspace,
             start_cmds,
             probe_url.clone(),
             expected.clone(),
@@ -262,6 +266,29 @@ impl Tool for E2eProbeTool {
                 total_timeout.as_secs(),
             )),
         }
+    }
+}
+
+fn resolve_probe_workspace(working_dir: &str) -> Result<String, String> {
+    crate::platform::workspace::resolve_workspace_dir(Some(working_dir))
+        .map(|path| path.to_string_lossy().into_owned())
+        .map_err(|error| format!("End-to-end probe workspace is unavailable: {error}"))
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::*;
+
+    #[test]
+    fn probe_requires_an_existing_absolute_workspace() {
+        assert!(resolve_probe_workspace(".")
+            .unwrap_err()
+            .contains("must be absolute"));
+        let workspace = tempfile::tempdir().expect("workspace");
+        assert_eq!(
+            resolve_probe_workspace(&workspace.path().to_string_lossy()).unwrap(),
+            workspace.path().canonicalize().unwrap().to_string_lossy()
+        );
     }
 }
 

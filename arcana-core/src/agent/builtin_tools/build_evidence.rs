@@ -1,33 +1,14 @@
-// Doc 09 T2.4 — build evidence tracker.
+// Doc 09 T2.4 — task-associated build evidence.
 //
-// Records bash invocations that look like build / test / smoke commands so
-// `update_task_status_tool` can reject `qc_review` transitions whose
-// session has produced no evidence of an actual build.
-//
-// Why a module-level tracker instead of plumbing the tool history through
-// ToolContext: the agent loop invokes tools without exposing a shared
-// transcript to the tool layer.
-// We don't need accuracy — we need a directional "did this session run a
-// build in the last few minutes?" signal. A small in-memory ring keyed by
-// session_id with a TTL is enough.
-//
-// Each entry carries the matched command + exit code so we can also veto
-// `qc_review` when the most recent build *failed* (exit != 0). That alone
-// would have caught the calendar run's `"build": "node -c …"` bug —
-// `-c` is a Bash flag, not a Node flag, so it errored 255 every time.
-
-use crate::state::lock::LockTolerant;
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
-
-/// Build evidence stays in the tracker for 15 minutes. Long enough for a
-/// worker tick (build → write artefact → smoke → commit → status update),
-/// short enough that a stale claim from a previous task doesn't leak.
-pub const EVIDENCE_TTL: Duration = Duration::from_secs(15 * 60);
+// The Rust-owned `project_command` records build/test/lint results only after
+// it spawns the selected toolchain command and observes its exit status.
+// Results are persisted in the task database, keyed to the worker's unique
+// in-progress task, so `update_task_status_tool` can refuse `qc_review` when
+// evidence is missing, belongs to another task, is unattributable, or failed.
 
 #[derive(Debug, Clone)]
 pub struct BuildEvidence {
+    pub task_id: i64,
     pub session_id: String,
     pub command: String,
     pub exit_code: i32,
@@ -41,8 +22,10 @@ pub struct BuildEvidence {
     /// mandatory, which turned a dormant hole into an active one. Found by the
     /// P0 post-phase audit (F-23).
     pub exit_code_attributable: bool,
-    pub recorded_at: Instant,
+    pub recorded_at: String,
     pub kind: BuildEvidenceKind,
+    pub workspace_path: Option<String>,
+    pub workspace_fingerprint: Option<String>,
 }
 
 /// Whether a shell command's exit status belongs to the command we classified.
@@ -67,6 +50,8 @@ pub enum BuildEvidenceKind {
     Cargo,
     /// `uv run pytest`, `uv sync`, `pytest`, `python -m pytest`, `py.test`
     Python,
+    /// `make build`, `make test`, `make lint`, `make run`
+    Make,
     /// `go test`, `go build`
     Go,
     /// `timeout … npm run dev` etc. — the T2.3 smoke probe
@@ -81,13 +66,9 @@ impl BuildEvidenceKind {
             Self::Python => "python",
             Self::Go => "go",
             Self::Smoke => "smoke",
+            Self::Make => "make",
         }
     }
-}
-
-fn ring() -> &'static Mutex<HashMap<String, Vec<BuildEvidence>>> {
-    static RING: OnceLock<Mutex<HashMap<String, Vec<BuildEvidence>>>> = OnceLock::new();
-    RING.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// Classify a bash command string. Returns None when the command isn't
@@ -235,62 +216,350 @@ pub fn classify(command: &str) -> Option<BuildEvidenceKind> {
     None
 }
 
-/// Record a bash invocation. Idempotent — multiple records of the same
-/// command back-to-back are not deduplicated; the GC just sweeps the
-/// expired ones out on the next read.
-pub fn record(session_id: &str, command: &str, exit_code: i32) {
-    let Some(kind) = classify(command) else {
-        return;
-    };
-    let evidence = BuildEvidence {
-        session_id: session_id.to_string(),
-        command: command.chars().take(200).collect(),
+/// Persist a completed platform-owned build/test/lint invocation against the
+/// worker's claimed task. Callers must invoke this only after the spawned
+/// process returns an observed exit code.
+pub fn record_result_for_worker(
+    worker_slug: &str,
+    session_id: &str,
+    workspace_path: &std::path::Path,
+    command: &str,
+    exit_code: i32,
+    kind: BuildEvidenceKind,
+) -> Option<i64> {
+    let result = (|| {
+        let db = crate::db::tasks::TasksDb::open()?;
+        record_for_worker_in(
+            &db,
+            worker_slug,
+            session_id,
+            workspace_path,
+            command,
+            exit_code,
+            kind,
+        )
+    })();
+    match result {
+        Ok(streak) => streak,
+        Err(error) => {
+            tracing::warn!(
+                "[BuildEvidence] could not persist build result for worker '{worker_slug}': {error}"
+            );
+            None
+        }
+    }
+}
+
+/// Persist all spawned build exits from one deterministic command invocation.
+/// Returns true when the observed failure sequence reached the diagnostic
+/// threshold of three consecutive nonzero exits.
+pub fn record_results_for_worker(
+    worker_slug: &str,
+    session_id: &str,
+    workspace_path: &std::path::Path,
+    attempts: &[(String, i32, BuildEvidenceKind, Option<String>)],
+    aggregate_failure: Option<usize>,
+) -> crate::errors::Result<Option<bool>> {
+    let db = crate::db::tasks::TasksDb::open()?;
+    let persisted = attempts
+        .iter()
+        .map(|(command, exit_code, kind, fingerprint)| {
+            (
+                command.chars().take(200).collect::<String>(),
+                *exit_code,
+                kind.as_str().to_owned(),
+                Some(workspace_path.to_string_lossy().into_owned()),
+                fingerprint.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    db.record_build_attempts_with_workspace_for_worker(
+        worker_slug,
+        session_id,
+        &persisted,
+        aggregate_failure,
+    )
+    .map(|result| result.map(|(_, _, diagnostic_reached)| diagnostic_reached))
+}
+
+pub fn begin_project_build_batch_for_worker(
+    worker_slug: &str,
+    session_id: &str,
+    workspace_path: &std::path::Path,
+    expected_count: usize,
+    workspace_fingerprint: Option<&str>,
+) -> crate::errors::Result<Option<crate::db::tasks::ProjectBuildBatch>> {
+    let db = crate::db::tasks::TasksDb::open()?;
+    db.begin_project_build_batch_for_worker(
+        worker_slug,
+        session_id,
+        expected_count,
+        &workspace_path.to_string_lossy(),
+        workspace_fingerprint,
+    )
+}
+
+pub fn finish_project_build_batch_for_worker(
+    batch_id: i64,
+    worker_slug: &str,
+    session_id: &str,
+    workspace_path: &std::path::Path,
+    attempts: &[(String, i32, BuildEvidenceKind, Option<String>)],
+    aggregate_failure: Option<usize>,
+    all_children_completed: bool,
+) -> crate::errors::Result<Option<bool>> {
+    let db = crate::db::tasks::TasksDb::open()?;
+    let persisted = attempts
+        .iter()
+        .map(|(command, exit_code, kind, fingerprint)| {
+            (
+                command.chars().take(200).collect::<String>(),
+                *exit_code,
+                kind.as_str().to_owned(),
+                Some(workspace_path.to_string_lossy().into_owned()),
+                fingerprint.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    db.finish_project_build_batch_for_worker(
+        batch_id,
+        worker_slug,
+        session_id,
+        &persisted,
+        aggregate_failure,
+        all_children_completed,
+    )
+    .map(|result| result.map(|(_, _, diagnostic_reached)| diagnostic_reached))
+}
+
+/// Ensures an in-flight build batch stops authorizing QC if its caller is
+/// cancelled or unwinds before normal evidence finalization. Completed child
+/// exits are retained in memory and persisted as observed evidence on drop;
+/// missing children remain missing rather than receiving fabricated exits.
+pub(super) struct ProjectBuildBatchCancellationGuard {
+    batch_id: i64,
+    worker_slug: String,
+    session_id: String,
+    workspace_path: std::path::PathBuf,
+    attempts: Vec<(String, i32, BuildEvidenceKind, Option<String>)>,
+    armed: bool,
+}
+
+impl ProjectBuildBatchCancellationGuard {
+    pub(super) fn new(
+        batch_id: i64,
+        worker_slug: &str,
+        session_id: &str,
+        workspace_path: &std::path::Path,
+    ) -> Self {
+        Self {
+            batch_id,
+            worker_slug: worker_slug.to_owned(),
+            session_id: session_id.to_owned(),
+            workspace_path: workspace_path.to_path_buf(),
+            attempts: Vec::new(),
+            armed: true,
+        }
+    }
+
+    pub(super) fn record_observed_exit(
+        &mut self,
+        command: &str,
+        exit_code: i32,
+        kind: BuildEvidenceKind,
+        fingerprint: Option<String>,
+    ) {
+        self.attempts
+            .push((command.to_owned(), exit_code, kind, fingerprint));
+    }
+
+    pub(super) fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for ProjectBuildBatchCancellationGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        // Drop also runs when the async caller is cancelled, where no await is
+        // available. The existing DB API uses a short SQLite transaction and
+        // marks this batch failed/incomplete without inventing a child result.
+        match finish_project_build_batch_for_worker(
+            self.batch_id,
+            &self.worker_slug,
+            &self.session_id,
+            &self.workspace_path,
+            &self.attempts,
+            None,
+            false,
+        ) {
+            Ok(Some(_)) => {}
+            Ok(None) => tracing::warn!(
+                target: "arcana::build_evidence",
+                batch_id = self.batch_id,
+                "cancelled project build batch was already finalized or unavailable"
+            ),
+            Err(_) => tracing::error!(
+                target: "arcana::build_evidence",
+                batch_id = self.batch_id,
+                "could not persist cancellation outcome for project build batch"
+            ),
+        }
+    }
+}
+
+pub(super) fn record_for_worker_in(
+    db: &crate::db::tasks::TasksDb,
+    worker_slug: &str,
+    session_id: &str,
+    workspace_path: &std::path::Path,
+    command: &str,
+    exit_code: i32,
+    kind: BuildEvidenceKind,
+) -> crate::errors::Result<Option<i64>> {
+    let workspace_fingerprint =
+        crate::platform::workspace_fingerprint::fingerprint(workspace_path).ok();
+    let attempts = [(
+        command.chars().take(200).collect::<String>(),
         exit_code,
-        exit_code_attributable: exit_code_is_attributable(command),
-        recorded_at: Instant::now(),
-        kind,
-    };
-    let mut map = ring().lock_tolerant();
-    map.entry(session_id.to_string())
-        .or_default()
-        .push(evidence);
+        kind.as_str().to_owned(),
+        Some(workspace_path.to_string_lossy().into_owned()),
+        workspace_fingerprint,
+    )];
+    let recorded = db.record_build_attempts_with_workspace_for_worker(
+        worker_slug,
+        session_id,
+        &attempts,
+        None,
+    )?;
+    Ok(recorded.map(|(_, consecutive_failures, _)| consecutive_failures))
 }
 
-/// Return the most-recent build evidence (excluding smoke) for a session,
-/// or None when nothing fresh is on file. Sweeps expired entries as a
-/// side effect.
-pub fn most_recent_build(session_id: &str) -> Option<BuildEvidence> {
-    let now = Instant::now();
-    let mut map = ring().lock_tolerant();
-    let Some(entries) = map.get_mut(session_id) else {
-        return None;
-    };
-    entries.retain(|e| now.duration_since(e.recorded_at) < EVIDENCE_TTL);
-    entries
-        .iter()
-        .filter(|e| e.kind != BuildEvidenceKind::Smoke)
-        .max_by_key(|e| e.recorded_at)
-        .cloned()
+pub fn most_recent_build(task_id: i64) -> crate::errors::Result<Option<BuildEvidence>> {
+    let db = crate::db::tasks::TasksDb::open()?;
+    most_recent_build_in(&db, task_id)
 }
 
-/// Return the most-recent smoke evidence for a session.
-pub fn most_recent_smoke(session_id: &str) -> Option<BuildEvidence> {
-    let now = Instant::now();
-    let mut map = ring().lock_tolerant();
-    let Some(entries) = map.get_mut(session_id) else {
-        return None;
-    };
-    entries.retain(|e| now.duration_since(e.recorded_at) < EVIDENCE_TTL);
-    entries
-        .iter()
-        .filter(|e| e.kind == BuildEvidenceKind::Smoke)
-        .max_by_key(|e| e.recorded_at)
-        .cloned()
+pub fn qc_gate_error(task_id: i64) -> crate::errors::Result<Option<String>> {
+    let db = crate::db::tasks::TasksDb::open()?;
+    qc_gate_error_in(&db, task_id)
 }
+
+pub fn qc_gate_error_for_workspace(
+    task_id: i64,
+    selected_workspace: &std::path::Path,
+) -> crate::errors::Result<Option<String>> {
+    let db = crate::db::tasks::TasksDb::open()?;
+    qc_gate_error_in_for_workspace(&db, task_id, Some(selected_workspace))
+}
+
+pub(crate) fn qc_gate_error_in(
+    db: &crate::db::tasks::TasksDb,
+    task_id: i64,
+) -> crate::errors::Result<Option<String>> {
+    qc_gate_error_in_for_workspace(db, task_id, None)
+}
+
+pub(crate) fn qc_gate_error_in_for_workspace(
+    db: &crate::db::tasks::TasksDb,
+    task_id: i64,
+    selected_workspace: Option<&std::path::Path>,
+) -> crate::errors::Result<Option<String>> {
+    let batch = db.latest_project_build_batch_status(task_id)?;
+    Ok(match batch {
+        None => Some(format!(
+            "Cannot move task to qc_review without a complete project build batch for task #{task_id}."
+        )),
+        Some((outcome, expected, observed, passing, path, fingerprint, evidence_rows, bad_rows, _))
+            if outcome != "passed"
+                || expected <= 0
+                || observed != expected
+                || passing != expected
+                || evidence_rows != expected
+                || bad_rows != 0
+                || !fingerprint.as_ref().is_some_and(|expected| {
+                    crate::platform::workspace_fingerprint::fingerprint(
+                        std::path::Path::new(&path),
+                    )
+                    .is_ok_and(|actual| actual == *expected)
+                }) =>
+        {
+            Some("The latest project build batch is incomplete, failing, or no longer matches the current workspace. Rerun project_command(intent='build') after checking the selected workspace.".to_string())
+        }
+        Some((_, _, _, _, path, _, _, _, _))
+            if !selected_workspace.is_some_and(|selected| {
+                crate::platform::workspace::workspace_identity(selected)
+                    .is_ok_and(|selected| {
+                        crate::platform::workspace::workspace_identity(
+                            std::path::Path::new(&path),
+                        )
+                        .is_ok_and(|batch| selected == batch)
+                    })
+            }) =>
+        {
+            Some("The latest passing batch belongs to a different or unverified selected workspace. Run project_command(intent='build') in the workspace currently selected for this task.".to_string())
+        }
+        Some(_) => None,
+    })
+}
+
+pub(crate) fn most_recent_build_in(
+    db: &crate::db::tasks::TasksDb,
+    task_id: i64,
+) -> crate::errors::Result<Option<BuildEvidence>> {
+    db.latest_build_evidence(task_id).map(|row| {
+        row.map(|row| BuildEvidence {
+            task_id: row.task_id,
+            session_id: row.session_id,
+            command: row.command,
+            exit_code: row.exit_code,
+            exit_code_attributable: row.exit_code_attributable,
+            recorded_at: row.created_at,
+            kind: BuildEvidenceKind::from_str(&row.kind),
+            workspace_path: row.workspace_path,
+            workspace_fingerprint: row.workspace_fingerprint,
+        })
+    })
+}
+
+impl BuildEvidenceKind {
+    fn from_str(kind: &str) -> Self {
+        match kind {
+            "node" => Self::Node,
+            "cargo" => Self::Cargo,
+            "python" => Self::Python,
+            "go" => Self::Go,
+            "smoke" => Self::Smoke,
+            "make" => Self::Make,
+            _ => unreachable!("database CHECK constraint restricts evidence kind"),
+        }
+    }
+}
+
+/*
+ * Historical session-scoped, process-local evidence was removed. The database
+ * query intentionally keys by task, so records from a different task or a
+ * restarted application cannot satisfy the QC gate.
+ */
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn create_task(db: &crate::db::tasks::TasksDb, title: &str) -> i64 {
+        db.create(crate::db::tasks::CreateTaskInput {
+            title: title.into(),
+            description: None,
+            priority: "p2".into(),
+            task_type: "feature".into(),
+            acceptance_criteria: "build".into(),
+            created_by: None,
+        })
+        .unwrap()
+        .id
+    }
 
     #[test]
     fn classifies_npm_build() {
@@ -328,18 +597,194 @@ mod tests {
 
     #[test]
     fn round_trip_record_and_recall() {
-        let sid = "test-session-xyz";
-        record(sid, "npm run build && echo done", 0);
-        let recalled = most_recent_build(sid).expect("should have evidence");
+        let path =
+            std::env::temp_dir().join(format!("arcana-build-evidence-{}.db", uuid::Uuid::new_v4()));
+        let db = crate::db::tasks::TasksDb::open_at(&path).unwrap();
+        let task = db
+            .create(crate::db::tasks::CreateTaskInput {
+                title: "build evidence".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "build".into(),
+                created_by: None,
+            })
+            .unwrap();
+        db.insert_build_evidence(task.id, "test-session", "npm run build", 0, true, "node")
+            .unwrap();
+        drop(db);
+        let db = crate::db::tasks::TasksDb::open_at(&path).unwrap();
+        let recalled = most_recent_build_in(&db, task.id)
+            .unwrap()
+            .expect("should have evidence");
         assert_eq!(recalled.kind, BuildEvidenceKind::Node);
         assert_eq!(recalled.exit_code, 0);
+        assert_eq!(recalled.task_id, task.id);
+        assert_eq!(recalled.session_id, "test-session");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn completed_process_is_persisted_for_the_claimed_task_and_consumed_after_reopen() {
+        let path = std::env::temp_dir().join(format!(
+            "arcana-build-worker-evidence-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let db = crate::db::tasks::TasksDb::open_at(&path).unwrap();
+        let task_id = create_task(&db, "claimed build");
+        db.update_status(task_id, "assigned", Some("worker-backend"))
+            .unwrap();
+        db.claim_task_with_pid(task_id, "worker-backend", 1234)
+            .unwrap();
+        assert_eq!(
+            record_for_worker_in(
+                &db,
+                "worker-backend",
+                "worker-session",
+                &std::env::current_dir().unwrap(),
+                "cargo test --all-targets",
+                0,
+                BuildEvidenceKind::Cargo
+            )
+            .unwrap(),
+            Some(0)
+        );
+        let (workspace, fingerprint) = crate::db::tasks::synthetic_build_evidence_workspace();
+        let workspace_path = workspace.to_string_lossy().into_owned();
+        let batch = db
+            .begin_project_build_batch_for_worker(
+                "worker-backend",
+                "worker-session",
+                1,
+                &workspace_path,
+                Some(fingerprint),
+            )
+            .unwrap()
+            .expect("claimed task starts an attributable project batch");
+        db.finish_project_build_batch_for_worker(
+            batch.id,
+            "worker-backend",
+            "worker-session",
+            &[(
+                "cargo test --all-targets".into(),
+                0,
+                "cargo".into(),
+                Some(workspace_path),
+                Some(fingerprint.clone()),
+            )],
+            None,
+            true,
+        )
+        .unwrap()
+        .expect("persist the observed passing project build");
+        drop(db);
+
+        let reopened = crate::db::tasks::TasksDb::open_at(&path).unwrap();
+        let evidence = most_recent_build_in(&reopened, task_id)
+            .unwrap()
+            .expect("durable evidence survives database reopen");
+        assert_eq!(evidence.task_id, task_id);
+        assert_eq!(evidence.session_id, "worker-session");
+        assert_eq!(evidence.exit_code, 0);
+        assert_eq!(
+            qc_gate_error_in_for_workspace(
+                &reopened,
+                task_id,
+                Some(&crate::db::tasks::synthetic_build_evidence_workspace().0),
+            )
+            .unwrap(),
+            None
+        );
+        assert!(qc_gate_error_in(&reopened, task_id + 1).unwrap().is_some());
+        drop(reopened);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn qc_gate_refuses_failed_or_unattributable_legacy_batches() {
+        let path =
+            std::env::temp_dir().join(format!("arcana-build-gate-{}.db", uuid::Uuid::new_v4()));
+        let db = crate::db::tasks::TasksDb::open_at(&path).unwrap();
+        let task_id = create_task(&db, "failing build");
+        db.insert_build_evidence(task_id, "s1", "npm run build", 1, true, "node")
+            .unwrap();
+        let error = qc_gate_error_in_for_workspace(
+            &db,
+            task_id,
+            Some(&crate::db::tasks::synthetic_build_evidence_workspace().0),
+        )
+        .unwrap()
+        .expect("legacy result cannot satisfy current batch contract");
+        assert!(
+            error.contains("latest project build batch is incomplete"),
+            "unexpected QC error: {error}"
+        );
+        db.insert_build_evidence(task_id, "s1", "npm run build | tee log", 0, false, "node")
+            .unwrap();
+        assert!(qc_gate_error_in_for_workspace(
+            &db,
+            task_id,
+            Some(&crate::db::tasks::synthetic_build_evidence_workspace().0),
+        )
+        .unwrap()
+        .unwrap()
+        .contains("latest project build batch is incomplete"));
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn evidence_requires_one_in_progress_task_for_the_worker() {
+        let path = std::env::temp_dir().join(format!(
+            "arcana-build-task-resolution-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let db = crate::db::tasks::TasksDb::open_at(&path).unwrap();
+        assert_eq!(
+            record_for_worker_in(
+                &db,
+                "worker-backend",
+                "s1",
+                &std::env::current_dir().unwrap(),
+                "cargo test",
+                0,
+                BuildEvidenceKind::Cargo
+            )
+            .unwrap(),
+            None
+        );
+        let first = create_task(&db, "one");
+        let second = create_task(&db, "two");
+        db.update_status(first, "assigned", Some("worker-backend"))
+            .unwrap();
+        db.claim_task_with_pid(first, "worker-backend", (first + 100) as u32)
+            .unwrap();
+        db.update_status(second, "assigned", Some("worker-backend"))
+            .unwrap();
+        // The shared atomic claim API prevents a second active task. Direct
+        // SQL is outside that API contract, so exercise the supported claim
+        // boundary rather than expecting the metadata trigger to enforce load.
+        assert!(db
+            .claim_task_with_pid(second, "worker-backend", 9999)
+            .is_err());
+        assert!(record_for_worker_in(
+            &db,
+            "worker-backend",
+            "s1",
+            &std::env::current_dir().unwrap(),
+            "cargo test",
+            0,
+            BuildEvidenceKind::Cargo
+        )
+        .unwrap()
+        .is_some());
+        drop(db);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn skips_unclassified_commands() {
-        let sid = "test-skip-session";
-        record(sid, "ls -la", 0);
-        assert!(most_recent_build(sid).is_none());
+        assert_eq!(classify("ls -la"), None);
     }
 }
 

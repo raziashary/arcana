@@ -10,6 +10,238 @@
 // cargo feature.
 
 use super::*;
+use crate::provider::types::RequestMessage;
+
+#[test]
+fn count_tokens_error_summary_keeps_only_safe_status_and_field_paths() {
+    let summary = safe_google_error_summary(
+        br#"{"error":{"code":400,"status":"INVALID_ARGUMENT","message":"private prompt must never leak","details":[{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":[{"field":"generateContentRequest.tools[0]","description":"private tool schema must never leak"},{"field":"unsafe\nfield"}]}]}}"#,
+    );
+    assert_eq!(
+        summary,
+        "INVALID_ARGUMENT fields=generateContentRequest.tools[0]"
+    );
+    assert!(!summary.contains("private"));
+    assert!(!summary.contains("unsafe"));
+}
+
+#[tokio::test]
+async fn count_tokens_uses_the_exact_generation_body_before_generation() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind countTokens fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::task::spawn_blocking(move || {
+        let (mut stream, _) = listener.accept().expect("accept countTokens request");
+        let mut reader = BufReader::new(stream.try_clone().expect("clone fixture stream"));
+        let mut request_line = String::new();
+        reader
+            .read_line(&mut request_line)
+            .expect("read HTTP request line");
+        let mut content_length = 0usize;
+        let mut saw_api_key = false;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("read HTTP header");
+            if line == "\r\n" || line.is_empty() {
+                break;
+            }
+            if let Some((name, value)) = line.split_once(':') {
+                if name.eq_ignore_ascii_case("content-length") {
+                    content_length = value.trim().parse().expect("content length");
+                }
+                if name.eq_ignore_ascii_case("x-goog-api-key") && value.trim() == "test-secret" {
+                    saw_api_key = true;
+                }
+            }
+        }
+        let mut body = vec![0; content_length];
+        reader
+            .read_exact(&mut body)
+            .expect("read JSON request body");
+        let status_body = r#"{"totalTokens":321}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            status_body.len(),
+            status_body
+        )
+        .expect("write countTokens response");
+        stream.flush().expect("flush fixture response");
+        (request_line, saw_api_key, body)
+    });
+
+    let request = CompletionRequest {
+        model: "gemini-3.8-flash".to_string(),
+        messages: vec![RequestMessage {
+            role: "user".to_string(),
+            content: vec![MessageContent::Text {
+                text: "count this exact prompt".to_string(),
+            }],
+        }],
+        system: Some("system contract".to_string()),
+        tools: vec![crate::provider::types::ToolDefinition {
+            name: "read_file".to_string(),
+            description: "Read a workspace file".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {"path": {"type": "string"}}
+            }),
+        }],
+        max_tokens: 2048,
+        temperature: Some(0.2),
+        top_p: None,
+        reasoning_effort: None,
+        thinking_budget_tokens: Some(512),
+        cache: crate::provider::usage::CachePolicy::Off,
+        clear_tool_uses: None,
+    };
+    let mut expected_generation_body =
+        GoogleProvider::new("test-secret".to_string()).build_body_for_test(&request, false);
+    expected_generation_body["model"] = serde_json::json!("models/gemini-3.8-flash");
+    let provider = GoogleProvider::new_at("test-secret".to_string(), format!("http://{address}"));
+    assert_eq!(
+        provider
+            .input_token_upper_bound(&request)
+            .await
+            .expect("countTokens response"),
+        321
+    );
+
+    let (request_line, saw_api_key, body) = server.await.expect("fixture task");
+    assert!(request_line.contains("/v1beta/models/gemini-3.8-flash:countTokens"));
+    assert!(
+        !request_line.contains("test-secret"),
+        "API key stays out of URL"
+    );
+    assert!(saw_api_key, "API key uses the dedicated request header");
+    let request_body: serde_json::Value = serde_json::from_slice(&body).expect("JSON body");
+    assert_eq!(
+        request_body["generateContentRequest"],
+        expected_generation_body
+    );
+    assert_eq!(
+        request_body["generateContentRequest"]["model"],
+        "models/gemini-3.8-flash"
+    );
+}
+
+#[tokio::test]
+async fn count_tokens_rejects_invalid_response_without_exposing_body() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind countTokens fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::task::spawn_blocking(move || {
+        let (mut stream, _) = listener.accept().expect("accept countTokens request");
+        let mut reader = BufReader::new(stream.try_clone().expect("clone fixture stream"));
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("read request line");
+        loop {
+            line.clear();
+            reader.read_line(&mut line).expect("read header");
+            if line == "\r\n" || line.is_empty() {
+                break;
+            }
+        }
+        let mut drain = [0u8; 2048];
+        let _ = reader.read(&mut drain);
+        let status_body = r#"{"provider_private_text":"do not leak"}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            status_body.len(),
+            status_body
+        )
+        .expect("write invalid response");
+        stream.flush().expect("flush fixture response");
+    });
+
+    let mut request = CompletionRequest {
+        model: "gemini-3.8-flash".to_string(),
+        messages: vec![],
+        system: None,
+        tools: vec![],
+        max_tokens: 128,
+        temperature: None,
+        top_p: None,
+        reasoning_effort: None,
+        thinking_budget_tokens: None,
+        cache: crate::provider::usage::CachePolicy::Off,
+        clear_tool_uses: None,
+    };
+    request.system = Some("private request".into());
+    let provider = GoogleProvider::new_at("test-secret".to_string(), format!("http://{address}"));
+    let error = provider
+        .input_token_upper_bound(&request)
+        .await
+        .expect_err("missing totalTokens must fail closed");
+    assert!(!error.to_string().contains("do not leak"));
+    server.await.expect("fixture task");
+}
+
+#[tokio::test]
+async fn count_tokens_stops_reading_an_oversized_response_at_the_bound() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind oversized response fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::task::spawn_blocking(move || {
+        let (mut stream, _) = listener.accept().expect("accept countTokens request");
+        let mut reader = BufReader::new(stream.try_clone().expect("clone fixture stream"));
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("read request line");
+        let mut content_length = 0usize;
+        loop {
+            line.clear();
+            reader.read_line(&mut line).expect("read request headers");
+            if line == "\r\n" || line.is_empty() {
+                break;
+            }
+            if let Some((name, value)) = line.split_once(':') {
+                if name.eq_ignore_ascii_case("content-length") {
+                    content_length = value.trim().parse().expect("content length");
+                }
+            }
+        }
+        let mut request_body = vec![0; content_length];
+        reader
+            .read_exact(&mut request_body)
+            .expect("read request JSON");
+        let body = "x".repeat(MAX_COUNT_TOKENS_RESPONSE_BYTES + 1);
+        let _ = write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = stream.flush();
+    });
+
+    let request = CompletionRequest {
+        model: "gemini-3.8-flash".into(),
+        messages: vec![],
+        system: None,
+        tools: vec![],
+        max_tokens: 128,
+        temperature: None,
+        top_p: None,
+        reasoning_effort: None,
+        thinking_budget_tokens: None,
+        cache: crate::provider::usage::CachePolicy::Off,
+        clear_tool_uses: None,
+    };
+    let provider = GoogleProvider::new_at("test-secret".into(), format!("http://{address}"));
+    let error = provider
+        .input_token_upper_bound(&request)
+        .await
+        .expect_err("oversized response must be bounded");
+    assert!(error.to_string().contains("safe response bound"));
+    server.await.expect("fixture task");
+}
 
 #[test]
 fn native_thought_parts_are_not_emitted_as_visible_text() {
@@ -249,9 +481,8 @@ fn an_empty_candidate_list_yields_nothing_rather_than_panicking() {
 fn a_tool_calls_thought_signature_survives_the_round_trip() {
     // 🔴 Found live on 2026-09-02, and unfindable from fixtures alone.
     //
-    // Gemini attaches a `thoughtSignature` to each `functionCall` part and
-    // REJECTS the next request with a 400 if it is missing when the call is
-    // replayed:
+    // The signature is attached to the part, not the functionCall object.
+    // Gemini requires it on the first call in a tool-call step:
     //
     //   "Function call is missing a thought_signature in functionCall parts.
     //    This is required for tools to work correctly."
@@ -278,6 +509,48 @@ fn a_tool_calls_thought_signature_survives_the_round_trip() {
         Some("CtEBAVKm-sig-xyz"),
         "the signature must be captured, or the next request is rejected outright"
     );
+}
+
+#[test]
+fn snake_case_thought_signature_is_normalized_and_replayed_on_the_part() {
+    let chunks = parse_google_sse_line(&sse(
+        r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"read_file","args":{"path":"a.rs"}},"thought_signature":"opaque-token"}]}}]}"#,
+    ))
+    .expect("parse");
+    let StreamChunk::ToolUseStart { opaque, .. } = chunks
+        .iter()
+        .find(|chunk| matches!(chunk, StreamChunk::ToolUseStart { .. }))
+        .expect("tool call")
+    else {
+        unreachable!()
+    };
+    assert_eq!(opaque.as_deref(), Some("opaque-token"));
+
+    let request = CompletionRequest {
+        model: "test-model".to_string(),
+        messages: vec![RequestMessage {
+            role: "assistant".to_string(),
+            content: vec![MessageContent::ToolUse {
+                id: "call-1".to_string(),
+                name: "read_file".to_string(),
+                input: serde_json::json!({"path":"a.rs"}),
+                opaque: Some("opaque-token".to_string()),
+            }],
+        }],
+        system: None,
+        tools: vec![],
+        max_tokens: 1024,
+        temperature: None,
+        top_p: None,
+        reasoning_effort: None,
+        thinking_budget_tokens: None,
+        cache: crate::provider::usage::CachePolicy::Off,
+        clear_tool_uses: None,
+    };
+    let body = GoogleProvider::new(String::new()).build_body_for_test(&request, false);
+    let replayed_part = &body["contents"][0]["parts"][0];
+    assert_eq!(replayed_part["thoughtSignature"], "opaque-token");
+    assert!(replayed_part["functionCall"]["thoughtSignature"].is_null());
 }
 
 #[test]

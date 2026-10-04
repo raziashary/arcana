@@ -1,13 +1,10 @@
-// The retry policy `ErrorClass::Retryable` never had (P3-09, GAP-12).
+// The typed retry policy consuming `ErrorClass` was added for P3-09 / GAP-12.
 //
 // ── Why there was none ───────────────────────────────────────────────────────
 //
-// `ErrorClass` distinguishes `Retryable` from `Fatal` and `QuotaExhausted`, and
-// the code says twice that no policy consumes it (`usage.rs`, `ci_gate.rs`).
-// Worse than absent: `classify()` was called, `Debug`-formatted into the error
-// **string**, and discarded — so a retry loop written today would have to
-// string-match `[Retryable]` back out of a message. That is `F-5` from the P2
-// audit, deferred to exactly here.
+// `ErrorClass` distinguishes `Retryable` from `Fatal` and `QuotaExhausted`.
+// This module consumes the classification directly rather than recovering it
+// from provider error text.
 //
 // ── The rule that makes this dangerous to get wrong ──────────────────────────
 //
@@ -102,12 +99,21 @@ where
 {
     let mut attempt = 1u32;
     loop {
+        let attempt_started = std::time::Instant::now();
         match op().await {
             Ok(v) => return Ok(v),
             Err(e) => {
                 let class = classify(&e);
                 match decide(class.clone(), attempt) {
                     RetryDecision::RetryAfter(delay) => {
+                        tracing::info!(
+                            target: "arcana::telemetry",
+                            event_type = "provider_retry",
+                            attempt,
+                            duration_ns = attempt_started.elapsed().as_nanos() as u64,
+                            outcome = "retrying",
+                            "Provider attempt will be retried"
+                        );
                         tracing::warn!(
                             "attempt {attempt}/{MAX_ATTEMPTS} failed ({class:?}); retrying in \
                              {}ms: {e}",
@@ -117,6 +123,14 @@ where
                         attempt += 1;
                     }
                     RetryDecision::Stop(why) => {
+                        tracing::info!(
+                            target: "arcana::telemetry",
+                            event_type = "provider_retry",
+                            attempt,
+                            duration_ns = attempt_started.elapsed().as_nanos() as u64,
+                            outcome = "stopped",
+                            "Provider retry policy stopped"
+                        );
                         if matches!(why, StopReason::QuotaExhausted) {
                             tracing::error!(
                                 "not retrying: the provider reports quota or credit \

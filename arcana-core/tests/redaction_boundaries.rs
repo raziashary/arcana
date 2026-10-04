@@ -25,9 +25,11 @@ static HOME_LOCK: Mutex<()> = Mutex::new(());
 const SECRET: &str = "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEYZ1";
 
 fn sandbox(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("arcana-redaction-boundary-{tag}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(dir.join(".arcana")).expect("mkdir");
+    let dir = std::env::temp_dir().join(format!(
+        "arcana-redaction-boundary-{tag}-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(dir.join(".arcana")).expect("create unique isolated test directory");
     dir
 }
 

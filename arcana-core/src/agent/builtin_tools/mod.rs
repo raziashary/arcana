@@ -34,9 +34,12 @@ pub mod write_interface_spec;
 pub mod append_file;
 pub mod check_file;
 pub mod e2e_probe;
+pub mod external_mcp;
 pub mod get_memory;
 pub mod list_memories;
+pub mod project_command;
 pub mod propose_memory;
+pub mod reconcile_worker_operation;
 pub mod request_supervisor_action;
 pub mod search_memory;
 pub mod validate;
@@ -71,6 +74,8 @@ pub mod resolve_worker_request_tool;
 // existing budget / orphan / build-evidence machinery because the target
 // worker reads its inbox during its own scheduled tick, not out-of-band.
 pub mod acknowledge_worker_message;
+pub mod list_stale_worker_messages;
+pub mod list_worker_health;
 pub mod list_worker_messages;
 pub mod send_worker_message;
 
@@ -114,6 +119,9 @@ pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
             registry.register(Arc::new(edit_file::EditFileTool));
             registry.register(Arc::new(bash::BashTool));
             registry.register(Arc::new(git_commit::GitCommitTool));
+            registry.register(Arc::new(project_command::ProjectCommandTool));
+            registry.register(Arc::new(external_mcp::McpListToolsTool));
+            registry.register(Arc::new(external_mcp::McpCallTool));
             registry.register(Arc::new(list_directory::ListDirectoryTool));
             registry.register(Arc::new(grep::GrepTool));
             registry.register(Arc::new(glob::GlobTool));
@@ -181,6 +189,13 @@ pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
             // worker messages from the chat tab for debugging the fleet.
             registry.register(Arc::new(send_worker_message::SendWorkerMessageTool));
             registry.register(Arc::new(list_worker_messages::ListWorkerMessagesTool));
+            registry.register(Arc::new(
+                list_stale_worker_messages::ListStaleWorkerMessagesTool,
+            ));
+            registry.register(Arc::new(list_worker_health::ListWorkerHealthTool));
+            registry.register(Arc::new(
+                reconcile_worker_operation::ReconcileWorkerOperationTool,
+            ));
             registry.register(Arc::new(
                 acknowledge_worker_message::AcknowledgeWorkerMessageTool,
             ));

@@ -2,7 +2,7 @@
 use super::db::AnalyticsDb;
 use super::types::*;
 use crate::errors::Result;
-use chrono::{Local, NaiveDate};
+use chrono::Local;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -35,6 +35,13 @@ impl AnalyticsAggregator {
 
     /// Run daily rollup — aggregate token usage into daily costs
     pub fn run_daily_rollup(&self) -> Result<()> {
+        let mut operation =
+            crate::observability::timing::OperationTimer::start("database_daily_analytics_rollup")
+                .with_database("analytics");
+        let worker_cutoff = Local::now().date_naive() - chrono::Duration::days(90);
+        self.db
+            .rollup_and_prune_worker_stats_before(worker_cutoff)?;
+
         let today = Local::now().naive_local().date();
         let yesterday = today - chrono::Duration::days(1);
 
@@ -42,8 +49,11 @@ impl AnalyticsAggregator {
         let records = self.db.get_token_usage_by_date(yesterday)?;
 
         if records.is_empty() {
+            operation = operation.with_result_count(0);
+            operation.succeed();
             return Ok(());
         }
+        let record_count = records.len();
 
         // Aggregate data
         let mut total_cost = 0.0;
@@ -93,6 +103,8 @@ impl AnalyticsAggregator {
         };
 
         self.db.insert_daily_cost(&daily_cost)?;
+        operation = operation.with_result_count(record_count);
+        operation.succeed();
         Ok(())
     }
 }

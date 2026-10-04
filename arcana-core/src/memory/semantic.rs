@@ -13,7 +13,6 @@
 //                  confidence 1.0 labelled `user_explicit` — so any agent
 //                  could put a sentence in the user's mouth.
 
-use chrono::Utc;
 use rusqlite::params;
 use tracing::{debug, info};
 use uuid::Uuid;
@@ -39,12 +38,16 @@ impl SemanticStore {
         working_dir: Option<&str>,
         tags: &[String],
     ) -> Result<String> {
+        let mut timer =
+            crate::observability::timing::OperationTimer::start("memory_semantic_write")
+                .with_database("memory")
+                .with_session_id(source_session.unwrap_or_default());
         // Redaction boundary (M-40, P1-21). Memory is persistent, so a secret
         // written here is kept forever.
         let fact_text = &crate::security::redaction::redact_text(fact_text);
 
         let db = MemoryDb::open()?;
-        let now = Utc::now().to_rfc3339();
+        let now = crate::db::timestamps::now_rfc3339();
         let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".into());
 
         // Look for a near-duplicate (same category, text starts same way).
@@ -79,6 +82,7 @@ impl SemanticStore {
                 )?;
                 info!("[SemanticStore] updated fact id={existing_id}");
             }
+            timer.succeed();
             return Ok(existing_id);
         }
 
@@ -104,24 +108,32 @@ impl SemanticStore {
             "[SemanticStore] stored fact category={} id={id}",
             category.as_str()
         );
+        timer.succeed();
         Ok(id)
     }
 
     /// Soft-delete (deactivate) a fact — never hard-delete so history is preserved.
     pub fn deactivate_fact(id: &str) -> Result<()> {
+        let mut timer =
+            crate::observability::timing::OperationTimer::start("memory_semantic_deactivate")
+                .with_database("memory");
         let db = MemoryDb::open()?;
-        let now = Utc::now().to_rfc3339();
+        let now = crate::db::timestamps::now_rfc3339();
         db.conn.execute(
             "UPDATE semantic_memories SET is_active = 0, updated_at = ?1 WHERE id = ?2",
             params![now, id],
         )?;
+        timer.succeed();
         Ok(())
     }
 
     /// Update the text of an existing fact (records history automatically).
     pub fn update_fact(id: &str, new_text: &str, new_confidence: Option<f64>) -> Result<()> {
+        let mut timer =
+            crate::observability::timing::OperationTimer::start("memory_semantic_update")
+                .with_database("memory");
         let db = MemoryDb::open()?;
-        let now = Utc::now().to_rfc3339();
+        let now = crate::db::timestamps::now_rfc3339();
 
         let old_text: String = db.conn.query_row(
             "SELECT fact_text FROM semantic_memories WHERE id = ?1",
@@ -147,6 +159,7 @@ impl SemanticStore {
                 params![new_text, now, id],
             )?;
         }
+        timer.succeed();
         Ok(())
     }
 
@@ -154,6 +167,8 @@ impl SemanticStore {
 
     /// Return active facts ordered by confidence (descending), then recency.
     pub fn recall_facts(limit: u32) -> Result<Vec<SemanticFact>> {
+        let timer = crate::observability::timing::OperationTimer::start("memory_semantic_recall")
+            .with_database("memory");
         let db = MemoryDb::open()?;
         let mut stmt = db.conn.prepare(
             "SELECT id, fact_text, category, confidence, source_type, source_session,
@@ -164,11 +179,16 @@ impl SemanticStore {
              ORDER  BY confidence DESC, updated_at DESC
              LIMIT  ?1",
         )?;
-        map_facts(&mut stmt, params![limit])
+        let facts = map_facts(&mut stmt, params![limit])?;
+        timer.with_result_count(facts.len()).succeed();
+        Ok(facts)
     }
 
     /// Return facts in the 'preference' and 'user_profile' categories.
     pub fn get_user_preferences() -> Result<Vec<SemanticFact>> {
+        let timer =
+            crate::observability::timing::OperationTimer::start("memory_semantic_preferences_read")
+                .with_database("memory");
         let db = MemoryDb::open()?;
         let mut stmt = db.conn.prepare(
             "SELECT id, fact_text, category, confidence, source_type, source_session,
@@ -179,11 +199,15 @@ impl SemanticStore {
              ORDER  BY confidence DESC, updated_at DESC
              LIMIT  20",
         )?;
-        map_facts(&mut stmt, params![])
+        let facts = map_facts(&mut stmt, params![])?;
+        timer.with_result_count(facts.len()).succeed();
+        Ok(facts)
     }
 
     /// Simple keyword search across all active facts.
     pub fn search(query: &str, limit: u32) -> Result<Vec<SemanticFact>> {
+        let timer = crate::observability::timing::OperationTimer::start("memory_semantic_search")
+            .with_database("memory");
         let db = MemoryDb::open()?;
         let pattern = format!("%{}%", query.to_lowercase());
         let mut stmt = db.conn.prepare(
@@ -195,22 +219,35 @@ impl SemanticStore {
              ORDER  BY confidence DESC
              LIMIT  ?2",
         )?;
-        map_facts(&mut stmt, params![pattern, limit])
+        let facts = map_facts(&mut stmt, params![pattern, limit])?;
+        timer.with_result_count(facts.len()).succeed();
+        Ok(facts)
     }
 
     pub fn count_total() -> u64 {
-        MemoryDb::open()
-            .ok()
-            .and_then(|db| {
-                db.conn
-                    .query_row(
-                        "SELECT COUNT(*) FROM semantic_memories WHERE is_active = 1",
-                        [],
-                        |r| r.get::<_, i64>(0),
-                    )
-                    .ok()
-            })
-            .unwrap_or(0) as u64
+        Self::count_total_with_health().0
+    }
+
+    pub(crate) fn count_total_with_health() -> (u64, bool) {
+        let mut timer =
+            crate::observability::timing::OperationTimer::start("memory_semantic_count_total")
+                .with_database("memory");
+        let result = MemoryDb::open().ok().and_then(|db| {
+            db.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM semantic_memories WHERE is_active = 1",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .ok()
+        });
+        if let Some(count) = result {
+            timer.with_result_count(count.max(0) as usize).succeed();
+            (count.max(0) as u64, true)
+        } else {
+            timer.set_outcome("fallback");
+            (0, false)
+        }
     }
 
     // ─── Rule-based extraction ────────────────────────────────────────────────
@@ -219,19 +256,55 @@ impl SemanticStore {
     /// any hits with confidence 0.75 (below the explicit 1.0 threshold).
     /// Patterns are conservative to avoid false positives.
     pub fn extract_and_store(content: &str, session_id: &str, working_dir: Option<&str>) {
+        let mut timer =
+            crate::observability::timing::OperationTimer::start("memory_semantic_extract")
+                .with_database("memory")
+                .with_session_id(session_id);
         let extractions = extract_facts(content);
-        for (text, category) in extractions {
-            let _ = Self::store_fact(
-                &text,
+        let attempted = extractions.len();
+        let (stored, failed) = store_extracted_facts(extractions, |text, category| {
+            Self::store_fact(
+                text,
                 category,
                 0.75,
                 "extracted",
                 Some(session_id),
                 working_dir,
                 &[],
-            );
+            )
+            .map(|_| ())
+        });
+        tracing::info!(
+            target: "arcana::telemetry",
+            event_type = "memory_semantic_extract_result",
+            attempted_count = attempted,
+            stored_count = stored,
+            failed_count = failed,
+            outcome = if failed == 0 { "success" } else { "degraded" },
+            "Semantic memory extraction completed"
+        );
+        timer = timer.with_result_count(stored);
+        timer.set_outcome(if failed == 0 { "success" } else { "degraded" });
+    }
+}
+
+fn store_extracted_facts<F>(
+    extractions: Vec<(String, FactCategory)>,
+    mut store: F,
+) -> (usize, usize)
+where
+    F: FnMut(&str, FactCategory) -> crate::errors::Result<()>,
+{
+    let mut stored = 0;
+    let mut failed = 0;
+    for (text, category) in extractions {
+        if store(&text, category).is_ok() {
+            stored += 1;
+        } else {
+            failed += 1;
         }
     }
+    (stored, failed)
 }
 
 // ─── Rule-based fact extraction ──────────────────────────────────────────────
@@ -278,6 +351,37 @@ fn extract_facts(content: &str) -> Vec<(String, FactCategory)> {
     results
 }
 
+#[cfg(test)]
+mod observability_tests {
+    use super::*;
+
+    #[test]
+    fn extraction_reports_successes_and_failures_without_exposing_fact_text() {
+        let extractions = vec![
+            (
+                "private preference one".to_owned(),
+                FactCategory::Preference,
+            ),
+            (
+                "private preference two".to_owned(),
+                FactCategory::Preference,
+            ),
+        ];
+        let mut calls = 0;
+        let counts = store_extracted_facts(extractions, |_text, _category| {
+            calls += 1;
+            if calls == 1 {
+                Ok(())
+            } else {
+                Err(crate::errors::ArcanaError::Agent(
+                    "private storage failure".into(),
+                ))
+            }
+        });
+        assert_eq!(counts, (1, 1));
+    }
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 fn normalize(s: &str) -> String {
@@ -305,8 +409,8 @@ fn map_facts(
                 working_dir: row.get(6)?,
                 tags,
                 is_active: row.get::<_, i32>(8)? != 0,
-                created_at: row.get::<_, String>(9)?.parse().unwrap_or_default(),
-                updated_at: row.get::<_, String>(10)?.parse().unwrap_or_default(),
+                created_at: crate::db::timestamps::parse_row_timestamp(row, 9)?,
+                updated_at: crate::db::timestamps::parse_row_timestamp(row, 10)?,
             })
         })?
         .filter_map(|r| r.ok())

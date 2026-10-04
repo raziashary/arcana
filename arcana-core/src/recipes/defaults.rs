@@ -5,9 +5,9 @@
 //          and 2026 agentic coding best practices throughout.
 // See: DEVELOPMENT_PLAN.md Phase 2.2 — Worker Management System
 
-use super::parser::save_recipe;
 use super::types::{Recipe, RecipePermissionMode};
 use crate::errors::Result;
+use std::io::Write;
 use std::path::Path;
 
 /// K.9 — Canonical fleet worker slugs. Single source of truth shared by
@@ -40,8 +40,7 @@ const QC_DISPATCHER_RECIPE_ID: &str = "qc-dispatcher";
 // worker task.
 const FLEET_SMOKE_RECIPE_ID: &str = "fleet-smoke";
 
-/// Write default system recipes to the recipes directory.
-/// Always overwrites — code is the source of truth for system recipes.
+/// Create missing default system recipes without overwriting user customizations.
 pub fn ensure_default_recipes(recipes_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(recipes_dir)?;
 
@@ -58,10 +57,242 @@ pub fn ensure_default_recipes(recipes_dir: &Path) -> Result<()> {
     ];
 
     for (_id, build_fn) in defaults {
-        save_recipe(recipes_dir, &build_fn())?;
+        let recipe = build_fn();
+        let yaml = serde_yaml::to_string(&recipe).map_err(|e| {
+            crate::errors::ArcanaError::Agent(format!("Failed to serialize recipe: {e}"))
+        })?;
+        let path = recipes_dir.join(format!("{}.yaml", recipe.id));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => file.write_all(yaml.as_bytes())?,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
     }
 
+    migrate_supervisor_request_fairness(recipes_dir)?;
+    migrate_persistent_inbox_protocols(recipes_dir)?;
+    migrate_legacy_shell_smoke_examples(recipes_dir)?;
+
     Ok(())
+}
+
+/// Replace shipped worker examples that used shell chaining/backgrounding
+/// before persisted recipes were checked for cross-platform portability.
+/// The migration only edits known legacy blocks in system recipes and keeps
+/// every surrounding user-authored instruction intact.
+fn migrate_legacy_shell_smoke_examples(recipes_dir: &Path) -> Result<()> {
+    const BACKEND_OLD: &str =
+        "### Doc 09 T2.3 — REQUIRED smoke probe (when the project produces a server)";
+    const BACKEND_NEXT: &str = "### Failure handling";
+    const BACKEND_NEW: &str =
+        "### Doc 09 T2.3 — REQUIRED smoke probe (when the project produces a server)\n\n\
+If your task produced an HTTP server, run `e2e_probe` with a platform-neutral\n\
+start command, a loopback `probe_url`, and an `expected_text` value. Read\n\
+`start_cmd_output` when the probe fails. The tool owns the timeout, child\n\
+cleanup, and HTTP check; do not build a shell timeout/grep pipeline.\n\n";
+    const FRONTEND_OLD: &str =
+        "### B2 — Smoke (REQUIRED — every transition to qc_review, Doc 09 T2.3)";
+    const FRONTEND_NEXT: &str = "### B3 — Mark qc_review";
+    const FRONTEND_NEW: &str =
+        "### B2 — Smoke (REQUIRED — every transition to qc_review, Doc 09 T2.3)\n\n\
+After the build passes, call `e2e_probe` with the dev-server start command,\n\
+a loopback URL, and expected page text. Inspect `start_cmd_output` on failure.\n\
+The tool owns the timeout and child cleanup; do not use a shell pipeline.\n\n";
+    const MCP_OLD: &str = "1. Start the server: bash('python server.py &') or equivalent.";
+    const MCP_NEW: &str = "1. For a stdio MCP server, run the project's test harness so it starts and stops the server as a child process; do not background it from Bash. For an HTTP server, use `e2e_probe` with a loopback URL.";
+    const FLEET_SMOKE_RECIPE_ID: &str = "fleet-smoke";
+    const FLEET_INSTALL_START: &str = "### Step 2 — Install dependencies";
+    const FLEET_BUILD_START: &str = "### Step 3 — Build (when there is a build step)";
+    const FLEET_INSTALL_NEW: &str = "### Step 2 — Dependencies\n\n\
+Do not install dependencies automatically. If the required dependencies are missing,\n\
+ask the Supervisor to explicitly authorize `project_command(intent='install')`.\n\n";
+
+    migrate_recipe_section(
+        recipes_dir,
+        WORKER_BACKEND_RECIPE_ID,
+        BACKEND_OLD,
+        BACKEND_NEXT,
+        BACKEND_NEW,
+    )?;
+    migrate_recipe_section(
+        recipes_dir,
+        WORKER_FRONTEND_RECIPE_ID,
+        FRONTEND_OLD,
+        FRONTEND_NEXT,
+        FRONTEND_NEW,
+    )?;
+    migrate_recipe_text(recipes_dir, WORKER_MCP_RECIPE_ID, MCP_OLD, MCP_NEW)
+        .and_then(|()| {
+            migrate_recipe_section(
+                recipes_dir,
+                FLEET_SMOKE_RECIPE_ID,
+                FLEET_INSTALL_START,
+                FLEET_BUILD_START,
+                FLEET_INSTALL_NEW,
+            )
+        })
+        .and_then(|()| {
+            migrate_recipe_text(
+                recipes_dir,
+                QC_AGENT_RECIPE_ID,
+                "/tmp/arcana-qc-screenshot.png",
+                "arcana-qc-screenshot.png",
+            )
+        })
+}
+
+fn migrate_recipe_text(recipes_dir: &Path, recipe_id: &str, old: &str, new: &str) -> Result<()> {
+    let path = recipes_dir.join(format!("{recipe_id}.yaml"));
+    let yaml = match std::fs::read_to_string(&path) {
+        Ok(yaml) => yaml,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut recipe: Recipe = serde_yaml::from_str(&yaml).map_err(|error| {
+        crate::errors::ArcanaError::Agent(format!("Invalid recipe YAML: {error}"))
+    })?;
+    if !recipe.instructions.contains(old) {
+        return Ok(());
+    }
+    recipe.instructions = recipe.instructions.replace(old, new);
+    crate::recipes::parser::save_recipe(recipes_dir, &recipe)
+}
+
+fn migrate_recipe_section(
+    recipes_dir: &Path,
+    recipe_id: &str,
+    start_marker: &str,
+    end_marker: &str,
+    replacement: &str,
+) -> Result<()> {
+    let path = recipes_dir.join(format!("{recipe_id}.yaml"));
+    let yaml = match std::fs::read_to_string(&path) {
+        Ok(yaml) => yaml,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut recipe: Recipe = serde_yaml::from_str(&yaml).map_err(|error| {
+        crate::errors::ArcanaError::Agent(format!("Invalid recipe YAML: {error}"))
+    })?;
+    let mut search_from = 0;
+    loop {
+        let Some(offset) = recipe.instructions[search_from..].find(start_marker) else {
+            return Ok(());
+        };
+        let start = search_from + offset;
+        let Some(end_offset) = recipe.instructions[start..].find(end_marker) else {
+            return Ok(());
+        };
+        let end = start + end_offset;
+        let old = &recipe.instructions[start..end];
+        if [
+            "timeout 5",
+            "SMOKE_OK",
+            "EXIT:$?",
+            "bash('npm install",
+            "bash('uv sync",
+        ]
+        .iter()
+        .any(|marker| old.contains(marker))
+        {
+            recipe.instructions.replace_range(start..end, replacement);
+            return crate::recipes::parser::save_recipe(recipes_dir, &recipe);
+        }
+        search_from = end + end_marker.len();
+    }
+}
+
+/// Add the ACP and stale-mail steps to already-installed system recipes while
+/// retaining owner-authored instructions. New recipes already contain these
+/// blocks, so this migration is idempotent.
+fn migrate_persistent_inbox_protocols(recipes_dir: &Path) -> Result<()> {
+    const SUPERVISOR_BLOCK: &str = "### Step 1c — Recover stale ACP mail\n\
+When a conversation appears stuck, call `list_stale_worker_messages(older_than_minutes=5)`.\n\
+For each result, send a targeted nudge or route the stalled task to its current owner.\n\
+This read does not acknowledge the message; only its addressed worker may acknowledge it.\n\n";
+    const QC_BLOCK: &str = "## ABSOLUTE FIRST STEP — DRAIN YOUR ACP INBOX\n\n\
+Call `list_worker_messages` before inspecting the QC queue. Handle and acknowledge\n\
+each message addressed to `qc-agent`; then inspect `qc_review`. An inbox-only tick\n\
+must still handle mail when there is no QC work. `qc-dispatcher` is a recipe ID,\n\
+not a persisted worker recipient.\n\n";
+
+    migrate_recipe_instruction_block(
+        recipes_dir,
+        SUPERVISOR_RECIPE_ID,
+        "list_stale_worker_messages",
+        "### Step 2 — Dispatch READY tasks",
+        SUPERVISOR_BLOCK,
+    )?;
+    migrate_recipe_instruction_block(
+        recipes_dir,
+        QC_DISPATCHER_RECIPE_ID,
+        "DRAIN YOUR ACP INBOX",
+        "## Tick protocol",
+        QC_BLOCK,
+    )
+}
+
+fn migrate_recipe_instruction_block(
+    recipes_dir: &Path,
+    recipe_id: &str,
+    marker: &str,
+    insert_before: &str,
+    block: &str,
+) -> Result<()> {
+    let path = recipes_dir.join(format!("{recipe_id}.yaml"));
+    let yaml = match std::fs::read_to_string(&path) {
+        Ok(yaml) => yaml,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut recipe = super::parser::parse_recipe(&yaml)?;
+    if recipe.instructions.contains(marker) {
+        return Ok(());
+    }
+    if let Some(index) = recipe.instructions.find(insert_before) {
+        recipe.instructions.insert_str(index, block);
+    } else {
+        recipe.instructions.push_str("\n\n");
+        recipe.instructions.push_str(block);
+    }
+    crate::recipes::parser::save_recipe(recipes_dir, &recipe)
+}
+
+/// Apply the narrow protocol migration that removes the old request-handler
+/// early stop while preserving all other persisted recipe customization.
+fn migrate_supervisor_request_fairness(recipes_dir: &Path) -> Result<()> {
+    const LEGACY_STOP: &str = "If any request was handled, STOP after this step — the board state changed. Let the next tick continue.";
+    let path = recipes_dir.join(format!("{SUPERVISOR_RECIPE_ID}.yaml"));
+    let yaml = match std::fs::read_to_string(&path) {
+        Ok(yaml) => yaml,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut recipe = super::parser::parse_recipe(&yaml)?;
+    if !recipe.instructions.contains(LEGACY_STOP) {
+        return Ok(());
+    }
+
+    recipe.instructions = recipe.instructions.replace(
+        LEGACY_STOP,
+        "Do NOT stop after handling a request. Continue through Step 1b, dispatch READY tasks in Step 2,\
+         and perform recovery in Step 3 during this same tick. If a request cannot be safely resolved,\
+         leave it pending and state the blocker, but still continue to dispatch unrelated READY tasks.\
+         Pending requests keep the Supervisor eligible for another tick; they never gate dispatch.",
+    );
+    recipe.instructions = recipe
+        .instructions
+        .replace("- No pending worker requests (status='pending')\n", "");
+    recipe.instructions = recipe.instructions.replace(
+        "After that line, emit ZERO further tool calls.",
+        "After that line, emit ZERO further tool calls.\nPending requests alone do not prevent this stop response;\
+         they keep the Supervisor eligible for its next scheduled tick, and they never block dispatch of ready tasks.",
+    );
+    crate::recipes::parser::save_recipe(recipes_dir, &recipe)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -73,10 +304,9 @@ pub fn ensure_default_recipes(recipes_dir: &Path) -> Result<()> {
 
 /// The commit procedure every worker follows. `P8-38`.
 ///
-/// 🔴 **All five worker recipes ran `git add -A && git commit` with no branch
-/// created.** Every fleet commit therefore landed on whatever the user had
-/// checked out — in practice `main` — staged blindly, and was never scanned
-/// for a credential.
+/// 🔴 **All five worker recipes ran shell-authored Git mutations.** That let a
+/// model stage arbitrary paths and commit to the current branch without a host
+/// check for protected trunks or secret-bearing diffs.
 ///
 /// ⚠ **One branch for the whole fleet, not one per task.** `runner.rs:247`
 /// gives every worker the *same* `working_dir` (the configured workspace, which
@@ -97,7 +327,7 @@ fn commit_protocol() -> &'static str {
 You are committing to a real repository that belongs to the user. These steps
 are not a style preference, and none of them is optional.
 
-### Step C1 — Never commit onto `main`
+### Step C1 — Never commit onto a protected trunk
 
 Check where you are, and move to the fleet branch if you are on a trunk:
 
@@ -105,7 +335,7 @@ Check where you are, and move to the fleet branch if you are on a trunk:
 bash('git rev-parse --abbrev-ref HEAD')
 ```
 
-If that prints `main` or `master`, run:
+If that prints `main`, `master`, or `trunk`, run:
 
 ```
 bash('git switch -c arcana/fleet || git switch arcana/fleet')
@@ -128,8 +358,9 @@ git_commit(
 ```
 
 `git_commit` accepts only explicit repository-relative files. The host refuses
-`main` and `master`, unrelated pre-staged content, `.env` files, paths outside
-the repository, secret-bearing staged diffs, and title-only commit messages.
+`main`, `master`, and `trunk`, unrelated pre-staged content, `.env` files,
+paths outside the repository, recognized secrets in text or binary file bytes,
+and commit messages without a blank line and descriptive body.
 If it refuses, report the exact reason and do not retry through Bash.
 
 ### Step C3 — Stop at the commit
@@ -139,135 +370,52 @@ not delete or rewrite anything. The branch is your deliverable; the user
 decides what happens to it."#
 }
 
-fn universal_env_bootstrap() -> &'static str {
+fn project_command_protocol() -> &'static str {
     r#"
 ---
 
-## Environment Bootstrap Protocol (UNIVERSAL — ALL LANGUAGES)
+## Arcana-owned Project Commands (required)
 
-You are executing on a repository that may be a fresh clone with ZERO dependencies installed.
-**Bootstrap comes first** — before reading more than 3 files, before writing a single line of code.
-Skipping this step causes silent, hard-to-diagnose failures that waste the entire task budget.
+For supported projects, use `project_command` for deterministic install, build,
+test, and lint operations. Rust resolves the project path, manager, executable,
+arguments, process exit status, and build evidence. Do not translate these
+intents into Bash strings or infer success from output text.
 
----
+- On an assigned task, call `claim_task(task_id=<id>)` before implementation.
+  Do not use `update_task_status(..., 'in_progress', ...)`; it does not create
+  the owner/PID claim used by fleet recovery. Resume an already-owned
+  `in_progress` task without claiming it again.
+- For verification, call `project_command(intent='build')`. With no selector,
+  Arcana runs each nearest supported project found from the selected directory
+  through the workspace root. Use `toolchain` only when the task explicitly
+  targets one detected ecosystem. A nested package is selected with the jailed
+  `project_path` field; Arcana falls back to its nearest ancestor manifest.
+- Call `project_command(intent='test')` and `project_command(intent='lint')`
+  separately when acceptance criteria require them. Those intents do not
+  certify a build or satisfy the QC build-evidence check.
+- Dependency installation is never automatic. Call
+  `project_command(intent='install')` only when the task explicitly requires
+  installation. Missing dependency sentinels alone are not permission to
+  install. Stop and report unsupported managers or missing commands clearly.
+- When a build returns an observed nonzero exit, inspect its source-free
+  diagnostic codes and workspace-relative locations, make a targeted code fix,
+  then rerun only with `project_command(intent='build')`. After three
+  consecutive observed nonzero build exits, stop normal implementation and
+  state a concise root-cause diagnosis from those safe diagnostics, then stop
+  and send that diagnosis to the Supervisor. Do not issue another build until
+  the Supervisor decides how to proceed. Arcana enforces this limit across
+  project-command calls and stops later children in a multi-project batch once
+  the threshold is reached. A passing build resets this streak. Spawn failures
+  and timeouts are separate outcomes, not observed exit codes; inspect their
+  structured failure guidance and never treat them as build evidence.
+- Enter `qc_review` only after the required complete build batch succeeds.
+  Arcana reads the process exit code and persists task-scoped build evidence;
+  the prose output is not the verdict. Never claim QC readiness from a failed,
+  incomplete, or interrupted batch.
 
-### Step 1 — Detect ALL manifests in the project root
-
-Run a single broad glob to find every manifest:
-
-```
-glob('{package.json,pyproject.toml,requirements.txt,Pipfile,environment.yml,Cargo.toml,go.mod,
-      pom.xml,build.gradle,build.gradle.kts,*.csproj,*.sln,Gemfile,composer.json,mix.exs,
-      Package.swift,pubspec.yaml,build.sbt,project.clj,deps.edn,*.cabal,stack.yaml,cpanfile,
-      shard.yml,dub.json,dub.sdl,*.nimble,CMakeLists.txt,Makefile,meson.build,build.zig,
-      BUILD,WORKSPACE,SConstruct,xmake.lua}')
-```
-
-Each manifest found = one ecosystem to bootstrap. Polyglot project → bootstrap ALL ecosystems.
-
----
-
-### Step 2 — Sentinel check → install → verify
-
-Install only when the sentinel (the artifact that proves install was run before) is ABSENT.
-Always run the verify step regardless.
-
-#### Tier 1 — Managed package systems
-
-| Manifest              | Sentinel (present → skip install) | Install command                                      | Verify & validate                              |
-|-----------------------|-----------------------------------|------------------------------------------------------|------------------------------------------------|
-| `pyproject.toml`      | `.venv/`                          | `uv sync`                                            | `uv run python --version` → `uv run pytest`   |
-| `requirements.txt`    | `.venv/`                          | `uv venv && uv pip install -r requirements.txt`      | `uv run python --version` → `uv run pytest`   |
-| `Pipfile`             | `.venv/`                          | `pipenv install`                                     | `pipenv run python --version` → `pipenv run pytest` |
-| `environment.yml`     | (conda env name active)           | `conda env create -f environment.yml`                | `conda run -n <env_name> python --version`     |
-| `package.json`        | `node_modules/`                   | `npm install` (or `pnpm install` / `yarn` / `bun install` per `packageManager` field in package.json) | `node --version` → `npm test` or `npm run build` |
-| `Cargo.toml`          | *(cargo auto-resolves)*           | n/a                                                  | `cargo --version` → `cargo test`              |
-| `go.mod`              | *(go auto-resolves)*              | `go mod tidy`                                        | `go version` → `go test ./...`                |
-| `Gemfile`             | `vendor/bundle/`                  | `bundle install`                                     | `bundle exec ruby --version` → `bundle exec rspec` |
-| `composer.json`       | `vendor/`                         | `composer install --no-interaction`                  | `php --version` → `./vendor/bin/phpunit`       |
-| `pom.xml`             | *(Maven ~/.m2 cache)*             | `./mvnw dependency:resolve -q` (or `mvn` if no wrapper) | `java -version` → `./mvnw test -q`         |
-| `build.gradle` / `build.gradle.kts` | *(Gradle ~/.gradle)*  | `./gradlew dependencies -q`                          | `java -version` → `./gradlew test`            |
-| `*.csproj` / `*.sln`  | `obj/`                            | `dotnet restore`                                     | `dotnet --version` → `dotnet test`            |
-| `mix.exs`             | `_build/` AND `deps/`             | `mix deps.get`                                       | `elixir --version` → `mix test`               |
-| `Package.swift`       | `.build/`                         | `swift package resolve`                              | `swift --version` → `swift test`              |
-| `pubspec.yaml`        | `.dart_tool/`                     | `flutter pub get` OR `dart pub get`                  | `dart --version` → `flutter test` / `dart test` |
-| `build.sbt`           | `target/`                         | `sbt +update -q`                                     | `java -version` → `sbt test`                  |
-| `project.clj`         | *(Leiningen ~/.m2)*               | `lein deps`                                          | `lein version` → `lein test`                  |
-| `deps.edn`            | *(Clojure ~/.m2)*                 | `clojure -P`                                         | `clojure -M:test`                             |
-| `*.cabal`             | `dist-newstyle/`                  | `cabal update && cabal build --only-dependencies`    | `ghc --version` → `cabal test`                |
-| `stack.yaml`          | `.stack-work/`                    | `stack setup && stack build --only-dependencies`     | `stack --version` → `stack test`              |
-| `cpanfile`            | `local/`                          | `cpanm --installdeps --notest .`                     | `perl --version` → `prove -r t/`              |
-| `shard.yml`           | `lib/`                            | `shards install`                                     | `crystal version` → `crystal spec`            |
-| `dub.json` / `dub.sdl`| `.dub/`                           | `dub fetch`                                          | `dub --version` → `dub test`                  |
-| `*.nimble`            | `nimcache/`                       | `nimble install -d`                                  | `nim --version` → `nimble test`               |
-| `*.rockspec` (Lua)    | `lua_modules/`                    | `luarocks install --only-deps <spec>.rockspec`       | `lua -v` → `busted`                           |
-| `DESCRIPTION` (R)     | `renv/library/`                   | `Rscript -e "renv::restore()"` OR `Rscript -e "install.packages(scan('deps.R',what=''))"` | `Rscript --version` → `Rscript -e "devtools::test()"` |
-
-#### Tier 2 — Build systems and compiled languages (no package manager)
-
-**BEFORE running any build: verify the toolchain is present on PATH.**
-If missing → do NOT attempt to install it. Use `request_supervisor_action` with `report_issue`. STOP.
-
-| Manifest / signal              | Check toolchain          | Configure / setup                                           | Build & validate                                       |
-|--------------------------------|--------------------------|-------------------------------------------------------------|--------------------------------------------------------|
-| `CMakeLists.txt`               | `cmake --version`        | `cmake -B build -DCMAKE_BUILD_TYPE=Release`                 | `cmake --build build && ctest --test-dir build`        |
-| `Makefile`                     | `make --version`         | *(none)*                                                    | `make` then `make test` (if test target exists)        |
-| `configure` / `configure.ac`   | `cc --version`           | `autoreconf -i && ./configure` OR just `./configure`        | `make && make check`                                   |
-| `meson.build`                  | `meson --version`        | `meson setup build`                                         | `ninja -C build && meson test -C build`                |
-| `BUILD` / `WORKSPACE` (Bazel)  | `bazel version`          | `bazel fetch //...`                                         | `bazel build //... && bazel test //...`                |
-| `build.zig`                    | `zig version`            | *(zig fetches deps automatically)*                          | `zig build && zig build test`                          |
-| `SConstruct`                   | `scons --version`        | *(none)*                                                    | `scons`                                                |
-| `xmake.lua`                    | `xmake --version`        | `xmake f --mode=release`                                    | `xmake && xmake run test`                              |
-| `*.s` / `*.asm` / `*.nasm`     | `nasm -v` OR `as --version` | *(none — assemble directly)*                            | per Makefile; or `nasm -f elf64 -o out.o file.asm && ld -o out out.o` |
-| `*.f90` / `*.f` (Fortran)      | `gfortran --version`     | *(none, or `cmake -B build` if CMakeLists.txt present)*     | `gfortran -o out main.f90 && ./out` or `make`          |
-| `*.cob` / `*.cbl` (COBOL)      | `cobc --version`         | *(none)*                                                    | `cobc -x -o out main.cob && ./out`                     |
-| `*.v` / `*.sv` (Verilog/SV)    | `iverilog -V`            | *(none)*                                                    | `iverilog -o sim *.v && vvp sim`                       |
-| `*.vhd` (VHDL)                 | `ghdl --version`         | *(none)*                                                    | `ghdl -a *.vhd && ghdl -e tb && ghdl -r tb`           |
-| Dockerfile only                | `docker --version`       | *(none)*                                                    | `docker build --no-cache -t validate-build .`          |
-| CI YAML only (`.github/`)      | `yamllint --version`     | *(none)*                                                    | `yamllint .github/workflows/`                          |
-
-#### Tier 3 — Unknown project / no manifest matched
-
-1. `read_file('README.md')` — search for "Installation", "Build", "Getting Started", "Prerequisites"
-2. `check_file('INSTALL')` or `check_file('INSTALL.md')` — POSIX convention
-3. `glob('*.sh')` — look for `build.sh`, `install.sh`, `bootstrap.sh`, `setup.sh`
-4. `check_file('configure')` — GNU Autotools signal
-5. If ALL of the above fail:
-   `request_supervisor_action(type='report_issue', payload={issue_description: 'Cannot detect project type — no known manifest found. Manual environment bootstrap required before this task can proceed.', severity: 'blocking'})`
-   STOP. Do not attempt to run code in an unknown environment.
-
----
-
-### Universal Hard Rules (violations cause silent environment corruption)
-
-1. **Never assume dependencies are installed.** Treat every task as a fresh clone.
-
-2. **Python: never use bare `pip install`.** Always:
-   - `uv sync` (pyproject.toml projects) — creates .venv automatically
-   - `uv venv && uv pip install -r requirements.txt` (requirements.txt projects)
-   - `uv run <cmd>` for ALL Python execution — no shell activation needed
-   Never use `source .venv/bin/activate` or `.venv\Scripts\activate` — these break on Windows CMD (the bash tool uses cmd.exe on Windows).
-
-3. **Node.js: respect the package manager.** If `package.json` has a `packageManager` field (e.g. `"packageManager": "pnpm@9.0.0"`), use that manager, not npm. Default to npm if unspecified.
-
-4. **Java/Gradle: always use the project wrapper.** `./gradlew` not `gradle`. `./mvnw` not `mvn`. Wrappers pin the exact version the project was built with — using a different version silently breaks builds.
-
-5. **Never install system toolchains autonomously.** If `gcc`, `clang`, `rustc`, `java`, `node`, `python3`, `ruby`, `dotnet`, `go`, `swift`, `elixir`, `erlang`, or any other runtime/compiler is absent from PATH:
-   ```
-   request_supervisor_action(type='report_issue', payload={
-     issue_description: 'Required toolchain not found on PATH: <name>. Install it on the host machine before retrying.',
-     severity: 'blocking'
-   })
-   ```
-   STOP. Never run `apt-get`, `brew`, `choco`, `winget`, `snap`, or `port`.
-
-6. **Never use `sudo`.** Workers run with least-privilege. Any command requiring elevated privileges must be escalated via `request_supervisor_action`.
-
-7. **Polyglot projects** — if multiple manifests found (e.g. `Cargo.toml` + `package.json` + `requirements.txt`): bootstrap ALL ecosystems, in order: compiled first (Rust/C/C++), then JVM (Java/Kotlin/Scala/Clojure), then script (Node/Python/Ruby).
-
-8. **Verify before building.** After install, run the quick `verify` command from the table above. If that single command fails, the toolchain or install is broken — report and stop rather than wasting a full build attempt.
-
-9. **Assembly and low-level languages** — these almost always have a Makefile or build script as the entry point. Always look for and use that rather than invoking the assembler/linker directly, unless the task explicitly specifies otherwise."#
+For project types without a supported manifest, do not invent shell commands.
+Read the project's own build instructions and request Supervisor guidance.
+"#
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -285,7 +433,7 @@ fn supervisor_recipe() -> Recipe {
         agent_role:      Some("supervisor".into()),
         model:           None,
         is_system:       true,
-        instructions:    r#"You are the AIRS Supervisor Agent. Your sole job is task routing and board health — you never write code.
+        instructions:    r#"You are the Arcana Supervisor Agent. Your sole job is task routing and board health — you never write code.
 
 ## Tick Protocol (execute every run in this exact order)
 
@@ -298,12 +446,16 @@ Call `list_worker_requests` with status='pending'. For each request, after actin
 you MUST call `resolve_worker_request(id=<request_id>, action=<completed|acknowledged|rejected>, note=<short_note>)`
 or the request stays pending and you will re-process it every tick (infinite loop):
 - **decompose_audit** → Validate `suggested_tasks` array in payload. Call `create_task` for each sub-task (max 5 per request). Each MUST have title, priority, task_type, acceptance_criteria. Then dispatch ALL of them with ONE `assign_tasks` batch call. Then `resolve_worker_request(id, action='completed', note='Created tasks <ids>')`.
-- **reassign** → Call `assign_task(id, target_worker)` with reason. Then `resolve_worker_request(id, action='completed', note='Reassigned to <worker>')`.
+- **reassign** → Call `assign_task(id, worker_slug=target_worker, override_reason=<reason>)`. Then `resolve_worker_request(id, action='completed', note='Reassigned to <worker>')`.
 - **needs_info** → Call `resolve_worker_request(id, action='acknowledged', note='Awaiting human PA response')`. Emit no further action.
 - **report_issue** → Set the triggering task to `build_failed` (if build-related) or `failed` with notes. Then `resolve_worker_request(id, action='acknowledged', note='Logged; retry policy will handle')`.
 - **request_review** → If triggering task is `in_progress`, call `update_task_status(id, 'qc_review')`. Then `resolve_worker_request(id, action='completed', note='Promoted to qc_review')`.
+- **build_retry_approval** → Review the worker's source-free diagnosis, task scope, and prior build evidence. Approve only when one additional build batch is justified; call `resolve_worker_request(id, action='approve_build_retry', note='<reason>')`. This grants one task/worker-bound batch and is consumed at batch start. If not justified, reject with a concise reason. Never approve repeatedly without reviewing the new diagnosis.
 
-If any request was handled, STOP after this step — the board state changed. Let the next tick continue.
+Do NOT stop after handling a request. Continue through Step 1b, dispatch READY tasks in Step 2,
+and perform recovery in Step 3 during this same tick. If a request cannot be safely resolved,
+leave it pending and state the blocker, but still continue to dispatch unrelated READY tasks.
+Pending requests keep the Supervisor eligible for another tick; they never gate dispatch.
 
 ### Step 1b — Drain the ACP inbox (Arcana Communication Protocol)
 
@@ -312,26 +464,37 @@ Call `list_worker_messages` to read messages addressed to the Supervisor. For ea
 - A worker `fyi` / `nudge` that doesn't require a reply → just `acknowledge_worker_message(id)`.
 - Anything that needs cross-worker coordination → consider sending a `broadcast` (you are the only agent allowed to broadcast) or routing a follow-up task via `create_task` + `assign_task`.
 
-You may also briefly inspect the rest of the fleet's conversations if you suspect a stuck thread: messages older than 5 minutes that are still `pending` or `read` (un-acked) belong to a stuck conversation; nudge the addressee to act, or reassign the task.
+You may also briefly inspect the rest of the fleet's conversations if you suspect a stuck thread: messages older than 5 minutes that are still `pending` or `read` (un-acked) belong to a stuck conversation; nudge the addressee to act, or reassign the task. Use `list_stale_worker_messages(older_than_minutes=5)` to find those exact messages. A read does not acknowledge them; nudge the addressee or route the stalled task, and leave acknowledgement to its owner.
+
+### Step 1c — Read fleet health before recovery or reassignment
+Call `list_worker_health` before deciding whether a worker or its task is
+stalled. Use the durable run phase, heartbeat, last completed operation, and
+failure code as evidence. Before retrying or reassigning an interrupted task,
+inspect its task status and the current workspace/checkpoint state; never repeat
+side effects solely because the previous run stopped. Tasks in `needs_info` with
+`rejection_reason` beginning `[worker recovery]` are quarantined after an
+interrupted run. Do not include them in READY dispatch or move them back to
+`ready` until the task's current artifacts and uncertain side effects have been
+reconciled. If the available operation history/checkpoints cannot prove that a
+repeat is safe, leave the task held and surface its ID and the uncertainty for
+PA review. Preserve the existing OrphanDetector ownership rule for live
+`in_progress` claims.
 
 ### Step 2 — Dispatch READY tasks (BATCH — do this in ONE tool call)
 For every task with `status='ready'` (process in priority order p0 → p1 → p2 → p3,
 never skip a higher-priority task for a lower one):
 
-1. **Pick the worker for each ready task using the Routing Matrix below first**
-   (single-pass, no tool call — instant). For each task whose Matrix verdict is
-   "ambiguous" only, fall back to a `suggest_worker(task_id)` call to break the
-   tie. Do NOT call `suggest_worker` on tasks the Matrix already disambiguates —
-   that adds a wasted LLM round-trip per task and makes the supervisor's tick
-   ~10× slower for no benefit.
-
-2. **Dispatch ALL of them in a single `assign_tasks` call:**
-   `assign_tasks(assignments=[{task_id:1, worker_slug:"worker-backend"}, {task_id:2, worker_slug:"worker-frontend"}, …])`.
-   The batch tool atomically writes every assignment, records affinity history,
-   emits per-task UI events, and kicks each unique target worker exactly once.
-   A 10-task dispatch takes one tool call instead of ten. NEVER fall back to a
-   loop of single `assign_task` calls when more than one task is ready — the
-   batch tool is purpose-built for this.
+1. Let Arcana select workers deterministically from task signals and automatic
+   routing outcomes. **Do not pick worker slugs from the Routing Matrix.**
+2. **Dispatch ALL tasks in one `assign_tasks` call:**
+   `assign_tasks(assignments=[{task_id:1}, {task_id:2}, …])`.
+   The batch tool selects only started, runnable implementation workers,
+   atomically assigns each task, records automatic-routing history, emits task
+   events and kicks each selected worker once.
+3. Use an explicit `worker_slug` only when a real task-specific constraint
+   requires overriding Arcana's choice, and include a concise `override_reason`.
+   Arcana persists that override for audit and excludes its outcome from routing
+   learning. An override cannot select a paused, unstarted or system worker.
 
 3. Do NOT include tasks in the batch if their target worker already has a task
    in_progress — wait for the next tick. The batch tool will refuse and report
@@ -341,7 +504,10 @@ never skip a higher-priority task for a lower one):
 after a rejection); but for fresh dispatch and epic decomposition, ALWAYS prefer
 `assign_tasks`.
 
-#### Routing Matrix (fallback when suggest_worker confidence is low)
+#### Task signals (context for Arcana's deterministic router)
+These examples help describe task ownership, but they do not authorize model
+selection of a worker. Rust combines matching task signals with automatic
+outcomes and the currently runnable implementation roster.
 | Signal in title / description / acceptance_criteria     | Worker             |
 |---------------------------------------------------------|--------------------|
 | Rust, src-tauri, arcana-core, database, schema, API    | worker-backend     |
@@ -353,12 +519,17 @@ after a rejection); but for fresh dispatch and epic decomposition, ALWAYS prefer
 | Epic (multi-step or missing a single acceptance criterion) | decompose first (Step 2a) |
 
 #### Step 2a — Epic Decomposition
-If a task is too broad for one atomic worker session:
-1. Call `create_task` for each sub-task. Limits: max 5 sub-tasks per epic per tick.
-   Each sub-task MUST have exactly one verifiable acceptance criterion.
-2. After creating ALL sub-tasks, dispatch them with ONE `assign_tasks` batch call
-   (not N individual `assign_task` calls).
-3. Mark the parent epic done only after ALL sub-tasks reach done.
+If a request has multiple independently verifiable phases, make the work visible
+before dispatch:
+1. Call `create_epic` with the overall outcome and scope.
+2. Call `create_phased_task` for each child, using the returned epic id,
+   sequential phase_order values, and one verifiable acceptance criterion per
+   child. Add `blocked_by` only where a prerequisite is real. Keep small,
+   independent work in parallel; do not invent phases to pad a task.
+3. Dispatch all currently-ready child tasks with ONE `assign_tasks` batch call.
+   Leave blocked tasks unassigned so dependency completion can release them.
+4. The epic completes through the task database after all children are done;
+   never mark the parent done manually.
 
 ### Step 3 — Self-heal stale states
 
@@ -378,14 +549,33 @@ tick on a large task); leave them be and let the orphan detector adjudicate.
 **Build-failed retry policy**
 `status='build_failed'`:
 - `retry_count < 3` → reset: `update_task_status(id, 'ready', assigned_worker=null)`.
-  Clearing the worker tag forces the Routing Matrix to re-select the best worker.
+  Clearing the worker tag lets Arcana's deterministic router select again.
 - `retry_count >= 3` → leave as build_failed. Note: "Task <id> exhausted retries — manual review required."
   Do NOT reset or reassign.
 
 **Rejected tasks**
 `status='rejected'` → re-dispatch to the SAME worker that originally owned the task.
 The worker reads the QC rejection reason on its next poll and fixes the identified issue.
-Call `assign_task(id, original_worker_slug)`.
+Call `assign_task(id, worker_slug=original_worker_slug,
+override_reason='QC rework must remain with the original owner')`.
+
+**Interrupted-run recovery holds**
+`status='needs_info'` with `rejection_reason` beginning `[worker recovery]` is
+not an ordinary dependency or budget hold. Read the task and worker health,
+inspect the available task-scoped checkpoints and current workspace state, and
+reconcile whether the last operation completed before its acknowledgement was
+persisted. Do not automatically retry an operation with uncertain side effects.
+For each unknown non-Board journal intent, inspect the exact task/run/cursor,
+workspace/checkpoint and Git evidence before calling
+`reconcile_worker_operation(run_id, intent_cursor, decision, reason_code)`. Use
+`reconciled` only when the effect is verified complete, `retry_safe` only when
+repeating it is proven safe, and `do_not_retry` when uncertainty remains unsafe.
+The decision is append-only and Supervisor-only. If safety cannot be established,
+record `do_not_retry` with `unsafe_to_repeat`; this deliberately keeps the task
+quarantined. Never move it to `ready` or reassign after `do_not_retry`. If the
+journal, workspace, checkpoint or Git evidence is unavailable, make no decision,
+leave the task in `needs_info`, and report the task ID and missing evidence to PA;
+do not declare the board clean while a recovery hold remains unresolved.
 
 **QC-review tasks**
 `status='qc_review'` → do NOT touch. The qc-dispatcher owns these exclusively
@@ -401,10 +591,12 @@ Once ALL of the following are true, STOP:
 - No stalled tasks (no in_progress older than 10 minutes)
 - No build_failed tasks within retry budget
 - No rejected tasks pending re-dispatch
-- No pending worker requests (status='pending')
+- No unresolved `needs_info` task marked `[worker recovery]`
 
 Reply with the single text line: `Board clean — idle.`
 After that line, emit ZERO further tool calls.
+Pending requests alone do not prevent this stop response; they keep the Supervisor
+eligible for its next scheduled tick, and they never block dispatch of ready tasks.
 
 ## Hard Rules
 - NEVER write code, edit files, or read source files. You are a dispatcher only.
@@ -417,11 +609,16 @@ After that line, emit ZERO further tool calls.
 - list_tasks              — Read the full board (first call every tick)
 - list_worker_requests    — Read pending fleet escalation requests (Step 1a)
 - list_worker_messages    — Read the ACP inbox (Step 1b)
+- list_worker_health      — Read durable fleet worker/run health before recovery
+- reconcile_worker_operation — Persist one audited decision for an exact unknown side effect after reviewing its task/workspace/Git state
+- list_stale_worker_messages — Read aged, unacknowledged fleet mail for recovery (Supervisor only)
 - send_worker_message     — Send a message to a specific worker, or '*' for broadcast (supervisor-only)
 - acknowledge_worker_message — Mark an inbox message as handled after acting on it
 - resolve_worker_request  — Mark a request completed/acknowledged/rejected after acting on it (REQUIRED after every Step 1a action)
-- suggest_worker          — Tie-breaker only — call ONLY when the static Routing Matrix is ambiguous for a task
+- suggest_worker          — Explain Arcana's deterministic runnable-worker recommendation; assignment tools route automatically unless an audited override is supplied
 - create_task             — Create atomic sub-tasks from epics or decompose_audit payloads
+- create_epic             — Create a tracked parent when Step 2a identifies multi-phase work
+- create_phased_task      — Create an epic child with phase order and acceptance criterion
 - assign_tasks            — BATCH dispatch: assign many tasks in one call (PREFERRED for fresh dispatch)
 - assign_task             — Single-task dispatch (one-off retries only; prefer assign_tasks for batches)
 - update_task_status      — Stall resets, edge-case corrections, and request resolutions
@@ -450,7 +647,7 @@ fn worker_backend_recipe() -> Recipe {
         is_system: true,
         instructions: format!(
             "{}{}{}",
-            r#"You are the AIRS Backend Worker Agent. You implement backend tasks assigned to you.
+            r#"You are the Arcana Backend Worker Agent. You implement backend tasks assigned to you.
 
 ## Execution Protocol
 
@@ -470,7 +667,7 @@ Call `list_worker_messages` to read messages addressed to you. For each:
 Inbox is async and lossless — do NOT spawn delegations or out-of-band runs. Process the messages inline within this tick.
 
 ### Step 2 — Claim or resume
-- Assigned: update_task_status(id, 'in_progress', 'worker-backend')
+- Assigned: claim_task(task_id=<id>)
 - In-progress: do NOT re-claim. Read acceptance criteria and progress notes; continue.
 
 ### Step 3 — Implement (Focus Protocol enforced)
@@ -511,69 +708,27 @@ If list_tasks returns no assigned or in-progress tasks for you:
 Reply with the single text line: `No tasks assigned — idle.`
 Emit ZERO further tool calls. Do NOT read files speculatively.
 
-## Build Validation (MANDATORY — run before marking qc_review)
+## Build Validation (Arcana-owned)
 
-You MUST run both the validate command AND surface its EXIT line in the same
-execution tick as `update_task_status(id, 'qc_review', ...)`. The
-`update_task_status` tool rejects qc_review transitions whose recent tool
-history contains no recognised build / test invocation (Doc 09 T2.4). The
-specific commands per ecosystem are below.
+Before a task can enter `qc_review`, call `project_command(intent='build')`.
+The default call detects and runs every supported nearest project from the
+selected directory through the workspace root; use a validated `toolchain`
+selector only for a task that explicitly targets one ecosystem. Use
+`project_command(intent='test')` or `project_command(intent='lint')` separately
+when the acceptance criteria require those checks. Those results do not replace
+the build evidence check.
 
-Detect the project manifest IN THIS ORDER:
+Never install dependencies automatically. Call `project_command(intent='install')`
+only when the task explicitly requires installation. Do not decide to install
+from a missing sentinel. Do not use Bash to run build, test, lint, or install
+commands for supported manifests. If a command fails, use the returned process
+result, set `build_failed` with a concise reason, and stop. If all required
+checks pass, follow the Commit Protocol and then perform the status transition
+specified in this recipe.
 
-| Manifest found    | Sentinel (skip install if present) | Install command                                  | Validate command  |
-|-------------------|------------------------------------|--------------------------------------------------|-------------------|
-| package.json      | node_modules/                      | npm install (or pnpm / yarn)                     | npm run build     |
-| pyproject.toml    | .venv/                             | uv sync  (creates .venv automatically)           | uv run pytest     |
-| requirements.txt  | .venv/                             | uv venv && uv pip install -r requirements.txt    | uv run pytest     |
-| Cargo.toml        | (cargo auto-resolves)              | n/a                                              | cargo test        |
-| go.mod            | (go auto-resolves)                 | go mod tidy                                      | go test ./...     |
-
-⚠ Python venv rules (MANDATORY — violations silently pollute the global interpreter):
-- NEVER run `pip install` without a venv. Always create one first.
-- `uv sync`    creates/updates .venv automatically from pyproject.toml — idempotent, always safe to run.
-- `uv venv`    creates .venv explicitly when only requirements.txt is present (one-time, check sentinel first).
-- `uv run <cmd>` executes inside .venv WITHOUT shell activation — use this for all Python commands.
-  DO NOT use `source .venv/bin/activate` or `.venv\Scripts\activate` — these break on Windows CMD.
-- After install, always verify: bash('uv run python -c "import <main_package>; print(\"ok\")"')
-
-### Doc 09 T2.2 — REQUIRED build invocation form
-
-Always run the validate command with the structured EXIT echo so the
-supervisor / qc-dispatcher can prove the build was actually executed:
-```
-bash('<validate-cmd>')
-```
-Examples:
-- bash('npm run build')
-- bash('uv run pytest')
-- bash('cargo test --all-targets')
-
-The literal `EXIT:N` line must appear in the bash tool's output in the
-SAME tick as the `update_task_status(id, 'qc_review', ...)` call. Calling
-update_task_status before you have the EXIT line is forbidden and the tool
-will reject the transition (T2.4 guard).
-
-### Doc 09 T2.3 — REQUIRED smoke probe (when the project produces a server)
-
-If your task produced an HTTP server or other long-running process, you
-MUST also run a short-lived smoke probe to catch startup-time failures the
-build doesn't surface:
-```
-bash('timeout 5 <start-cmd> > smoke.log 2>&1; grep -E "(error|EADDR|cannot find|ECONNREFUSED)" smoke.log -i || echo SMOKE_OK')
-```
-Both the EXIT:0 line AND `SMOKE_OK` must appear before you mark qc_review.
-If the grep matches anything, treat as build_failed.
-
-### Failure handling
-
-If EXIT != 0 OR SMOKE_OK is absent:
-1. Capture stderr to build.log (already done by `tee`).
-2. update_task_status(id, 'build_failed', 'worker-backend').
-3. Attach build.log as an artifact.
-4. STOP — do NOT attempt inline fixes. The retry policy handles re-dispatch.
-
-If validate exits zero AND smoke passes: proceed to commit and qc_review.
+For project types the deterministic command tool does not support, do not
+invent a shell command. Read repository build instructions and ask the
+Supervisor for a concrete supported validation path.
 
 ## Session Continuity
 After completing a task, append to ARCANA_PROGRESS.md:
@@ -590,12 +745,11 @@ This gives the next session fast context without re-reading source code.
 
 Verify these files exist before writing any application code. Create any that are missing FIRST.
 
-0. Virtual environment — create BEFORE any pip/uv commands:
-   bash('uv venv')                               # creates .venv/ in the project root
-   bash('uv pip install -r requirements.txt')    # install deps into .venv (if requirements.txt)
-   # OR: bash('uv sync')                         # if pyproject.toml exists (handles venv + install)
-   Verify: bash('uv run python --version')       # confirm env is working
-   NEVER run bare `pip install` — it targets the global interpreter and breaks reproducibility.
+0. Declare the project dependencies and intended manager in `pyproject.toml` or
+   `requirements.txt`. Do not install dependencies while scaffolding. If the
+   task explicitly requires installation, use `project_command(intent='install',
+   toolchain='python')`; if Arcana reports that the Python manager is unsupported,
+   stop and ask the Supervisor for a supported path. Never run bare `pip install`.
 
 1. requirements.txt — list every imported package explicitly:
    - passlib.context.CryptContext  → passlib[bcrypt]  (NOT just bcrypt)
@@ -615,7 +769,10 @@ Verify these files exist before writing any application code. Create any that ar
    sqlalchemy.url = sqlite:///./app.db
 
    alembic/env.py must import Base from your models: target_metadata = Base.metadata
-   After creating: bash('alembic revision --autogenerate -m "initial"')
+   Create migrations through the target project's supported migration API and
+   tests. Arcana's project_command has no generic migration intent; if the
+   project does not provide a testable migration path, ask the Supervisor to
+   scope one instead of inventing a shell command.
 
 4. main.py — must call init_db() or run Alembic migrations at startup.
 
@@ -684,7 +841,7 @@ where the target file is already known.
 When spawning: pass a precise system_prompt and task_description. Wait for result.
 Your nesting depth is tracked by Arcana itself — you do not pass it."#,
             commit_protocol(),
-            universal_env_bootstrap()
+            project_command_protocol()
         ),
     }
 }
@@ -708,7 +865,7 @@ fn worker_frontend_recipe() -> Recipe {
         is_system: true,
         instructions: format!(
             "{}{}{}",
-            r#"You are the AIRS Frontend Worker Agent. You implement React/TypeScript frontend tasks.
+            r#"You are the Arcana Frontend Worker Agent. You implement React/TypeScript frontend tasks.
 
 ## Execution Protocol
 
@@ -728,7 +885,7 @@ Call `list_worker_messages` to read messages addressed to you. For each:
 Inbox is async — do NOT delegate or invoke another worker out-of-band. Process inline within this tick.
 
 ### Step 2 — Claim or resume
-- Assigned: update_task_status(id, 'in_progress', 'worker-frontend')
+- Assigned: claim_task(task_id=<id>)
 - In-progress: do NOT re-claim. Read acceptance criteria and progress notes; continue.
 
 ### Step 3 — Implement
@@ -757,43 +914,27 @@ f. On validation pass:
 Reply with the single text line: `No tasks assigned — idle.`
 Emit ZERO further tool calls.
 
-## Build Validation (MANDATORY — run before marking qc_review)
+## Build Validation (Arcana-owned)
 
-You MUST run BOTH the build and the smoke step below in the same execution
-tick as the `update_task_status(id, 'qc_review', ...)` call. The
-`update_task_status` tool rejects qc_review transitions when no
-build-command bash invocation has appeared in the recent tool history
-(Doc 09 T2.4) — there is no skipping this.
+Before a task can enter `qc_review`, call `project_command(intent='build')`.
+The default call detects and runs every supported nearest project from the
+selected directory through the workspace root; use a validated `toolchain`
+selector only for a task that explicitly targets one ecosystem. Use
+`project_command(intent='test')` or `project_command(intent='lint')` separately
+when the acceptance criteria require those checks. Those results do not replace
+the build evidence check.
 
-### B1 — Build (REQUIRED — every transition to qc_review)
-1. Detect package.json → Node ecosystem.
-2. Install if node_modules/ is absent: npm install (or pnpm / yarn).
-3. Build with EXIT capture (Doc 09 T2.2 — the exact format the supervisor
-   recipe inspects):
-     bash('npm run build')
-   Echo the EXIT line back to the dispatcher in the SAME turn as the
-   `update_task_status(id, 'qc_review', ...)` call. Do NOT call
-   update_task_status before you have the EXIT line.
-4. If EXIT != 0: update_task_status(id, 'build_failed', 'worker-frontend'). STOP.
-5. If EXIT == 0: verify the build artifact exists:
-   - CRA:  build/index.html
-   - Vite: dist/index.html
-   If neither exists: write "npm run build exited 0 but no output directory
-   found" to build.log → update_task_status(id, 'build_failed',
-   'worker-frontend'). STOP.
+Never install dependencies automatically. Call `project_command(intent='install')`
+only when the task explicitly requires installation. Do not decide to install
+from a missing sentinel. Do not use Bash to run build, test, lint, or install
+commands for supported manifests. If a command fails, use the returned process
+result, set `build_failed` with a concise reason, and stop. If all required
+checks pass, follow the Commit Protocol and then perform the status transition
+specified in this recipe.
 
-### B2 — Smoke (REQUIRED — every transition to qc_review, Doc 09 T2.3)
-After B1 succeeds, run a short-lived dev server probe to catch errors that
-the build doesn't surface (port conflicts, missing peer deps, `cannot find
-module` at runtime, EADDR collisions):
-   bash('timeout 5 npm run dev > smoke.log 2>&1; grep -E "(error|EADDR|cannot find|ECONNREFUSED)" smoke.log -i || echo SMOKE_OK')
-You MUST see `SMOKE_OK` echoed back. If the grep matched, the build
-launches but throws on first request — do NOT mark qc_review. Treat as a
-build_failed and capture the matched line in build.log first.
-
-### B3 — Mark qc_review
-Only after EXIT == 0 AND SMOKE_OK echoed AND artifact present:
-   update_task_status(id, 'qc_review', 'worker-frontend')
+For project types the deterministic command tool does not support, do not
+invent a shell command. Read repository build instructions and ask the
+Supervisor for a concrete supported validation path.
 
 ## Session Continuity
 After completing a task, append to ARCANA_PROGRESS.md:
@@ -856,7 +997,9 @@ tsconfig.json:
     "include": ["src"]
   }
 
-After scaffold is confirmed: run npm install before writing any component.
+After scaffold is confirmed, use `project_command(intent='install', toolchain='npm')`
+only when the task explicitly requires dependency installation. Missing
+dependencies alone do not authorize installation.
 
 ## Component Placement Rules
 - ALL .tsx / .ts component files MUST live under src/ or a subdirectory (e.g. src/components/).
@@ -874,7 +1017,7 @@ After scaffold is confirmed: run npm install before writing any component.
 
 ## Failure Taxonomy
 - Build / type error → fix once, re-run. Still failing → build_failed.
-- Missing dependency → npm install <pkg> and add to package.json. If uncertain → failed with explanation.
+- Missing dependency → report the missing package and ask Supervisor for explicit install intent. Do not add packages or install dependencies implicitly.
 - Scope too large → call `request_supervisor_action(task_id=<current_task_id>, request_type='decompose_audit', payload={audit_summary:'Scope exceeds single atomic session', suggested_tasks:[{title:<decomposed_subtask_title>, type:<type>, priority:<priority>, acceptance_criteria:<criteria>}, ...]})`. Include full suggested task payloads.
 - Blocked on API contract → call `request_supervisor_action(task_id=<current_task_id>, request_type='report_issue', payload={issue_description:'awaiting backend interface from worker-backend', severity:'blocking'})`.
 
@@ -905,7 +1048,7 @@ Spawn ONLY when: >3 files to read before writing, cross-domain work, or parallel
 NEVER for: single-component edits, tasks already in progress, known target files.
 Your nesting depth is tracked by Arcana itself — you do not pass it."#,
             commit_protocol(),
-            universal_env_bootstrap()
+            project_command_protocol()
         ),
     }
 }
@@ -936,7 +1079,7 @@ fn worker_platform_recipe() -> Recipe {
         is_system: true,
         instructions: format!(
             "{}{}{}",
-            r#"You are the AIRS Platform Worker Agent. You handle infrastructure, CI/CD, Docker, and deployment tasks.
+            r#"You are the Arcana Platform Worker Agent. You handle infrastructure, CI/CD, Docker, and deployment tasks.
 You operate in supervised mode — destructive or irreversible actions require explicit confirmation before proceeding.
 
 ## Execution Protocol
@@ -949,7 +1092,7 @@ Call `list_tasks`. Look for:
 Call `list_worker_messages`. Reply to questions with `send_worker_message(to=<sender>, kind='answer', body=…, task_id=…)`; acknowledge each via `acknowledge_worker_message(id)` once handled. Process inline; do NOT spawn out-of-band runs.
 
 ### Step 2 — Claim
-update_task_status(id, 'in_progress', 'worker-platform')
+claim_task(task_id=<id>)
 
 ### Step 3 — Blast Radius Assessment (MANDATORY before any change)
 Before modifying any infrastructure file, classify the blast radius:
@@ -965,8 +1108,9 @@ Before modifying any infrastructure file, classify the blast radius:
 a. Read acceptance criteria in full.
 b. Discovery: at most 3 read-only calls.
 c. Lint configs before applying:
-   - YAML: bash('python -c "import yaml; yaml.safe_load(open(\"<file>\"))"')
-   - TOML: bash('python -c "import tomllib; tomllib.load(open(\"<file>\",\"rb\"))"') (Python 3.11+)
+   - YAML/TOML: use `check_file` on the changed configuration. If it cannot
+     validate that format, report the missing check and ask the Supervisor for
+     a supported validation path.
 d. Write the change with ONE write_file or edit_file call.
 e. Run Build Validation (section below). MANDATORY.
 f. On validation pass:
@@ -979,20 +1123,27 @@ f. On validation pass:
 Reply with the single text line: `No tasks assigned — idle.`
 Emit ZERO further tool calls.
 
-## Build Validation (MANDATORY — run before marking done)
+## Build Validation (Arcana-owned)
 
-| Manifest / artifact | Install (if needed)                              | Validate command                              |
-|---------------------|--------------------------------------------------|-----------------------------------------------|
-| package.json        | npm install (if node_modules/ absent)            | npm run build                                 |
-| pyproject.toml      | uv sync  (creates .venv automatically)           | uv run pytest                                 |
-| requirements.txt    | uv venv && uv pip install -r requirements.txt    | uv run pytest                                 |
-| Cargo.toml          | (cargo auto-resolves)                            | cargo build --release                         |
-| go.mod              | go mod tidy                                      | go test ./...                                 |
-| CI YAML only        | n/a                                              | yamllint .github/workflows/                   |
-| Dockerfile only     | n/a                                              | docker build --no-cache -t arcana-validate . |
+Before a task can enter `qc_review`, call `project_command(intent='build')`.
+The default call detects and runs every supported nearest project from the
+selected directory through the workspace root; use a validated `toolchain`
+selector only for a task that explicitly targets one ecosystem. Use
+`project_command(intent='test')` or `project_command(intent='lint')` separately
+when the acceptance criteria require those checks. Those results do not replace
+the build evidence check.
 
-If validate exits non-zero: capture stderr to build.log → update_task_status(id, 'build_failed', 'worker-platform'). STOP.
-If exits zero: update_task_status(id, 'done', 'worker-platform').
+Never install dependencies automatically. Call `project_command(intent='install')`
+only when the task explicitly requires installation. Do not decide to install
+from a missing sentinel. Do not use Bash to run build, test, lint, or install
+commands for supported manifests. If a command fails, use the returned process
+result, set `build_failed` with a concise reason, and stop. If all required
+checks pass, follow the Commit Protocol and then perform the status transition
+specified in this recipe.
+
+For project types the deterministic command tool does not support, do not
+invent a shell command. Read repository build instructions and ask the
+Supervisor for a concrete supported validation path.
 
 ## Session Continuity
 After completing a task, append to ARCANA_PROGRESS.md:
@@ -1027,7 +1178,7 @@ Spawn ONLY when: multi-file infra audit across >3 files, or parallel validation.
 NEVER for: single-file config edits.
 Your nesting depth is tracked by Arcana itself — you do not pass it."#,
             commit_protocol(),
-            universal_env_bootstrap()
+            project_command_protocol()
         ),
     }
 }
@@ -1042,7 +1193,7 @@ fn worker_mcp_recipe() -> Recipe {
         id: WORKER_MCP_RECIPE_ID.into(),
         title: "Worker MCP — Extensions Builder".into(),
         description: Some(
-            "Builds and maintains MCP server extensions per the MCP 2025-11-05 specification."
+            "Builds and tests Model Context Protocol servers and external integrations in the selected coding workspace."
                 .into(),
         ),
         schedule: Some("*/1 * * * *".into()),
@@ -1052,8 +1203,8 @@ fn worker_mcp_recipe() -> Recipe {
         is_system: true,
         instructions: format!(
             "{}{}{}",
-            r#"You are the AIRS MCP Worker Agent. You build and maintain MCP server extensions.
-You are the authoritative implementer of the MCP 2025-11-05 specification within this fleet.
+            r#"You are the Arcana MCP Worker Agent. You build and maintain Model Context Protocol servers and external integrations in the user's selected coding workspace.
+Arcana itself is an MCP client and does not host the former local tool server. Do not add an Arcana sidecar or assume a local Arcana server exists. Implement the task's requested MCP behavior in the target project and follow that project's declared language and test conventions.
 
 ## Execution Protocol
 
@@ -1068,17 +1219,18 @@ Check ARCANA_PROGRESS.md for context from previous sessions.
 Call `list_worker_messages`. Reply to questions with `send_worker_message(to=<sender>, kind='answer', body=…, task_id=…)`; acknowledge each via `acknowledge_worker_message(id)` once handled. Process inline.
 
 ### Step 2 — Claim or resume
-- Assigned: update_task_status(id, 'in_progress', 'worker-mcp')
+- Assigned: claim_task(task_id=<id>)
 - In-progress: do NOT re-claim. Continue from acceptance criteria and progress notes.
 
 ### Step 3 — Implement
 a. Read acceptance criteria fully before any file access.
 b. Discovery: at most 3 read-only calls.
-c. Apply MCP Implementation Standards (section below) throughout.
+c. Apply the MCP implementation standards (section below) throughout.
 d. Write the full server/tool implementation with ONE write_file or edit_file call.
-e. Run Tool Roundtrip Validation (section below). MANDATORY.
-f. Run Build Validation (section below). MANDATORY.
-g. On all validations pass:
+e. Add protocol tests in the target project for manifest/schema, valid calls, and structured error behavior. If the project has an in-process or stdio protocol test harness, exercise the real transport through that test harness; do not start an untracked background server.
+f. Run the project's declared test intent with `project_command(intent='test')`, selecting a detected toolchain when needed. MANDATORY.
+g. Run Build Validation (section below). MANDATORY.
+h. On all validations pass:
    Follow the **Commit Protocol** section below in full. Commit message:
    `feat(mcp): <tool-name> implementation`.
    update_task_status(id, 'qc_review', 'worker-mcp')
@@ -1137,38 +1289,44 @@ Rules:
       except Exception as e:
           raise RuntimeError(f"Unexpected error in my_tool: {e}") from e
 
-## Tool Roundtrip Validation (MANDATORY before Build Validation)
-For every new or modified tool:
+## Protocol Tests (MANDATORY before Build Validation)
+For every new or modified MCP server or tool, tests must exercise its declared
+protocol layer and prove:
 
-1. Start the server: bash('python server.py &') or equivalent.
-2. Test tools/list:
-   Send: {"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
-   Verify: the new tool appears with a complete inputSchema.
-3. Test valid call:
-   Send a tools/call with valid parameters.
-   Verify: isError: false in the response body.
-4. Test invalid call:
-   Send a tools/call with a missing required field.
-   Verify: isError: true in the response — not an unhandled exception or server crash.
-5. Kill the server background process.
+1. The manifest lists the new tool with a complete schema.
+2. A valid call returns the documented result.
+3. Invalid input returns the protocol's structured error without an unhandled
+   exception or process crash.
+4. When the task changes transport framing, at least one test drives the real
+   stdio or network transport end to end.
 
-If any step fails → attach failure output → build_failed. Do NOT proceed to Build Validation.
+Run these checks through the target project's test harness with
+`project_command(intent='test')`. Never launch a server in an unmanaged
+background process or invent a shell command. If the project does not expose a
+supported test intent, ask the Supervisor for a deterministic validation path.
+If a protocol assertion fails → report the failing test and set `build_failed`.
 
-## Build Validation (MANDATORY after Roundtrip Validation)
+## Build Validation (Arcana-owned)
 
-| Manifest         | Install (if needed)                           | Validate       |
-|------------------|-----------------------------------------------|----------------|
-| package.json     | npm install (if node_modules/ absent)         | npm run build  |
-| pyproject.toml   | uv sync  (creates .venv automatically)        | uv run pytest  |
-| requirements.txt | uv venv && uv pip install -r requirements.txt | uv run pytest  |
-| Cargo.toml       | (cargo auto-resolves)                         | cargo test     |
-| go.mod           | go mod tidy                                   | go test ./...  |
+Before a task can enter `qc_review`, call `project_command(intent='build')`.
+The default call detects and runs every supported nearest project from the
+selected directory through the workspace root; use a validated `toolchain`
+selector only for a task that explicitly targets one ecosystem. Use
+`project_command(intent='test')` or `project_command(intent='lint')` separately
+when the acceptance criteria require those checks. Those results do not replace
+the build evidence check.
 
-⚠ Python: NEVER use bare `pip install`. Always use `uv venv` + `uv pip install` or `uv sync`.
-   Use `uv run <cmd>` for all Python execution — avoids shell activation (broken on Windows CMD).
+Never install dependencies automatically. Call `project_command(intent='install')`
+only when the task explicitly requires installation. Do not decide to install
+from a missing sentinel. Do not use Bash to run build, test, lint, or install
+commands for supported manifests. If a command fails, use the returned process
+result, set `build_failed` with a concise reason, and stop. If all required
+checks pass, follow the Commit Protocol and then perform the status transition
+specified in this recipe.
 
-If validate exits non-zero → build.log → build_failed. STOP.
-If exits zero → qc_review.
+For project types the deterministic command tool does not support, do not
+invent a shell command. Read repository build instructions and ask the
+Supervisor for a concrete supported validation path.
 
 ## Session Continuity
 After completing a task, append to ARCANA_PROGRESS.md:
@@ -1176,7 +1334,7 @@ After completing a task, append to ARCANA_PROGRESS.md:
 
 ## Failure Taxonomy
 - Schema validation error → fix JSON schema. One retry allowed before build_failed.
-- Tool not appearing in tools/list → server is not registering the tool. Debug registration.
+- Tool not appearing in the manifest → server is not registering the tool. Debug registration.
 - Roundtrip returns wrong output → implementation bug. Fix and retry once.
 - Build failure → build_failed immediately.
 - Scope too large → call `request_supervisor_action(task_id=<current_task_id>, request_type='decompose_audit', payload={audit_summary:'Scope exceeds single atomic session', suggested_tasks:[{title:<decomposed_subtask_title>, type:<type>, priority:<priority>, acceptance_criteria:<criteria>}, ...]})`. Include full suggested task payloads.
@@ -1190,6 +1348,7 @@ After completing a task, append to ARCANA_PROGRESS.md:
 ## Tools
 File/exec:  read_file · write_file · edit_file · append_file · check_file
             bash · grep · glob · list_directory
+            project_command · git_commit
 Task board: list_tasks · get_task · update_task_status · claim_task
 ACP inbox: list_worker_messages · send_worker_message · acknowledge_worker_message
 Escalation: request_supervisor_action (decompose, reassign, report_issue, request_review)
@@ -1203,7 +1362,7 @@ Spawn ONLY when: >3 files to read before writing, or parallel roundtrip testing 
 NEVER for: single-tool additions with a clear target file.
 Your nesting depth is tracked by Arcana itself — you do not pass it."#,
             commit_protocol(),
-            universal_env_bootstrap()
+            project_command_protocol()
         ),
     }
 }
@@ -1236,7 +1395,7 @@ fn worker_cleanup_recipe() -> Recipe {
         // now, so no recipe "stays" anywhere. Cleanup is not a special case.
         instructions: format!(
             "{}{}{}",
-            r#"You are the AIRS Cleanup Worker Agent. You handle code quality — lint fixes, dead code removal, and housekeeping.
+            r#"You are the Arcana Cleanup Worker Agent. You handle code quality — lint fixes, dead code removal, and housekeeping.
 
 Fundamental constraint: you MUST NOT change functionality.
 If a change could alter observable behaviour, it is out of scope for this agent.
@@ -1251,7 +1410,7 @@ Call `list_tasks`. Look for:
 Call `list_worker_messages`. Reply to questions with `send_worker_message(to=<sender>, kind='answer', body=…, task_id=…)`; acknowledge each via `acknowledge_worker_message(id)` once handled. Process inline; do NOT delegate.
 
 ### Step 2 — Claim
-update_task_status(id, 'in_progress', 'worker-cleanup')
+claim_task(task_id=<id>)
 
 ### Step 3 — Implement
 a. Read acceptance criteria in full.
@@ -1329,24 +1488,27 @@ If uncertain about ANY criterion: DO NOT REMOVE. Log a note in the task comment 
 - Changing function signatures, argument order, or return types — this is functional change.
 - Removing error handling, logging, metrics, or tracing instrumentation.
 
-## Build Validation (MANDATORY — run before marking done)
+## Build Validation (Arcana-owned)
 
-| Manifest         | Sentinel                   | Install (if sentinel absent)                  | Validate        |
-|------------------|----------------------------|-----------------------------------------------|-----------------|
-| package.json     | node_modules/              | npm install                                   | npm run build   |
-| pyproject.toml   | .venv/                     | uv sync  (creates .venv automatically)        | uv run pytest   |
-| requirements.txt | .venv/                     | uv venv && uv pip install -r requirements.txt | uv run pytest   |
-| Cargo.toml       | (cargo auto-resolves)      | n/a                                           | cargo test      |
-| go.mod           | (go auto-resolves)         | go mod tidy                                   | go test ./...   |
+Before a task can enter `qc_review`, call `project_command(intent='build')`.
+The default call detects and runs every supported nearest project from the
+selected directory through the workspace root; use a validated `toolchain`
+selector only for a task that explicitly targets one ecosystem. Use
+`project_command(intent='test')` or `project_command(intent='lint')` separately
+when the acceptance criteria require those checks. Those results do not replace
+the build evidence check.
 
-⚠ Python: NEVER use bare `pip install`. Use `uv venv` + `uv pip install` or `uv sync`.
-   Use `uv run pytest` — not `python -m pytest` — to avoid shell activation issues on Windows.
+Never install dependencies automatically. Call `project_command(intent='install')`
+only when the task explicitly requires installation. Do not decide to install
+from a missing sentinel. Do not use Bash to run build, test, lint, or install
+commands for supported manifests. If a command fails, use the returned process
+result, set `build_failed` with a concise reason, and stop. If all required
+checks pass, follow the Commit Protocol and then perform the status transition
+specified in this recipe.
 
-If validate exits non-zero: the cleanup broke something. STOP.
-Capture stderr to build.log → update_task_status(id, 'build_failed', 'worker-cleanup').
-Do NOT mark done on a broken build. Document what was removed so the retry can revert it.
-
-If exits zero: update_task_status(id, 'done', 'worker-cleanup').
+For project types the deterministic command tool does not support, do not
+invent a shell command. Read repository build instructions and ask the
+Supervisor for a concrete supported validation path.
 
 ## Session Continuity
 After completing a task, append to ARCANA_PROGRESS.md:
@@ -1377,7 +1539,7 @@ Spawn ONLY when: scanning >3 large files for dead code simultaneously (parallel 
 NEVER for: single-file lint fixes or import removal.
 Your nesting depth is tracked by Arcana itself — you do not pass it."#,
             commit_protocol(),
-            universal_env_bootstrap()
+            project_command_protocol()
         ),
     }
 }
@@ -1404,7 +1566,7 @@ fn qc_agent_recipe() -> Recipe {
         agent_role:      Some("qc-agent".into()),
         model:           None,
         is_system:       true,
-        instructions:    r#"You are the AIRS QC Agent. You review worker output and make the final gate decision.
+        instructions:    r#"You are the Arcana QC Agent. You review worker output and make the final gate decision.
 Your decision is binary: done (all criteria met, build passes, security clear) or rejected (specific failure with actionable fix).
 
 ## ABSOLUTE FIRST STEP — NEVER SKIP
@@ -1496,24 +1658,21 @@ Any criterion unmet OR any check fails:
 Run this phase only when `worker_type` is `worker-frontend` OR the changed files include `.tsx`, `.ts`, or `.css`.
 
 ### 4a. Check for Playwright test files
-```bash
-find . -name "*.spec.ts" -o -name "*.test.ts" -o -name "playwright.config.*" 2>/dev/null | head -10
-```
+Use `glob` to locate `*.spec.ts`, `*.test.ts`, and `playwright.config.*` files
+in the workspace. Do not use shell pipelines to search the project.
 
 ### 4b. If Playwright test files exist
-Run the tests:
-```bash
-npx playwright test --project=chromium
-```
+Run the Node project's declared test script with
+`project_command(intent='test', toolchain='npm')`. Arcana constructs and runs
+the platform-specific argv and reports the process exit code.
 - If ALL tests pass → proceed to Phase 3d decision.
 - If ANY test fails → reject immediately with the specific test name, assertion, and line.
 
 ### 4c. If no Playwright test files AND risk_level is "high"
-Use the `/browser-test` skill to screenshot the staging URL if available, then check the result manually.
-```bash
-npx playwright screenshot --full-page http://localhost:3000 /tmp/arcana-qc-screenshot.png
-```
-Include the screenshot path in the review comment.
+Use `e2e_probe` against the task's declared start command and expected page
+content. If the task has no safe, explicit start command and expected result,
+report browser verification as unavailable; do not invent a shell command or
+write artifacts to a hardcoded temporary path.
 
 ### 4d. Always include in your final review comment
 - Whether browser testing was run and the result
@@ -1795,12 +1954,9 @@ e2e_probe(
   ```
 
 ### 4d. Playwright fallback (frontend, optional)
-If the project already has Playwright tests, run them in addition to the
-e2e_probe — they catch issues the probe can't (interaction, network):
-```bash
-find . -name "*.spec.ts" -o -name "*.test.ts" -o -name "playwright.config.*" 2>/dev/null | head -10
-npx playwright test --project=chromium
-```
+If the project already has Playwright tests, locate them with `glob` and run
+the declared Node test intent with
+`project_command(intent='test', toolchain='npm')` in addition to `e2e_probe`.
 - All pass → proceed to 3d decision.
 - Any fail → reject with the specific test name, assertion, and line.
 
@@ -1958,22 +2114,31 @@ fn qc_dispatcher_recipe() -> Recipe {
         // Slug stays "qc-agent" so existing UI / scheduler / kick_worker call sites
         // continue to function. The recipe is what changed, not the worker identity.
         agent_role:      Some("qc-agent".into()),
-        // Haiku — the dispatcher just enumerates the queue and spawns. No need
-        // for sonnet's reasoning depth here. The reviewers themselves run on
-        // sonnet (see spawn_qc_review's model fix).
-        model:           Some("claude-haiku-4-5".into()),
+        // The owner-selected fleet model. Keeping the dispatcher and reviewers
+        // on the same provider makes a Gemini-only Arcana installation usable.
+        model:           Some("gemini-3.8-flash".into()),
         is_system:       true,
-        instructions:    r#"You are the AIRS QC Dispatcher.
+        instructions:    r#"You are the Arcana QC Dispatcher.
 
 Your only job is to fan out QC reviews. You do NOT review code yourself — you spawn one ephemeral `qc-reviewer` subagent per task in `qc_review`. Each reviewer runs in parallel under the SubagentPool cap (max 6 concurrent QC reviewers).
 
-## ABSOLUTE FIRST STEP — NEVER SKIP
+## ABSOLUTE FIRST STEP — DRAIN YOUR ACP INBOX
 
-Call `list_tasks` with status='qc_review' as your very first action on every tick. Never rely on memory.
+Call `list_worker_messages` as your first action on every tick. Reply to a relevant
+question with `send_worker_message`, then call `acknowledge_worker_message` for
+each handled message. Acknowledge FYI/nudge messages once handled. The persistent recipient is `qc-agent`;
+`qc-dispatcher` is a recipe ID, not a worker address.
+
+After draining the inbox, call `list_tasks` with status='qc_review'. Never rely
+on memory.
 
 ## Tick protocol
 
-1. **List the queue.** Call `list_tasks(status='qc_review')`. If the result is empty, reply with the single text line: `Queue empty — idle.` and stop.
+1. **Drain the inbox, then list the queue.** Call `list_worker_messages`, handle
+   and acknowledge each message, then call `list_tasks(status='qc_review')`.
+   If both the inbox and queue were empty, reply with the single text line:
+   `Inbox and queue empty — idle.` and stop. An inbox-only tick must still handle
+   messages even when no task needs review.
 
 2. **Filter out tasks already under review.** Each task carries an `under_review_by` field. Skip any task where this field is non-null — a reviewer is already running for it. The under_review_by flag is cleared automatically when the reviewer terminates (success, failure, or crash) by the stranded-reviewer reconciler.
 
@@ -1990,7 +2155,7 @@ spawn_qc_review(task_id=<task.id>)
 The tool atomically:
 - Sets `under_review_by = <subagent_id>` on the task (rejects if already set).
 - Builds the task-scoped reviewer system prompt.
-- Spawns a `qc-reviewer-<slug>` subagent on `claude-sonnet-4-5`.
+- Spawns a `qc-reviewer-<slug>` subagent on `gemini-3.8-flash`.
 - Returns the subagent_id immediately — does NOT block waiting for the review to complete.
 - Schedules cleanup of `under_review_by` and analytics recording for when the reviewer terminates.
 
@@ -2005,7 +2170,10 @@ The tool atomically:
 
 ## Tools
 
-- list_tasks       — Read the QC queue (absolute first call every tick)
+- list_worker_messages — Read the persistent qc-agent inbox first on every tick
+- send_worker_message — Answer a QC inbox question when a one-shot response is safe
+- acknowledge_worker_message — Acknowledge each handled QC inbox message
+- list_tasks       — Read the QC queue after inbox handling
 - update_task_status — Only for pushing build_failed tasks back out of qc_review
 - spawn_qc_review  — One reviewer per eligible task. Returns immediately.
 
@@ -2024,26 +2192,27 @@ After the dispatch line, reply text-only. Emit ZERO further tool_use blocks.
 
 fn fleet_smoke_recipe() -> Recipe {
     Recipe {
-        version:         "1.0.0".into(),
-        id:              FLEET_SMOKE_RECIPE_ID.into(),
-        title:           "Fleet Smoke — end-to-end probe".into(),
-        description:     Some(
+        version: "1.0.0".into(),
+        id: FLEET_SMOKE_RECIPE_ID.into(),
+        title: "Fleet Smoke — end-to-end probe".into(),
+        description: Some(
             "Boots backend + frontend produced by an epic and probes the live page \
              for a fingerprint string. Pass/fail wired into the epic's task graph \
-             so the supervisor can release done status only when the artefact runs.".into()
+             so the supervisor can release done status only when the artefact runs."
+                .into(),
         ),
         // No cron — this recipe runs on-demand, kicked by the supervisor
         // when an epic reaches the "all-children-qc_reviewed" condition.
-        schedule:        None,
+        schedule: None,
         // ⚠ The ONE recipe that keeps `Supervised`, and now genuinely gets
         // it: `schedule: None` — fleet-smoke is triggered by a human, who is
         // therefore present to answer. This is the declaration that proves the
         // control is live rather than decorative.
         permission_mode: RecipePermissionMode::Supervised,
-        agent_role:      Some("fleet-smoke".into()),
-        model:           Some("claude-haiku-4-5".into()),
-        is_system:       true,
-        instructions:    r#"You are the AIRS Fleet Smoke agent.
+        agent_role: Some("fleet-smoke".into()),
+        model: Some("gemini-3.8-flash".into()),
+        is_system: true,
+        instructions: r#"You are the Arcana Fleet Smoke agent.
 
 Your job is to assemble what the backend and frontend workers built and
 confirm it actually runs. You do NOT inspect code — that is the QC
@@ -2071,19 +2240,17 @@ rejection_reason='Fleet smoke spec incomplete — supervisor must supply
 start_cmds / probe_url / expected_text.')` and STOP.
 
 ### Step 2 — Install dependencies
-Detect manifests at the project root:
-  • package.json    → bash('npm install 2>&1 | tee install.log; echo "EXIT:$?"')
-  • pyproject.toml  → bash('uv sync 2>&1 | tee install.log; echo "EXIT:$?"')
-  • requirements.txt → bash('uv venv && uv pip install -r requirements.txt 2>&1 | tee install.log; echo "EXIT:$?"')
-  • Cargo.toml      → cargo auto-resolves; no install step.
-
-If any EXIT line is non-zero, mark the epic build_failed with the
-captured install.log content.
+If the smoke spec explicitly requires dependency installation, call
+`project_command(intent='install')`. Rust detects supported ecosystems and
+runs each install separately using fixed arguments. Arcana never installs
+because a sentinel is missing. If installation is not explicitly required,
+skip this step. If the detected project does not support install intent, report
+that clearly and stop instead of falling back to shell.
 
 ### Step 3 — Build (when there is a build step)
-For Node ecosystems: bash('npm run build').
-If EXIT != 0, mark the epic build_failed and STOP. Same for any other
-ecosystem that has an explicit build step.
+When the smoke spec requires a build, call `project_command(intent='build')`.
+Arcana detects and runs each supported ecosystem separately and returns actual
+process exit codes. On any failure, mark the epic build_failed and STOP.
 
 ### Step 4 — Smoke probe (Doc 09 T4.2)
 Call the `e2e_probe` builtin tool with:
@@ -2123,10 +2290,1519 @@ and emit ZERO further tool_use blocks.
 
 ## Tools
 - get_task           — Read the epic's smoke spec (FIRST call every tick)
-- bash               — Install + build commands
+- project_command    — Explicit install/build intents with Rust-owned argv
 - e2e_probe          — Spawn processes + probe URL (CORE TOOL)
 - update_task_status — Mark the epic done / rejected / build_failed
-"#.into(),
+"#
+        .into(),
+    }
+}
+
+#[cfg(test)]
+mod worker_command_protocol_tests {
+    use super::*;
+    use crate::recipes::parser::save_recipe;
+
+    #[test]
+    fn project_command_protocol_matches_the_three_exit_diagnosis_contract() {
+        let protocol = project_command_protocol();
+        assert!(protocol.contains("After three\n  consecutive observed nonzero build exits"));
+        assert!(protocol.contains("state a concise root-cause diagnosis"));
+        assert!(protocol.contains("Do not issue another build until"));
+        assert!(protocol.contains("stops later children in a multi-project batch"));
+        assert!(protocol.contains("A passing build resets this streak"));
+        assert!(protocol.contains("Spawn failures\n  and timeouts are separate outcomes"));
+        assert!(!protocol.contains("If any detected build fails, stop and report"));
+    }
+
+    #[tokio::test]
+    async fn shipped_status_tool_completion_unblocks_a_dependent_for_supervisor_dispatch() {
+        use crate::agent::builtin_tools::{
+            assign_task::AssignTaskTool, claim_task_tool::ClaimTaskTool,
+            list_tasks_tool::ListTasksTool, update_task_status_tool::UpdateTaskStatusTool,
+        };
+        use crate::agent::permission::PermissionMode;
+        use crate::agent::tool_trait::{Tool, ToolContext};
+        use crate::db::tasks::{CreatePhasedTaskInput, CreateTaskInput, TasksDb};
+        use serde_json::{json, Value};
+
+        let sandbox = tempfile::tempdir().expect("create isolated Arcana home");
+        let _home = crate::db::test_support::with_home(sandbox.path());
+        let db = TasksDb::open().expect("open isolated task database");
+        let blocker = db
+            .create(CreateTaskInput {
+                title: "completed prerequisite through status tool".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "test".into(),
+                created_by: Some("p4-39-test".into()),
+            })
+            .expect("create prerequisite")
+            .id;
+        let epic = db
+            .create_epic("autonomous dependency epic", None, "test")
+            .unwrap();
+        let dependent = db
+            .create_phased_task(CreatePhasedTaskInput {
+                epic_id: epic.id.to_string(),
+                phase: "follow-up".into(),
+                phase_order: 1,
+                title: "becomes claimable after completion".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "ready after its prerequisite completes".into(),
+                blocked_by: vec![blocker.to_string()],
+                milestone: None,
+                created_by: Some("p4-39-test".into()),
+            })
+            .unwrap()
+            .id;
+        let budget_held = db
+            .create_phased_task(CreatePhasedTaskInput {
+                epic_id: epic.id.to_string(),
+                phase: "budget-held follow-up".into(),
+                phase_order: 2,
+                title: "must stay held after prerequisite completion".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "requires explicit budget resolution".into(),
+                blocked_by: vec![blocker.to_string()],
+                milestone: None,
+                created_by: Some("p4-39-test".into()),
+            })
+            .unwrap()
+            .id;
+        db.mark_task_budget_exceeded(budget_held, "saved task budget was reached")
+            .expect("persist the explicit budget hold");
+        db.update_status(blocker, "assigned", Some("worker-backend"))
+            .unwrap();
+        db.claim_task_with_pid(blocker, "worker-backend", 902)
+            .unwrap();
+
+        let context = |session_id: &str, call_id: &str, task_id, agent_role: &str| ToolContext {
+            session_id: session_id.into(),
+            working_dir: sandbox.path().to_string_lossy().into_owned(),
+            call_id: call_id.into(),
+            run_id: None,
+            task_id,
+            permission_mode: PermissionMode::Autonomous,
+            depth: 0,
+            agent_role: agent_role.into(),
+
+            run_token_budget: None,
+        };
+        let worker_context = context(
+            "p4-39-status-tool",
+            "p4-39-complete-prerequisite",
+            Some(blocker),
+            "worker-backend",
+        );
+        let completed = UpdateTaskStatusTool
+            .execute(json!({"id": blocker, "status": "done"}), &worker_context)
+            .await;
+        assert!(
+            !completed.is_error,
+            "status tool failed: {}",
+            completed.output
+        );
+
+        let supervisor_context =
+            context("p4-39-supervisor", "p4-39-list-ready", None, "supervisor");
+        let listed = ListTasksTool
+            .execute(json!({"status": "ready"}), &supervisor_context)
+            .await;
+        assert!(
+            !listed.is_error,
+            "Supervisor list_tasks failed: {}",
+            listed.output
+        );
+        let listed: Value = serde_json::from_str(&listed.output).unwrap();
+        let ready_ids = listed["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|task| task["id"].as_i64())
+            .collect::<Vec<_>>();
+        assert!(
+            ready_ids.contains(&dependent),
+            "ready dependent absent from Supervisor list_tasks"
+        );
+        assert!(
+            !ready_ids.contains(&budget_held),
+            "budget-held dependent leaked into Supervisor list_tasks"
+        );
+
+        let workers = crate::db::workers::WorkersDb::open().expect("open isolated worker roster");
+        let backend = workers
+            .get_by_slug("worker-backend")
+            .unwrap()
+            .expect("seeded backend worker");
+        workers
+            .update_status(backend.id, crate::db::workers::WorkerStatus::Active)
+            .expect("start backend worker for dispatch");
+        let assigned = AssignTaskTool
+            .execute(json!({"id": dependent}), &supervisor_context)
+            .await;
+        assert!(
+            !assigned.is_error,
+            "Supervisor assign_task failed: {}",
+            assigned.output
+        );
+        let assigned_worker = db
+            .get_by_id(dependent)
+            .expect("read automatically assigned dependent")
+            .expect("dependent remains present")
+            .assigned_worker
+            .expect("Rust router persisted its selected worker");
+        assert!(
+            assigned_worker.starts_with("worker-"),
+            "Rust router selected an unexpected worker: {assigned_worker}"
+        );
+        let history = db.get_routing_history(20).expect("read routing history");
+        let assignment = history
+            .iter()
+            .find(|row| row.task_id == dependent.to_string())
+            .expect("automatic assignment records routing history");
+        assert_eq!(assignment.worker_slug, assigned_worker);
+        let (assignment_method, override_reason): (String, Option<String>) = db
+            .conn
+            .query_row(
+                "SELECT assignment_method, override_reason FROM routing_history WHERE id = ?1",
+                [&assignment.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read persisted routing provenance");
+        assert_eq!(assignment_method, "automatic");
+        assert!(override_reason.is_none());
+        let held_claim = ClaimTaskTool
+            .execute(
+                json!({"task_id": budget_held}),
+                &context(
+                    "p4-39-worker",
+                    "p4-39-claim-held-task",
+                    Some(budget_held),
+                    "worker-platform",
+                ),
+            )
+            .await;
+        assert!(
+            held_claim.is_error,
+            "budget-held task was claimable: {}",
+            held_claim.output
+        );
+        let worker_context = context(
+            "p4-39-worker",
+            "p4-39-claim-dependent",
+            Some(dependent),
+            &assigned_worker,
+        );
+        let claimed = ClaimTaskTool
+            .execute(json!({"task_id": dependent}), &worker_context)
+            .await;
+        assert!(
+            !claimed.is_error,
+            "worker claim_task failed: {}",
+            claimed.output
+        );
+        let claimed_task = db.get_by_id(dependent).unwrap().unwrap();
+        assert_eq!(claimed_task.status.as_str(), "in_progress");
+        assert_eq!(
+            claimed_task.assigned_worker.as_deref(),
+            Some(assigned_worker.as_str())
+        );
+        let held = db.get_by_id(budget_held).unwrap().unwrap();
+        assert_eq!(held.status.as_str(), "needs_info");
+        assert!(held.budget_exceeded);
+        assert_eq!(
+            held.budget_exceeded_reason.as_deref(),
+            Some("saved task budget was reached")
+        );
+        assert!(
+            db.claim_task_with_pid(budget_held, "worker-platform", 903)
+                .is_err(),
+            "budget-held dependent must remain unavailable to atomic worker claims"
+        );
+    }
+
+    #[test]
+    fn qc_dispatcher_drains_persistent_worker_inbox_before_idle_queue_exit() {
+        let recipe = qc_dispatcher_recipe();
+        let inbox = recipe.instructions.find("list_worker_messages").unwrap();
+        let queue = recipe.instructions.find("list_tasks").unwrap();
+        assert!(
+            inbox < queue,
+            "QC recipe must drain inbox before empty-queue exit"
+        );
+        assert!(recipe.instructions.contains("acknowledge_worker_message"));
+        assert!(recipe
+            .instructions
+            .contains("The persistent recipient is `qc-agent`"));
+    }
+
+    #[test]
+    fn supervisor_protocol_reads_stale_message_recovery_tool() {
+        let recipe = supervisor_recipe();
+        assert!(recipe.instructions.contains("list_stale_worker_messages"));
+    }
+
+    #[test]
+    fn startup_preserves_customized_system_recipes_and_seeds_missing_defaults() {
+        let sandbox = tempfile::tempdir().expect("create recipe sandbox");
+        let recipes_dir = sandbox.path();
+
+        let mut customized = worker_backend_recipe();
+        customized
+            .instructions
+            .push_str("\nUser customization survives restart.\n");
+        save_recipe(recipes_dir, &customized).expect("write customized system recipe");
+
+        ensure_default_recipes(recipes_dir).expect("seed missing defaults");
+
+        let yaml =
+            std::fs::read_to_string(recipes_dir.join(format!("{WORKER_BACKEND_RECIPE_ID}.yaml")))
+                .expect("custom recipe remains present");
+        let persisted =
+            crate::recipes::parser::parse_recipe(&yaml).expect("parse persisted recipe");
+        assert!(persisted
+            .instructions
+            .contains("User customization survives restart."));
+
+        assert!(recipes_dir
+            .join(format!("{SUPERVISOR_RECIPE_ID}.yaml"))
+            .exists());
+    }
+
+    #[test]
+    fn supervisor_request_protocol_migration_preserves_custom_recipe_text() {
+        const CURRENT_STOP: &str = "Do NOT stop after handling a request. Continue through Step 1b, dispatch READY tasks in Step 2,\nand perform recovery in Step 3 during this same tick. If a request cannot be safely resolved,\nleave it pending and state the blocker, but still continue to dispatch unrelated READY tasks.\nPending requests keep the Supervisor eligible for another tick; they never gate dispatch.";
+        let sandbox = tempfile::tempdir().expect("create recipe sandbox");
+        let mut old = supervisor_recipe();
+        old.instructions = old.instructions.replace(
+            CURRENT_STOP,
+            "If any request was handled, STOP after this step — the board state changed. Let the next tick continue.",
+        );
+        old.instructions = old
+            .instructions
+            .replace("- No pending worker requests (status='pending')\n", "");
+        old.instructions
+            .push_str("\nOwner customization remains.\n");
+        save_recipe(sandbox.path(), &old).expect("write old customized Supervisor recipe");
+
+        ensure_default_recipes(sandbox.path()).expect("apply narrow protocol migration");
+
+        let yaml =
+            std::fs::read_to_string(sandbox.path().join(format!("{SUPERVISOR_RECIPE_ID}.yaml")))
+                .expect("read migrated Supervisor recipe");
+        let migrated = crate::recipes::parser::parse_recipe(&yaml).expect("parse migrated recipe");
+        assert!(migrated
+            .instructions
+            .contains("Owner customization remains."));
+        assert!(!migrated.instructions.contains("STOP after this step"));
+        assert!(migrated
+            .instructions
+            .contains("Pending requests keep the Supervisor eligible"));
+        assert!(!migrated
+            .instructions
+            .contains("- No pending worker requests (status='pending')"));
+    }
+
+    #[test]
+    fn installed_supervisor_and_qc_recipes_receive_inbox_protocols_without_losing_custom_text() {
+        let sandbox = tempfile::tempdir().expect("create recipe sandbox");
+        let mut old_supervisor = supervisor_recipe();
+        let step = old_supervisor
+            .instructions
+            .find("### Step 1b — Drain the ACP inbox")
+            .expect("current prompt has ACP section");
+        let next = old_supervisor.instructions[step..]
+            .find("### Step 2 — Dispatch READY tasks")
+            .map(|offset| step + offset)
+            .unwrap();
+        old_supervisor.instructions.replace_range(step..next, "");
+        old_supervisor.instructions = old_supervisor
+            .instructions
+            .replace("- list_stale_worker_messages — Read aged, unacknowledged fleet mail for recovery (Supervisor only)\n", "");
+        old_supervisor
+            .instructions
+            .push_str("\nUser supervisor instruction survives.\n");
+        save_recipe(sandbox.path(), &old_supervisor).expect("write legacy Supervisor recipe");
+
+        let mut old_qc = qc_dispatcher_recipe();
+        let step = old_qc
+            .instructions
+            .find("## ABSOLUTE FIRST STEP — DRAIN YOUR ACP INBOX")
+            .expect("current prompt has ACP section");
+        let next = old_qc.instructions[step..]
+            .find("## Tick protocol")
+            .map(|offset| step + offset)
+            .unwrap();
+        old_qc.instructions.replace_range(step..next, "");
+        old_qc
+            .instructions
+            .push_str("\nUser QC instruction survives.\n");
+        save_recipe(sandbox.path(), &old_qc).expect("write legacy QC recipe");
+
+        ensure_default_recipes(sandbox.path()).expect("migrate installed recipe prompts");
+        let supervisor = crate::recipes::parser::parse_recipe(
+            &std::fs::read_to_string(sandbox.path().join("supervisor-poll.yaml")).unwrap(),
+        )
+        .unwrap();
+        let qc = crate::recipes::parser::parse_recipe(
+            &std::fs::read_to_string(sandbox.path().join("qc-dispatcher.yaml")).unwrap(),
+        )
+        .unwrap();
+        assert!(supervisor
+            .instructions
+            .contains("list_stale_worker_messages"));
+        assert!(supervisor
+            .instructions
+            .contains("User supervisor instruction survives."));
+        assert!(qc.instructions.contains("DRAIN YOUR ACP INBOX"));
+        assert!(qc.instructions.contains("User QC instruction survives."));
+
+        let migrated = std::fs::read_to_string(sandbox.path().join("qc-dispatcher.yaml")).unwrap();
+        ensure_default_recipes(sandbox.path()).expect("second migration is a no-op");
+        assert_eq!(
+            migrated,
+            std::fs::read_to_string(sandbox.path().join("qc-dispatcher.yaml")).unwrap()
+        );
+    }
+
+    #[test]
+    fn installed_worker_recipes_migrate_legacy_shell_smokes_without_losing_custom_text() {
+        let sandbox = tempfile::tempdir().expect("create recipe sandbox");
+        let mut backend = worker_backend_recipe();
+        backend.instructions.push_str(
+            "\n### Doc 09 T2.3 — REQUIRED smoke probe (when the project produces a server)\n\n\
+If your task produced an HTTP server, run:\n\
+```\n\
+bash('timeout 5 <start-cmd> > smoke.log 2>&1; grep -E \\\"error\\\" smoke.log || echo SMOKE_OK')\n\
+```\n\
+Both EXIT:0 and SMOKE_OK must appear.\n\n### Failure handling\n\n\
+Backend customization survives.\n",
+        );
+        std::fs::write(
+            sandbox.path().join("worker-backend-poll.yaml"),
+            serde_yaml::to_string(&backend).unwrap(),
+        )
+        .unwrap();
+
+        let mut frontend = worker_frontend_recipe();
+        frontend.instructions.push_str(
+            "\n### B2 — Smoke (REQUIRED — every transition to qc_review, Doc 09 T2.3)\n\n\
+Run bash('timeout 5 npm run dev > smoke.log 2>&1; grep error smoke.log || echo SMOKE_OK').\n\n\
+### B3 — Mark qc_review\n\nFrontend customization survives.\n",
+        );
+        std::fs::write(
+            sandbox.path().join("worker-frontend-poll.yaml"),
+            serde_yaml::to_string(&frontend).unwrap(),
+        )
+        .unwrap();
+
+        let mut mcp = worker_mcp_recipe();
+        mcp.instructions.push_str(
+            "\n## Legacy test example\n1. Start the server: bash('python server.py &') or equivalent.\n\n\
+MCP customization survives.\n",
+        );
+        std::fs::write(
+            sandbox.path().join("worker-mcp-poll.yaml"),
+            serde_yaml::to_string(&mcp).unwrap(),
+        )
+        .unwrap();
+
+        let mut fleet_smoke = fleet_smoke_recipe();
+        fleet_smoke.instructions.push_str(
+            "\n### Step 2 — Install dependencies\n\n\
+Detect manifests:\n\
+  • package.json → bash('npm install 2>&1 | tee install.log; echo \\\"EXIT:$?\\\"')\n\
+If EXIT is non-zero, mark build_failed.\n\n\
+### Step 3 — Build (when there is a build step)\n\nBuild customization survives.\n",
+        );
+        std::fs::write(
+            sandbox.path().join("fleet-smoke.yaml"),
+            serde_yaml::to_string(&fleet_smoke).unwrap(),
+        )
+        .unwrap();
+
+        let mut qc_agent = qc_agent_recipe();
+        qc_agent.instructions.push_str(
+            "\nScreenshot command: `npx playwright screenshot --full-page http://localhost:3000 /tmp/arcana-qc-screenshot.png`.\n\
+QC customization survives.\n",
+        );
+        std::fs::write(
+            sandbox.path().join("qc-agent-review.yaml"),
+            serde_yaml::to_string(&qc_agent).unwrap(),
+        )
+        .unwrap();
+
+        ensure_default_recipes(sandbox.path()).expect("migrate legacy shell examples");
+        for recipe_id in [
+            WORKER_BACKEND_RECIPE_ID,
+            WORKER_FRONTEND_RECIPE_ID,
+            WORKER_MCP_RECIPE_ID,
+            FLEET_SMOKE_RECIPE_ID,
+            QC_AGENT_RECIPE_ID,
+        ] {
+            let yaml =
+                std::fs::read_to_string(sandbox.path().join(format!("{recipe_id}.yaml"))).unwrap();
+            if recipe_id == FLEET_SMOKE_RECIPE_ID {
+                let decoded: Recipe = serde_yaml::from_str(&yaml).unwrap();
+                assert!(
+                    !decoded.instructions.contains("$?"),
+                    "fleet-smoke migration left shell status syntax: {}",
+                    decoded
+                        .instructions
+                        .lines()
+                        .filter(|line| line.contains("$?"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
+            }
+            let recipe = crate::recipes::parser::parse_recipe(&yaml)
+                .unwrap_or_else(|error| panic!("{recipe_id} must load after migration: {error}"));
+            assert!(recipe.instructions.contains("customization survives"));
+            assert!(!recipe.instructions.contains("SMOKE_OK"));
+            assert!(!recipe.instructions.contains("python server.py &"));
+            assert!(!recipe.instructions.contains("EXIT:$?"));
+            assert!(!recipe
+                .instructions
+                .contains("/tmp/arcana-qc-screenshot.png"));
+        }
+        let backend_after =
+            std::fs::read_to_string(sandbox.path().join("worker-backend-poll.yaml")).unwrap();
+        ensure_default_recipes(sandbox.path()).expect("migration is idempotent");
+        assert_eq!(
+            backend_after,
+            std::fs::read_to_string(sandbox.path().join("worker-backend-poll.yaml")).unwrap()
+        );
+    }
+
+    #[test]
+    fn shipped_coding_workers_use_owner_claims_and_rust_owned_project_commands() {
+        let recipes = [
+            worker_backend_recipe(),
+            worker_frontend_recipe(),
+            worker_platform_recipe(),
+            worker_mcp_recipe(),
+            worker_cleanup_recipe(),
+        ];
+        for recipe in recipes {
+            assert!(
+                recipe.instructions.contains("claim_task(task_id=<id>)"),
+                "{} must use the atomic owner-checked task claim",
+                recipe.title
+            );
+            assert!(
+                recipe
+                    .instructions
+                    .contains("project_command(intent='build')"),
+                "{} must use Rust-owned deterministic build execution",
+                recipe.title
+            );
+            assert!(
+                !recipe
+                    .instructions
+                    .contains("update_task_status(id, 'in_progress'"),
+                "{} must not bypass claim_task",
+                recipe.title
+            );
+            assert!(
+                !recipe.instructions.contains("bash('npm run build')"),
+                "{} must not use model-authored shell for build validation",
+                recipe.title
+            );
+            assert!(
+                !recipe.instructions.contains("bash('uv sync')"),
+                "{} must not install dependencies automatically",
+                recipe.title
+            );
+            assert!(
+                recipe.instructions.contains("git_commit("),
+                "{} must use host-validated commits",
+                recipe.title
+            );
+            assert!(
+                !recipe.instructions.contains("bash('git add"),
+                "{} must not stage via Bash",
+                recipe.title
+            );
+            assert!(
+                !recipe.instructions.contains("bash('git commit"),
+                "{} must not commit via Bash",
+                recipe.title
+            );
+        }
+
+        let supervisor = supervisor_recipe();
+        assert!(supervisor.instructions.contains("create_epic"));
+        assert!(supervisor.instructions.contains("create_phased_task"));
+        assert!(
+            !supervisor.instructions.contains("STOP after this step"),
+            "resolving a worker request must not short-circuit ready-task dispatch"
+        );
+        assert!(supervisor.instructions.contains("Continue through Step 1b"));
+        assert!(supervisor
+            .instructions
+            .contains("they never block dispatch of ready tasks"));
+        let listed_tools = supervisor
+            .instructions
+            .split("## Tools")
+            .last()
+            .unwrap_or_default();
+        assert!(listed_tools.contains("create_epic"));
+        assert!(listed_tools.contains("create_phased_task"));
+        let smoke = fleet_smoke_recipe();
+        assert!(smoke
+            .instructions
+            .contains("project_command(intent='install')"));
+        assert!(smoke
+            .instructions
+            .contains("project_command(intent='build')"));
+        assert!(!smoke.instructions.contains("bash('npm install"));
+        assert!(!smoke.instructions.contains("bash('npm run build"));
+    }
+
+    #[test]
+    fn tg4_17_shipped_recipe_prompts_do_not_embed_posix_shell_or_tmp_commands() {
+        let recipes = [
+            supervisor_recipe(),
+            worker_backend_recipe(),
+            worker_frontend_recipe(),
+            worker_platform_recipe(),
+            worker_mcp_recipe(),
+            worker_cleanup_recipe(),
+            qc_agent_recipe(),
+            qc_dispatcher_recipe(),
+            fleet_smoke_recipe(),
+        ];
+        for recipe in recipes {
+            assert!(
+                !recipe.instructions.contains("```bash"),
+                "{} embeds a shell code block instead of a platform-owned command",
+                recipe.title
+            );
+            assert!(
+                !recipe.instructions.contains("/tmp/"),
+                "{} contains a hardcoded POSIX temporary path",
+                recipe.title
+            );
+            assert!(
+                !recipe.instructions.contains("$?"),
+                "{} asks a worker to inspect a POSIX shell exit variable",
+                recipe.title
+            );
+            assert!(
+                !recipe.instructions.contains("&&"),
+                "{} contains a cmd-incompatible shell chaining operator",
+                recipe.title
+            );
+            for command_fragment in ["2>&1", "| tee ", "source .venv"] {
+                assert!(
+                    !recipe.instructions.contains(command_fragment),
+                    "{} contains platform-specific shell command fragment {command_fragment:?}",
+                    recipe.title
+                );
+            }
+            assert_inline_bash_commands_are_platform_neutral(&recipe.instructions, &recipe.title);
+        }
+        let mcp_worker = worker_mcp_recipe();
+        assert!(mcp_worker
+            .instructions
+            .contains("Arcana itself is an MCP client"));
+        assert!(mcp_worker
+            .instructions
+            .contains("project_command(intent='test')"));
+        assert!(!mcp_worker.instructions.contains("python server.py"));
+        assert!(!mcp_worker.instructions.contains("python server.py &"));
+        assert_inline_bash_commands_are_platform_neutral(
+            &mcp_worker.instructions,
+            &mcp_worker.title,
+        );
+        assert!(
+            !QC_REVIEWER_PROTOCOL.contains("```bash"),
+            "the per-task QC reviewer prompt must use Arcana-owned command intents"
+        );
+        assert!(
+            !QC_REVIEWER_PROTOCOL.contains("/tmp/"),
+            "the per-task QC reviewer prompt must not use a POSIX temporary path"
+        );
+        assert_inline_bash_commands_are_platform_neutral(QC_REVIEWER_PROTOCOL, "QC reviewer");
+
+        for mode in [
+            crate::agent::PAMode::FastDevelopment,
+            crate::agent::PAMode::Review,
+            crate::agent::PAMode::Delegate,
+        ] {
+            let mut registry = crate::agent::tool_registry::ToolRegistry::new();
+            crate::agent::builtin_tools::register_for_mode(&mut registry, mode);
+            for tool in registry.all() {
+                let description = tool.description();
+                assert!(
+                    !description.contains("```bash") && !description.contains("```sh"),
+                    "tool {} embeds a shell command block instead of a platform-owned command",
+                    tool.name()
+                );
+                assert!(
+                    !description.contains("/tmp/") && !description.contains("$?"),
+                    "tool {} contains a POSIX temporary path or shell exit variable",
+                    tool.name()
+                );
+                // The free-form Bash tool documents shell syntax and explicitly
+                // tells Windows workers not to use this redundant `&&` prefix.
+                // Treating that negative example as a command would be a false hit.
+                if tool.name() != "bash" {
+                    assert!(
+                        !description.contains("&&"),
+                        "tool {} contains a cmd-incompatible shell chaining operator",
+                        tool.name()
+                    );
+                }
+                for command_fragment in ["2>&1", "| tee ", "source .venv"] {
+                    assert!(
+                        !description.contains(command_fragment),
+                        "tool {} contains platform-specific shell command fragment {command_fragment:?}",
+                        tool.name()
+                    );
+                }
+                if tool.name() != "bash" {
+                    assert_inline_bash_commands_are_platform_neutral(description, tool.name());
+                }
+            }
+        }
+    }
+
+    fn assert_inline_bash_commands_are_platform_neutral(prompt: &str, owner: &str) {
+        for line in prompt.lines() {
+            let Some(start) = line.find("bash('") else {
+                continue;
+            };
+            let prefix_len = 6;
+            let command = &line[start + prefix_len..];
+            let end = command.find("')").unwrap_or(command.len());
+            let command = &command[..end];
+            for fragment in ["&&", ";", "`", "$?", "$(", "2>&1", "| tee ", "&"] {
+                assert!(
+                    !command.contains(fragment),
+                    "{owner} embeds a non-portable shell command fragment {fragment:?}: {command}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod supervisor_epic_workflow_tests {
+    use super::{qc_dispatcher_recipe, supervisor_recipe};
+    use crate::agent::engine::AgentEngine;
+    use crate::agent::permission::{new_pending_permissions, PermissionMode};
+    use crate::agent::tool_trait::AgentIdentity;
+    use crate::db::tasks::TasksDb;
+    use crate::provider::traits::{Provider, StreamResult};
+    use crate::provider::types::{
+        CompletionRequest, CompletionResponse, MessageContent, ModelInfo, ProviderStatus,
+        RequestMessage, StreamChunk,
+    };
+    use crate::provider::usage::Usage;
+    use crate::state::AppState;
+    use async_trait::async_trait;
+    use serde_json::{json, Value};
+    use std::sync::{Arc, Mutex};
+
+    struct QcInboxWorkflowProvider {
+        turn: Mutex<usize>,
+        calls: Mutex<Vec<String>>,
+        message_id: i64,
+    }
+
+    impl QcInboxWorkflowProvider {
+        fn chunks(name: &str, input: Value) -> Vec<StreamChunk> {
+            vec![
+                StreamChunk::ToolUseStart {
+                    id: format!("qc-{name}"),
+                    name: name.to_owned(),
+                    block_index: 0,
+                    opaque: None,
+                },
+                StreamChunk::ToolInputDelta {
+                    block_index: 0,
+                    partial_json: input.to_string(),
+                },
+                StreamChunk::MessageDelta {
+                    stop_reason: "tool_use".into(),
+                    usage: Usage::default(),
+                },
+                StreamChunk::Done,
+            ]
+        }
+    }
+
+    #[async_trait]
+    impl Provider for QcInboxWorkflowProvider {
+        fn id(&self) -> &str {
+            "anthropic"
+        }
+
+        fn name(&self) -> &str {
+            "QC inbox workflow fixture"
+        }
+
+        fn models(&self) -> Vec<ModelInfo> {
+            Vec::new()
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> crate::errors::Result<CompletionResponse> {
+            unreachable!("the QC production-path test must use streaming")
+        }
+
+        async fn stream(&self, request: CompletionRequest) -> crate::errors::Result<StreamResult> {
+            assert!(request
+                .system
+                .as_deref()
+                .unwrap_or_default()
+                .contains("DRAIN YOUR ACP INBOX"));
+            for required in [
+                "list_worker_messages",
+                "acknowledge_worker_message",
+                "list_tasks",
+            ] {
+                assert!(
+                    request.tools.iter().any(|tool| tool.name == required),
+                    "FastDevelopment omitted QC inbox tool {required}"
+                );
+            }
+            let index = {
+                let mut turn = self.turn.lock().unwrap();
+                let index = *turn;
+                *turn += 1;
+                index
+            };
+            let (name, input) = match index {
+                0 => ("list_worker_messages", json!({})),
+                1 => ("acknowledge_worker_message", json!({"id": self.message_id})),
+                2 => ("list_tasks", json!({"status": "qc_review"})),
+                3 => {
+                    return Ok(Box::pin(futures::stream::iter(
+                        vec![
+                            Ok(StreamChunk::TextDelta {
+                                text: "Inbox handled; QC queue is empty.".into(),
+                                block_index: 0,
+                            }),
+                            Ok(StreamChunk::MessageDelta {
+                                stop_reason: "end_turn".into(),
+                                usage: Usage::default(),
+                            }),
+                            Ok(StreamChunk::Done),
+                        ]
+                        .into_iter(),
+                    )))
+                }
+                other => panic!("unexpected QC provider turn {other}"),
+            };
+            self.calls.lock().unwrap().push(name.to_string());
+            Ok(Box::pin(futures::stream::iter(
+                Self::chunks(name, input).into_iter().map(Ok),
+            )))
+        }
+
+        async fn test_connection(&self) -> crate::errors::Result<ProviderStatus> {
+            Ok(ProviderStatus::Connected)
+        }
+    }
+
+    #[tokio::test]
+    async fn shipped_qc_recipe_handles_inbox_only_work_through_agent_engine() {
+        let sandbox = Box::leak(Box::new(
+            tempfile::tempdir().expect("create isolated Arcana data root"),
+        ));
+        let _home = crate::db::test_support::with_home(sandbox.path());
+        let workers = crate::db::workers::WorkersDb::open().expect("seed persistent worker roster");
+        let qc_worker = workers
+            .get_by_slug("qc-agent")
+            .expect("read persistent QC worker")
+            .expect("persistent QC worker is seeded");
+        assert_eq!(
+            qc_worker.recipe_id.as_deref(),
+            Some("qc-dispatcher"),
+            "the persisted QC worker must use the shipped inbox dispatcher recipe"
+        );
+        let tasks = TasksDb::open().expect("initialize isolated tasks DB");
+        let message = tasks
+            .insert_worker_message(
+                "worker-backend",
+                "qc-agent",
+                "Please acknowledge the completed handoff.",
+                "fyi",
+                None,
+            )
+            .expect("persist inbox-only work");
+        assert!(tasks.list(Some("assigned")).unwrap().is_empty());
+        assert!(tasks.list(Some("in_progress")).unwrap().is_empty());
+        assert!(tasks.list(Some("qc_review")).unwrap().is_empty());
+        let analytics = Arc::new(
+            crate::analytics::AnalyticsManager::new()
+                .await
+                .expect("initialize isolated analytics DB"),
+        );
+        crate::analytics::install_global(analytics);
+        let provider = Arc::new(QcInboxWorkflowProvider {
+            turn: Mutex::new(0),
+            calls: Mutex::new(Vec::new()),
+            message_id: message.id,
+        });
+        let engine = AgentEngine::new(
+            provider.clone(),
+            PermissionMode::Autonomous,
+            crate::agent::PAMode::FastDevelopment,
+            Arc::new(Mutex::new(AppState::default())),
+            new_pending_permissions(),
+            AgentIdentity::worker("qc-agent"),
+        );
+        let recipe = qc_dispatcher_recipe();
+        let ran = crate::recipes::scheduler::run_if_recoverable_work(
+            "qc-agent",
+            || crate::recipes::scheduler::worker_has_recoverable_work_in(&tasks, "qc-agent"),
+            async {
+                engine
+                    .run(
+                        "qc-inbox-only-smoke",
+                        sandbox.path().to_str().expect("sandbox path"),
+                        "claude-haiku-4-5",
+                        Vec::<RequestMessage>::new(),
+                        "Handle the inbox and inspect the review queue.",
+                        Some(&recipe.instructions),
+                    )
+                    .await
+                    .map(|_| ())
+            },
+        )
+        .await
+        .expect("the shipped QC inbox-only turn should complete");
+        assert!(
+            ran,
+            "a persisted inbox message must admit the QC worker run"
+        );
+
+        assert_eq!(
+            *provider.calls.lock().unwrap(),
+            [
+                "list_worker_messages",
+                "acknowledge_worker_message",
+                "list_tasks"
+            ]
+        );
+        assert!(tasks
+            .list_worker_messages_for("qc-agent", true)
+            .unwrap()
+            .is_empty());
+    }
+
+    struct SupervisorWorkflowProvider {
+        turn: Mutex<usize>,
+        calls: Mutex<Vec<String>>,
+        dispatch_task_id: i64,
+    }
+
+    impl SupervisorWorkflowProvider {
+        fn chunks(name: &str, input: Value) -> Vec<StreamChunk> {
+            vec![
+                StreamChunk::ToolUseStart {
+                    id: format!("supervisor-{name}"),
+                    name: name.to_owned(),
+                    block_index: 0,
+                    opaque: None,
+                },
+                StreamChunk::ToolInputDelta {
+                    block_index: 0,
+                    partial_json: input.to_string(),
+                },
+                StreamChunk::MessageDelta {
+                    stop_reason: "tool_use".into(),
+                    usage: Usage::default(),
+                },
+                StreamChunk::Done,
+            ]
+        }
+    }
+
+    #[async_trait]
+    impl Provider for SupervisorWorkflowProvider {
+        fn id(&self) -> &str {
+            "anthropic"
+        }
+
+        fn name(&self) -> &str {
+            "Supervisor workflow fixture"
+        }
+
+        fn models(&self) -> Vec<ModelInfo> {
+            Vec::new()
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> crate::errors::Result<CompletionResponse> {
+            unreachable!("the production engine test must use its streaming path")
+        }
+
+        async fn stream(&self, request: CompletionRequest) -> crate::errors::Result<StreamResult> {
+            assert!(
+                request
+                    .system
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("Step 2a"),
+                "AgentEngine must receive the shipped Supervisor recipe instructions"
+            );
+            assert!(
+                request
+                    .system
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("Tasks in `needs_info` with"),
+                "the production Supervisor prompt must explain interrupted-run holds"
+            );
+            assert!(request
+                .system
+                .as_deref()
+                .unwrap_or_default()
+                .contains("they never block dispatch of ready tasks"));
+            for required in [
+                "list_tasks",
+                "list_worker_health",
+                "reconcile_worker_operation",
+                "list_stale_worker_messages",
+                "send_worker_message",
+                "assign_tasks",
+                "create_epic",
+                "create_phased_task",
+            ] {
+                assert!(
+                    request.tools.iter().any(|tool| tool.name == required),
+                    "the production FastDevelopment toolset omitted {required}"
+                );
+            }
+
+            let index = {
+                let mut turn = self.turn.lock().unwrap();
+                let index = *turn;
+                *turn += 1;
+                index
+            };
+            let (name, input) = match index {
+                0 => ("list_tasks", json!({})),
+                1 => ("list_worker_requests", json!({})),
+                2 => ("list_worker_messages", json!({"unread_only": true})),
+                3 => (
+                    "list_stale_worker_messages",
+                    json!({"older_than_minutes": 5}),
+                ),
+                4 => {
+                    let (stale_id, stale_task_id) = request
+                        .messages
+                        .iter()
+                        .flat_map(|message| &message.content)
+                        .find_map(|content| match content {
+                            MessageContent::ToolResult {
+                                name,
+                                content,
+                                is_error: false,
+                                ..
+                            } if name == "list_stale_worker_messages" => {
+                                let payload: Value = serde_json::from_str(content).ok()?;
+                                assert_eq!(payload["count"], 1);
+                                Some((
+                                    payload["messages"][0]["id"].as_i64()?,
+                                    payload["messages"][0]["task_id"].as_i64()?,
+                                ))
+                            }
+                            _ => None,
+                        })
+                        .expect("the stale-mail read result must drive the recovery action");
+                    (
+                        "send_worker_message",
+                        json!({
+                            "to": "qc-agent",
+                            "kind": "nudge",
+                            "task_id": stale_task_id,
+                            "body": format!("I found unacknowledged message #{stale_id}; please resume or acknowledge it."),
+                        }),
+                    )
+                }
+                5 => (
+                    "assign_tasks",
+                    json!({"assignments": [{"task_id": self.dispatch_task_id, "worker_slug": "worker-frontend", "override_reason": "fixture verifies explicit routing in the production tool"}]}),
+                ),
+                6 => (
+                    "create_epic",
+                    json!({
+                        "title": "Test phased coding delivery",
+                        "description": "Exercise the shipped Supervisor epic workflow."
+                    }),
+                ),
+                7 => {
+                    let epic_id = request
+                        .messages
+                        .iter()
+                        .flat_map(|message| &message.content)
+                        .find_map(|content| match content {
+                            MessageContent::ToolResult { name, content, .. }
+                                if name == "create_epic" =>
+                            {
+                                serde_json::from_str::<Value>(content)
+                                    .ok()?
+                                    .get("epic_id")
+                                    .and_then(Value::as_i64)
+                                    .map(|id| id.to_string())
+                            }
+                            _ => None,
+                        })
+                        .expect("the real create_epic result must feed the child call");
+                    (
+                        "create_phased_task",
+                        json!({
+                            "epic_id": epic_id,
+                            "phase": "foundation",
+                            "phase_order": 1,
+                            "title": "Implement the deterministic project command",
+                            "description": "Build and test the command interface.",
+                            "priority": "p2",
+                            "task_type": "feature",
+                            "acceptance_criteria": "A focused test proves the command path."
+                        }),
+                    )
+                }
+                8 => {
+                    let chunks = vec![
+                        StreamChunk::TextDelta {
+                            text: "The epic and its first phase are on the board.".into(),
+                            block_index: 0,
+                        },
+                        StreamChunk::MessageDelta {
+                            stop_reason: "end_turn".into(),
+                            usage: Usage::default(),
+                        },
+                        StreamChunk::Done,
+                    ];
+                    return Ok(Box::pin(futures::stream::iter(chunks.into_iter().map(Ok))));
+                }
+                other => panic!("unexpected extra Supervisor provider turn: {other}"),
+            };
+            self.calls.lock().unwrap().push(name.to_owned());
+            Ok(Box::pin(futures::stream::iter(
+                Self::chunks(name, input).into_iter().map(Ok),
+            )))
+        }
+
+        async fn test_connection(&self) -> crate::errors::Result<ProviderStatus> {
+            Ok(ProviderStatus::Connected)
+        }
+    }
+
+    #[tokio::test]
+    async fn shipped_supervisor_creates_visible_epic_and_phased_child_through_agent_engine() {
+        // AgentEngine records cost through the required application-wide
+        // analytics singleton. Keep this isolated home alive for the test
+        // process because the singleton intentionally cannot be reset or drop
+        // its open SQLite connection between unit tests.
+        let sandbox = Box::leak(Box::new(
+            tempfile::tempdir().expect("create isolated Arcana data root"),
+        ));
+        let _home = crate::db::test_support::with_home(sandbox.path());
+        let tasks = TasksDb::open().expect("initialize isolated tasks DB");
+        let workers = crate::db::workers::WorkersDb::open().expect("initialize isolated worker DB");
+        let frontend = workers
+            .get_by_slug("worker-frontend")
+            .unwrap()
+            .expect("seeded frontend worker");
+        workers
+            .update_status(frontend.id, crate::db::workers::WorkerStatus::Idle)
+            .expect("mark frontend runnable for Supervisor assignment");
+        let blocker = tasks
+            .create(crate::db::tasks::CreateTaskInput {
+                title: "unresolved Supervisor request".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "remain pending".into(),
+                created_by: Some("p4-24-test".into()),
+            })
+            .unwrap();
+        tasks
+            .update_status(blocker.id, "assigned", Some("worker-backend"))
+            .unwrap();
+        let request = tasks
+            .create_worker_request(&crate::db::tasks::CreateWorkerRequestInput {
+                worker_slug: "worker-backend".into(),
+                task_id: Some(blocker.id),
+                request_type: "report_issue".into(),
+                payload: "{\"reason\":\"retain for liveness test\"}".into(),
+            })
+            .unwrap();
+        let stale_message = tasks
+            .insert_worker_message(
+                "worker-backend",
+                "qc-agent",
+                "Please review the interrupted QC request",
+                "question",
+                Some(blocker.id),
+            )
+            .expect("persist message for stale-mail recovery proof");
+        tasks
+            .conn
+            .execute(
+                "UPDATE worker_messages SET created_at = datetime('now', '-10 minutes') WHERE id = ?1",
+                rusqlite::params![stale_message.id],
+            )
+            .expect("age stale-mail fixture");
+        let unrelated = tasks
+            .create(crate::db::tasks::CreateTaskInput {
+                title: "unrelated ready task".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "gets dispatched".into(),
+                created_by: Some("p4-24-test".into()),
+            })
+            .unwrap();
+        let analytics = Arc::new(
+            crate::analytics::AnalyticsManager::new()
+                .await
+                .expect("initialize isolated analytics database"),
+        );
+        crate::analytics::install_global(analytics);
+        let provider = Arc::new(SupervisorWorkflowProvider {
+            turn: Mutex::new(0),
+            calls: Mutex::new(Vec::new()),
+            dispatch_task_id: unrelated.id,
+        });
+        let engine = AgentEngine::new(
+            provider.clone(),
+            PermissionMode::Autonomous,
+            crate::agent::PAMode::FastDevelopment,
+            Arc::new(Mutex::new(AppState::default())),
+            new_pending_permissions(),
+            AgentIdentity::supervisor(),
+        );
+        let recipe = supervisor_recipe();
+        let result = engine
+            .run(
+                "supervisor-epic-smoke",
+                sandbox.path().to_str().expect("sandbox path"),
+                "claude-sonnet-5",
+                Vec::<RequestMessage>::new(),
+                "Implement a multi-phase deterministic command feature.",
+                Some(&recipe.instructions),
+            )
+            .await
+            .expect("the Supervisor turn should complete");
+
+        assert_eq!(
+            *provider.calls.lock().unwrap(),
+            [
+                "list_tasks",
+                "list_worker_requests",
+                "list_worker_messages",
+                "list_stale_worker_messages",
+                "send_worker_message",
+                "assign_tasks",
+                "create_epic",
+                "create_phased_task"
+            ]
+        );
+        assert!(result.iter().any(|message| {
+            message.content.iter().any(|content| {
+                matches!(
+                    content,
+                    MessageContent::Text { text }
+                        if text.contains("epic and its first phase are on the board")
+                )
+            })
+        }));
+        assert_eq!(
+            tasks
+                .get_by_id(unrelated.id)
+                .unwrap()
+                .unwrap()
+                .status
+                .as_str(),
+            "assigned",
+            "the real Supervisor tool turn must dispatch unrelated work"
+        );
+        assert_eq!(
+            tasks
+                .get_worker_request_by_id(request.id)
+                .unwrap()
+                .unwrap()
+                .status
+                .as_str(),
+            "pending",
+            "an unresolved request must not block dispatch"
+        );
+        assert!(
+            tasks
+                .list_recent_worker_messages(10)
+                .unwrap()
+                .iter()
+                .any(|message| {
+                    message.from_slug == "supervisor"
+                        && message.to_slug == "qc-agent"
+                        && message.task_id == Some(blocker.id)
+                        && message.body.contains(&stale_message.id.to_string())
+                }),
+            "the shipped Supervisor must turn stale-mail output into a persisted nudge"
+        );
+
+        let board = TasksDb::open().expect("reopen application task database");
+        let tasks = board.list(None).expect("read application task board");
+        let epic = tasks
+            .iter()
+            .find(|task| task.title == "Test phased coding delivery")
+            .expect("created epic must be visible through the application reader");
+        assert_eq!(epic.task_type.as_str(), "epic");
+        let epic_id = epic.id.to_string();
+        let children = board
+            .get_epic_tasks(&epic_id)
+            .expect("read the epic's phased children");
+        assert_eq!(children.len(), 1);
+        assert_eq!(
+            children[0].title,
+            "Implement the deterministic project command"
+        );
+        assert_eq!(children[0].epic_id.as_deref(), Some(epic_id.as_str()));
+        assert_eq!(children[0].phase_order, Some(1));
+    }
+
+    struct WorkerClaimProvider {
+        task_id: i64,
+        should_refuse: bool,
+        turns: Mutex<usize>,
+        observed_result: Mutex<Option<(bool, String)>>,
+    }
+
+    #[async_trait]
+    impl Provider for WorkerClaimProvider {
+        fn id(&self) -> &str {
+            "anthropic"
+        }
+
+        fn name(&self) -> &str {
+            "Worker claim fixture"
+        }
+
+        fn models(&self) -> Vec<ModelInfo> {
+            Vec::new()
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> crate::errors::Result<CompletionResponse> {
+            unreachable!("the worker recipe test must use AgentEngine streaming")
+        }
+
+        async fn stream(&self, request: CompletionRequest) -> crate::errors::Result<StreamResult> {
+            assert!(
+                request
+                    .system
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("claim_task"),
+                "AgentEngine must receive the shipped worker protocol"
+            );
+            assert!(
+                request.tools.iter().any(|tool| tool.name == "claim_task"),
+                "the production FastDevelopment registry must expose claim_task"
+            );
+
+            let turn = {
+                let mut turns = self.turns.lock().unwrap();
+                let turn = *turns;
+                *turns += 1;
+                turn
+            };
+            if turn == 0 {
+                return Ok(Box::pin(futures::stream::iter(
+                    SupervisorWorkflowProvider::chunks(
+                        "claim_task",
+                        json!({"task_id": self.task_id}),
+                    )
+                    .into_iter()
+                    .map(Ok),
+                )));
+            }
+
+            let observed = request
+                .messages
+                .iter()
+                .flat_map(|message| &message.content)
+                .find_map(|content| match content {
+                    MessageContent::ToolResult {
+                        name,
+                        content,
+                        is_error,
+                        ..
+                    } if name == "claim_task" => Some((*is_error, content.clone())),
+                    _ => None,
+                })
+                .expect("the real claim_task result must return to the model");
+            assert_eq!(
+                observed.0, self.should_refuse,
+                "the tool's owner check must match this test case"
+            );
+            *self.observed_result.lock().unwrap() = Some(observed);
+            Ok(Box::pin(futures::stream::iter(
+                [
+                    StreamChunk::TextDelta {
+                        text: "Claim attempt completed.".into(),
+                        block_index: 0,
+                    },
+                    StreamChunk::MessageDelta {
+                        stop_reason: "end_turn".into(),
+                        usage: Usage::default(),
+                    },
+                    StreamChunk::Done,
+                ]
+                .into_iter()
+                .map(Ok),
+            )))
+        }
+
+        async fn test_connection(&self) -> crate::errors::Result<ProviderStatus> {
+            Ok(ProviderStatus::Connected)
+        }
+    }
+
+    async fn run_shipped_worker_claim(
+        root: &std::path::Path,
+        task_id: i64,
+        worker_slug: &str,
+        recipe: &super::Recipe,
+        should_refuse: bool,
+    ) -> (bool, String) {
+        let provider = Arc::new(WorkerClaimProvider {
+            task_id,
+            should_refuse,
+            turns: Mutex::new(0),
+            observed_result: Mutex::new(None),
+        });
+        let engine = AgentEngine::new(
+            provider.clone(),
+            PermissionMode::Autonomous,
+            crate::agent::PAMode::FastDevelopment,
+            Arc::new(Mutex::new(AppState::default())),
+            new_pending_permissions(),
+            AgentIdentity::worker(worker_slug),
+        );
+        engine
+            .run(
+                &format!("claim-check-{worker_slug}"),
+                root.to_str().expect("isolated workspace path"),
+                "gemini-3.7-flash",
+                Vec::<RequestMessage>::new(),
+                "Claim the assigned task.",
+                Some(&recipe.instructions),
+            )
+            .await
+            .expect("the worker AgentEngine turn should finish");
+        let observed = provider
+            .observed_result
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the provider observed the claim result");
+        observed
+    }
+
+    #[tokio::test]
+    async fn shipped_worker_recipes_claim_through_agent_engine_with_owner_identity() {
+        let sandbox = Box::leak(Box::new(
+            tempfile::tempdir().expect("create isolated Arcana data root"),
+        ));
+        let _home = crate::db::test_support::with_home(sandbox.path());
+        let analytics = Arc::new(
+            crate::analytics::AnalyticsManager::new()
+                .await
+                .expect("initialize isolated analytics database"),
+        );
+        crate::analytics::install_global(analytics);
+
+        let db = TasksDb::open().expect("open isolated task DB");
+        let task_id = db
+            .create(crate::db::tasks::CreateTaskInput {
+                title: "production recipe claim proof".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "only the assigned runtime identity can claim this task"
+                    .into(),
+                created_by: Some("test".into()),
+            })
+            .expect("create task")
+            .id;
+        db.update_status(task_id, "assigned", Some("worker-backend"))
+            .expect("assign task to worker-backend");
+
+        let refused = run_shipped_worker_claim(
+            sandbox.path(),
+            task_id,
+            "worker-frontend",
+            &super::worker_frontend_recipe(),
+            true,
+        )
+        .await;
+        assert!(refused.0);
+        assert!(refused
+            .1
+            .contains("not the calling worker 'worker-frontend'"));
+        let still_assigned = db
+            .get_by_id(task_id)
+            .expect("read task after wrong-owner claim")
+            .expect("task remains present");
+        assert_eq!(
+            still_assigned.status,
+            crate::db::tasks::TaskStatus::Assigned
+        );
+        assert_eq!(
+            still_assigned.assigned_worker.as_deref(),
+            Some("worker-backend")
+        );
+        assert!(still_assigned.claimed_by_pid.is_none());
+
+        let claimed = run_shipped_worker_claim(
+            sandbox.path(),
+            task_id,
+            "worker-backend",
+            &super::worker_backend_recipe(),
+            false,
+        )
+        .await;
+        assert!(!claimed.0);
+        assert!(claimed.1.contains("claimed by worker-backend"));
+        let in_progress = db
+            .get_by_id(task_id)
+            .expect("read task after owner claim")
+            .expect("task remains present");
+        assert_eq!(in_progress.status, crate::db::tasks::TaskStatus::InProgress);
+        assert_eq!(
+            in_progress.claimed_by_pid,
+            Some(std::process::id() as i64),
+            "the real process PID must be persisted by the production claim tool"
+        );
+        assert!(
+            in_progress.claim_host.is_some(),
+            "the production claim tool must persist the host identity"
+        );
+        assert_eq!(
+            in_progress.assigned_worker.as_deref(),
+            Some("worker-backend")
+        );
     }
 }
 

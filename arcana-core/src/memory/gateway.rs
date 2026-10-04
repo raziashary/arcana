@@ -190,7 +190,14 @@ fn overlap(a: &str, b: &str) -> f32 {
 ///
 /// The four criteria are the anchor's §18 list — importance, novelty,
 /// duplication, confidence — applied as `DET` policy.
+#[tracing::instrument(
+    target = "arcana::telemetry",
+    skip_all,
+    fields(event_type = "trace_span", operation = "memory_proposal")
+)]
 pub fn propose(conn: &rusqlite::Connection, p: &Proposal) -> Result<Verdict> {
+    let mut timer = crate::observability::timing::OperationTimer::start("memory_proposal")
+        .with_database("memory");
     // ⚠ Redacted on the way IN, like every other memory writer
     // (`episodic.rs:32`, `semantic.rs:44`, `procedural.rs:129`), and for the
     // reason those three already state: *"a store that never held the secret
@@ -209,6 +216,7 @@ pub fn propose(conn: &rusqlite::Connection, p: &Proposal) -> Result<Verdict> {
 
     // ── Substance ────────────────────────────────────────────────────────
     if content.chars().filter(|c| c.is_alphanumeric()).count() < MIN_CONTENT_CHARS {
+        timer.set_outcome("rejected");
         return Ok(Verdict::Rejected {
             reason: format!(
                 "too short to be a memory ({} characters of content; {MIN_CONTENT_CHARS} required)",
@@ -237,6 +245,7 @@ pub fn propose(conn: &rusqlite::Connection, p: &Proposal) -> Result<Verdict> {
 
     for (id, other) in &existing {
         if overlap(content, other) >= DUPLICATE_THRESHOLD {
+            timer.set_outcome("duplicate");
             return Ok(Verdict::Rejected {
                 reason: format!("duplicate of an existing memory ({id})"),
             });
@@ -245,7 +254,7 @@ pub fn propose(conn: &rusqlite::Connection, p: &Proposal) -> Result<Verdict> {
 
     // ── Store ────────────────────────────────────────────────────────────
     let id = format!("mem-{}", uuid::Uuid::new_v4());
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = crate::db::timestamps::now_rfc3339();
     conn.execute(
         "INSERT INTO memories
             (id, tier, scope, scope_ref, scope_key, content, source, source_file, source_line,
@@ -267,6 +276,7 @@ pub fn propose(conn: &rusqlite::Connection, p: &Proposal) -> Result<Verdict> {
         ],
     )?;
 
+    timer.succeed();
     Ok(Verdict::Stored { id, confidence })
 }
 

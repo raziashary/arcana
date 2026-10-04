@@ -1,17 +1,13 @@
-// Reading timestamps back out of SQLite.
+// Shared database timestamp contract.
 //
-// Two formats live in these databases, and they are not interchangeable:
+// New Rust and SQLite writes use fixed-millisecond UTC RFC 3339 with `Z`,
+// e.g. `2026-09-29T09:32:17.418Z`. The parser also accepts two legacy shapes:
+// offset-bearing RFC 3339 and SQLite's offset-less UTC values such as
+// `2026-09-01 06:23:58`. Old values remain readable; new writers should use
+// `format_utc_timestamp`, `now_rfc3339`, or `SQLITE_UTC_NOW`.
 //
-//   * **chrono-written**, e.g. `2026-05-14T09:32:17.418759+00:00`. Full
-//     RFC 3339, with an offset. This is what `analytics` and `routing_history`
-//     contain.
-//   * **SQLite-written**, e.g. `2026-09-01 06:23:58`. Produced by
-//     `datetime('now')` and by `DEFAULT CURRENT_TIMESTAMP`. Space separator,
-//     **no offset**, always UTC.
-//
-// `DateTime::parse_from_rfc3339` handles the first and rejects the second. That
-// was measured rather than assumed, because the obvious guess is wrong in an
-// interesting way:
+// The offset-less legacy form must be interpreted as UTC. That was measured
+// rather than assumed, because the obvious guess about the separator is wrong:
 //
 // ```text
 //   2026-09-01 06:23:58            -> FAIL   (no offset)
@@ -32,12 +28,13 @@
 //
 // See MDP `§7 P1-13`.
 
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, SecondsFormat, Utc};
 
 use crate::errors::{ArcanaError, Result};
+use rusqlite::types::Type;
 
-/// Formats `datetime('now')` and `CURRENT_TIMESTAMP` produce, in the order
-/// they are tried.
+/// Legacy formats emitted by `datetime('now')` and `CURRENT_TIMESTAMP` before
+/// P4-57, in the order they are tried.
 const SQLITE_FORMATS: &[&str] = &[
     "%Y-%m-%d %H:%M:%S",    // datetime('now'), CURRENT_TIMESTAMP
     "%Y-%m-%d %H:%M:%S%.f", // with fractional seconds
@@ -76,6 +73,25 @@ pub fn parse_db_timestamp(raw: &str) -> Result<DateTime<Utc>> {
     )))
 }
 
+/// Read and parse a timestamp column without converting malformed data into a
+/// plausible epoch/current-time value.
+pub fn parse_row_timestamp(
+    row: &rusqlite::Row<'_>,
+    column: usize,
+) -> rusqlite::Result<DateTime<Utc>> {
+    let raw: String = row.get(column)?;
+    parse_db_timestamp(&raw).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            column,
+            Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                error.to_string(),
+            )),
+        )
+    })
+}
+
 /// How old a timestamp column is, in whole hours.
 ///
 /// Negative when the value is in the future, which is left to the caller to
@@ -86,13 +102,24 @@ pub fn age_hours(raw: &str) -> Result<i64> {
     Ok(Utc::now().signed_duration_since(then).num_hours())
 }
 
-/// The current time in the offset-bearing format, for writing from Rust.
-///
-/// Prefer this to `datetime('now')` in new code: a column that always carries
-/// an offset can be read by `parse_from_rfc3339` alone.
+/// The current time in Arcana's canonical fixed-millisecond UTC format.
 pub fn now_rfc3339() -> String {
-    Utc::now().to_rfc3339()
+    format_utc_timestamp(Utc::now())
 }
+
+/// Format an instant in Arcana's canonical persisted form:
+/// `YYYY-MM-DDTHH:mm:ss.sssZ`.
+///
+/// Keep this paired with [`SQLITE_UTC_NOW`] so Rust and SQLite writes have the
+/// same UTC representation and precision.
+pub fn format_utc_timestamp(instant: DateTime<Utc>) -> String {
+    instant.to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+/// SQLite expression for the canonical persisted UTC form. SQLite schemas and
+/// direct SQL writers use this instead of `CURRENT_TIMESTAMP` or
+/// `datetime('now')`.
+pub const SQLITE_UTC_NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 
 #[cfg(test)]
 mod tests {
@@ -224,5 +251,103 @@ mod tests {
             DateTime::parse_from_rfc3339(&s).is_ok(),
             "what we write must be readable by the strict parser too"
         );
+        assert!(s.ends_with('Z'), "canonical UTC suffix expected: {s}");
+        assert_eq!(s.len(), 24, "fixed millisecond precision expected: {s}");
+    }
+
+    #[test]
+    fn canonical_timestamps_round_trip_a_leap_year_across_offset_extremes() {
+        use chrono::{FixedOffset, TimeZone};
+
+        let offsets = [-43_200, 0, 50_400];
+        for ordinal in 1..=366 {
+            let date = chrono::NaiveDate::from_yo_opt(2024, ordinal).expect("day in leap year");
+            for seconds in [0, 1, 43_199, 86_399] {
+                let local = date.and_hms_opt(0, 0, 0).expect("midnight")
+                    + chrono::Duration::seconds(seconds);
+                for offset_seconds in offsets {
+                    let zone = FixedOffset::east_opt(offset_seconds).expect("valid UTC offset");
+                    let instant = zone
+                        .from_local_datetime(&local)
+                        .single()
+                        .expect("fixed offset is unambiguous")
+                        .with_timezone(&Utc);
+                    let encoded = format_utc_timestamp(instant);
+                    let decoded = parse_db_timestamp(&encoded).expect("canonical timestamp parses");
+                    assert_eq!(decoded, instant, "offset={offset_seconds}, local={local}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn canonical_timestamps_round_trip_northern_and_southern_dst_edges() {
+        use chrono::{FixedOffset, TimeZone};
+
+        // US 2024 spring-forward and fall-back wall-clock boundaries.
+        let cases = [
+            ("2024-03-10 01:59:59", -18_000),
+            ("2024-03-10 03:00:00", -14_400),
+            ("2024-11-03 01:59:59", -14_400),
+            ("2024-11-03 01:00:00", -18_000),
+            // Sydney 2024 end and start boundaries (southern hemisphere).
+            ("2024-04-07 02:59:59", 39_600),
+            ("2024-04-07 02:00:00", 36_000),
+            ("2024-10-06 01:59:59", 36_000),
+            ("2024-10-06 03:00:00", 39_600),
+        ];
+        for (local, offset_seconds) in cases {
+            let naive = NaiveDateTime::parse_from_str(local, "%Y-%m-%d %H:%M:%S")
+                .expect("valid transition wall-clock");
+            let offset = FixedOffset::east_opt(offset_seconds).expect("valid offset");
+            let instant = offset
+                .from_local_datetime(&naive)
+                .single()
+                .expect("fixed offset is unambiguous")
+                .with_timezone(&Utc);
+            let encoded = format_utc_timestamp(instant);
+            assert_eq!(parse_db_timestamp(&encoded).unwrap(), instant, "{local}");
+        }
+    }
+
+    #[test]
+    fn sqlite_and_rust_writers_emit_the_same_canonical_shape() {
+        let connection = rusqlite::Connection::open_in_memory().expect("in-memory SQLite");
+        let sqlite_value: String = connection
+            .query_row(&format!("SELECT {SQLITE_UTC_NOW}"), [], |row| row.get(0))
+            .expect("SQLite UTC formatter");
+        let rust_value = now_rfc3339();
+        for value in [&sqlite_value, &rust_value] {
+            assert!(
+                value.ends_with('Z'),
+                "canonical UTC suffix expected: {value}"
+            );
+            assert_eq!(value.len(), 24, "millisecond precision expected: {value}");
+            parse_db_timestamp(value).expect("canonical timestamp must parse");
+        }
+    }
+
+    #[test]
+    fn row_parser_reads_canonical_and_legacy_storage_values() {
+        let connection = rusqlite::Connection::open_in_memory().expect("in-memory SQLite");
+        for (value, expected) in [
+            ("2026-09-29T01:23:45.123Z", "2026-09-29T01:23:45.123Z"),
+            (
+                "2026-09-29T01:23:45.123456+00:00",
+                "2026-09-29T01:23:45.123456Z",
+            ),
+            ("2026-09-29 01:23:45", "2026-09-29T01:23:45Z"),
+        ] {
+            let parsed = connection
+                .query_row("SELECT ?1", [value], |row| parse_row_timestamp(row, 0))
+                .expect("timestamp row parses");
+            assert_eq!(
+                parsed.to_rfc3339_opts(SecondsFormat::AutoSi, true),
+                expected
+            );
+        }
+        assert!(connection
+            .query_row("SELECT 'not-a-time'", [], |row| parse_row_timestamp(row, 0))
+            .is_err());
     }
 }

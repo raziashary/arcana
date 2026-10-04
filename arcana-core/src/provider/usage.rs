@@ -226,6 +226,17 @@ pub enum ErrorClass {
 }
 
 impl ErrorClass {
+    /// Stable low-cardinality label suitable for telemetry and analytics.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Retryable => "retryable",
+            Self::Overloaded => "overloaded",
+            Self::QuotaExhausted => "quota_exhausted",
+            Self::Deferred => "deferred",
+            Self::Fatal => "fatal",
+        }
+    }
+
     pub fn is_retryable(&self) -> bool {
         matches!(self, ErrorClass::Retryable | ErrorClass::Overloaded)
     }

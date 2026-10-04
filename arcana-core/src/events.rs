@@ -269,6 +269,7 @@ pub struct PermissionPayload {
     pub tool_name: String,
     pub input: serde_json::Value,
     pub description: String,
+    pub allow_always: bool,
 }
 
 #[derive(Debug, Serialize, Clone)]

@@ -246,8 +246,14 @@ mod enabled {
     /// on an async worker stalls every other task on it. `spawn_blocking` is
     /// not a nicety here — a turn shares its runtime with streaming, tool
     /// execution and the event pump.
+    #[tracing::instrument(
+        target = "arcana::telemetry",
+        skip_all,
+        fields(event_type = "trace_span", operation = "memory_embedding")
+    )]
     pub async fn embed(text: String) -> Option<Vec<f32>> {
-        tokio::task::spawn_blocking(move || {
+        let mut timer = crate::observability::timing::OperationTimer::start("memory_embedding");
+        let result = tokio::task::spawn_blocking(move || {
             let m = model()?;
             let mut guard = match m.lock() {
                 Ok(g) => g,
@@ -257,11 +263,27 @@ mod enabled {
         })
         .await
         .ok()
-        .flatten()
+        .flatten();
+        if result.is_some() {
+            timer.succeed();
+        } else {
+            timer.set_outcome("unavailable");
+        }
+        result
     }
 
     /// Vector retrieval over `memories_vec`, scoped by partition key.
-    pub struct VectorBackend;
+    pub struct VectorBackend {
+        availability: crate::memory::backend::VectorAvailability,
+    }
+
+    impl Default for VectorBackend {
+        fn default() -> Self {
+            Self {
+                availability: crate::memory::backend::VectorAvailability::default(),
+            }
+        }
+    }
 
     impl RetrievalBackend for VectorBackend {
         fn name(&self) -> &'static str {
@@ -269,11 +291,11 @@ mod enabled {
         }
 
         fn is_degraded(&self) -> bool {
-            false
+            self.availability.is_degraded()
         }
 
         fn degraded_reason(&self) -> Option<String> {
-            None
+            self.availability.degraded_reason()
         }
 
         fn search(
@@ -290,9 +312,12 @@ mod enabled {
             // query text; a blocking embed inside a `&self` search would put
             // inference back on whatever thread called it.
             let Some(vector) = futures::executor::block_on(embed(q.text.clone())) else {
-                // No model → this backend contributes nothing and the lexical
-                // leg carries the query. It does not error.
-                return Ok(Vec::new());
+                // A model may have been present when the backend was selected
+                // and still fail during inference. Keep the promised lexical
+                // retrieval and report this recall as degraded rather than
+                // turning a transient model failure into a successful miss.
+                self.availability.mark_degraded();
+                return crate::memory::backend::lexical_fallback(conn, q);
             };
             if vector.len() != EMBEDDING_DIMS {
                 return Err(ArcanaError::Agent(format!(
@@ -344,7 +369,7 @@ mod enabled {
     /// The vector backend, if a model is actually loaded.
     pub fn vector_backend_if_ready() -> Option<Box<dyn RetrievalBackend>> {
         if super::model_is_present() {
-            Some(Box::new(VectorBackend))
+            Some(Box::new(VectorBackend::default()))
         } else {
             None
         }

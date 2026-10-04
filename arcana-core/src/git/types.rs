@@ -153,6 +153,7 @@ pub struct BlameLine {
 pub struct CheckpointInfo {
     pub id: String,
     pub session_id: String,
+    pub task_id: Option<i64>,
     pub file_path: String,
     /// Unix ms timestamp when the snapshot was taken.
     pub created_ms: i64,

@@ -27,6 +27,12 @@ pub const DIAGNOSTIC_TABLES: &[&str] = &[
     "daily_costs",
 ];
 
+const TOKEN_USAGE_COUNT_SQL: &str = "SELECT COUNT(*) FROM token_usage";
+const API_FAILURES_COUNT_SQL: &str = "SELECT COUNT(*) FROM api_failures";
+const SYSTEM_EVENTS_COUNT_SQL: &str = "SELECT COUNT(*) FROM system_events";
+const WORKER_STATS_COUNT_SQL: &str = "SELECT COUNT(*) FROM worker_stats";
+const DAILY_COSTS_COUNT_SQL: &str = "SELECT COUNT(*) FROM daily_costs";
+
 impl AnalyticsQueries {
     pub fn new(db: Arc<AnalyticsDb>) -> Self {
         Self { db }
@@ -46,9 +52,15 @@ impl AnalyticsQueries {
             // `-1` means "could not be counted". With the table list pinned to
             // the schema it is a real signal (a corrupt or missing database)
             // rather than the permanent state it was for `hourly_costs`.
-            let count: i64 = conn
-                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
-                .unwrap_or(-1);
+            let sql = match *table {
+                "token_usage" => TOKEN_USAGE_COUNT_SQL,
+                "api_failures" => API_FAILURES_COUNT_SQL,
+                "system_events" => SYSTEM_EVENTS_COUNT_SQL,
+                "worker_stats" => WORKER_STATS_COUNT_SQL,
+                "daily_costs" => DAILY_COSTS_COUNT_SQL,
+                _ => continue,
+            };
+            let count: i64 = conn.query_row(sql, [], |r| r.get(0)).unwrap_or(-1);
             out.insert((*table).to_string(), count);
         }
         Ok(out)
@@ -73,15 +85,13 @@ impl AnalyticsQueries {
         let today_tokens = live_tokens;
 
         // Yesterday: persisted rollup
-        let yesterday_cost = self
-            .db
-            .get_daily_cost(yesterday)?
-            .map(|r| r.total_cost_usd)
+        let yesterday_rollup = self.db.get_daily_cost(yesterday)?;
+        let yesterday_cost = yesterday_rollup
+            .as_ref()
+            .map(|record| record.total_cost_usd)
             .unwrap_or(0.0);
-        let yesterday_tokens = self
-            .db
-            .get_daily_cost(yesterday)?
-            .map(|r| r.total_tokens)
+        let yesterday_tokens = yesterday_rollup
+            .map(|record| record.total_tokens)
             .unwrap_or(0);
 
         let cost_change_percent = if yesterday_cost > 0.0 {
@@ -107,26 +117,25 @@ impl AnalyticsQueries {
                     &path,
                     OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
                 ) {
-                    Ok(conn) => {
-                        let today_str = today.to_string();
+                    Ok(mut conn) => {
+                        crate::observability::sqlite::install_profile(&mut conn, &path);
+                        // Worker `created_at` values are canonical UTC
+                        // timestamps; compare them against the UTC date rather
+                        // than the local dashboard date used by cost rollups.
+                        let today_str = chrono::Utc::now().date_naive().to_string();
                         let total: i32 = conn
-                            .query_row(
-                                "SELECT COUNT(*) FROM workers WHERE status != 'deleted'",
-                                [],
-                                |r| r.get(0),
-                            )
+                            .query_row(crate::db::workers::DASHBOARD_WORKER_TOTAL_SQL, [], |r| {
+                                r.get(0)
+                            })
                             .unwrap_or(0);
                         let active: i32 = conn
-                            .query_row(
-                                "SELECT COUNT(*) FROM workers \
-                             WHERE status NOT IN ('paused', 'deleted')",
-                                [],
-                                |r| r.get(0),
-                            )
+                            .query_row(crate::db::workers::DASHBOARD_WORKER_ACTIVE_SQL, [], |r| {
+                                r.get(0)
+                            })
                             .unwrap_or(0);
                         let added: i32 = conn
                             .query_row(
-                                "SELECT COUNT(*) FROM workers WHERE date(created_at) = ?1",
+                                crate::db::workers::DASHBOARD_WORKER_ADDED_TODAY_SQL,
                                 rusqlite::params![today_str],
                                 |r| r.get(0),
                             )
@@ -322,10 +331,8 @@ mod tests {
     /// there, so the list cannot drift from the schema again.
     #[tokio::test]
     async fn every_diagnostic_table_actually_exists() {
-        let dir = std::env::temp_dir().join("arcana-analytics-diag-test");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        let path = dir.join("analytics.db");
+        let dir = tempfile::tempdir().expect("isolated diagnostics directory");
+        let path = dir.path().join("analytics.db");
 
         let db = crate::analytics::db::AnalyticsDb::new_at(&path)
             .await
@@ -344,9 +351,61 @@ mod tests {
                 n, 1,
                 "DIAGNOSTIC_TABLES names '{table}', which the schema never creates"
             );
+            let query = format!("SELECT COUNT(*) FROM {table}");
+            let plan: Vec<String> = conn
+                .prepare(&format!("EXPLAIN QUERY PLAN {query}"))
+                .expect("prepare diagnostic count plan")
+                .query_map([], |row| row.get(3))
+                .expect("explain full diagnostic count")
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .expect("collect diagnostic plan");
+            assert!(
+                !plan.is_empty(),
+                "full-table count for '{table}' is an explicit one-shot diagnostic query"
+            );
         }
         drop(conn);
-        drop(db);
-        let _ = std::fs::remove_dir_all(&dir);
+
+        let queries = AnalyticsQueries::new(Arc::new(db));
+        let counts = queries
+            .row_counts_for_diagnostic()
+            .expect("read actual diagnostic counts");
+        assert_eq!(counts.len(), DIAGNOSTIC_TABLES.len());
+        assert!(counts.values().all(|count| *count == 0));
+    }
+
+    #[tokio::test]
+    async fn dashboard_summary_reads_worker_counts_from_the_production_worker_database() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let analytics_path = home.path().join("analytics-fixture.db");
+        let analytics = crate::analytics::db::AnalyticsDb::new_at(&analytics_path)
+            .await
+            .expect("analytics db");
+        let queries = AnalyticsQueries::new(Arc::new(analytics));
+        let workers = crate::db::workers::WorkersDb::open().expect("open isolated workers db");
+
+        let before = queries
+            .get_dashboard_summary(0.0, 0)
+            .expect("read dashboard summary before worker creation");
+        workers
+            .create(
+                "Dashboard query fixture",
+                "dashboard-query-fixture",
+                "custom",
+                crate::db::workers::DEFAULT_MODEL,
+                &[],
+                120,
+                None,
+            )
+            .expect("create worker through the production repository");
+
+        let after = queries
+            .get_dashboard_summary(0.0, 0)
+            .expect("read dashboard summary after worker creation");
+        assert_eq!(after.total_workers, before.total_workers + 1);
+        assert_eq!(after.active_workers, before.active_workers + 1);
+        assert_eq!(after.workers_added_today, before.workers_added_today + 1);
+        drop(workers);
     }
 }

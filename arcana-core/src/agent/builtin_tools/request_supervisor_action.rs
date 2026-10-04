@@ -34,7 +34,7 @@ impl Tool for RequestSupervisorActionTool {
     fn description(&self) -> &str {
         "Send a structured request to the Supervisor. Workers use this to escalate \
          audit results, request re-assignment, report blockers, or ask for review. \
-         The Supervisor polls these requests every tick and acts on them."
+         The Supervisor polls these requests every tick and acts on them. Workers at the build-failure threshold may use build_retry_approval to request one extra build batch."
     }
 
     fn input_schema(&self) -> Value {
@@ -47,13 +47,14 @@ impl Tool for RequestSupervisorActionTool {
                 },
                 "request_type": {
                     "type": "string",
-                    "enum": ["decompose_audit", "reassign", "needs_info", "report_issue", "request_review"],
+                    "enum": ["decompose_audit", "reassign", "needs_info", "report_issue", "request_review", "build_retry_approval"],
                     "description": "Type of request. \
                         decompose_audit = audit found multiple sub-tasks; \
                         reassign = task should go to a different worker; \
                         needs_info = need clarification before continuing; \
                         report_issue = blocking issue/bug discovered; \
-                        request_review = task is ready for QC early."
+                        request_review = task is ready for QC early; \
+                        build_retry_approval = request one audited extra project build batch after three observed failures."
                 },
                 "payload": {
                     "type": "object",
@@ -81,6 +82,7 @@ impl Tool for RequestSupervisorActionTool {
             "needs_info",
             "report_issue",
             "request_review",
+            "build_retry_approval",
         ];
         if !valid_types.contains(&request_type.as_str()) {
             return ToolResult::error(&format!(
@@ -90,6 +92,59 @@ impl Tool for RequestSupervisorActionTool {
         }
 
         let task_id = input["task_id"].as_i64();
+
+        if request_type == "build_retry_approval" {
+            let Some(task_id) = task_id else {
+                return ToolResult::error("build_retry_approval requires the current task_id");
+            };
+            if ctx.agent_role.trim() == "supervisor" || ctx.task_id != Some(task_id) {
+                return ToolResult::error(
+                    "Only a worker may request a retry approval for its currently claimed task.",
+                );
+            }
+            if let Err(message) = ctx.require_current_task_claim() {
+                return ToolResult::error(message);
+            }
+            let db = match TasksDb::open() {
+                Ok(db) => db,
+                Err(error) => {
+                    return ToolResult::error(format!("Failed to open tasks database: {error}"))
+                }
+            };
+            let payload = match &input["payload"] {
+                Value::Object(_) => input["payload"].to_string(),
+                _ => return ToolResult::error("'payload' must be a JSON object"),
+            };
+            let request = match db.create_build_retry_request_for_worker(
+                &ctx.agent_role,
+                task_id,
+                &payload,
+            ) {
+                Ok(request) => request,
+                Err(error) => {
+                    return ToolResult::error(format!(
+                        "Could not request build retry approval: {error}"
+                    ))
+                }
+            };
+            crate::recipes::scheduler::kick("supervisor");
+            emit_worker_request(WorkerRequestPayload {
+                id: request.id,
+                worker_slug: request.worker_slug.clone(),
+                task_id: request.task_id,
+                request_type: request.request_type.clone(),
+                status: request.status.as_str().to_string(),
+                payload: request.payload.clone(),
+            });
+            return ToolResult::success(
+                json!({
+                    "request_id": request.id,
+                    "status": "pending",
+                    "message": "The Supervisor must approve one additional project build batch before the worker can build again."
+                })
+                .to_string(),
+            );
+        }
 
         let payload = match &input["payload"] {
             Value::Object(_) => input["payload"].to_string(),

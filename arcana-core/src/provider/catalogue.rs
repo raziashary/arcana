@@ -80,6 +80,17 @@ pub const CATALOGUE: &[CatalogueEntry] = &[
     // minimum below which the implicit cache does not engage — so `Automatic`
     // carries a minimum rather than claiming to have none.
     CatalogueEntry {
+        id: "gemini-3.8-flash",
+        display_name: "Gemini 3.8 Flash",
+        provider: "google",
+        context_window: 1_048_576,
+        max_output: 65_536,
+        vision: true,
+        reasoning: true,
+        parallel_tools: true,
+        cache: CacheSupport::Automatic { min_tokens: 4_096 },
+    },
+    CatalogueEntry {
         // ⚠ `-preview` is the ONLY id this model ships under. `gemini-3.1-pro`
         // returns 404 from Google — caught by the live smoke on its first run,
         // and by nothing else: a fixture test would have gone on passing
@@ -477,7 +488,10 @@ mod tests {
 
     #[test]
     fn each_provider_serves_the_models_it_is_supposed_to() {
-        assert_eq!(models_for("google").len(), 2);
+        assert_eq!(models_for("google").len(), 3);
+        assert!(models_for("google")
+            .iter()
+            .any(|model| model.id == "gemini-3.8-flash"));
         assert_eq!(models_for("anthropic").len(), 4);
         // Four, not six: gpt-5.5-pro and gpt-5.3-codex were removed on
         // 2026-09-02 because no verified price existed for them, and an

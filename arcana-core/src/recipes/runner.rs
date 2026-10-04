@@ -12,19 +12,23 @@
 // `ADR-LOG-RESTRUCT-0008` and `P8-48`; it does not belong at the top of the
 // file that no longer does it (`P8-60`).
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use tracing::Instrument;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::agent::engine::AgentEngine;
 use crate::agent::permission::{PendingPermissions, PermissionMode};
 use crate::agent::PAMode;
-use crate::db::workers::WorkersDb;
+use crate::db::workers::{WorkerStatus, WorkersDb};
 use crate::errors::{ArcanaError, Result};
 use crate::events::{
-    emit_worker_log_line, emit_worker_status, emit_worker_tick_end, emit_worker_tick_start,
-    WorkerLogLinePayload, WorkerStatusPayload, WorkerTickEndPayload, WorkerTickStartPayload,
+    emit_worker_status, emit_worker_tick_end, emit_worker_tick_start, WorkerStatusPayload,
+    WorkerTickEndPayload, WorkerTickStartPayload,
 };
 use crate::hooks::ecosystem::Ecosystem;
 use crate::provider::anthropic::AnthropicProvider;
@@ -67,6 +71,238 @@ pub(crate) fn unanswerable_prompt_config(recipe: &Recipe) -> Option<String> {
 const RECIPE_TRIGGER: &str =
     "Begin your scheduled execution. Check the task board and proceed with your responsibilities.";
 
+const STARTUP_MAX_ATTEMPTS: u32 = 4;
+const STARTUP_RETRY_BASE_MS: u64 = 200;
+const STARTUP_RETRY_MAX_DELAY: Duration = Duration::from_millis(2_200);
+const STARTUP_RETRY_MAX_ELAPSED: Duration = Duration::from_secs(2);
+
+fn worker_run_budget(
+    worker_slug: &str,
+    supervisor_override: Option<&crate::budget::TaskBudget>,
+) -> crate::budget::TaskBudget {
+    if worker_slug == "supervisor" {
+        supervisor_override
+            .cloned()
+            .unwrap_or_else(crate::budget::TaskBudget::default_supervisor)
+    } else {
+        crate::budget::TaskBudget::default_worker()
+    }
+}
+
+fn startup_retry_delay(retry_number: u32, jitter_seed: u128) -> Duration {
+    let exponent = retry_number.saturating_sub(1).min(63);
+    let window_ms = STARTUP_RETRY_BASE_MS
+        .saturating_mul(1u64 << exponent)
+        .min(STARTUP_RETRY_MAX_DELAY.as_millis() as u64);
+    let delay_ms = (jitter_seed % u128::from(window_ms.saturating_add(1))) as u64;
+    Duration::from_millis(delay_ms)
+}
+
+fn retryable_startup_error(error: &ArcanaError) -> bool {
+    match error {
+        ArcanaError::Io(error) => matches!(
+            error.kind(),
+            std::io::ErrorKind::Interrupted
+                | std::io::ErrorKind::WouldBlock
+                | std::io::ErrorKind::TimedOut
+        ),
+        ArcanaError::Database(rusqlite::Error::SqliteFailure(error, _)) => matches!(
+            error.code,
+            rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+        ),
+        // Vault errors currently use a string-only error variant, so the
+        // runner cannot distinguish transient keychain service failures from
+        // corrupt or undecryptable persistent data. Fail once until that
+        // boundary exposes typed transient errors.
+        ArcanaError::Vault(_) => false,
+        _ => false,
+    }
+}
+
+fn startup_error_class(error: &ArcanaError) -> &'static str {
+    match error {
+        ArcanaError::Io(_) => "io",
+        ArcanaError::Database(_) => "database",
+        ArcanaError::Vault(_) => "keychain",
+        ArcanaError::Provider(message) if message.contains("[QuotaExhausted]") => {
+            "provider_quota_exhausted"
+        }
+        ArcanaError::Provider(message) if message.contains("[Overloaded]") => "provider_overloaded",
+        ArcanaError::Provider(message) if message.contains("[Retryable]") => "provider_retryable",
+        ArcanaError::Provider(_) => "provider_fatal",
+        ArcanaError::Cancelled => "cancelled",
+        _ => "permanent",
+    }
+}
+
+#[cfg(test)]
+mod provider_failure_class_tests {
+    use super::startup_error_class;
+    use crate::errors::ArcanaError;
+
+    #[test]
+    fn provider_failure_records_preserve_the_provider_retry_class() {
+        assert_eq!(
+            startup_error_class(&ArcanaError::Provider(
+                "Google 503 [Overloaded]: busy".into()
+            )),
+            "provider_overloaded"
+        );
+        assert_eq!(
+            startup_error_class(&ArcanaError::Provider(
+                "Google 429 [QuotaExhausted]: capped".into()
+            )),
+            "provider_quota_exhausted"
+        );
+        assert_eq!(
+            startup_error_class(&ArcanaError::Provider(
+                "Google 500 [Retryable]: unavailable".into()
+            )),
+            "provider_retryable"
+        );
+        assert_eq!(
+            startup_error_class(&ArcanaError::Provider("Google 400 [Fatal]: invalid".into())),
+            "provider_fatal"
+        );
+    }
+}
+
+#[cfg(test)]
+async fn retry_startup<T, F>(worker_slug: &str, run_id: &str, mut prepare: F) -> Result<T>
+where
+    F: FnMut() -> Result<T>,
+{
+    retry_startup_with_state(worker_slug, run_id, &mut prepare, |_| {}).await
+}
+
+async fn retry_startup_with_state<T, F, R>(
+    worker_slug: &str,
+    run_id: &str,
+    prepare: F,
+    on_retry: R,
+) -> Result<T>
+where
+    F: FnMut() -> Result<T>,
+    R: FnMut(u32),
+{
+    retry_startup_with_state_and_delay(worker_slug, run_id, prepare, on_retry, |attempt| {
+        startup_retry_delay(attempt, Uuid::new_v4().as_u128())
+    })
+    .await
+}
+
+async fn retry_startup_with_state_and_delay<T, F, R, D>(
+    worker_slug: &str,
+    run_id: &str,
+    mut prepare: F,
+    mut on_retry: R,
+    mut delay_for_attempt: D,
+) -> Result<T>
+where
+    F: FnMut() -> Result<T>,
+    R: FnMut(u32),
+    D: FnMut(u32) -> Duration,
+{
+    let started = Instant::now();
+    for attempt in 1..=STARTUP_MAX_ATTEMPTS {
+        let result = catch_unwind(AssertUnwindSafe(|| prepare()));
+        let (value, error, retryable, error_class) = match result {
+            Ok(Ok(value)) => (Some(value), None, false, "none"),
+            Ok(Err(error)) => {
+                let retryable = retryable_startup_error(&error);
+                let class = startup_error_class(&error);
+                (None, Some(error), retryable, class)
+            }
+            Err(_) => (
+                None,
+                Some(ArcanaError::Agent("worker startup panicked".into())),
+                true,
+                "panic",
+            ),
+        };
+
+        if let Some(value) = value {
+            if attempt > 1 {
+                tracing::info!(
+                    target: "arcana::telemetry",
+                    event_type = "worker_startup_retry",
+                    worker = %worker_slug,
+                    run_id = %run_id,
+                    attempt,
+                    max_attempts = STARTUP_MAX_ATTEMPTS,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    outcome = "recovered",
+                    "Worker startup recovered before provider work"
+                );
+            }
+            return Ok(value);
+        }
+
+        let error = error.expect("failed startup attempt has an error");
+        let delay = delay_for_attempt(attempt);
+        let elapsed = started.elapsed();
+        if !retryable
+            || attempt == STARTUP_MAX_ATTEMPTS
+            || elapsed.saturating_add(delay) > STARTUP_RETRY_MAX_ELAPSED
+        {
+            tracing::warn!(
+                target: "arcana::telemetry",
+                event_type = "worker_startup_retry",
+                worker = %worker_slug,
+                run_id = %run_id,
+                attempt,
+                max_attempts = STARTUP_MAX_ATTEMPTS,
+                error_class,
+                outcome = if retryable { "exhausted" } else { "permanent_failure" },
+                elapsed_ms = elapsed.as_millis() as u64,
+                "Worker startup stopped before provider work"
+            );
+            return Err(error);
+        }
+
+        tracing::warn!(
+            target: "arcana::telemetry",
+            event_type = "worker_startup_retry",
+            worker = %worker_slug,
+            run_id = %run_id,
+            attempt,
+            max_attempts = STARTUP_MAX_ATTEMPTS,
+            next_delay_ms = delay.as_millis() as u64,
+            error_class,
+            outcome = "retry_scheduled",
+            "Retrying worker setup before provider work"
+        );
+        on_retry(attempt);
+        tokio::time::sleep(delay).await;
+    }
+    unreachable!("bounded startup attempts always return")
+}
+
+/// Select a worker/recipe model only when it belongs to the active provider.
+/// Seeded worker rows can outlive a provider switch, so an incompatible saved
+/// id must not be sent to the newly selected provider.
+fn model_for_provider(
+    provider: Option<&str>,
+    worker_model: Option<&str>,
+    recipe_model: Option<&str>,
+    active_model: Option<&str>,
+) -> Option<String> {
+    let Some(provider) = provider else {
+        return worker_model
+            .or(recipe_model)
+            .or(active_model)
+            .map(str::to_owned);
+    };
+    [worker_model, recipe_model, active_model]
+        .into_iter()
+        .flatten()
+        .find(|model| {
+            crate::provider::catalogue::entry(model).is_some_and(|entry| entry.provider == provider)
+        })
+        .map(str::to_owned)
+        .or_else(|| crate::provider::catalogue::default_model_for(provider).map(str::to_owned))
+}
+
 // ─── RecipeRunner ─────────────────────────────────────────────────────────────
 
 /// Executes a recipe as an autonomous agent session.
@@ -75,6 +311,14 @@ pub struct RecipeRunner {
     state: Arc<Mutex<AppState>>,
     _session_mgr: Arc<SessionManager>, // retained for future SSE bridging (not attached to recipe sessions)
     pending: PendingPermissions,
+    workspace_override: Option<String>,
+    supervisor_budget_override: Option<crate::budget::TaskBudget>,
+    fleet_correlation_id: Option<String>,
+    host_approval_available: bool,
+    #[cfg(test)]
+    provider_override: Option<Arc<dyn Provider>>,
+    #[cfg(test)]
+    startup_failures_for_test: Arc<AtomicUsize>,
 }
 
 impl RecipeRunner {
@@ -83,15 +327,82 @@ impl RecipeRunner {
         session_mgr: Arc<SessionManager>,
         pending: PendingPermissions,
     ) -> Self {
+        Self::new_with_workspace_override(state, session_mgr, pending, None)
+    }
+
+    /// Construct a runner with a host-selected, already validated workspace.
+    /// The override is process-local and leaves the user's configured
+    /// workspace untouched.
+    pub fn new_with_workspace_override(
+        state: Arc<Mutex<AppState>>,
+        session_mgr: Arc<SessionManager>,
+        pending: PendingPermissions,
+        workspace_override: Option<String>,
+    ) -> Self {
         Self {
             state,
             _session_mgr: session_mgr,
             pending,
+            workspace_override,
+            supervisor_budget_override: None,
+            fleet_correlation_id: None,
+            host_approval_available: true,
+            #[cfg(test)]
+            provider_override: None,
+            #[cfg(test)]
+            startup_failures_for_test: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    /// Replace provider construction in production-path tests while leaving
+    /// scheduler dispatch, recipe resolution, AgentEngine, and tools intact.
+    #[cfg(test)]
+    pub(crate) fn with_provider_for_test(mut self, provider: Arc<dyn Provider>) -> Self {
+        self.provider_override = Some(provider);
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_startup_failures_for_test(mut self, count: usize) -> Self {
+        self.startup_failures_for_test = Arc::new(AtomicUsize::new(count));
+        self
+    }
+
+    /// Apply a bounded host-scoped override to each Supervisor run. Worker
+    /// caps remain unchanged; any saved task budget is still intersected by
+    /// the engine after a task is claimed.
+    pub fn with_supervisor_budget_override(
+        mut self,
+        budget: Option<crate::budget::TaskBudget>,
+    ) -> Self {
+        self.supervisor_budget_override = budget;
+        self
+    }
+
+    /// Correlate every production worker tick with the host's Fleet run.
+    pub fn with_fleet_correlation_id(mut self, correlation_id: Option<String>) -> Self {
+        self.fleet_correlation_id = correlation_id;
+        self
+    }
+
+    /// Set whether this host can answer one-call approval prompts.
+    pub fn with_host_approval_available(mut self, available: bool) -> Self {
+        self.host_approval_available = available;
+        self
     }
 
     /// Execute a recipe for the given worker slug.
     /// Updates worker status in DB: idle → working → idle/error.
+    #[tracing::instrument(
+        target = "arcana::telemetry",
+        skip_all,
+        fields(
+            event_type = "trace_span",
+            operation = "fleet_worker_tick",
+            fleet_correlation_id = self.fleet_correlation_id.as_deref().unwrap_or(""),
+            worker = %worker_slug
+        )
+    )]
     pub async fn run_recipe(&self, recipe: &Recipe, worker_slug: &str) -> Result<()> {
         // ── P3-65 · a schedule and a prompt are mutually exclusive ──────────
         //
@@ -127,88 +438,49 @@ impl RecipeRunner {
 
         // ── Deterministic no-op short-circuit ──────────────────────────────────
         //
-        // For "worker-*" slugs (backend / frontend / platform / mcp / cleanup),
-        // the recipe is meaningful ONLY when there is an actual task on the
-        // board assigned to this worker in a runnable state
-        // (`assigned` or `in_progress`). Historically the LLM was spun up on
-        // every cron tick regardless and — finding an empty board — would
-        // hallucinate work, drift through random files, and churn until the
-        // hard `MAX_TOOL_TURNS` cap (20). That produced the "18 loops for a
-        // simple markdown" behaviour seen in `logs/demo.txt`.
-        //
-        // ⚠ This was once conditional on which engine the tick would take.
-        // The condition was always true (`P8-48`), so it has only ever meant
-        // what it now says: every `worker-*` slug, every tick.
-        if worker_slug.starts_with("worker-") {
-            if !Self::has_runnable_task(worker_slug) {
-                info!(
-                    "[RecipeRunner] worker '{}' has no assigned/in_progress tasks — skipping tick",
-                    worker_slug
-                );
-                self.set_worker_status(worker_slug, "idle");
-                return Ok(());
-            }
+        // Every persistent worker is provider-gated by actual board work. This
+        // includes the Supervisor's READY/request queues and QC's inbox/review
+        // queue, so neither can spend on an empty startup, event, or recovery
+        // tick. A failed DB read is an error, never evidence that the queue is
+        // empty.
+        if !crate::recipes::scheduler::worker_has_recoverable_work(worker_slug)? {
+            info!(
+                "[RecipeRunner] worker '{}' has no recoverable task or message work — skipping provider turn",
+                worker_slug
+            );
+            self.set_worker_status(worker_slug, WorkerStatus::Idle);
+            return Ok(());
         }
 
         // ── Model resolution ───────────────────────────────────────────────
-        // Priority: worker.model (DB) > recipe.model (YAML) > active_model > default.
+        // Priority among provider-compatible ids: worker.model (DB) >
+        // recipe.model (YAML) > active_model > that provider's catalogue default.
         let worker_model: Option<String> = WorkersDb::open()
             .ok()
             .and_then(|db| db.get_by_slug(worker_slug).ok().flatten())
             .map(|w| w.model)
             .filter(|m| !m.is_empty());
 
-        let model = {
+        let (active_provider, active_model) = {
             let s = self.state.lock_tolerant();
-            worker_model
-                .or_else(|| recipe.model.clone())
-                .unwrap_or_else(|| {
-                    // P2-31. The literal here was `claude-sonnet-4-5`, retired
-                    // in February 2026 — so a run with no worker model, no
-                    // recipe model and no active selection reached for a model
-                    // that does not exist.
-                    //
-                    // `DEFAULT_MODEL` is the one place a fallback model id is
-                    // written down, and `TG-P2-09` holds every such id to the
-                    // catalogue.
-                    s.active_model
-                        .clone()
-                        .unwrap_or_else(|| crate::db::workers::DEFAULT_MODEL.to_string())
-                })
+            (s.active_provider.clone(), s.active_model.clone())
         };
+        let model = model_for_provider(
+            active_provider.as_deref(),
+            worker_model.as_deref(),
+            recipe.model.as_deref(),
+            active_model.as_deref(),
+        )
+        .unwrap_or_else(|| crate::db::workers::DEFAULT_MODEL.to_string());
 
         // Ephemeral session id — used by Mode 1 if reached
         let session_id = format!("recipe-{}-{}", worker_slug, Uuid::new_v4());
+        let runs_db = crate::db::runs::RunsDb::open()?;
+        let worker_run_id = runs_db.begin_worker_tick(worker_slug, &session_id)?;
         // Track the native run under its worker/session pair for its entire
         // lifetime. This does not retain the engine or persist the session.
         let _runtime_lease =
             crate::state::runtime_registry::global().admit(worker_slug, &session_id)?;
-
-        // Working directory for recipe agents.
-        //
-        // Priority:
-        //   1. Configured workspace dir (set via Settings → Workspace Folder).
-        //      This is the SAME root the Personal Assistant uses, so the worker
-        //      fleet and the PA share a consistent view of the project.
-        //   2. Fallback sandbox ~/.arcana/agents/<slug>/ when no workspace is set,
-        //      so background ticks can still run on a fresh install without
-        //      polluting a random cwd.
-        let workspace_dir = crate::db::app_settings::load_workspace_dir();
-        let working_dir = if !workspace_dir.trim().is_empty() {
-            workspace_dir
-        } else {
-            crate::db::arcana_dir()
-                .map(|p| {
-                    let agent_dir = p.join("agents").join(worker_slug);
-                    let _ = std::fs::create_dir_all(&agent_dir);
-                    agent_dir.to_string_lossy().into_owned()
-                })
-                .unwrap_or_else(|_| {
-                    std::env::var("USERPROFILE")
-                        .or_else(|_| std::env::var("HOME"))
-                        .unwrap_or_else(|_| ".".to_string())
-                })
-        };
 
         // ⚠ Two dead branches stood here and were deleted in `P8-48` and
         // `P8-47`: a dispatch arm into a second runtime, unreachable by
@@ -221,37 +493,150 @@ impl RecipeRunner {
         // all rather than something stale. `P8-42` moved them onto the live
         // path in the same change.
 
-        // ── The engine ──────────────────────────────────────────────────
-        // A provider and key are required: without one there is nothing to run
-        // the recipe on.
-        let provider_id = {
-            let s = self.state.lock_tolerant();
-            s.active_provider.clone()
-        };
+        // Prepare all local startup state under one bounded retry boundary.
+        // Workspace validation stays before the no-provider return, preserving
+        // the fail-closed worker contract. A retry can only happen before
+        // `engine.run`, so it cannot replay a provider request, tool call, task
+        // claim, or other run side effect.
+        let retry_run_id = worker_run_id.clone();
+        let retry_worker_slug = worker_slug.to_owned();
+        let prepared = retry_startup_with_state(worker_slug, &worker_run_id, || {
+            #[cfg(test)]
+            if self
+                .startup_failures_for_test
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                    remaining.checked_sub(1)
+                })
+                .is_ok()
+            {
+                return Err(ArcanaError::Io(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "injected transient startup failure before provider work",
+                )));
+            }
 
-        let provider_id = match provider_id {
-            Some(id) => id,
-            None => {
-                // No LLM provider configured — there is nothing to run on.
-                // 🔴 `P8-43`. This branch used to say the worker would stay
-                // idle until a second runtime finished starting and picked the
-                // recipe up, and logged that it was waiting for one.
-                // **Nothing is coming.** There is one engine, and a worker with
-                // no provider configured is not waiting for a peer — it is
-                // blocked until the user adds a key. Saying otherwise turned a
-                // fixable configuration gap into a wait with no end.
-                //
-                // Still not `"error"`: the user has simply not finished setting
-                // up, which is a state to report, not a failure to log.
-                info!(
-                    "[RecipeRunner] Worker '{}' idle: no LLM provider configured. \
-                     Add a provider key in Settings — nothing else will pick this up.",
-                    worker_slug
+            // Every agent runs against the same canonical configured project.
+            // Missing, unreadable, relative, or invalid workspace configuration
+            // fails the tick instead of redirecting work to CWD or an Arcana folder.
+            let working_dir = crate::platform::workspace::resolve_workspace_dir(
+                self.workspace_override.as_deref(),
+            )?
+                .to_string_lossy()
+                .into_owned();
+
+            let Some(provider_id) = active_provider.as_deref() else {
+                return Ok(None);
+            };
+
+            let inner: Arc<dyn Provider> = {
+                #[cfg(test)]
+                if let Some(provider) = &self.provider_override {
+                    provider.clone()
+                } else {
+                    let api_key = VaultManager::get(&provider_key(provider_id))?.ok_or_else(|| {
+                        ArcanaError::Agent(format!(
+                            "No API key stored for provider '{provider_id}' — set it in Settings"
+                        ))
+                    })?;
+                    match provider_id {
+                        "anthropic" => Arc::new(AnthropicProvider::new(api_key)),
+                        "openai" => Arc::new(OpenAIProvider::new(api_key)),
+                        "google" => Arc::new(GoogleProvider::new(api_key)),
+                        other => {
+                            return Err(ArcanaError::Agent(format!("Unsupported provider: {other}")))
+                        }
+                    }
+                }
+                #[cfg(not(test))]
+                {
+                    let api_key = VaultManager::get(&provider_key(provider_id))?.ok_or_else(|| {
+                        ArcanaError::Agent(format!(
+                            "No API key stored for provider '{provider_id}' — set it in Settings"
+                        ))
+                    })?;
+                    match provider_id {
+                        "anthropic" => Arc::new(AnthropicProvider::new(api_key)),
+                        "openai" => Arc::new(OpenAIProvider::new(api_key)),
+                        "google" => Arc::new(GoogleProvider::new(api_key)),
+                        other => {
+                            return Err(ArcanaError::Agent(format!("Unsupported provider: {other}")))
+                        }
+                    }
+                }
+            };
+
+            // Every worker call passes the daily ceiling (P2-21).
+            let provider = crate::provider::capped::CappedProvider::wrap(inner, self.state.clone());
+
+            // NOTE: session_mgr is intentionally NOT attached. Recipe sessions
+            // are ephemeral and are not inserted into the sessions table.
+            let engine = AgentEngine::new(
+                provider,
+                PermissionMode::from(&recipe.permission_mode),
+                PAMode::FastDevelopment,
+                self.state.clone(),
+                self.pending.clone(),
+                crate::agent::tool_trait::AgentIdentity::worker(worker_slug),
+            )
+            .with_workspace_egress_consent()
+            .with_host_approval_available(self.host_approval_available)
+            .with_procedural_recall(true)
+            .with_fleet_correlation_id(self.fleet_correlation_id.clone())
+            // P2-48: unattended runs always have a worker-level spending cap.
+                .with_budget(worker_run_budget(
+                    worker_slug,
+                    self.supervisor_budget_override.as_ref(),
+                ));
+
+            Ok(Some((engine, working_dir, provider_id.to_owned())))
+        }, |attempt| {
+            let update = crate::db::runs::RunsDb::open().and_then(|db| {
+                db.update_worker_tick_phase(&retry_run_id, "retrying", None, None)
+            });
+            if let Err(error) = update {
+                warn!(target: "arcana::telemetry", event_type = "worker_startup_retry_state_failed", worker = %retry_worker_slug, run_id = %retry_run_id, attempt, error_class = "runs_db", "Could not persist startup retry phase");
+                let _ = error;
+            }
+        })
+        .await;
+
+        let prepared = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let class = startup_error_class(&error);
+                let _ = runs_db.finish_worker_tick(
+                    &worker_run_id,
+                    "failed",
+                    crate::db::runs::outcome::FAILED,
+                    Some(class),
                 );
-                self.set_worker_status(worker_slug, "idle_no_provider");
-                return Ok(());
+                self.set_worker_status(worker_slug, WorkerStatus::Error);
+                return Err(error);
             }
         };
+
+        let Some((engine, working_dir, provider_id)) = prepared else {
+            // No LLM provider configured — there is nothing to run on.
+            // `P8-43`: report the blocked configuration state rather than
+            // claiming another runtime will eventually pick the recipe up.
+            info!(
+                "[RecipeRunner] Worker '{}' idle: no LLM provider configured. \
+                 Add a provider key in Settings — nothing else will pick this up.",
+                worker_slug
+            );
+            runs_db.finish_worker_tick(
+                &worker_run_id,
+                "blocked",
+                crate::db::runs::outcome::OK,
+                Some("provider_not_configured"),
+            )?;
+            self.set_worker_status(worker_slug, WorkerStatus::IdleNoProvider);
+            return Ok(());
+        };
+
+        runs_db.update_worker_tick_phase(&worker_run_id, "running", None, None)?;
+        let engine = engine.with_worker_run_id(worker_run_id.clone());
+
         // ⚠ The `mode` / `mode1_capable` fields are gone with the second
         // engine: every worker runs here, so a field that was true for all of
         // them carried no information and a `grep` for it selected everything.
@@ -260,60 +645,11 @@ impl RecipeRunner {
             "[RecipeRunner] Worker '{}' active (provider='{}')", worker_slug, provider_id,
         );
 
-        let api_key = VaultManager::get(&provider_key(&provider_id))?.ok_or_else(|| {
-            ArcanaError::Agent(format!(
-                "No API key stored for provider '{provider_id}' — set it in Settings"
-            ))
-        })?;
-
-        let inner: Arc<dyn Provider> = match provider_id.as_str() {
-            "anthropic" => Arc::new(AnthropicProvider::new(api_key)),
-            "openai" => Arc::new(OpenAIProvider::new(api_key)),
-            "google" => Arc::new(GoogleProvider::new(api_key)),
-            other => return Err(ArcanaError::Agent(format!("Unsupported provider: {other}"))),
-        };
-
-        // Every worker call passes the daily ceiling (P2-21).
-        let provider = crate::provider::capped::CappedProvider::wrap(inner, self.state.clone());
-
-        self.set_worker_status(worker_slug, "working");
+        self.set_worker_status(worker_slug, WorkerStatus::Working);
         info!(
             "[RecipeRunner] Starting Rust AgentEngine for '{}' (session: {})",
             worker_slug, session_id
         );
-
-        // ⚠ P3-65. This comment used to read "Build autonomous engine — workers
-        // never wait for user approval", and the line below hardcoded
-        // `PermissionMode::Autonomous`. That was true of every recipe
-        // regardless of what it declared, which is why four recipes could ask
-        // for `Supervised` and get none of it.
-        //
-        // A recipe on a cron schedule still must not prompt — there is nobody
-        // there to answer, and the 300s `PERMISSION_TIMEOUT` would stall the
-        // fleet. That constraint is now enforced where it belongs, on the
-        // *recipe declarations* (and gated by `TG-P3-65`), rather than by
-        // ignoring the field here.
-        //
-        // NOTE: session_mgr is intentionally NOT attached. Recipe sessions are ephemeral
-        // (session_id never inserted into sessions table), so append_message would fail
-        // with FOREIGN KEY constraint. In-memory context is sufficient for recipe runs.
-        let engine = AgentEngine::new(
-            provider,
-            PermissionMode::from(&recipe.permission_mode),
-            PAMode::FastDevelopment,
-            self.state.clone(),
-            self.pending.clone(),
-            // The worker's own slug is its identity. This is what the three
-            // worker-messaging tools, claim_task's orphan detection and the
-            // qc_review gate all read — previously it was None on this path.
-            crate::agent::tool_trait::AgentIdentity::worker(worker_slug),
-        )
-        // P2-48. A worker runs unattended, so it runs under a ceiling. Until
-        // 2026-09-02 nothing ever called this and the guard in `engine.run`
-        // was unreachable — a worker could loop indefinitely and spend without
-        // limit. The task's own budget, when it claims one, refines this; the
-        // default is what stops an unclaimed or unbudgeted run.
-        .with_budget(crate::budget::TaskBudget::default_worker());
 
         // P8-42 — the Live Monitor's tick events, emitted around the NATIVE run.
         //
@@ -335,11 +671,19 @@ impl RecipeRunner {
             // payload is a published event shape; `agentLiveStore.ts` types it
             // and does not read it.
             mode: "native".to_string(),
-            timestamp: chrono::Utc::now().to_rfc3339(),
+            timestamp: crate::db::timestamps::now_rfc3339(),
         });
 
         // Run agent with recipe instructions as system prompt override
-        let result = engine
+        let fleet_span = tracing::info_span!(
+            target: "arcana::telemetry",
+            "fleet_worker_tick",
+            event_type = "trace_span",
+            worker = %worker_slug,
+            session_id = %session_id,
+            worker_id = %worker_slug,
+        );
+        let engine_run = engine
             .run(
                 &session_id,
                 &working_dir,
@@ -348,7 +692,28 @@ impl RecipeRunner {
                 RECIPE_TRIGGER,
                 Some(&recipe.instructions),
             )
-            .await;
+            .instrument(fleet_span);
+        tokio::pin!(engine_run);
+        let mut heartbeat = tokio::time::interval_at(
+            tokio::time::Instant::now() + Duration::from_secs(15),
+            Duration::from_secs(15),
+        );
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let result = loop {
+            tokio::select! {
+                result = &mut engine_run => break result,
+                _ = heartbeat.tick() => {
+                    if let Err(error) = WorkersDb::open().and_then(|db| db.heartbeat(worker_slug)) {
+                        warn!(target: "arcana::telemetry", event_type = "worker_heartbeat_failed", worker = %worker_slug, error_class = "workers_db", "Could not refresh worker heartbeat");
+                        let _ = error;
+                    }
+                    if let Err(error) = runs_db.heartbeat_worker_tick(&worker_run_id) {
+                        warn!(target: "arcana::telemetry", event_type = "worker_heartbeat_failed", worker = %worker_slug, error_class = "runs_db", "Could not refresh durable run heartbeat");
+                        let _ = error;
+                    }
+                }
+            }
+        };
 
         // P8-42 — one end event per tick, whatever the outcome. `last_outcome`
         // is what the Live Monitor renders, so it carries the real result
@@ -365,9 +730,26 @@ impl RecipeRunner {
                 // exact failure this task exists to end.
                 Err(e) => format!("error: {e}"),
             },
-            timestamp: chrono::Utc::now().to_rfc3339(),
+            timestamp: crate::db::timestamps::now_rfc3339(),
         });
         let _tick_duration_ms = tick_started.elapsed().as_millis() as u64;
+        info!(
+            target: "arcana::fleet",
+            worker = %worker_slug,
+            session_id = %session_id,
+            elapsed_ms = _tick_duration_ms,
+            outcome = if result.is_ok() { "completed" } else { "error" },
+            "worker recipe tick finished"
+        );
+        tracing::info!(
+            target: "arcana::telemetry",
+            event_type = "fleet_worker_tick",
+            worker = %worker_slug,
+            session_id = %session_id,
+            duration_ns = tick_started.elapsed().as_nanos() as u64,
+            outcome = if result.is_ok() { "completed" } else { "error" },
+            "Fleet worker tick completed"
+        );
 
         // Update worker status based on outcome
         match &result {
@@ -376,7 +758,7 @@ impl RecipeRunner {
                     "[RecipeRunner] Rust AgentEngine completed for worker '{}'",
                     worker_slug
                 );
-                self.set_worker_status(worker_slug, "idle");
+                self.set_worker_status(worker_slug, WorkerStatus::Idle);
                 // Phase 7.5 — Record successful Mode 1 tick in analytics DB.
                 // Token usage is already recorded inside engine.rs per-session;
                 // record the worker-level completion so dashboards can show task counts.
@@ -390,20 +772,39 @@ impl RecipeRunner {
                 );
             }
             Err(e) => {
-                error!(
-                    "[RecipeRunner] Rust AgentEngine failed for worker '{}': {e}",
-                    worker_slug
-                );
-                self.set_worker_status(worker_slug, "error");
-                // Phase 7.5 — Record failed Mode 1 tick in analytics DB.
-                let _ = crate::analytics::global().collector().record_worker_stats(
-                    worker_slug.to_string(),
-                    0, // tasks_completed
-                    1, // tasks_failed
-                    0,
-                    0.0,
-                    0,
-                );
+                if matches!(&e, ArcanaError::Cancelled) {
+                    info!(
+                        "[RecipeRunner] Worker '{}' run was cancelled; preserving task state",
+                        worker_slug
+                    );
+                    self.set_worker_status_ex(
+                        worker_slug,
+                        WorkerStatus::Paused,
+                        None,
+                        Some("cancelled".into()),
+                    );
+                    // Cancellation is a terminal run outcome, not an ordinary
+                    // failed tick that should be retried or promoted to QC.
+                    // Leave claim ownership untouched here; the scheduler's
+                    // run guard will move the exact interrupted claim to
+                    // needs_info, where side effects must be reconciled before
+                    // a retry is considered.
+                } else {
+                    error!(
+                        "[RecipeRunner] Rust AgentEngine failed for worker '{}': {e}",
+                        worker_slug
+                    );
+                    self.set_worker_status(worker_slug, WorkerStatus::Error);
+                    // Phase 7.5 — Record failed Mode 1 tick in analytics DB.
+                    let _ = crate::analytics::global().collector().record_worker_stats(
+                        worker_slug.to_string(),
+                        0, // tasks_completed
+                        1, // tasks_failed
+                        0,
+                        0.0,
+                        0,
+                    );
+                }
             }
         }
 
@@ -425,8 +826,8 @@ impl RecipeRunner {
         // Run reconciliation BEFORE the sentinel guard so a stranded task that
         // completed but forgot to update status is promoted to qc_review
         // instead of being incorrectly marked build_failed.
-        if worker_slug.starts_with("worker-") {
-            Self::reconcile_stranded_task(worker_slug);
+        if worker_slug.starts_with("worker-") && result.is_ok() {
+            Self::reconcile_stranded_task(worker_slug, std::path::Path::new(&working_dir));
         }
 
         // Fix 8c: sentinel-file guard after successful tick.
@@ -435,13 +836,32 @@ impl RecipeRunner {
             Self::guard_and_validate(worker_slug, std::path::Path::new(&working_dir));
         }
 
+        let (phase, outcome, failure_code) = match &result {
+            Ok(_) => ("completed", crate::db::runs::outcome::OK, None),
+            Err(ArcanaError::Cancelled) => (
+                "cancelled",
+                crate::db::runs::outcome::CANCELLED,
+                Some("cancelled"),
+            ),
+            Err(error) => (
+                "failed",
+                crate::db::runs::outcome::FAILED,
+                Some(startup_error_class(error)),
+            ),
+        };
+        if let Err(error) = runs_db.finish_worker_tick(&worker_run_id, phase, outcome, failure_code)
+        {
+            warn!(target: "arcana::telemetry", event_type = "worker_run_close_failed", worker = %worker_slug, error_class = "runs_db", "Could not close durable worker run");
+            let _ = error;
+        }
+
         result.map(|_| ())
     }
 
     /// If a task remains `in_progress` for this worker after the session
     /// ends, promote it to `qc_review` so QC can verify work state. See
     /// comment at the call site for motivation.
-    fn reconcile_stranded_task(worker_slug: &str) {
+    fn reconcile_stranded_task(worker_slug: &str, workspace_path: &std::path::Path) {
         let db = match crate::db::tasks::TasksDb::open() {
             Ok(db) => db,
             Err(_) => return,
@@ -454,7 +874,14 @@ impl RecipeRunner {
             let is_mine = t.assigned_worker.as_deref() == Some(worker_slug);
             let is_in_progress = matches!(t.status, crate::db::tasks::TaskStatus::InProgress);
             if is_mine && is_in_progress {
-                match db.update_status(t.id, "qc_review", Some(worker_slug)) {
+                match db.update_status_with_workspace_and_run_id(
+                    t.id,
+                    "qc_review",
+                    Some(worker_slug),
+                    None,
+                    None,
+                    workspace_path,
+                ) {
                     Ok(()) => {
                         info!(
                             "[RecipeRunner] Reconciled stranded in_progress task #{} → qc_review \
@@ -473,53 +900,20 @@ impl RecipeRunner {
         }
     }
 
-    /// Returns true when the local task board has at least one task assigned to
-    /// `worker_slug` in a runnable state (`assigned` or `in_progress`).
-    ///
-    /// Used by `run_recipe` to skip LLM invocation on empty ticks so workers
-    /// can't fabricate work when there is literally nothing queued. Reads
-    /// `~/.arcana/tasks.db` via `TasksDb`; any DB failure is treated as
-    /// "no work" (fail-safe: never spin up the LLM when we can't confirm work
-    /// exists).
-    fn has_runnable_task(worker_slug: &str) -> bool {
-        let db = match crate::db::tasks::TasksDb::open() {
-            Ok(db) => db,
-            Err(e) => {
-                warn!("[RecipeRunner] tasks.db open failed ({e}); treating as no-work");
-                return false;
-            }
-        };
-        let all = match db.list(None) {
-            Ok(v) => v,
-            Err(e) => {
-                warn!("[RecipeRunner] tasks.db list failed ({e}); treating as no-work");
-                return false;
-            }
-        };
-        all.iter().any(|t| {
-            t.assigned_worker.as_deref() == Some(worker_slug)
-                && matches!(
-                    t.status,
-                    crate::db::tasks::TaskStatus::Assigned
-                        | crate::db::tasks::TaskStatus::InProgress
-                )
-        })
-    }
-
-    fn set_worker_status(&self, slug: &str, status: &str) {
+    fn set_worker_status(&self, slug: &str, status: WorkerStatus) {
         self.set_worker_status_ex(slug, status, None, None);
     }
 
     fn set_worker_status_ex(
         &self,
         slug: &str,
-        status: &str,
+        status: WorkerStatus,
         tick_duration_ms: Option<u64>,
         last_outcome: Option<String>,
     ) {
         let previous = if let Ok(db) = WorkersDb::open() {
             if let Ok(Some(worker)) = db.get_by_slug(slug) {
-                let prev = worker.status.clone();
+                let prev = worker.status.as_str().to_string();
                 let _ = db.update_status(worker.id, status);
                 Some(prev)
             } else {
@@ -533,19 +927,23 @@ impl RecipeRunner {
         // and mutates local state in place, eliminating the derived-status
         // flicker where rows went `idle → error → idle` between ticks.
         // Fix 9a: expanded payload with previous_status, reason, cooldown_seconds.
-        let reason: Option<String> = if status == "error" {
+        let reason: Option<String> = if status == WorkerStatus::Error {
             Some("Invoke failed — see logs for details".into())
         } else {
             None
         };
-        let cooldown_seconds: Option<u32> = if status == "error" { Some(30) } else { None };
+        let cooldown_seconds: Option<u32> = if status == WorkerStatus::Error {
+            Some(30)
+        } else {
+            None
+        };
         emit_worker_status(WorkerStatusPayload {
             slug: slug.to_string(),
-            status: status.to_string(),
+            status: status.as_str().to_string(),
             previous_status: previous,
             reason,
             cooldown_seconds,
-            timestamp: chrono::Utc::now().to_rfc3339(),
+            timestamp: crate::db::timestamps::now_rfc3339(),
             tick_duration_ms,
             last_outcome,
         });
@@ -618,7 +1016,6 @@ impl RecipeRunner {
 #[cfg(test)]
 mod p3_65_runner_tests {
     use super::*;
-    use crate::recipes::types::RecipePermissionMode;
 
     fn recipe(schedule: Option<&str>, mode: RecipePermissionMode) -> Recipe {
         Recipe {
@@ -655,6 +1052,100 @@ mod p3_65_runner_tests {
         );
     }
 
+    #[tokio::test]
+    async fn empty_supervisor_and_qc_queues_exit_before_provider_resolution() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workers = WorkersDb::open().expect("seed isolated worker roster");
+        let runner = RecipeRunner::new(
+            Arc::new(Mutex::new(AppState::default())),
+            Arc::new(SessionManager::new().expect("open isolated session DB")),
+            crate::agent::permission::new_pending_permissions(),
+        );
+
+        for slug in ["supervisor", "qc-agent"] {
+            runner
+                .run_recipe(
+                    &recipe(Some("*/5 * * * *"), RecipePermissionMode::Autonomous),
+                    slug,
+                )
+                .await
+                .expect("empty queue should be an idle turn");
+            assert_eq!(
+                workers.get_by_slug(slug).unwrap().unwrap().status,
+                WorkerStatus::Idle,
+                "{slug} should skip model resolution without work"
+            );
+        }
+    }
+
+    #[test]
+    fn stranded_task_reconciliation_cannot_bypass_qc_build_evidence() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let db = crate::db::tasks::TasksDb::open().expect("open isolated task DB");
+        let task = db
+            .create(crate::db::tasks::CreateTaskInput {
+                title: "stranded task QC evidence gate".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "reconciliation cannot skip build evidence".into(),
+                created_by: Some("tg4-07-test".into()),
+            })
+            .expect("create task");
+        db.update_status(task.id, "assigned", Some("worker-backend"))
+            .expect("assign task");
+        db.claim_task_with_pid(task.id, "worker-backend", 991)
+            .expect("claim task");
+
+        let workspace = tempfile::tempdir().expect("create selected workspace");
+        let workspace_path = workspace
+            .path()
+            .canonicalize()
+            .expect("canonical workspace");
+        RecipeRunner::reconcile_stranded_task("worker-backend", &workspace_path);
+        assert_eq!(
+            db.get_by_id(task.id).unwrap().unwrap().status,
+            crate::db::tasks::TaskStatus::InProgress,
+            "reconciliation must leave a task in progress if no build evidence exists"
+        );
+
+        let fingerprint = crate::platform::workspace_fingerprint::fingerprint(&workspace_path)
+            .expect("fingerprint selected workspace");
+        let batch = db
+            .begin_project_build_batch_for_worker(
+                "worker-backend",
+                "test-session",
+                1,
+                &workspace_path.to_string_lossy(),
+                Some(&fingerprint),
+            )
+            .expect("begin selected workspace batch")
+            .expect("claimed task batch");
+        db.finish_project_build_batch_for_worker(
+            batch.id,
+            "worker-backend",
+            "test-session",
+            &[(
+                "cargo test".into(),
+                0,
+                "cargo".into(),
+                Some(workspace_path.to_string_lossy().into_owned()),
+                Some(fingerprint),
+            )],
+            None,
+            true,
+        )
+        .expect("record complete passing build batch");
+        RecipeRunner::reconcile_stranded_task("worker-backend", &workspace_path);
+        assert_eq!(
+            db.get_by_id(task.id).unwrap().unwrap().status,
+            crate::db::tasks::TaskStatus::QcReview,
+            "the same production reconciliation path may promote after a passing build"
+        );
+    }
+
     #[test]
     fn a_manual_supervised_recipe_is_exactly_what_supervision_is_for() {
         // The no-fire half, and the whole point of wiring the field up: with
@@ -676,5 +1167,1488 @@ mod p3_65_runner_tests {
             .is_none(),
             "the entire fleet runs this way; refusing it would stop everything"
         );
+    }
+
+    #[test]
+    fn recipe_model_resolution_never_sends_a_saved_foreign_model_to_the_provider() {
+        assert_eq!(
+            model_for_provider(
+                Some("google"),
+                Some("claude-sonnet-5"),
+                None,
+                Some("gemini-3.7-flash"),
+            ),
+            Some("gemini-3.7-flash".into())
+        );
+        assert_eq!(
+            model_for_provider(Some("google"), None, None, None),
+            crate::provider::catalogue::default_model_for("google").map(str::to_owned)
+        );
+        assert_eq!(
+            model_for_provider(
+                Some("google"),
+                Some("claude-sonnet-5"),
+                Some("claude-haiku-4-5"),
+                None,
+            ),
+            crate::provider::catalogue::default_model_for("google").map(str::to_owned)
+        );
+    }
+
+    #[tokio::test]
+    async fn worker_run_refuses_to_fall_back_when_workspace_is_unconfigured() {
+        let home = std::env::temp_dir().join(format!("arcana-runner-workspace-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&home).expect("create isolated Arcana home");
+        let _home = crate::db::test_support::with_home(&home);
+        let workers = WorkersDb::open().expect("open isolated worker DB");
+        assert!(workers
+            .registered_slugs()
+            .unwrap()
+            .iter()
+            .any(|slug| slug == "worker-backend"));
+        let tasks = crate::db::tasks::TasksDb::open().expect("open isolated task DB");
+        let task_id = tasks
+            .create(crate::db::tasks::CreateTaskInput {
+                title: "workspace resolver worker fixture".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "worker must require the configured workspace".into(),
+                created_by: Some("tg4-09-test".into()),
+            })
+            .unwrap()
+            .id;
+        tasks
+            .update_status(task_id, "assigned", Some("worker-backend"))
+            .expect("assign task so worker dispatch reaches its workspace resolver");
+
+        let runner = RecipeRunner::new(
+            Arc::new(Mutex::new(AppState::default())),
+            Arc::new(SessionManager::new().expect("open isolated session DB")),
+            crate::agent::permission::new_pending_permissions(),
+        );
+        let error = runner
+            .run_recipe(
+                &recipe(Some("*/5 * * * *"), RecipePermissionMode::Autonomous),
+                "worker-backend",
+            )
+            .await
+            .expect_err("worker must refuse to run without a selected project");
+        assert!(
+            error
+                .to_string()
+                .contains("Workspace folder is not configured"),
+            "report the missing project rather than falling back: {error}"
+        );
+        assert_eq!(
+            tasks.get_by_id(task_id).unwrap().unwrap().status,
+            crate::db::tasks::TaskStatus::Assigned,
+            "workspace resolution failure must not claim or mutate the task"
+        );
+        drop(runner);
+        drop(tasks);
+        drop(workers);
+        drop(_home);
+        std::fs::remove_dir_all(home).expect("remove isolated Arcana home");
+    }
+}
+
+#[cfg(test)]
+mod production_git_commit_recipe_tests {
+    use super::*;
+    use crate::db::tasks::{CreateTaskInput, TasksDb};
+    use crate::provider::traits::{Provider, StreamResult};
+    use crate::provider::types::{
+        CompletionRequest, CompletionResponse, MessageContent, ModelInfo, ProviderStatus,
+        StreamChunk,
+    };
+    use crate::provider::usage::Usage;
+    use async_trait::async_trait;
+    use futures::stream;
+    use git2::{Repository, Signature};
+    use serde_json::{json, Value};
+    use std::sync::Mutex;
+
+    struct CommitPathProvider {
+        task_id: i64,
+        turn: Mutex<usize>,
+        requests: Mutex<Vec<CompletionRequest>>,
+    }
+
+    impl CommitPathProvider {
+        fn tool_call(id: &str, name: &str, input: Value) -> Vec<StreamChunk> {
+            vec![
+                StreamChunk::ToolUseStart {
+                    id: id.into(),
+                    name: name.into(),
+                    block_index: 0,
+                    opaque: None,
+                },
+                StreamChunk::ToolInputDelta {
+                    block_index: 0,
+                    partial_json: input.to_string(),
+                },
+                StreamChunk::MessageDelta {
+                    stop_reason: "tool_use".into(),
+                    usage: Usage::default(),
+                },
+                StreamChunk::Done,
+            ]
+        }
+
+        fn final_answer() -> Vec<StreamChunk> {
+            vec![
+                StreamChunk::TextDelta {
+                    text: "The task change was committed.".into(),
+                    block_index: 0,
+                },
+                StreamChunk::MessageDelta {
+                    stop_reason: "end_turn".into(),
+                    usage: Usage::default(),
+                },
+                StreamChunk::Done,
+            ]
+        }
+    }
+
+    #[async_trait]
+    impl Provider for CommitPathProvider {
+        fn id(&self) -> &str {
+            "google"
+        }
+
+        fn name(&self) -> &str {
+            "Production git commit path fixture"
+        }
+
+        fn models(&self) -> Vec<ModelInfo> {
+            crate::provider::catalogue::models_for("google")
+        }
+
+        async fn input_token_upper_bound(
+            &self,
+            _request: &CompletionRequest,
+        ) -> crate::errors::Result<u64> {
+            Ok(10)
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> crate::errors::Result<CompletionResponse> {
+            unreachable!("RecipeRunner must use AgentEngine streaming")
+        }
+
+        async fn stream(&self, request: CompletionRequest) -> crate::errors::Result<StreamResult> {
+            assert!(request.tools.iter().any(|tool| tool.name == "claim_task"));
+            assert!(request.tools.iter().any(|tool| tool.name == "git_commit"));
+            self.requests
+                .lock()
+                .expect("provider request capture")
+                .push(request.clone());
+
+            let turn = {
+                let mut turn = self.turn.lock().expect("provider turn lock");
+                let current = *turn;
+                *turn += 1;
+                current
+            };
+            let chunks = match turn {
+                0 => Self::tool_call("claim-task", "claim_task", json!({"task_id": self.task_id})),
+                1 => {
+                    let claim = request
+                        .messages
+                        .iter()
+                        .flat_map(|message| &message.content)
+                        .find_map(|content| match content {
+                            MessageContent::ToolResult { name, is_error, .. }
+                                if name == "claim_task" =>
+                            {
+                                Some(*is_error)
+                            }
+                            _ => None,
+                        })
+                        .expect("model turn must receive the production task-claim result");
+                    assert!(
+                        !claim,
+                        "the assigned worker must successfully claim its task"
+                    );
+                    Self::tool_call(
+                        "commit-change",
+                        "git_commit",
+                        json!({
+                            "paths": ["change.txt"],
+                            "message": "fix(core): commit through the worker host\n\nProve model-produced commits use the host-validated production path."
+                        }),
+                    )
+                }
+                2 => {
+                    let commit = request
+                        .messages
+                        .iter()
+                        .flat_map(|message| &message.content)
+                        .find_map(|content| match content {
+                            MessageContent::ToolResult { name, is_error, .. }
+                                if name == "git_commit" =>
+                            {
+                                Some(*is_error)
+                            }
+                            _ => None,
+                        })
+                        .expect("model turn must receive the host git_commit result");
+                    assert!(
+                        !commit,
+                        "the host commit tool should accept the safe named file"
+                    );
+                    Self::final_answer()
+                }
+                _ => panic!("unexpected provider request after scripted task completion"),
+            };
+            Ok(Box::pin(stream::iter(chunks.into_iter().map(Ok))))
+        }
+
+        async fn test_connection(&self) -> crate::errors::Result<ProviderStatus> {
+            Ok(ProviderStatus::Connected)
+        }
+    }
+
+    #[tokio::test]
+    async fn model_produced_commit_runs_through_recipe_runner_and_host_guard() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let analytics = Arc::new(
+            crate::analytics::AnalyticsManager::new()
+                .await
+                .expect("initialize isolated analytics DB"),
+        );
+        crate::analytics::install_global(analytics);
+
+        let workspace = tempfile::tempdir().expect("isolated selected workspace");
+        crate::egress_consent::WorkspaceEgressConsentDb::open()
+            .expect("open isolated workspace consent store")
+            .grant(workspace.path(), "provider:google")
+            .expect("grant test provider to the isolated workspace");
+        let repository = Repository::init(workspace.path()).expect("initialize Git repository");
+        let signature = Signature::now("Arcana Test", "arcana-test@example.invalid")
+            .expect("fixture commit identity");
+        repository
+            .config()
+            .expect("open repository config")
+            .set_str("user.name", "Arcana Test")
+            .expect("set fixture name");
+        repository
+            .config()
+            .expect("open repository config")
+            .set_str("user.email", "arcana-test@example.invalid")
+            .expect("set fixture email");
+        std::fs::write(workspace.path().join("README.md"), "base\n")
+            .expect("write tracked fixture file");
+        let mut index = repository.index().expect("open initial index");
+        index
+            .add_path(std::path::Path::new("README.md"))
+            .expect("stage initial file");
+        index.write().expect("write initial index");
+        let tree_id = index.write_tree().expect("write initial tree");
+        let tree = repository.find_tree(tree_id).expect("load initial tree");
+        let initial = repository
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "chore: initialize worker fixture\n\nCreate the isolated repository baseline.",
+                &tree,
+                &[],
+            )
+            .expect("commit repository baseline");
+        drop(tree);
+        repository
+            .branch(
+                "arcana/fleet",
+                &repository.find_commit(initial).unwrap(),
+                false,
+            )
+            .expect("create fleet branch");
+        repository
+            .set_head("refs/heads/arcana/fleet")
+            .expect("select fleet branch");
+        std::fs::write(workspace.path().join("change.txt"), "worker change\n")
+            .expect("write the task change");
+        drop(repository);
+
+        let tasks = TasksDb::open().expect("open isolated task database");
+        let task_id = tasks
+            .create(CreateTaskInput {
+                title: "Commit through production worker host".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "a model-generated commit is host validated".into(),
+                created_by: Some("tg8-13".into()),
+            })
+            .expect("create task")
+            .id;
+        tasks
+            .update_status(task_id, "assigned", Some("worker-backend"))
+            .expect("assign task to backend worker");
+
+        let workers = crate::db::workers::WorkersDb::open().expect("seed worker roster");
+        let backend = workers
+            .get_by_slug("worker-backend")
+            .expect("read backend worker")
+            .expect("backend worker exists");
+        workers
+            .update_status(backend.id, WorkerStatus::Active)
+            .expect("make worker runnable");
+
+        let provider = Arc::new(CommitPathProvider {
+            task_id,
+            turn: Mutex::new(0),
+            requests: Mutex::new(Vec::new()),
+        });
+        let state = Arc::new(Mutex::new(AppState {
+            active_provider: Some("google".into()),
+            active_model: Some("gemini-3.8-flash".into()),
+            ..AppState::default()
+        }));
+        let runner = RecipeRunner::new_with_workspace_override(
+            state,
+            Arc::new(SessionManager::new().expect("open isolated session manager")),
+            crate::agent::permission::new_pending_permissions(),
+            Some(workspace.path().to_string_lossy().into_owned()),
+        )
+        .with_provider_for_test(provider.clone());
+        let recipes_dir = home.path().join(".arcana").join("recipes");
+        crate::recipes::defaults::ensure_default_recipes(&recipes_dir)
+            .expect("persist the shipped worker recipes");
+        let recipe: Recipe = serde_yaml::from_str(
+            &std::fs::read_to_string(recipes_dir.join("worker-backend-poll.yaml"))
+                .expect("read the shipped backend recipe"),
+        )
+        .expect("parse the shipped backend recipe");
+        assert_eq!(recipe.id, "worker-backend-poll");
+        assert!(recipe.instructions.contains("git_commit"));
+
+        let scheduler = crate::recipes::scheduler::RecipeScheduler::new(Arc::new(runner));
+        scheduler.kick_worker("worker-backend");
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let completed = crate::db::runs::RunsDb::open()
+                    .expect("open worker run ledger")
+                    .latest_worker_tick("worker-backend")
+                    .expect("read worker tick")
+                    .is_some_and(|run| run.phase == "completed");
+                if completed {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("scheduler must finish the scripted worker run before timeout");
+        scheduler.shutdown().await;
+
+        let committed_repo = Repository::open(workspace.path()).expect("reopen worker repository");
+        assert_eq!(
+            committed_repo.head().unwrap().shorthand(),
+            Some("arcana/fleet")
+        );
+        let committed = committed_repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(committed.parent_count(), 1);
+        assert!(committed
+            .message()
+            .unwrap()
+            .starts_with("fix(core): commit through the worker host"));
+        let parent = committed.parent(0).expect("read fixture baseline commit");
+        let diff = committed_repo
+            .diff_tree_to_tree(
+                Some(&parent.tree().unwrap()),
+                Some(&committed.tree().unwrap()),
+                None,
+            )
+            .expect("compare the committed tree to its parent");
+        let changed_paths = diff
+            .deltas()
+            .filter_map(|delta| {
+                delta
+                    .new_file()
+                    .path()
+                    .map(|path| path.to_string_lossy().into_owned())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(changed_paths, ["change.txt"]);
+        let task = tasks.get_by_id(task_id).unwrap().unwrap();
+        assert_eq!(task.status, crate::db::tasks::TaskStatus::InProgress);
+        assert_eq!(task.assigned_worker.as_deref(), Some("worker-backend"));
+        let requests = provider
+            .requests
+            .lock()
+            .expect("captured provider requests");
+        assert_eq!(requests.len(), 3, "claim, commit and final response turns");
+        assert!(requests
+            .iter()
+            .all(|request| request.tools.iter().any(|tool| tool.name == "git_commit")));
+        drop(requests);
+        let runs = crate::db::runs::RunsDb::open().expect("open worker run ledger");
+        let latest = runs
+            .latest_worker_tick("worker-backend")
+            .expect("read latest worker tick")
+            .expect("production runner should persist a tick");
+        assert_eq!(latest.phase, "completed");
+        let journal = runs
+            .operation_journal_page(&latest.run_id, 0, 20)
+            .expect("read commit operation journal");
+        assert!(journal.entries.iter().any(|entry| {
+            entry.operation == "git_commit"
+                && entry.outcome == crate::db::runs::OperationOutcome::Ok
+        }));
+    }
+}
+
+#[cfg(test)]
+mod supervisor_build_retry_recipe_tests {
+    use super::*;
+    use crate::db::tasks::{CreateTaskInput, TasksDb};
+    use crate::provider::traits::{Provider, StreamResult};
+    use crate::provider::types::{
+        CompletionRequest, CompletionResponse, ModelInfo, ProviderStatus, StreamChunk,
+    };
+    use crate::provider::usage::Usage;
+    use async_trait::async_trait;
+    use futures::stream;
+    use serde_json::{json, Value};
+    use std::sync::Mutex;
+
+    struct SupervisorRetryProvider {
+        request_id: i64,
+        turn: Mutex<usize>,
+        requests: Mutex<Vec<CompletionRequest>>,
+    }
+
+    impl SupervisorRetryProvider {
+        fn tool_call(id: &str, name: &str, input: Value) -> Vec<StreamChunk> {
+            vec![
+                StreamChunk::ToolUseStart {
+                    id: id.into(),
+                    name: name.into(),
+                    block_index: 0,
+                    opaque: None,
+                },
+                StreamChunk::ToolInputDelta {
+                    block_index: 0,
+                    partial_json: input.to_string(),
+                },
+                StreamChunk::MessageDelta {
+                    stop_reason: "tool_use".into(),
+                    usage: Usage::default(),
+                },
+                StreamChunk::Done,
+            ]
+        }
+
+        fn final_answer() -> Vec<StreamChunk> {
+            vec![
+                StreamChunk::TextDelta {
+                    text: "The failed build was reviewed and one retry was approved.".into(),
+                    block_index: 0,
+                },
+                StreamChunk::MessageDelta {
+                    stop_reason: "end_turn".into(),
+                    usage: Usage::default(),
+                },
+                StreamChunk::Done,
+            ]
+        }
+    }
+
+    #[async_trait]
+    impl Provider for SupervisorRetryProvider {
+        fn id(&self) -> &str {
+            "google"
+        }
+
+        fn name(&self) -> &str {
+            "Scripted Supervisor build retry decision"
+        }
+
+        fn models(&self) -> Vec<ModelInfo> {
+            crate::provider::catalogue::models_for("google")
+        }
+
+        async fn input_token_upper_bound(
+            &self,
+            _request: &CompletionRequest,
+        ) -> crate::errors::Result<u64> {
+            Ok(1_000)
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> crate::errors::Result<CompletionResponse> {
+            unreachable!("RecipeRunner must use AgentEngine streaming")
+        }
+
+        async fn stream(&self, request: CompletionRequest) -> crate::errors::Result<StreamResult> {
+            self.requests
+                .lock()
+                .expect("captured provider requests")
+                .push(request.clone());
+            let turn = {
+                let mut turn = self.turn.lock().expect("provider turn lock");
+                let current = *turn;
+                *turn += 1;
+                current
+            };
+            let chunks = match turn {
+                0 => {
+                    assert!(request.tools.iter().any(|tool| tool.name == "list_tasks"));
+                    Self::tool_call("list-board", "list_tasks", json!({"status": "all"}))
+                }
+                1 => {
+                    let board_read = request
+                        .messages
+                        .iter()
+                        .flat_map(|message| &message.content)
+                        .find_map(|content| match content {
+                            crate::provider::types::MessageContent::ToolResult {
+                                name,
+                                is_error,
+                                ..
+                            } if name == "list_tasks" => Some(*is_error),
+                            _ => None,
+                        })
+                        .expect("Supervisor must read the task board before requests");
+                    assert!(!board_read, "board read should succeed");
+                    assert!(request
+                        .tools
+                        .iter()
+                        .any(|tool| tool.name == "list_worker_requests"));
+                    Self::tool_call(
+                        "list-escalations",
+                        "list_worker_requests",
+                        json!({"status": "pending"}),
+                    )
+                }
+                2 => {
+                    let pending = request
+                        .messages
+                        .iter()
+                        .flat_map(|message| &message.content)
+                        .find_map(|content| match content {
+                            crate::provider::types::MessageContent::ToolResult {
+                                name,
+                                content,
+                                is_error,
+                                ..
+                            } if name == "list_worker_requests" => {
+                                Some((content.clone(), *is_error))
+                            }
+                            _ => None,
+                        })
+                        .expect("Supervisor must inspect the pending escalation");
+                    assert!(!pending.1, "pending request read should succeed");
+                    assert!(pending.0.contains(&self.request_id.to_string()));
+                    assert!(pending.0.contains("build_retry_approval"));
+                    assert!(pending.0.contains("diagnosis"));
+                    assert!(request
+                        .tools
+                        .iter()
+                        .any(|tool| tool.name == "resolve_worker_request"));
+                    Self::tool_call(
+                        "approve-retry",
+                        "resolve_worker_request",
+                        json!({
+                            "id": self.request_id,
+                            "action": "approve_build_retry",
+                            "note": "The diagnosis is actionable; authorize one bounded verification batch."
+                        }),
+                    )
+                }
+                3 => {
+                    let approval = request
+                        .messages
+                        .iter()
+                        .flat_map(|message| &message.content)
+                        .find_map(|content| match content {
+                            crate::provider::types::MessageContent::ToolResult {
+                                name,
+                                content,
+                                is_error,
+                                ..
+                            } if name == "resolve_worker_request" => {
+                                Some((content.clone(), *is_error))
+                            }
+                            _ => None,
+                        })
+                        .expect("provider must observe the production approval result");
+                    assert!(!approval.1, "Supervisor approval should succeed");
+                    assert!(approval.0.contains("exactly one"));
+                    Self::final_answer()
+                }
+                _ => panic!("unexpected provider turn after Supervisor approval"),
+            };
+            Ok(Box::pin(stream::iter(chunks.into_iter().map(Ok))))
+        }
+
+        async fn test_connection(&self) -> crate::errors::Result<ProviderStatus> {
+            Ok(ProviderStatus::Connected)
+        }
+    }
+
+    #[tokio::test]
+    async fn shipped_supervisor_recipe_approves_one_diagnosed_build_retry() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let analytics = Arc::new(
+            crate::analytics::AnalyticsManager::new()
+                .await
+                .expect("initialize isolated analytics DB"),
+        );
+        crate::analytics::install_global(analytics);
+        let workspace = tempfile::tempdir().expect("isolated selected workspace");
+        crate::egress_consent::WorkspaceEgressConsentDb::open()
+            .expect("open isolated workspace consent store")
+            .grant(workspace.path(), "provider:google")
+            .expect("grant scripted provider for the isolated workspace");
+
+        let tasks = TasksDb::open().expect("open isolated TasksDb");
+        let task_id = tasks
+            .create(CreateTaskInput {
+                title: "Repair a repeatedly failing build".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "Supervisor reviews diagnosis before another build".into(),
+                created_by: Some("tg4-08-test".into()),
+            })
+            .expect("create task")
+            .id;
+        tasks
+            .update_status(task_id, "assigned", Some("worker-backend"))
+            .expect("assign task to backend worker");
+        tasks
+            .claim_task_with_pid(task_id, "worker-backend", std::process::id())
+            .expect("claim task for the worker");
+        let fingerprint = "test-workspace-fingerprint";
+        for index in 0..3 {
+            let session_id = format!("failed-build-{index}");
+            let batch = tasks
+                .begin_project_build_batch_for_worker(
+                    "worker-backend",
+                    &session_id,
+                    1,
+                    &workspace.path().to_string_lossy(),
+                    Some(fingerprint),
+                )
+                .expect("begin observed failed build batch")
+                .expect("claimed task should own a build batch");
+            tasks
+                .finish_project_build_batch_for_worker(
+                    batch.id,
+                    "worker-backend",
+                    &session_id,
+                    &[(
+                        "cargo test".into(),
+                        101,
+                        "cargo".into(),
+                        Some(workspace.path().to_string_lossy().into_owned()),
+                        Some(fingerprint.into()),
+                    )],
+                    Some(0),
+                    true,
+                )
+                .expect("persist observed failed build exit");
+        }
+        let diagnosis = json!({
+            "diagnosis": [{"code": "RUST_COMPILER_ERROR", "location": "src/lib.rs:12"}]
+        })
+        .to_string();
+        let request = tasks
+            .create_build_retry_request_for_worker("worker-backend", task_id, &diagnosis)
+            .expect("worker creates typed diagnosis request");
+
+        let workers = crate::db::workers::WorkersDb::open().expect("seed worker roster");
+        let supervisor = workers
+            .get_by_slug("supervisor")
+            .expect("read Supervisor")
+            .expect("seeded Supervisor exists");
+        workers
+            .update_status(supervisor.id, WorkerStatus::Active)
+            .expect("make Supervisor runnable");
+        let provider = Arc::new(SupervisorRetryProvider {
+            request_id: request.id,
+            turn: Mutex::new(0),
+            requests: Mutex::new(Vec::new()),
+        });
+        let state = Arc::new(Mutex::new(AppState {
+            active_provider: Some("google".into()),
+            active_model: Some("gemini-3.8-flash".into()),
+            ..AppState::default()
+        }));
+        let runner = RecipeRunner::new_with_workspace_override(
+            state,
+            Arc::new(SessionManager::new().expect("open isolated session manager")),
+            crate::agent::permission::new_pending_permissions(),
+            Some(workspace.path().to_string_lossy().into_owned()),
+        )
+        .with_provider_for_test(provider.clone());
+        let recipes_dir = home.path().join(".arcana").join("recipes");
+        crate::recipes::defaults::ensure_default_recipes(&recipes_dir)
+            .expect("persist shipped recipes");
+        let recipe: Recipe = serde_yaml::from_str(
+            &std::fs::read_to_string(recipes_dir.join("supervisor-poll.yaml"))
+                .expect("read shipped Supervisor recipe"),
+        )
+        .expect("parse shipped Supervisor recipe");
+
+        runner
+            .run_recipe(&recipe, "supervisor")
+            .await
+            .expect("scripted Supervisor run should process the build retry request");
+
+        drop(tasks);
+        let tasks = TasksDb::open().expect("reopen task DB after Supervisor run");
+        let request_after = tasks
+            .get_worker_request_by_id(request.id)
+            .expect("read resolved request")
+            .expect("request remains auditable");
+        assert_eq!(
+            request_after.status,
+            crate::db::tasks::WorkerRequestStatus::Completed
+        );
+        drop(tasks);
+        let database_path = home.path().join(".arcana").join("tasks.db");
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let workspace_path = workspace.path().to_string_lossy().into_owned();
+        let workers = (0..2)
+            .map(|index| {
+                let barrier = Arc::clone(&barrier);
+                let database_path = database_path.clone();
+                let workspace_path = workspace_path.clone();
+                std::thread::spawn(move || {
+                    let tasks = TasksDb::open_at(&database_path)
+                        .expect("open independent TasksDb connection");
+                    barrier.wait();
+                    tasks.begin_project_build_batch_for_worker(
+                        "worker-backend",
+                        &format!("approved-retry-race-{index}"),
+                        1,
+                        &workspace_path,
+                        Some(fingerprint),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let outcomes = workers
+            .into_iter()
+            .map(|worker| {
+                worker
+                    .join()
+                    .expect("concurrent batch consumer must not panic")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| outcome.as_ref().is_ok_and(|batch| batch
+                    .as_ref()
+                    .is_some_and(|batch| batch.supervisor_retry_approved)))
+                .count(),
+            1,
+            "exactly one concurrent build batch may consume the approval"
+        );
+        assert_eq!(
+            outcomes.iter().filter(|outcome| outcome.is_err()).count(),
+            1,
+            "the losing consumer must fail closed after the atomic claim"
+        );
+        let reopened = TasksDb::open().expect("reopen task DB after concurrent consumption");
+        let retry_count = reopened
+            .get_by_id(task_id)
+            .expect("read task after batch race")
+            .expect("task remains persisted")
+            .retry_count;
+        assert_eq!(retry_count, 3, "starting a retry does not invent an exit");
+
+        let provider_requests = provider
+            .requests
+            .lock()
+            .expect("captured provider requests");
+        assert_eq!(provider_requests.len(), 4);
+        assert!(provider_requests.iter().all(|request| {
+            request
+                .tools
+                .iter()
+                .any(|tool| tool.name == "resolve_worker_request")
+        }));
+    }
+}
+
+#[cfg(test)]
+mod supervisor_operation_recovery_recipe_tests {
+    use super::*;
+    use crate::db::tasks::{CreateTaskInput, TasksDb};
+    use crate::provider::traits::{Provider, StreamResult};
+    use crate::provider::types::{
+        CompletionRequest, CompletionResponse, ModelInfo, ProviderStatus, StreamChunk,
+    };
+    use crate::provider::usage::Usage;
+    use async_trait::async_trait;
+    use futures::stream;
+    use serde_json::{json, Value};
+    use std::sync::Mutex;
+
+    struct SupervisorOperationRecoveryProvider {
+        run_id: String,
+        task_id: i64,
+        intent_cursor: i64,
+        turn: Mutex<usize>,
+    }
+
+    impl SupervisorOperationRecoveryProvider {
+        fn tool_call(id: &str, name: &str, input: Value) -> Vec<StreamChunk> {
+            vec![
+                StreamChunk::ToolUseStart {
+                    id: id.into(),
+                    name: name.into(),
+                    block_index: 0,
+                    opaque: None,
+                },
+                StreamChunk::ToolInputDelta {
+                    block_index: 0,
+                    partial_json: input.to_string(),
+                },
+                StreamChunk::MessageDelta {
+                    stop_reason: "tool_use".into(),
+                    usage: Usage::default(),
+                },
+                StreamChunk::Done,
+            ]
+        }
+
+        fn final_answer() -> Vec<StreamChunk> {
+            vec![
+                StreamChunk::TextDelta {
+                    text: "The interrupted operation remains held because its side effect is uncertain.".into(),
+                    block_index: 0,
+                },
+                StreamChunk::MessageDelta {
+                    stop_reason: "end_turn".into(),
+                    usage: Usage::default(),
+                },
+                StreamChunk::Done,
+            ]
+        }
+    }
+
+    #[async_trait]
+    impl Provider for SupervisorOperationRecoveryProvider {
+        fn id(&self) -> &str {
+            "google"
+        }
+
+        fn name(&self) -> &str {
+            "Scripted Supervisor operation recovery"
+        }
+
+        fn models(&self) -> Vec<ModelInfo> {
+            crate::provider::catalogue::models_for("google")
+        }
+
+        async fn input_token_upper_bound(
+            &self,
+            _request: &CompletionRequest,
+        ) -> crate::errors::Result<u64> {
+            Ok(1_000)
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> crate::errors::Result<CompletionResponse> {
+            unreachable!("RecipeRunner must use AgentEngine streaming")
+        }
+
+        async fn stream(&self, request: CompletionRequest) -> crate::errors::Result<StreamResult> {
+            let turn = {
+                let mut turn = self.turn.lock().expect("provider turn lock");
+                let current = *turn;
+                *turn += 1;
+                current
+            };
+            let chunks = match turn {
+                0 => {
+                    assert!(request.tools.iter().any(|tool| tool.name == "list_tasks"));
+                    Self::tool_call("recovery-board", "list_tasks", json!({ "compact": false }))
+                }
+                1 => {
+                    let board = request
+                        .messages
+                        .iter()
+                        .flat_map(|message| &message.content)
+                        .find_map(|content| match content {
+                            crate::provider::types::MessageContent::ToolResult {
+                                name,
+                                content,
+                                is_error,
+                                ..
+                            } if name == "list_tasks" => Some((content.clone(), *is_error)),
+                            _ => None,
+                        })
+                        .expect("Supervisor must read the board first");
+                    assert!(!board.1, "task board read should succeed");
+                    assert!(board.0.contains(&self.task_id.to_string()));
+                    assert!(board.0.contains("worker recovery"));
+                    assert!(request
+                        .tools
+                        .iter()
+                        .any(|tool| tool.name == "list_worker_requests"));
+                    Self::tool_call(
+                        "recovery-requests",
+                        "list_worker_requests",
+                        json!({ "status": "pending" }),
+                    )
+                }
+                2 => {
+                    let requests = request
+                        .messages
+                        .iter()
+                        .flat_map(|message| &message.content)
+                        .find_map(|content| match content {
+                            crate::provider::types::MessageContent::ToolResult {
+                                name,
+                                is_error,
+                                ..
+                            } if name == "list_worker_requests" => Some(*is_error),
+                            _ => None,
+                        })
+                        .expect("Supervisor must inspect its request queue");
+                    assert!(!requests, "pending request read should succeed");
+                    assert!(request
+                        .tools
+                        .iter()
+                        .any(|tool| tool.name == "list_worker_messages"));
+                    Self::tool_call(
+                        "recovery-inbox",
+                        "list_worker_messages",
+                        json!({ "unread_only": true }),
+                    )
+                }
+                3 => {
+                    let inbox = request
+                        .messages
+                        .iter()
+                        .flat_map(|message| &message.content)
+                        .find_map(|content| match content {
+                            crate::provider::types::MessageContent::ToolResult {
+                                name,
+                                content,
+                                is_error,
+                                ..
+                            } if name == "list_worker_messages" => {
+                                Some((content.clone(), *is_error))
+                            }
+                            _ => None,
+                        })
+                        .expect("Supervisor must drain its ACP inbox");
+                    assert!(!inbox.1, "inbox read should succeed");
+                    assert!(inbox.0.contains("Inbox empty"));
+                    assert!(request
+                        .tools
+                        .iter()
+                        .any(|tool| tool.name == "list_worker_health"));
+                    Self::tool_call(
+                        "recovery-health",
+                        "list_worker_health",
+                        json!({ "limit": 100, "journal_limit": 50 }),
+                    )
+                }
+                4 => {
+                    let health = request
+                        .messages
+                        .iter()
+                        .flat_map(|message| &message.content)
+                        .find_map(|content| match content {
+                            crate::provider::types::MessageContent::ToolResult {
+                                name,
+                                content,
+                                is_error,
+                                ..
+                            } if name == "list_worker_health" => Some((content.clone(), *is_error)),
+                            _ => None,
+                        })
+                        .expect("Supervisor must inspect durable worker health");
+                    assert!(!health.1, "health read should succeed");
+                    let health: Value = serde_json::from_str(&health.0).expect("health JSON");
+                    assert_eq!(
+                        health["workers"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .find(|worker| worker["slug"] == "worker-backend")
+                            .unwrap()["run"]["run_id"],
+                        self.run_id
+                    );
+                    assert_eq!(
+                        health["workers"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .find(|worker| worker["slug"] == "worker-backend")
+                            .unwrap()["run"]["operation_journal"]["entries"][0]["cursor"],
+                        self.intent_cursor
+                    );
+                    assert_eq!(
+                        health["workers"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .find(|worker| worker["slug"] == "worker-backend")
+                            .unwrap()["run"]["operation_journal"]["entries"][0]["outcome"],
+                        "unknown"
+                    );
+                    assert!(request.tools.iter().any(|tool| tool.name == "get_task"));
+                    Self::tool_call("recovery-task", "get_task", json!({ "id": self.task_id }))
+                }
+                5 => {
+                    let task = request
+                        .messages
+                        .iter()
+                        .flat_map(|message| &message.content)
+                        .find_map(|content| match content {
+                            crate::provider::types::MessageContent::ToolResult {
+                                name,
+                                content,
+                                is_error,
+                                ..
+                            } if name == "get_task" => Some((content.clone(), *is_error)),
+                            _ => None,
+                        })
+                        .expect("Supervisor must inspect the held task before deciding");
+                    assert!(!task.1, "task detail read should succeed");
+                    let task: Value = serde_json::from_str(&task.0).expect("task JSON");
+                    assert_eq!(task["status"], "needs_info");
+                    assert!(task["rejection_reason"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("[worker recovery]"));
+                    assert!(request
+                        .tools
+                        .iter()
+                        .any(|tool| tool.name == "reconcile_worker_operation"));
+                    Self::tool_call(
+                        "reconcile-uncertain",
+                        "reconcile_worker_operation",
+                        json!({
+                            "run_id": self.run_id,
+                            "intent_cursor": self.intent_cursor,
+                            "decision": "do_not_retry",
+                            "reason_code": "unsafe_to_repeat"
+                        }),
+                    )
+                }
+                6 => {
+                    let decision = request
+                        .messages
+                        .iter()
+                        .flat_map(|message| &message.content)
+                        .find_map(|content| match content {
+                            crate::provider::types::MessageContent::ToolResult {
+                                name,
+                                content,
+                                is_error,
+                                ..
+                            } if name == "reconcile_worker_operation" => {
+                                Some((content.clone(), *is_error))
+                            }
+                            _ => None,
+                        })
+                        .expect("provider must observe the production reconciliation result");
+                    assert!(!decision.1, "Supervisor decision should persist");
+                    assert!(decision.0.contains("do_not_retry"));
+                    assert!(decision.0.contains("unsafe_to_repeat"));
+                    Self::final_answer()
+                }
+                _ => panic!("unexpected Supervisor recovery provider turn"),
+            };
+            Ok(Box::pin(stream::iter(chunks.into_iter().map(Ok))))
+        }
+
+        async fn test_connection(&self) -> crate::errors::Result<ProviderStatus> {
+            Ok(ProviderStatus::Connected)
+        }
+    }
+
+    #[tokio::test]
+    async fn shipped_supervisor_recipe_keeps_uncertain_operation_quarantined() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let analytics = Arc::new(
+            crate::analytics::AnalyticsManager::new()
+                .await
+                .expect("initialize analytics"),
+        );
+        crate::analytics::install_global(analytics);
+        let workspace = tempfile::tempdir().expect("isolated selected workspace");
+        crate::egress_consent::WorkspaceEgressConsentDb::open()
+            .expect("open isolated workspace consent store")
+            .grant(workspace.path(), "provider:google")
+            .expect("grant scripted provider for isolated workspace");
+
+        let tasks = TasksDb::open().expect("open isolated TasksDb");
+        let task_id = tasks
+            .create(CreateTaskInput {
+                title: "Inspect interrupted file mutation".into(),
+                description: Some(
+                    "The worker stopped after an unacknowledged file mutation.".into(),
+                ),
+                priority: "p1".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "Do not replay uncertain mutations.".into(),
+                created_by: Some("tg4-53-test".into()),
+            })
+            .expect("create recovery task")
+            .id;
+        tasks
+            .update_status(task_id, "assigned", Some("worker-backend"))
+            .expect("assign task");
+        tasks
+            .claim_task_with_pid(task_id, "worker-backend", std::process::id())
+            .expect("claim task");
+        let host = std::env::var("COMPUTERNAME")
+            .or_else(|_| std::env::var("HOSTNAME"))
+            .unwrap_or_else(|_| "unknown".to_string());
+        tasks
+            .hold_interrupted_claims_for_worker_run(
+                "worker-backend",
+                std::process::id() as i64,
+                &host,
+                "provider acknowledgement was lost",
+            )
+            .expect("quarantine interrupted worker claim");
+
+        let runs = crate::db::runs::RunsDb::open().expect("open run ledger");
+        let run_id = runs
+            .begin_worker_tick("worker-backend", "operation-recovery-session")
+            .expect("begin worker run");
+        runs.update_worker_tick_phase(&run_id, "running", Some(task_id), None)
+            .expect("attribute run to task");
+        let intent_cursor = runs
+            .record_operation_intent(
+                &run_id,
+                Some(task_id),
+                "uncertain-file-write-1",
+                "write_file",
+                "FileSystem",
+                &["src/calendar.rs".into()],
+            )
+            .expect("record unknown file mutation intent");
+
+        let workers = crate::db::workers::WorkersDb::open().expect("seed worker roster");
+        let supervisor = workers
+            .get_by_slug("supervisor")
+            .expect("read Supervisor")
+            .expect("seeded Supervisor");
+        workers
+            .update_status(supervisor.id, WorkerStatus::Active)
+            .expect("make Supervisor runnable");
+        let provider = Arc::new(SupervisorOperationRecoveryProvider {
+            run_id: run_id.clone(),
+            task_id,
+            intent_cursor,
+            turn: Mutex::new(0),
+        });
+        let state = Arc::new(Mutex::new(AppState {
+            active_provider: Some("google".into()),
+            active_model: Some("gemini-3.8-flash".into()),
+            ..AppState::default()
+        }));
+        let runner = RecipeRunner::new_with_workspace_override(
+            state,
+            Arc::new(SessionManager::new().expect("open isolated session manager")),
+            crate::agent::permission::new_pending_permissions(),
+            Some(workspace.path().to_string_lossy().into_owned()),
+        )
+        .with_supervisor_budget_override(Some(crate::budget::TaskBudget {
+            max_tokens: Some(100_000),
+            max_usd: None,
+            max_turns: Some(12),
+        }))
+        .with_provider_for_test(provider);
+        let recipes_dir = home.path().join(".arcana").join("recipes");
+        crate::recipes::defaults::ensure_default_recipes(&recipes_dir)
+            .expect("persist shipped recipes");
+        let recipe: Recipe = serde_yaml::from_str(
+            &std::fs::read_to_string(recipes_dir.join("supervisor-poll.yaml"))
+                .expect("read shipped Supervisor recipe"),
+        )
+        .expect("parse shipped Supervisor recipe");
+
+        runner
+            .run_recipe(&recipe, "supervisor")
+            .await
+            .expect("scripted recovery tick");
+
+        drop(runs);
+        let runs = crate::db::runs::RunsDb::open().expect("reopen journal after Supervisor run");
+        let page = runs
+            .operation_journal_page(&run_id, 0, 10)
+            .expect("read reconciled journal");
+        let entry = page
+            .entries
+            .iter()
+            .find(|entry| entry.cursor == intent_cursor)
+            .expect("intent retained");
+        assert_eq!(entry.outcome, crate::db::runs::OperationOutcome::Unknown);
+        assert_eq!(
+            entry.reconciliation,
+            crate::db::runs::OperationReconciliation::DoNotRetry
+        );
+        assert_eq!(entry.reconciliation_actor.as_deref(), Some("supervisor"));
+        assert_eq!(
+            entry.reconciliation_reason.as_deref(),
+            Some("unsafe_to_repeat")
+        );
+        assert_eq!(
+            runs.unresolved_task_side_effect(task_id)
+                .expect("read retry barrier")
+                .unwrap()
+                .2,
+            intent_cursor
+        );
+        runs.finish_worker_tick(&run_id, "interrupted", "interrupted", None)
+            .expect("close the interrupted worker run");
+        let replacement_run = runs
+            .begin_worker_tick("worker-backend", "recovery-replacement-session")
+            .expect("start replacement worker run after interruption");
+        assert!(matches!(
+            runs.record_operation_intent(
+                &replacement_run,
+                Some(task_id),
+                "must-not-replay-uncertain-effect",
+                "write_file",
+                "FileSystem",
+                &["src/calendar.rs".into()],
+            ),
+            Err(crate::errors::ArcanaError::OperationReconciliationRequired { .. })
+        ));
+        let held = TasksDb::open()
+            .expect("reopen task board")
+            .get_by_id(task_id)
+            .expect("read held task")
+            .unwrap();
+        assert_eq!(held.status, crate::db::tasks::TaskStatus::NeedsInfo);
+        assert!(held
+            .rejection_reason
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("[worker recovery]"));
+    }
+}
+
+#[cfg(test)]
+mod startup_retry_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::Notify;
+
+    fn transient_startup_error() -> ArcanaError {
+        ArcanaError::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "transient setup failure",
+        ))
+    }
+
+    #[test]
+    fn supervisor_run_budget_can_be_overridden_without_raising_worker_caps() {
+        let override_budget = crate::budget::TaskBudget {
+            max_tokens: Some(180_000),
+            max_usd: Some(2.0),
+            max_turns: Some(30),
+        };
+        assert_eq!(
+            worker_run_budget("supervisor", Some(&override_budget)),
+            override_budget
+        );
+        assert_eq!(
+            worker_run_budget("supervisor", None),
+            crate::budget::TaskBudget::default_supervisor()
+        );
+        assert_eq!(
+            worker_run_budget("worker-backend", Some(&override_budget)),
+            crate::budget::TaskBudget::default_worker(),
+            "a Supervisor CLI override must not widen worker run caps"
+        );
+    }
+
+    #[test]
+    fn startup_backoff_uses_bounded_exponential_full_jitter() {
+        let expected_windows = [200, 400, 800, 1_600];
+        for (index, window_ms) in expected_windows.into_iter().enumerate() {
+            let retry = index as u32 + 1;
+            let low = startup_retry_delay(retry, 0).as_millis() as u64;
+            let middle = startup_retry_delay(retry, u128::from(window_ms / 2)).as_millis() as u64;
+            let high = startup_retry_delay(retry, u128::from(window_ms)).as_millis() as u64;
+            assert_eq!(low, 0, "retry {retry} must allow full lower jitter bound");
+            assert_eq!(middle, window_ms / 2, "retry {retry} midpoint");
+            assert_eq!(
+                high, window_ms,
+                "retry {retry} must reach its exponential ceiling"
+            );
+            assert!(high <= STARTUP_RETRY_MAX_DELAY.as_millis() as u64);
+        }
+    }
+
+    #[tokio::test]
+    async fn transient_setup_failure_recovers_within_startup_boundary() {
+        let mut attempts = 0;
+        let prepared = retry_startup("test-worker", "test-run", || {
+            attempts += 1;
+            if attempts == 1 {
+                return Err(transient_startup_error());
+            }
+            Ok("prepared")
+        })
+        .await
+        .expect("second setup attempt should recover");
+
+        assert_eq!(prepared, "prepared");
+        assert_eq!(attempts, 2);
+    }
+
+    #[test]
+    fn startup_retry_events_include_the_durable_worker_run_id() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("create current-thread runtime");
+        let mut attempts = 0;
+        let (_, events) = crate::observability::timing::capture_json_events(|| {
+            runtime.block_on(retry_startup_with_state_and_delay(
+                "test-worker",
+                "durable-run-42",
+                || {
+                    attempts += 1;
+                    if attempts == 1 {
+                        Err(transient_startup_error())
+                    } else {
+                        Ok(())
+                    }
+                },
+                |_| {},
+                |_| Duration::ZERO,
+            ))
+        });
+
+        assert_eq!(attempts, 2);
+        let retry_events = events
+            .iter()
+            .filter(|event| event["fields"]["event_type"] == "worker_startup_retry")
+            .collect::<Vec<_>>();
+        assert_eq!(retry_events.len(), 2, "scheduled and recovered events");
+        assert!(retry_events
+            .iter()
+            .all(|event| event["fields"]["run_id"] == "durable-run-42"));
+        assert!(retry_events.iter().any(|event| {
+            event["fields"]["outcome"] == "retry_scheduled" && event["fields"]["attempt"] == 1
+        }));
+        assert!(retry_events.iter().any(|event| {
+            event["fields"]["outcome"] == "recovered" && event["fields"]["attempt"] == 2
+        }));
+        assert!(retry_events
+            .iter()
+            .all(|event| event["fields"]["max_attempts"] == STARTUP_MAX_ATTEMPTS));
+    }
+
+    #[tokio::test]
+    async fn permanent_setup_failure_is_not_retried() {
+        let mut attempts = 0;
+        let result = retry_startup::<(), _>("test-worker", "test-run", || {
+            attempts += 1;
+            Err(ArcanaError::Agent("invalid workspace configuration".into()))
+        })
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(attempts, 1);
+    }
+
+    #[tokio::test]
+    async fn vault_setup_failure_is_not_retried_without_a_typed_transient_cause() {
+        let mut attempts = 0;
+        let result = retry_startup::<(), _>("test-worker", "test-run", || {
+            attempts += 1;
+            Err(ArcanaError::Vault("vault data is corrupt".into()))
+        })
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(attempts, 1);
+    }
+
+    #[tokio::test]
+    async fn exhausted_transient_startup_returns_after_the_attempt_limit() {
+        let mut attempts = 0;
+        let started = Instant::now();
+        let result = retry_startup::<(), _>("test-worker", "test-run", || {
+            attempts += 1;
+            Err(transient_startup_error())
+        })
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(attempts, STARTUP_MAX_ATTEMPTS);
+        assert!(started.elapsed() <= STARTUP_RETRY_MAX_ELAPSED);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancellation_during_backoff_stops_before_another_attempt() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let retry_scheduled = Arc::new(Notify::new());
+        let task = tokio::spawn({
+            let attempts = Arc::clone(&attempts);
+            let retry_scheduled = Arc::clone(&retry_scheduled);
+            async move {
+                retry_startup_with_state_and_delay(
+                    "test-worker",
+                    "test-run",
+                    move || {
+                        attempts.fetch_add(1, Ordering::SeqCst);
+                        Err::<(), _>(transient_startup_error())
+                    },
+                    move |_| retry_scheduled.notify_one(),
+                    |_| Duration::from_secs(1),
+                )
+                .await
+            }
+        });
+
+        retry_scheduled.notified().await;
+        task.abort();
+        assert!(task.await.expect_err("aborted retry task").is_cancelled());
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            1,
+            "cancellation during the retry sleep must prevent another setup"
+        );
+    }
+
+    #[tokio::test]
+    async fn startup_panic_is_contained_and_retried_before_provider_work() {
+        let mut attempts = 0;
+        let result = retry_startup("test-worker", "test-run", || {
+            attempts += 1;
+            if attempts == 1 {
+                panic!("synthetic startup panic");
+            }
+            Ok("prepared")
+        })
+        .await;
+
+        assert_eq!(
+            result.expect("second startup attempt should recover"),
+            "prepared"
+        );
+        assert_eq!(attempts, 2);
     }
 }

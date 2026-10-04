@@ -44,6 +44,14 @@ impl Tool for GetMemoryTool {
     }
 
     async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
+        let mut timing = crate::observability::timing::OperationTimer::start("memory_tool_get")
+            .with_database("memory")
+            .with_session_id(&ctx.session_id)
+            .with_task_id(ctx.task_id)
+            .with_call_context(&ctx.call_id, &ctx.agent_role);
+        if let Some(run_id) = ctx.run_id.as_deref() {
+            timing = timing.with_run_id(run_id);
+        }
         let id = match input["id"].as_str() {
             Some(s) if !s.trim().is_empty() => s.to_string(),
             _ => return ToolResult::error("'id' is required"),
@@ -93,11 +101,98 @@ impl Tool for GetMemoryTool {
         });
 
         match row {
-            Ok(v) => ToolResult::success(v.to_string()),
+            Ok(v) => {
+                timing.with_result_count(1).succeed();
+                ToolResult::success(v.to_string())
+            }
             Err(rusqlite::Error::QueryReturnedNoRows) => {
+                timing.with_result_count(0).set_outcome("not_found");
                 ToolResult::error(format!("No memory {id} is readable from this workspace."))
             }
             Err(e) => ToolResult::error(format!("Failed to read memory: {e}")),
         }
+    }
+}
+
+#[cfg(test)]
+mod observability_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn production_get_memory_emits_correlated_count_without_memory_content() {
+        let home = tempfile::tempdir().expect("isolated home");
+        let _home_guard = crate::db::test_support::with_home(home.path());
+        let db = crate::memory::db::MemoryDb::open().expect("open migrated MemoryDb");
+        db.conn
+            .execute(
+                "INSERT INTO memories (id, tier, scope, scope_ref, scope_key, content, source, created_at, updated_at)
+                 VALUES ('private-id', 'semantic', 'global', '', 'global', 'private memory contents', 'test', '2026-10-03T00:00:00Z', '2026-10-03T00:00:00Z')",
+                [],
+            )
+            .expect("seed scoped memory");
+        drop(db);
+
+        let context = ToolContext {
+            session_id: "session-fixture".into(),
+            working_dir: home.path().to_string_lossy().into_owned(),
+            call_id: "call-fixture".into(),
+            run_id: Some("run-fixture".into()),
+            task_id: Some(17),
+            permission_mode: crate::agent::permission::PermissionMode::Autonomous,
+            depth: 0,
+            agent_role: "supervisor".into(),
+
+            run_token_budget: None,
+        };
+        let runtime = tokio::runtime::Runtime::new().expect("test runtime");
+        let (result, events) = crate::observability::timing::capture_json_events(|| {
+            runtime.block_on(GetMemoryTool.execute(json!({"id":"private-id"}), &context))
+        });
+        assert!(!result.is_error);
+        assert!(result.output.contains("private memory contents"));
+        let event = events
+            .iter()
+            .find(|event| event["fields"]["operation"] == "memory_tool_get")
+            .expect("production tool operation event");
+        assert_eq!(event["fields"]["database"], "memory");
+        assert_eq!(event["fields"]["run_id"], "run-fixture");
+        assert_eq!(event["fields"]["task_id"], "17");
+        assert_eq!(event["fields"]["result_count"], 1);
+        let telemetry = serde_json::to_string(&events).expect("serialize safe events");
+        assert!(!telemetry.contains("private memory contents"));
+        assert!(!telemetry.contains("private-id"));
+    }
+
+    #[test]
+    fn production_get_memory_marks_not_found_as_an_observed_zero() {
+        let home = tempfile::tempdir().expect("isolated home");
+        let _home_guard = crate::db::test_support::with_home(home.path());
+        crate::memory::db::MemoryDb::open().expect("open migrated MemoryDb");
+        let context = ToolContext {
+            session_id: "session-fixture".into(),
+            working_dir: home.path().to_string_lossy().into_owned(),
+            call_id: "call-fixture".into(),
+            run_id: Some("run-fixture".into()),
+            task_id: Some(19),
+            permission_mode: crate::agent::permission::PermissionMode::Autonomous,
+            depth: 0,
+            agent_role: "supervisor".into(),
+
+            run_token_budget: None,
+        };
+        let runtime = tokio::runtime::Runtime::new().expect("test runtime");
+        let (result, events) = crate::observability::timing::capture_json_events(|| {
+            runtime.block_on(GetMemoryTool.execute(json!({"id":"absent-id"}), &context))
+        });
+
+        assert!(result.is_error);
+        let event = events
+            .iter()
+            .find(|event| event["fields"]["operation"] == "memory_tool_get")
+            .expect("production not-found operation event");
+        assert_eq!(event["fields"]["outcome"], "not_found");
+        assert_eq!(event["fields"]["result_count"], 0);
+        assert_eq!(event["fields"]["result_count_observed"], true);
     }
 }

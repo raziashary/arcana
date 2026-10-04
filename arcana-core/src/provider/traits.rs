@@ -36,6 +36,24 @@ pub trait Provider: Send + Sync {
         super::catalogue::capabilities_for(model)
     }
 
+    /// Return a safe upper bound for the input tokens in this exact request.
+    /// Providers with an authoritative tokenizer should override this. The
+    /// default reserves the model's entire known context window, which is
+    /// conservative but may deny a request under a smaller run budget.
+    async fn input_token_upper_bound(&self, request: &CompletionRequest) -> Result<u64> {
+        self.models()
+            .into_iter()
+            .find(|model| model.id == request.model)
+            .map(|model| u64::from(model.context_window))
+            .filter(|tokens| *tokens > 0)
+            .ok_or_else(|| {
+                crate::errors::ArcanaError::Agent(
+                    "run-token preflight cannot establish a safe input bound for this model"
+                        .to_string(),
+                )
+            })
+    }
+
     /// Non-streaming completion — used for short tasks, testing
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse>;
 

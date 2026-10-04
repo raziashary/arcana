@@ -18,6 +18,17 @@ pub enum ArcanaError {
     #[error("Agent error: {0}")]
     Agent(String),
 
+    #[error(
+        "Operation reconciliation required for '{operation}' at journal entry {intent_cursor}"
+    )]
+    OperationReconciliationRequired {
+        operation: String,
+        intent_cursor: i64,
+    },
+
+    #[error("Operation cancelled")]
+    Cancelled,
+
     // Budget circuit breaker — Ruflo Feature 4
     #[error("Budget exceeded: {0}")]
     BudgetExceeded(String),
@@ -29,6 +40,9 @@ pub enum ArcanaError {
     // Permission denied
     #[error("Permission denied for tool '{tool}'")]
     PermissionDenied { tool: String },
+
+    #[error("Workspace egress denied for destination '{destination}'")]
+    EgressDenied { destination: String },
 
     // Session / SQLite errors
     #[error("Session error: {0}")]

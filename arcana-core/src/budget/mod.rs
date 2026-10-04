@@ -1,4 +1,5 @@
 pub mod daily;
+pub mod run_tokens;
 // Budget Circuit Breaker — Ruflo Feature 4.
 //
 // Pre-emptive per-task token and cost caps enforced inside the AgentEngine loop.
@@ -13,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 // ── Core Budget Types ─────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TaskBudget {
     pub max_tokens: Option<u64>, // None = unbounded
     pub max_usd: Option<f64>,    // None = unbounded
@@ -50,6 +51,34 @@ impl BudgetExceededReason {
 // ── Preset Constructors ───────────────────────────────────────────────────────
 
 impl TaskBudget {
+    /// Combine task-specific caps with a worker's run cap. The stricter finite
+    /// value wins, and a missing task cap leaves the worker cap unchanged.
+    pub fn restricted_by(&self, task: &TaskBudget) -> Self {
+        fn minimum(a: Option<u64>, b: Option<u64>) -> Option<u64> {
+            match (a, b) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (Some(a), None) | (None, Some(a)) => Some(a),
+                (None, None) => None,
+            }
+        }
+        fn minimum_turns(a: Option<u32>, b: Option<u32>) -> Option<u32> {
+            match (a, b) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (Some(a), None) | (None, Some(a)) => Some(a),
+                (None, None) => None,
+            }
+        }
+        Self {
+            max_tokens: minimum(self.max_tokens, task.max_tokens),
+            max_usd: match (self.max_usd, task.max_usd) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (Some(a), None) | (None, Some(a)) => Some(a),
+                (None, None) => None,
+            },
+            max_turns: minimum_turns(self.max_turns, task.max_turns),
+        }
+    }
+
     pub fn default_worker() -> Self {
         Self {
             max_tokens: Some(100_000),
@@ -190,5 +219,23 @@ mod budget_enforcement_tests {
             b.check(&spent(0, 0.0, 20)).is_some(),
             "turns are still capped"
         );
+    }
+
+    #[test]
+    fn saved_task_caps_only_tighten_the_worker_run_cap() {
+        let worker = TaskBudget {
+            max_tokens: Some(100_000),
+            max_usd: Some(0.50),
+            max_turns: Some(20),
+        };
+        let task = TaskBudget {
+            max_tokens: Some(2_000),
+            max_usd: None,
+            max_turns: Some(5),
+        };
+        let effective = worker.restricted_by(&task);
+        assert_eq!(effective.max_tokens, Some(2_000));
+        assert_eq!(effective.max_usd, Some(0.50));
+        assert_eq!(effective.max_turns, Some(5));
     }
 }

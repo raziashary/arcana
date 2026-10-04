@@ -202,7 +202,14 @@ impl Tool for SpawnParallelSubagentsTool {
             // Spawn every subagent in this chunk (sequential — pool handles back-pressure).
             let mut chunk_ids: Vec<Result<String, String>> = Vec::with_capacity(chunk.len());
             for (config, prompt) in chunk {
-                match mgr.spawn(config.clone(), prompt.clone()).await {
+                match mgr
+                    .spawn_with_run_token_budget(
+                        config.clone(),
+                        prompt.clone(),
+                        ctx.run_token_budget.clone(),
+                    )
+                    .await
+                {
                     Ok(h) => chunk_ids.push(Ok(h.id)),
                     Err(e) => chunk_ids.push(Err(e.to_string())),
                 }

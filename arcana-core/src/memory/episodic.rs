@@ -3,7 +3,6 @@
 // turn tracking per session. Session summaries are stored as special rows
 // (summary_type = 'session_summary') and used for cross-session recall.
 
-use chrono::Utc;
 use rusqlite::params;
 use tracing::debug;
 use uuid::Uuid;
@@ -24,6 +23,10 @@ impl EpisodicStore {
         working_dir: Option<&str>,
         metadata: Option<serde_json::Value>,
     ) -> Result<String> {
+        let mut timer =
+            crate::observability::timing::OperationTimer::start("memory_episodic_write")
+                .with_database("memory")
+                .with_session_id(session_id);
         // Redaction boundary (M-40, P1-21). Memory is persistent, so a secret
         // written here is a secret kept forever — `G4:486` recorded exactly
         // that happening with tool arguments. Redacted on the way in rather
@@ -36,7 +39,7 @@ impl EpisodicStore {
         let db = MemoryDb::open()?;
         let id = Uuid::new_v4().to_string();
         let turn = next_turn_index(&db, session_id)?;
-        let now = Utc::now().to_rfc3339();
+        let now = crate::db::timestamps::now_rfc3339();
 
         db.conn.execute(
             "INSERT INTO episodic_memories
@@ -53,6 +56,7 @@ impl EpisodicStore {
             ],
         )?;
         debug!("[EpisodicStore] stored user message session={session_id} turn={turn}");
+        timer.succeed();
         Ok(id)
     }
 
@@ -71,6 +75,10 @@ impl EpisodicStore {
         working_dir: Option<&str>,
         metadata: Option<serde_json::Value>,
     ) -> Result<String> {
+        let mut timer =
+            crate::observability::timing::OperationTimer::start("memory_episodic_write")
+                .with_database("memory")
+                .with_session_id(session_id);
         // Redaction boundary (M-40, P1-21). `tool_calls` is the field
         // `G4:486` recorded landing in memory verbatim; `thinking` is model
         // reasoning that can quote a secret it just read.
@@ -87,7 +95,7 @@ impl EpisodicStore {
         let db = MemoryDb::open()?;
         let id = Uuid::new_v4().to_string();
         let turn = current_turn_index(&db, session_id);
-        let now = Utc::now().to_rfc3339();
+        let now = crate::db::timestamps::now_rfc3339();
 
         db.conn.execute(
             "INSERT INTO episodic_memories
@@ -111,6 +119,7 @@ impl EpisodicStore {
             ],
         )?;
         debug!("[EpisodicStore] stored agent response session={session_id} turn={turn}");
+        timer.succeed();
         Ok(id)
     }
 
@@ -122,6 +131,10 @@ impl EpisodicStore {
         summary_text: &str,
         working_dir: Option<&str>,
     ) -> Result<String> {
+        let mut timer =
+            crate::observability::timing::OperationTimer::start("memory_episodic_summary")
+                .with_database("memory")
+                .with_session_id(session_id);
         // Redaction boundary (M-40, P1-21). Memory is persistent, so a secret
         // written here is kept forever.
         let summary_text = &crate::security::redaction::redact_text(summary_text);
@@ -129,7 +142,7 @@ impl EpisodicStore {
         let db = MemoryDb::open()?;
         let id = Uuid::new_v4().to_string();
         let turn = current_turn_index(&db, session_id);
-        let now = Utc::now().to_rfc3339();
+        let now = crate::db::timestamps::now_rfc3339();
 
         db.conn.execute(
             "INSERT INTO episodic_memories
@@ -138,6 +151,7 @@ impl EpisodicStore {
             params![id, session_id, turn, summary_text, working_dir, now],
         )?;
         debug!("[EpisodicStore] stored session summary session={session_id}");
+        timer.succeed();
         Ok(id)
     }
 
@@ -145,6 +159,10 @@ impl EpisodicStore {
 
     /// Full ordered timeline for one session.
     pub fn get_session_timeline(session_id: &str) -> Result<Vec<EpisodicMemory>> {
+        let timer =
+            crate::observability::timing::OperationTimer::start("memory_episodic_timeline_read")
+                .with_database("memory")
+                .with_session_id(session_id);
         let db = MemoryDb::open()?;
         let mut stmt = db.conn.prepare(
             "SELECT id, session_id, turn_index, role, content, model, cost_usd,
@@ -154,12 +172,18 @@ impl EpisodicStore {
              WHERE  session_id = ?1
              ORDER  BY turn_index ASC, created_at ASC",
         )?;
-        map_rows(&mut stmt, params![session_id])
+        let rows = map_rows(&mut stmt, params![session_id])?;
+        timer.with_result_count(rows.len()).succeed();
+        Ok(rows)
     }
 
     /// Recent session summaries across ALL sessions except the current one.
     /// Used for cross-session context injection into the system prompt.
     pub fn get_recent_summaries(exclude_session: &str, limit: u32) -> Result<Vec<EpisodicMemory>> {
+        let timer =
+            crate::observability::timing::OperationTimer::start("memory_episodic_summaries_read")
+                .with_database("memory")
+                .with_session_id(exclude_session);
         let db = MemoryDb::open()?;
         let mut stmt = db.conn.prepare(
             "SELECT id, session_id, turn_index, role, content, model, cost_usd,
@@ -171,45 +195,79 @@ impl EpisodicStore {
              ORDER  BY created_at DESC
              LIMIT  ?2",
         )?;
-        map_rows(&mut stmt, params![exclude_session, limit])
+        let rows = map_rows(&mut stmt, params![exclude_session, limit])?;
+        timer.with_result_count(rows.len()).succeed();
+        Ok(rows)
     }
 
     /// Total turn count for a session — used by auto-summarization scheduler.
     pub fn get_turn_count(session_id: &str) -> u32 {
-        MemoryDb::open()
+        let mut timer =
+            crate::observability::timing::OperationTimer::start("memory_episodic_turn_count")
+                .with_database("memory")
+                .with_session_id(session_id);
+        let result = MemoryDb::open()
             .ok()
-            .map(|db| current_turn_index(&db, session_id))
-            .unwrap_or(0)
+            .map(|db| current_turn_index(&db, session_id));
+        if let Some(count) = result {
+            timer.with_result_count(count as usize).succeed();
+            count
+        } else {
+            timer.set_outcome("fallback");
+            0
+        }
     }
 
     /// Number of episodic rows in the database.
     pub fn count_total() -> u64 {
-        MemoryDb::open()
-            .ok()
-            .and_then(|db| {
-                db.conn
-                    .query_row("SELECT COUNT(*) FROM episodic_memories", [], |r| {
-                        r.get::<_, i64>(0)
-                    })
-                    .ok()
-            })
-            .unwrap_or(0) as u64
+        Self::count_total_with_health().0
+    }
+
+    pub(crate) fn count_total_with_health() -> (u64, bool) {
+        let mut timer =
+            crate::observability::timing::OperationTimer::start("memory_episodic_count_total")
+                .with_database("memory");
+        let result = MemoryDb::open().ok().and_then(|db| {
+            db.conn
+                .query_row("SELECT COUNT(*) FROM episodic_memories", [], |r| {
+                    r.get::<_, i64>(0)
+                })
+                .ok()
+        });
+        if let Some(count) = result {
+            timer.with_result_count(count.max(0) as usize).succeed();
+            (count.max(0) as u64, true)
+        } else {
+            timer.set_outcome("fallback");
+            (0, false)
+        }
     }
 
     /// Count of distinct sessions.
     pub fn count_sessions() -> u64 {
-        MemoryDb::open()
-            .ok()
-            .and_then(|db| {
-                db.conn
-                    .query_row(
-                        "SELECT COUNT(DISTINCT session_id) FROM episodic_memories",
-                        [],
-                        |r| r.get::<_, i64>(0),
-                    )
-                    .ok()
-            })
-            .unwrap_or(0) as u64
+        Self::count_sessions_with_health().0
+    }
+
+    pub(crate) fn count_sessions_with_health() -> (u64, bool) {
+        let mut timer =
+            crate::observability::timing::OperationTimer::start("memory_episodic_count_sessions")
+                .with_database("memory");
+        let result = MemoryDb::open().ok().and_then(|db| {
+            db.conn
+                .query_row(
+                    "SELECT COUNT(DISTINCT session_id) FROM episodic_memories",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .ok()
+        });
+        if let Some(count) = result {
+            timer.with_result_count(count.max(0) as usize).succeed();
+            (count.max(0) as u64, true)
+        } else {
+            timer.set_outcome("fallback");
+            (0, false)
+        }
     }
 }
 
@@ -259,7 +317,7 @@ fn map_rows(
                 metadata: row
                     .get::<_, Option<String>>(13)?
                     .and_then(|s| serde_json::from_str(&s).ok()),
-                created_at: row.get::<_, String>(14)?.parse().unwrap_or_default(),
+                created_at: crate::db::timestamps::parse_row_timestamp(row, 14)?,
             })
         })?
         .filter_map(|r| r.ok())

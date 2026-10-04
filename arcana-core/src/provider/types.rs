@@ -46,9 +46,10 @@ pub enum MessageContent {
         ///
         /// ── Why this field exists ────────────────────────────────────────────
         ///
-        /// Gemini attaches a `thoughtSignature` to each `functionCall` it emits,
-        /// and **rejects the turn with a 400 if that signature is missing when
-        /// the call is replayed**:
+        /// Gemini attaches an opaque `thoughtSignature` to parts in its response.
+        /// The signature on the first function call in a tool-call step is
+        /// required when replaying that step; sequential steps carry their own
+        /// signature. Preserve any signature on a call exactly as received:
         ///
         /// > Function call is missing a thought_signature in functionCall parts.
         /// > This is required for tools to work correctly.

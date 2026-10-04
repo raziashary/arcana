@@ -71,8 +71,9 @@ mod tests {
 
     #[test]
     fn the_redirect_is_restored_on_drop() {
-        let dir = std::env::temp_dir().join("arcana-home-guard-test");
-        std::fs::create_dir_all(&dir).expect("mkdir");
+        let dir =
+            std::env::temp_dir().join(format!("arcana-home-guard-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).expect("create unique isolated directory");
         {
             let _g = with_home(&dir);
             assert_eq!(std::env::var("HOME").ok().as_deref(), dir.to_str());
@@ -95,10 +96,10 @@ mod tests {
     /// rather than trampling the first.
     #[test]
     fn two_redirects_do_not_overlap() {
-        let a = std::env::temp_dir().join("arcana-home-guard-a");
-        let b = std::env::temp_dir().join("arcana-home-guard-b");
-        std::fs::create_dir_all(&a).expect("mkdir a");
-        std::fs::create_dir_all(&b).expect("mkdir b");
+        let a = std::env::temp_dir().join(format!("arcana-home-guard-a-{}", uuid::Uuid::new_v4()));
+        let b = std::env::temp_dir().join(format!("arcana-home-guard-b-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&a).expect("create unique isolated directory a");
+        std::fs::create_dir(&b).expect("create unique isolated directory b");
 
         let g = with_home(&a);
         assert_eq!(std::env::var("HOME").ok().as_deref(), a.to_str());

@@ -17,7 +17,7 @@
 use chrono::Utc;
 use rusqlite::params;
 use std::path::{Path, PathBuf};
-use tracing::{debug, warn};
+use tracing::debug;
 use uuid::Uuid;
 
 use super::db::MemoryDb;
@@ -32,6 +32,8 @@ impl ProceduralStore {
     /// Return the full contents of MEMORY.md. Creates the file with a default
     /// header if it does not exist yet.
     pub fn get_memory_md() -> Result<String> {
+        let mut timer =
+            crate::observability::timing::OperationTimer::start("memory_procedural_index_read");
         let path = memory_md_path()?;
         if !path.exists() {
             let default = default_memory_md();
@@ -39,23 +41,33 @@ impl ProceduralStore {
                 std::fs::create_dir_all(parent)?;
             }
             std::fs::write(&path, &default)?;
+            timer = timer.with_result_bytes(default.len());
+            timer.succeed();
             return Ok(default);
         }
-        Ok(std::fs::read_to_string(&path)?)
+        let content = std::fs::read_to_string(&path)?;
+        timer = timer.with_result_bytes(content.len());
+        timer.succeed();
+        Ok(content)
     }
 
-    /// Overwrite MEMORY.md and sync the updated_at timestamp in SQLite for
-    /// every topic that appears in the file (mirrors content digest).
+    /// Overwrite the MEMORY.md index file without changing topic records.
+    /// Topic rows and their SQLite search mirror are maintained by
+    /// `save_topic` and `delete_topic`; those operations regenerate this index.
     pub fn save_memory_md(content: &str) -> Result<()> {
+        let mut timer =
+            crate::observability::timing::OperationTimer::start("memory_procedural_index_write");
         let path = memory_md_path()?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::write(&path, content)?;
+        timer = timer.with_result_bytes(content.len());
         debug!(
             "[ProceduralStore] saved MEMORY.md ({} bytes)",
             content.len()
         );
+        timer.succeed();
         Ok(())
     }
 
@@ -63,12 +75,23 @@ impl ProceduralStore {
 
     /// List all topic files found on disk (*.md in topics/ directory).
     pub fn list_topics() -> Result<Vec<ProceduralMemory>> {
-        let dir = topics_dir()?;
-        if !dir.exists() {
-            return Ok(vec![]);
-        }
+        Self::list_topics_at(&topics_dir()?)
+    }
+
+    fn list_topics_at(dir: &Path) -> Result<Vec<ProceduralMemory>> {
+        let timer =
+            crate::observability::timing::OperationTimer::start("memory_procedural_topics_list");
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                timer.with_result_count(0).succeed();
+                return Ok(vec![]);
+            }
+            Err(error) => return Err(error.into()),
+        };
         let mut topics = Vec::new();
-        for entry in std::fs::read_dir(&dir)?.filter_map(|e| e.ok()) {
+        for entry in entries {
+            let entry = entry?;
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("md") {
                 continue;
@@ -81,37 +104,39 @@ impl ProceduralStore {
             if topic.is_empty() {
                 continue;
             }
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                topics.push(ProceduralMemory {
-                    id: topic.clone(),
-                    topic: topic.clone(),
-                    title: title_from_content(&content).unwrap_or_else(|| topic.clone()),
-                    content,
-                    tags: vec![],
-                    created_at: Utc::now(),
-                    updated_at: entry
-                        .metadata()
-                        .ok()
-                        .and_then(|m| m.modified().ok())
-                        .map(|t| {
-                            let dur = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-                            chrono::DateTime::<Utc>::from_timestamp(dur.as_secs() as i64, 0)
-                                .unwrap_or_else(Utc::now)
-                        })
-                        .unwrap_or_else(Utc::now),
-                });
-            }
+            let content = std::fs::read_to_string(&path)?;
+            topics.push(ProceduralMemory {
+                id: topic.clone(),
+                topic: topic.clone(),
+                title: title_from_content(&content).unwrap_or_else(|| topic.clone()),
+                content,
+                tags: vec![],
+                created_at: Utc::now(),
+                updated_at: entry
+                    .metadata()
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .map(|t| {
+                        let dur = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+                        chrono::DateTime::<Utc>::from_timestamp(dur.as_secs() as i64, 0)
+                            .unwrap_or_else(Utc::now)
+                    })
+                    .unwrap_or_else(Utc::now),
+            });
         }
         topics.sort_by(|a, b| a.topic.cmp(&b.topic));
+        timer.with_result_count(topics.len()).succeed();
         Ok(topics)
     }
 
     /// Read a single topic file by name.
     pub fn get_topic(topic: &str) -> Result<ProceduralMemory> {
+        let timer =
+            crate::observability::timing::OperationTimer::start("memory_procedural_topic_read");
         let path = topic_path(topic)?;
         let content = std::fs::read_to_string(&path)
             .map_err(|_| ArcanaError::Agent(format!("Topic '{topic}' not found")))?;
-        Ok(ProceduralMemory {
+        let memory = ProceduralMemory {
             id: topic.to_string(),
             topic: topic.to_string(),
             title: title_from_content(&content).unwrap_or_else(|| topic.to_string()),
@@ -119,11 +144,16 @@ impl ProceduralStore {
             tags: vec![],
             created_at: Utc::now(),
             updated_at: Utc::now(),
-        })
+        };
+        timer.with_result_count(1).succeed();
+        Ok(memory)
     }
 
     /// Write (create or overwrite) a topic file and upsert its SQLite mirror.
     pub fn save_topic(topic: &str, title: &str, content: &str, tags: &[String]) -> Result<()> {
+        let mut timer =
+            crate::observability::timing::OperationTimer::start("memory_procedural_write")
+                .with_database("memory");
         // Redaction boundary (M-40, P1-21). Memory is persistent, so a secret
         // written here is kept forever.
         let content = &crate::security::redaction::redact_text(content);
@@ -136,7 +166,7 @@ impl ProceduralStore {
 
         // Mirror into SQLite for search.
         let db = MemoryDb::open()?;
-        let now = Utc::now().to_rfc3339();
+        let now = crate::db::timestamps::now_rfc3339();
         let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".into());
         let id = Uuid::new_v4().to_string();
 
@@ -155,11 +185,15 @@ impl ProceduralStore {
         refresh_memory_md_index()?;
 
         debug!("[ProceduralStore] saved topic='{topic}'");
+        timer.succeed();
         Ok(())
     }
 
     /// Delete a topic file and remove from SQLite mirror.
     pub fn delete_topic(topic: &str) -> Result<()> {
+        let mut timer =
+            crate::observability::timing::OperationTimer::start("memory_procedural_topic_delete")
+                .with_database("memory");
         let path = topic_path(topic)?;
         if path.exists() {
             std::fs::remove_file(&path)?;
@@ -170,11 +204,14 @@ impl ProceduralStore {
             params![topic],
         )?;
         refresh_memory_md_index()?;
+        timer.succeed();
         Ok(())
     }
 
     /// Keyword search across SQLite mirror.
     pub fn search(query: &str, limit: u32) -> Result<Vec<ProceduralMemory>> {
+        let timer = crate::observability::timing::OperationTimer::start("memory_procedural_search")
+            .with_database("memory");
         let db = MemoryDb::open()?;
         let pattern = format!("%{}%", query.to_lowercase());
         let mut stmt = db.conn.prepare(
@@ -184,36 +221,336 @@ impl ProceduralStore {
              ORDER  BY updated_at DESC
              LIMIT  ?2",
         )?;
-        let rows = stmt
-            .query_map(params![pattern, limit], |row| {
-                let tags_str: String = row.get(4).unwrap_or_else(|_| "[]".into());
-                let tags: Vec<String> = serde_json::from_str(&tags_str).unwrap_or_default();
-                Ok(ProceduralMemory {
-                    id: row.get(0)?,
-                    topic: row.get(1)?,
-                    title: row.get(2)?,
-                    content: row.get(3)?,
-                    tags,
-                    created_at: row.get::<_, String>(5)?.parse().unwrap_or_default(),
-                    updated_at: row.get::<_, String>(6)?.parse().unwrap_or_default(),
-                })
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
+        let malformed_tag_sets = std::cell::Cell::new(0usize);
+        let mapped = stmt.query_map(params![pattern, limit], |row| {
+            let tags_str: String = match row.get(4) {
+                Ok(tags) => tags,
+                Err(_) => {
+                    malformed_tag_sets.set(malformed_tag_sets.get() + 1);
+                    "[]".into()
+                }
+            };
+            let tags = match serde_json::from_str(&tags_str) {
+                Ok(tags) => tags,
+                Err(_) => {
+                    malformed_tag_sets.set(malformed_tag_sets.get() + 1);
+                    Vec::new()
+                }
+            };
+            Ok(ProceduralMemory {
+                id: row.get(0)?,
+                topic: row.get(1)?,
+                title: row.get(2)?,
+                content: row.get(3)?,
+                tags,
+                created_at: crate::db::timestamps::parse_row_timestamp(row, 5)?,
+                updated_at: crate::db::timestamps::parse_row_timestamp(row, 6)?,
+            })
+        })?;
+        let mut rows = Vec::new();
+        let mut skipped_rows = 0usize;
+        for row in mapped {
+            match row {
+                Ok(memory) => rows.push(memory),
+                Err(_) => skipped_rows += 1,
+            }
+        }
+        finish_search_observation(timer, rows.len(), skipped_rows, malformed_tag_sets.get());
         Ok(rows)
     }
 
     pub fn count_total() -> u64 {
-        MemoryDb::open()
-            .ok()
-            .and_then(|db| {
-                db.conn
-                    .query_row("SELECT COUNT(*) FROM procedural_memories", [], |r| {
-                        r.get::<_, i64>(0)
-                    })
-                    .ok()
+        Self::count_total_with_health().0
+    }
+
+    pub(crate) fn count_total_with_health() -> (u64, bool) {
+        let mut timer =
+            crate::observability::timing::OperationTimer::start("memory_procedural_count_total")
+                .with_database("memory");
+        let result = MemoryDb::open().ok().and_then(|db| {
+            db.conn
+                .query_row("SELECT COUNT(*) FROM procedural_memories", [], |r| {
+                    r.get::<_, i64>(0)
+                })
+                .ok()
+        });
+        if let Some(count) = result {
+            timer.with_result_count(count.max(0) as usize).succeed();
+            (count.max(0) as u64, true)
+        } else {
+            timer.set_outcome("fallback");
+            (0, false)
+        }
+    }
+}
+
+fn finish_search_observation(
+    timer: crate::observability::timing::OperationTimer,
+    count: usize,
+    skipped_rows: usize,
+    malformed_tag_sets: usize,
+) {
+    tracing::info!(
+        target: "arcana::telemetry",
+        event_type = "memory_search_result",
+        memory_tier = "procedural",
+        result_count = count,
+        skipped_rows,
+        malformed_tag_sets,
+        "Procedural memory search returned"
+    );
+    let mut timer = timer.with_result_count(count);
+    if skipped_rows == 0 && malformed_tag_sets == 0 {
+        timer.succeed();
+    } else {
+        timer.set_outcome("degraded");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn procedural_search_result_and_timing_events_agree_on_result_count() {
+        struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+
+        impl Write for SharedWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0
+                    .lock()
+                    .expect("capture telemetry")
+                    .extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let writer_output = Arc::clone(&output);
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(move || SharedWriter(Arc::clone(&writer_output)))
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            finish_search_observation(
+                crate::observability::timing::OperationTimer::start("memory_procedural_search")
+                    .with_database("memory"),
+                2,
+                0,
+                0,
+            );
+        });
+
+        let output = String::from_utf8(output.lock().expect("capture output").clone())
+            .expect("UTF-8 JSON events");
+        let events = output
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("JSON event"))
+            .collect::<Vec<_>>();
+        let result = events
+            .iter()
+            .find(|event| event["fields"]["event_type"] == "memory_search_result")
+            .expect("procedural search result event");
+        let timing = events
+            .iter()
+            .find(|event| event["fields"]["event_type"] == "operation_timing")
+            .expect("procedural search timing event");
+        assert_eq!(result["fields"]["result_count"], 2);
+        assert_eq!(result["fields"]["skipped_rows"], 0);
+        assert_eq!(result["fields"]["malformed_tag_sets"], 0);
+        assert_eq!(timing["fields"]["result_count"], 2);
+        assert_eq!(timing["fields"]["database"], "memory");
+        assert_eq!(timing["fields"]["outcome"], "success");
+    }
+
+    #[test]
+    fn procedural_search_marks_dropped_rows_as_degraded() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home_guard = crate::db::test_support::with_home(home.path());
+        let db = MemoryDb::open().expect("open migrated test memory DB");
+        db.conn
+            .execute(
+                "INSERT INTO procedural_memories (id, topic, title, content, tags, created_at, updated_at)
+                 VALUES ('good-row', 'good', 'needle good', 'needle content', '[]', '2026-10-03T00:00:00Z', '2026-10-03T00:00:00Z')",
+                [],
+            )
+            .expect("insert valid row");
+        db.conn
+            .execute(
+                "INSERT INTO procedural_memories (id, topic, title, content, tags, created_at, updated_at)
+                 VALUES ('bad-row', 'bad', 'needle bad', 'needle content', '[]', 'not-a-timestamp', '2026-10-03T00:00:00Z')",
+                [],
+            )
+            .expect("insert corrupt row");
+        drop(db);
+
+        let (result, events) = crate::observability::timing::capture_json_events(|| {
+            ProceduralStore::search("needle", 10)
+        });
+        assert_eq!(result.expect("search remains available").len(), 1);
+        let result_event = events
+            .iter()
+            .find(|event| event["fields"]["event_type"] == "memory_search_result")
+            .expect("search result telemetry");
+        let timing_event = events
+            .iter()
+            .find(|event| event["fields"]["operation"] == "memory_procedural_search")
+            .expect("search operation timing");
+        assert_eq!(result_event["fields"]["result_count"], 1);
+        assert_eq!(result_event["fields"]["skipped_rows"], 1);
+        assert_eq!(result_event["fields"]["malformed_tag_sets"], 0);
+        assert_eq!(timing_event["fields"]["outcome"], "degraded");
+        assert_eq!(timing_event["fields"]["result_count"], 1);
+    }
+
+    #[test]
+    fn malformed_tag_json_is_reported_without_calling_the_row_dropped() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home_guard = crate::db::test_support::with_home(home.path());
+        let db = MemoryDb::open().expect("open migrated test memory DB");
+        db.conn
+            .execute(
+                "INSERT INTO procedural_memories (id, topic, title, content, tags, created_at, updated_at)
+                 VALUES ('tag-row', 'topic', 'needle title', 'needle content', '{invalid', '2026-10-03T00:00:00Z', '2026-10-03T00:00:00Z')",
+                [],
+            )
+            .expect("insert row with malformed tags");
+        drop(db);
+
+        let (result, events) = crate::observability::timing::capture_json_events(|| {
+            ProceduralStore::search("needle", 10)
+        });
+        let results = result.expect("row remains available with empty tags");
+        assert_eq!(results.len(), 1);
+        assert!(results[0].tags.is_empty());
+        let event = events
+            .iter()
+            .find(|event| event["fields"]["event_type"] == "memory_search_result")
+            .expect("procedural result event");
+        assert_eq!(event["fields"]["result_count"], 1);
+        assert_eq!(event["fields"]["skipped_rows"], 0);
+        assert_eq!(event["fields"]["malformed_tag_sets"], 1);
+        let timing = events
+            .iter()
+            .find(|event| event["fields"]["operation"] == "memory_procedural_search")
+            .expect("procedural operation event");
+        assert_eq!(timing["fields"]["outcome"], "degraded");
+    }
+
+    #[test]
+    fn topic_listing_reports_invalid_topic_file_and_records_error_outcome() {
+        struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+
+        impl Write for SharedWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0
+                    .lock()
+                    .expect("capture telemetry")
+                    .extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let directory = tempfile::tempdir().expect("temporary topic directory");
+        std::fs::write(directory.path().join("good.md"), "# Good\nReadable topic")
+            .expect("write readable topic");
+        std::fs::write(directory.path().join("broken.md"), [0xff, 0xfe])
+            .expect("write invalid UTF-8 topic");
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let writer_output = Arc::clone(&output);
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(move || SharedWriter(Arc::clone(&writer_output)))
+            .finish();
+
+        let result = tracing::subscriber::with_default(subscriber, || {
+            ProceduralStore::list_topics_at(directory.path())
+        });
+
+        assert!(
+            result.is_err(),
+            "invalid topic data must not look like a complete list"
+        );
+        let output = String::from_utf8(output.lock().expect("capture output").clone())
+            .expect("UTF-8 JSON events");
+        let event = output
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("JSON event"))
+            .find(|event| {
+                event["fields"]["event_type"] == "operation_timing"
+                    && event["fields"]["operation"] == "memory_procedural_topics_list"
             })
-            .unwrap_or(0) as u64
+            .expect("topic listing operation event");
+        assert_eq!(event["fields"]["outcome"], "error");
+    }
+
+    #[test]
+    fn index_refresh_reports_unreadable_topic_instead_of_writing_partial_index() {
+        struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+
+        impl Write for SharedWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0
+                    .lock()
+                    .expect("capture telemetry")
+                    .extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let root = tempfile::tempdir().expect("temporary memory directory");
+        let topics = root.path().join("topics");
+        std::fs::create_dir_all(&topics).expect("create topics directory");
+        std::fs::write(topics.join("good.md"), "# Good\nReadable topic")
+            .expect("write readable topic");
+        std::fs::write(topics.join("broken.md"), [0xff, 0xfe]).expect("write invalid UTF-8 topic");
+        let index = root.path().join("MEMORY.md");
+
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let writer_output = Arc::clone(&output);
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(move || SharedWriter(Arc::clone(&writer_output)))
+            .finish();
+
+        let result = tracing::subscriber::with_default(subscriber, || {
+            refresh_memory_md_index_at(&topics, &index)
+        });
+
+        assert!(
+            result.is_err(),
+            "index refresh must not accept partial topic data"
+        );
+        assert!(!index.exists(), "partial index must not be written");
+        let output = String::from_utf8(output.lock().expect("capture output").clone())
+            .expect("UTF-8 JSON events");
+        let event = output
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("JSON event"))
+            .find(|event| {
+                event["fields"]["event_type"] == "operation_timing"
+                    && event["fields"]["operation"] == "memory_procedural_index_refresh"
+            })
+            .expect("index refresh operation event");
+        assert_eq!(event["fields"]["outcome"], "error");
     }
 }
 
@@ -265,19 +602,30 @@ fn default_memory_md() -> String {
          > Edit topic files in `~/.arcana/memory/topics/` or use the Memory sidebar.\n\n\
          ## Topics\n\
          *(No topics yet — use `propose_memory` or the Memory sidebar to add learnings)*\n",
-        Utc::now().to_rfc3339()
+        crate::db::timestamps::now_rfc3339()
     )
 }
 
 /// Regenerate the MEMORY.md topic index from the topics/ directory.
 fn refresh_memory_md_index() -> Result<()> {
-    let dir = topics_dir()?;
-    if !dir.exists() {
-        return Ok(());
-    }
+    refresh_memory_md_index_at(&topics_dir()?, &memory_md_path()?)
+}
+
+fn refresh_memory_md_index_at(dir: &Path, path: &Path) -> Result<()> {
+    let timer =
+        crate::observability::timing::OperationTimer::start("memory_procedural_index_refresh");
+    let entries_on_disk = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            timer.with_result_count(0).succeed();
+            return Ok(());
+        }
+        Err(error) => return Err(error.into()),
+    };
 
     let mut entries: Vec<(String, String)> = Vec::new();
-    for entry in std::fs::read_dir(&dir)?.filter_map(|e| e.ok()) {
+    for entry in entries_on_disk {
+        let entry = entry?;
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("md") {
             continue;
@@ -287,7 +635,7 @@ fn refresh_memory_md_index() -> Result<()> {
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_string();
-        let content = std::fs::read_to_string(&path).unwrap_or_default();
+        let content = std::fs::read_to_string(&path)?;
         let title = title_from_content(&content).unwrap_or_else(|| topic.clone());
         entries.push((topic, title));
     }
@@ -302,17 +650,17 @@ fn refresh_memory_md_index() -> Result<()> {
             .collect()
     };
 
-    let now = Utc::now().to_rfc3339();
+    let now = crate::db::timestamps::now_rfc3339();
     let content = format!(
         "# Arcana Memory\n\
          > Last updated: {now}\n\n\
          ## Topics\n{topic_lines}"
     );
 
-    let path = memory_md_path()?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&path, content)?;
+    std::fs::write(path, content)?;
+    timer.with_result_count(entries.len()).succeed();
     Ok(())
 }

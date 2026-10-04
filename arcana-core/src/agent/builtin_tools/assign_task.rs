@@ -32,10 +32,10 @@ impl Tool for AssignTaskTool {
     }
 
     fn description(&self) -> &str {
-        "Atomically assign a ready task to a worker. Sets status='assigned' AND \
-        assigned_worker in one operation — this is the ONLY correct way for the \
-        Supervisor to dispatch work. Prefer this over update_task_status for \
-        assignments. The registered worker roster is checked at dispatch time."
+        "Atomically dispatch a task. Omit worker_slug and Arcana selects a runnable \
+        implementation worker from task signals and automatic outcome history. To \
+        override that choice, provide a runnable worker_slug and a non-empty \
+        override_reason; overrides are audited and excluded from routing learning."
     }
 
     fn input_schema(&self) -> Value {
@@ -48,33 +48,29 @@ impl Tool for AssignTaskTool {
                 },
                 "worker_slug": {
                     "type": "string",
-                    "description": "A currently registered worker slug; Arcana validates it against the live worker roster"
+                    "description": "Optional explicit override. Must name a runnable implementation worker and requires override_reason. Omit to let Arcana route deterministically."
+                },
+                "override_reason": {
+                    "type": "string",
+                    "description": "Required when worker_slug is supplied; persisted for audit and excluded from automatic routing learning."
                 }
             },
-            "required": ["id", "worker_slug"]
+            "required": ["id"]
         })
     }
 
-    async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
+        if ctx.agent_role.trim() != "supervisor" {
+            return ToolResult::error("Only the Supervisor may assign or reassign fleet tasks");
+        }
         let id = match input["id"].as_i64() {
             Some(id) if id > 0 => id,
             _ => return ToolResult::error("'id' must be a positive integer task ID"),
         };
-        let worker_slug = match input["worker_slug"].as_str() {
-            Some(s) if !s.trim().is_empty() => s.trim().to_string(),
-            _ => return ToolResult::error("'worker_slug' is required"),
+        let workers = match crate::db::workers::WorkersDb::open().and_then(|db| db.list()) {
+            Ok(workers) => workers,
+            Err(e) => return ToolResult::error(&format!("Failed to read worker roster: {e}")),
         };
-        let registered_workers =
-            match crate::db::workers::WorkersDb::open().and_then(|db| db.registered_slugs()) {
-                Ok(workers) => workers,
-                Err(e) => return ToolResult::error(&format!("Failed to read worker roster: {e}")),
-            };
-        if !registered_workers.iter().any(|slug| slug == &worker_slug) {
-            return ToolResult::error(&format!(
-                "'{worker_slug}' is not a registered worker. Registered workers: {}",
-                registered_workers.join(", ")
-            ));
-        }
 
         let db = match TasksDb::open() {
             Ok(db) => db,
@@ -91,6 +87,11 @@ impl Tool for AssignTaskTool {
         };
 
         let prev_status = task.status.as_str().to_string();
+        if task.task_type.as_str() == "epic" {
+            return ToolResult::error(format!(
+                "Task #{id} is an epic. Epic records track progress and cannot be assigned to a worker."
+            ));
+        }
         // K.9 — Added 'rejected' to the dispatchable states. Without this, the
         // supervisor calling assign_task on a QC-rejected task would get a hard
         // error, breaking the entire Phase A retry path at the tool level.
@@ -105,14 +106,50 @@ impl Tool for AssignTaskTool {
             ));
         }
 
-        if let Err(e) = db.update_status(id, "assigned", Some(&worker_slug)) {
+        let override_reason = input["override_reason"].as_str().map(str::trim);
+        let explicit_worker = input["worker_slug"].as_str().map(str::trim);
+        let (worker_slug, override_reason) = match explicit_worker {
+            Some(slug) if !slug.is_empty() => {
+                let Some(reason) = override_reason.filter(|reason| !reason.is_empty()) else {
+                    return ToolResult::error(
+                        "An explicit worker_slug requires a non-empty override_reason",
+                    );
+                };
+                let Some(worker) = workers.iter().find(|worker| worker.slug == slug) else {
+                    return ToolResult::error(format!("'{slug}' is not a registered worker"));
+                };
+                if !crate::routing::TaskRouter::is_runnable_implementation_worker(worker) {
+                    return ToolResult::error(format!(
+                        "'{slug}' is not a started, runnable implementation worker"
+                    ));
+                }
+                (slug.to_string(), Some(reason.to_string()))
+            }
+            Some(_) => return ToolResult::error("'worker_slug' cannot be empty"),
+            None => {
+                if override_reason.is_some() {
+                    return ToolResult::error("'override_reason' requires an explicit worker_slug");
+                }
+                let selected = match crate::routing::TaskRouter::select_worker_for_dispatch(&task) {
+                    Ok(selected) => selected,
+                    Err(error) => {
+                        return ToolResult::error(&format!("Automatic routing failed: {error}"))
+                    }
+                };
+                (selected.worker_slug, None)
+            }
+        };
+
+        let routing_entry = crate::routing::TaskRouter::assignment_entry(&task, &worker_slug);
+        let assignment = match override_reason.as_deref() {
+            Some(reason) => {
+                db.assign_with_routing_override(id, &worker_slug, &routing_entry, reason)
+            }
+            None => db.assign_with_routing_history(id, &worker_slug, &routing_entry),
+        };
+        if let Err(e) = assignment {
             return ToolResult::error(&format!("Failed to assign task #{id}: {e}"));
         }
-
-        // Ruflo Feature 1 — record this assignment in routing_history so the
-        // affinity scorer can learn from it. Fire-and-forget; a failed record
-        // does not block the assignment.
-        let _ = crate::routing::TaskRouter::record_assignment(&task, &worker_slug);
 
         // Phase 3.0 R1 — push-based dispatch. The supervisor just handed work
         // to a worker; wake that worker *now* instead of waiting up to its
@@ -134,10 +171,10 @@ impl Tool for AssignTaskTool {
         let ctx = HookContext {
             hook_type: HookType::OnTaskClaim.as_str().to_string(),
             timestamp: chrono::Utc::now(),
-            session_id: Some(_ctx.session_id.clone()),
+            session_id: Some(ctx.session_id.clone()),
             agent_mode: Some("Supervisor".to_string()),
             tool_call: Some(ToolCallContext {
-                id: _ctx.call_id.clone(),
+                id: ctx.call_id.clone(),
                 name: "assign_task".to_string(),
                 input: input.clone(),
                 result: Some(json!({
@@ -175,5 +212,34 @@ impl Tool for AssignTaskTool {
             })
             .to_string(),
         )
+    }
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+    use crate::agent::{permission::PermissionMode, tool_trait::ToolContext};
+
+    #[tokio::test]
+    async fn worker_cannot_call_assignment_tool() {
+        let context = ToolContext {
+            session_id: "assignment-security-test".into(),
+            working_dir: std::env::temp_dir().to_string_lossy().into_owned(),
+            call_id: "worker-assignment-call".into(),
+            run_id: None,
+            task_id: Some(1),
+            permission_mode: PermissionMode::Autonomous,
+            depth: 0,
+            agent_role: "worker-backend".into(),
+
+            run_token_budget: None,
+        };
+        let result = AssignTaskTool.execute(json!({"id": 2}), &context).await;
+        assert!(result.is_error);
+        let output: Value = serde_json::from_str(&result.output).unwrap();
+        assert!(output["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Only the Supervisor"));
     }
 }

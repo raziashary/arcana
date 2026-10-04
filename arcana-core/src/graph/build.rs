@@ -31,9 +31,10 @@ pub fn build(
     task_id: Option<i64>,
 ) -> Result<BuildStats> {
     let start = std::time::Instant::now();
-    let mut nodes_upserted = 0;
-    let mut edges_upserted = 0;
     let files_parsed = extractions.len();
+    let mut operation = crate::observability::timing::OperationTimer::start("graph_build")
+        .with_database("graph")
+        .with_task_id(task_id);
 
     // Collect all nodes and edges
     let mut all_nodes = Vec::new();
@@ -76,8 +77,13 @@ pub fn build(
             file_hash: node.file_hash,
         })
         .collect();
+    let nodes_upserted = schema_nodes.len();
+    let mut node_write = crate::observability::timing::OperationTimer::start("graph_nodes_upsert")
+        .with_database("graph")
+        .with_task_id(task_id)
+        .with_result_count(nodes_upserted);
     store.upsert_nodes_batch(&schema_nodes, agent_author, task_id)?;
-    nodes_upserted = schema_nodes.len();
+    node_write.succeed();
     tracing::info!("[GraphBuild] Upserted {} nodes", nodes_upserted);
 
     // Batch upsert edges to SQLite using a single connection+transaction
@@ -99,21 +105,37 @@ pub fn build(
             relation: None,
         })
         .collect();
+    let edges_upserted = schema_edges.len();
+    let mut edge_write = crate::observability::timing::OperationTimer::start("graph_edges_upsert")
+        .with_database("graph")
+        .with_task_id(task_id)
+        .with_result_count(edges_upserted);
     store.upsert_edges_batch(&schema_edges, agent_author, task_id)?;
-    edges_upserted = schema_edges.len();
+    edge_write.succeed();
     tracing::info!("[GraphBuild] Upserted {} edges", edges_upserted);
 
     // Rebuild FTS5 index
     tracing::info!("[GraphBuild] Rebuilding FTS5 index...");
-    store.rebuild_fts_index()?;
+    let mut fts_rebuild = crate::observability::timing::OperationTimer::start("graph_fts_rebuild")
+        .with_database("graph")
+        .with_task_id(task_id);
+    store.rebuild_fts_index_for_task(task_id)?;
+    fts_rebuild.succeed();
     tracing::info!("[GraphBuild] FTS5 index rebuilt");
 
     // Flush all writes to disk
     tracing::info!("[GraphBuild] Flushing writes to disk...");
-    store.flush()?;
+    let mut flush = crate::observability::timing::OperationTimer::start("graph_flush")
+        .with_database("graph")
+        .with_task_id(task_id);
+    store.flush_for_task(task_id)?;
+    flush.succeed();
     tracing::info!("[GraphBuild] Writes flushed");
 
     let elapsed_ms = start.elapsed().as_millis() as u64;
+
+    operation = operation.with_result_count(nodes_upserted + edges_upserted);
+    operation.succeed();
 
     Ok(BuildStats {
         nodes_upserted,
@@ -138,6 +160,83 @@ pub fn deduplicate_nodes(nodes: &mut Vec<super::extract::NodeInfo>) {
             true
         }
     });
+}
+
+#[cfg(test)]
+mod observability_tests {
+    use super::*;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn production_graph_build_emits_correlated_operation_outcomes() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("arcana-graph-observability-{unique}"));
+        std::fs::create_dir_all(&dir).expect("isolated graph fixture directory");
+        let store = GraphStore::open(&dir.join("graph.db")).expect("open isolated graph DB");
+
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let writer_output = Arc::clone(&output);
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(move || SharedWriter(Arc::clone(&writer_output)))
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            build(Vec::new(), &store, Some("test-worker"), Some(42))
+                .expect("empty production graph build succeeds");
+        });
+
+        let output = String::from_utf8(output.lock().unwrap().clone()).expect("JSON event bytes");
+        let events = output
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("JSON event"))
+            .filter(|event| event["fields"]["event_type"] == "operation_timing")
+            .collect::<Vec<_>>();
+        for operation in [
+            "graph_nodes_upsert",
+            "graph_edges_upsert",
+            "graph_fts_rebuild",
+            "graph_flush",
+            "graph_build",
+        ] {
+            let event = events
+                .iter()
+                .find(|event| event["fields"]["operation"] == operation)
+                .unwrap_or_else(|| panic!("missing {operation} event: {events:?}"));
+            assert_eq!(event["fields"]["database"], "graph");
+            assert_eq!(event["fields"]["outcome"], "success");
+            assert_eq!(event["fields"]["task_id"], "42", "event: {event:?}");
+            assert!(event["fields"]["duration_ns"].as_u64().is_some());
+        }
+        assert_eq!(
+            events
+                .iter()
+                .find(|event| event["fields"]["operation"] == "graph_nodes_upsert")
+                .unwrap()["fields"]["result_count"],
+            0
+        );
+
+        drop(store);
+        std::fs::remove_dir_all(&dir).expect("remove isolated graph fixture");
+    }
 }
 
 pub fn reconcile_edges(edges: &mut Vec<super::extract::EdgeInfo>, node_ids: &HashSet<String>) {

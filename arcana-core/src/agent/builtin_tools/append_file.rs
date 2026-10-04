@@ -6,11 +6,26 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::path::Path;
 use tokio::fs::OpenOptions;
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt, SeekFrom};
 
 use super::path_jail::validate_workspace_path;
 use super::path_lock;
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
+
+async fn append_all<W>(writer: &mut W, bytes: &[u8]) -> Result<(), ToolResult>
+where
+    W: AsyncWrite + Unpin,
+{
+    writer.write_all(bytes).await.map_err(|_| {
+        ToolResult::categorized_error(
+            "append_outcome_unknown",
+            "side_effect_outcome_unknown",
+            "The append write failed after it started; some or all bytes may have been written.",
+            "Reconcile the file contents against the task checkpoint before retrying this append.",
+        )
+        .with_unknown_side_effect_outcome()
+    })
+}
 
 pub struct AppendFileTool;
 
@@ -86,6 +101,19 @@ impl Tool for AppendFileTool {
         // trailing-newline probe.
         let _lock_guard = path_lock::acquire_for(&resolved, &ctx.working_dir).await;
 
+        if let Err(message) = ctx.require_current_task_claim() {
+            return ToolResult::error(message);
+        }
+        if let Err(e) = crate::git::checkpoint::auto_checkpoint_before_write(
+            &ctx.session_id,
+            ctx.task_id,
+            &resolved.to_string_lossy(),
+        ) {
+            return ToolResult::error(format!(
+                "Append refused because its recovery checkpoint failed: {e}"
+            ));
+        }
+
         // Create parent directories if needed
         if let Some(parent) = resolved.parent() {
             if let Err(e) = tokio::fs::create_dir_all(parent).await {
@@ -144,8 +172,8 @@ impl Tool for AppendFileTool {
         };
         let bytes_to_append = to_write.len();
 
-        if let Err(e) = file.write_all(to_write.as_bytes()).await {
-            return ToolResult::error(format!("Write failed for '{}': {e}", resolved.display()));
+        if let Err(result) = append_all(&mut file, to_write.as_bytes()).await {
+            return result;
         }
 
         ToolResult::success(format!(
@@ -153,5 +181,112 @@ impl Tool for AppendFileTool {
             bytes_to_append,
             resolved.display()
         ))
+    }
+}
+
+#[cfg(test)]
+mod checkpoint_tests {
+    use super::*;
+    use crate::agent::permission::PermissionMode;
+    use std::io;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+    use tokio::io::AsyncWrite;
+
+    struct PartialThenFailWriter {
+        written: Vec<u8>,
+    }
+
+    impl AsyncWrite for PartialThenFailWriter {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buffer: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            if self.written.is_empty() {
+                let count = buffer.len().min(2);
+                self.written.extend_from_slice(&buffer[..count]);
+                Poll::Ready(Ok(count))
+            } else {
+                Poll::Ready(Err(io::Error::other("injected partial write failure")))
+            }
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn partial_append_failure_is_marked_as_unknown_side_effect() {
+        let mut writer = PartialThenFailWriter {
+            written: Vec::new(),
+        };
+        let result = append_all(&mut writer, b"append payload")
+            .await
+            .expect_err("injected writer must fail after its first partial write");
+
+        assert_eq!(writer.written, b"ap");
+        let error: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert_eq!(error["error"]["code"], "append_outcome_unknown");
+        assert_eq!(error["error"]["outcome_unknown"], true);
+        assert_eq!(error["error"]["retry_safe"], false);
+        assert!(error["error"]["next_step"]
+            .as_str()
+            .unwrap()
+            .contains("Reconcile the file contents"));
+    }
+
+    #[tokio::test]
+    async fn append_uses_task_checkpoint_and_restores_prior_absence() {
+        let home = tempfile::tempdir().expect("isolated Arcana data root");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("workspace");
+        let db = crate::db::tasks::TasksDb::open().expect("open tasks db");
+        let task = db
+            .create(crate::db::tasks::CreateTaskInput {
+                title: "append checkpoint task".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "append is task-attributed".into(),
+                created_by: Some("append-test".into()),
+            })
+            .expect("create task");
+        db.update_status(task.id, "assigned", Some("worker-backend"))
+            .expect("assign task");
+        db.claim_task_with_pid(task.id, "worker-backend", std::process::id())
+            .expect("claim task");
+        let context = ToolContext {
+            session_id: "append-checkpoint-test".into(),
+            working_dir: workspace.path().to_string_lossy().into_owned(),
+            call_id: "append-checkpoint-call".into(),
+            run_id: None,
+            task_id: Some(task.id),
+            permission_mode: PermissionMode::Autonomous,
+            depth: 0,
+            agent_role: "worker-backend".into(),
+
+            run_token_budget: None,
+        };
+        let result = AppendFileTool
+            .execute(
+                json!({"path":"new/file.txt","content":"task output"}),
+                &context,
+            )
+            .await;
+        assert!(!result.is_error, "append succeeded: {}", result.output);
+
+        let file = workspace.path().join("new/file.txt");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "task output");
+        let checkpoints =
+            crate::git::checkpoint::list(None, None, Some(task.id)).expect("read task checkpoint");
+        assert_eq!(checkpoints.len(), 1);
+        crate::git::checkpoint::restore(&checkpoints[0].id).expect("restore file's prior absence");
+        assert!(!file.exists());
     }
 }

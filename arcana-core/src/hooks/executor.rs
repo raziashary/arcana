@@ -33,7 +33,7 @@ impl HookExecutor {
             outcome,
             output,
             error,
-            executed_at: chrono::Utc::now().to_rfc3339(),
+            executed_at: crate::db::timestamps::now_rfc3339(),
             duration_ms,
         }
     }
@@ -53,7 +53,27 @@ impl HookExecutor {
                 working_dir,
                 timeout_secs,
             } => {
+                let expanded_working_dir = working_dir.as_ref().map(|dir| substitute(dir, ctx));
+                if let Some(working_dir) = &expanded_working_dir {
+                    if let Err(error) =
+                        crate::platform::shell_portability::validate_working_directory(working_dir)
+                    {
+                        return (
+                            HookOutcome::Failed,
+                            None,
+                            Some(format!("Hook working directory refused: {error}")),
+                        );
+                    }
+                }
                 let cmd = substitute(command, ctx);
+                if let Err(error) = crate::platform::shell_portability::validate_shell_command(&cmd)
+                {
+                    return (
+                        HookOutcome::Failed,
+                        None,
+                        Some(format!("Expanded hook command refused: {error}")),
+                    );
+                }
                 let timeout = timeout_secs.unwrap_or(30);
 
                 let mut builder =
@@ -63,8 +83,8 @@ impl HookExecutor {
                 } else {
                     builder.args(["-c", &cmd]);
                 }
-                if let Some(wd) = working_dir {
-                    builder.current_dir(substitute(wd, ctx));
+                if let Some(wd) = expanded_working_dir {
+                    builder.current_dir(wd);
                 }
 
                 match tokio::time::timeout(
@@ -152,7 +172,7 @@ impl HookExecutor {
             HookAction::Log { file, message } => {
                 let msg = substitute(message, ctx);
                 let path = std::path::Path::new(file);
-                let line = format!("[{}] {}\n", chrono::Utc::now().to_rfc3339(), msg);
+                let line = format!("[{}] {}\n", crate::db::timestamps::now_rfc3339(), msg);
                 match std::fs::OpenOptions::new()
                     .create(true)
                     .append(true)
@@ -233,4 +253,58 @@ fn substitute(template: &str, ctx: &HookContext) -> String {
     }
 
     result
+}
+
+#[cfg(test)]
+mod portability_tests {
+    use super::*;
+    use crate::hooks::types::{HookType, ToolCallContext};
+
+    #[tokio::test]
+    async fn expanded_saved_hook_command_is_refused_before_shell_process_starts() {
+        let temp = tempfile::tempdir().unwrap();
+        let sentinel = temp.path().join("hook-ran.txt");
+        let hook = HookConfig {
+            id: "legacy-hook".into(),
+            name: "Legacy hook".into(),
+            hook_type: HookType::PreToolUse,
+            enabled: true,
+            priority: 100,
+            conditions: Default::default(),
+            action: HookAction::Shell {
+                command: "echo {{session_id}}".into(),
+                working_dir: None,
+                timeout_secs: Some(2),
+            },
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let context = HookContext {
+            hook_type: "pre_tool_use".into(),
+            timestamp: chrono::Utc::now(),
+            session_id: Some(format!(
+                "ok && echo should-not-run > {}",
+                sentinel.display()
+            )),
+            agent_mode: None,
+            tool_call: Some(ToolCallContext {
+                id: "test".into(),
+                name: "test".into(),
+                input: serde_json::Value::Null,
+                result: None,
+                is_error: false,
+            }),
+            file_path: None,
+            task_id: None,
+            worker_id: None,
+            extra: serde_json::Value::Null,
+        };
+        let log = HookExecutor::execute(&hook, &context).await;
+        assert_eq!(log.outcome, HookOutcome::Failed);
+        assert!(log.error.unwrap().contains("command refused"));
+        assert!(
+            !sentinel.exists(),
+            "refused hook must not spawn its command"
+        );
+    }
 }

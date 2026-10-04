@@ -64,12 +64,9 @@ impl Tool for WriteFileTool {
 
         let resolved = resolve_path(path_str, &ctx.working_dir);
 
-        // Workspace path-jail (Phase 1 of docs/endtoendrun/14may2026/07).
-        // Refuse any write whose canonical destination escapes the configured
-        // workspace. Without this, an agent passing a relative path resolves
-        // it against `std::env::current_dir()`, and files leak into
-        // `src-tauri/` during `tauri dev`. The error message tells the model
-        // exactly how to retry.
+        // Workspace path-jail. Relative file names are joined to the agent's
+        // resolved workspace, while the shared resolver rejects an invalid or
+        // relative workspace instead of letting the process CWD choose a root.
         let path = match validate_workspace_path(&resolved, &ctx.working_dir) {
             Ok(canonical) => canonical,
             Err(msg) => return ToolResult::error(msg),
@@ -118,7 +115,22 @@ impl Tool for WriteFileTool {
             ));
         }
 
-        // Create parent directories if needed
+        // Phase 3.3 — auto-checkpoint before overwrite so the edit is undoable.
+        if let Err(message) = ctx.require_current_task_claim() {
+            return ToolResult::error(message);
+        }
+        if let Err(e) = crate::git::checkpoint::auto_checkpoint_before_write(
+            &ctx.session_id,
+            ctx.task_id,
+            &path.to_string_lossy(),
+        ) {
+            return ToolResult::error(format!(
+                "Write refused because its recovery checkpoint failed: {e}"
+            ));
+        }
+
+        // Checkpoint first so a failed recovery record cannot leave even newly
+        // created parent directories behind.
         if let Some(parent) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 return ToolResult::error(format!(
@@ -127,12 +139,6 @@ impl Tool for WriteFileTool {
                 ));
             }
         }
-
-        // Phase 3.3 — auto-checkpoint before overwrite so the edit is undoable.
-        crate::git::checkpoint::auto_checkpoint_before_write(
-            &ctx.session_id,
-            &path.to_string_lossy(),
-        );
 
         match std::fs::write(&path, content) {
             Ok(_) => {
@@ -230,5 +236,99 @@ fn resolve_path(path: &str, working_dir: &str) -> std::path::PathBuf {
         p.to_path_buf()
     } else {
         Path::new(working_dir).join(path)
+    }
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::*;
+    use crate::agent::permission::PermissionMode;
+    use crate::agent::tool_trait::AgentIdentity;
+
+    fn context(working_dir: String) -> ToolContext {
+        ToolContext {
+            session_id: "workspace-test-session".into(),
+            working_dir,
+            call_id: "workspace-test-call".into(),
+            run_id: None,
+            task_id: None,
+            permission_mode: PermissionMode::Autonomous,
+            depth: 0,
+            agent_role: AgentIdentity::supervisor().role,
+
+            run_token_budget: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn write_file_refuses_a_relative_workspace_without_touching_process_cwd() {
+        let name = format!("arcana-workspace-refusal-{}.txt", uuid::Uuid::new_v4());
+        let result = WriteFileTool
+            .execute(
+                json!({"path": name, "content": "must not be written"}),
+                &context(".".into()),
+            )
+            .await;
+        assert!(result.is_error, "invalid workspace should stop the write");
+        assert!(
+            !Path::new(&name).exists(),
+            "no CWD-relative file may appear"
+        );
+    }
+
+    #[tokio::test]
+    async fn write_file_creates_a_workspace_relative_file_under_the_canonical_root() {
+        let home = tempfile::tempdir().expect("isolated Arcana data root");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("workspace");
+        let mut tool_context = context(workspace.path().to_string_lossy().into_owned());
+        tool_context.task_id = Some(99);
+        let result = WriteFileTool
+            .execute(
+                json!({"path": "src/main.rs", "content": "fn main() {}\n"}),
+                &tool_context,
+            )
+            .await;
+        assert!(
+            !result.is_error,
+            "valid workspace write failed: {}",
+            result.output
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("src/main.rs")).unwrap(),
+            "fn main() {}\n"
+        );
+        let destination = std::fs::canonicalize(workspace.path().join("src/main.rs"))
+            .expect("canonicalize written destination");
+        let checkpoints = crate::git::checkpoint::list(None, None, Some(99))
+            .expect("read task checkpoint through production store");
+        assert_eq!(checkpoints.len(), 1);
+        assert_eq!(
+            std::fs::canonicalize(&checkpoints[0].file_path).unwrap(),
+            destination,
+            "the checkpoint must store the canonical destination"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_checkpoint_blocks_file_and_parent_directory_creation() {
+        let home = tempfile::tempdir().expect("isolated Arcana data root");
+        let _home = crate::db::test_support::with_home(home.path());
+        let arcana_dir = home.path().join(".arcana");
+        std::fs::create_dir_all(arcana_dir.join("config.db"))
+            .expect("make config.db path unusable");
+        let workspace = tempfile::tempdir().expect("workspace");
+        let destination = workspace.path().join("new/nested/main.rs");
+
+        let result = WriteFileTool
+            .execute(
+                json!({"path": "new/nested/main.rs", "content": "fn main() {}"}),
+                &context(workspace.path().to_string_lossy().into_owned()),
+            )
+            .await;
+
+        assert!(result.is_error);
+        assert!(!destination.exists());
+        assert!(!destination.parent().unwrap().exists());
     }
 }

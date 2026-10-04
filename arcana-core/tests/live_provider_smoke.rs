@@ -92,6 +92,27 @@ macro_rules! require_key {
     };
 }
 
+/// The headless production Fleet resolves provider credentials from Arcana's
+/// vault, while live provider smokes intentionally read the repository `.env`.
+/// Keep those two deliberate paths aligned without ever printing either value.
+#[test]
+fn p4_cli_google_credential_matches_the_live_smoke_dotenv_key() {
+    use zeroize::Zeroizing;
+
+    let dotenv_key = Zeroizing::new(require_key!("GOOGLE_API_KEY"));
+    let vault_key = Zeroizing::new(
+        arcana_core::vault::keychain::VaultManager::get(
+            &arcana_core::vault::keychain::provider_key("google"),
+        )
+        .expect("read Google key availability from Arcana vault")
+        .expect("Google key must be configured for the CLI Fleet"),
+    );
+    assert_eq!(
+        &*vault_key, &*dotenv_key,
+        "CLI Google credential differs from the explicit live-smoke .env key"
+    );
+}
+
 /// Whether an error is the vendor being busy rather than us being wrong.
 ///
 /// ── Why every live test needs this ───────────────────────────────────────────
@@ -107,6 +128,31 @@ macro_rules! require_key {
 fn is_transient(err: &arcana_core::errors::ArcanaError) -> bool {
     let text = err.to_string();
     text.contains("[Overloaded]") || text.contains("[Retryable]")
+}
+
+/// Retry only transient failures before Gemini opens the streaming response.
+/// This mirrors the provider retry cadence without hiding malformed payloads or
+/// stream errors from the live smoke.
+async fn google_stream_with_transient_retry(
+    provider: &GoogleProvider,
+    request: CompletionRequest,
+) -> arcana_core::provider::traits::StreamResult {
+    for attempt in 0..3 {
+        match provider.stream(request.clone()).await {
+            Ok(stream) => return stream,
+            Err(error) if is_transient(&error) && attempt < 2 => {
+                eprintln!("  Gemini overloaded; retrying bounded live smoke request");
+                tokio::time::sleep(std::time::Duration::from_millis(if attempt == 0 {
+                    500
+                } else {
+                    1_000
+                }))
+                .await;
+            }
+            Err(error) => panic!("Gemini live stream request failed: {error}"),
+        }
+    }
+    unreachable!("the retry loop always returns or panics")
 }
 
 /// Skip the current provider when it is merely busy, with a visible note.
@@ -691,6 +737,127 @@ async fn s2_08_gemini_tool_calls_carry_their_arguments_and_run_in_parallel() {
             calls.len()
         );
     }
+}
+
+// ── P4 · Gemini 3.8 streaming signatures survive a real follow-up ────────────
+
+#[tokio::test]
+async fn p4_gemini_38_streamed_tool_signature_replays_successfully() {
+    use arcana_core::provider::types::{StreamChunk, ToolDefinition};
+    use futures::StreamExt;
+    use std::collections::BTreeMap;
+
+    let provider = GoogleProvider::new(require_key!("GOOGLE_API_KEY"));
+    let tool = ToolDefinition {
+        name: "lookup_record".to_string(),
+        description: "Look up the record with the provided key".to_string(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": { "key": { "type": "string" } },
+            "required": ["key"]
+        }),
+    };
+    let prompt =
+        "Call lookup_record exactly once with key alpha. Do not answer until the tool returns.";
+    let mut request = small_request("gemini-3.8-flash", prompt, CachePolicy::Off);
+    request.max_tokens = 1024;
+    request.tools = vec![tool.clone()];
+
+    let mut stream = google_stream_with_transient_retry(&provider, request).await;
+    let mut calls: BTreeMap<u64, (String, String, Option<String>, String)> = BTreeMap::new();
+    while let Some(item) = stream.next().await {
+        match item.expect("Gemini 3.8 tool stream returned an error") {
+            StreamChunk::ToolUseStart {
+                id,
+                name,
+                block_index,
+                opaque,
+            } => {
+                calls.insert(block_index, (id, name, opaque, String::new()));
+            }
+            StreamChunk::ToolInputDelta {
+                block_index,
+                partial_json,
+            } => {
+                if let Some((_, _, _, input)) = calls.get_mut(&block_index) {
+                    input.push_str(&partial_json);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let (id, name, signature, input) = calls
+        .into_values()
+        .find(|(_, name, signature, _)| name == "lookup_record" && signature.is_some())
+        .expect("Gemini 3.8 did not return a signed lookup_record call");
+    let input: serde_json::Value =
+        serde_json::from_str(&input).expect("tool arguments were not JSON");
+    assert_eq!(
+        input["key"], "alpha",
+        "tool arguments changed in the stream"
+    );
+    let signature = signature.expect("the selected tool call must carry its opaque signature");
+
+    let mut follow_up = small_request(
+        "gemini-3.8-flash",
+        "Reply briefly after receiving the tool result.",
+        CachePolicy::Off,
+    );
+    follow_up.max_tokens = 1024;
+    follow_up.tools = vec![tool];
+    follow_up.messages = vec![
+        RequestMessage {
+            role: "user".to_string(),
+            content: vec![MessageContent::Text {
+                text: prompt.to_string(),
+            }],
+        },
+        RequestMessage {
+            role: "assistant".to_string(),
+            content: vec![MessageContent::ToolUse {
+                id: id.clone(),
+                name: name.clone(),
+                input,
+                opaque: Some(signature),
+            }],
+        },
+        RequestMessage {
+            role: "user".to_string(),
+            content: vec![MessageContent::ToolResult {
+                tool_use_id: id,
+                name,
+                content: "{\"value\":\"record alpha\"}".to_string(),
+                is_error: false,
+            }],
+        },
+    ];
+
+    let mut replay = google_stream_with_transient_retry(&provider, follow_up).await;
+    let mut saw_response = false;
+    while let Some(item) = replay.next().await {
+        match item.expect("Gemini follow-up stream returned an error") {
+            StreamChunk::TextDelta { .. } | StreamChunk::MessageDelta { .. } => {
+                saw_response = true;
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_response, "Gemini follow-up returned no response chunks");
+}
+
+#[tokio::test]
+async fn p4_google_live_key_from_dotenv_is_accepted_by_models_endpoint() {
+    let provider = GoogleProvider::new(require_key!("GOOGLE_API_KEY"));
+    let status = provider
+        .test_connection()
+        .await
+        .expect("Google models endpoint request failed");
+    assert_eq!(
+        status,
+        arcana_core::provider::ProviderStatus::Connected,
+        "the Google key read directly from repo .env was rejected"
+    );
 }
 
 // ── S2-03 · reported cost is reconcilable with reported usage ────────────────

@@ -202,7 +202,10 @@ impl Tool for SpawnSubagentTool {
 
         // Spawn (returns immediately) then await the bridge task to drive it
         // synchronously from the parent's perspective.
-        let handle = match mgr.spawn(config, task_description).await {
+        let handle = match mgr
+            .spawn_with_run_token_budget(config, task_description, ctx.run_token_budget.clone())
+            .await
+        {
             Ok(h) => h,
             Err(e) => return ToolResult::error(&format!("spawn_subagent failed: {e}")),
         };

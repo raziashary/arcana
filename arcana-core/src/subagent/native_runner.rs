@@ -26,7 +26,7 @@ use tokio::time::{timeout, Duration};
 use tracing::{info, warn};
 
 use crate::agent::engine::{AgentEngine, RunAccounting};
-use crate::agent::permission::{PendingPermissions, PermissionMode};
+use crate::agent::permission::PendingPermissions;
 use crate::agent::tool_trait::AgentIdentity;
 use crate::agent::PAMode;
 use crate::errors::{ArcanaError, Result};
@@ -102,6 +102,7 @@ pub async fn run(
     config: SubagentConfig,
     prompt: String,
     events_tx: mpsc::UnboundedSender<SubagentEvent>,
+    run_token_budget: Option<Arc<crate::budget::run_tokens::RunTokenLedger>>,
 ) -> Result<SubagentResult> {
     let started_at = Instant::now();
 
@@ -122,6 +123,7 @@ pub async fn run(
         &prompt,
         &events_tx,
         &mut accounting,
+        run_token_budget,
     )
     .await;
     let duration_secs = started_at.elapsed().as_secs_f64();
@@ -215,6 +217,7 @@ async fn run_inner(
     // expensive ones. Same discipline as `record_spend`: written on every exit,
     // especially the ones that return early.
     accounting: &mut RunAccounting,
+    run_token_budget: Option<Arc<crate::budget::run_tokens::RunTokenLedger>>,
 ) -> Result<String> {
     let (provider_id, fallback_model) = {
         let s = deps.state.lock_tolerant();
@@ -284,6 +287,7 @@ async fn run_inner(
         deps.pending.clone(),
         identity,
     )
+    .with_workspace_egress_consent()
     // P2-48. A subagent is autonomous and fans out — `spawn_parallel_subagents`
     // runs several at once — so an unbounded one multiplies. Same default
     // ceiling as a worker.
@@ -309,6 +313,7 @@ async fn run_inner(
         }
         budget
     })
+    .with_optional_run_token_budget(run_token_budget)
     // ⚠ P3-60. `SubagentConfig.tools` is documented as "tool subset the
     // subagent is allowed to use", is written by all three spawn tools AND the
     // Tauri command, and had **zero readers** — the child received the full
@@ -442,6 +447,7 @@ fn identity_for(_subagent_id: &str, config: &SubagentConfig) -> AgentIdentity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::permission::PermissionMode;
 
     fn config_at_depth(depth: u32) -> SubagentConfig {
         SubagentConfig {
@@ -552,8 +558,9 @@ mod p3_58_63_tests {
     fn a_requested_model_the_provider_serves_is_honoured() {
         // The no-fire half: if this over-corrects, every explicit model choice
         // is silently discarded.
-        let chosen = pick_servable_model("anthropic", SubagentConfig::DEFAULT_MODEL, None);
-        assert_eq!(chosen, SubagentConfig::DEFAULT_MODEL);
+        let requested = "claude-sonnet-5";
+        let chosen = pick_servable_model("anthropic", requested, None);
+        assert_eq!(chosen, requested);
     }
 
     #[test]
@@ -639,6 +646,7 @@ mod g5_tests {
                     "a child of a {parent:?} parent leaves the machine unprompted"
                 );
             }
+            assert!(ToolEffect::HostApproval.requires_prompt(&child));
         }
     }
 
@@ -660,5 +668,7 @@ mod g5_tests {
                 "{effect:?} would prompt a fleet subagent"
             );
         }
+        assert!(ToolEffect::FreeformShell.requires_prompt(&fleet_parent));
+        assert!(ToolEffect::HostApproval.requires_prompt(&fleet_parent));
     }
 }

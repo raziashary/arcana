@@ -33,6 +33,65 @@ use crate::state::AppState;
 
 const MAX_TOOL_TURNS: usize = 20;
 
+struct ProviderCallTelemetry {
+    provider: String,
+    model: String,
+    started: std::time::Instant,
+    attempts: u32,
+    usage: Usage,
+    outcome: &'static str,
+    result_blocks: usize,
+}
+
+impl ProviderCallTelemetry {
+    fn new(model: &str) -> Self {
+        Self {
+            provider: crate::provider::routing::provider_for_model(model)
+                .unwrap_or("unknown")
+                .to_owned(),
+            model: model.to_owned(),
+            started: std::time::Instant::now(),
+            attempts: 0,
+            usage: Usage::default(),
+            outcome: "error",
+            result_blocks: 0,
+        }
+    }
+
+    fn update_usage(&mut self, current: &Usage, before: Usage) {
+        self.usage = Usage {
+            input: current.input.saturating_sub(before.input),
+            cached_read: current.cached_read.saturating_sub(before.cached_read),
+            cache_write: current.cache_write.saturating_sub(before.cache_write),
+            output: current.output.saturating_sub(before.output),
+            reasoning: current.reasoning.saturating_sub(before.reasoning),
+            tool: current.tool.saturating_sub(before.tool),
+        };
+    }
+}
+
+impl Drop for ProviderCallTelemetry {
+    fn drop(&mut self) {
+        tracing::info!(
+            target: "arcana::telemetry",
+            event_type = "provider_call",
+            provider = %self.provider,
+            model = %self.model,
+            attempts = self.attempts,
+            duration_ns = self.started.elapsed().as_nanos() as u64,
+            input_tokens = self.usage.input,
+            cache_read_tokens = self.usage.cached_read,
+            cache_write_tokens = self.usage.cache_write,
+            output_tokens = self.usage.output,
+            reasoning_tokens = self.usage.reasoning,
+            tool_tokens = self.usage.tool,
+            outcome = self.outcome,
+            result_blocks = self.result_blocks,
+            "Provider call outcome recorded"
+        );
+    }
+}
+
 /// What one run of the engine actually cost.
 ///
 /// P3-62. `SubagentResult`'s cost and token fields were hardcoded `0.0/0/0`
@@ -62,6 +121,19 @@ pub struct AgentEngine {
     // Ruflo Feature 4 — Budget Circuit Breaker: set via with_task_budget()
     task_id: Option<i64>,
     task_budget: Option<crate::budget::TaskBudget>,
+    /// Inherited only by in-process child agents; roots create a fresh ledger
+    /// for each run so independent runs do not consume one another's cap.
+    run_token_budget: Option<Arc<crate::budget::run_tokens::RunTokenLedger>>,
+    /// Production callers enable persisted workspace egress checks; unit
+    /// fixtures keep the provider seam isolated.
+    workspace_egress_consent: bool,
+    /// Procedural recall is opt-in so only fleet workers receive it.
+    procedural_recall: bool,
+    /// Whether a live host can answer one-call approval requests.
+    host_approval_available: bool,
+    /// Durable fleet-run correlation; interactive engines leave this unset.
+    worker_run_id: Option<String>,
+    fleet_correlation_id: Option<String>,
     /// Accounting for the most recent run (`P3-62`). Interior mutability
     /// because `run` takes `&self` at every call site.
     last_run: Mutex<Option<RunAccounting>>,
@@ -90,8 +162,44 @@ impl AgentEngine {
             session_mgr: None,
             task_id: None,
             task_budget: None,
+            run_token_budget: None,
+            workspace_egress_consent: false,
+            procedural_recall: false,
+            host_approval_available: true,
+            worker_run_id: None,
+            fleet_correlation_id: None,
             last_run: std::sync::Mutex::new(None),
         }
+    }
+
+    pub fn with_workspace_egress_consent(mut self) -> Self {
+        self.workspace_egress_consent = true;
+        self
+    }
+
+    /// Configure the host-side prompt channel for sensitive one-call actions.
+    pub fn with_host_approval_available(mut self, available: bool) -> Self {
+        self.host_approval_available = available;
+        self
+    }
+
+    /// Enable procedural memory recall for this engine's tool turns.
+    ///
+    /// Interactive agents and subagents remain off unless their caller opts
+    /// in. The fleet RecipeRunner is the production caller that does so.
+    pub(crate) fn with_procedural_recall(mut self, on: bool) -> Self {
+        self.procedural_recall = on;
+        self
+    }
+
+    pub(crate) fn with_worker_run_id(mut self, run_id: impl Into<String>) -> Self {
+        self.worker_run_id = Some(run_id.into());
+        self
+    }
+
+    pub(crate) fn with_fleet_correlation_id(mut self, correlation_id: Option<String>) -> Self {
+        self.fleet_correlation_id = correlation_id;
+        self
     }
 
     /// Narrow this engine's tool registry to a declared subset (`P3-60`).
@@ -140,6 +248,14 @@ impl AgentEngine {
         self
     }
 
+    pub(crate) fn with_optional_run_token_budget(
+        mut self,
+        ledger: Option<Arc<crate::budget::run_tokens::RunTokenLedger>>,
+    ) -> Self {
+        self.run_token_budget = ledger;
+        self
+    }
+
     /// Attach a budget **and** the task it belongs to, so an overrun can be
     /// escalated against that task.
     pub fn with_task_budget(mut self, task_id: i64, budget: crate::budget::TaskBudget) -> Self {
@@ -154,6 +270,20 @@ impl AgentEngine {
     /// stop reason classifies as anything other than `StopReason::ToolUse`.
     /// Stated by classification rather than by the literal `"end_turn"`, which
     /// is only Anthropic's spelling for it.
+    #[tracing::instrument(
+        target = "arcana::telemetry",
+        skip_all,
+        fields(
+            event_type = "trace_span",
+            operation = "agent_turn",
+            session_id = %session_id,
+            // Empty means this is an unscoped turn. Serializing `None` as
+            // numeric zero makes unrelated PA turns share a false task key.
+            task_id = %crate::observability::timing::correlation_task_id(self.task_id),
+            agent_role = %self.identity.role,
+            fleet_correlation_id = self.fleet_correlation_id.as_deref().unwrap_or(""),
+        )
+    )]
     pub async fn run(
         &self,
         session_id: &str,
@@ -163,6 +293,10 @@ impl AgentEngine {
         user_message: &str,
         system_prompt_override: Option<&str>,
     ) -> Result<Vec<RequestMessage>> {
+        let mut turn_timer = crate::observability::timing::OperationTimer::start("agent_turn")
+            .with_session_id(session_id)
+            .with_task_id(self.task_id);
+        let mut cancelled_during_run = false;
         // ── P3-05 · exactly one terminal event, on every exit ────────────────
         //
         // Three paths returned without telling anyone (`:128`, `:328`, `:628`),
@@ -171,6 +305,26 @@ impl AgentEngine {
         // emit a terminal event without going through it, and therefore no way
         // to emit two. `TG3-01` fails zero and two alike.
         let mut terminal = crate::agent::terminal_event::TerminalEventGuard::new(session_id);
+
+        let consented_provider: Arc<dyn Provider> = if self.workspace_egress_consent {
+            Arc::new(crate::egress_consent::ConsentProvider::wrap(
+                self.provider.clone(),
+                working_dir,
+            ))
+        } else {
+            self.provider.clone()
+        };
+        let run_token_budget = self.run_token_budget.clone().unwrap_or_else(|| {
+            crate::budget::run_tokens::RunTokenLedger::new(
+                self.task_budget
+                    .as_ref()
+                    .and_then(|budget| budget.max_tokens),
+            )
+        });
+        let provider = crate::provider::run_budget::RunTokenBudgetProvider::wrap(
+            consented_provider,
+            Arc::clone(&run_token_budget),
+        );
 
         // Check for cancellation before starting
         if self.state.lock_tolerant().is_cancelled(session_id) {
@@ -182,10 +336,9 @@ impl AgentEngine {
             if let Some(mgr) = crate::subagent::manager::global() {
                 mgr.abort_children_of(session_id).await;
             }
+            turn_timer.set_outcome("cancelled");
             terminal.error("The run was cancelled before it started.");
-            return Err(ArcanaError::Agent(
-                "Agent was cancelled before start".into(),
-            ));
+            return Err(ArcanaError::Cancelled);
         }
 
         let context_builder = ContextBuilder::new(working_dir).with_session(session_id);
@@ -256,7 +409,7 @@ impl AgentEngine {
         // verdict reused. Recomputing per turn would be harmless but would
         // invite the prefix and the request to be built from different
         // snapshots, which is the one way this fails silently.
-        let caps = self.provider.capabilities(model);
+        let caps = provider.capabilities(model);
         let cache_prefix = crate::cache::prefix::build(
             &tool_defs
                 .iter()
@@ -363,6 +516,10 @@ impl AgentEngine {
             working_dir.to_string(),
             self.identity.clone(),
         )
+        .with_host_approval_available(self.host_approval_available)
+        .with_run_id(self.worker_run_id.clone())
+        .with_run_token_budget(Arc::clone(&run_token_budget))
+        .with_procedural_recall(self.procedural_recall)
         // 🔴 G-3 (P3 post-phase gap hunt). `with_state` had **zero callers
         // workspace-wide**, so `self.state` was always `None` — and
         // `request_permission`'s cancellation arm reads it through
@@ -393,6 +550,11 @@ impl AgentEngine {
         let mut total_usage = Usage::default();
         // Ruflo Feature 4 — cumulative budget usage tracked across all turns
         let mut budget_status = crate::budget::BudgetStatus::default();
+        // Fleet workers know their task only after claim_task executes.
+        let mut active_task_id = self.task_id;
+        let mut active_budget = self.task_budget.clone();
+        let mut task_budget_tokens_base = 0u64;
+        let mut task_budget_cost_base = 0.0f64;
 
         loop {
             // Fire AgentLoopStart hook at beginning of each turn
@@ -415,18 +577,18 @@ impl AgentEngine {
 
             // Ruflo Feature 4 — Budget Circuit Breaker: pre-emptive halt before spending tokens
             budget_status.turns_used += 1;
-            if let Some(ref budget) = self.task_budget {
+            if let Some(ref budget) = active_budget {
                 if let Some(reason) = budget.check(&budget_status) {
                     let reason_str = reason.as_event_str().to_string();
                     crate::events::emit_budget_exceeded(crate::events::BudgetExceededEvent {
                         session_id: session_id.to_string(),
-                        task_id: self.task_id,
+                        task_id: active_task_id,
                         reason: reason_str.clone(),
                         tokens_used: budget_status.tokens_used,
                         cost_usd: budget_status.cost_usd,
                         turns_used: budget_status.turns_used,
                     });
-                    if let Some(tid) = self.task_id {
+                    if let Some(tid) = active_task_id {
                         self.escalate_budget_exceeded(tid, &budget_status, &reason_str);
                     }
                     // D-1. Record BEFORE returning. This is the budget path:
@@ -476,8 +638,7 @@ impl AgentEngine {
                 // Folded into the turn total so it reaches cost, the daily
                 // ceiling, and analytics like any other call.
                 let (compacted, compaction_usage) =
-                    CompactionEngine::compact_with_summary(history, self.provider.as_ref(), model)
-                        .await;
+                    CompactionEngine::compact_with_summary(history, provider.as_ref(), model).await;
                 history = compacted;
                 if compaction_usage.total() > 0 {
                     info!(
@@ -495,6 +656,7 @@ impl AgentEngine {
             // Cancel check
             if self.state.lock_tolerant().is_cancelled(session_id) {
                 info!("Agent cancelled during turn {turn}");
+                cancelled_during_run = true;
                 // P3-24. Children are DETACHED tokio tasks: dropping the
                 // JoinHandle the parent awaits detaches rather than aborts, so
                 // breaking out here used to leave every subagent this session
@@ -511,10 +673,18 @@ impl AgentEngine {
                 break;
             }
 
+            // A recalled procedure belongs to this provider request only. It
+            // is rendered by recall.rs, kept out of conversation history, and
+            // consumed before streaming so an empty/unknown tool batch cannot
+            // repeat it on a later request.
+            let request_system = match tool_executor.take_procedural_block() {
+                Some(procedural) => format!("{system_prompt}\n\n{procedural}"),
+                None => system_prompt.clone(),
+            };
             let request = CompletionRequest {
                 model: model.to_string(),
                 messages: history.clone(),
-                system: Some(system_prompt.clone()),
+                system: Some(request_system),
                 tools: tool_defs.clone(),
                 // ── P3-25 · the clear layer ──────────────────────────────
                 //
@@ -576,11 +746,41 @@ impl AgentEngine {
                 .stream_response(
                     session_id,
                     model,
+                    provider.clone(),
                     request,
                     &mut total_usage,
                     &mut turn_stop_reason,
                 )
                 .await;
+
+            if let Err(ArcanaError::BudgetExceeded(reason)) = &stream_result {
+                if let Some(task_id) = active_task_id {
+                    crate::events::emit_budget_exceeded(crate::events::BudgetExceededEvent {
+                        session_id: session_id.to_string(),
+                        task_id: Some(task_id),
+                        reason: reason.clone(),
+                        tokens_used: budget_status.tokens_used,
+                        cost_usd: budget_status.cost_usd,
+                        turns_used: budget_status.turns_used,
+                    });
+                    self.escalate_budget_exceeded(task_id, &budget_status, reason);
+                    self.record_spend(session_id, model, &total_usage);
+                    terminal.error(format!("Budget exceeded: {reason}"));
+                    return Err(ArcanaError::BudgetExceeded(reason.clone()));
+                }
+            }
+
+            // A cancellation may arrive while the provider stream is active.
+            // Check it before accepting tool calls or a clean end-turn result;
+            // otherwise a final response could be reported as successful and
+            // a tool side effect could start after cancellation.
+            if self.state.lock_tolerant().is_cancelled(session_id) {
+                cancelled_during_run = true;
+                if let Some(mgr) = crate::subagent::manager::global() {
+                    mgr.abort_children_of(session_id).await;
+                }
+                break;
+            }
 
             // The sparkline's data. `window_tokens` is this turn's delta and
             // `total_tokens` the running total, which is exactly the pair the
@@ -648,13 +848,13 @@ impl AgentEngine {
             // for every provider and for any spelling a vendor adds later.
             let reason = turn_stop_reason
                 .as_deref()
-                .map(|raw| StopReason::parse(self.provider.id(), raw));
+                .map(|raw| StopReason::parse(provider.id(), raw));
 
             if reason.as_ref().is_some_and(StopReason::is_truncated) {
                 warn!(
                     "Turn truncated by the output ceiling (model={model}, provider={}, \
                      wire reason={:?}); the response is incomplete",
-                    self.provider.id(),
+                    provider.id(),
                     turn_stop_reason.as_deref().unwrap_or("<none>")
                 );
             }
@@ -669,7 +869,8 @@ impl AgentEngine {
 
             // Ruflo Feature 4 — accumulate token usage into budget_status after each LLM response
             if let Ok(ref _r) = stream_result {
-                budget_status.tokens_used = total_usage.total() as u64;
+                budget_status.tokens_used =
+                    task_budget_tokens_base.saturating_add(total_usage.total() as u64);
                 // An unpriced model is a configuration error, not a $0 turn.
                 // `TG-P2-02` gates that every model the UI offers is priced, so
                 // reaching this branch means the model came from somewhere the
@@ -678,10 +879,10 @@ impl AgentEngine {
                 // and, once the cap lands, let an unpriced model spend past it
                 // silently.
                 match CostTracker::calculate(model, &total_usage) {
-                    Ok(c) => budget_status.cost_usd = c.cost_usd,
+                    Ok(c) => budget_status.cost_usd = task_budget_cost_base + c.cost_usd,
                     Err(e) => error!("Cost unavailable for this turn: {e}"),
                 }
-                if let Some(tid) = self.task_id {
+                if let Some(tid) = active_task_id {
                     if let Ok(db) = crate::db::tasks::TasksDb::open() {
                         // P2-47. This was `let _ =`, in a function that logs
                         // loudly for every other DB failure. It is the ONLY
@@ -801,20 +1002,190 @@ impl AgentEngine {
 
             // Execute batch with concurrency control
             let batch_results = if !tool_batch.is_empty() {
-                // D-1. The `?` here was the third path that jumped over cost
-                // recording: a tool-batch failure discarded the whole run's
-                // spend. Handled explicitly so the record happens first.
+                // Convert executor infrastructure failures into failed tool
+                // results so the provider sees the same error contract as a
+                // handler failure. The run can then finish through the normal
+                // spend-recording and terminal path.
                 match tool_executor.execute_batch(tool_batch).await {
                     Ok(r) => r,
-                    Err(e) => {
-                        self.record_spend(session_id, model, &total_usage);
-                        terminal.error(format!("Tool execution failed: {e}"));
-                        return Err(e);
+                    Err(error) => {
+                        let (code, category, safe_message) = match &error {
+                            ArcanaError::Cancelled => (
+                                "operation_cancelled",
+                                "cancellation",
+                                "Arcana cancelled this tool batch before it returned.",
+                            ),
+                            ArcanaError::Database(_) => (
+                                "tool_executor_database_failure",
+                                "infrastructure",
+                                "Arcana could not access the state required to execute this tool batch.",
+                            ),
+                            ArcanaError::Io(_) => (
+                                "tool_executor_io_failure",
+                                "infrastructure",
+                                "Arcana encountered an internal I/O failure before this tool batch returned.",
+                            ),
+                            _ => (
+                                "tool_executor_failed",
+                                "infrastructure",
+                                "Arcana could not complete this tool call because its executor failed.",
+                            ),
+                        };
+                        tracing::error!(
+                            target: "arcana::telemetry",
+                            event_type = "tool_executor_failed",
+                            session_id = %session_id,
+                            task_id = %crate::observability::timing::correlation_task_id(active_task_id),
+                            run_id = self.worker_run_id.as_deref().unwrap_or(""),
+                            error_class = match &error {
+                                ArcanaError::Cancelled => "cancelled",
+                                ArcanaError::Database(_) => "database",
+                                ArcanaError::Io(_) => "io",
+                                _ => "executor",
+                            },
+                            "ToolExecutor failed before returning the tool batch"
+                        );
+                        tool_calls
+                            .iter()
+                            .filter_map(|call| match call {
+                                MessageContent::ToolUse { id, name, .. } => {
+                                    let call_id = format!("{session_id}-{id}");
+                                    let failure = super::tool_trait::ToolResult::categorized_error(
+                                        code,
+                                        category,
+                                        safe_message,
+                                        "Inspect task and workspace state before retrying; the executor cannot certify whether a side effect began.",
+                                    )
+                                    .with_execution_context(
+                                        name,
+                                        session_id,
+                                        &self.identity.role,
+                                        active_task_id,
+                                        &call_id,
+                                        self.worker_run_id.as_deref(),
+                                    );
+                                    Some((id.clone(), failure))
+                                }
+                                _ => None,
+                            })
+                            .collect()
                     }
                 }
             } else {
                 Vec::new()
             };
+
+            // claim_task is the runtime handoff to the persisted task budget.
+            // Its response was assembled from the claimed DB row, so the
+            // worker cannot choose or widen these limits.
+            for (tool_use_id, result) in &batch_results {
+                let is_claim = tool_calls.iter().any(|call| matches!(call,
+                    MessageContent::ToolUse { id, name, .. } if id == tool_use_id && name == "claim_task"));
+                if !is_claim || result.is_error {
+                    continue;
+                }
+                let Ok(payload) = serde_json::from_str::<serde_json::Value>(&result.output) else {
+                    continue;
+                };
+                let Some(task_id) = payload.get("task_id").and_then(|value| value.as_i64()) else {
+                    continue;
+                };
+                let Some(saved) = payload.get("budget") else {
+                    continue;
+                };
+                let task_budget = crate::budget::TaskBudget {
+                    max_tokens: saved.get("max_tokens").and_then(|value| value.as_u64()),
+                    max_usd: saved.get("max_usd").and_then(|value| value.as_f64()),
+                    max_turns: saved
+                        .get("max_turns")
+                        .and_then(|value| value.as_u64())
+                        .and_then(|value| u32::try_from(value).ok()),
+                };
+                active_budget = Some(match active_budget.take() {
+                    Some(worker_cap) => worker_cap.restricted_by(&task_budget),
+                    None => task_budget,
+                });
+                active_task_id = Some(task_id);
+                task_budget_tokens_base = saved
+                    .get("tokens_used")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0);
+                run_token_budget
+                    .tighten_limit(active_budget.as_ref().and_then(|budget| budget.max_tokens));
+                run_token_budget.raise_used_floor(
+                    task_budget_tokens_base.saturating_add(total_usage.total() as u64),
+                );
+                tool_executor.set_task_id(active_task_id);
+                task_budget_cost_base = saved
+                    .get("cost_usd")
+                    .and_then(|value| value.as_f64())
+                    .unwrap_or(0.0);
+                budget_status.tokens_used =
+                    task_budget_tokens_base.saturating_add(total_usage.total() as u64);
+                budget_status.cost_usd = task_budget_cost_base
+                    + CostTracker::calculate(model, &total_usage)
+                        .map(|cost| cost.cost_usd)
+                        .unwrap_or(0.0);
+                budget_status.turns_used = saved
+                    .get("turns_used")
+                    .and_then(|value| value.as_u64())
+                    .and_then(|value| u32::try_from(value).ok())
+                    .unwrap_or(0)
+                    .saturating_add(turn as u32 + 1);
+                if let Ok(db) = crate::db::tasks::TasksDb::open() {
+                    if let Err(e) = db.update_task_budget_usage(
+                        task_id,
+                        budget_status.tokens_used,
+                        budget_status.cost_usd,
+                        budget_status.turns_used,
+                    ) {
+                        error!(
+                            "Failed to persist saved budget activation for task #{task_id}: {e}"
+                        );
+                    }
+                }
+            }
+
+            // Record safe, bounded operation labels after each tool batch so
+            // recovery can identify the last completed operation without
+            // persisting prompts, arguments, paths, or tool output.
+            if let Some(run_id) = self.worker_run_id.as_deref() {
+                if let Ok(runs) = crate::db::runs::RunsDb::open() {
+                    for call in &tool_calls {
+                        let MessageContent::ToolUse { id, name, .. } = call else {
+                            continue;
+                        };
+                        let safe_name = if self.registry.get(name).is_some() {
+                            name.as_str()
+                        } else {
+                            "unknown_tool"
+                        };
+                        let failed = batch_results
+                            .iter()
+                            .find(|(call_id, _)| call_id == id)
+                            .map(|(_, result)| result.is_error)
+                            .unwrap_or(true);
+                        let progress =
+                            format!("tool_{safe_name}_{}", if failed { "error" } else { "ok" });
+                        if let Err(error) =
+                            runs.record_worker_progress(run_id, active_task_id, &progress)
+                        {
+                            tracing::warn!(
+                                target: "arcana::telemetry",
+                                event_type = "worker_progress_persist_failed",
+                                run_id = %run_id,
+                                error_class = match error {
+                                    crate::errors::ArcanaError::Database(_) => "database",
+                                    crate::errors::ArcanaError::Io(_) => "io",
+                                    _ => "agent",
+                                },
+                                "Could not persist worker progress"
+                            );
+                            break;
+                        }
+                    }
+                }
+            }
 
             // ── P2-61 · results follow the order of the CALLS ───────────
             //
@@ -831,7 +1202,22 @@ impl AgentEngine {
             let mut by_id: std::collections::HashMap<String, (String, bool)> =
                 std::collections::HashMap::new();
             for (tool_use_id, name) in unknown_tools {
-                by_id.insert(tool_use_id, (format!("Unknown tool: {name}"), true));
+                let call_id = format!("{session_id}-{tool_use_id}");
+                let result = super::tool_trait::ToolResult::categorized_error(
+                    "unknown_tool",
+                    "tool_resolution",
+                    format!("The requested tool '{name}' is not registered."),
+                    "Choose a tool from the registered tool list and retry without repeating side effects.",
+                )
+                .with_execution_context(
+                    &name,
+                    session_id,
+                    &self.identity.role,
+                    active_task_id,
+                    &call_id,
+                    self.worker_run_id.as_deref(),
+                );
+                by_id.insert(tool_use_id, (result.output, result.is_error));
             }
             for (tool_use_id, result) in batch_results {
                 // Hint appended inline so the model reads it as part of the result.
@@ -927,7 +1313,7 @@ impl AgentEngine {
                 "Provider '{}' returned content but reported ZERO tokens for model \
                  '{model}'. Cost and every spend ceiling are blind to this turn. \
                  The usage field names have most likely changed.",
-                self.provider.id()
+                provider.id()
             );
         }
 
@@ -959,39 +1345,10 @@ impl AgentEngine {
         // (The cost event is emitted by `record_spend`, on every exit path
         // rather than only this one.)
 
-        // Phase 7.5 — Record token usage in analytics DB.
-        // Infer provider from model name (engine only knows the model string).
-        {
-            // P2-53. This substring ladder was written out here AND in the other
-            // runtime path, and they did not agree: `o4-mini`
-            // matched neither and was filed as "unknown",
-            // attributing real spend to a vendor that does not
-            // exist. One shared function now answers.
-            let analytics_provider = crate::provider::routing::provider_for_analytics(model);
-            // Phase 1 of docs/endtoendrun/14may2026/02 — fail loudly so a
-            // future analytics regression shows up in the log instead of
-            // silently zeroing the Dashboard.
-            if let Err(e) = crate::analytics::global().collector().record_token_usage(
-                session_id.to_string(),
-                // ⚠ `P8-43` deliberately does NOT rename this. It is the
-                // `agent_type` column of `token_usage`, and
-                // `aggregator.rs:78` groups the Dashboard's cost breakdown by
-                // it. Renaming would leave every historical row under the old
-                // label and every new row under the new one, so one agent
-                // would appear as two lines that never reconcile. The name is
-                // stale; splitting the user's cost history to fix a string is
-                // a worse trade.
-                "mode1_agent".to_string(),
-                analytics_provider.to_string(),
-                model.to_string(),
-                total_usage.total_input() as i32,
-                total_usage.output as i32,
-                None,
-                cost_usd,
-                "agent_session".to_string(),
-            ) {
-                error!("[Mode1] record_token_usage failed for session {session_id}: {e}");
-            }
+        if cancelled_during_run {
+            turn_timer.set_outcome("cancelled");
+            terminal.error("The run was cancelled.");
+            return Err(ArcanaError::Cancelled);
         }
 
         terminal.done(AgentDonePayload {
@@ -1002,6 +1359,7 @@ impl AgentEngine {
             cost_usd,
         });
 
+        turn_timer.succeed();
         Ok(history)
     }
 
@@ -1011,14 +1369,25 @@ impl AgentEngine {
     /// tell a `max_tokens` truncation from a clean finish (P2-46). It used to be
     /// destructured away with `..`, so the two were literally the same code
     /// path and silent truncation was invisible.
+    #[tracing::instrument(
+        target = "arcana::telemetry",
+        skip_all,
+        fields(event_type = "trace_span", operation = "provider_stream", session_id = %session_id, model = %model)
+    )]
     async fn stream_response(
         &self,
         session_id: &str,
         model: &str,
+        provider: Arc<dyn Provider>,
         request: CompletionRequest,
         total_usage: &mut Usage,
         stop_reason: &mut Option<String>,
     ) -> Result<Vec<MessageContent>> {
+        let mut stream_timer =
+            crate::observability::timing::OperationTimer::start("provider_stream")
+                .with_session_id(session_id);
+        let usage_before = *total_usage;
+        let mut provider_call = ProviderCallTelemetry::new(model);
         // P2-58: `model` was `_model` — a parameter passed live and never read,
         // sitting exactly where per-model streaming behaviour would go.
         debug!("stream_response: model={model}");
@@ -1041,19 +1410,38 @@ impl AgentEngine {
         // retry-after and never succeeds, so retrying it is a spend loop
         // against a ceiling that has already fired.
         let request_for_retry = request.clone();
-        let provider = self.provider.clone();
-        let mut stream = crate::provider::retry::with_retry(
+        let mut stream_attempts = 0u32;
+        let last_error_class = Arc::new(Mutex::new(None));
+        let classify_error = last_error_class.clone();
+        let stream_result = crate::provider::retry::with_retry(
             || {
+                stream_attempts = stream_attempts.saturating_add(1);
+                provider_call.attempts = stream_attempts;
+                let attempt = stream_attempts;
                 let p = provider.clone();
                 let r = request_for_retry.clone();
-                async move { p.stream(r).await }
+                async move {
+                    let started = std::time::Instant::now();
+                    let result = p.stream(r).await;
+                    tracing::info!(
+                        target: "arcana::telemetry",
+                        event_type = "provider_attempt",
+                        provider = crate::provider::routing::provider_for_model(&model).unwrap_or("unknown"),
+                        model = %model,
+                        attempt,
+                        duration_ns = started.elapsed().as_nanos() as u64,
+                        outcome = if result.is_ok() { "stream_opened" } else { "error" },
+                        "Provider stream establishment attempt completed"
+                    );
+                    result
+                }
             },
             |e| {
                 // The adapter embedded the class in the message as `[Class]`.
                 // Read back until the error type carries it structurally —
                 // recorded as `F-5`, and this is its first real consumer.
                 let text = e.to_string();
-                if text.contains("[QuotaExhausted]") {
+                let class = if text.contains("[QuotaExhausted]") {
                     crate::provider::usage::ErrorClass::QuotaExhausted
                 } else if text.contains("[Overloaded]") {
                     crate::provider::usage::ErrorClass::Overloaded
@@ -1061,10 +1449,59 @@ impl AgentEngine {
                     crate::provider::usage::ErrorClass::Retryable
                 } else {
                     crate::provider::usage::ErrorClass::Fatal
-                }
+                };
+                *classify_error
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(class);
+                class
             },
         )
-        .await?;
+        .await;
+
+        // `api_failures` already has a dashboard reader but had no production
+        // writer. Persist one bounded aggregate per provider call that saw a
+        // failed attempt, retaining retry count and whether the call recovered.
+        // Never persist the provider body: it can contain sensitive request
+        // details, and the structured log already retains the stable class.
+        if stream_attempts > 1 || stream_result.is_err() {
+            let class = last_error_class
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or(crate::provider::usage::ErrorClass::Fatal);
+            if let Some(analytics) = crate::analytics::try_global() {
+                let outcome = if stream_result.is_ok() {
+                    "recovered after retry"
+                } else {
+                    "failed after retries"
+                };
+                let message = format!(
+                    "Provider request {outcome} ({} attempt(s), class {}).",
+                    stream_attempts,
+                    class.as_str()
+                );
+                if let Err(error) = analytics.collector().record_api_failure_outcome(
+                    provider.id().to_string(),
+                    class.as_str().to_string(),
+                    message,
+                    None,
+                    stream_attempts.saturating_sub(1) as i32,
+                    stream_result.is_ok(),
+                ) {
+                    tracing::error!(
+                        target: "arcana::telemetry",
+                        event_type = "provider_failure_persist_failed",
+                        provider = provider.id(),
+                        error_class = class.as_str(),
+                        "Could not persist provider failure analytics"
+                    );
+                    let _ = error;
+                }
+            }
+        }
+        let mut stream = match stream_result {
+            Ok(stream) => stream,
+            Err(error) => return Err(error),
+        };
 
         // ── Ordering (P2-59, P2-60) ──────────────────────────────────────
         //
@@ -1164,6 +1601,16 @@ impl AgentEngine {
                     opaque,
                 } => {
                     debug!("Tool use start: name={name} id={id} block_index={block_index}");
+                    // Gemini's streamed candidate may repeat a function-call
+                    // part as it completes the response. A later update can
+                    // omit the already-issued thought signature; replacing the
+                    // whole entry would erase it before the next request.
+                    // Retain the first provider token observed for this part.
+                    let opaque = opaque.or_else(|| {
+                        tool_use_map
+                            .get(&block_index)
+                            .and_then(|(_, _, _, previous)| previous.clone())
+                    });
                     tool_use_map.insert(block_index, (id, name, String::new(), opaque));
                 }
                 StreamChunk::ToolInputDelta {
@@ -1185,6 +1632,7 @@ impl AgentEngine {
                     usage,
                 } => {
                     total_usage.add(&usage);
+                    provider_call.update_usage(total_usage, usage_before);
                     // F-23: see `stamp_accounting`. A dropped future runs no
                     // exit path, so the accounting must already be written.
                     self.stamp_accounting(model, &total_usage);
@@ -1255,6 +1703,10 @@ impl AgentEngine {
             thinking_by_block,
             tool_use_map,
         ));
+
+        stream_timer.succeed();
+        provider_call.result_blocks = content_blocks.len();
+        provider_call.outcome = "success";
 
         Ok(content_blocks)
     }
@@ -1411,6 +1863,27 @@ impl AgentEngine {
                 0.0
             }
         };
+
+        // Persist token usage alongside spend on every exit path. Keeping this
+        // here (rather than only after a successful turn loop) means budget
+        // halts, cancellations, and provider/tool errors remain visible to the
+        // analytics reader with the provider-reported token categories.
+        let analytics_provider = crate::provider::routing::provider_for_analytics(model);
+        if let Err(error) = crate::analytics::global().collector().record_token_usage(
+            session_id.to_string(),
+            // This label is part of the existing dashboard aggregation
+            // contract; role-specific provider metrics are emitted separately.
+            "mode1_agent".to_string(),
+            analytics_provider.to_string(),
+            model.to_string(),
+            total_usage.total_input() as i32,
+            total_usage.output as i32,
+            (total_usage.reasoning > 0).then_some(total_usage.reasoning as i32),
+            cost_usd,
+            "agent_session".to_string(),
+        ) {
+            error!("[analytics] token usage persistence failed for run: {error}");
+        }
 
         let total_today = {
             let mut state = self.state.lock_tolerant();
@@ -1682,6 +2155,7 @@ mod wire_order_tests {
             .stream_response(
                 "p8-anthropic-session",
                 "claude-sonnet-5",
+                engine.provider.clone(),
                 fixture_request(),
                 &mut usage,
                 &mut stop_reason,
@@ -1722,6 +2196,74 @@ mod wire_order_tests {
     }
 
     #[tokio::test]
+    async fn repeated_gemini_stream_part_does_not_erase_its_thought_signature() {
+        let mut chunks = crate::provider::google::parse_google_sse_line(
+            r#"data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"list_worker_health","args":{"include_paused":true}},"thoughtSignature":"provider-issued-signature"}]}}]}"#,
+        )
+        .expect("parse first Gemini stream update");
+        // Streaming updates for one part can repeat the call without
+        // repeating metadata that was present in an earlier update.
+        chunks.extend(
+            crate::provider::google::parse_google_sse_line(
+                r#"data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"list_worker_health","args":{"include_paused":true}}}]}}]}"#,
+            )
+            .expect("parse repeated Gemini stream update"),
+        );
+        chunks.extend([
+            StreamChunk::MessageDelta {
+                stop_reason: "tool_use".into(),
+                usage: Usage::default(),
+            },
+            StreamChunk::Done,
+        ]);
+        let engine = fixture_engine(chunks);
+        let mut usage = Usage::default();
+        let mut stop_reason = None;
+        let assistant_content = engine
+            .stream_response(
+                "gemini-signature-session",
+                "gemini-3.8-flash",
+                engine.provider.clone(),
+                fixture_request(),
+                &mut usage,
+                &mut stop_reason,
+            )
+            .await
+            .expect("production stream consumer should assemble the function call");
+
+        let request = CompletionRequest {
+            model: "gemini-3.8-flash".into(),
+            messages: vec![
+                RequestMessage {
+                    role: "assistant".into(),
+                    content: assistant_content,
+                },
+                RequestMessage {
+                    role: "user".into(),
+                    content: vec![MessageContent::ToolResult {
+                        tool_use_id: "gemini-list_worker_health-6".into(),
+                        name: "list_worker_health".into(),
+                        content: "[]".into(),
+                        is_error: false,
+                    }],
+                },
+            ],
+            ..fixture_request()
+        };
+        let body = crate::provider::google::GoogleProvider::new("unused".into())
+            .build_body_for_test(&request, true);
+
+        assert_eq!(
+            body["contents"][0]["parts"][0]["thoughtSignature"], "provider-issued-signature",
+            "a repeated stream update must not erase a provider replay token"
+        );
+        assert_eq!(
+            body["contents"][1]["parts"][0]["functionResponse"]["name"],
+            "list_worker_health"
+        );
+    }
+
+    #[tokio::test]
     async fn production_stream_consumer_keeps_xml_reasoning_private_and_flushes_visible_tail() {
         let engine = fixture_engine(vec![
             StreamChunk::TextDelta {
@@ -1744,6 +2286,7 @@ mod wire_order_tests {
             .stream_response(
                 "p8-streaming-session",
                 "gpt-5.4-nano",
+                engine.provider.clone(),
                 fixture_request(),
                 &mut usage,
                 &mut stop_reason,
@@ -1786,6 +2329,7 @@ mod wire_order_tests {
             .stream_response(
                 "p8-anthropic-session",
                 "claude-sonnet-5",
+                engine.provider.clone(),
                 fixture_request(),
                 &mut usage,
                 &mut stop_reason,
@@ -1976,5 +2520,1008 @@ mod wire_order_tests {
             }
             _ => panic!("expected a tool use"),
         }
+    }
+}
+
+#[cfg(test)]
+mod procedural_memory_tests {
+    use super::*;
+    use crate::agent::tool_trait::{ToolContext, ToolResult};
+    use crate::provider::traits::{Provider, StreamResult};
+    use crate::provider::types::{CompletionRequest, ModelInfo, ProviderStatus, StreamChunk};
+    use crate::provider::usage::Usage;
+    use async_trait::async_trait;
+    use futures::stream;
+    use std::collections::VecDeque;
+
+    async fn ensure_isolated_test_analytics() {
+        static INIT: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+        INIT.get_or_init(|| async {
+            let analytics_home = Box::leak(Box::new(
+                tempfile::tempdir().expect("isolated analytics home"),
+            ));
+            let _home = crate::db::test_support::with_home(analytics_home.path());
+            let manager = Arc::new(
+                crate::analytics::AnalyticsManager::new()
+                    .await
+                    .expect("initialize isolated analytics DB"),
+            );
+            crate::analytics::install_global(manager);
+        })
+        .await;
+    }
+
+    struct ScriptedProvider {
+        provider_id: String,
+        requests: Mutex<Vec<CompletionRequest>>,
+        responses: Mutex<VecDeque<Vec<StreamChunk>>>,
+        fail_next_attempt: Mutex<Option<String>>,
+        cancel_on_stream: Option<(Arc<Mutex<crate::state::AppState>>, String)>,
+        input_token_bound: Option<u64>,
+    }
+
+    #[async_trait]
+    impl Provider for ScriptedProvider {
+        fn id(&self) -> &str {
+            &self.provider_id
+        }
+
+        fn name(&self) -> &str {
+            "Procedural memory fixture"
+        }
+
+        fn models(&self) -> Vec<ModelInfo> {
+            Vec::new()
+        }
+
+        async fn input_token_upper_bound(&self, _request: &CompletionRequest) -> Result<u64> {
+            self.input_token_bound.ok_or_else(|| {
+                ArcanaError::Agent("scripted provider has no configured preflight bound".into())
+            })
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<crate::provider::types::CompletionResponse> {
+            unreachable!("the agent loop uses the scripted stream")
+        }
+
+        async fn stream(&self, request: CompletionRequest) -> Result<StreamResult> {
+            if let Some((state, session_id)) = &self.cancel_on_stream {
+                state
+                    .lock()
+                    .expect("cancel fixture state lock")
+                    .cancel_agent(session_id);
+            }
+            self.requests
+                .lock()
+                .expect("request capture lock")
+                .push(request);
+            if let Some(error) = self
+                .fail_next_attempt
+                .lock()
+                .expect("scripted failure lock")
+                .take()
+            {
+                return Err(ArcanaError::Provider(error));
+            }
+            let response = self
+                .responses
+                .lock()
+                .expect("script response lock")
+                .pop_front()
+                .expect("one scripted response per provider request");
+            Ok(Box::pin(stream::iter(response.into_iter().map(Ok))))
+        }
+
+        async fn test_connection(&self) -> Result<ProviderStatus> {
+            Ok(ProviderStatus::Connected)
+        }
+    }
+
+    struct ScriptedTool {
+        name: String,
+    }
+
+    #[async_trait]
+    impl crate::agent::tool_trait::Tool for ScriptedTool {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn description(&self) -> &str {
+            "A deterministic tool used by the production engine path test."
+        }
+
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object", "properties": {}})
+        }
+
+        fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+            crate::agent::tool_effect::ToolEffect::Read
+        }
+
+        async fn execute(&self, _input: serde_json::Value, _ctx: &ToolContext) -> ToolResult {
+            ToolResult::success("scripted tool completed")
+        }
+    }
+
+    #[tokio::test]
+    async fn unknown_tool_failure_uses_structured_correlated_tool_result() {
+        ensure_isolated_test_analytics().await;
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let provider = scripted_provider("not_registered");
+        let workspace = tempfile::tempdir().expect("isolated workspace");
+        let engine = AgentEngine::new(
+            provider.clone(),
+            super::super::permission::PermissionMode::Autonomous,
+            super::super::PAMode::FastDevelopment,
+            Arc::new(Mutex::new(crate::state::AppState::default())),
+            super::super::permission::new_pending_permissions(),
+            super::super::tool_trait::AgentIdentity::worker("worker-backend"),
+        )
+        .with_worker_run_id("run-unknown-tool");
+
+        engine
+            .run(
+                "unknown-tool-session",
+                workspace.path().to_str().expect("workspace path"),
+                "fixture-model",
+                Vec::new(),
+                "Call the requested tool.",
+                Some("Worker instructions."),
+            )
+            .await
+            .expect("scripted engine completes after error result");
+
+        let requests = provider.requests.lock().expect("captured requests");
+        assert!(
+            requests.len() >= 2,
+            "the model must receive the failed result"
+        );
+        let result = requests[1]
+            .messages
+            .iter()
+            .flat_map(|message| message.content.iter())
+            .find_map(|content| match content {
+                MessageContent::ToolResult {
+                    tool_use_id,
+                    name,
+                    content,
+                    is_error,
+                } if tool_use_id == "call-1" && name == "not_registered" => {
+                    Some((content, *is_error))
+                }
+                _ => None,
+            })
+            .expect("provider receives the matching unknown-tool result");
+        let envelope: serde_json::Value =
+            serde_json::from_str(result.0).expect("unknown-tool error is valid JSON");
+        assert!(result.1, "unknown tool must not look like a success");
+        assert_eq!(envelope["schema_version"], 1);
+        assert_eq!(envelope["ok"], false);
+        assert_eq!(envelope["error"]["code"], "unknown_tool");
+        assert_eq!(envelope["error"]["category"], "tool_resolution");
+        assert_eq!(envelope["error"]["tool"], "not_registered");
+        assert_eq!(
+            envelope["error"]["context"]["tool_call_id"],
+            "unknown-tool-session-call-1"
+        );
+        assert_eq!(envelope["error"]["context"]["run_id"], "run-unknown-tool");
+    }
+
+    #[tokio::test]
+    async fn provider_retry_outcome_is_readable_from_analytics_without_raw_error_text() {
+        ensure_isolated_test_analytics().await;
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let mut provider = scripted_provider("not_registered");
+        Arc::get_mut(&mut provider)
+            .expect("provider is uniquely owned")
+            .provider_id = "fixture_retry_success".into();
+        Arc::get_mut(&mut provider)
+            .expect("provider is uniquely owned")
+            .fail_next_attempt = Mutex::new(Some(
+            "Google 503 [Overloaded]: private provider response body".to_string(),
+        ));
+        let workspace = tempfile::tempdir().expect("isolated workspace");
+        let engine = AgentEngine::new(
+            provider,
+            super::super::permission::PermissionMode::Autonomous,
+            super::super::PAMode::FastDevelopment,
+            Arc::new(Mutex::new(crate::state::AppState::default())),
+            super::super::permission::new_pending_permissions(),
+            super::super::tool_trait::AgentIdentity::worker("worker-backend"),
+        );
+
+        engine
+            .run(
+                "provider-retry-analytics-session",
+                workspace.path().to_str().expect("workspace path"),
+                "fixture-model",
+                Vec::new(),
+                "Call the requested tool.",
+                Some("Worker instructions."),
+            )
+            .await
+            .expect("the retry should recover and the scripted run should finish");
+
+        let report = crate::analytics::global()
+            .queries()
+            .get_api_failures(24)
+            .expect("production analytics query reads the persisted result");
+        let failure = report
+            .recent_failures
+            .iter()
+            .find(|failure| {
+                failure.provider == "fixture_retry_success"
+                    && failure.error_type == "overloaded"
+                    && failure.retry_count == 1
+                    && failure.resolved
+            })
+            .expect("the recovered provider call is recorded as resolved");
+        assert_eq!(
+            report.failures_by_provider.get("fixture_retry_success"),
+            Some(&1)
+        );
+        assert_eq!(report.auto_retry_success_rate, 1.0);
+        assert!(!failure
+            .error_message
+            .contains("private provider response body"));
+    }
+
+    #[tokio::test]
+    async fn exhausted_provider_failure_is_recorded_without_retrying_or_persisting_body() {
+        ensure_isolated_test_analytics().await;
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let mut provider = scripted_provider("unused");
+        Arc::get_mut(&mut provider)
+            .expect("provider is uniquely owned")
+            .fail_next_attempt = Mutex::new(Some(
+            "Google 429 [QuotaExhausted]: private quota response body".to_string(),
+        ));
+        let workspace = tempfile::tempdir().expect("isolated workspace");
+        let engine = AgentEngine::new(
+            provider.clone(),
+            super::super::permission::PermissionMode::Autonomous,
+            super::super::PAMode::FastDevelopment,
+            Arc::new(Mutex::new(crate::state::AppState::default())),
+            super::super::permission::new_pending_permissions(),
+            super::super::tool_trait::AgentIdentity::worker("worker-backend"),
+        );
+
+        let error = engine
+            .run(
+                "provider-quota-analytics-session",
+                workspace.path().to_str().expect("workspace path"),
+                "fixture-model",
+                Vec::new(),
+                "Complete the task.",
+                Some("Worker instructions."),
+            )
+            .await
+            .expect_err("quota exhaustion is terminal");
+        assert!(error.to_string().contains("QuotaExhausted"));
+        assert_eq!(
+            provider.requests.lock().expect("captured requests").len(),
+            1,
+            "quota exhaustion must not trigger a retry"
+        );
+
+        let report = crate::analytics::global()
+            .queries()
+            .get_api_failures(24)
+            .expect("production analytics query reads the persisted result");
+        let failure = report
+            .recent_failures
+            .iter()
+            .find(|failure| {
+                failure.provider == "fixture"
+                    && failure.error_type == "quota_exhausted"
+                    && failure.retry_count == 0
+                    && !failure.resolved
+            })
+            .expect("the terminal provider failure is recorded");
+        assert!(!failure
+            .error_message
+            .contains("private quota response body"));
+    }
+
+    fn scripted_provider(tool_name: &str) -> Arc<ScriptedProvider> {
+        Arc::new(ScriptedProvider {
+            provider_id: "fixture".into(),
+            requests: Mutex::new(Vec::new()),
+            fail_next_attempt: Mutex::new(None),
+            cancel_on_stream: None,
+            input_token_bound: Some(10),
+            responses: Mutex::new(VecDeque::from([
+                vec![
+                    StreamChunk::ToolUseStart {
+                        id: "call-1".into(),
+                        name: tool_name.into(),
+                        block_index: 0,
+                        opaque: None,
+                    },
+                    StreamChunk::ToolInputDelta {
+                        block_index: 0,
+                        partial_json: "{}".into(),
+                    },
+                    StreamChunk::MessageDelta {
+                        stop_reason: "tool_use".into(),
+                        usage: Usage::default(),
+                    },
+                    StreamChunk::Done,
+                ],
+                vec![
+                    StreamChunk::ToolUseStart {
+                        id: "call-2".into(),
+                        name: "worker_publish".into(),
+                        block_index: 0,
+                        opaque: None,
+                    },
+                    StreamChunk::ToolInputDelta {
+                        block_index: 0,
+                        partial_json: "{}".into(),
+                    },
+                    StreamChunk::MessageDelta {
+                        stop_reason: "tool_use".into(),
+                        usage: Usage::default(),
+                    },
+                    StreamChunk::Done,
+                ],
+                vec![
+                    StreamChunk::TextDelta {
+                        text: "finished".into(),
+                        block_index: 0,
+                    },
+                    StreamChunk::MessageDelta {
+                        stop_reason: "end_turn".into(),
+                        usage: Usage::default(),
+                    },
+                    StreamChunk::Done,
+                ],
+            ])),
+        })
+    }
+
+    #[tokio::test]
+    async fn engine_run_cap_denies_before_the_scripted_provider_stream_is_called() {
+        ensure_isolated_test_analytics().await;
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("isolated workspace");
+        let mut provider = scripted_provider("worker_scan");
+        Arc::get_mut(&mut provider)
+            .expect("unique fixture provider")
+            .input_token_bound = Some(10);
+        let engine = AgentEngine::new(
+            provider.clone(),
+            super::super::permission::PermissionMode::Autonomous,
+            super::super::PAMode::FastDevelopment,
+            Arc::new(Mutex::new(crate::state::AppState::default())),
+            super::super::permission::new_pending_permissions(),
+            super::super::tool_trait::AgentIdentity::worker("worker-backend"),
+        )
+        .with_budget(crate::budget::TaskBudget {
+            max_tokens: Some(1),
+            max_usd: None,
+            max_turns: Some(20),
+        });
+
+        let result = engine
+            .run(
+                "run-token-denial-session",
+                workspace.path().to_str().expect("workspace path"),
+                "fixture-model",
+                Vec::new(),
+                "Start the scripted operation.",
+                Some("Worker instructions."),
+            )
+            .await;
+        assert!(matches!(result, Err(ArcanaError::BudgetExceeded(_))));
+        assert!(
+            provider.requests.lock().expect("request lock").is_empty(),
+            "countTokens preflight may run, but the generation stream must not be dispatched"
+        );
+    }
+
+    fn scripted_tool_response(
+        call_id: &str,
+        name: &str,
+        input: serde_json::Value,
+    ) -> Vec<StreamChunk> {
+        vec![
+            StreamChunk::ToolUseStart {
+                id: call_id.to_string(),
+                name: name.to_string(),
+                block_index: 0,
+                opaque: None,
+            },
+            StreamChunk::ToolInputDelta {
+                block_index: 0,
+                partial_json: input.to_string(),
+            },
+            StreamChunk::MessageDelta {
+                stop_reason: "tool_use".into(),
+                usage: Usage::default(),
+            },
+            StreamChunk::Done,
+        ]
+    }
+
+    #[tokio::test]
+    async fn agent_engine_calls_configured_mcp_through_production_executor() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        ensure_isolated_test_analytics().await;
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("isolated workspace");
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind local MCP fixture");
+        let address = listener.local_addr().expect("fixture address");
+        let observed_lists = Arc::new(AtomicUsize::new(0));
+        let observed_calls = Arc::new(AtomicUsize::new(0));
+        let server_lists = Arc::clone(&observed_lists);
+        let server_calls = Arc::clone(&observed_calls);
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let server_lists = Arc::clone(&server_lists);
+                let server_calls = Arc::clone(&server_calls);
+                tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    let mut buffer = [0_u8; 4096];
+                    let header_end = loop {
+                        let count = socket.read(&mut buffer).await.unwrap_or(0);
+                        if count == 0 {
+                            return;
+                        }
+                        request.extend_from_slice(&buffer[..count]);
+                        if let Some(index) =
+                            request.windows(4).position(|bytes| bytes == b"\r\n\r\n")
+                        {
+                            break index + 4;
+                        }
+                    };
+                    let headers = String::from_utf8_lossy(&request[..header_end]);
+                    let content_length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())
+                                .flatten()
+                        })
+                        .unwrap_or(0);
+                    while request.len() < header_end + content_length {
+                        let count = socket.read(&mut buffer).await.unwrap_or(0);
+                        if count == 0 {
+                            return;
+                        }
+                        request.extend_from_slice(&buffer[..count]);
+                    }
+                    let body: serde_json::Value =
+                        serde_json::from_slice(&request[header_end..header_end + content_length])
+                            .expect("MCP request JSON");
+                    let method = body["method"].as_str().unwrap_or_default();
+                    if method.starts_with("notifications/") {
+                        let _ = socket
+                            .write_all(b"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                            .await;
+                        return;
+                    }
+                    let result = match method {
+                        "server/discover" => {
+                            serde_json::to_value(rmcp::model::DiscoverResult::new(
+                                vec![rmcp::model::ProtocolVersion::V_2026_07_28],
+                                Default::default(),
+                            ))
+                            .expect("discovery result")
+                        }
+                        "tools/list" => {
+                            server_lists.fetch_add(1, Ordering::SeqCst);
+                            serde_json::json!({
+                                "tools": [{
+                                    "name":"fixture_search",
+                                    "description":"Local synthetic search",
+                                    "inputSchema":{"type":"object","properties":{}}
+                                }]
+                            })
+                        }
+                        "tools/call" => {
+                            server_calls.fetch_add(1, Ordering::SeqCst);
+                            serde_json::json!({
+                                "content":[{"type":"text","text":"engine fixture result"}],
+                                "isError":false
+                            })
+                        }
+                        other => panic!("unexpected MCP request method {other}"),
+                    };
+                    let payload = serde_json::json!({
+                        "jsonrpc":"2.0",
+                        "id":body["id"],
+                        "result":result
+                    })
+                    .to_string();
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        payload.len(), payload
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+
+        let endpoint = format!("http://{address}/mcp");
+        crate::db::app_settings::set(
+            "github_mcp_config",
+            &serde_json::json!({"enabled":true,"server_url":endpoint}).to_string(),
+        )
+        .expect("persist configured fixture connector");
+        crate::egress_consent::WorkspaceEgressConsentDb::open()
+            .expect("open isolated consent DB")
+            .grant(workspace.path(), "mcp:github-mcp")
+            .expect("grant fixture workspace consent");
+        let run_id = crate::db::runs::RunsDb::open()
+            .expect("open isolated RunsDb")
+            .begin_worker_tick("worker-backend", "session-mcp-engine")
+            .expect("persist the worker run before tool execution");
+
+        let provider = Arc::new(ScriptedProvider {
+            provider_id: "fixture_mcp_engine".into(),
+            requests: Mutex::new(Vec::new()),
+            fail_next_attempt: Mutex::new(None),
+            cancel_on_stream: None,
+            input_token_bound: Some(10),
+            responses: Mutex::new(VecDeque::from([
+                scripted_tool_response("mcp-list", "mcp_list_tools", serde_json::json!({})),
+                scripted_tool_response(
+                    "mcp-call",
+                    "mcp_call_tool",
+                    serde_json::json!({"name":"fixture_search","arguments":{"query":"arcana"}}),
+                ),
+                vec![
+                    StreamChunk::TextDelta {
+                        text: "MCP result received".into(),
+                        block_index: 0,
+                    },
+                    StreamChunk::MessageDelta {
+                        stop_reason: "end_turn".into(),
+                        usage: Usage::default(),
+                    },
+                    StreamChunk::Done,
+                ],
+            ])),
+        });
+        let engine = AgentEngine::new(
+            provider.clone(),
+            super::super::permission::PermissionMode::Autonomous,
+            super::super::PAMode::FastDevelopment,
+            Arc::new(Mutex::new(crate::state::AppState::default())),
+            super::super::permission::new_pending_permissions(),
+            super::super::tool_trait::AgentIdentity::worker("worker-backend"),
+        )
+        .with_worker_run_id(&run_id);
+
+        engine
+            .run(
+                "session-mcp-engine",
+                workspace.path().to_str().expect("workspace path"),
+                "fixture-model",
+                Vec::new(),
+                "Discover and call the configured MCP tool.",
+                Some("Use the available MCP tools."),
+            )
+            .await
+            .expect("scripted AgentEngine MCP run completes");
+
+        let requests = provider
+            .requests
+            .lock()
+            .expect("captured provider requests");
+        let list_result = requests[1]
+            .messages
+            .iter()
+            .flat_map(|message| message.content.iter())
+            .find_map(|content| match content {
+                MessageContent::ToolResult {
+                    tool_use_id,
+                    content,
+                    is_error,
+                    ..
+                } if tool_use_id.contains("mcp-list") => Some((content, *is_error)),
+                _ => None,
+            })
+            .expect("provider receives the MCP list tool result");
+        assert_eq!(
+            observed_lists.load(Ordering::SeqCst),
+            1,
+            "local MCP list count; error={}; result={}",
+            list_result.1,
+            list_result.0
+        );
+        assert_eq!(observed_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(requests.len(), 3, "list, call, and final response turns");
+        let call_result = requests[2]
+            .messages
+            .iter()
+            .flat_map(|message| message.content.iter())
+            .find_map(|content| match content {
+                MessageContent::ToolResult {
+                    name,
+                    content,
+                    is_error,
+                    ..
+                } if name == "mcp_call_tool" => Some((content, *is_error)),
+                _ => None,
+            })
+            .expect("provider receives the real MCP tool result");
+        assert!(!call_result.1);
+        assert!(call_result.0.contains("engine fixture result"));
+        let journal = crate::db::runs::RunsDb::open()
+            .expect("reopen isolated RunsDb")
+            .operation_journal_page(&run_id, 0, 10)
+            .expect("read production operation journal")
+            .entries;
+        for operation in ["mcp_list_tools", "mcp_call_tool"] {
+            assert!(
+                journal.iter().any(|entry| {
+                    entry.operation == operation
+                        && entry.outcome == crate::db::runs::OperationOutcome::Ok
+                }),
+                "the production {operation} result must be durable"
+            );
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn cancellation_during_provider_stream_is_terminal_and_prevents_tool_side_effects() {
+        ensure_isolated_test_analytics().await;
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let session_id = "cancel-during-stream-session";
+        let state = Arc::new(Mutex::new(crate::state::AppState::default()));
+        state.lock().expect("state lock").agents.insert(
+            session_id.to_owned(),
+            crate::state::app_state::ActiveAgent {
+                session_id: session_id.to_owned(),
+                is_running: true,
+                cancel_flag: false,
+            },
+        );
+        let mut provider = scripted_provider("side_effect");
+        let scripted = Arc::get_mut(&mut provider).expect("provider is uniquely owned");
+        scripted.cancel_on_stream = Some((state.clone(), session_id.to_owned()));
+        let response = scripted
+            .responses
+            .get_mut()
+            .expect("scripted responses lock")
+            .front_mut()
+            .expect("scripted response");
+        let usage = response
+            .iter_mut()
+            .find_map(|chunk| match chunk {
+                StreamChunk::MessageDelta { usage, .. } => Some(usage),
+                _ => None,
+            })
+            .expect("message usage chunk");
+        *usage = Usage {
+            input: 120,
+            output: 18,
+            ..Usage::default()
+        };
+        let side_effects = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut engine = AgentEngine::new(
+            provider.clone(),
+            super::super::permission::PermissionMode::Autonomous,
+            super::super::PAMode::FastDevelopment,
+            state,
+            super::super::permission::new_pending_permissions(),
+            super::super::tool_trait::AgentIdentity::worker("worker-backend"),
+        );
+        engine.registry.register(Arc::new(SideEffectTool {
+            calls: side_effects.clone(),
+        }));
+        let workspace = tempfile::tempdir().expect("isolated workspace");
+
+        let result = engine
+            .run(
+                session_id,
+                workspace.path().to_str().expect("workspace path"),
+                "fixture-model",
+                Vec::new(),
+                "Run the scripted operation.",
+                Some("Worker instructions."),
+            )
+            .await;
+
+        assert!(matches!(result, Err(ArcanaError::Cancelled)));
+        assert_eq!(side_effects.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(
+            provider.requests.lock().expect("request lock").len(),
+            1,
+            "the cancelled provider response must be terminal"
+        );
+        let rows = crate::analytics::global()
+            .db()
+            .get_token_usage_by_date(chrono::Local::now().date_naive())
+            .expect("read analytics rows");
+        let persisted = rows
+            .iter()
+            .find(|row| row.session_id == session_id)
+            .expect("cancelled run token usage is persisted");
+        assert_eq!(persisted.prompt_tokens, 120);
+        assert_eq!(persisted.completion_tokens, 18);
+    }
+
+    struct SideEffectTool {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl crate::agent::tool_trait::Tool for SideEffectTool {
+        fn name(&self) -> &str {
+            "side_effect"
+        }
+
+        fn description(&self) -> &str {
+            "Count a side effect in cancellation tests."
+        }
+
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object", "properties": {}})
+        }
+
+        fn effect(&self) -> crate::agent::tool_effect::ToolEffect {
+            crate::agent::tool_effect::ToolEffect::Execute
+        }
+
+        async fn execute(&self, _input: serde_json::Value, _ctx: &ToolContext) -> ToolResult {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            ToolResult::success("side effect completed")
+        }
+    }
+
+    async fn run_worker_turn(
+        provider: Arc<ScriptedProvider>,
+        tool_name: &str,
+        procedural_recall: bool,
+        working_dir: &str,
+    ) -> Vec<CompletionRequest> {
+        let mut engine = AgentEngine::new(
+            provider.clone(),
+            super::super::permission::PermissionMode::Autonomous,
+            super::super::PAMode::FastDevelopment,
+            Arc::new(Mutex::new(crate::state::AppState::default())),
+            super::super::permission::new_pending_permissions(),
+            super::super::tool_trait::AgentIdentity::worker("worker-backend"),
+        );
+        if procedural_recall {
+            engine = engine.with_procedural_recall(true);
+        }
+        engine.registry.register(Arc::new(ScriptedTool {
+            name: tool_name.into(),
+        }));
+        engine
+            .run(
+                &format!("procedural-test-{}", uuid::Uuid::new_v4()),
+                working_dir,
+                "fixture-model",
+                Vec::new(),
+                "Continue with the scripted operation.",
+                Some("Worker instructions."),
+            )
+            .await
+            .expect("scripted worker turn should complete");
+        provider
+            .requests
+            .lock()
+            .expect("request capture lock")
+            .clone()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn worker_procedural_memory_reaches_only_the_next_matching_provider_request() {
+        ensure_isolated_test_analytics().await;
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let working_dir = tempfile::tempdir().expect("isolated worker workspace");
+        crate::memory::procedural::ProceduralStore::save_topic(
+            "worker-scan",
+            "Specialized scan procedure",
+            "When invoking worker_scan, inspect the assigned task before editing.",
+            &[],
+        )
+        .expect("persist procedure in isolated Arcana home");
+
+        let relevant_tool = "worker_scan";
+        let default_requests = run_worker_turn(
+            scripted_provider(relevant_tool),
+            relevant_tool,
+            false,
+            working_dir.path().to_str().expect("workspace path"),
+        )
+        .await;
+        assert_eq!(default_requests.len(), 3);
+        assert!(
+            !default_requests[0]
+                .system
+                .as_deref()
+                .unwrap_or_default()
+                .contains("saved procedure"),
+            "procedural recall must be absent on the initial request"
+        );
+        assert!(
+            !default_requests[1]
+                .system
+                .as_deref()
+                .unwrap_or_default()
+                .contains("(a saved procedure: Specialized scan procedure)"),
+            "the engine default must leave procedural recall off"
+        );
+        assert!(
+            !default_requests[2]
+                .system
+                .as_deref()
+                .unwrap_or_default()
+                .contains("(a saved procedure: Specialized scan procedure)"),
+            "the engine default must leave procedural recall off on every request"
+        );
+
+        let recalled_requests = run_worker_turn(
+            scripted_provider(relevant_tool),
+            relevant_tool,
+            true,
+            working_dir.path().to_str().expect("workspace path"),
+        )
+        .await;
+        assert_eq!(recalled_requests.len(), 3);
+        let recalled_system = recalled_requests[1]
+            .system
+            .as_deref()
+            .expect("system prompt on following request");
+        assert!(recalled_system.contains("(a saved procedure: Specialized scan procedure)"));
+        assert!(recalled_system.contains("inspect the assigned task before editing"));
+        assert!(
+            !recalled_requests[0]
+                .system
+                .as_deref()
+                .unwrap_or_default()
+                .contains("(a saved procedure: Specialized scan procedure)"),
+            "recall must not be added before the matching tool batch runs"
+        );
+        assert!(
+            !recalled_requests[2]
+                .system
+                .as_deref()
+                .unwrap_or_default()
+                .contains("(a saved procedure: Specialized scan procedure)"),
+            "a procedure recalled for one request must not carry past an unrelated tool batch"
+        );
+
+        let unrelated_requests = run_worker_turn(
+            scripted_provider("worker_publish"),
+            "worker_publish",
+            true,
+            working_dir.path().to_str().expect("workspace path"),
+        )
+        .await;
+        assert_eq!(unrelated_requests.len(), 3);
+        assert!(
+            !unrelated_requests[1]
+                .system
+                .as_deref()
+                .unwrap_or_default()
+                .contains("(a saved procedure: Specialized scan procedure)"),
+            "unrelated invoked tool names must not recall the stored procedure"
+        );
+        assert!(
+            !unrelated_requests[2]
+                .system
+                .as_deref()
+                .unwrap_or_default()
+                .contains("(a saved procedure: Specialized scan procedure)"),
+            "unrelated tool names must not keep prior procedural text in later requests"
+        );
+        assert!(
+            unrelated_requests[1]
+                .messages
+                .iter()
+                .all(|message| !format!("{:?}", message.content).contains("Worker scan procedure")),
+            "recalled text must stay out of persisted conversation history"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn claimed_task_budget_activates_before_the_next_provider_request() {
+        ensure_isolated_test_analytics().await;
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let task_db = crate::db::tasks::TasksDb::open().expect("isolated tasks DB");
+        let task = task_db
+            .create(crate::db::tasks::CreateTaskInput {
+                title: "budget activation task".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "saved cap fires after claim".into(),
+                created_by: Some("test".into()),
+            })
+            .expect("create task");
+        task_db
+            .update_status(task.id, "assigned", Some("worker-backend"))
+            .expect("assign task");
+        task_db
+            .set_task_budget(task.id, Some(10_000), Some(1.0), Some(10))
+            .expect("save task budget");
+        task_db
+            .update_task_budget_usage(task.id, 2_000, 0.0, 0)
+            .expect("seed previously consumed task tokens");
+
+        let provider = Arc::new(ScriptedProvider {
+            provider_id: "fixture".into(),
+            requests: Mutex::new(Vec::new()),
+            fail_next_attempt: Mutex::new(None),
+            cancel_on_stream: None,
+            input_token_bound: Some(10),
+            responses: Mutex::new(VecDeque::from([vec![
+                StreamChunk::ToolUseStart {
+                    id: "claim-call".into(),
+                    name: "claim_task".into(),
+                    block_index: 0,
+                    opaque: None,
+                },
+                StreamChunk::ToolInputDelta {
+                    block_index: 0,
+                    partial_json: format!("{{\"task_id\":{}}}", task.id),
+                },
+                StreamChunk::MessageDelta {
+                    stop_reason: "tool_use".into(),
+                    usage: Usage::default(),
+                },
+                StreamChunk::Done,
+            ]])),
+        });
+        let workspace = tempfile::tempdir().expect("worker workspace");
+        let engine = AgentEngine::new(
+            provider.clone(),
+            super::super::permission::PermissionMode::Autonomous,
+            super::super::PAMode::FastDevelopment,
+            Arc::new(Mutex::new(crate::state::AppState::default())),
+            super::super::permission::new_pending_permissions(),
+            super::super::tool_trait::AgentIdentity::worker("worker-backend"),
+        )
+        .with_budget(crate::budget::TaskBudget::default_worker());
+
+        let result = engine
+            .run(
+                "budget-activation-session",
+                workspace.path().to_str().expect("workspace path"),
+                "fixture-model",
+                Vec::new(),
+                "Claim the assigned task.",
+                Some("Worker instructions."),
+            )
+            .await;
+        assert!(matches!(result, Err(ArcanaError::BudgetExceeded(_))));
+        assert_eq!(
+            provider.requests.lock().expect("request lock").len(),
+            1,
+            "the saved one-turn task cap must block another provider request"
+        );
+        let claimed = task_db.get_by_id(task.id).unwrap().unwrap();
+        assert_eq!(claimed.status, crate::db::tasks::TaskStatus::NeedsInfo);
+        assert_eq!(claimed.budget_turns_used, 1);
     }
 }

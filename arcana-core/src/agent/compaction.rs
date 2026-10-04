@@ -226,28 +226,70 @@ impl CompactionEngine {
             clear_tool_uses: None,
         };
 
-        // Try to get a summary from the LLM
+        // Try to get a summary from the LLM. Compaction is a real provider
+        // request and must produce the same safe provider-call accounting as
+        // streamed turns, including failure/fallback and elapsed time.
         let mut compaction_usage = crate::provider::usage::Usage::default();
-        let summary_text = match provider.complete(summary_request).await {
-            Ok(response) => response
-                .usage_recorded(&mut compaction_usage)
-                .content
-                .into_iter()
-                .find_map(|block| {
-                    if let MessageContent::Text { text } = block {
-                        Some(text)
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_else(|| {
-                    format!(
-                        "[{} messages summarized — summary unavailable]",
-                        middle.len()
-                    )
-                }),
-            Err(e) => {
-                info!("LLM summary failed ({e}), falling back to truncation");
+        let provider_started = std::time::Instant::now();
+        let summary_result = provider.complete(summary_request).await;
+        let summary_text = match summary_result {
+            Ok(response) => {
+                let response = response.usage_recorded(&mut compaction_usage);
+                tracing::info!(
+                    target: "arcana::telemetry",
+                    event_type = "provider_call",
+                    provider = crate::provider::routing::provider_for_model(model).unwrap_or("unknown"),
+                    model = %model,
+                    attempts = 1_u32,
+                    duration_ns = provider_started.elapsed().as_nanos() as u64,
+                    input_tokens = compaction_usage.input,
+                    cache_read_tokens = compaction_usage.cached_read,
+                    cache_write_tokens = compaction_usage.cache_write,
+                    output_tokens = compaction_usage.output,
+                    reasoning_tokens = compaction_usage.reasoning,
+                    tool_tokens = compaction_usage.tool,
+                    outcome = "success",
+                    result_blocks = 0_u64,
+                    operation = "compaction",
+                    "Compaction provider call completed"
+                );
+                response
+                    .content
+                    .into_iter()
+                    .find_map(|block| {
+                        if let MessageContent::Text { text } = block {
+                            Some(text)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_else(|| {
+                        format!(
+                            "[{} messages summarized — summary unavailable]",
+                            middle.len()
+                        )
+                    })
+            }
+            Err(_error) => {
+                tracing::warn!(
+                    target: "arcana::telemetry",
+                    event_type = "provider_call",
+                    provider = crate::provider::routing::provider_for_model(model).unwrap_or("unknown"),
+                    model = %model,
+                    attempts = 1_u32,
+                    duration_ns = provider_started.elapsed().as_nanos() as u64,
+                    input_tokens = 0_u32,
+                    cache_read_tokens = 0_u32,
+                    cache_write_tokens = 0_u32,
+                    output_tokens = 0_u32,
+                    reasoning_tokens = 0_u32,
+                    tool_tokens = 0_u32,
+                    outcome = "error",
+                    result_blocks = 0_u64,
+                    operation = "compaction",
+                    "Compaction provider call failed; falling back to truncation"
+                );
+                info!("LLM summary failed, falling back to truncation");
                 // No usage to report — the call did not complete. Truncation is
                 // free, which is the one good thing about this path.
                 return (Self::compact_truncate(messages), compaction_usage);
@@ -282,6 +324,111 @@ impl CompactionEngine {
 #[cfg(test)]
 mod p3_25_28_tests {
     use super::*;
+
+    struct CompletionFixture;
+
+    #[async_trait::async_trait]
+    impl crate::provider::traits::Provider for CompletionFixture {
+        fn id(&self) -> &str {
+            "google"
+        }
+
+        fn name(&self) -> &str {
+            "fixture"
+        }
+
+        fn models(&self) -> Vec<crate::provider::types::ModelInfo> {
+            Vec::new()
+        }
+
+        async fn complete(
+            &self,
+            _request: crate::provider::types::CompletionRequest,
+        ) -> crate::errors::Result<crate::provider::types::CompletionResponse> {
+            Ok(crate::provider::types::CompletionResponse {
+                message_id: "compaction-fixture".into(),
+                content: vec![MessageContent::Text {
+                    text: "safe summary".into(),
+                }],
+                stop_reason: "STOP".into(),
+                usage: crate::provider::usage::Usage {
+                    input: 31,
+                    output: 7,
+                    ..Default::default()
+                },
+                model: "gemini-3.8-flash".into(),
+            })
+        }
+
+        async fn stream(
+            &self,
+            _request: crate::provider::types::CompletionRequest,
+        ) -> crate::errors::Result<crate::provider::traits::StreamResult> {
+            Err(crate::errors::ArcanaError::Agent(
+                "stream not used by fixture".into(),
+            ))
+        }
+
+        async fn test_connection(
+            &self,
+        ) -> crate::errors::Result<crate::provider::types::ProviderStatus> {
+            Ok(crate::provider::types::ProviderStatus::Connected)
+        }
+    }
+
+    #[tokio::test]
+    async fn compaction_provider_call_emits_timed_token_metrics() {
+        use tracing_subscriber::{layer::SubscriberExt, EnvFilter, Layer};
+
+        let directory = tempfile::tempdir().expect("temporary telemetry directory");
+        let events_path = directory.path().join("events.jsonl");
+        let file = std::fs::File::create(&events_path).expect("create telemetry fixture");
+        let (writer, guard) = tracing_appender::non_blocking(file);
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_writer(writer)
+                .with_filter(EnvFilter::new("arcana::telemetry=debug")),
+        );
+        let dispatch = tracing::Dispatch::new(subscriber);
+        let _subscriber_guard = tracing::dispatcher::set_default(&dispatch);
+
+        let messages = (0..12)
+            .map(|index| RequestMessage {
+                role: if index % 2 == 0 { "user" } else { "assistant" }.into(),
+                content: vec![MessageContent::Text {
+                    text: format!("message {index}"),
+                }],
+            })
+            .collect();
+        let (_compacted, usage) = CompactionEngine::compact_with_summary(
+            messages,
+            &CompletionFixture,
+            "gemini-3.8-flash",
+        )
+        .await;
+        assert_eq!(usage.input, 31);
+        assert_eq!(usage.output, 7);
+
+        drop(_subscriber_guard);
+        drop(guard);
+        let records = std::fs::read_to_string(events_path)
+            .expect("read persisted telemetry")
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("JSON event"))
+            .collect::<Vec<_>>();
+        let event = records
+            .iter()
+            .find(|event| event["fields"]["event_type"] == "provider_call")
+            .expect("compaction call is visible to provider metrics");
+        assert_eq!(event["fields"]["operation"], "compaction");
+        assert_eq!(event["fields"]["provider"], "google");
+        assert_eq!(event["fields"]["model"], "gemini-3.8-flash");
+        assert_eq!(event["fields"]["input_tokens"], 31);
+        assert_eq!(event["fields"]["output_tokens"], 7);
+        assert!(event["fields"]["duration_ns"].as_u64().unwrap_or_default() > 0);
+        assert_eq!(event["fields"]["outcome"], "success");
+    }
 
     #[test]
     fn the_clear_layer_fires_before_the_compaction_layer() {

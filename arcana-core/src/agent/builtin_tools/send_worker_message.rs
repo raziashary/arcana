@@ -1,9 +1,10 @@
 // send_worker_message — Arcana Communication Protocol (ACP) outbound tool.
 //
 // One worker sends a structured message to another worker (or the supervisor).
-// The message lands in `worker_messages` SQLite table and is pushed to the
-// target's bound recipe via `recipes::scheduler::kick`, so the target picks
-// it up on its next tick (sub-second under push, ≤ cron cadence otherwise).
+// The message lands in `worker_messages` and an immediate tick is requested
+// for a scheduled target. Delivery stays at-least-once until the target's
+// recipe consumer acknowledges the stable message ID; without an active
+// consumer, the inbox row remains pending.
 //
 // Why this exists (vs. the orchestrator's DELEGATE[@agent] syntax):
 //   * Async, not out-of-band. The target reads its inbox during its own
@@ -20,6 +21,236 @@ use super::super::tool_trait::{Tool, ToolContext, ToolResult};
 use crate::db::tasks::TasksDb;
 use crate::events::{emit_worker_message, WorkerMessagePayload};
 use crate::recipes::scheduler;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::permission::{new_pending_permissions, PermissionMode};
+    use crate::agent::tool_executor::ToolExecutor;
+    use crate::agent::tool_trait::AgentIdentity;
+    use std::sync::Arc;
+
+    #[test]
+    fn qc_dispatcher_recipe_id_is_not_an_addressable_worker_recipient() {
+        let registered = vec![
+            "worker-backend".to_string(),
+            "supervisor".to_string(),
+            "qc-agent".to_string(),
+        ];
+        assert!(is_known_recipient("qc-agent", &registered));
+        assert!(!is_known_recipient("qc-dispatcher", &registered));
+        let broadcast = broadcast_targets(registered, "supervisor");
+        assert!(broadcast.contains(&"qc-agent".to_string()));
+        assert!(!broadcast.contains(&"qc-dispatcher".to_string()));
+        assert!(!is_known_recipient("qc-agent", &["worker-backend".into()]));
+        assert!(
+            !broadcast_targets(vec!["worker-backend".into()], "supervisor")
+                .contains(&"qc-agent".to_string())
+        );
+    }
+
+    #[test]
+    fn deleted_system_worker_is_not_a_message_recipient_or_broadcast_target() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workers = crate::db::workers::WorkersDb::open().expect("open isolated worker roster");
+        // Default workers are installed separately from recipe defaults. If
+        // the shipped QC worker is active here, verify it cannot survive in
+        // the addressable roster after soft deletion.
+        if workers
+            .registered_slugs()
+            .expect("read initial roster")
+            .contains(&"qc-agent".to_string())
+        {
+            workers
+                .deactivate("qc-agent")
+                .expect("deactivate shipped QC worker");
+        }
+        // Install a unique QC-like worker so this test proves that
+        // active-roster membership, not a hard-coded system slug, controls
+        // message addressing.
+        let qc_slug = "qc-agent-test";
+        let qc_agent_id = workers
+            .create("QC", qc_slug, "qc", "gemini-2.5-flash", &[], 120, None)
+            .expect("create QC worker fixture");
+        assert!(is_known_recipient(
+            qc_slug,
+            &workers.registered_slugs().expect("active roster")
+        ));
+        workers.deactivate(qc_slug).expect("deactivate QC worker");
+        let active = workers
+            .registered_slugs()
+            .expect("read active worker roster");
+        assert!(!active.contains(&qc_slug.to_string()));
+        assert!(!is_known_recipient(qc_slug, &active));
+        assert!(!is_known_recipient("qc-agent", &active));
+        assert!(!broadcast_targets(active.clone(), "supervisor").contains(&"qc-agent".to_string()));
+        assert!(!broadcast_targets(active, "supervisor").contains(&qc_slug.to_string()));
+        assert!(
+            workers.get_by_id(qc_agent_id).unwrap().is_none(),
+            "deleted workers are excluded from normal recipient lookup"
+        );
+    }
+
+    #[tokio::test]
+    async fn native_tool_executor_supplies_sender_identity_and_refuses_self_messages() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = home.path().to_string_lossy().into_owned();
+        let tool = Arc::new(SendWorkerMessageTool);
+
+        let mut worker = ToolExecutor::new(
+            PermissionMode::Autonomous,
+            new_pending_permissions(),
+            "worker-session".into(),
+            workspace.clone(),
+            AgentIdentity::worker("worker-backend"),
+        );
+        let sent = worker
+            .execute_batch(vec![(
+                tool.clone(),
+                json!({"to":"supervisor", "body":"Endpoint is ready."}),
+                "call-send".into(),
+            )])
+            .await
+            .expect("execute native tool path");
+        assert_eq!(sent.len(), 1);
+        assert!(!sent[0].1.is_error, "send failed: {}", sent[0].1.output);
+        let payload: Value = serde_json::from_str(&sent[0].1.output).expect("send result");
+        let message_id = payload["persisted_message_ids"][0]
+            .as_i64()
+            .expect("persisted message id");
+        drop(worker);
+
+        let db = TasksDb::open().expect("reopen persisted task board");
+        let message = db
+            .get_worker_message(message_id)
+            .expect("read persisted message")
+            .expect("message row");
+        assert_eq!(message.from_slug, "worker-backend");
+        assert_eq!(message.to_slug, "supervisor");
+
+        let mut supervisor = ToolExecutor::new(
+            PermissionMode::Autonomous,
+            new_pending_permissions(),
+            "supervisor-session".into(),
+            workspace.clone(),
+            AgentIdentity::supervisor(),
+        );
+        let self_send = supervisor
+            .execute_batch(vec![(
+                tool.clone(),
+                json!({"to":"supervisor", "body":"This must be refused."}),
+                "call-self".into(),
+            )])
+            .await
+            .expect("execute self-message path");
+        assert!(self_send[0].1.is_error);
+        assert!(self_send[0].1.output.contains("yourself"));
+
+        let mut limited_worker = ToolExecutor::new(
+            PermissionMode::Autonomous,
+            new_pending_permissions(),
+            "worker-session-2".into(),
+            workspace,
+            AgentIdentity::worker("worker-backend"),
+        );
+        let worker_broadcast = limited_worker
+            .execute_batch(vec![(
+                tool.clone(),
+                json!({"to":"*", "body":"this must not fan out"}),
+                "call-worker-broadcast".into(),
+            )])
+            .await
+            .expect("execute bounded-broadcast refusal");
+        assert!(worker_broadcast[0].1.is_error);
+        assert!(worker_broadcast[0].1.output.contains("supervisor-only"));
+
+        let oversized = limited_worker
+            .execute_batch(vec![(
+                tool,
+                json!({"to":"worker-frontend", "body":"x".repeat(MAX_BODY_BYTES + 1)}),
+                "call-oversized".into(),
+            )])
+            .await
+            .expect("execute message-size refusal");
+        assert!(oversized[0].1.is_error);
+        assert!(oversized[0].1.output.contains("maximum is 4096"));
+        assert_eq!(db.list_recent_worker_messages(10).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn message_to_unbound_worker_reports_durable_pending_delivery() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workers = crate::db::workers::WorkersDb::open().expect("open isolated worker roster");
+        let worker_id = workers
+            .create(
+                "Unbound worker",
+                "worker-unbound-test",
+                "backend",
+                "gemini-3.8-flash",
+                &[],
+                120,
+                None,
+            )
+            .expect("create unbound worker");
+        assert_eq!(
+            workers.get_by_id(worker_id).unwrap().unwrap().recipe_id,
+            None,
+            "fixture should have no recipe consumer"
+        );
+
+        let mut supervisor = ToolExecutor::new(
+            PermissionMode::Autonomous,
+            new_pending_permissions(),
+            "supervisor-session".into(),
+            home.path().to_string_lossy().into_owned(),
+            AgentIdentity::supervisor(),
+        );
+        let results = supervisor
+            .execute_batch(vec![(
+                Arc::new(SendWorkerMessageTool),
+                json!({"to":"worker-unbound-test", "body":"Please review the task."}),
+                "call-unbound-message".into(),
+            )])
+            .await
+            .expect("execute message through production tool executor");
+        let result = &results[0].1;
+        assert!(!result.is_error, "durable inbox should accept the message");
+        let payload: Value = serde_json::from_str(&result.output).expect("message result JSON");
+        assert!(payload["message"]
+            .as_str()
+            .unwrap()
+            .contains("acknowledgement is pending"));
+        let message_id = payload["persisted_message_ids"][0]
+            .as_i64()
+            .expect("persisted message id");
+
+        let tasks = TasksDb::open().expect("open isolated tasks DB");
+        let inbox = tasks
+            .list_worker_messages_for("worker-unbound-test", true)
+            .expect("read durable inbox");
+        assert_eq!(inbox.len(), 1);
+        assert_eq!(inbox[0].id, message_id);
+        assert_eq!(inbox[0].status, "pending");
+        assert_eq!(
+            tasks
+                .get_worker_message(message_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            "read",
+            "the read marker is separate from acknowledgement"
+        );
+        tasks
+            .acknowledge_worker_message(message_id)
+            .expect("acknowledge message");
+        assert!(tasks
+            .list_worker_messages_for("worker-unbound-test", true)
+            .expect("read acknowledged inbox")
+            .is_empty());
+    }
+}
 
 pub struct SendWorkerMessageTool;
 
@@ -28,11 +259,17 @@ const VALID_KINDS: &[&str] = &["nudge", "question", "answer", "fyi", "broadcast"
 
 /// Recipients the protocol accepts. `*` is the broadcast wildcard, supervisor-only.
 fn is_known_recipient(slug: &str, registered_workers: &[String]) -> bool {
-    slug == "supervisor"
-        || slug == "qc-agent"
-        || slug == "qc-dispatcher"
-        || slug == "*"
-        || registered_workers.iter().any(|worker| worker == slug)
+    slug == "*" || registered_workers.iter().any(|worker| worker == slug)
+}
+
+fn broadcast_targets(registered_workers: Vec<String>, sender: &str) -> Vec<String> {
+    let mut targets = Vec::with_capacity(registered_workers.len());
+    for slug in registered_workers {
+        if slug != sender && !targets.contains(&slug) {
+            targets.push(slug);
+        }
+    }
+    targets
 }
 
 #[async_trait]
@@ -100,7 +337,7 @@ impl Tool for SendWorkerMessageTool {
             };
         if !is_known_recipient(&to, &registered_workers) {
             return ToolResult::error(format!(
-                "'{to}' is not a known recipient. Registered workers: {}; supervisor, qc-agent, qc-dispatcher, or '*' (broadcast).",
+                "'{to}' is not a registered recipient. Active workers: {}; '*' is the supervisor-only broadcast address.",
                 registered_workers.join(", ")
             ));
         }
@@ -132,10 +369,9 @@ impl Tool for SendWorkerMessageTool {
         }
 
         // ── Resolve sender ───────────────────────────────────────────────────
-        // ctx.agent_role is the canonical sender identity, set from
-        // __agent_role at the MCP boundary. PA / interactive callers won't
-        // have one; we refuse those so the inbox stays fleet-only and the
-        // From column in Fleet Chat is always an agent slug, never "anon".
+        // ctx.agent_role is the canonical sender identity, set by the Rust
+        // ToolExecutor from the running agent's identity. We refuse blank
+        // values so the inbox sender is always a real agent slug, never "anon".
         // Identity is Rust-authored and always present now, and the
         // interactive assistant is "supervisor" — the role the shipped recipes
         // already give it (recipes/defaults.rs:217), and the one that dispatches
@@ -178,13 +414,7 @@ impl Tool for SendWorkerMessageTool {
 
         // Broadcast = N inserts; non-broadcast = 1.
         let targets: Vec<String> = if to == "*" {
-            // Every fleet worker + supervisor's helpers, EXCLUDING the sender
-            // (supervisor doesn't broadcast to itself).
-            let mut all = registered_workers;
-            all.push("qc-agent".into());
-            all.push("qc-dispatcher".into());
-            all.retain(|s| s != &from);
-            all
+            broadcast_targets(registered_workers, &from)
         } else {
             vec![to.clone()]
         };
@@ -211,20 +441,22 @@ impl Tool for SendWorkerMessageTool {
                 timestamp: msg.created_at.clone(),
             });
 
-            // Push the target's recipe so they read the inbox on the very
-            // next event-loop tick instead of waiting up to a cron cadence.
-            // Safe no-op for the qc-agent / qc-dispatcher slugs if they
-            // aren't bound to a scheduled recipe.
+            // Request an immediate tick so a scheduled target reads the inbox
+            // promptly. If no schedule is active (including an unbound worker),
+            // the durable message remains pending until a consumer runs.
             scheduler::kick(target);
 
             delivered.push(msg.id);
         }
 
         let summary = if targets.len() == 1 {
-            format!("Message #{} delivered to '{}'.", delivered[0], targets[0])
+            format!(
+                "Message #{} persisted in '{}''s inbox; acknowledgement is pending.",
+                delivered[0], targets[0]
+            )
         } else {
             format!(
-                "Broadcast delivered to {} recipients (ids: {}).",
+                "Broadcast persisted to {} inboxes; acknowledgement is pending (ids: {}).",
                 delivered.len(),
                 delivered
                     .iter()
@@ -236,7 +468,7 @@ impl Tool for SendWorkerMessageTool {
 
         ToolResult::success(
             json!({
-                "delivered_message_ids": delivered,
+                "persisted_message_ids": delivered,
                 "from":                  from,
                 "to":                    targets,
                 "kind":                  kind,

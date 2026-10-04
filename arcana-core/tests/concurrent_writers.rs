@@ -39,9 +39,9 @@ use std::sync::{Arc, Barrier};
 use arcana_core::db::open_tuned;
 
 fn sandbox(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("arcana-concurrent-{tag}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("mkdir");
+    let dir =
+        std::env::temp_dir().join(format!("arcana-concurrent-{tag}-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&dir).expect("create unique isolated test directory");
     dir.join("contended.db")
 }
 

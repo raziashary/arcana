@@ -34,7 +34,7 @@ impl Tool for ListTasksTool {
                     "type": "string",
                     "description": "Filter by status. Omit to list all.",
                     "enum": ["ready", "assigned", "in_progress", "qc_review", "done",
-                             "failed", "build_failed", "cancelled", "rejected"]
+                             "failed", "build_failed", "cancelled", "rejected", "needs_info"]
                 },
                 "compact": {
                     "type": "boolean",

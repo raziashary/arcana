@@ -116,9 +116,7 @@ pub struct Scored {
 /// reaches zero, because *"old memories should generally be deprioritized
 /// before they are destroyed"* (anchor §11).
 pub fn recency_score(created_at: &str, now: chrono::DateTime<chrono::Utc>) -> f32 {
-    let parsed = chrono::DateTime::parse_from_rfc3339(created_at)
-        .map(|d| d.with_timezone(&chrono::Utc))
-        .ok();
+    let parsed = crate::db::timestamps::parse_db_timestamp(created_at).ok();
     let Some(created) = parsed else {
         // An unparseable timestamp must not score as "brand new" — that would
         // make a malformed row outrank every real one.

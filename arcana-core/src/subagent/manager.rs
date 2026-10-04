@@ -99,8 +99,17 @@ impl SubagentManager {
     /// `terminate(id)` / `abort(id)` to stop early.
     pub async fn spawn(
         self: &Arc<Self>,
+        config: SubagentConfig,
+        prompt: String,
+    ) -> Result<SubagentHandle> {
+        self.spawn_with_run_token_budget(config, prompt, None).await
+    }
+
+    pub async fn spawn_with_run_token_budget(
+        self: &Arc<Self>,
         mut config: SubagentConfig,
         prompt: String,
+        run_token_budget: Option<Arc<crate::budget::run_tokens::RunTokenLedger>>,
     ) -> Result<SubagentHandle> {
         // ⚠ P3-22. Sweep BEFORE reserving. The prune used to sit at the far
         // side of this `acquire`, which is a plain deadlock: `acquire` waits
@@ -144,10 +153,9 @@ impl SubagentManager {
         let run_deps = self.deps.clone();
         let run_id = id.clone();
         let run_cfg = config.clone();
-        let task =
-            tokio::spawn(
-                async move { native_runner::run(run_deps, run_id, run_cfg, prompt, tx).await },
-            );
+        let task = tokio::spawn(async move {
+            native_runner::run(run_deps, run_id, run_cfg, prompt, tx, run_token_budget).await
+        });
 
         // Launch the event pump (consumes rx, fans out to global bus + state).
         let pump_manager = self.clone();

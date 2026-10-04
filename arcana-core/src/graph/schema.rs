@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     worker_locked BOOLEAN DEFAULT 0,
     worktree TEXT,
     extra TEXT,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 )
 "#;
 
@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS edges (
     agent_author TEXT,
     task_id INTEGER,
     extra TEXT,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     FOREIGN KEY (source_qualified) REFERENCES nodes(qualified_name) ON DELETE CASCADE,
     FOREIGN KEY (target_qualified) REFERENCES nodes(qualified_name) ON DELETE CASCADE
 )
@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS communities (
     cohesion_score REAL NOT NULL,
     member_count INTEGER NOT NULL,
     dominant_language TEXT,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 )
 "#;
 
@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS flows (
     criticality_score REAL NOT NULL,
     is_tested BOOLEAN DEFAULT 0,
     has_security_keyword BOOLEAN DEFAULT 0,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 )
 "#;
 
@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS snapshots (
     node_count INTEGER NOT NULL,
     edge_count INTEGER NOT NULL,
     graph_json TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 )
 "#;
 
@@ -123,7 +123,7 @@ CREATE TABLE IF NOT EXISTS analysis_cache (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
     graph_hash TEXT NOT NULL,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 )
 "#;
 

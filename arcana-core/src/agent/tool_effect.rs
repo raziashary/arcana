@@ -54,6 +54,11 @@ pub enum ToolEffect {
     /// subprocess inherits the environment and can do anything the user can.
     Execute,
 
+    /// Runs model-authored free-form shell text. Unlike typed commands, its
+    /// eventual side effects cannot be inferred before execution, so it always
+    /// asks for per-call approval, including in autonomous fleet mode.
+    FreeformShell,
+
     /// Sends data off the machine.
     ///
     /// ⚠ **Its own effect, never folded into `Read`.** A tool that uploads the
@@ -61,6 +66,11 @@ pub enum ToolEffect {
     /// BYOK makes it the user's own data and the user's own bill. This is the
     /// prompting half of `TG3-26` (`P3-56`); the consent *store* is P4's.
     Network,
+
+    /// Performs a host-controlled dependency installation that needs explicit
+    /// consent even during Autonomous fleet execution. Consent is per call and
+    /// must never become a standing tool allowance.
+    HostApproval,
 
     /// Mutates task or fleet state — the board.
     ///
@@ -82,7 +92,7 @@ impl ToolEffect {
         match mode {
             // Nothing is prompted. The user has said so explicitly, and
             // unattended fleet work depends on it.
-            M::Autonomous => false,
+            M::Autonomous => matches!(self, ToolEffect::FreeformShell | ToolEffect::HostApproval),
 
             // Everything with a consequence is prompted.
             M::ManualApproval => !matches!(self, ToolEffect::Read),
@@ -95,7 +105,11 @@ impl ToolEffect {
             // file in their own workspace, and it is the one they cannot undo.
             M::SmartApprove => matches!(
                 self,
-                ToolEffect::Execute | ToolEffect::Network | ToolEffect::Board
+                ToolEffect::Execute
+                    | ToolEffect::FreeformShell
+                    | ToolEffect::Network
+                    | ToolEffect::HostApproval
+                    | ToolEffect::Board
             ),
             // ⚠ Spec `06 §1.1` names a fourth mode, `ChatOnly`. It does not
             // exist in `PermissionMode` — the code has three variants — and
@@ -117,7 +131,11 @@ impl ToolEffect {
             ToolEffect::Read => "read from your workspace",
             ToolEffect::Write => "modify files in your workspace",
             ToolEffect::Execute => "run a command on your machine",
+            ToolEffect::FreeformShell => "run a shell command you can review first",
             ToolEffect::Network => "send data from your machine to an external service",
+            ToolEffect::HostApproval => {
+                "install selected project dependencies or verified Arcana tooling from the network"
+            }
             ToolEffect::Board => "change shared task and fleet state",
         }
     }
@@ -131,6 +149,12 @@ impl ToolEffect {
     /// not express.
     pub fn is_concurrency_safe(&self) -> bool {
         matches!(self, ToolEffect::Read)
+    }
+
+    /// Whether a single approval may be saved as a session-long tool grant.
+    /// Calls requiring explicit host approval never support standing consent.
+    pub fn supports_standing_allow(&self) -> bool {
+        !matches!(self, ToolEffect::FreeformShell | ToolEffect::HostApproval)
     }
 }
 
@@ -160,6 +184,10 @@ mod tests {
         for mode in [M::ManualApproval, M::SmartApprove] {
             assert!(ToolEffect::Execute.requires_prompt(&mode));
         }
+        assert!(ToolEffect::FreeformShell.requires_prompt(&M::Autonomous));
+        for mode in [M::Autonomous, M::ManualApproval, M::SmartApprove] {
+            assert!(ToolEffect::HostApproval.requires_prompt(&mode));
+        }
     }
 
     #[test]
@@ -180,7 +208,9 @@ mod tests {
             ToolEffect::Read,
             ToolEffect::Write,
             ToolEffect::Execute,
+            ToolEffect::FreeformShell,
             ToolEffect::Network,
+            ToolEffect::HostApproval,
             ToolEffect::Board,
         ];
         let profile = |m: &M| {
@@ -207,6 +237,7 @@ mod tests {
         // which is how a concurrency hint became a security control.
         assert!(ToolEffect::Read.is_concurrency_safe());
         assert!(!ToolEffect::Execute.is_concurrency_safe());
+        assert!(!ToolEffect::FreeformShell.is_concurrency_safe());
         assert!(ToolEffect::Execute.requires_prompt(&M::SmartApprove));
     }
 
@@ -216,7 +247,9 @@ mod tests {
             ToolEffect::Read,
             ToolEffect::Write,
             ToolEffect::Execute,
+            ToolEffect::FreeformShell,
             ToolEffect::Network,
+            ToolEffect::HostApproval,
             ToolEffect::Board,
         ] {
             let d = e.describe();

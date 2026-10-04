@@ -75,7 +75,7 @@ impl SubagentConfig {
     pub const DEFAULT_TIMEOUT_SECS: u32 = 300;
     /// Fallback model when the LLM omits the `model` field in a subtask.
     /// Matches the fleet default used by RecipeRunner.
-    pub const DEFAULT_MODEL: &'static str = "claude-haiku-4-5";
+    pub const DEFAULT_MODEL: &'static str = "gemini-3.8-flash";
 }
 
 /// Lifecycle state of a subagent. Drives UI status indicators and the

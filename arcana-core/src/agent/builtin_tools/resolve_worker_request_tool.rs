@@ -28,7 +28,7 @@ impl Tool for ResolveWorkerRequestTool {
          Supervisor re-processes it every tick. \
          Use action='completed' when the request was fulfilled (e.g., decompose_audit → tasks created), \
          'acknowledged' when no further action is needed (e.g., needs_info awaiting human), \
-         'rejected' when the request was invalid or refused."
+         'rejected' when the request was invalid or refused. For a build_retry_approval request, action='approve_build_retry' grants exactly one subsequent project build batch and requires a reason."
     }
 
     fn input_schema(&self) -> Value {
@@ -41,8 +41,8 @@ impl Tool for ResolveWorkerRequestTool {
                 },
                 "action": {
                     "type": "string",
-                    "enum": ["completed", "acknowledged", "rejected"],
-                    "description": "Resolution. completed=fulfilled, acknowledged=seen-no-action, rejected=declined."
+                    "enum": ["completed", "acknowledged", "rejected", "approve_build_retry"],
+                    "description": "Resolution. approve_build_retry is Supervisor-only, requires a reason, and grants one project build batch."
                 },
                 "note": {
                     "type": "string",
@@ -53,16 +53,23 @@ impl Tool for ResolveWorkerRequestTool {
         })
     }
 
-    async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let id = match input["id"].as_i64() {
             Some(v) => v,
             None => return ToolResult::error("'id' is required (integer worker request ID)"),
         };
         let action = match input["action"].as_str() {
-            Some(s) if matches!(s, "completed" | "acknowledged" | "rejected") => s,
+            Some(s)
+                if matches!(
+                    s,
+                    "completed" | "acknowledged" | "rejected" | "approve_build_retry"
+                ) =>
+            {
+                s
+            }
             Some(s) => {
                 return ToolResult::error(&format!(
-                    "Invalid action '{s}'. Must be one of: completed, acknowledged, rejected."
+                    "Invalid action '{s}'. Must be one of: completed, acknowledged, rejected, approve_build_retry."
                 ))
             }
             None => return ToolResult::error("'action' is required"),
@@ -73,6 +80,26 @@ impl Tool for ResolveWorkerRequestTool {
             Ok(db) => db,
             Err(e) => return ToolResult::error(&format!("Failed to open tasks database: {e}")),
         };
+
+        if action == "approve_build_retry" {
+            if ctx.agent_role.trim() != "supervisor" {
+                return ToolResult::error("Only the Supervisor can approve a build retry.");
+            }
+            let Some(reason) = note else {
+                return ToolResult::error("A short approval reason is required.");
+            };
+            if let Err(error) = db.approve_build_retry_request(id, &ctx.agent_role, reason) {
+                return ToolResult::error(format!("Could not approve one build retry: {error}"));
+            }
+            return ToolResult::success(
+                json!({
+                    "id": id,
+                    "action": action,
+                    "message": "Approved exactly one subsequent project build batch. The grant is task- and worker-bound and will be consumed atomically at batch start."
+                })
+                .to_string(),
+            );
+        }
 
         if let Err(e) = db.update_worker_request_status(id, action, note) {
             return ToolResult::error(&format!("Failed to resolve worker request {id}: {e}"));

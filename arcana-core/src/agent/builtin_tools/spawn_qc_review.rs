@@ -58,7 +58,7 @@ impl Tool for SpawnQcReviewTool {
                 },
                 "model": {
                     "type": "string",
-                    "description": "Override LLM (registry key). Default: claude-sonnet-4-5."
+                    "description": "Override LLM (registry key). Default: gemini-3.8-flash."
                 },
                 "timeout_secs": {
                     "type": "integer",
@@ -207,7 +207,10 @@ impl Tool for SpawnQcReviewTool {
         // get_task as its first action per its recipe.
         let trigger = format!("Begin QC review of task #{task_id}.");
 
-        let handle = match mgr.spawn(config, trigger).await {
+        let handle = match mgr
+            .spawn_with_run_token_budget(config, trigger, ctx.run_token_budget.clone())
+            .await
+        {
             Ok(h) => h,
             Err(e) => {
                 // Roll back the claim so the next tick can retry.

@@ -38,8 +38,11 @@ serde_json  = "1"
 thiserror   = "1"
 anyhow      = "1"
 tracing     = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+rmcp = { version = "=3.5.0", default-features = false, features = ["client", "transport-streamable-http-client-reqwest"] }
 chrono      = { version = "0.4", features = ["serde"] }
-rusqlite    = { version = "0.31", features = ["bundled"] }
+rusqlite    = { version = "0.31", features = ["bundled", "trace", "functions"] }
 # P3-30. Vector search for memory. Its ENTIRE `[dependencies]` is `cc`:
 # it compiles sqlite-vec.c with -DSQLITE_CORE and never touches
 # libsqlite3-sys, so there is nothing to conflict with the pin above and
@@ -101,4 +104,30 @@ tree-sitter = "0.22"
 petgraph    = "0.6"
 ignore      = "0.4"
 cron        = "0.12"
+
+[dev-dependencies]
+# Deterministic paused-clock coverage for the production worker-run deadline.
+tokio = { version = "1", features = ["test-util"] }
+syn = { version = "2.0.117", features = ["full", "visit"] }
+
+[target.'cfg(windows)'.dependencies]
+flatbuffers = "=25.12.19"
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Isolation",
+    "Win32_Security_Cryptography",
+    "Win32_Security_WinTrust",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Environment",
+    "Win32_System_JobObjects",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Pipes",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 

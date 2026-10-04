@@ -12,10 +12,8 @@
 //   canonical workspace. Otherwise it returns an Err with a self-correcting
 //   message the LLM can read and retry against.
 //
-// This is a Rust-side load-bearing safety net. It must remain in place even
-// after the Python MCPBridge starts forwarding `__working_dir` correctly,
-// because a misbehaving model can still emit absolute paths outside the
-// workspace.
+// This Rust-side load-bearing safety net keeps built-in file tools confined
+// even when a model emits an absolute path outside the selected workspace.
 
 use std::path::{Path, PathBuf};
 
@@ -24,11 +22,11 @@ use std::path::{Path, PathBuf};
 /// enforce, and we surface that as an error so the caller doesn't silently
 /// degrade into a no-op.
 fn canonicalize_workspace(workspace: &Path) -> Result<PathBuf, String> {
-    workspace.canonicalize().map_err(|e| {
+    let workspace = workspace.to_string_lossy();
+    crate::platform::workspace::resolve_workspace_dir(Some(&workspace)).map_err(|error| {
         format!(
-            "Workspace path '{}' could not be canonicalized: {e}. \
-         This is a configuration problem in Arcana — the worker has no valid workspace.",
-            workspace.display()
+            "Workspace path '{}' is unavailable: {error}",
+            workspace.as_ref()
         )
     })
 }
@@ -307,6 +305,19 @@ mod tests {
             .to_string();
         let result = validate_workspace_path(&target, &bogus_workspace);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_relative_workspace_instead_of_resolving_it_from_process_cwd() {
+        let result = validate_workspace_path(Path::new("Cargo.toml"), ".");
+        assert!(
+            result.is_err(),
+            "agent writes must not resolve a relative workspace from process CWD"
+        );
+        assert!(
+            result.unwrap_err().contains("must be absolute"),
+            "the strict workspace resolver should explain the invalid root"
+        );
     }
 }
 

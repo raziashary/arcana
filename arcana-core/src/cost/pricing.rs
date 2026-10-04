@@ -103,6 +103,20 @@ pub struct PriceTier {
 const PRICES: &[(&str, ModelPrice)] = &[
     // Google — verified 2026-09-02. Cached read is a 90% discount on input.
     (
+        // Google Gemini API pricing, verified 2026-09-28. Standard tier;
+        // introductory prices double on 2027-01-01. Google reports cached
+        // reads but not cache writes in the usage metadata Arcana consumes.
+        "gemini-3.8-flash",
+        ModelPrice {
+            input: 0.75,
+            output: 3.75,
+            cached_read: 0.075,
+            cache_write: 0.0,
+            tier: None,
+            changes_on: Some("2027-01-01"),
+        },
+    ),
+    (
         // razi-ruled 2026-09-02: the fast model moves from 3.5-flash to
         // 3.7-flash, which is both newer and cheaper.
         //
@@ -344,6 +358,12 @@ mod tests {
         assert!((fresh - 3.00).abs() < 1e-9);
         assert!((cached - 0.20).abs() < 1e-9);
         assert!(cached * 10.0 < fresh, "a cache read must be far cheaper");
+    }
+
+    #[test]
+    fn gemini_38_flash_is_metered_at_the_published_standard_rate() {
+        let usage = usage(1_000_000, 0, 0, 1_000_000);
+        assert_eq!(cost_usd("gemini-3.8-flash", &usage).unwrap(), 4.5);
     }
 
     #[test]

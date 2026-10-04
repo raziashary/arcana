@@ -66,6 +66,22 @@ impl AnalyticsCollector {
         error_message: String,
         request_id: Option<String>,
     ) -> Result<i64> {
+        self.record_api_failure_outcome(provider, error_type, error_message, request_id, 0, false)
+    }
+
+    /// Record one provider call that saw at least one failed attempt. A
+    /// recovered call is marked resolved, with the number of retries retained
+    /// for the dashboard's retry-success metric. Messages must be pre-sanitized
+    /// summaries; raw provider bodies are not safe analytics data.
+    pub fn record_api_failure_outcome(
+        &self,
+        provider: String,
+        error_type: String,
+        error_message: String,
+        request_id: Option<String>,
+        retry_count: i32,
+        resolved: bool,
+    ) -> Result<i64> {
         // Redaction boundary (M-40, P1-21). A provider error message is the
         // most likely place for a credential to reach durable storage from the
         // egress path: an auth failure routinely echoes the request, and some
@@ -79,8 +95,8 @@ impl AnalyticsCollector {
             error_type,
             error_message,
             request_id,
-            retry_count: 0,
-            resolved: false,
+            retry_count: retry_count.max(0),
+            resolved,
         };
 
         self.db.insert_api_failure(&record)
@@ -128,7 +144,7 @@ impl AnalyticsCollector {
     ) -> Result<()> {
         let today = chrono::Local::now().naive_local().date();
         let success_rate = if tasks_completed + tasks_failed > 0 {
-            (tasks_completed as f64) / ((tasks_completed + tasks_failed) as f64) * 100.0
+            (tasks_completed as f64) / ((tasks_completed + tasks_failed) as f64)
         } else {
             0.0
         };

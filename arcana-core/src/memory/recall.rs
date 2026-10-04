@@ -57,13 +57,23 @@ pub struct Recalled {
 ///
 /// Both parameters are now load-bearing: `query` drives retrieval and
 /// `working_dir` determines scope.
+#[tracing::instrument(
+    target = "arcana::telemetry",
+    skip_all,
+    fields(event_type = "trace_span", operation = "memory_recall", session_id = %session_id)
+)]
 pub fn recall(session_id: &str, query: &str, working_dir: &str) -> Recalled {
     let _ = session_id; // reserved: session-anchored boosting (OQ-7)
+    let mut timer = crate::observability::timing::OperationTimer::start("memory_recall")
+        .with_database("memory")
+        .with_session_id(session_id);
 
     let db = match super::db::MemoryDb::open() {
         Ok(db) => db,
         Err(e) => {
             debug!("[recall] memory unavailable: {e}");
+            timer = timer.with_result_count(0);
+            timer.set_outcome("unavailable");
             return Recalled {
                 block: None,
                 degraded: Some(format!("memory unavailable: {e}")),
@@ -87,6 +97,8 @@ pub fn recall(session_id: &str, query: &str, working_dir: &str) -> Recalled {
         Ok(c) => c,
         Err(e) => {
             debug!("[recall] search failed: {e}");
+            timer = timer.with_result_count(0);
+            timer.set_outcome("degraded");
             return Recalled {
                 block: None,
                 degraded: Some(format!("retrieval failed: {e}")),
@@ -103,20 +115,23 @@ pub fn recall(session_id: &str, query: &str, working_dir: &str) -> Recalled {
         chrono::Utc::now(),
     );
 
+    let degraded = backend.degraded_reason();
     if ranked.is_empty() {
+        finish_recall_observation(timer, 0, degraded.is_some());
         return Recalled {
             block: None,
-            degraded: backend.degraded_reason(),
+            degraded,
             ids: Vec::new(),
         };
     }
 
     let ids: Vec<String> = ranked.iter().map(|s| s.candidate.id.clone()).collect();
     record_access(&db.conn, &ids);
+    finish_recall_observation(timer, ids.len(), degraded.is_some());
 
     Recalled {
-        block: Some(render(&ranked, backend.degraded_reason().is_some())),
-        degraded: backend.degraded_reason(),
+        block: Some(render(&ranked, degraded.is_some())),
+        degraded,
         ids,
     }
 }
@@ -131,9 +146,32 @@ pub fn recall(session_id: &str, query: &str, working_dir: &str) -> Recalled {
 ///
 /// Returns `None` when nothing matches, so a caller cannot tell an empty
 /// recall from a disabled one by looking at the string.
+#[tracing::instrument(
+    target = "arcana::telemetry",
+    skip_all,
+    fields(event_type = "trace_span", operation = "memory_procedural_recall")
+)]
 pub fn procedural_context(query: &str, limit: u32) -> Option<String> {
-    let items = crate::memory::procedural::ProceduralStore::search(query, limit).ok()?;
-    render_procedural(&items)
+    let mut timer = crate::observability::timing::OperationTimer::start("memory_procedural_recall")
+        .with_database("memory");
+    let items = match crate::memory::procedural::ProceduralStore::search(query, limit) {
+        Ok(items) => items,
+        Err(_) => {
+            timer = timer.with_result_count(0);
+            timer.set_outcome("degraded");
+            return None;
+        }
+    };
+    tracing::info!(
+        target: "arcana::telemetry",
+        event_type = "memory_procedural_result",
+        result_count = items.len(),
+        "Procedural memory search completed"
+    );
+    let rendered = render_procedural(&items);
+    timer = timer.with_result_count(items.len());
+    timer.succeed();
+    rendered
 }
 
 /// Render procedural memories. **Pure** — no database, no filesystem.
@@ -315,6 +353,8 @@ fn record_access(conn: &rusqlite::Connection, ids: &[String]) {
     if ids.is_empty() {
         return;
     }
+    let mut timing = crate::observability::timing::OperationTimer::start("memory_access_record")
+        .with_database("memory");
     let placeholders = (0..ids.len())
         .map(|i| format!("?{}", i + 2))
         .collect::<Vec<_>>()
@@ -323,22 +363,90 @@ fn record_access(conn: &rusqlite::Connection, ids: &[String]) {
         "UPDATE memories SET access_count = access_count + 1, last_accessed_at = ?1
          WHERE id IN ({placeholders})"
     );
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = crate::db::timestamps::now_rfc3339();
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(now)];
     for id in ids {
         params.push(Box::new(id.clone()));
     }
     let refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| b.as_ref()).collect();
-    if let Err(e) = conn.execute(&sql, refs.as_slice()) {
-        // A failure to record usage must never fail the recall itself.
-        debug!("[recall] could not record access: {e}");
+    match conn.execute(&sql, refs.as_slice()) {
+        Ok(updated) => {
+            timing.with_result_count(updated).succeed();
+        }
+        Err(e) => {
+            timing.set_outcome("degraded");
+            // A failure to record usage must never fail the recall itself.
+            debug!("[recall] could not record access: {e}");
+        }
     }
 }
 
 /// Cross-tier search — used by the `search_memory` builtin tool.
 pub fn search_all(req: &RecallRequest) -> Result<Vec<RecallResult>> {
+    Ok(search_all_detailed(req)?.results)
+}
+
+/// Cross-tier search results together with the retrieval backend's state.
+///
+/// The detailed form lets callers distinguish an empty complete search from an
+/// empty keyword-only fallback. The legacy `search_all` API remains available
+/// for callers that only need result rows.
+#[derive(Debug)]
+pub struct DetailedSearchResult {
+    pub results: Vec<RecallResult>,
+    pub degraded: bool,
+    pub degraded_reason: Option<String>,
+}
+
+/// Search every requested memory tier and report backend degradation.
+pub fn search_all_detailed(req: &RecallRequest) -> Result<DetailedSearchResult> {
+    search_all_detailed_with_context(req, None, None, None, None)
+}
+
+/// Production-tool variant that preserves the caller context on the search span.
+pub fn search_all_detailed_with_context(
+    req: &RecallRequest,
+    task_id: Option<i64>,
+    call_id: Option<&str>,
+    run_id: Option<&str>,
+    agent_role: Option<&str>,
+) -> Result<DetailedSearchResult> {
+    let mut timer = crate::observability::timing::OperationTimer::start("memory_search_all")
+        .with_database("memory")
+        .with_session_id(&req.session_id)
+        .with_task_id(task_id);
+    if let (Some(call_id), Some(agent_role)) = (call_id, agent_role) {
+        timer = timer.with_call_context(call_id, agent_role);
+    }
+    if let Some(run_id) = run_id {
+        timer = timer.with_run_id(run_id);
+    }
     let db = super::db::MemoryDb::open()?;
     let backend = super::manager::active_backend();
+    let result = search_with_backend(&db.conn, req, backend.as_ref())?;
+    finish_search_timing(timer, &result);
+    Ok(result)
+}
+
+fn finish_search_timing(
+    mut timer: crate::observability::timing::OperationTimer,
+    result: &DetailedSearchResult,
+) {
+    timer = timer.with_result_count(result.results.len());
+    if result.degraded {
+        timer.set_outcome("fallback");
+    } else {
+        timer.succeed();
+    }
+}
+
+/// Search against a caller-selected backend. Kept visible within the crate so
+/// tests can exercise backend degradation without model downloads or globals.
+pub(crate) fn search_with_backend(
+    conn: &rusqlite::Connection,
+    req: &RecallRequest,
+    backend: &dyn super::backend::RetrievalBackend,
+) -> Result<DetailedSearchResult> {
     let limit = req.limit.unwrap_or(20) as usize;
 
     let tiers = req.tier_filter.clone().unwrap_or_default();
@@ -352,7 +460,17 @@ pub fn search_all(req: &RecallRequest) -> Result<Vec<RecallResult>> {
         limit: limit * 4,
     };
 
-    let candidates = backend.search(&db.conn, &q)?;
+    let candidates = backend.search(conn, &q)?;
+    // Capture status after search. A vector backend can lose inference during
+    // this call and still produce lexical rows for this recall.
+    let degraded = backend.is_degraded();
+    let degraded_reason = backend.degraded_reason().map(|reason| {
+        crate::security::redaction::redact_text(&reason)
+            .chars()
+            .map(|ch| if ch.is_control() { ' ' } else { ch })
+            .take(512)
+            .collect()
+    });
     let ranked = super::rank::rank_and_budget(
         candidates,
         &super::rank::TierBudget {
@@ -366,9 +484,10 @@ pub fn search_all(req: &RecallRequest) -> Result<Vec<RecallResult>> {
     );
 
     let ids: Vec<String> = ranked.iter().map(|s| s.candidate.id.clone()).collect();
-    record_access(&db.conn, &ids);
+    record_access(conn, &ids);
 
-    Ok(ranked
+    let mut malformed_timestamp = false;
+    let results: Vec<RecallResult> = ranked
         .into_iter()
         .take(limit)
         .map(|s| RecallResult {
@@ -376,31 +495,110 @@ pub fn search_all(req: &RecallRequest) -> Result<Vec<RecallResult>> {
             id: s.candidate.id,
             content: truncate(&s.candidate.content, 400),
             score: s.score as f64,
-            created_at: chrono::DateTime::parse_from_rfc3339(&s.candidate.created_at)
-                .map(|d| d.with_timezone(&chrono::Utc))
-                .unwrap_or_else(|_| chrono::Utc::now()),
+            created_at: crate::db::timestamps::parse_db_timestamp(&s.candidate.created_at)
+                .unwrap_or_else(|_| {
+                    malformed_timestamp = true;
+                    tracing::warn!("memory result has invalid persisted timestamp");
+                    chrono::Utc::now()
+                }),
         })
-        .collect())
+        .collect();
+    let degraded_reason = if malformed_timestamp {
+        Some(match degraded_reason {
+            Some(reason) => format!("{reason}; one or more results had invalid timestamps"),
+            None => "one or more results had invalid timestamps".to_string(),
+        })
+    } else {
+        degraded_reason
+    };
+    Ok(DetailedSearchResult {
+        results,
+        degraded: degraded || malformed_timestamp,
+        degraded_reason,
+    })
 }
 
 /// Aggregate statistics across all three tiers.
 pub fn get_stats() -> MemoryStats {
-    let last_updated = super::db::MemoryDb::open().ok().and_then(|db| {
-        db.conn
-            .query_row("SELECT MAX(created_at) FROM episodic_memories", [], |r| {
-                r.get::<_, Option<String>>(0)
-            })
-            .ok()
-            .flatten()
-            .and_then(|s| s.parse().ok())
-    });
+    let timer = crate::observability::timing::OperationTimer::start("memory_get_stats")
+        .with_database("memory");
+    let (last_updated, last_updated_ok) = match super::db::MemoryDb::open() {
+        Ok(db) => {
+            match db
+                .conn
+                .query_row("SELECT MAX(created_at) FROM episodic_memories", [], |r| {
+                    r.get::<_, Option<String>>(0)
+                }) {
+                Ok(Some(value)) => match value.parse() {
+                    Ok(parsed) => (Some(parsed), true),
+                    Err(_) => (None, false),
+                },
+                Ok(None) => (None, true),
+                Err(_) => (None, false),
+            }
+        }
+        Err(_) => (None, false),
+    };
 
-    MemoryStats {
-        episodic_count: EpisodicStore::count_total(),
-        semantic_count: SemanticStore::count_total(),
-        procedural_count: ProceduralStore::count_total(),
-        session_count: EpisodicStore::count_sessions(),
+    let (episodic_count, episodic_ok) = EpisodicStore::count_total_with_health();
+    let (semantic_count, semantic_ok) = SemanticStore::count_total_with_health();
+    let (procedural_count, procedural_ok) = ProceduralStore::count_total_with_health();
+    let (session_count, sessions_ok) = EpisodicStore::count_sessions_with_health();
+
+    let stats = MemoryStats {
+        episodic_count,
+        semantic_count,
+        procedural_count,
+        session_count,
         last_updated,
+    };
+    let result_count = [
+        stats.episodic_count,
+        stats.semantic_count,
+        stats.procedural_count,
+        stats.session_count,
+    ]
+    .into_iter()
+    .fold(0usize, |total, count| {
+        total.saturating_add(usize::try_from(count).unwrap_or(usize::MAX))
+    });
+    let all_reads_succeeded =
+        last_updated_ok && episodic_ok && semantic_ok && procedural_ok && sessions_ok;
+    finish_stats_observation(timer, result_count, all_reads_succeeded);
+    stats
+}
+
+fn finish_stats_observation(
+    timer: crate::observability::timing::OperationTimer,
+    result_count: usize,
+    all_reads_succeeded: bool,
+) {
+    let mut timer = timer.with_result_count(result_count);
+    if all_reads_succeeded {
+        timer.succeed();
+    } else {
+        timer.set_outcome("partial");
+    }
+}
+
+fn finish_recall_observation(
+    timer: crate::observability::timing::OperationTimer,
+    result_count: usize,
+    backend_degraded: bool,
+) {
+    tracing::info!(
+        target: "arcana::telemetry",
+        event_type = "memory_recall_result",
+        candidate_count = result_count,
+        result_count,
+        backend_degraded,
+        "Memory recall ranked candidates"
+    );
+    let mut timer = timer.with_result_count(result_count);
+    if backend_degraded {
+        timer.set_outcome("fallback");
+    } else {
+        timer.succeed();
     }
 }
 
@@ -416,6 +614,244 @@ pub fn get_stats() -> MemoryStats {
 /// one place to fix.
 fn truncate(s: &str, max: usize) -> String {
     crate::security::truncate::truncate_with_note(s, max)
+}
+
+#[cfg(test)]
+mod observability_tests {
+    use super::{
+        finish_recall_observation, finish_search_timing, finish_stats_observation, record_access,
+        DetailedSearchResult,
+    };
+    use crate::observability::timing::OperationTimer;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("capture telemetry")
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn capture_events(action: impl FnOnce()) -> Vec<serde_json::Value> {
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let writer_output = Arc::clone(&output);
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(move || SharedWriter(Arc::clone(&writer_output)))
+            .finish();
+        tracing::subscriber::with_default(subscriber, action);
+        let output = String::from_utf8(output.lock().expect("capture output").clone())
+            .expect("UTF-8 JSON events");
+        output
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("JSON event"))
+            .collect()
+    }
+
+    #[test]
+    fn recall_result_and_timing_events_report_the_same_nonzero_count() {
+        let events = capture_events(|| {
+            finish_recall_observation(OperationTimer::start("memory_recall"), 3, false);
+        });
+        let result = events
+            .iter()
+            .find(|event| event["fields"]["event_type"] == "memory_recall_result")
+            .expect("recall result event");
+        let timing = events
+            .iter()
+            .find(|event| event["fields"]["event_type"] == "operation_timing")
+            .expect("recall timing event");
+        assert_eq!(result["fields"]["result_count"], 3);
+        assert_eq!(timing["fields"]["result_count"], 3);
+        assert_eq!(timing["fields"]["outcome"], "success");
+    }
+
+    #[test]
+    fn degraded_cross_tier_search_is_recorded_as_fallback() {
+        let result = DetailedSearchResult {
+            results: Vec::new(),
+            degraded: true,
+            degraded_reason: Some("keyword-only retrieval".into()),
+        };
+        let events = capture_events(|| {
+            finish_search_timing(OperationTimer::start("memory_search_all"), &result);
+        });
+        let timing = events
+            .iter()
+            .find(|event| event["fields"]["operation"] == "memory_search_all")
+            .expect("cross-tier search timing event");
+        assert_eq!(timing["fields"]["outcome"], "fallback");
+        assert_eq!(timing["fields"]["result_count"], 0);
+    }
+
+    #[test]
+    fn aggregate_stats_marks_component_fallbacks_as_partial() {
+        let events = capture_events(|| {
+            finish_stats_observation(
+                OperationTimer::start("memory_get_stats").with_database("memory"),
+                5,
+                false,
+            );
+        });
+        let timing = events
+            .iter()
+            .find(|event| event["fields"]["operation"] == "memory_get_stats")
+            .expect("aggregate stats operation event");
+        assert_eq!(timing["fields"]["result_count"], 5);
+        assert_eq!(timing["fields"]["outcome"], "partial");
+    }
+
+    #[test]
+    fn access_history_write_reports_success_and_failure_without_memory_ids() {
+        let connection = rusqlite::Connection::open_in_memory().expect("in-memory DB");
+        connection
+            .execute(
+                "CREATE TABLE memories (id TEXT PRIMARY KEY, access_count INTEGER NOT NULL DEFAULT 0, last_accessed_at TEXT)",
+                [],
+            )
+            .expect("create isolated test table");
+        connection
+            .execute(
+                "INSERT INTO memories (id, access_count) VALUES ('private-memory-id', 0)",
+                [],
+            )
+            .expect("seed one memory");
+        let ids = vec!["private-memory-id".to_string()];
+
+        let success_events = capture_events(|| record_access(&connection, &ids));
+        let success = success_events
+            .iter()
+            .find(|event| event["fields"]["operation"] == "memory_access_record")
+            .expect("successful access write event");
+        assert_eq!(success["fields"]["outcome"], "success");
+        assert_eq!(success["fields"]["result_count"], 1);
+
+        let missing_table = rusqlite::Connection::open_in_memory().expect("in-memory DB");
+        let failure_events = capture_events(|| record_access(&missing_table, &ids));
+        let failure = failure_events
+            .iter()
+            .find(|event| event["fields"]["operation"] == "memory_access_record")
+            .expect("failed access write event");
+        assert_eq!(failure["fields"]["outcome"], "degraded");
+        let serialized = serde_json::to_string(&success_events).expect("serialize events");
+        assert!(!serialized.contains("private-memory-id"));
+    }
+
+    #[test]
+    fn production_detailed_search_survives_best_effort_access_history_failure() {
+        let home = tempfile::tempdir().expect("isolated home");
+        let _home_guard = crate::db::test_support::with_home(home.path());
+        let db = super::super::db::MemoryDb::open().expect("open migrated MemoryDb");
+        db.conn
+            .execute(
+                "INSERT INTO memories (id, tier, scope, scope_ref, scope_key, content, source, confidence, importance, created_at, updated_at)
+                 VALUES ('recall-row', 'semantic', 'global', '', 'global', 'needle result content', 'test', 0.9, 0.8, '2026-10-03T00:00:00Z', '2026-10-03T00:00:00Z')",
+                [],
+            )
+            .expect("seed searchable memory");
+        db.conn
+            .execute_batch(
+                "CREATE TRIGGER fail_access_history BEFORE UPDATE OF access_count ON memories
+                 BEGIN SELECT RAISE(ABORT, 'injected access history failure'); END;",
+            )
+            .expect("install isolated failure trigger");
+
+        let request = super::super::types::RecallRequest {
+            session_id: "session-fixture".into(),
+            query: "needle".into(),
+            working_dir: None,
+            tier_filter: None,
+            limit: Some(5),
+        };
+        drop(db);
+        let (result, events) = crate::observability::timing::capture_json_events(|| {
+            super::search_all_detailed_with_context(
+                &request,
+                Some(17),
+                Some("tool-call-safe"),
+                Some("run-safe"),
+                Some("worker-backend"),
+            )
+        });
+
+        let result = result.expect("recall remains successful after optional history failure");
+        assert_eq!(result.results.len(), 1);
+        assert_eq!(result.results[0].id, "recall-row");
+        assert!(
+            result.degraded,
+            "lexical-only backend remains classified as fallback"
+        );
+        let access = events
+            .iter()
+            .find(|event| event["fields"]["operation"] == "memory_access_record")
+            .expect("best-effort access failure event");
+        assert_eq!(access["fields"]["outcome"], "degraded");
+        assert_eq!(access["fields"]["result_count_observed"], false);
+        let search = events
+            .iter()
+            .find(|event| event["fields"]["operation"] == "memory_search_all")
+            .expect("public detailed-search operation event");
+        assert_eq!(search["fields"]["outcome"], "fallback");
+        assert_eq!(search["fields"]["result_count"], 1);
+        assert_eq!(search["fields"]["task_id"], "17");
+        assert_eq!(search["fields"]["call_id"], "tool-call-safe");
+        assert_eq!(search["fields"]["run_id"], "run-safe");
+        assert_eq!(search["fields"]["agent_role"], "worker-backend");
+    }
+
+    #[test]
+    fn malformed_persisted_timestamp_degrades_without_logging_raw_data() {
+        let home = tempfile::tempdir().expect("isolated home");
+        let _home_guard = crate::db::test_support::with_home(home.path());
+        let db = super::super::db::MemoryDb::open().expect("open migrated MemoryDb");
+        db.conn
+            .execute(
+                "INSERT INTO memories (id, tier, scope, scope_ref, scope_key, content, source, confidence, importance, created_at, updated_at)
+                 VALUES ('timestamp-row', 'semantic', 'global', '', 'global', 'timestamp-canary-content', 'test', 0.9, 0.8, 'timestamp-canary-raw', '2026-10-03T00:00:00Z')",
+                [],
+            )
+            .expect("seed row with malformed timestamp");
+        drop(db);
+        let request = super::super::types::RecallRequest {
+            session_id: "session-fixture".into(),
+            query: "timestamp-canary-content".into(),
+            working_dir: None,
+            tier_filter: None,
+            limit: Some(5),
+        };
+
+        let (result, events) = crate::observability::timing::capture_json_events(|| {
+            super::search_all_detailed(&request)
+        });
+
+        let result = result.expect("search tolerates malformed legacy row");
+        assert_eq!(result.results.len(), 1);
+        assert!(result.degraded);
+        assert!(result
+            .degraded_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("invalid timestamps"));
+        let serialized = serde_json::to_string(&events).expect("serialize telemetry");
+        assert!(!serialized.contains("timestamp-canary-raw"));
+        assert!(!serialized.contains("timestamp-canary-content"));
+        let search = events
+            .iter()
+            .find(|event| event["fields"]["operation"] == "memory_search_all")
+            .expect("search timing event");
+        assert_eq!(search["fields"]["outcome"], "fallback");
+    }
 }
 
 #[cfg(test)]

@@ -28,6 +28,20 @@
 use rusqlite::Connection;
 
 use crate::errors::{ArcanaError, Result};
+use crate::observability::timing::OperationTimer;
+
+fn telemetry_database_name(db_name: &str) -> &'static str {
+    match db_name {
+        "analytics.db" => "analytics",
+        "annotations.db" => "annotations",
+        "config.db" => "config",
+        "plans.db" => "plans",
+        "runs.db" => "runs",
+        "tasks.db" => "tasks",
+        "workers.db" => "workers",
+        _ => "other",
+    }
+}
 
 /// One rung of a ladder.
 #[derive(Debug, Clone, Copy)]
@@ -104,6 +118,36 @@ fn is_destructive(sql: &str) -> bool {
     DESTRUCTIVE.iter().any(|needle| lower.contains(needle))
 }
 
+/// Keep file-backed unit-test migrations self-contained. `open_at` exists so a
+/// test can exercise the real file-backed schema path without touching the
+/// user's database. Once a migration becomes backup-required, routing every
+/// such temporary file into the ambient `~/.arcana/backups` both leaks test
+/// artifacts and makes parallel tests collide on the same second-resolution
+/// backup name. Production builds keep the canonical backup root; tests whose
+/// database is under the OS temp directory keep the backup beside that fixture.
+fn backup_before_migration(
+    path: &std::path::Path,
+    reason: &str,
+) -> Result<crate::db::backup::Backup> {
+    #[cfg(test)]
+    if let (Some(parent), Ok(temp_root)) = (path.parent(), std::env::temp_dir().canonicalize()) {
+        if parent
+            .canonicalize()
+            .is_ok_and(|p| p.starts_with(&temp_root))
+        {
+            let root = parent.join(".arcana").join("backups");
+            return crate::db::backup::backup_database_in(
+                &root,
+                path,
+                reason,
+                &crate::db::backup::timestamp_now(),
+            );
+        }
+    }
+
+    crate::db::backup::backup_before(path, reason)
+}
+
 /// Apply every migration in `ladder` whose version is above the database's
 /// current `user_version`, in order, and return the version reached.
 ///
@@ -113,6 +157,9 @@ fn is_destructive(sql: &str) -> bool {
 /// so a database is never left having done the work without recording it, or
 /// having recorded it without doing the work.
 pub fn run_ladder(conn: &Connection, db_name: &str, ladder: &[Migration]) -> Result<i32> {
+    let mut operation = OperationTimer::start("database_schema_migration_ladder")
+        .with_database(telemetry_database_name(db_name))
+        .with_result_count(0);
     validate_ladder(db_name, ladder)?;
 
     let current = user_version(conn)?;
@@ -128,6 +175,7 @@ pub fn run_ladder(conn: &Connection, db_name: &str, ladder: &[Migration]) -> Res
         )));
     }
 
+    let mut applied_count = 0;
     for m in ladder.iter().filter(|m| m.version > current) {
         // GAP-11 / §0.8: a migration that can destroy data is backed up first,
         // automatically. A baseline rung is `CREATE … IF NOT EXISTS` only and
@@ -147,7 +195,7 @@ pub fn run_ladder(conn: &Connection, db_name: &str, ladder: &[Migration]) -> Res
                 .map(std::path::PathBuf::from)
             {
                 let reason = format!("{db_name}-v{}-{}", m.version, m.name);
-                match crate::db::backup::backup_before(&path, &reason) {
+                match backup_before_migration(&path, &reason) {
                     Ok(b) => tracing::info!("[migrate] {}", b.describe()),
                     Err(e) => {
                         return Err(ArcanaError::Agent(format!(
@@ -171,6 +219,8 @@ pub fn run_ladder(conn: &Connection, db_name: &str, ladder: &[Migration]) -> Res
                 conn.execute_batch("COMMIT").map_err(|e| {
                     ArcanaError::Agent(format!("{db_name} v{}: commit: {e}", m.version))
                 })?;
+                applied_count += 1;
+                operation = operation.with_result_count(applied_count);
                 tracing::info!("[migrate] {db_name}: applied v{} ({})", m.version, m.name);
             }
             Err(e) => {
@@ -186,7 +236,9 @@ pub fn run_ladder(conn: &Connection, db_name: &str, ladder: &[Migration]) -> Res
         }
     }
 
-    user_version(conn)
+    let version = user_version(conn)?;
+    operation.succeed();
+    Ok(version)
 }
 
 /// Add any of `columns` that `table` does not already have.
@@ -300,6 +352,75 @@ mod tests {
     }
 
     #[test]
+    fn migration_ladder_emits_safe_result_span() {
+        const BROKEN: &[Migration] = &[
+            Migration {
+                version: 1,
+                name: "private-migration-name-marker",
+                sql: "CREATE TABLE private_migration_sql_marker (id INTEGER PRIMARY KEY);",
+            },
+            Migration {
+                version: 2,
+                name: "broken-migration-name-marker",
+                sql: "CREATE TABLE invalid (",
+            },
+        ];
+        let success = mem();
+        let no_op = mem();
+        let failure = mem();
+
+        let (observed, events) = crate::observability::timing::capture_json_events(|| {
+            let first =
+                run_ladder(&success, "analytics.db", LADDER).expect("initial ladder application");
+            let repeated =
+                run_ladder(&success, "analytics.db", LADDER).expect("already-current ladder");
+            let failed =
+                run_ladder(&failure, "C:/private/database-path-marker.db", BROKEN).is_err();
+            let empty = run_ladder(&no_op, "unrecognized-private-db-marker", &[])
+                .expect("empty ladder is a no-op");
+            (first, repeated, failed, empty)
+        });
+
+        assert_eq!(observed, (2, 2, true, 0));
+        let operations: Vec<_> = events
+            .iter()
+            .filter(|event| event["fields"]["event_type"] == "operation_timing")
+            .collect();
+        assert_eq!(operations.len(), 4);
+        assert!(operations.iter().any(|event| {
+            event["fields"]["operation"] == "database_schema_migration_ladder"
+                && event["fields"]["database"] == "analytics"
+                && event["fields"]["outcome"] == "success"
+                && event["fields"]["result_count"] == 2
+        }));
+        assert!(operations.iter().any(|event| {
+            event["fields"]["operation"] == "database_schema_migration_ladder"
+                && event["fields"]["outcome"] == "error"
+                && event["fields"]["result_count_observed"] == true
+                && event["fields"]["result_count"] == 1
+        }));
+        assert!(operations.iter().any(|event| {
+            event["fields"]["operation"] == "database_schema_migration_ladder"
+                && event["fields"]["database"] == "other"
+                && event["fields"]["outcome"] == "success"
+                && event["fields"]["result_count"] == 0
+        }));
+        let operation_json = serde_json::to_string(&operations).expect("serialize operation spans");
+        for private_value in [
+            "private-migration-name-marker",
+            "broken-migration-name-marker",
+            "private_migration_sql_marker",
+            "private/database-path-marker",
+            "unrecognized-private-db-marker",
+        ] {
+            assert!(
+                !operation_json.contains(private_value),
+                "migration telemetry leaked {private_value}"
+            );
+        }
+    }
+
+    #[test]
     fn ensure_columns_adds_only_what_is_missing_and_is_idempotent() {
         let c = mem();
         c.execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY, a TEXT);")
@@ -398,9 +519,11 @@ mod tests {
     /// stops the operation" was an unproven claim.
     #[test]
     fn a_destructive_migration_refuses_to_run_when_the_backup_fails() {
-        let dir = std::env::temp_dir().join("arcana-migrate-refuse-test");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("mkdir");
+        let dir = std::env::temp_dir().join(format!(
+            "arcana-migrate-refuse-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&dir).expect("create unique isolated directory");
         let db_path = dir.join("victim.db");
 
         let c = Connection::open(&db_path).expect("open");
@@ -492,9 +615,11 @@ mod tests {
     /// and the backup contains the data the migration is about to remove.
     #[test]
     fn a_destructive_migration_backs_up_first() {
-        let dir = std::env::temp_dir().join("arcana-migrate-backup-test");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("mkdir");
+        let dir = std::env::temp_dir().join(format!(
+            "arcana-migrate-backup-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&dir).expect("create unique isolated directory");
         let db_path = dir.join("victim.db");
 
         let c = Connection::open(&db_path).expect("open");
