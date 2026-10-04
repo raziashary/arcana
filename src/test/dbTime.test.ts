@@ -37,7 +37,8 @@ describe('parseDbTimestamp', () => {
     const correct = parseDbTimestamp(raw)!.getTime()
     const naive = new Date(raw).getTime()
     const offsetMs = new Date(raw.replace(' ', 'T') + 'Z').getTimezoneOffset() * 60_000
-    expect(correct - naive).toBe(-offsetMs)
+    // Test the instant offset without distinguishing +0 from -0 on UTC hosts.
+    expect(correct - naive + offsetMs).toBe(0)
   })
 
   it('accepts fractional seconds', () => {
