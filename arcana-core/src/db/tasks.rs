@@ -2479,8 +2479,8 @@ impl TasksDb {
             // `claim_host` as one unit, because a task with no worker cannot
             // have a live claim — leaving a PID behind makes it an orphan
             // candidate on the next sweep. This makes THIS path internally
-            // consistent; the broader "clear them on every non-claim write" is
-            // `P4-40`'s job and is not done here.
+            // consistent; P4-40's SQLite guards also reject inconsistent claim
+            // metadata from any other writer.
             let sql = format!(
                 "UPDATE tasks SET status = ?1, assigned_worker = NULL, \
                  claimed_by_pid = NULL, claim_host = NULL, rejection_reason = ?2, \
@@ -8725,6 +8725,66 @@ mod tests {
                 .as_deref(),
             Some("worker-b")
         );
+    }
+
+    #[test]
+    fn p4_claim_triggers_reject_inconsistent_metadata_from_independent_sql_writer() {
+        let path = sandbox("p4-claim-writer-boundary");
+        let db = TasksDb::open_at(&path).expect("open isolated migrated TasksDb");
+        let task = ready_task(&db, "independent writer claim invariant");
+        db.update_status(task.id, "assigned", Some("worker-a"))
+            .unwrap();
+        let writer = Connection::open(&path).expect("open independent raw SQLite writer");
+
+        for statement in [
+            "UPDATE tasks SET claimed_by_pid=901 WHERE id=?1",
+            "UPDATE tasks SET claim_host='writer-host' WHERE id=?1",
+            "UPDATE tasks SET status='in_progress' WHERE id=?1",
+            "UPDATE tasks SET status='in_progress', claimed_by_pid=901 WHERE id=?1",
+            "UPDATE tasks SET status='in_progress', claim_host='writer-host' WHERE id=?1",
+        ] {
+            assert!(
+                writer.execute(statement, [task.id]).is_err(),
+                "guard must reject {statement}"
+            );
+            let unchanged = db.get_by_id(task.id).unwrap().unwrap();
+            assert_eq!(unchanged.status, TaskStatus::Assigned);
+            assert_eq!(unchanged.claimed_by_pid, None);
+            assert_eq!(unchanged.claim_host, None);
+        }
+        assert!(writer.execute(
+            "INSERT INTO tasks(title,status,assigned_worker,claimed_by_pid,claim_host) VALUES('forged insert','in_progress','worker-b',902,'writer-host')",
+            [],
+        ).is_err());
+        assert_eq!(db.list(None).unwrap().len(), 1);
+
+        db.claim_task_with_pid(task.id, "worker-a", 901).unwrap();
+        let claimed = db.get_by_id(task.id).unwrap().unwrap();
+        for statement in [
+            "UPDATE tasks SET claimed_by_pid=902 WHERE id=?1",
+            "UPDATE tasks SET claimed_by_pid=NULL WHERE id=?1",
+            "UPDATE tasks SET claim_host='replacement-host' WHERE id=?1",
+            "UPDATE tasks SET claim_host=NULL WHERE id=?1",
+            "UPDATE tasks SET assigned_worker='worker-b' WHERE id=?1",
+            "UPDATE tasks SET assigned_worker=NULL WHERE id=?1",
+            "UPDATE tasks SET status='failed' WHERE id=?1",
+        ] {
+            assert!(
+                writer.execute(statement, [task.id]).is_err(),
+                "active-claim guard must reject {statement}"
+            );
+            let current = db.get_by_id(task.id).unwrap().unwrap();
+            assert_eq!(current.status, TaskStatus::InProgress);
+            assert_eq!(current.assigned_worker, claimed.assigned_worker);
+            assert_eq!(current.claimed_by_pid, claimed.claimed_by_pid);
+            assert_eq!(current.claim_host, claimed.claim_host);
+        }
+        db.update_status(task.id, "failed", Some("worker-a"))
+            .unwrap();
+        let exited = db.get_by_id(task.id).unwrap().unwrap();
+        assert_eq!(exited.status, TaskStatus::Failed);
+        assert_eq!(exited.claimed_by_pid, None);
+        assert_eq!(exited.claim_host, None);
     }
 
     #[test]

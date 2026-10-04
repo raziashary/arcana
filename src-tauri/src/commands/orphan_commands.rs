@@ -60,6 +60,150 @@ mod tests {
     use super::*;
 
     #[test]
+    fn manual_release_command_clears_claim_and_updates_board_readers() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::test_support::isolate_home(home.path());
+        let db = TasksDb::open().expect("open isolated task DB");
+        let task = db
+            .create(crate::db::tasks::CreateTaskInput {
+                title: "normal manual release".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "release clears metadata and the board observes it".into(),
+                created_by: Some("test".into()),
+            })
+            .unwrap();
+        db.update_status(task.id, "assigned", Some("worker-a"))
+            .unwrap();
+        db.claim_task_with_pid(task.id, "worker-a", 43001).unwrap();
+        let observed = get_orphaned_tasks()
+            .unwrap()
+            .into_iter()
+            .find(|row| row.id == task.id)
+            .expect("the production orphan reader sees the claim");
+        force_release_task(
+            task.id,
+            observed.status.as_str().to_string(),
+            observed.assigned_worker,
+            observed.claimed_by_pid,
+            observed.claim_host,
+            observed.updated_at,
+            Some("user confirmed obsolete claim".into()),
+        )
+        .expect("an unchanged observed claim may be released");
+        let released = crate::commands::task_commands::get_task(task.id)
+            .unwrap()
+            .expect("production board reader returns released task");
+        assert_eq!(released.status, TaskStatus::Ready);
+        assert_eq!(released.assigned_worker, None);
+        assert_eq!(released.claimed_by_pid, None);
+        assert_eq!(released.claim_host, None);
+        assert_eq!(
+            released.rejection_reason.as_deref(),
+            Some("[orphan] user confirmed obsolete claim")
+        );
+        assert!(!get_orphaned_tasks()
+            .unwrap()
+            .iter()
+            .any(|row| row.id == task.id));
+    }
+
+    #[test]
+    fn manual_release_command_cas_preserves_claim_replaced_after_preflight() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+        use tracing_subscriber::{layer::SubscriberExt, Layer};
+
+        struct ReplaceClaimAtRelease {
+            path: std::path::PathBuf,
+            observed: Task,
+            fired: Arc<AtomicBool>,
+        }
+
+        impl<S: tracing::Subscriber> Layer<S> for ReplaceClaimAtRelease {
+            fn on_new_span(
+                &self,
+                attributes: &tracing::span::Attributes<'_>,
+                _id: &tracing::span::Id,
+                _context: tracing_subscriber::layer::Context<'_, S>,
+            ) {
+                if attributes.metadata().name() != "database_task_orphan_release"
+                    || self.fired.swap(true, Ordering::SeqCst)
+                {
+                    return;
+                }
+                let path = self.path.clone();
+                let observed = self.observed.clone();
+                std::thread::spawn(move || {
+                    let writer = TasksDb::open_at(&path).expect("open competing connection");
+                    assert!(writer
+                        .release_orphaned_task_if_unchanged(&observed, "race replacement")
+                        .unwrap());
+                    writer
+                        .update_status(observed.id, "assigned", Some("worker-b"))
+                        .unwrap();
+                    writer
+                        .claim_task_with_pid(observed.id, "worker-b", 42002)
+                        .unwrap();
+                })
+                .join()
+                .expect("competing claim commits before the delayed CAS");
+            }
+        }
+
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::test_support::isolate_home(home.path());
+        let db = TasksDb::open().expect("open isolated TasksDb");
+        let task = db
+            .create(crate::db::tasks::CreateTaskInput {
+                title: "late manual release race".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "a replacement after preflight survives stale release".into(),
+                created_by: Some("test".into()),
+            })
+            .unwrap();
+        db.update_status(task.id, "assigned", Some("worker-a"))
+            .unwrap();
+        db.claim_task_with_pid(task.id, "worker-a", 42001).unwrap();
+        let observed = db.get_by_id(task.id).unwrap().unwrap();
+        let fired = Arc::new(AtomicBool::new(false));
+        let subscriber = tracing_subscriber::registry().with(ReplaceClaimAtRelease {
+            path: home.path().join(".arcana").join("tasks.db"),
+            observed: observed.clone(),
+            fired: fired.clone(),
+        });
+        let error = tracing::subscriber::with_default(subscriber, || {
+            force_release_task(
+                task.id,
+                observed.status.as_str().to_string(),
+                observed.assigned_worker,
+                observed.claimed_by_pid,
+                observed.claim_host.clone(),
+                observed.updated_at,
+                Some("delayed UI action".into()),
+            )
+        })
+        .expect_err("the post-preflight compare-and-set must lose the race");
+        assert!(
+            fired.load(Ordering::SeqCst),
+            "preflight must reach the real release boundary"
+        );
+        assert!(error
+            .to_string()
+            .contains("changed while it was being released"));
+        let current = db.get_by_id(task.id).unwrap().unwrap();
+        assert_eq!(current.status, TaskStatus::InProgress);
+        assert_eq!(current.assigned_worker.as_deref(), Some("worker-b"));
+        assert_eq!(current.claimed_by_pid, Some(42002));
+        assert_eq!(current.claim_host, observed.claim_host);
+    }
+
+    #[test]
     fn manual_release_command_rejects_a_stale_claim_snapshot() {
         let home = tempfile::tempdir().expect("isolated Arcana home");
         let _home = crate::test_support::isolate_home(home.path());

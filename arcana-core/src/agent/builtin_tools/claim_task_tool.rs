@@ -195,6 +195,8 @@ mod tests {
 
     #[test]
     fn shipped_claim_tool_refuses_other_worker_and_claims_for_owner() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
         let path =
             std::env::temp_dir().join(format!("arcana-claim-tool-{}.db", uuid::Uuid::new_v4()));
         let db = TasksDb::open_at(&path).expect("open isolated tasks DB");
@@ -227,10 +229,14 @@ mod tests {
         let payload: Value = serde_json::from_str(&allowed.output).expect("claim result JSON");
         assert_eq!(payload["budget"]["max_tokens"], 250);
         assert_eq!(payload["budget"]["tokens_used"], 17);
-        assert_eq!(
-            db.get_by_id(task.id).unwrap().unwrap().status,
-            crate::db::tasks::TaskStatus::InProgress
-        );
+        let claimed = db.get_by_id(task.id).unwrap().unwrap();
+        assert_eq!(claimed.status, crate::db::tasks::TaskStatus::InProgress);
+        assert_eq!(claimed.assigned_worker.as_deref(), Some("worker-a"));
+        assert_eq!(claimed.claimed_by_pid, Some(i64::from(std::process::id())));
+        assert!(claimed
+            .claim_host
+            .as_deref()
+            .is_some_and(|host| !host.is_empty()));
 
         drop(db);
         let _ = std::fs::remove_file(path);

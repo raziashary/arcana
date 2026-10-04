@@ -1,5 +1,6 @@
 // update_task_status_tool — Native tool for recipe agents to update task board state.
-// Used by the Supervisor recipe to assign tasks, mark in_progress, escalate failures, etc.
+// Used by the Supervisor recipe for assignments/recovery and by workers for results.
+// Entering in_progress requires the owning worker's atomic claim_task tool.
 // Available in FastDevelopment mode — recipe agents run in this mode.
 // Eliminates the need for Python scripts to manipulate tasks.db directly.
 
@@ -25,7 +26,8 @@ impl Tool for UpdateTaskStatusTool {
     fn description(&self) -> &str {
         "Update the status and/or assigned worker for a task on the Arcana board. \
         Use this to: assign a task to a worker (status='assigned', assigned_worker='worker-backend'), \
-        mark as in_progress, escalate to failed, report build failures, or mark as done. \
+        escalate to failed, report build failures, or mark as done. \
+        To enter in_progress, the assigned worker must use claim_task; this tool cannot create a claim. \
         Valid statuses: ready, assigned, in_progress, qc_review, done, failed, build_failed, cancelled, rejected, needs_info. \
         Use rejected when QC finds issues — provide a rejection_reason in that field so the worker knows what to fix."
     }

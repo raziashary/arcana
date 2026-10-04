@@ -6923,3 +6923,11 @@ readback.
 **Reason.** Authenticated run 37216487226 failed only this desktop source guard (165 passed, one failed): it still counted inline `ErrorClass::classify` calls, which now live behind the approved bounded-body helper. All six complete/stream error blocks use that helper. This stale test prevents the dependent P4 three-platform workflow corpus from executing.
 
 **Proof.** Repaired source guard passes 1/1; full desktop source-gate module passes 77/77. Production Anthropic/OpenAI complete/stream error privacy fixtures pass 2/2; Google quota-class/privacy fixture passes 1/1. Workspace check and formatting pass. Remote CI must rerun; no P2 or P4 gate closes from the source guard alone.
+
+## ADR-LOG-RESTRUCT-0282 — Inject the manual-release race through existing tracing
+
+**Decision.** Test P4-40's late reassignment boundary using a test-only tracing Layer that observes the real `database_task_orphan_release` span entry. A separate isolated TasksDb connection replaces the claim after command preflight but before its compare-and-set. Add direct-SQL invariant falsification and document the production writer inventory.
+
+**Reason.** The existing Tauri regression changes the claim before preflight and cannot prove the later window. The production release already creates the span immediately before its atomic SQL, so the test needs no shipped hook, API or schema change. Keep the owner-approved DB-wide claim invariant and CAS policy unchanged.
+
+**Proof required.** Real Tauri command reaches the post-preflight span, rejects the stale CAS and preserves the replacement owner/PID/host; direct SQL cannot introduce inconsistent claim metadata; production writer and recovery consumers are accounted for. Those checks pass; P4-40 is proven in `_verify/P4-40-CLAIM-SAFETY-CLOSEOUT-2026-10-05.md`. The raw SQL and claim-tool tests pass on Windows/Linux; the late manual command race and CLI smoke pass on Windows. The manual endpoint has no React caller; no manual UI-button proof is claimed.
