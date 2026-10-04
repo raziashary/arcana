@@ -310,3 +310,9 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 - The production assignment/routing test now completes a worker-owned task and reads the persisted routing outcome through `TasksDb::get_routing_history`, asserting `outcome_at` is canonical and parseable.
 - `cargo test -p arcana-core --lib p4_assignment_and_routing_history_commit_per_entry --locked -- --test-threads=1` passes 1/1. Formatting and diff checks pass. This covers selected routing fields only; TG4-19 remains open.
 - Phase counts remain P4 32/59 and TG4 10/33. Owner Calendar acceptance remains untouched.
+
+## Continuation — Linux WSL launcher and retention regressions
+
+- The first Linux `arcana-core` test build exposed a non-awaited async call in the Landlock child test and an unconditional reference to the Windows-only Python Ruff installer. The Linux test now awaits `process_sandbox::spawn`; ProjectCommand selects the verified Ruff installer only on Windows and returns a structured `unsupported_platform` result on other hosts. ADR-LOG-RESTRUCT-0269 records the fail-closed portability contract.
+- Ubuntu WSL tests pass: Landlock workspace-write/symlink/descendant test 1/1; AnalyticsDb and HooksDb active-writer retention tests 2/2; structured non-Windows Ruff staging refusal 1/1. `cargo fmt --check` passes. Rust 1.99 and native build prerequisites are installed in the WSL Ubuntu profile; its Cargo test target is `/tmp/arcana-p4-linux-target`.
+- This is focused Linux proof only. Linux external-read/network policy and production ecosystem corpus, full core suite, macOS runner, Windows Clippy canonicalization, guarded Windows stage/copy-back, successful CLI Fleet run, Logs end-to-end, and owner Calendar acceptance remain open. P4/TG4 remain 32/59 and 10/33; no task or gate is marked complete. Calendar target was not accessed.

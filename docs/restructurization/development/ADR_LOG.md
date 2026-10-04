@@ -6769,3 +6769,17 @@ readback.
 **Limit.** This closes two Memory ordering readers only. P4-57/TG4-19 remain open for full writer/reader inventory and cross-platform property evidence.
 
 **Where.** `arcana-core/src/memory/semantic.rs`, P4-57, TG4-19.
+
+## ADR-LOG-RESTRUCT-0269 — Fail closed for unsupported host Ruff staging
+
+**Status.** Implemented and focused-tested on 2026-10-04.
+
+**Decision.** Keep the pinned Ruff host installer behind the Windows platform boundary where Arcana has a verified signed Python runtime and staged-wheel implementation. On Linux and macOS, return a structured `unsupported_platform` failure instead of referencing a module that is not compiled or attempting an unverified package installation.
+
+**Reason.** The production Python runtime module is Windows-only, and the current Ruff staging implementation is verified only for Windows x64. ProjectCommand is cross-platform; its unsupported branch must compile and fail closed without allowing a Bash/package-manager bypass.
+
+**Evidence.** Linux Ubuntu WSL test `agent::builtin_tools::project_command::tests::pinned_ruff_install_fails_closed_with_structured_unsupported_platform_result` passes 1/1 and asserts the categorized error, actionable guidance, and absence of HTTP detail. The Linux build also exposed an async Linux sandbox test that called `spawn` without awaiting it; the test now awaits the production launcher and passes 1/1. Both production analytics/hook active-writer tests pass on Linux (2/2).
+
+**Limit.** This does not implement Ruff staging on Linux/macOS or close cross-platform ProjectCommand/security gates. Linux external-read/network containment, complete ecosystem corpus, full core suite, macOS sandbox, and Windows canonicalization remain open.
+
+**Where.** `arcana-core/src/agent/builtin_tools/project_command.rs`, `arcana-core/src/platform/process_sandbox/linux.rs`, P4-11/P4-61, TG4-18/TG4-31.

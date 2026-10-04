@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use std::ffi::{OsStr, OsString};
+#[cfg(windows)]
+use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
@@ -102,17 +104,7 @@ impl Tool for ProjectCommandTool {
             && input["toolchain"].as_str() == Some("python")
             && input["package"].as_str() == Some("ruff")
         {
-            return match crate::platform::python_runtime::install_ruff().await {
-                Ok(()) => ToolResult::success(
-                    "Ruff 0.16.8 is installed in Arcana's verified Python tool cache. Python lint can now run offline through the process sandbox.",
-                ),
-                Err(error) => ToolResult::categorized_error(
-                    "python_lint_tool_install_failed",
-                    "dependency",
-                    format!("Arcana could not stage the pinned Ruff runtime: {error}"),
-                    "Check host network access and the signed Python installation, then retry this exact operation only after confirming the current stage was not partially installed.",
-                ),
-            };
+            return install_pinned_ruff_for_host().await;
         }
         if intent == CommandIntent::Install {
             tracing::warn!(
@@ -692,6 +684,42 @@ impl Tool for ProjectCommandTool {
                 .with_diagnostics(json!(safe_diagnostics))
             }
         }
+    }
+}
+
+async fn install_pinned_ruff_for_host() -> ToolResult {
+    #[cfg(windows)]
+    {
+        return match crate::platform::python_runtime::install_ruff().await {
+            Ok(()) => ToolResult::success(
+                "Ruff 0.16.8 is installed in Arcana's verified Python tool cache. Python lint can now run offline through the process sandbox.",
+            ),
+            Err(error) => ToolResult::categorized_error(
+                "python_lint_tool_install_failed",
+                "dependency",
+                format!("Arcana could not stage the pinned Ruff runtime: {error}"),
+                "Check host network access and the signed Python installation, then retry this exact operation only after confirming the current stage was not partially installed.",
+            ),
+        };
+    }
+
+    #[cfg(not(windows))]
+    {
+        tracing::warn!(
+            target: "arcana::telemetry",
+            event_type = "project_command_denied",
+            intent = "install",
+            toolchain = "python",
+            package = "ruff",
+            reason = "host_tool_installer_unavailable",
+            "the pinned Ruff installer is unavailable on this platform"
+        );
+        ToolResult::categorized_error(
+            "python_lint_tool_install_unsupported",
+            "unsupported_platform",
+            "Arcana can stage its pinned Ruff runtime on Windows x64 only.",
+            "Do not retry with a different package, installer, or Bash command. Complete a platform-specific host-approved Ruff staging path before using this exception on Linux or macOS.",
+        )
     }
 }
 
@@ -1587,6 +1615,24 @@ fn resolve_project_directory(
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn pinned_ruff_install_fails_closed_with_structured_unsupported_platform_result() {
+        let result = install_pinned_ruff_for_host().await;
+        assert!(result.is_error);
+        let error: Value = serde_json::from_str(&result.output).expect("structured tool error");
+        assert_eq!(
+            error["error"]["code"],
+            "python_lint_tool_install_unsupported"
+        );
+        assert_eq!(error["error"]["category"], "unsupported_platform");
+        assert!(error["error"]["next_step"]
+            .as_str()
+            .expect("actionable unsupported guidance")
+            .contains("platform-specific"));
+        assert!(!result.output.contains("http"));
+    }
 
     #[test]
     fn incomplete_command_stage_keeps_tool_call_correlation() {

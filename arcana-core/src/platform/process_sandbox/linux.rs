@@ -159,6 +159,7 @@ mod tests {
             },
             &workspace,
         )
+        .await
         .unwrap();
         let mut child = child;
         let code = child.wait().await.unwrap();
