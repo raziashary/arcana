@@ -298,3 +298,9 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 - The complete project-build batch production test now reads the latest persisted passing evidence through `TasksDb::latest_build_evidence` and validates the canonical UTC creation timestamp.
 - `cargo test -p arcana-core --lib project_build_batches_block_partial_and_interrupted_qc_until_complete_pass --locked -- --test-threads=1` passes 1/1. Formatting and diff checks pass. This does not cover batch `completed_at` or close TG4-19.
 - P4/TG4 counts remain 32/59 and 10/33; owner Calendar acceptance remains unrun and untouched.
+
+## Continuation — timestamp evidence commits and Linux test environment
+
+- Pushed the semantic Memory instant-order fix (`d2f833b`), worker request/message timestamp readback proof (`e4fd313`), and build-evidence timestamp proof (`dc8fcc2`) to the established `origin/main` branch. P4/TG4 counts remain 32/59 and 10/33; no task closes from these focused slices.
+- Installed a user-scoped Rust 1.99 toolchain in WSL Ubuntu using the official rustup installer. This WSL image has no C compiler or libc development headers, and passwordless package installation is unavailable; the Linux retention tests were not run. Windows active-writer tests pass locally; Linux/macOS matrix results remain pending.
+- The latest full `arcana-core` result remains the 2026-10-04 baseline: 959 passed, 2 failed (Windows Clippy canonicalization OS error 5), 1 ignored. The owner Calendar scenario remains unrun and untouched.
