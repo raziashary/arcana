@@ -6741,3 +6741,17 @@ readback.
 **Limit.** This closes only the session-list timestamp pair. P4-57/TG4-19 remain open for the full inventory and remaining production writer/readers.
 
 **Where.** `arcana-core/src/session/storage.rs`, P4-57, TG4-19.
+
+## ADR-LOG-RESTRUCT-0267 — Order Memory recency readers by timestamp instant
+
+**Status.** Implemented and focused-tested on 2026-10-04.
+
+**Decision.** Use `julianday(created_at) DESC` with a stable ID tie-break in Memory recency consumers and add a matching expression index through Memory schema migration 4. Parse timestamps as UTC instants before rank tie-breaking.
+
+**Reason.** Memory history can contain both legacy SQLite timestamps and canonical UTC strings. Lexical ordering can place a later legacy instant before an earlier canonical instant. Existing production database readers already use `julianday` and matching indexes for this mixed-format compatibility; rank tie-breaking must use the same instant semantics.
+
+**Evidence.** `recency_fallback_orders_mixed_timestamp_formats_by_instant`, `production_list_tool_orders_mixed_timestamps_by_instant`, and `equal_score_ties_order_mixed_timestamp_formats_by_instant` exercise the Memory fallback, production list tool, and rank tie-break. `cargo test -p arcana-core --lib mixed_timestamp_formats_by_instant --locked -- --test-threads=1` passes 4/4, including the session-list regression; the production list-tool test also passes independently.
+
+**Limit.** This proves selected Memory consumers, not every Memory writer/reader pair. P4-57/TG4-19 remain open for full inventory and cross-platform property evidence.
+
+**Where.** `arcana-core/src/memory`, P4-57, TG4-19.

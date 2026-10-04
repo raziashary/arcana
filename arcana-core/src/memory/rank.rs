@@ -212,12 +212,17 @@ pub fn rank_and_budget(
         .map(|c| c.lexical_score)
         .fold(0.0f32, f32::max);
 
-    let mut scored: Vec<Scored> = candidates
+    let mut scored: Vec<(Scored, Option<chrono::DateTime<chrono::Utc>>)> = candidates
         .iter()
-        .map(|c| score(c, weights, query_scope_ref, now, max_lexical))
+        .map(|c| {
+            (
+                score(c, weights, query_scope_ref, now, max_lexical),
+                crate::db::timestamps::parse_db_timestamp(&c.created_at).ok(),
+            )
+        })
         .collect();
 
-    scored.sort_by(|a, b| {
+    scored.sort_by(|(a, a_time), (b, b_time)| {
         b.score
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
@@ -225,13 +230,18 @@ pub fn rank_and_budget(
             // recall is reproducible. A nondeterministic tie-break would make
             // `TG3-12`'s "the same query twice returns the same set" flaky for
             // reasons nobody could reproduce.
-            .then_with(|| b.candidate.created_at.cmp(&a.candidate.created_at))
+            .then_with(|| match (a_time, b_time) {
+                (Some(a_time), Some(b_time)) => b_time.cmp(a_time),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => b.candidate.created_at.cmp(&a.candidate.created_at),
+            })
             .then_with(|| a.candidate.id.cmp(&b.candidate.id))
     });
 
     let mut taken = std::collections::HashMap::<&'static str, usize>::new();
     let mut out = Vec::new();
-    for s in scored {
+    for (s, _) in scored {
         let key = crate::memory::backend::tier_name(s.candidate.tier);
         let used = taken.entry(key).or_insert(0);
         if *used < budget.for_tier(s.candidate.tier) {
@@ -293,6 +303,32 @@ mod tests {
     fn an_unparseable_timestamp_scores_zero_not_new() {
         // A malformed row must not outrank every real one.
         assert_eq!(recency_score("not-a-date", Utc::now()), 0.0);
+    }
+
+    #[test]
+    fn equal_score_ties_order_mixed_timestamp_formats_by_instant() {
+        let mut canonical = cand("canonical-0900", MemoryTier::Semantic);
+        canonical.created_at = "2026-09-02T09:00:00Z".into();
+        let mut legacy = cand("legacy-1200", MemoryTier::Semantic);
+        legacy.created_at = "2026-09-02 12:00:00".into();
+        let weights = RerankWeights {
+            recency: 0.0,
+            ..RerankWeights::default()
+        };
+
+        let ranked = rank_and_budget(
+            vec![canonical, legacy],
+            &TierBudget {
+                semantic: 2,
+                ..TierBudget::default()
+            },
+            &weights,
+            "/proj",
+            Utc::now(),
+        );
+
+        assert_eq!(ranked[0].candidate.id, "legacy-1200");
+        assert_eq!(ranked[1].candidate.id, "canonical-0900");
     }
 
     #[test]

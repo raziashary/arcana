@@ -513,6 +513,14 @@ impl MemoryDb {
                AND ref_id IN (SELECT id FROM semantic_memories WHERE is_active = 0);
         "#,
         },
+        Migration {
+            version: 4,
+            name: "memory-scope-instant-order-index",
+            sql: r#"
+            CREATE INDEX IF NOT EXISTS idx_mem_scope_created_julianday
+                ON memories(scope_key, julianday(created_at) DESC, id DESC);
+        "#,
+        },
     ];
 
     fn migrate(&self) -> Result<()> {

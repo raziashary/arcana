@@ -92,7 +92,7 @@ impl Tool for ListMemoriesTool {
             "SELECT id, tier, content, source, confidence, created_at
              FROM memories
              WHERE scope_key IN ({placeholders}){tier_clause}
-             ORDER BY created_at DESC
+             ORDER BY julianday(created_at) DESC, id DESC
              LIMIT ?{}",
             scopes.len() + 1
         );
@@ -270,5 +270,44 @@ mod observability_tests {
         assert_eq!(output["truncated"], true);
         assert_eq!(output["degraded"], true);
         assert_eq!(output["malformed_count"], 1);
+    }
+
+    #[test]
+    fn production_list_tool_orders_mixed_timestamps_by_instant() {
+        let home = tempfile::tempdir().expect("isolated home");
+        let _home_guard = crate::db::test_support::with_home(home.path());
+        let db = crate::memory::db::MemoryDb::open().expect("open migrated MemoryDb");
+        for (id, created_at) in [
+            ("canonical-0900", "2026-09-02T09:00:00Z"),
+            ("legacy-1200", "2026-09-02 12:00:00"),
+        ] {
+            db.conn
+                .execute(
+                    "INSERT INTO memories (id, tier, scope, scope_ref, scope_key, content, source, confidence, created_at, updated_at)
+                     VALUES (?1, 'semantic', 'global', '', 'global', ?1, 'test', 0.8, ?2, ?2)",
+                    rusqlite::params![id, created_at],
+                )
+                .expect("seed mixed-format Memory row");
+        }
+        drop(db);
+
+        let context = ToolContext {
+            session_id: "session-fixture".into(),
+            working_dir: home.path().to_string_lossy().into_owned(),
+            call_id: "call-fixture".into(),
+            run_id: None,
+            task_id: None,
+            permission_mode: crate::agent::permission::PermissionMode::Autonomous,
+            depth: 0,
+            agent_role: "supervisor".into(),
+            run_token_budget: None,
+        };
+        let runtime = tokio::runtime::Runtime::new().expect("test runtime");
+        let result = runtime.block_on(ListMemoriesTool.execute(json!({"limit":10}), &context));
+        let output: Value = serde_json::from_str(&result.output).expect("tool JSON result");
+
+        assert!(!result.is_error);
+        assert_eq!(output["memories"][0]["id"], "legacy-1200");
+        assert_eq!(output["memories"][1]["id"], "canonical-0900");
     }
 }

@@ -225,7 +225,7 @@ impl RetrievalBackend for LexicalBackend {
                             0.0 AS score
                      FROM memories m
                      WHERE m.scope_key IN ({scope_placeholders}){tier_clause}
-                     ORDER BY m.created_at DESC
+                     ORDER BY julianday(m.created_at) DESC, m.id DESC
                      LIMIT ?{}",
                     scope_params.len() + 2
                 ),
@@ -417,6 +417,46 @@ mod tests {
         assert_eq!(r.len(), 5, "recency shape should still return rows");
         // and it is ordered by recency, not by a meaningless relevance score
         assert!(r.iter().all(|c| c.lexical_score == 0.0));
+    }
+
+    #[test]
+    fn recency_fallback_orders_mixed_timestamp_formats_by_instant() {
+        let c = db();
+        insert(&c, "canonical-0900", "semantic", "global", "fact morning");
+        insert(&c, "legacy-1200", "semantic", "global", "fact noon");
+        c.execute(
+            "UPDATE memories SET created_at='2026-09-02 12:00:00', updated_at='2026-09-02 12:00:00'
+             WHERE id='legacy-1200'",
+            [],
+        )
+        .expect("seed legacy timestamp");
+        c.execute(
+            "UPDATE memories SET created_at='2026-09-02T09:00:00Z', updated_at='2026-09-02T09:00:00Z'
+             WHERE id='canonical-0900'",
+            [],
+        )
+        .expect("seed canonical timestamp");
+
+        let query = q("", &["global"]);
+        let candidates = LexicalBackend.search(&c, &query).expect("recency search");
+        assert_eq!(candidates[0].id, "legacy-1200");
+        assert_eq!(candidates[1].id, "canonical-0900");
+
+        let plan: Vec<String> = c
+            .prepare(
+                "EXPLAIN QUERY PLAN SELECT id FROM memories WHERE scope_key IN (?1)
+                 ORDER BY julianday(created_at) DESC, id DESC LIMIT ?2",
+            )
+            .expect("prepare recency query plan")
+            .query_map(["global", 10.to_string().as_str()], |row| row.get(3))
+            .expect("explain recency query")
+            .collect::<rusqlite::Result<_>>()
+            .expect("collect recency plan");
+        assert!(
+            plan.iter()
+                .any(|detail| detail.contains("idx_mem_scope_created_julianday")),
+            "recency fallback should use its expression index: {plan:?}"
+        );
     }
 
     #[test]
