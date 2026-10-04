@@ -1,6 +1,6 @@
 # Arcana working memory (updated 2026-10-05)
 
-Current continuation (2026-10-05): **P4 38/59 checked; TG4 15/33 passing**.
+Current continuation (2026-10-05): **P4 38/59 checked; TG4 16/33 passing**.
 P4-55/TG4-29, P4-43, P4-40, P4-23/TG4-10/11 and P4-29/TG4-15 are proven. P4-16/TG4-17 is also proven on all three CI hosts. Core P4 remains active; 21 tasks
 remain, including owner-run P4-49. The expanded goal stays unread until core
 P4 closes. Claim-safety proof is in
@@ -43,7 +43,7 @@ cross-phase audit findings and owner dispositions are in
 - The 2026-09-24 P8 closeout was reopened under ADR-0075 for host-enforced
   commit safety. The 2026-09-28 follow-up audit's shared-index, staged-binary
   scan, and stale gate findings are now fixed and retested in the current
-  worktree; this final P8 hardening is not yet committed. P4 remains active,
+  worktree; this final P8 hardening was verified and pushed on 2026-10-03. P4 remains active,
   followed by P5–P7; P9 is later.
   Retired design rows and the former two-rollout sequence live in
   `HISTORICAL_DESIGN_PROGRAMME.md`. The 2026-09-28 active register has 391

@@ -1045,13 +1045,15 @@ mod tests {
     use crate::db::tasks::{CreateTaskInput, TasksDb};
     use crate::provider::traits::{Provider, StreamResult};
     use crate::provider::types::{
-        CompletionRequest, CompletionResponse, ModelInfo, ProviderStatus, StreamChunk,
+        CompletionRequest, CompletionResponse, MessageContent, ModelInfo, ProviderStatus,
+        StreamChunk,
     };
     use crate::provider::usage::Usage;
     use async_trait::async_trait;
     use futures::stream;
     use serde_json::json;
     use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct QcInboxProvider {
         responses: Mutex<VecDeque<Vec<StreamChunk>>>,
@@ -1162,6 +1164,447 @@ mod tests {
         async fn test_connection(&self) -> Result<ProviderStatus> {
             Ok(ProviderStatus::Connected)
         }
+    }
+
+    struct DependencyCompletionProvider {
+        dependent_task_id: i64,
+        supervisor_turns: AtomicUsize,
+        worker_turns: AtomicUsize,
+        requests: Mutex<Vec<CompletionRequest>>,
+    }
+
+    impl DependencyCompletionProvider {
+        fn new(dependent_task_id: i64) -> Self {
+            Self {
+                dependent_task_id,
+                supervisor_turns: AtomicUsize::new(0),
+                worker_turns: AtomicUsize::new(0),
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn tool_call(id: &str, name: &str, input: serde_json::Value) -> Vec<StreamChunk> {
+            vec![
+                StreamChunk::ToolUseStart {
+                    id: id.into(),
+                    name: name.into(),
+                    block_index: 0,
+                    opaque: None,
+                },
+                StreamChunk::ToolInputDelta {
+                    block_index: 0,
+                    partial_json: input.to_string(),
+                },
+                StreamChunk::MessageDelta {
+                    stop_reason: "tool_use".into(),
+                    usage: Usage::default(),
+                },
+                StreamChunk::Done,
+            ]
+        }
+
+        fn final_answer(text: &str) -> Vec<StreamChunk> {
+            vec![
+                StreamChunk::TextDelta {
+                    text: text.into(),
+                    block_index: 0,
+                },
+                StreamChunk::MessageDelta {
+                    stop_reason: "end_turn".into(),
+                    usage: Usage::default(),
+                },
+                StreamChunk::Done,
+            ]
+        }
+    }
+
+    #[async_trait]
+    impl Provider for DependencyCompletionProvider {
+        fn id(&self) -> &str {
+            "google"
+        }
+
+        fn name(&self) -> &str {
+            "P4-39 dependency completion fixture"
+        }
+
+        fn models(&self) -> Vec<ModelInfo> {
+            crate::provider::catalogue::models_for("google")
+        }
+
+        async fn input_token_upper_bound(&self, _request: &CompletionRequest) -> Result<u64> {
+            Ok(10)
+        }
+
+        async fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse> {
+            unreachable!("RecipeRunner uses the provider streaming path")
+        }
+
+        async fn stream(&self, request: CompletionRequest) -> Result<StreamResult> {
+            self.requests
+                .lock()
+                .expect("dependency fixture request lock")
+                .push(request.clone());
+
+            let prompt = request
+                .system
+                .as_deref()
+                .expect("saved recipe system prompt");
+            let is_supervisor = prompt.contains("You are the Arcana Supervisor Agent.");
+            assert!(
+                is_supervisor || prompt.contains("You are the Arcana Backend Worker Agent."),
+                "only the two selected saved recipes may dispatch"
+            );
+            let response = if is_supervisor {
+                assert!(request.tools.iter().any(|tool| tool.name == "list_tasks"));
+                match self.supervisor_turns.fetch_add(1, Ordering::SeqCst) {
+                    0 => Self::tool_call(
+                        "p4-39-list-ready",
+                        "list_tasks",
+                        serde_json::json!({"status": "ready", "compact": false}),
+                    ),
+                    1 => Self::tool_call(
+                        "p4-39-route-dependent",
+                        "assign_task",
+                        serde_json::json!({"id": self.dependent_task_id}),
+                    ),
+                    2 => Self::final_answer("Routed the newly unblocked dependency."),
+                    turn => panic!("unexpected Supervisor provider turn {turn}"),
+                }
+            } else {
+                assert!(request.tools.iter().any(|tool| tool.name == "claim_task"));
+                assert!(request
+                    .tools
+                    .iter()
+                    .any(|tool| tool.name == "update_task_status"));
+                match self.worker_turns.fetch_add(1, Ordering::SeqCst) {
+                    0 => Self::tool_call(
+                        "p4-39-claim-dependent",
+                        "claim_task",
+                        serde_json::json!({"task_id": self.dependent_task_id}),
+                    ),
+                    1 => Self::tool_call(
+                        "p4-39-complete-dependent",
+                        "update_task_status",
+                        serde_json::json!({
+                            "id": self.dependent_task_id,
+                            "status": "done"
+                        }),
+                    ),
+                    2 => Self::final_answer("Completed the claimed dependency."),
+                    turn => panic!("unexpected worker provider turn {turn}"),
+                }
+            };
+
+            Ok(Box::pin(stream::iter(response.into_iter().map(Ok))))
+        }
+
+        async fn test_connection(&self) -> Result<ProviderStatus> {
+            Ok(ProviderStatus::Connected)
+        }
+    }
+
+    #[tokio::test]
+    async fn dependency_completion_wakes_persisted_supervisor_and_completes_saved_worker_recipe() {
+        const CHILD_MARKER: &str = "ARCANA_P4_39_DEPENDENCY_COMPLETION_CHILD";
+
+        if std::env::var_os(CHILD_MARKER).is_none() {
+            let test_name = std::thread::current()
+                .name()
+                .expect("Rust test harness names the current test")
+                .to_owned();
+            let output = std::process::Command::new(
+                std::env::current_exe().expect("resolve current Rust test executable"),
+            )
+            .arg("--exact")
+            .arg(test_name)
+            .arg("--nocapture")
+            .env(CHILD_MARKER, "1")
+            .output()
+            .expect("run scheduler fixture in an isolated test process");
+            assert!(
+                output.status.success(),
+                "isolated P4-39 test process failed\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        use crate::agent::builtin_tools::{
+            claim_task_tool::ClaimTaskTool, update_task_status_tool::UpdateTaskStatusTool,
+        };
+        use crate::agent::permission::PermissionMode;
+        use crate::agent::tool_trait::{Tool, ToolContext};
+        use crate::db::tasks::{CreatePhasedTaskInput, CreateTaskInput, TasksDb};
+        use serde_json::Value;
+
+        ensure_isolated_test_analytics().await;
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        crate::recipes::init().expect("initialize persisted worker recipes");
+
+        let tasks = TasksDb::open().expect("open isolated task database");
+        let blocker = tasks
+            .create(CreateTaskInput {
+                title: "P4-39 prerequisite completed through status tool".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "complete through the production worker path".into(),
+                created_by: Some("p4-39-scheduler-test".into()),
+            })
+            .expect("create prerequisite")
+            .id;
+        let epic = tasks
+            .create_epic("P4-39 autonomous dependency completion", None, "test")
+            .expect("create dependency epic");
+        let dependent = tasks
+            .create_phased_task(CreatePhasedTaskInput {
+                epic_id: epic.id.to_string(),
+                phase: "ordinary dependency".into(),
+                phase_order: 1,
+                title: "ordinary child auto-routed and completed".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "the saved worker recipe claims and completes this task"
+                    .into(),
+                blocked_by: vec![blocker.to_string()],
+                milestone: None,
+                created_by: Some("p4-39-scheduler-test".into()),
+            })
+            .expect("create ordinary dependent")
+            .id;
+        let budget_held = tasks
+            .create_phased_task(CreatePhasedTaskInput {
+                epic_id: epic.id.to_string(),
+                phase: "budget-held dependency".into(),
+                phase_order: 2,
+                title: "budget hold requires explicit resolution".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "automatic dependency completion must leave this held".into(),
+                blocked_by: vec![blocker.to_string()],
+                milestone: None,
+                created_by: Some("p4-39-scheduler-test".into()),
+            })
+            .expect("create budget-held dependent")
+            .id;
+        tasks
+            .mark_task_budget_exceeded(budget_held, "saved task budget was reached")
+            .expect("persist explicit budget hold");
+        tasks
+            .update_status(blocker, "assigned", Some("worker-backend"))
+            .expect("assign prerequisite to backend worker");
+        tasks
+            .claim_task_with_pid(blocker, "worker-backend", std::process::id())
+            .expect("claim prerequisite before its worker reports completion");
+
+        let workers = WorkersDb::open().expect("open persisted worker roster");
+        let supervisor = workers
+            .get_by_slug("supervisor")
+            .expect("read persisted Supervisor")
+            .expect("default Supervisor is installed");
+        assert!(supervisor.recipe_id.is_some());
+        workers
+            .update_status(supervisor.id, WorkerStatus::Idle)
+            .expect("make Supervisor runnable");
+        let backend = workers
+            .get_by_slug("worker-backend")
+            .expect("read backend worker")
+            .expect("default backend worker is installed");
+        workers
+            .update_status(backend.id, WorkerStatus::Active)
+            .expect("make routed worker runnable");
+        assert!(backend.recipe_id.is_some());
+
+        let workspace = tempfile::tempdir().expect("isolated worker workspace");
+        crate::egress_consent::WorkspaceEgressConsentDb::open()
+            .expect("open isolated consent store")
+            .grant(workspace.path(), "provider:google")
+            .expect("grant only the scripted workspace destination");
+        let provider = Arc::new(DependencyCompletionProvider::new(dependent));
+        let runner = RecipeRunner::new_with_workspace_override(
+            Arc::new(Mutex::new(crate::state::AppState {
+                active_provider: Some("google".into()),
+                active_model: Some("gemini-3.8-flash".into()),
+                ..crate::state::AppState::default()
+            })),
+            Arc::new(
+                crate::session::manager::SessionManager::new()
+                    .expect("open isolated session manager"),
+            ),
+            crate::agent::permission::new_pending_permissions(),
+            Some(workspace.path().to_string_lossy().into_owned()),
+        )
+        .with_provider_for_test(provider.clone());
+        let scheduler = Arc::new(RecipeScheduler::new(Arc::new(runner)));
+        install_global(scheduler.clone());
+
+        let context = |task_id, agent_role: &str, call_id: &str| ToolContext {
+            session_id: "p4-39-dependency-completion".into(),
+            working_dir: workspace.path().to_string_lossy().into_owned(),
+            call_id: call_id.into(),
+            run_id: None,
+            task_id,
+            permission_mode: PermissionMode::Autonomous,
+            depth: 0,
+            agent_role: agent_role.into(),
+            run_token_budget: None,
+        };
+        let completed = UpdateTaskStatusTool
+            .execute(
+                serde_json::json!({"id": blocker, "status": "done"}),
+                &context(
+                    Some(blocker),
+                    "worker-backend",
+                    "p4-39-complete-prerequisite",
+                ),
+            )
+            .await;
+        assert!(
+            !completed.is_error,
+            "prerequisite status tool failed: {}",
+            completed.output
+        );
+
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let dependent_row = tasks
+                    .get_by_id(dependent)
+                    .expect("read dependent while scheduler runs")
+                    .expect("dependent remains persisted");
+                let supervisor_status = WorkersDb::open()
+                    .expect("reopen worker roster while scheduler runs")
+                    .get_by_slug("supervisor")
+                    .expect("read Supervisor state")
+                    .expect("persisted Supervisor remains present")
+                    .status;
+                let backend_status = WorkersDb::open()
+                    .expect("reopen worker roster while scheduler runs")
+                    .get_by_slug("worker-backend")
+                    .expect("read backend state")
+                    .expect("persisted backend remains present")
+                    .status;
+                if dependent_row.status.as_str() == "done"
+                    && supervisor_status == WorkerStatus::Idle
+                    && backend_status == WorkerStatus::Idle
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("Supervisor and saved worker recipe autonomously complete the dependent");
+
+        let dependent_row = tasks
+            .get_by_id(dependent)
+            .expect("read completed dependent")
+            .expect("completed dependent remains persisted");
+        assert_eq!(dependent_row.status.as_str(), "done");
+        assert!(
+            dependent_row.assigned_worker.is_none(),
+            "completed status call clears the active assignment"
+        );
+        let route = tasks
+            .get_routing_history(20)
+            .expect("production routing-history reader")
+            .into_iter()
+            .find(|entry| entry.task_id == dependent.to_string())
+            .expect("automatic dispatch persists its worker attribution");
+        assert_eq!(route.worker_slug, "worker-backend");
+        assert_eq!(route.outcome.as_deref(), Some("success"));
+
+        let held_before_claim = tasks
+            .get_by_id(budget_held)
+            .expect("read budget-held dependent")
+            .expect("budget-held dependent remains persisted");
+        assert_eq!(held_before_claim.status.as_str(), "needs_info");
+        assert!(held_before_claim.budget_exceeded);
+        assert_eq!(
+            held_before_claim.budget_exceeded_reason.as_deref(),
+            Some("saved task budget was reached")
+        );
+        let held_claim = ClaimTaskTool
+            .execute(
+                serde_json::json!({"task_id": budget_held}),
+                &context(
+                    Some(budget_held),
+                    "worker-platform",
+                    "p4-39-claim-budget-held",
+                ),
+            )
+            .await;
+        assert!(
+            held_claim.is_error,
+            "budget-held task was claimable without explicit resolution: {}",
+            held_claim.output
+        );
+        assert_eq!(
+            tasks
+                .get_by_id(budget_held)
+                .expect("verify held task after refused claim")
+                .expect("held task remains persisted")
+                .status
+                .as_str(),
+            "needs_info"
+        );
+
+        let requests = provider
+            .requests
+            .lock()
+            .expect("read captured scripted provider requests")
+            .clone();
+        let ready_list = requests
+            .iter()
+            .flat_map(|request| &request.messages)
+            .flat_map(|message| &message.content)
+            .find_map(|content| match content {
+                MessageContent::ToolResult {
+                    name,
+                    content,
+                    is_error,
+                    ..
+                } if name == "list_tasks" && !is_error => Some(content),
+                _ => None,
+            })
+            .expect("persisted Supervisor recipe must consume list_tasks output");
+        let ready_list: Value =
+            serde_json::from_str(ready_list).expect("parse Supervisor task list");
+        let ready_ids = ready_list["tasks"]
+            .as_array()
+            .expect("Supervisor task list includes tasks")
+            .iter()
+            .filter_map(|task| task["id"].as_i64())
+            .collect::<Vec<_>>();
+        assert!(ready_ids.contains(&dependent));
+        assert!(!ready_ids.contains(&budget_held));
+
+        assert!(
+            requests
+                .iter()
+                .any(|request| request.tools.iter().any(|tool| tool.name == "claim_task")),
+            "the saved worker recipe must run through AgentEngine's claim tool"
+        );
+        assert!(
+            requests
+                .iter()
+                .flat_map(|request| &request.messages)
+                .flat_map(|message| &message.content)
+                .any(|content| matches!(
+                    content,
+                    MessageContent::ToolResult {
+                        name,
+                        is_error: false,
+                        ..
+                    } if name == "claim_task"
+                )),
+            "the worker's atomic claim must succeed before completion"
+        );
+        scheduler.shutdown().await;
     }
 
     async fn ensure_isolated_test_analytics() {

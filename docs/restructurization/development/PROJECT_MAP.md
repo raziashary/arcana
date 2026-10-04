@@ -126,7 +126,7 @@ findings and current dispositions are recorded in
 `_verify/2026-09-27-CROSS-PHASE-HARNESS-AUDIT.md`; P4 closeout gates remain
 open until their production-path proofs pass. P8 host commit safety has passed
 current-tree TG8-13/S8-06 and concurrency/binary-content tests after audit
-hardening; this final hardening is still uncommitted. Its Bash control is a
+hardening; this final hardening was verified and pushed on 2026-10-03. Its Bash control is a
 textual heuristic with a documented process-sandbox limit.
 
 Windows `project_command` Python intents route through
