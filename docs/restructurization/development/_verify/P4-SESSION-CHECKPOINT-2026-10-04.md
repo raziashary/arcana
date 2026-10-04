@@ -292,3 +292,9 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 - The production worker-message replay test now asserts canonical `created_at` and `read_at` values after reopening TasksDb. It also creates and resolves a worker request through production APIs and checks persisted `created_at`/`resolved_at` through the production reader.
 - `cargo test -p arcana-core --lib p4_23_message_replays_with_the_same_id_after_read_until_acknowledged --locked -- --test-threads=1` passes 1/1. This covers selected communication fields only; other task child tables and whole-database/cross-platform TG4-19 evidence remain open.
 - P4/TG4 counts remain 32/59 and 10/33. The owner Calendar task remains unrun and untouched.
+
+## Continuation — project build evidence timestamp readback
+
+- The complete project-build batch production test now reads the latest persisted passing evidence through `TasksDb::latest_build_evidence` and validates the canonical UTC creation timestamp.
+- `cargo test -p arcana-core --lib project_build_batches_block_partial_and_interrupted_qc_until_complete_pass --locked -- --test-threads=1` passes 1/1. Formatting and diff checks pass. This does not cover batch `completed_at` or close TG4-19.
+- P4/TG4 counts remain 32/59 and 10/33; owner Calendar acceptance remains unrun and untouched.

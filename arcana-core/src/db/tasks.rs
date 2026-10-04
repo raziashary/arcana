@@ -5368,6 +5368,14 @@ mod tests {
             )
             .expect("finalize complete passing batch")
             .expect("batch remains attributable");
+        let evidence = reopened
+            .latest_build_evidence(task.id)
+            .expect("read completed batch evidence")
+            .expect("passing build evidence is persisted");
+        assert_eq!(evidence.created_at.len(), 24);
+        assert!(evidence.created_at.ends_with('Z'));
+        crate::db::timestamps::parse_db_timestamp(&evidence.created_at)
+            .expect("build evidence timestamp parses");
         let other_workspace = path.parent().unwrap().join("other-workspace");
         std::fs::create_dir_all(&other_workspace).expect("create alternate selected workspace");
         assert!(
