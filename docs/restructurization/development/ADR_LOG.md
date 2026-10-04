@@ -6931,3 +6931,12 @@ readback.
 **Reason.** The existing Tauri regression changes the claim before preflight and cannot prove the later window. The production release already creates the span immediately before its atomic SQL, so the test needs no shipped hook, API or schema change. Keep the owner-approved DB-wide claim invariant and CAS policy unchanged.
 
 **Proof required.** Real Tauri command reaches the post-preflight span, rejects the stale CAS and preserves the replacement owner/PID/host; direct SQL cannot introduce inconsistent claim metadata; production writer and recovery consumers are accounted for. Those checks pass; P4-40 is proven in `_verify/P4-40-CLAIM-SAFETY-CLOSEOUT-2026-10-05.md`. The raw SQL and claim-tool tests pass on Windows/Linux; the late manual command race and CLI smoke pass on Windows. The manual endpoint has no React caller; no manual UI-button proof is claimed.
+
+
+## ADR-LOG-RESTRUCT-0283 — Follow shared startup spend hydration in the CI guard
+
+**Decision.** Update S2-06's stale desktop source guard to trace desktop and CLI Fleet entry points into `runtime::initialize`, then `hydrate_state` and `AppState::hydrate_today`. Add isolated persisted-counter readback through the actual shared hydration helper, including old-day refusal.
+
+**Why / when / where.** On 2026-10-05 CI run 37218542575 passed desktop unit tests and core library tests, then stopped on the old assertion requiring an inline hydration call in `src-tauri/src/main.rs`. Startup hydration moved to the approved shared host initializer; the runtime still calls it. This is a test ownership correction, not a spending-policy change.
+
+**Proof.** S2-06 integration suite passes 9/9 on Windows/Linux. The shared hydration helper restores the prior instance's persisted cost/token counts and discards an old-day stamp; runtime group passes 5/5 on Linux and within the Windows 11/11 runtime-filter group (which also includes Python runtime tests). Workspace check and format check pass. The remote host matrix remains pending until upstream workspace tests pass.

@@ -273,6 +273,38 @@ mod tests {
     use super::resolve_selection;
 
     #[test]
+    fn shared_startup_hydrates_persisted_spend_and_discards_yesterday() {
+        use super::{hydrate_state, AppState, Arc, Mutex};
+        use crate::db::app_settings;
+
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let today = chrono::Local::now().date_naive();
+        let mut previous_process = AppState::new();
+        previous_process.add_cost(0.75, 31, 7);
+        drop(previous_process);
+
+        let state = Arc::new(Mutex::new(AppState::new()));
+        hydrate_state(&state);
+        {
+            let restored = state.lock().unwrap();
+            assert_eq!(restored.cost_day, Some(today));
+            assert_eq!(restored.cost_today_usd, 0.75);
+            assert_eq!(restored.tokens_in_today, 31);
+            assert_eq!(restored.tokens_out_today, 7);
+        }
+
+        app_settings::set("cost_day", "2020-01-01").expect("stamp old counters");
+        let restarted = Arc::new(Mutex::new(AppState::new()));
+        hydrate_state(&restarted);
+        let restored = restarted.lock().unwrap();
+        assert_eq!(restored.cost_day, Some(today));
+        assert_eq!(restored.cost_today_usd, 0.0);
+        assert_eq!(restored.tokens_in_today, 0);
+        assert_eq!(restored.tokens_out_today, 0);
+    }
+
+    #[test]
     fn no_overrides_leave_the_hydrated_desktop_selection_unchanged() {
         assert_eq!(resolve_selection(None, None).unwrap(), None);
     }

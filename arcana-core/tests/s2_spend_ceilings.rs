@@ -263,15 +263,38 @@ fn s2_06_the_daily_spend_counter_is_persisted_and_date_stamped() {
 
     // And startup must actually call it — a hydrate nobody calls is the same
     // silent nothing as no hydrate at all.
-    let main_src = read_source(
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("workspace root")
-            .join("src-tauri/src/main.rs"),
-    );
+    let core_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = core_root.parent().expect("workspace root");
+    let main_src = read_source(&workspace_root.join("src-tauri/src/main.rs"));
     assert!(
-        main_src.contains("hydrate_today()"),
-        "the desktop binary never restores today's spend at startup"
+        main_src.contains("arcana_core::runtime::initialize("),
+        "desktop startup must enter the shared runtime initializer"
+    );
+    let cli_src = read_source(&workspace_root.join("src-cli/src/commands/fleet.rs"));
+    assert!(
+        cli_src.contains("runtime::initialize(CoreRuntimeOptions"),
+        "CLI Fleet must enter the same shared runtime initializer"
+    );
+    let runtime_src = read_source(&core_root.join("src/runtime.rs"));
+    let initialize = runtime_src
+        .split("pub async fn initialize(")
+        .nth(1)
+        .and_then(|body| body.split_once("\n}\n"))
+        .map(|(body, _)| body)
+        .expect("shared runtime initializer body");
+    assert!(
+        initialize.contains("hydrate_state(&state)"),
+        "shared startup must call its state hydration helper"
+    );
+    let hydrate_state = runtime_src
+        .split("fn hydrate_state(")
+        .nth(1)
+        .and_then(|body| body.split_once("\n}\n"))
+        .map(|(body, _)| body)
+        .expect("shared startup hydration body");
+    assert!(
+        hydrate_state.contains("state.hydrate_today()"),
+        "shared startup hydration must restore persisted spend"
     );
 }
 
