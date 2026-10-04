@@ -218,6 +218,8 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
@@ -229,6 +231,20 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python command corpus tools
+        run: python -m pip install pytest ruff
+
+      # TG4-18: run Rust, npm and Python command intents through Arcana's
+      # production argv resolver and process launcher on each OS in this
+      # matrix, including the real Windows npm.cmd shim path.
+      - name: Project command portability corpora
+        run: cargo test -p arcana-core --lib agent::builtin_tools::project_command::tests::checked_in_ecosystem_corpora_run_real_intents_through_the_production_launcher --locked -- --exact --nocapture
 
       - name: Install deps
         run: npm ci
