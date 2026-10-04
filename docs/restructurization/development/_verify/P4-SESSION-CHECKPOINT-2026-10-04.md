@@ -385,3 +385,8 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 
 - Ran `production_startup_idle_workers_skip_provider_and_record_gate` in Ubuntu WSL from `/mnt/c/arcana`; the test passes 1/1. The cross-platform startup evidence now covers Windows and Ubuntu WSL for the shipped Supervisor, QC, and backend workers.
 - P4-43 remains open for cron/recovery provider-call counts and an intentional-turn bound.
+
+## Continuation — Unix log-retention symlink proof
+
+- Ran `cargo test -p arcana-core --lib observability::log_retention::tests --locked -- --nocapture --test-threads=1` in Ubuntu WSL. All seven tests pass, including `policy_does_not_follow_or_unlink_symlinks`, age/count pruning, active-writer continuity, and cleanup-failure logging. This provides the previously missing Unix execution for the symlink refusal clause; the same seven-test group passes on Windows.
+- Updated TG4-29, P4-55, and readiness to record the cross-platform evidence. Isolated desktop startup-order execution remains open, so the task/gate stay partial and counts are unchanged.
