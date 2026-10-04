@@ -6,6 +6,17 @@ use crate::errors::{ArcanaError, Result};
 use crate::observability::timing::OperationTimer;
 use chrono::{Local, NaiveDate, TimeZone, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
+
+const APPEND_ONLY_INVALID_TIMESTAMPS_SQL: &str = "SELECT (SELECT COUNT(*) FROM token_usage WHERE julianday(timestamp) IS NULL) + (SELECT COUNT(*) FROM system_events WHERE julianday(timestamp) IS NULL) + (SELECT COUNT(*) FROM api_failures WHERE julianday(timestamp) IS NULL)";
+const APPEND_ONLY_TOKEN_DAILY_SUMMARY_SQL: &str = "SELECT date(timestamp, 'localtime'), SUM(cost_usd), SUM(total_tokens), COUNT(DISTINCT session_id), COUNT(*), SUM(CASE WHEN request_type = 'tool_use' THEN 1 ELSE 0 END) FROM token_usage WHERE julianday(timestamp) < julianday(?1) GROUP BY date(timestamp, 'localtime')";
+const APPEND_ONLY_PROVIDER_COSTS_SQL: &str = "SELECT date(timestamp, 'localtime'), provider, SUM(cost_usd) FROM token_usage WHERE julianday(timestamp) < julianday(?1) GROUP BY date(timestamp, 'localtime'), provider";
+const APPEND_ONLY_AGENT_COSTS_SQL: &str = "SELECT date(timestamp, 'localtime'), agent_type, SUM(cost_usd) FROM token_usage WHERE julianday(timestamp) < julianday(?1) GROUP BY date(timestamp, 'localtime'), agent_type";
+const APPEND_ONLY_PRUNE_TOKEN_USAGE_SQL: &str =
+    "DELETE FROM token_usage WHERE julianday(timestamp) < julianday(?1)";
+const APPEND_ONLY_PRUNE_SYSTEM_EVENTS_SQL: &str =
+    "DELETE FROM system_events WHERE julianday(timestamp) < julianday(?1)";
+const APPEND_ONLY_PRUNE_API_FAILURES_SQL: &str =
+    "DELETE FROM api_failures WHERE julianday(timestamp) < julianday(?1)";
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -824,13 +835,7 @@ impl AnalyticsDb {
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(ArcanaError::Database)?;
         let invalid_rows: i64 = tx
-            .query_row(
-                "SELECT (SELECT COUNT(*) FROM token_usage WHERE julianday(timestamp) IS NULL)
-                      + (SELECT COUNT(*) FROM system_events WHERE julianday(timestamp) IS NULL)
-                      + (SELECT COUNT(*) FROM api_failures WHERE julianday(timestamp) IS NULL)",
-                [],
-                |row| row.get(0),
-            )
+            .query_row(APPEND_ONLY_INVALID_TIMESTAMPS_SQL, [], |row| row.get(0))
             .map_err(ArcanaError::Database)?;
         if invalid_rows > 0 {
             return Err(ArcanaError::Agent(
@@ -850,14 +855,7 @@ impl AnalyticsDb {
         let mut daily_summaries = HashMap::<String, DailySummary>::new();
         {
             let mut stmt = tx
-                .prepare(
-                    "SELECT date(timestamp, 'localtime'), SUM(cost_usd), SUM(total_tokens),
-                            COUNT(DISTINCT session_id), COUNT(*),
-                            SUM(CASE WHEN request_type = 'tool_use' THEN 1 ELSE 0 END)
-                       FROM token_usage
-                      WHERE julianday(timestamp) < julianday(?1)
-                      GROUP BY date(timestamp, 'localtime')",
-                )
+                .prepare(APPEND_ONLY_TOKEN_DAILY_SUMMARY_SQL)
                 .map_err(ArcanaError::Database)?;
             let rows = stmt
                 .query_map([cutoff], |row| {
@@ -893,14 +891,10 @@ impl AnalyticsDb {
                 );
             }
         }
-        for (column, target) in [("provider", true), ("agent_type", false)] {
-            let sql = format!(
-                "SELECT date(timestamp, 'localtime'), {column}, SUM(cost_usd)
-                   FROM token_usage
-                  WHERE julianday(timestamp) < julianday(?1)
-                  GROUP BY date(timestamp, 'localtime'), {column}"
-            );
-            let mut stmt = tx.prepare(&sql).map_err(ArcanaError::Database)?;
+        {
+            let mut stmt = tx
+                .prepare(APPEND_ONLY_PROVIDER_COSTS_SQL)
+                .map_err(ArcanaError::Database)?;
             let rows = stmt
                 .query_map([cutoff], |row| {
                     Ok((
@@ -911,7 +905,7 @@ impl AnalyticsDb {
                 })
                 .map_err(ArcanaError::Database)?;
             for row in rows {
-                let (date, key, cost) = row.map_err(ArcanaError::Database)?;
+                let (date, provider, cost) = row.map_err(ArcanaError::Database)?;
                 let date = date.ok_or_else(|| {
                     ArcanaError::Agent(
                         "Analytics retention could not derive token usage date".into(),
@@ -920,12 +914,33 @@ impl AnalyticsDb {
                 let summary = daily_summaries.get_mut(&date).ok_or_else(|| {
                     ArcanaError::Agent("Analytics retention summary was inconsistent".into())
                 })?;
-                let breakdown = if target {
-                    &mut summary.provider_costs
-                } else {
-                    &mut summary.agent_costs
-                };
-                breakdown.insert(key, cost);
+                summary.provider_costs.insert(provider, cost);
+            }
+        }
+        {
+            let mut stmt = tx
+                .prepare(APPEND_ONLY_AGENT_COSTS_SQL)
+                .map_err(ArcanaError::Database)?;
+            let rows = stmt
+                .query_map([cutoff], |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, f64>(2)?,
+                    ))
+                })
+                .map_err(ArcanaError::Database)?;
+            for row in rows {
+                let (date, agent, cost) = row.map_err(ArcanaError::Database)?;
+                let date = date.ok_or_else(|| {
+                    ArcanaError::Agent(
+                        "Analytics retention could not derive token usage date".into(),
+                    )
+                })?;
+                let summary = daily_summaries.get_mut(&date).ok_or_else(|| {
+                    ArcanaError::Agent("Analytics retention summary was inconsistent".into())
+                })?;
+                summary.agent_costs.insert(agent, cost);
             }
         }
         for (date, summary) in daily_summaries {
@@ -953,13 +968,15 @@ impl AnalyticsDb {
         }
 
         let mut deleted = 0usize;
-        for sql in [
-            "DELETE FROM token_usage WHERE julianday(timestamp) < julianday(?1)",
-            "DELETE FROM system_events WHERE julianday(timestamp) < julianday(?1)",
-            "DELETE FROM api_failures WHERE julianday(timestamp) < julianday(?1)",
-        ] {
-            deleted += tx.execute(sql, [cutoff]).map_err(ArcanaError::Database)?;
-        }
+        deleted += tx
+            .execute(APPEND_ONLY_PRUNE_TOKEN_USAGE_SQL, [cutoff])
+            .map_err(ArcanaError::Database)?;
+        deleted += tx
+            .execute(APPEND_ONLY_PRUNE_SYSTEM_EVENTS_SQL, [cutoff])
+            .map_err(ArcanaError::Database)?;
+        deleted += tx
+            .execute(APPEND_ONLY_PRUNE_API_FAILURES_SQL, [cutoff])
+            .map_err(ArcanaError::Database)?;
         tx.commit().map_err(ArcanaError::Database)?;
         operation = operation.with_result_count(deleted);
         operation.succeed();
@@ -1672,6 +1689,87 @@ mod append_only_retention_tests {
                 .expect("insert API failure");
             }
             _ => panic!("unhandled test table"),
+        }
+    }
+
+    #[tokio::test]
+    async fn append_only_retention_readers_use_populated_timestamp_indexes() {
+        let (_directory, db) = database().await;
+        {
+            let conn = db.conn.lock().expect("analytics connection");
+            conn.execute_batch(
+                "WITH RECURSIVE n(value) AS (
+                    SELECT 1 UNION ALL SELECT value + 1 FROM n WHERE value < 5000
+                 )
+                 INSERT INTO token_usage
+                    (timestamp,session_id,agent_type,provider,model,prompt_tokens,
+                     completion_tokens,total_tokens,cost_usd,request_type)
+                 SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now','-' || value || ' days'),
+                        'session-' || (value % 8), 'worker-' || (value % 4),
+                        'provider-' || (value % 6), 'gemini-test', 2, 3, 5, 0.01, 'chat'
+                 FROM n;
+                 WITH RECURSIVE n(value) AS (
+                    SELECT 1 UNION ALL SELECT value + 1 FROM n WHERE value < 5000
+                 )
+                 INSERT INTO api_failures
+                    (timestamp,provider,error_type,error_message)
+                 SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now','-' || value || ' days'),
+                        'google','retryable','fixture' FROM n;
+                 WITH RECURSIVE n(value) AS (
+                    SELECT 1 UNION ALL SELECT value + 1 FROM n WHERE value < 5000
+                 )
+                 INSERT INTO system_events
+                    (timestamp,component,event_type,message,severity)
+                 SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now','-' || value || ' days'),
+                        'worker','completed','fixture','info' FROM n;
+                 ANALYZE;",
+            )
+            .expect("populate retention query fixture");
+        }
+
+        let conn = db.conn.lock().expect("analytics connection");
+        for (table, sql) in [
+            ("token_usage", APPEND_ONLY_INVALID_TIMESTAMPS_SQL),
+            ("token_usage", APPEND_ONLY_TOKEN_DAILY_SUMMARY_SQL),
+            ("token_usage", APPEND_ONLY_PROVIDER_COSTS_SQL),
+            ("token_usage", APPEND_ONLY_AGENT_COSTS_SQL),
+        ] {
+            let explain = format!("EXPLAIN QUERY PLAN {sql}");
+            let mut stmt = conn.prepare(&explain).expect("prepare production plan");
+            let details = if sql.contains("?1") {
+                stmt.query_map(["2026-01-01T00:00:00Z"], |row| row.get::<_, String>(3))
+                    .expect("explain production query")
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .expect("collect production query plan")
+                    .join(" | ")
+            } else {
+                stmt.query_map([], |row| row.get::<_, String>(3))
+                    .expect("explain production query")
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .expect("collect production query plan")
+                    .join(" | ")
+            };
+            assert!(
+                details.contains(table) && details.contains("USING"),
+                "expected indexed retention plan for {table}; plan was: {details}"
+            );
+            if sql == APPEND_ONLY_INVALID_TIMESTAMPS_SQL {
+                for index in [
+                    "idx_token_usage_julianday",
+                    "idx_system_events_julianday",
+                    "idx_api_failures_julianday",
+                ] {
+                    assert!(
+                        details.contains(index),
+                        "expected invalid-timestamp retention check to use {index}; plan was: {details}"
+                    );
+                }
+            } else {
+                assert!(
+                    details.contains("idx_token_usage_julianday"),
+                    "expected token retention reader to use its timestamp index; plan was: {details}"
+                );
+            }
         }
     }
 

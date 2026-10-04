@@ -175,13 +175,24 @@ impl AnalyticsReader {
     }
 
     fn ensure_retained_timestamps_valid(&self, table: &'static str) -> Result<()> {
-        let invalid: i64 = self.conn.query_row(
-            &format!(
-                "SELECT COUNT(*) FROM {table} WHERE timestamp IS NOT NULL AND julianday(timestamp) IS NULL"
-            ),
-            [],
-            |row| row.get(0),
-        )?;
+        let invalid: i64 = match table {
+            "token_usage" => self
+                .conn
+                .query_row(TOKEN_USAGE_INVALID_TIMESTAMP_SQL, [], |row| row.get(0))?,
+            "api_failures" => {
+                self.conn
+                    .query_row(API_FAILURES_INVALID_TIMESTAMP_SQL, [], |row| row.get(0))?
+            }
+            "system_events" => {
+                self.conn
+                    .query_row(SYSTEM_EVENTS_INVALID_TIMESTAMP_SQL, [], |row| row.get(0))?
+            }
+            _ => {
+                return Err(SharedError::Other(
+                    "unsupported analytics timestamp table".into(),
+                ));
+            }
+        };
         if invalid > 0 {
             return Err(SharedError::Other(format!(
                 "analytics export refused {table} rows with invalid timestamps"
@@ -292,6 +303,10 @@ const TOKEN_USAGE_ALL_SQL: &str = "SELECT id,timestamp,session_id,agent_type,pro
 const TOKEN_USAGE_RETAINED_SQL: &str = "SELECT id,timestamp,session_id,agent_type,provider,model,prompt_tokens,completion_tokens,total_tokens,cost_usd FROM token_usage WHERE julianday(timestamp) >= julianday('now', '-90 days') ORDER BY julianday(timestamp) DESC, id DESC";
 const API_FAILURES_RETAINED_SQL: &str = "SELECT id,timestamp,provider,error_type,error_message,request_id,retry_count,resolved FROM api_failures WHERE julianday(timestamp) >= julianday('now', '-90 days') ORDER BY julianday(timestamp) DESC, id DESC";
 const SYSTEM_EVENTS_RETAINED_SQL: &str = "SELECT id,timestamp,component,event_type,message,severity,metadata FROM system_events WHERE julianday(timestamp) >= julianday('now', '-90 days') ORDER BY julianday(timestamp) DESC, id DESC";
+const TOKEN_USAGE_INVALID_TIMESTAMP_SQL: &str =
+    "SELECT COUNT(*) FROM token_usage WHERE timestamp IS NOT NULL AND julianday(timestamp) IS NULL";
+const API_FAILURES_INVALID_TIMESTAMP_SQL: &str = "SELECT COUNT(*) FROM api_failures WHERE timestamp IS NOT NULL AND julianday(timestamp) IS NULL";
+const SYSTEM_EVENTS_INVALID_TIMESTAMP_SQL: &str = "SELECT COUNT(*) FROM system_events WHERE timestamp IS NOT NULL AND julianday(timestamp) IS NULL";
 const WORKER_STATS_RAW_TODAY_SQL: &str = "SELECT worker_id, date, tasks_completed, tasks_failed, time_spent_minutes, cost_usd, avg_task_duration_minutes, success_rate, last_heartbeat FROM worker_stats WHERE date >= date('now') ORDER BY date DESC, worker_id ASC";
 const WORKER_STATS_RAW_WEEK_SQL: &str = "SELECT worker_id, date, tasks_completed, tasks_failed, time_spent_minutes, cost_usd, avg_task_duration_minutes, success_rate, last_heartbeat FROM worker_stats WHERE date >= date('now', '-7 days') ORDER BY date DESC, worker_id ASC";
 const WORKER_STATS_RAW_MONTH_SQL: &str = "SELECT worker_id, date, tasks_completed, tasks_failed, time_spent_minutes, cost_usd, avg_task_duration_minutes, success_rate, last_heartbeat FROM worker_stats WHERE date >= date('now', '-30 days') ORDER BY date DESC, worker_id ASC";
@@ -464,6 +479,11 @@ mod analytics_reader_plan_tests {
                 ON worker_stats_monthly(covered_start, covered_end);",
         )
         .expect("create production-equivalent analytics schema");
+        conn.execute_batch(
+            "CREATE INDEX idx_api_failures_julianday ON api_failures(julianday(timestamp) DESC);
+             CREATE INDEX idx_system_events_julianday ON system_events(julianday(timestamp) DESC);",
+        )
+        .expect("create production timestamp indexes");
 
         {
             let tx = conn.unchecked_transaction().expect("fixture transaction");
@@ -601,7 +621,22 @@ mod analytics_reader_plan_tests {
                  VALUES (strftime('%Y-%m-%dT%H:%M:%fZ','now'),'worker','completed',
                          'retained event','info','{}'),
                         (strftime('%Y-%m-%dT%H:%M:%fZ','now','-91 days'),'worker','old',
-                         'expired event','info','{}');",
+                         'expired event','info','{}');
+                 WITH RECURSIVE n(value) AS (
+                    SELECT 1 UNION ALL SELECT value + 1 FROM n WHERE value < 10000
+                 )
+                 INSERT INTO api_failures
+                    (timestamp,provider,error_type,error_message,retry_count,resolved)
+                 SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now','-' || (100 + value) || ' days'),
+                        'google','fatal','expired fixture',0,0 FROM n;
+                 WITH RECURSIVE n(value) AS (
+                    SELECT 1 UNION ALL SELECT value + 1 FROM n WHERE value < 10000
+                 )
+                 INSERT INTO system_events
+                    (timestamp,component,event_type,message,severity,metadata)
+                 SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now','-' || (100 + value) || ' days'),
+                        'worker','old','expired fixture','info','{}' FROM n;
+                 ANALYZE;",
             )
             .expect("seed retained and expired detail");
 
@@ -611,6 +646,54 @@ mod analytics_reader_plan_tests {
         assert_eq!(export["api_failures"][0]["request_id"], "request-current");
         assert_eq!(export["system_events"].as_array().unwrap().len(), 1);
         assert_eq!(export["system_events"][0]["message"], "retained event");
+
+        for (table, index, sql) in [
+            (
+                "token_usage",
+                "idx_token_usage_julianday",
+                TOKEN_USAGE_RETAINED_SQL,
+            ),
+            (
+                "api_failures",
+                "idx_api_failures_julianday",
+                API_FAILURES_RETAINED_SQL,
+            ),
+            (
+                "system_events",
+                "idx_system_events_julianday",
+                SYSTEM_EVENTS_RETAINED_SQL,
+            ),
+        ] {
+            let details = explain_details(&reader.conn, sql, &[]).join(" | ");
+            assert!(
+                details.contains(index),
+                "expected retained {table} reader to use {index}; plan was: {details}"
+            );
+        }
+
+        for (table, index, sql) in [
+            (
+                "token_usage",
+                "idx_token_usage_julianday",
+                TOKEN_USAGE_INVALID_TIMESTAMP_SQL,
+            ),
+            (
+                "api_failures",
+                "idx_api_failures_julianday",
+                API_FAILURES_INVALID_TIMESTAMP_SQL,
+            ),
+            (
+                "system_events",
+                "idx_system_events_julianday",
+                SYSTEM_EVENTS_INVALID_TIMESTAMP_SQL,
+            ),
+        ] {
+            let details = explain_details(&reader.conn, sql, &[]).join(" | ");
+            assert!(
+                details.contains(index),
+                "expected invalid-timestamp check for {table} to use {index}; plan was: {details}"
+            );
+        }
 
         reader
             .conn
