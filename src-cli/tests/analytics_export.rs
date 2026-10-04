@@ -1,7 +1,8 @@
 use arcana_core::analytics::{
     db::AnalyticsDb,
-    types::{TokenUsageRecord, WorkerStatsRecord},
+    types::{ApiFailureRecord, SystemEventRecord, TokenUsageRecord, WorkerStatsRecord},
 };
+use arcana_core::hooks::types::{HookExecutionLog, HookOutcome};
 use chrono::{NaiveDate, Utc};
 use std::process::Command;
 
@@ -79,6 +80,42 @@ async fn analytics_cli_export_reads_pruned_worker_history_with_monthly_coverage(
         last_heartbeat: Some(Utc::now()),
     })
     .expect("write current-day worker stat");
+    db.insert_api_failure(&ApiFailureRecord {
+        id: None,
+        timestamp: Utc::now(),
+        provider: "google".into(),
+        error_type: "retryable".into(),
+        error_message: "retained provider failure".into(),
+        request_id: Some("retained-request-id".into()),
+        retry_count: 1,
+        resolved: true,
+    })
+    .expect("write retained API failure");
+    db.insert_system_event(&SystemEventRecord {
+        id: None,
+        timestamp: Utc::now(),
+        component: "worker".into(),
+        event_type: "completed".into(),
+        message: "retained worker event".into(),
+        severity: "info".into(),
+        metadata: Some("{}".into()),
+    })
+    .expect("write retained system event");
+    let hooks = arcana_core::hooks::db::HooksDb::open_at(&arcana_dir.join("config.db"))
+        .expect("open production config schema");
+    hooks
+        .insert_log(&HookExecutionLog {
+            id: 0,
+            hook_id: "hook-retention-proof".into(),
+            hook_name: "retained hook".into(),
+            hook_type: "pre_tool_use".into(),
+            outcome: HookOutcome::Executed,
+            output: None,
+            error: None,
+            executed_at: Utc::now().to_rfc3339(),
+            duration_ms: 4,
+        })
+        .expect("write retained hook log");
     assert_eq!(
         db.rollup_and_prune_worker_stats_before(
             NaiveDate::from_ymd_opt(2025, 1, 6).expect("cutoff date")
@@ -153,4 +190,16 @@ async fn analytics_cli_export_reads_pruned_worker_history_with_monthly_coverage(
     assert_eq!(daily["coverage_end"], today.to_string());
     assert_eq!(daily["tasks_completed"], 1);
     assert_eq!(daily["tasks_failed"], 0);
+    assert_eq!(exported["api_failures"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        exported["api_failures"][0]["request_id"],
+        "retained-request-id"
+    );
+    assert_eq!(exported["system_events"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        exported["system_events"][0]["message"],
+        "retained worker event"
+    );
+    assert_eq!(exported["hook_logs"].as_array().unwrap().len(), 1);
+    assert_eq!(exported["hook_logs"][0]["hook_id"], "hook-retention-proof");
 }

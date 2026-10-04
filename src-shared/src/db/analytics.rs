@@ -1,7 +1,7 @@
 // Analytics read-only access for arcanactl analytics commands.
 // Uses the same ~/.arcana/analytics.db written by the Tauri app.
 
-use crate::errors::Result;
+use crate::errors::{Result, SharedError};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +27,29 @@ pub struct TokenUsageRecord {
     pub completion_tokens: i64,
     pub total_tokens: i64,
     pub cost_usd: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiFailureRecord {
+    pub id: i64,
+    pub timestamp: String,
+    pub provider: String,
+    pub error_type: String,
+    pub error_message: String,
+    pub request_id: Option<String>,
+    pub retry_count: i64,
+    pub resolved: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemEventRecord {
+    pub id: i64,
+    pub timestamp: String,
+    pub component: String,
+    pub event_type: String,
+    pub message: String,
+    pub severity: String,
+    pub metadata: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,6 +123,71 @@ impl AnalyticsReader {
                 .collect::<std::result::Result<Vec<_>, _>>()?
         };
         Ok(rows)
+    }
+
+    /// All raw token records still inside the analytics retention window.
+    pub fn token_usage_retained(&self) -> Result<Vec<TokenUsageRecord>> {
+        self.ensure_retained_timestamps_valid("token_usage")?;
+        let mut stmt = self.conn.prepare(TOKEN_USAGE_RETAINED_SQL)?;
+        let rows = stmt
+            .query_map([], row_to_token_usage)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn api_failures_retained(&self) -> Result<Vec<ApiFailureRecord>> {
+        self.ensure_retained_timestamps_valid("api_failures")?;
+        let mut stmt = self.conn.prepare(API_FAILURES_RETAINED_SQL)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(ApiFailureRecord {
+                    id: row.get(0)?,
+                    timestamp: row.get(1)?,
+                    provider: row.get(2)?,
+                    error_type: row.get(3)?,
+                    error_message: row.get(4)?,
+                    request_id: row.get(5)?,
+                    retry_count: row.get(6)?,
+                    resolved: row.get::<_, i64>(7)? != 0,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn system_events_retained(&self) -> Result<Vec<SystemEventRecord>> {
+        self.ensure_retained_timestamps_valid("system_events")?;
+        let mut stmt = self.conn.prepare(SYSTEM_EVENTS_RETAINED_SQL)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(SystemEventRecord {
+                    id: row.get(0)?,
+                    timestamp: row.get(1)?,
+                    component: row.get(2)?,
+                    event_type: row.get(3)?,
+                    message: row.get(4)?,
+                    severity: row.get(5)?,
+                    metadata: row.get(6)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    fn ensure_retained_timestamps_valid(&self, table: &'static str) -> Result<()> {
+        let invalid: i64 = self.conn.query_row(
+            &format!(
+                "SELECT COUNT(*) FROM {table} WHERE timestamp IS NOT NULL AND julianday(timestamp) IS NULL"
+            ),
+            [],
+            |row| row.get(0),
+        )?;
+        if invalid > 0 {
+            return Err(SharedError::Other(format!(
+                "analytics export refused {table} rows with invalid timestamps"
+            )));
+        }
+        Ok(())
     }
 
     /// Worker statistics for the given date window.
@@ -180,12 +268,16 @@ impl AnalyticsReader {
     /// Export all analytics data as JSON.
     pub fn export_all(&self) -> Result<serde_json::Value> {
         let costs = self.cost_summary("all")?;
-        let tokens = self.token_usage(None, 10_000)?;
+        let tokens = self.token_usage_retained()?;
         let workers = self.worker_stats("all")?;
+        let failures = self.api_failures_retained()?;
+        let events = self.system_events_retained()?;
         let result = serde_json::json!({
             "cost_summary":   costs,
             "token_usage":    tokens,
             "worker_stats":   workers,
+            "api_failures":   failures,
+            "system_events":  events,
         });
         Ok(result)
     }
@@ -197,6 +289,9 @@ const COST_SUMMARY_MONTH_SQL: &str = "SELECT date, total_cost_usd, total_tokens,
 const COST_SUMMARY_ALL_SQL: &str = "SELECT date, total_cost_usd, total_tokens, session_count, message_count, tool_call_count FROM daily_costs ORDER BY date DESC";
 const TOKEN_USAGE_FILTERED_SQL: &str = "SELECT id,timestamp,session_id,agent_type,provider,model,prompt_tokens,completion_tokens,total_tokens,cost_usd FROM token_usage WHERE session_id=?1 ORDER BY julianday(timestamp) DESC LIMIT ?2";
 const TOKEN_USAGE_ALL_SQL: &str = "SELECT id,timestamp,session_id,agent_type,provider,model,prompt_tokens,completion_tokens,total_tokens,cost_usd FROM token_usage ORDER BY julianday(timestamp) DESC LIMIT ?1";
+const TOKEN_USAGE_RETAINED_SQL: &str = "SELECT id,timestamp,session_id,agent_type,provider,model,prompt_tokens,completion_tokens,total_tokens,cost_usd FROM token_usage WHERE julianday(timestamp) >= julianday('now', '-90 days') ORDER BY julianday(timestamp) DESC, id DESC";
+const API_FAILURES_RETAINED_SQL: &str = "SELECT id,timestamp,provider,error_type,error_message,request_id,retry_count,resolved FROM api_failures WHERE julianday(timestamp) >= julianday('now', '-90 days') ORDER BY julianday(timestamp) DESC, id DESC";
+const SYSTEM_EVENTS_RETAINED_SQL: &str = "SELECT id,timestamp,component,event_type,message,severity,metadata FROM system_events WHERE julianday(timestamp) >= julianday('now', '-90 days') ORDER BY julianday(timestamp) DESC, id DESC";
 const WORKER_STATS_RAW_TODAY_SQL: &str = "SELECT worker_id, date, tasks_completed, tasks_failed, time_spent_minutes, cost_usd, avg_task_duration_minutes, success_rate, last_heartbeat FROM worker_stats WHERE date >= date('now') ORDER BY date DESC, worker_id ASC";
 const WORKER_STATS_RAW_WEEK_SQL: &str = "SELECT worker_id, date, tasks_completed, tasks_failed, time_spent_minutes, cost_usd, avg_task_duration_minutes, success_rate, last_heartbeat FROM worker_stats WHERE date >= date('now', '-7 days') ORDER BY date DESC, worker_id ASC";
 const WORKER_STATS_RAW_MONTH_SQL: &str = "SELECT worker_id, date, tasks_completed, tasks_failed, time_spent_minutes, cost_usd, avg_task_duration_minutes, success_rate, last_heartbeat FROM worker_stats WHERE date >= date('now', '-30 days') ORDER BY date DESC, worker_id ASC";
@@ -315,6 +410,16 @@ mod analytics_reader_plan_tests {
              CREATE INDEX idx_token_usage_julianday ON token_usage(julianday(timestamp) DESC);
              CREATE INDEX idx_token_usage_session_julianday
                 ON token_usage(session_id, julianday(timestamp) DESC);
+             CREATE TABLE api_failures (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL,
+                provider TEXT NOT NULL, error_type TEXT NOT NULL, error_message TEXT NOT NULL,
+                request_id TEXT, retry_count INTEGER NOT NULL, resolved INTEGER NOT NULL
+             );
+             CREATE TABLE system_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL,
+                component TEXT NOT NULL, event_type TEXT NOT NULL, message TEXT NOT NULL,
+                severity TEXT NOT NULL, metadata TEXT
+             );
              CREATE TABLE daily_costs (
                 date DATE PRIMARY KEY,
                 total_cost_usd REAL NOT NULL,
@@ -468,6 +573,59 @@ mod analytics_reader_plan_tests {
             details.contains(&format!("{table}")) && details.contains("USING"),
             "expected an indexed plan for {table}; plan was: {details}"
         );
+    }
+
+    #[test]
+    fn retained_export_is_complete_and_excludes_rows_past_the_raw_cutoff() {
+        let reader = migrated_reader();
+        reader
+            .conn
+            .execute_batch(
+                "WITH RECURSIVE n(value) AS (
+                    SELECT 1 UNION ALL SELECT value + 1 FROM n WHERE value < 10001
+                 )
+                 INSERT INTO token_usage
+                    (timestamp,session_id,agent_type,provider,model,prompt_tokens,
+                     completion_tokens,total_tokens,thinking_tokens,cost_usd,request_type)
+                 SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'session', 'worker',
+                        'google', 'gemini-test', 2, 3, 5, 0, 0.01, 'completion'
+                 FROM n;
+                 INSERT INTO api_failures
+                    (timestamp,provider,error_type,error_message,request_id,retry_count,resolved)
+                 VALUES (strftime('%Y-%m-%dT%H:%M:%fZ','now'),'google','retryable',
+                         'retained failure','request-current',1,0),
+                        (strftime('%Y-%m-%dT%H:%M:%fZ','now','-91 days'),'google','fatal',
+                         'expired failure','request-expired',0,0);
+                 INSERT INTO system_events
+                    (timestamp,component,event_type,message,severity,metadata)
+                 VALUES (strftime('%Y-%m-%dT%H:%M:%fZ','now'),'worker','completed',
+                         'retained event','info','{}'),
+                        (strftime('%Y-%m-%dT%H:%M:%fZ','now','-91 days'),'worker','old',
+                         'expired event','info','{}');",
+            )
+            .expect("seed retained and expired detail");
+
+        let export = reader.export_all().expect("read complete retained export");
+        assert_eq!(export["token_usage"].as_array().unwrap().len(), 15_001);
+        assert_eq!(export["api_failures"].as_array().unwrap().len(), 1);
+        assert_eq!(export["api_failures"][0]["request_id"], "request-current");
+        assert_eq!(export["system_events"].as_array().unwrap().len(), 1);
+        assert_eq!(export["system_events"][0]["message"], "retained event");
+
+        reader
+            .conn
+            .execute(
+                "INSERT INTO api_failures
+                 (timestamp,provider,error_type,error_message,retry_count,resolved)
+                 VALUES ('malformed','google','fatal','invalid timestamp',0,0)",
+                [],
+            )
+            .expect("seed malformed timestamp");
+        let error = reader
+            .export_all()
+            .expect_err("invalid detail must not disappear silently")
+            .to_string();
+        assert!(error.contains("invalid timestamps"), "{error}");
     }
 
     #[test]

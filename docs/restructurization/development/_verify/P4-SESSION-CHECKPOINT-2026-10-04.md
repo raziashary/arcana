@@ -211,3 +211,10 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 - Added production-adapter fixtures for malformed successful JSON and unavailable endpoints for all three providers, plus planted private-content parser checks across all three SSE implementations.
 - `cargo test -p arcana-core --lib provider:: --locked -- --test-threads=1` passes 126/126. `cargo check -p arcana-core --locked`, `cargo fmt --all`, and `git diff --check` pass. ADR-LOG-RESTRUCT-0260 records the boundary.
 - P4-51/TG4-25 remain open for complete builtin failure matrix, timeout/cancellation, and full telemetry readback; P4/TG4 counts remain 32/59 and 10/33. No live provider request or Calendar run was made.
+
+## Continuation — 2026-10-04 retained database export
+
+- Expanded the real `arcanactl analytics export` consumer: it no longer truncates token details at 10,000 rows, and now includes all retained 90-day API failures, system events, and hook logs along with daily costs and combined daily/monthly worker history.
+- Added retained-history readers in `src-shared` and the schema-owned hook DB. Malformed timestamps cause explicit export refusal instead of being silently filtered out.
+- `cargo test -p arcana-shared --lib analytics_reader_plan_tests --locked -- --test-threads=1` passes 2/2, including 15,001 token rows, current/expired cutoff behavior, and invalid timestamps. `cargo test -p arcana-core --lib hook_log_export_reads_complete_retained_rows_and_refuses_invalid_dates --locked -- --test-threads=1` passes 1/1. `cargo test -p arcanactl --test analytics_export --locked -- --test-threads=1` passes 1/1 against the production CLI subprocess and all raw stores. `cargo check -p arcanactl --locked`, formatting, and diff checks pass.
+- ADR-LOG-RESTRUCT-0261 records the contract. P4-59/TG4-21 remain open for cross-platform active-writer contention and platform proof; P4/TG4 counts remain 32/59 and 10/33. No owner Calendar run was made.

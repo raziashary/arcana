@@ -2,6 +2,7 @@ use crate::output::OutputContext;
 use anyhow::Result;
 use arcana_core::observability::timing::OperationTimer;
 use arcana_shared::db::analytics::AnalyticsReader;
+use chrono::{Duration, Utc};
 use clap::{Args, Subcommand};
 use std::path::Path;
 
@@ -208,7 +209,7 @@ fn export(output: Option<String>, ctx: OutputContext) -> Result<()> {
     )?;
     let tokens = observe_analytics_read(
         "cli_analytics_export_token_usage_read",
-        || reader.token_usage(None, 10_000),
+        || reader.token_usage_retained(),
         |rows| rows.len(),
     )?;
     let workers = observe_analytics_read(
@@ -216,10 +217,32 @@ fn export(output: Option<String>, ctx: OutputContext) -> Result<()> {
         || reader.worker_stats("all"),
         |rows| rows.len(),
     )?;
+    let failures = observe_analytics_read(
+        "cli_analytics_export_api_failures_read",
+        || reader.api_failures_retained(),
+        |rows| rows.len(),
+    )?;
+    let events = observe_analytics_read(
+        "cli_analytics_export_system_events_read",
+        || reader.system_events_retained(),
+        |rows| rows.len(),
+    )?;
+    let config_path = arcana_shared::db::arcana_dir()?.join("config.db");
+    let hooks_db = arcana_core::hooks::db::HooksDb::open_at(&config_path)?;
+    let cutoff = (Utc::now() - Duration::days(90)).to_rfc3339();
+    let hook_logs = observe_database_read(
+        "cli_analytics_export_hook_logs_read",
+        "config",
+        || hooks_db.get_logs_since(&cutoff),
+        |rows| rows.len(),
+    )?;
     let data = serde_json::json!({
         "cost_summary": costs,
         "token_usage": tokens,
         "worker_stats": workers,
+        "api_failures": failures,
+        "system_events": events,
+        "hook_logs": hook_logs,
     });
     let json = serde_json::to_string_pretty(&data)?;
 
@@ -242,7 +265,19 @@ fn observe_analytics_read<T, E>(
 where
     E: Into<anyhow::Error>,
 {
-    let operation = OperationTimer::start(operation_name).with_database("analytics");
+    observe_database_read(operation_name, "analytics", read, result_count)
+}
+
+fn observe_database_read<T, E>(
+    operation_name: &'static str,
+    database: &'static str,
+    read: impl FnOnce() -> std::result::Result<T, E>,
+    result_count: impl FnOnce(&T) -> usize,
+) -> Result<T>
+where
+    E: Into<anyhow::Error>,
+{
+    let operation = OperationTimer::start(operation_name).with_database(database);
     let value = read().map_err(Into::into)?;
     let count = result_count(&value);
     if count == 0 {

@@ -256,6 +256,53 @@ impl HooksDb {
             Ok(logs)
         }
     }
+
+    /// Read complete retained hook history at or after a UTC timestamp cutoff.
+    /// This is used by explicit full analytics export; unlike the UI reader it
+    /// has no row limit and propagates corrupt-row errors instead of skipping.
+    pub fn get_logs_since(&self, cutoff: &str) -> Result<Vec<HookExecutionLog>> {
+        let operation = OperationTimer::start("database_hook_logs_retained_export_read")
+            .with_database("config");
+        let invalid_timestamps: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM hook_logs WHERE julianday(executed_at) IS NULL",
+            [],
+            |row| row.get(0),
+        )?;
+        if invalid_timestamps > 0 {
+            return Err(ArcanaError::Agent(
+                "hook-log export refused rows with invalid timestamps".into(),
+            ));
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT id, hook_id, hook_name, hook_type, outcome, output, error, executed_at, duration_ms
+             FROM hook_logs WHERE julianday(executed_at) >= julianday(?1) ORDER BY id DESC",
+        )?;
+        let rows = stmt.query_map(params![cutoff], row_to_hook_log)?;
+        let logs = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        operation.with_result_count(logs.len()).succeed();
+        Ok(logs)
+    }
+}
+
+fn row_to_hook_log(row: &rusqlite::Row<'_>) -> rusqlite::Result<HookExecutionLog> {
+    let outcome_str: String = row.get(4)?;
+    let outcome = match outcome_str.as_str() {
+        "executed" => HookOutcome::Executed,
+        "blocked" => HookOutcome::Blocked,
+        "skipped" => HookOutcome::Skipped,
+        _ => HookOutcome::Failed,
+    };
+    Ok(HookExecutionLog {
+        id: row.get(0)?,
+        hook_id: row.get(1)?,
+        hook_name: row.get(2)?,
+        hook_type: row.get(3)?,
+        outcome,
+        output: row.get(5)?,
+        error: row.get(6)?,
+        executed_at: row.get(7)?,
+        duration_ms: row.get::<_, i64>(8)? as u64,
+    })
 }
 
 fn row_to_hook(row: &rusqlite::Row<'_>) -> rusqlite::Result<HookConfig> {
@@ -552,6 +599,28 @@ mod retention_tests {
 
         assert_eq!(db.prune_logs_before(cutoff).expect("prune old logs"), 1);
         assert_eq!(db.get_logs(None, 10).expect("read retained logs").len(), 2);
+    }
+
+    #[test]
+    fn hook_log_export_reads_complete_retained_rows_and_refuses_invalid_dates() {
+        let (_directory, db) = database();
+        insert_log(&db, "2026-07-06T11:59:59Z");
+        insert_log(&db, "2026-07-06T12:00:00Z");
+        insert_log(&db, "malformed");
+
+        let error = db
+            .get_logs_since("2026-07-06T12:00:00Z")
+            .expect_err("invalid timestamps must not disappear from a full export");
+        assert!(error.to_string().contains("invalid timestamps"));
+
+        db.conn
+            .execute("DELETE FROM hook_logs WHERE executed_at = 'malformed'", [])
+            .expect("remove malformed isolated fixture row");
+        let rows = db
+            .get_logs_since("2026-07-06T12:00:00Z")
+            .expect("read complete retained rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].executed_at, "2026-07-06T12:00:00Z");
     }
 
     #[test]

@@ -6657,3 +6657,17 @@ readback.
 **Limit.** This closes identified provider-adapter diagnostic channels only. It does not prove every ToolExecutor failure class, provider timeout/cancellation, full telemetry readback, or successful CLI Fleet completion; P4-51/TG4-25 remain open.
 
 **Where.** `arcana-core/src/provider/usage.rs`, `arcana-core/src/provider/google.rs`, `arcana-core/src/provider/openai.rs`, `arcana-core/src/provider/anthropic.rs`, `arcana-core/src/provider/streaming.rs`, provider adapter tests, P4-51, TG4-25.
+
+## ADR-LOG-RESTRUCT-0261 — Export every retained append-only analytics detail
+
+**Status.** Implemented and production-consumer tested on 2026-10-04.
+
+**Decision.** `arcanactl analytics export` includes all raw records still inside the selected 90-day window from `token_usage`, `api_failures`, `system_events`, and `hook_logs`, alongside all daily cost summaries and combined daily/monthly worker history. Do not cap the full-export token rows at 10,000. Read hook logs from the schema-owned config database and emit a timed operation with `database=config`. Invalid timestamps cause export refusal rather than silent omission.
+
+**Reason.** The existing export claimed to include all analytics but capped token usage at 10,000 and omitted two analytics append-only tables and the separately stored hook logs. That left operators without a complete retained-history artifact after the database pruner removed raw rows. The approved policy keeps full raw detail only inside 90 days, while cost and worker summaries preserve useful older history.
+
+**Evidence.** `retained_export_is_complete_and_excludes_rows_past_the_raw_cutoff` exercises more than 10,000 token rows and expired/current event/failure rows through `AnalyticsReader::export_all`; it proves all in-window rows export, older raw detail does not, and malformed timestamps fail visibly. `hook_log_export_reads_complete_retained_rows_and_refuses_invalid_dates` proves hook export uses the cutoff and refuses malformed rows. The real CLI subprocess export fixture reads back retained API/system/hook records, pruned token detail, preserved cost summary, monthly worker coverage, and current-day worker rows. Focused suite names and results are recorded under P4-59/TG4-21.
+
+**Limit.** This closes CLI retained-detail export coverage on Windows. Cross-platform writer contention and the remaining TG4-21 platform proof stay open; this does not close P4-59/TG4-21.
+
+**Where.** `src-shared/src/db/analytics.rs`, `src-cli/src/commands/analytics.rs`, `src-cli/tests/analytics_export.rs`, `arcana-core/src/hooks/db.rs`, P4-59, TG4-21.
