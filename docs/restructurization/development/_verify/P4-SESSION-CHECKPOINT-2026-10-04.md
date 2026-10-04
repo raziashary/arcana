@@ -143,3 +143,9 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 
 - The timestamp-filtered core suite found a stale GraphStore timing assertion. `production_graph_readers_emit_private_result_spans` captured 10 timing events because nested statement timings are also emitted, but it expected only five named public graph operations. The test now selects those five expected operation labels while preserving result/privacy assertions.
 - The focused regression passes 1/1, and `cargo test -p arcana-core --lib timestamp --locked -- --test-threads=1` passes 30/30. No P4/TG4 checkbox changes.
+
+## Continuation — P4-52 claimed-task startup retry proof
+
+- Extended `model_produced_commit_runs_through_recipe_runner_and_host_guard` with one injected setup failure before the first provider request and a persisted task advisory budget. The actual shipped backend recipe then reaches AgentEngine once, claims the assigned task, applies its budget, and commits the scripted change once through the production host guard.
+- `cargo test -p arcana-core --lib model_produced_commit_runs_through_recipe_runner_and_host_guard --locked -- --test-threads=1` passes 1/1; the task remains assigned to the same worker, has a nonzero bounded turn count, and is not marked budget-exceeded. An initial overly strict `--exact` filter matched zero tests; rerunning with the unique test-name filter selected and passed the intended test.
+- Updated P4-52/TG4-26/Readiness evidence. This is a pre-provider retry followed by a single task/budget workflow; daily-budget reservation continuity, retry-event Logs readback, post-side-effect fault recovery, and successful CLI Fleet proof remain open. No checklist checkbox changed.

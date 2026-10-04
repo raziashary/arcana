@@ -1490,6 +1490,9 @@ mod production_git_commit_recipe_tests {
         tasks
             .update_status(task_id, "assigned", Some("worker-backend"))
             .expect("assign task to backend worker");
+        tasks
+            .set_task_budget(task_id, Some(100_000), Some(5.0), Some(10))
+            .expect("persist the assigned task budget before worker startup");
 
         let workers = crate::db::workers::WorkersDb::open().expect("seed worker roster");
         let backend = workers
@@ -1516,7 +1519,8 @@ mod production_git_commit_recipe_tests {
             crate::agent::permission::new_pending_permissions(),
             Some(workspace.path().to_string_lossy().into_owned()),
         )
-        .with_provider_for_test(provider.clone());
+        .with_provider_for_test(provider.clone())
+        .with_startup_failures_for_test(1);
         let recipes_dir = home.path().join(".arcana").join("recipes");
         crate::recipes::defaults::ensure_default_recipes(&recipes_dir)
             .expect("persist the shipped worker recipes");
@@ -1579,6 +1583,12 @@ mod production_git_commit_recipe_tests {
         let task = tasks.get_by_id(task_id).unwrap().unwrap();
         assert_eq!(task.status, crate::db::tasks::TaskStatus::InProgress);
         assert_eq!(task.assigned_worker.as_deref(), Some("worker-backend"));
+        assert!(
+            task.budget_turns_used > 0 && task.budget_turns_used <= 3,
+            "the saved task budget must activate when the single engine workflow claims it; used {} turns",
+            task.budget_turns_used
+        );
+        assert!(!task.budget_exceeded);
         let requests = provider
             .requests
             .lock()
