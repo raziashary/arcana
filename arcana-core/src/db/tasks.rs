@@ -8505,6 +8505,26 @@ mod tests {
         let assigned = db.get_by_id(valid.id).unwrap().unwrap();
         assert_eq!(assigned.status, TaskStatus::Assigned);
         assert_eq!(assigned.assigned_worker.as_deref(), Some("worker-a"));
+        db.claim_task_with_pid(valid.id, "worker-a", 913)
+            .expect("claim routed task");
+        db.update_status_for_worker_claim(valid.id, "worker-a", "done", None, None)
+            .expect("complete task through the worker claim path");
+        let completed_history = db
+            .get_routing_history(10)
+            .expect("read completed routing history");
+        let completed_entry = completed_history
+            .iter()
+            .find(|entry| entry.task_id == valid.id.to_string())
+            .expect("completed assignment remains persisted");
+        assert_eq!(completed_entry.outcome.as_deref(), Some("success"));
+        let outcome_at = completed_entry
+            .outcome_at
+            .as_deref()
+            .expect("production routing reader returns persisted outcome time");
+        assert_eq!(outcome_at.len(), 24);
+        assert!(outcome_at.ends_with('Z'));
+        crate::db::timestamps::parse_db_timestamp(outcome_at)
+            .expect("routing outcome timestamp parses");
 
         let failed = ready_task(&db, "entry with history failure");
         db.conn

@@ -304,3 +304,9 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 - Pushed the semantic Memory instant-order fix (`d2f833b`), worker request/message timestamp readback proof (`e4fd313`), and build-evidence timestamp proof (`dc8fcc2`) to the established `origin/main` branch. P4/TG4 counts remain 32/59 and 10/33; no task closes from these focused slices.
 - Installed a user-scoped Rust 1.99 toolchain in WSL Ubuntu using the official rustup installer. This WSL image has no C compiler or libc development headers, and passwordless package installation is unavailable; the Linux retention tests were not run. Windows active-writer tests pass locally; Linux/macOS matrix results remain pending.
 - The latest full `arcana-core` result remains the 2026-10-04 baseline: 959 passed, 2 failed (Windows Clippy canonicalization OS error 5), 1 ignored. The owner Calendar scenario remains unrun and untouched.
+
+## Continuation — routing outcome timestamp readback
+
+- The production assignment/routing test now completes a worker-owned task and reads the persisted routing outcome through `TasksDb::get_routing_history`, asserting `outcome_at` is canonical and parseable.
+- `cargo test -p arcana-core --lib p4_assignment_and_routing_history_commit_per_entry --locked -- --test-threads=1` passes 1/1. Formatting and diff checks pass. This covers selected routing fields only; TG4-19 remains open.
+- Phase counts remain P4 32/59 and TG4 10/33. Owner Calendar acceptance remains untouched.
