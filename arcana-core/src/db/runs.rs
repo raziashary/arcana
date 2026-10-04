@@ -23,7 +23,7 @@
 use rusqlite::{params, OptionalExtension};
 
 use crate::db::migrate::{self, Migration};
-use crate::db::timestamps::now_rfc3339;
+use crate::db::timestamps::{now_rfc3339, parse_db_timestamp};
 use crate::errors::{ArcanaError, Result};
 use crate::observability::timing::OperationTimer;
 
@@ -1132,11 +1132,11 @@ impl RunsDb {
             .optional()?;
         let active = raw
             .map(|(operation, started_at)| -> Result<ActiveWorkerOperation> {
-                let started = chrono::DateTime::parse_from_rfc3339(&started_at).map_err(|_| {
+                let started = parse_db_timestamp(&started_at).map_err(|_| {
                     ArcanaError::Agent("active worker operation timestamp is invalid".to_string())
                 })?;
                 let elapsed_ms = chrono::Utc::now()
-                    .signed_duration_since(started.with_timezone(&chrono::Utc))
+                    .signed_duration_since(started)
                     .num_milliseconds()
                     .max(0) as u64;
                 Ok(ActiveWorkerOperation {
@@ -1742,6 +1742,64 @@ mod tests {
         assert_eq!(next.entries[0].cursor, second);
         assert_eq!(next.next_cursor, second);
         assert!(!next.has_more);
+    }
+
+    #[test]
+    fn active_worker_operation_reads_canonical_and_legacy_timestamps() {
+        let path = temp_db("active-operation-timestamp");
+        let db = RunsDb::open_at(&path).expect("open isolated runs database");
+        let run_id = db
+            .begin_worker_tick("timestamp-worker", "timestamp-session")
+            .expect("begin worker tick");
+        db.update_worker_tick_phase(&run_id, "running", Some(1), None)
+            .expect("mark worker run active");
+        let cursor = db
+            .record_operation_intent(
+                &run_id,
+                Some(1),
+                "timestamp-operation",
+                "write",
+                "write_file",
+                &["src/main.rs".to_string()],
+            )
+            .expect("record active operation");
+
+        let canonical: String = db
+            .conn
+            .query_row(
+                "SELECT created_at FROM operation_journal WHERE id = ?1",
+                [cursor],
+                |row| row.get(0),
+            )
+            .expect("read canonical operation timestamp");
+        let canonical_read = db
+            .active_worker_operation(&run_id)
+            .expect("read canonical active operation")
+            .expect("operation remains active");
+        assert_eq!(canonical_read.started_at, canonical);
+
+        db.record_operation_outcome(&run_id, cursor, OperationOutcome::Ok, &[])
+            .expect("finish canonical operation");
+
+        // Legacy runs.db rows may have been written with SQLite's offset-less
+        // datetime form. Seed an append-only historical row directly rather
+        // than updating the production journal, whose trigger correctly
+        // prohibits mutation.
+        let legacy = "2026-09-01 06:23:58";
+        db.conn
+            .execute(
+                "INSERT INTO operation_journal
+                 (run_id, task_id, record_type, operation_id, operation, effect, target_paths, created_at)
+                 VALUES (?1, 1, 'intent', 'legacy-operation', 'legacy-write', 'write_file', '[]', ?2)",
+                params![run_id, legacy],
+            )
+            .expect("seed legacy timestamp");
+        let legacy_read = db
+            .active_worker_operation(&run_id)
+            .expect("read legacy active operation")
+            .expect("legacy operation remains active");
+        assert_eq!(legacy_read.started_at, legacy);
+        assert!(legacy_read.elapsed_ms > 0);
     }
 
     #[test]

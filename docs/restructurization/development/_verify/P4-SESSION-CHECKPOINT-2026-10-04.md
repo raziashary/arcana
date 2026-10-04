@@ -99,3 +99,9 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 - cargo test -p arcana-core --test p4_query_registry --locked -- --test-threads=1 passes 8/8. Focused populated RunsDb operation-journal, v7-upgrade, TasksDb build-batch plan, interrupted-QC, Supervisor retry-approval and QC evidence tests pass.
 - P4-58 and TG4-20 are checked again. The note captured a 31/58 scan and a 10/33 TG4 scan while the P4 denominator was still being reconciled. The current exact scan on 2026-10-04 is **32/59 P4 tasks** and **10/33 TG4 gates**; the temporary 31/58 count is historical, not current. This restores the earlier 32/59 tracker count after a temporary reopen, so it is not a net checked-task increase over that checkpoint.
 - No commit or push. Calendar remains owner-only and was not run. The full core suite remains red on the two Windows Clippy canonicalization cases; CLI Fleet success and remaining P4 work remain open.
+
+## Continuation — P4-57 RunsDb legacy timestamp readback
+
+- `RunsDb::active_worker_operation` previously parsed operation-journal timestamps with strict RFC3339 even though its shared timestamp contract accepts legacy offset-less SQLite values. It now uses `parse_db_timestamp`.
+- `cargo fmt --all -- --check` and `cargo test -p arcana-core --lib db::runs::tests::active_worker_operation_reads_canonical_and_legacy_timestamps --locked -- --exact --test-threads=1` pass. The test exercises canonical timestamp readback from the production intent writer and legacy timestamp readback from an append-only journal fixture through the production active-operation reader.
+- Updated the P4-57/TG4-19 evidence without closing either item. Mixed-format analytics/session ordering and all remaining production timestamp write/read pairs are still open.
