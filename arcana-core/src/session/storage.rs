@@ -45,10 +45,11 @@ impl SessionStorage {
     /// no code reads or writes them; a migrated store keeps them untouched, a
     /// fresh one is not given dead columns. That asymmetry is intentional and
     /// is the reason `P1-14` copies the file rather than rebuilding it.
-    const LADDER: &[Migration] = &[Migration {
-        version: 1,
-        name: "sessions-baseline",
-        sql: r#"
+    const LADDER: &[Migration] = &[
+        Migration {
+            version: 1,
+            name: "sessions-baseline",
+            sql: r#"
             CREATE TABLE IF NOT EXISTS sessions (
                 id          TEXT PRIMARY KEY,
                 title       TEXT NOT NULL,
@@ -78,7 +79,16 @@ impl SessionStorage {
             CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_messages_tool    ON messages(tool_call_id);
         "#,
-    }];
+        },
+        Migration {
+            version: 2,
+            name: "chronological-message-timestamp-index",
+            sql: r#"
+            CREATE INDEX IF NOT EXISTS idx_messages_session_julianday
+                ON messages(session_id, julianday(created_at) ASC);
+        "#,
+        },
+    ];
 
     /// Columns added to `sessions` after its original `CREATE TABLE`.
     const SESSION_COLUMNS: &[(&str, &str)] = &[(
@@ -338,7 +348,7 @@ impl SessionStorage {
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, role, content, tool_name, tool_input, tool_call_id, is_error,
                     tokens_in, tokens_out, cost_usd, created_at
-             FROM messages WHERE session_id=?1 ORDER BY created_at ASC",
+             FROM messages WHERE session_id=?1 ORDER BY julianday(created_at) ASC",
         )?;
         let msgs: Vec<Message> = stmt
             .query_map(params![session_id], |row| {
@@ -454,6 +464,23 @@ mod tests {
             created_at: instant,
         };
         storage.insert_message(&message).expect("write message");
+        let later_message = Message {
+            id: "message-canonical-order-test".into(),
+            session_id: session.id.clone(),
+            role: MessageRole::Assistant,
+            content: "later".into(),
+            tool_name: None,
+            tool_input: None,
+            tool_call_id: None,
+            is_error: false,
+            tokens_in: 0,
+            tokens_out: 0,
+            cost_usd: 0.0,
+            created_at: Utc.with_ymd_and_hms(2026, 9, 1, 9, 0, 0).unwrap(),
+        };
+        storage
+            .insert_message(&later_message)
+            .expect("write second message");
 
         let stored_session: String = storage
             .conn
@@ -485,7 +512,7 @@ mod tests {
         storage
             .conn
             .execute(
-                "UPDATE messages SET created_at='2026-09-01 06:23:58' WHERE id=?1",
+                "UPDATE messages SET created_at='2026-09-01 12:00:00' WHERE id=?1",
                 [&message.id],
             )
             .expect("write legacy message value");
@@ -497,7 +524,34 @@ mod tests {
             loaded.created_at,
             Utc.with_ymd_and_hms(2026, 9, 1, 6, 23, 58).unwrap()
         );
-        assert_eq!(loaded.messages[0].created_at, loaded.created_at);
+        assert_eq!(loaded.messages.len(), 2);
+        assert_eq!(loaded.messages[0].id, later_message.id);
+        assert_eq!(
+            loaded.messages[0].created_at,
+            Utc.with_ymd_and_hms(2026, 9, 1, 9, 0, 0).unwrap()
+        );
+        assert_eq!(loaded.messages[1].id, message.id);
+        assert_eq!(
+            loaded.messages[1].created_at,
+            Utc.with_ymd_and_hms(2026, 9, 1, 12, 0, 0).unwrap()
+        );
+        let message_plan: Vec<String> = storage
+            .conn
+            .prepare(
+                "EXPLAIN QUERY PLAN SELECT id FROM messages WHERE session_id=?1
+                 ORDER BY julianday(created_at) ASC",
+            )
+            .expect("prepare message query plan")
+            .query_map([&session.id], |row| row.get(3))
+            .expect("explain message query")
+            .collect::<rusqlite::Result<_>>()
+            .expect("collect message query plan");
+        assert!(
+            message_plan
+                .iter()
+                .any(|detail| detail.contains("idx_messages_session_julianday")),
+            "chronological message reader should use its expression index: {message_plan:?}"
+        );
     }
 
     #[test]
@@ -544,7 +598,7 @@ mod tests {
 
         let (result, events) = crate::observability::timing::capture_json_events(|| {
             storage.migrate().expect("repeat-safe schema migration");
-            assert_eq!(storage.schema_version().expect("schema version"), 1);
+            assert_eq!(storage.schema_version().expect("schema version"), 2);
             storage.upsert_session(&session).expect("upsert session");
             storage
                 .update_session_pa_mode(&session.id, "autonomous")

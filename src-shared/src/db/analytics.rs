@@ -195,8 +195,8 @@ const COST_SUMMARY_TODAY_SQL: &str = "SELECT date, total_cost_usd, total_tokens,
 const COST_SUMMARY_WEEK_SQL: &str = "SELECT date, total_cost_usd, total_tokens, session_count, message_count, tool_call_count FROM daily_costs WHERE date >= date('now', '-7 days') ORDER BY date DESC";
 const COST_SUMMARY_MONTH_SQL: &str = "SELECT date, total_cost_usd, total_tokens, session_count, message_count, tool_call_count FROM daily_costs WHERE date >= date('now', '-30 days') ORDER BY date DESC";
 const COST_SUMMARY_ALL_SQL: &str = "SELECT date, total_cost_usd, total_tokens, session_count, message_count, tool_call_count FROM daily_costs ORDER BY date DESC";
-const TOKEN_USAGE_FILTERED_SQL: &str = "SELECT id,timestamp,session_id,agent_type,provider,model,prompt_tokens,completion_tokens,total_tokens,cost_usd FROM token_usage WHERE session_id=?1 ORDER BY timestamp DESC LIMIT ?2";
-const TOKEN_USAGE_ALL_SQL: &str = "SELECT id,timestamp,session_id,agent_type,provider,model,prompt_tokens,completion_tokens,total_tokens,cost_usd FROM token_usage ORDER BY timestamp DESC LIMIT ?1";
+const TOKEN_USAGE_FILTERED_SQL: &str = "SELECT id,timestamp,session_id,agent_type,provider,model,prompt_tokens,completion_tokens,total_tokens,cost_usd FROM token_usage WHERE session_id=?1 ORDER BY julianday(timestamp) DESC LIMIT ?2";
+const TOKEN_USAGE_ALL_SQL: &str = "SELECT id,timestamp,session_id,agent_type,provider,model,prompt_tokens,completion_tokens,total_tokens,cost_usd FROM token_usage ORDER BY julianday(timestamp) DESC LIMIT ?1";
 const WORKER_STATS_RAW_TODAY_SQL: &str = "SELECT worker_id, date, tasks_completed, tasks_failed, time_spent_minutes, cost_usd, avg_task_duration_minutes, success_rate, last_heartbeat FROM worker_stats WHERE date >= date('now') ORDER BY date DESC, worker_id ASC";
 const WORKER_STATS_RAW_WEEK_SQL: &str = "SELECT worker_id, date, tasks_completed, tasks_failed, time_spent_minutes, cost_usd, avg_task_duration_minutes, success_rate, last_heartbeat FROM worker_stats WHERE date >= date('now', '-7 days') ORDER BY date DESC, worker_id ASC";
 const WORKER_STATS_RAW_MONTH_SQL: &str = "SELECT worker_id, date, tasks_completed, tasks_failed, time_spent_minutes, cost_usd, avg_task_duration_minutes, success_rate, last_heartbeat FROM worker_stats WHERE date >= date('now', '-30 days') ORDER BY date DESC, worker_id ASC";
@@ -313,6 +313,8 @@ mod analytics_reader_plan_tests {
              CREATE INDEX idx_token_usage_session ON token_usage(session_id);
              CREATE INDEX idx_token_usage_agent ON token_usage(agent_type);
              CREATE INDEX idx_token_usage_julianday ON token_usage(julianday(timestamp) DESC);
+             CREATE INDEX idx_token_usage_session_julianday
+                ON token_usage(session_id, julianday(timestamp) DESC);
              CREATE TABLE daily_costs (
                 date DATE PRIMARY KEY,
                 total_cost_usd REAL NOT NULL,
@@ -504,7 +506,21 @@ mod analytics_reader_plan_tests {
             ),
             (None, TOKEN_USAGE_ALL_SQL, vec![Value::Integer(9)]),
         ] {
-            assert_index_plan("token_usage", &explain_details(&reader.conn, sql, &params));
+            let plan = explain_details(&reader.conn, sql, &params);
+            assert_index_plan("token_usage", &plan);
+            if session.is_some() {
+                assert!(
+                    plan.iter()
+                        .any(|detail| detail.contains("idx_token_usage_session_julianday")),
+                    "filtered chronological reader should use its composite expression index: {plan:?}"
+                );
+            } else {
+                assert!(
+                    plan.iter()
+                        .any(|detail| detail.contains("idx_token_usage_julianday")),
+                    "global chronological reader should use its expression index: {plan:?}"
+                );
+            }
             let rows = reader
                 .token_usage(session, 9)
                 .expect("read production token usage");
@@ -521,6 +537,26 @@ mod analytics_reader_plan_tests {
             .token_usage(Some("missing-session"), 9)
             .expect("read empty filtered session")
             .is_empty());
+
+        reader
+            .conn
+            .execute(
+                "INSERT INTO token_usage
+                 (timestamp,session_id,agent_type,provider,model,prompt_tokens,completion_tokens,
+                  total_tokens,thinking_tokens,cost_usd,request_type)
+                 VALUES ('2026-09-01 12:00:00','legacy-time-session','agent','test','model',
+                         1,1,2,0,0.01,'completion'),
+                        ('2026-09-01T09:00:00.000Z','legacy-time-session','agent','test','model',
+                         1,1,2,0,0.01,'completion')",
+                [],
+            )
+            .expect("seed mixed-format timestamps");
+        let mixed = reader
+            .token_usage(Some("legacy-time-session"), 2)
+            .expect("read mixed-format timestamps");
+        assert_eq!(mixed.len(), 2);
+        assert_eq!(mixed[0].timestamp, "2026-09-01 12:00:00");
+        assert_eq!(mixed[1].timestamp, "2026-09-01T09:00:00.000Z");
 
         for window in ["today", "week", "month", "all"] {
             let (raw_sql, monthly_sql) = match window {
@@ -551,7 +587,7 @@ mod analytics_reader_plan_tests {
 
         let exported = reader.export_all().expect("export production analytics");
         assert_eq!(exported["cost_summary"].as_array().unwrap().len(), 401);
-        assert_eq!(exported["token_usage"].as_array().unwrap().len(), 5000);
+        assert_eq!(exported["token_usage"].as_array().unwrap().len(), 5002);
         let exported_workers = exported["worker_stats"].as_array().unwrap();
         assert_eq!(exported_workers.len(), 48 * (401 + 49));
         assert!(exported_workers

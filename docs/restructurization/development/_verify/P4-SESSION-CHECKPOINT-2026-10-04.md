@@ -105,3 +105,10 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 - `RunsDb::active_worker_operation` previously parsed operation-journal timestamps with strict RFC3339 even though its shared timestamp contract accepts legacy offset-less SQLite values. It now uses `parse_db_timestamp`.
 - `cargo fmt --all -- --check` and `cargo test -p arcana-core --lib db::runs::tests::active_worker_operation_reads_canonical_and_legacy_timestamps --locked -- --exact --test-threads=1` pass. The test exercises canonical timestamp readback from the production intent writer and legacy timestamp readback from an append-only journal fixture through the production active-operation reader.
 - Updated the P4-57/TG4-19 evidence without closing either item. Mixed-format analytics/session ordering and all remaining production timestamp write/read pairs are still open.
+
+## Continuation — P4-57 analytics and session timestamp ordering
+
+- Corrected lexical timestamp ordering in CLI token history and SessionStorage messages. Both now order by SQLite `julianday` while preserving the stored display string; additive composite expression indexes support the filtered production readers.
+- `cargo test -p arcana-shared cli_analytics_readers_use_populated_indexes_and_return_production_results --locked -- --test-threads=1` passes 1/1 with mixed legacy/canonical rows, actual-instant order, and global/filtered EXPLAIN index assertions. `cargo test -p arcana-core --lib session::storage::tests::session_and_message_round_trip_canonical_timestamps_and_legacy_rows --locked -- --exact --test-threads=1` passes 1/1 with chronological readback and its EXPLAIN index assertion.
+- The first query-registry scan correctly failed after the SQL fingerprint changed. Updated both current fingerprints and removed both stale forms; the focused registry test passes 1/1 against current source.
+- ADR-LOG-RESTRUCT-0256 records the existing `julianday` convention and additive index decision. P4-57/TG4-19 remain open for all remaining production timestamp pairs.

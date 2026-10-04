@@ -391,6 +391,14 @@ impl AnalyticsDb {
                 ON worker_stats_monthly(covered_start, covered_end);
         "#,
         },
+        Migration {
+            version: 5,
+            name: "token-usage-session-chronological-index",
+            sql: r#"
+            CREATE INDEX IF NOT EXISTS idx_token_usage_session_julianday
+                ON token_usage(session_id, julianday(timestamp) DESC);
+        "#,
+        },
     ];
 
     async fn migrate(&self) -> Result<()> {
@@ -2298,6 +2306,21 @@ mod local_day_tests {
         let db = AnalyticsDb::new_at(&path)
             .await
             .expect("production analytics opener");
+        let has_session_chronology_index: bool = db
+            .conn
+            .lock()
+            .expect("analytics connection")
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index'
+                 AND name='idx_token_usage_session_julianday')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read migrated chronology index");
+        assert!(
+            has_session_chronology_index,
+            "production analytics migration installs the session chronology index"
+        );
         db.conn
             .lock()
             .expect("analytics connection")

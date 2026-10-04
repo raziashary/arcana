@@ -6587,3 +6587,17 @@ readback.
 **Limit.** This is a measured index choice for the two task-scoped recovery readers only. P4-58/TG4-20 query-registry evidence is restored; unrelated P4 platform, Fleet, telemetry, and recovery work remains open.
 
 **Where.** `arcana-core/src/db/runs.rs`, `_verify/P4-58-QUERY-INVENTORY.md`, P4-53/P4-58, TG4-20/TG4-27.
+
+## ADR-LOG-RESTRUCT-0256 — Order mixed-format timestamps by represented instant
+
+**Status.** Implemented and focused-tested on 2026-10-04; P4-57/TG4-19 remain open.
+
+**Decision.** Production token-usage history and session-message history sort with SQLite `julianday(timestamp)` so canonical UTC RFC3339 values and legacy offset-less SQLite values are ordered by their represented UTC instant. Add measured expression indexes matching the filtered query shapes: `(session_id, julianday(timestamp) DESC)` for analytics and `(session_id, julianday(created_at) ASC)` for messages. Preserve the original timestamp string for display and avoid rewriting stored history.
+
+**Reason.** The readers already accept legacy timestamp rows, but lexical ordering compares the `T` separator in canonical values against the space in SQLite values before comparing time-of-day. That can reverse records from the same date. The analytics schema already has a global `julianday(timestamp)` index; the filtered reader and per-session message reader need matching composite indexes to retain an indexed plan with chronological ordering.
+
+**Evidence.** The shared CLI analytics production-reader fixture mixes `2026-09-01 12:00:00` and `2026-09-01T09:00:00.000Z`, verifies actual-instant order, and confirms both global and filtered query plans select their expression indexes. The production analytics migration test verifies the new session index is present. The SessionStorage production readback fixture verifies canonical 09:00 precedes legacy 12:00 and `EXPLAIN QUERY PLAN` selects `idx_messages_session_julianday`. Both focused reader tests pass.
+
+**Limit.** This closes two timestamp ordering pairs only. All other database writer/reader pairs, defaults/triggers and the complete TG4-19 inventory remain open. The schema changes are additive indexes; existing values remain unchanged.
+
+**Where.** `src-shared/src/db/analytics.rs`, `arcana-core/src/analytics/db.rs`, `arcana-core/src/session/storage.rs`, P4-57/P4-58, TG4-19/TG4-20.
