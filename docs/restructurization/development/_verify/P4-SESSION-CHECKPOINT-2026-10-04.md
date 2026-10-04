@@ -380,3 +380,8 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 
 - Expanded the production startup regression to the shipped Supervisor, QC, and backend workers in one isolated home. It verifies idle work-check and dispatch-gate timing for all three roles, zero total provider requests, and clean stop/removal of all scheduler handles.
 - The final test is `production_startup_idle_workers_skip_provider_and_record_gate`; focused test passes 1/1 on Windows. This supersedes the immediately preceding backend-only test name/evidence. P4-43 still lacks cron/recovery request counts, a general intentional-turn bound, and cross-platform startup proof.
+
+### P4-43 Linux startup validation
+
+- Ran `production_startup_idle_workers_skip_provider_and_record_gate` in Ubuntu WSL from `/mnt/c/arcana`; the test passes 1/1. The cross-platform startup evidence now covers Windows and Ubuntu WSL for the shipped Supervisor, QC, and backend workers.
+- P4-43 remains open for cron/recovery provider-call counts and an intentional-turn bound.
