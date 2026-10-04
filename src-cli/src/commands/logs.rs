@@ -259,7 +259,10 @@ fn find_logs(dir: &std::path::Path, component: Option<&str>) -> Vec<std::path::P
     let mut files: Vec<_> = entries
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.extension().map(|e| e == "log").unwrap_or(false))
+        .filter(|p| {
+            p.extension()
+                .is_some_and(|extension| extension == "log" || extension == "jsonl")
+        })
         .filter(|p| {
             if let Some(comp) = component {
                 p.file_name()
@@ -281,10 +284,22 @@ fn find_logs(dir: &std::path::Path, component: Option<&str>) -> Vec<std::path::P
 }
 
 fn read_tail(path: &std::path::Path, lines: usize) -> Result<String> {
-    let content = std::fs::read_to_string(path)?;
-    let all: Vec<&str> = content.lines().collect();
-    let start = all.len().saturating_sub(lines);
-    Ok(all[start..].join("\n"))
+    use std::io::{BufRead, BufReader};
+
+    if lines == 0 {
+        return Ok(String::new());
+    }
+
+    let file = std::fs::File::open(path)?;
+    let mut tail = std::collections::VecDeque::with_capacity(lines.min(1024));
+    for line in BufReader::new(file).lines() {
+        let line = line?;
+        if tail.len() == lines {
+            tail.pop_front();
+        }
+        tail.push_back(line);
+    }
+    Ok(tail.into_iter().collect::<Vec<_>>().join("\n"))
 }
 
 fn format_bytes(b: u64) -> String {
@@ -338,4 +353,53 @@ fn format_unix_time(secs: u64) -> String {
     }
     let day = doy + 1;
     format!("{year}-{month:02}-{day:02} {h:02}:{m:02}:{s:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_listing_includes_readable_and_structured_streams() {
+        let dir = std::env::temp_dir().join(format!("arcana-cli-logs-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create isolated log directory");
+        std::fs::write(dir.join("arcana.2026-10-02.log"), "readable\n")
+            .expect("write readable log");
+        std::fs::write(
+            dir.join("arcana-events.2026-10-02.jsonl"),
+            "{\"fields\":{\"event_type\":\"provider_call\"}}\n",
+        )
+        .expect("write structured log");
+        std::fs::write(dir.join("notes.txt"), "ignore\n").expect("write unrelated file");
+
+        let files = find_logs(&dir, None);
+        let names = files
+            .iter()
+            .filter_map(|path| path.file_name().and_then(|name| name.to_str()))
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"arcana.2026-10-02.log"));
+        assert!(names.contains(&"arcana-events.2026-10-02.jsonl"));
+        assert!(!names.contains(&"notes.txt"));
+
+        std::fs::remove_dir_all(&dir).expect("remove isolated log directory");
+    }
+
+    #[test]
+    fn log_tail_retains_only_the_requested_last_lines() {
+        let path =
+            std::env::temp_dir().join(format!("arcana-cli-tail-{}.log", uuid::Uuid::new_v4()));
+        let content = (0..50_000)
+            .map(|line| format!("event-{line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, content).expect("write large isolated log");
+
+        assert_eq!(
+            read_tail(&path, 3).expect("read bounded log tail"),
+            "event-49997\nevent-49998\nevent-49999"
+        );
+        assert_eq!(read_tail(&path, 0).expect("read empty tail"), "");
+
+        std::fs::remove_file(&path).expect("remove isolated log file");
+    }
 }

@@ -1,6 +1,6 @@
 use crate::output::{status_colored, OutputContext};
 use anyhow::Result;
-use arcana_core::db::workers::{Worker, WorkersDb, DEFAULT_MODEL};
+use arcana_core::db::workers::{Worker, WorkerStatus, WorkersDb, DEFAULT_MODEL};
 use clap::{Args, Subcommand};
 
 /// Matches the `polling_interval` DEFAULT in core's workers schema.
@@ -48,7 +48,7 @@ pub struct ListArgs {
     #[arg(short = 't', long)]
     pub worker_type: Option<String>,
 
-    /// Filter by status (created, active, deleted)
+    /// Filter by status (created, idle, idle_no_provider, active, working, paused, error, deleted)
     #[arg(short, long)]
     pub status: Option<String>,
 }
@@ -111,6 +111,12 @@ fn register(args: RegisterArgs, ctx: OutputContext) -> Result<()> {
 
 fn list(args: ListArgs, ctx: OutputContext) -> Result<()> {
     let db = WorkersDb::open()?;
+    let status_filter = args
+        .status
+        .as_deref()
+        .map(WorkerStatus::try_from_str)
+        .transpose()
+        .map_err(anyhow::Error::msg)?;
     // Core's `list()` returns every non-deleted worker; the CLI's two filters
     // are applied here rather than widening core's API for a caller-specific
     // query.
@@ -122,7 +128,7 @@ fn list(args: ListArgs, ctx: OutputContext) -> Result<()> {
                 .as_deref()
                 .is_none_or(|t| w.worker_type == t)
         })
-        .filter(|w| args.status.as_deref().is_none_or(|st| w.status == st))
+        .filter(|w| status_filter.is_none_or(|status| w.status == status))
         .collect();
 
     if workers.is_empty() {
@@ -139,7 +145,7 @@ fn list(args: ListArgs, ctx: OutputContext) -> Result<()> {
                 w.slug.clone(),
                 w.name.clone(),
                 w.worker_type.clone(),
-                status_colored(&w.status),
+                status_colored(w.status.as_str()),
                 w.model.clone(),
                 w.last_seen.as_deref().unwrap_or("-").to_string(),
             ]
@@ -166,7 +172,7 @@ fn status(args: StatusArgs, ctx: OutputContext) -> Result<()> {
                     vec![
                         w.id.to_string(),
                         w.slug.clone(),
-                        status_colored(&w.status),
+                        status_colored(w.status.as_str()),
                         w.worker_type.clone(),
                         w.last_seen.as_deref().unwrap_or("-").to_string(),
                     ]
@@ -197,12 +203,13 @@ fn unregister(args: UnregisterArgs, ctx: OutputContext) -> Result<()> {
 }
 
 fn print_worker_detail(ctx: &OutputContext, w: &Worker) {
+    let status = w.status.as_str();
     ctx.print_kv(&[
         ("id", &w.id.to_string()),
         ("slug", &w.slug),
         ("name", &w.name),
         ("type", &w.worker_type),
-        ("status", &w.status),
+        ("status", status),
         ("model", &w.model),
         ("description", w.description.as_deref().unwrap_or("-")),
         ("last_seen", w.last_seen.as_deref().unwrap_or("-")),

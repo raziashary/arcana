@@ -7,6 +7,8 @@
 // `arcanactl` keeps its task/DB surface, which is live and used.
 pub mod analytics;
 pub mod config;
+pub mod consent;
+pub mod fleet;
 pub mod logs;
 pub mod plan;
 pub mod plugin;

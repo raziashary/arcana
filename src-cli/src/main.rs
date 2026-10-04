@@ -1,13 +1,13 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::EnvFilter;
 
 mod commands;
 mod noninteractive;
 mod output;
 mod repl;
 
-use commands::{analytics, config, logs, plan, plugin, system, task, worker};
+use commands::{analytics, config, consent, fleet, logs, plan, plugin, system, task, worker};
 use output::{OutputContext, OutputFormat};
 
 #[derive(Parser)]
@@ -67,6 +67,16 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: worker::WorkerCmd,
     },
+    /// Run a task through the production worker Fleet
+    Fleet {
+        #[command(subcommand)]
+        cmd: fleet::FleetCmd,
+    },
+    /// Manage persisted workspace egress consent
+    Consent {
+        #[command(subcommand)]
+        cmd: consent::ConsentCmd,
+    },
     /// View and edit configuration
     Config {
         #[command(subcommand)]
@@ -108,9 +118,25 @@ pub enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if let Some(exit_code) = arcana_core::platform::process_sandbox::run_bridge_entrypoint() {
+        std::process::exit(exit_code);
+    }
     let cli = Cli::parse();
 
-    init_tracing(cli.verbose, cli.quiet);
+    // Prevent provider credentials exported by the invoking shell from being
+    // inherited by agent-spawned commands. Providers obtain keys from the OS
+    // vault; only variable names are safe to report here.
+    let removed_credentials = arcana_core::security::env_scrub::scrub_process_env();
+    if !removed_credentials.is_empty() {
+        eprintln!(
+            "[Arcana] Removed {} credential-shaped variable(s) from the process environment: {}",
+            removed_credentials.len(),
+            removed_credentials.join(", ")
+        );
+    }
+
+    let _log_guard = init_tracing(cli.verbose, cli.quiet);
+    arcana_core::observability::log_retention::prune_default();
 
     // Declare this host's event policy before anything in the agent runtime can
     // emit. `arcanactl` has no window to deliver events to, and discarding them
@@ -185,6 +211,8 @@ async fn dispatch(
         }
         Some(Commands::Task { cmd }) => task::run(cmd, ctx).await?,
         Some(Commands::Worker { cmd }) => worker::run(cmd, ctx).await?,
+        Some(Commands::Fleet { cmd }) => fleet::run(cmd, ctx).await?,
+        Some(Commands::Consent { cmd }) => consent::run(cmd, ctx)?,
         Some(Commands::Config { cmd }) => config::run(cmd, ctx).await?,
         Some(Commands::Plan { cmd }) => plan::run(cmd, ctx).await?,
         Some(Commands::System { cmd }) => system::run(cmd, ctx).await?,
@@ -198,15 +226,33 @@ async fn dispatch(
     Ok(())
 }
 
-fn init_tracing(verbose: bool, quiet: bool) {
-    let filter = if verbose {
+fn init_tracing(verbose: bool, quiet: bool) -> arcana_core::observability::logging::LoggingGuards {
+    let filter = tracing_filter(verbose, quiet);
+    arcana_core::observability::logging::init_with_filter(filter)
+}
+
+fn tracing_filter(verbose: bool, quiet: bool) -> EnvFilter {
+    if verbose {
         EnvFilter::new("debug")
     } else if quiet {
+        // Shared logging adds a telemetry-only DEBUG directive for the
+        // structured stream. Keep the host filter itself at ERROR so telemetry
+        // INFO does not leak to quiet-mode console or readable output.
         EnvFilter::new("error")
     } else {
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"))
-    };
-    fmt().with_env_filter(filter).with_target(false).init();
+        EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new("warn,arcana::telemetry=info"))
+    }
+}
+
+#[cfg(test)]
+mod tracing_filter_tests {
+    use super::*;
+
+    #[test]
+    fn quiet_filter_suppresses_telemetry_from_console_and_readable_layers() {
+        assert_eq!(tracing_filter(false, true).to_string(), "error");
+    }
 }
 
 fn load_config(cli: &Cli) -> Result<arcana_shared::config::CliConfigFile> {
