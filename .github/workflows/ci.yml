@@ -240,6 +240,13 @@ jobs:
       - name: Install Python command corpus tools
         run: python -m pip install pytest ruff
 
+      # Core unit-test executables cannot enter the private Windows process
+      # bridge mode. Build the shipped CLI bridge in this same job before any
+      # production sandbox command corpus invokes it.
+      - name: Build Windows sandbox bridge
+        if: runner.os == 'Windows'
+        run: cargo build -p arcanactl --locked
+
       # TG4-17: exercise the production read/write boundaries for saved
       # workflows and defaults on every supported host. The skill loader is
       # part of the desktop crate; running these tests in this matrix ensures

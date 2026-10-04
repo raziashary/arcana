@@ -436,8 +436,8 @@ mod macos_tests {
     use super::*;
     use tempfile::tempdir;
 
-    #[test]
-    fn project_command_fails_closed_until_signed_xpc_runner_is_available() {
+    #[tokio::test]
+    async fn project_command_fails_closed_until_signed_xpc_runner_is_available() {
         let parent = tempdir().expect("temporary parent");
         let workspace = parent.path().join("workspace");
         std::fs::create_dir(&workspace).expect("workspace");
@@ -453,7 +453,8 @@ mod macos_tests {
                 read_only_paths: Vec::new(),
             },
             &workspace,
-        );
+        )
+        .await;
 
         let error = match result {
             Ok(_) => panic!("macOS must not launch without the signed XPC runner"),

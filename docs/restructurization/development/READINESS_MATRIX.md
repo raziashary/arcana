@@ -440,3 +440,5 @@ Post-format revalidation update: `cargo fmt --all -- --check` passes. The same p
 | Date | Scope | Evidence | Limits |
 |---|---|---|---|
 | 2026-10-05 | P4-29 / TG4-15 closeout | Real claimed-task cap under enabled daily ceiling, daily pre-claim reservation denial, exact observed-cost settlement, zero holds and worker pause/status readback pass. Engine consumer group 10/10 Windows/Linux. | P4 37/59, TG4 14/33. TG2-17 remains separately open; no global cap, live Fleet or Calendar claim. Budget proof is `_verify/P4-29-BUDGET-INTERACTION-CLOSEOUT-2026-10-05.md`. |
+
+2026-10-05 matrix checkpoint: authenticated CI run 37224469153 passes Windows/Linux persisted-workflow portability and active-writer retention, plus Linux build/launch. macOS is blocked by an async test compilation error; Windows command corpus is blocked by the missing test bridge executable. ADR-0289/0290 repair those prerequisites without weakening sandbox policy. P4-16/TG4-17 and P4-59/TG4-21 remain open; no readiness score or tally changes.

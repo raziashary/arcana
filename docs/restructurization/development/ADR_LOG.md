@@ -6981,3 +6981,19 @@ readback.
 **Why / when / where.** 2026-10-05 P4-29/TG4-15 is open specifically for interaction proof. Reuse the existing scripted provider fixture with catalogue metadata for its explicit Google identity; no production limit, pricing, schema or API changes. The older fixture's message incorrectly calls its token exhaustion a one-turn cap although max_turns is ten; correct that assertion wording and historical evidence wording without altering its behavior.
 
 **Proof.** Engine consumer group passes 10/10 on Windows (4.27s) and Linux (5.70s), including both exact-cost/different-refusal cases and the original saved-token cap. Production readers verify cap/usage, needs_info versus assigned, and worker pause versus no daily pause; zero holds and exact observed daily microdollars are read back. Earlier daily regression group passes 15/15 on both. Workspace check/format pass. P4-29/TG4-15 is proven in `_verify/P4-29-BUDGET-INTERACTION-CLOSEOUT-2026-10-05.md`; TG2-17 remains separate. The first new fixture used obsolete Usage field names; corrected to live input/output before verification, not a production bug.
+
+## ADR-LOG-RESTRUCT-0289 — Await the macOS fail-closed launcher test
+
+**Decision.** Update the macOS-only sandbox refusal fixture to an async Tokio test and await the already-async production spawn function. No launcher capability or sandbox policy changes.
+
+**Why / when / where.** 2026-10-05 authenticated CI run 37224469153 passes the Rust workspace, frontend and CLI prerequisites, then macOS fails compiling its core test target: the old synchronous test matches a Future as a Result (E0308). That prevents even unrelated saved-workflow/retention gates from running. Windows and Linux variants already await spawn.
+
+**Proof.** Shared workspace check passes (14.16s) and formatting passes. Remote macOS compilation/refusal is still required. macOS remains unsupported for actual project execution until the approved signed XPC runner/staging is implemented; do not bypass that boundary to turn the matrix green.
+
+## ADR-LOG-RESTRUCT-0290 — Build the Windows bridge before the CI command corpus
+
+**Decision.** Build the existing shipped arcanactl executable in the Windows build-smoke job before sandbox command tests. No process policy or tool permission changes.
+
+**Why / when / where.** 2026-10-05 authenticated run 37224469153, job 111503366963, passes persisted-workflow portability and active-writer retention, then the corpus fails before its first Rust build because target/debug/arcanactl.exe is absent. The production bridge locator explicitly requires that executable when called from the Rust test harness. The separate CLI job's build output is not shared with this job. Linux passes the complete build-smoke job; macOS is blocked earlier by ADR-0289's test compilation error.
+
+**Proof.** Existing CI correctness gates pass 3/3 on Windows; workspace compilation/formatting passes and the exact CLI prerequisite builds locally. The added step is conditioned only on Windows and precedes all production command tests. The remote Windows corpus must still execute and may expose the separately recorded sandbox/toolchain failures. A bridge prerequisite fix does not prove P4-11 or the strict read/network contract.
