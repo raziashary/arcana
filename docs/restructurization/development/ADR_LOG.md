@@ -6900,6 +6900,14 @@ readback.
 
 **Proof.** Production writer tests preserve registered long labels in event and parent-span fields while redacting unknown secret-like strings, sensitive keys and foreign targets. The syn coverage test includes literal timers, fixed helper-call labels and fixed match selections. Observability suite passes 27/27 Windows and 28/28 Ubuntu WSL. The real CLI writer-to-full-export test passes on both hosts. Real isolated desktop startup persists 1,385 events, including seven identifiable idle worker work checks, 61 migration spans and 15 worker-initializer spans, with zero provider calls; clean shutdown is verified. `_verify/P4-50-REGISTERED-LABELS-2026-10-04.md` records evidence. P4-50 remains open, including the separate UUID-correlation decision.
 
+## ADR-LOG-RESTRUCT-0279 — Compare timestamp offsets without signed-zero identity
+
+**Decision.** Preserve the database timestamp test's exact offset equation, but assert that `correct - naive + offsetMs` is zero. Do not distinguish IEEE signed zero when the CI host is UTC.
+
+**Reason.** Authenticated CI logs show the frontend gate failing on `expected +0 to be -0` under UTC, preventing the dependent P4 host matrix. The prior commit also fails on this test; the date parser itself is unchanged.
+
+**Proof.** Frontend suite passes 53/53 with `TZ=UTC`; the timestamp suite passes 11/11 with `TZ=Asia/Bangkok` and `TZ=America/New_York`. Typecheck passes. This unblocks a prerequisite, not P4-57/TG4-19 closure.
+
 ## ADR-LOG-RESTRUCT-0280 — Measure real recovery ticks and existing provider turn caps
 
 **Decision.** Extend P4-43's production startup test with Tokio's existing paused-clock test facility, advancing beyond the actual fixed five-minute cron boundary. Drive the persisted shipped Supervisor/QC recipes through RecipeRunner and the real engine with a deliberately continuing scripted provider, checking the existing 10/20-turn run caps.
@@ -6907,3 +6915,11 @@ readback.
 **Reason.** Prior helper and startup-only tests could not establish cron request counts or intentional work bounds. These tests use the existing production loops and policies, without a new scheduler abstraction, live credentials or provider requests.
 
 **Proof.** Windows/Linux startup and real cron recovery tests pass with zero provider entries; continuing persisted Supervisor/QC RecipeRunner runs dispatch 9/19 requests and refuse the pending turn at the existing 10/20 thresholds, returning `BUDGET_EXCEEDED_TURNS` with inbox work still present. P4-43 is proven; `_verify/P4-43-CALL-BOUNDS-CLOSEOUT-2026-10-04.md` records exact evidence. The pending-turn semantics are unchanged.
+
+## ADR-LOG-RESTRUCT-0281 — Follow bounded provider classification in the CI source guard
+
+**Decision.** Update TG-P2-06's source guard to check each unsuccessful-status block's existing safe response helper and attached class, then verify the bounded helper's classification chain. Keep all adapter error behavior unchanged.
+
+**Reason.** Authenticated run 37216487226 failed only this desktop source guard (165 passed, one failed): it still counted inline `ErrorClass::classify` calls, which now live behind the approved bounded-body helper. All six complete/stream error blocks use that helper. This stale test prevents the dependent P4 three-platform workflow corpus from executing.
+
+**Proof.** Repaired source guard passes 1/1; full desktop source-gate module passes 77/77. Production Anthropic/OpenAI complete/stream error privacy fixtures pass 2/2; Google quota-class/privacy fixture passes 1/1. Workspace check and formatting pass. Remote CI must rerun; no P2 or P4 gate closes from the source guard alone.

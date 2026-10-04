@@ -4216,41 +4216,44 @@ let x = 1;
     /// 429 and a rate-limit 429 were the same string, and Anthropic's 529
     /// overload was the same string as a 500.
     ///
-    /// Nothing was looping on the wrong answer, because no retry logic exists
-    /// yet — which is exactly why this gate matters now. The first retry loop
-    /// anyone writes would otherwise have to re-derive the mapping at the one
-    /// place where getting it wrong costs money on every attempt.
-    ///
-    /// The gate keys on the response body being available: any site that reads
-    /// `resp.text()` after a non-success status is a site that can classify,
-    /// so it must.
+    /// Retry policy now consumes the classification. Adapters inspect bounded
+    /// response bodies through the safe helper instead of returning provider
+    /// text. Follow that helper chain as well as each complete/stream guard.
     #[test]
     fn tg_p2_06_every_provider_http_error_is_classified() {
         let dir = repo_root().join("arcana-core/src/provider");
         let mut offenders = Vec::new();
+        let usage = read_source(&dir.join("usage.rs"));
+        let shared_helper = rust_item_body(&usage, "async fn safe_error_response(");
+        assert!(shared_helper.contains("read_bounded_error_body(response).await"));
+        assert!(shared_helper.contains("classify_bounded_error_body("));
+        let classifier = rust_item_body(&usage, "fn classify_bounded_error_body(");
+        assert!(classifier.contains("ErrorClass::classify("));
+        assert!(classifier.contains("unwrap_or(ErrorClass::Fatal)"));
 
         for adapter in ["anthropic.rs", "openai.rs", "google.rs"] {
             let text = read_source(&dir.join(adapter));
-
-            // Each `if !status.is_success()` block is one error path.
-            let blocks = text.matches("if !status.is_success()").count();
-            let classified = text.matches("ErrorClass::classify").count();
-
-            if blocks == 0 {
-                offenders.push(format!(
-                    "{adapter}: no `if !status.is_success()` guard found at all — either \
-                     the adapter stopped checking status, or this gate is pointed at the \
-                     wrong shape"
-                ));
-                continue;
-            }
-
-            if classified < blocks {
-                offenders.push(format!(
-                    "{adapter}: {blocks} HTTP error path(s) but only {classified} \
-                     classified — an unclassified failure is a string, and a spend-cap \
-                     429 is indistinguishable from a rate-limit 429 in a string"
-                ));
+            let helper = if adapter == "google.rs" {
+                let google_helper = rust_item_body(&text, "async fn safe_google_error_details(");
+                assert!(google_helper.contains("read_bounded_error_body(response).await"));
+                assert!(google_helper.contains("classify_bounded_error_body("));
+                "safe_google_error_details(status, resp).await"
+            } else {
+                "safe_error_response("
+            };
+            for method in ["async fn complete(", "async fn stream("] {
+                let body = rust_item_body(&text, method);
+                let error_guard = rust_item_body(body, "if !status.is_success()");
+                if !error_guard.contains(helper)
+                    || !error_guard.contains("let (class, summary)")
+                    || !error_guard.contains("return Err(ArcanaError::Provider(format!(")
+                    || !error_guard.contains("[{class:?}]")
+                {
+                    offenders.push(format!(
+                        "{adapter} {method}: unsuccessful HTTP status must use its \
+                         bounded classification helper and attach the class to the returned error"
+                    ));
+                }
             }
         }
 

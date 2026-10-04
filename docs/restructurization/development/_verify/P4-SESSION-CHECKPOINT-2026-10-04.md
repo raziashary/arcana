@@ -408,3 +408,7 @@ Production startup/cron idle-call and intentional Supervisor/QC turn-cap tests p
 ## Continuation — registered telemetry labels fixed
 
 Owner approved exact source-controlled event/operation preservation. Shared JSONL writer restores registered values in event and parent-span fields only; generic secret redaction is unchanged. Current tests: Windows observability 27/27, Linux 28/28; real CLI full-export regression 1/1 on both. Isolated desktop profile `%TEMP%/arcana-p4-label-smoke-c8b06395222847c590127c5f59cdf430` contains 1,385 events and a summary: seven named idle checks, zero provider calls, no remaining app/port 1420 listener. ADR-0278 and `P4-50-REGISTERED-LABELS-2026-10-04.md` hold evidence. UUID field preservation is a separate pending owner question. P4-50/TG4-24 remain open.
+
+## CI prerequisite — bounded provider helper source guard
+
+Authenticated run 37216487226: Frontend and CLI succeed; Rust fails only stale TG-P2-06 (165/166 desktop tests), skipping the downstream three-OS build-smoke. All six production complete/stream HTTP error guards use approved bounded helpers, but the source test still counted inline classifier calls. The source gate now follows each existing helper/class attachment plus the bounded helper chain (ADR-0281). Windows desktop source gates pass 77/77; production Anthropic/OpenAI error/privacy fixtures pass 2/2 and Google quota/privacy fixture 1/1. Workspace check passes. No provider behavior changed, and P4-16 remains pending remote host-matrix execution.
