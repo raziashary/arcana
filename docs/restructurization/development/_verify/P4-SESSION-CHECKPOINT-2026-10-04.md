@@ -250,6 +250,12 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 - The test proves the already-authorized request remains in flight, while the new request is denied before provider dispatch. `cargo test -p arcana-core --lib concurrent_revocation_blocks_the_next_request_without_rewriting_in_flight_authorization --locked -- --nocapture --test-threads=1` passes 1/1.
 - This closes the provider-wrapper revocation-race test gap only. Live desktop IPC, complete cross-consumer allow/revoke readback, and desktop smoke remain open; no P4/TG4 checkbox or count changes.
 
+## Continuation — claimed-task checkpoint fail-closed through ToolExecutor
+
+- Added a production-path regression that creates and claims an isolated task, configures a worker `ToolExecutor` with that task ID, and invokes `WriteFileTool` through `execute_batch`.
+- The test makes the isolated checkpoint database unavailable, then proves the production error identifies checkpoint failure and neither the target nor parent directories are created. The focused write-file workspace group passes 4/4; `cargo fmt --all` passes.
+- This closes one ToolExecutor task-identity/checkpoint refusal slice for P4-19/TG4-09. Process-writer checkpointing, full artifact handoff and supported-platform proof remain open; no task/gate checkbox or count changes.
+
 ## Continuation — 2026-10-04 P4-59 cross-platform active-writer gate
 
 - CI's existing Windows/Linux/macOS build-smoke matrix now runs one focused filter covering the production analytics and hook-log retention races against an active immediate SQLite writer transaction.

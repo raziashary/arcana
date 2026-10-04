@@ -331,4 +331,72 @@ mod workspace_tests {
         assert!(!destination.exists());
         assert!(!destination.parent().unwrap().exists());
     }
+
+    #[tokio::test]
+    async fn production_tool_executor_claim_identity_blocks_write_after_checkpoint_failure() {
+        use crate::agent::permission::{new_pending_permissions, PermissionMode};
+        use crate::agent::tool_executor::ToolExecutor;
+        use crate::agent::tool_trait::AgentIdentity;
+        use std::sync::Arc;
+
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("isolated selected workspace");
+        let worker_slug = "worker-checkpoint-test";
+        let tasks = crate::db::tasks::TasksDb::open().expect("open isolated TasksDb");
+        let task = tasks
+            .create(crate::db::tasks::CreateTaskInput {
+                title: "checkpoint-gated file write".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "failed checkpoint blocks mutation".into(),
+                created_by: Some("test".into()),
+            })
+            .expect("create task");
+        tasks
+            .update_status(task.id, "assigned", Some(worker_slug))
+            .expect("assign task to worker");
+        tasks
+            .claim_task_with_pid(task.id, worker_slug, std::process::id())
+            .expect("claim task through production claim API");
+        drop(tasks);
+
+        let arcana_dir = home.path().join(".arcana");
+        std::fs::create_dir_all(arcana_dir.join("config.db"))
+            .expect("make checkpoint database path unusable");
+
+        let mut executor = ToolExecutor::new(
+            PermissionMode::Autonomous,
+            new_pending_permissions(),
+            "checkpoint-executor-session".into(),
+            workspace.path().to_string_lossy().into_owned(),
+            AgentIdentity::worker(worker_slug),
+        );
+        executor.set_task_id(Some(task.id));
+        let result = executor
+            .execute_batch(vec![(
+                Arc::new(WriteFileTool),
+                json!({"path":"src/nested/main.rs","content":"fn main() {}"}),
+                "checkpoint-write-call".into(),
+            )])
+            .await
+            .expect("execute production ToolExecutor batch");
+
+        assert!(
+            result[0].1.is_error,
+            "failed task checkpoint must deny write"
+        );
+        assert!(
+            result[0].1.output.contains("recovery checkpoint failed"),
+            "ToolExecutor must carry the claimed task identity into the failed checkpoint path: {}",
+            result[0].1.output
+        );
+        let destination = workspace.path().join("src/nested/main.rs");
+        assert!(!destination.exists(), "destination must remain absent");
+        assert!(
+            !workspace.path().join("src").exists(),
+            "parent directories must remain absent"
+        );
+    }
 }
