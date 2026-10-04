@@ -61,6 +61,15 @@ pub struct Usage {
 
 #[cfg(test)]
 pub(crate) fn test_error_server(body: String) -> (String, tokio::task::JoinHandle<()>) {
+    test_response_server(body, 429, "Too Many Requests")
+}
+
+#[cfg(test)]
+pub(crate) fn test_response_server(
+    body: String,
+    status: u16,
+    reason: &'static str,
+) -> (String, tokio::task::JoinHandle<()>) {
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
 
@@ -80,7 +89,7 @@ pub(crate) fn test_error_server(body: String) -> (String, tokio::task::JoinHandl
         }
         let _ = write!(
             stream,
-            "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
         );
@@ -317,6 +326,25 @@ pub(crate) async fn safe_error_response(
         "provider_error_details_unavailable"
     };
     (class, summary)
+}
+
+/// Convert a provider transport failure to a bounded error without retaining
+/// reqwest's request URL, which may contain user-configured credentials.
+pub(crate) fn safe_transport_error(
+    provider: &str,
+    stage: &'static str,
+) -> crate::errors::ArcanaError {
+    crate::errors::ArcanaError::Provider(format!(
+        "{provider} {stage} [Retryable]: provider_transport_failure"
+    ))
+}
+
+/// Convert a successful response that cannot be decoded without exposing the
+/// response body, URL, or parser details to the model and logs.
+pub(crate) fn safe_decode_error(provider: &str, stage: &'static str) -> crate::errors::ArcanaError {
+    crate::errors::ArcanaError::Provider(format!(
+        "{provider} {stage} [Fatal]: provider_response_invalid"
+    ))
 }
 
 impl ErrorClass {

@@ -245,10 +245,10 @@ fn sse_metadata_and_the_done_sentinel_are_handled() {
 
 #[test]
 fn a_malformed_data_payload_errors_instead_of_being_swallowed() {
-    assert!(
-        parse(&sse("{not json")).is_err(),
-        "a malformed data payload must not be silently dropped"
-    );
+    let error = parse(&sse("{\"private-prompt-marker\": not json"))
+        .expect_err("malformed data payload must not be silently dropped")
+        .to_string();
+    assert!(!error.contains("private-prompt-marker"), "{error}");
 }
 
 #[test]
@@ -344,7 +344,7 @@ fn a_frame_carrying_arguments_and_a_stop_reason_yields_both() {
 async fn provider_error_body_is_not_forwarded_to_openai_consumers() {
     use super::openai::OpenAIProvider;
     use super::traits::Provider;
-    use super::usage::{test_completion_request, test_error_server};
+    use super::usage::{test_completion_request, test_error_server, test_response_server};
 
     let body = r#"{"error":{"type":"insufficient_quota","message":"private-request-marker"}}"#;
     let (api_base, server) = test_error_server(body.to_string());
@@ -371,4 +371,28 @@ async fn provider_error_body_is_not_forwarded_to_openai_consumers() {
     assert!(error.contains("provider_error_response"), "{error}");
     assert!(!error.contains("private-request-marker"), "{error}");
     server.await.expect("OpenAI stream fixture");
+
+    let (api_base, server) = test_response_server("private-decode-marker".to_string(), 200, "OK");
+    let provider = OpenAIProvider::new_at("test-key".into(), api_base);
+    let error = provider
+        .complete(test_completion_request())
+        .await
+        .expect_err("malformed provider response")
+        .to_string();
+    assert!(error.contains("provider_response_invalid"), "{error}");
+    assert!(!error.contains("private-decode-marker"), "{error}");
+    server.await.expect("OpenAI malformed-response fixture");
+
+    let provider = OpenAIProvider::new_at(
+        "test-key".into(),
+        "http://127.0.0.1:9/private-transport-marker".into(),
+    );
+    let error = provider
+        .complete(test_completion_request())
+        .await
+        .expect_err("unavailable provider")
+        .to_string();
+    assert!(error.contains("provider_transport_failure"), "{error}");
+    assert!(error.contains("[Retryable]"), "{error}");
+    assert!(!error.contains("private-transport-marker"), "{error}");
 }

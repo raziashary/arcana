@@ -111,6 +111,34 @@ async fn provider_error_endpoints_keep_quota_class_without_provider_text() {
     assert!(error.contains("RESOURCE_EXHAUSTED"), "{error}");
     assert!(!error.contains("private request marker"), "{error}");
     server.await.expect("countTokens fixture");
+
+    let (api_base, server) = crate::provider::usage::test_response_server(
+        "private-decode-marker".to_string(),
+        200,
+        "OK",
+    );
+    let provider = GoogleProvider::new_at("test-secret".into(), api_base);
+    let error = provider
+        .complete(minimal_completion_request())
+        .await
+        .expect_err("malformed provider response")
+        .to_string();
+    assert!(error.contains("provider_response_invalid"), "{error}");
+    assert!(!error.contains("private-decode-marker"), "{error}");
+    server.await.expect("Google malformed-response fixture");
+
+    let provider = GoogleProvider::new_at(
+        "test-secret".into(),
+        "http://127.0.0.1:9/private-transport-marker".into(),
+    );
+    let error = provider
+        .complete(minimal_completion_request())
+        .await
+        .expect_err("unavailable provider")
+        .to_string();
+    assert!(error.contains("provider_transport_failure"), "{error}");
+    assert!(error.contains("[Retryable]"), "{error}");
+    assert!(!error.contains("private-transport-marker"), "{error}");
 }
 
 #[tokio::test]
@@ -578,7 +606,10 @@ fn non_data_lines_and_malformed_payloads_are_handled() {
         .is_empty());
     // A malformed payload is an error, not a silent empty — a parser that
     // swallows garbage cannot report a vendor changing its wire format.
-    assert!(parse_google_sse_line(&sse("{not json")).is_err());
+    let error = parse_google_sse_line(&sse("{\"private-prompt-marker\": not json"))
+        .expect_err("malformed frame must be observable")
+        .to_string();
+    assert!(!error.contains("private-prompt-marker"), "{error}");
 }
 
 #[test]

@@ -1,7 +1,7 @@
 // OpenAI provider — direct API calls to api.openai.com.
 // Implements the Provider trait with streaming support.
 
-use super::usage::{safe_error_response, CachePolicy};
+use super::usage::{safe_decode_error, safe_error_response, safe_transport_error, CachePolicy};
 use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;
@@ -292,7 +292,8 @@ impl Provider for OpenAIProvider {
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
-            .await?;
+            .await
+            .map_err(|_| safe_transport_error("OpenAI", "complete"))?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -305,7 +306,10 @@ impl Provider for OpenAIProvider {
             )));
         }
 
-        let data: serde_json::Value = resp.json().await?;
+        let data: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|_| safe_decode_error("OpenAI", "complete"))?;
         parse_completion_response(data)
     }
 
@@ -320,7 +324,8 @@ impl Provider for OpenAIProvider {
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
-            .await?;
+            .await
+            .map_err(|_| safe_transport_error("OpenAI", "stream"))?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -339,7 +344,8 @@ impl Provider for OpenAIProvider {
         let buffer = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
         let chunk_stream = byte_stream
             .map(move |bytes_result| -> Result<Vec<StreamChunk>> {
-                let bytes = bytes_result.map_err(ArcanaError::Http)?;
+                let bytes =
+                    bytes_result.map_err(|_| safe_transport_error("OpenAI", "stream_body"))?;
                 let text = String::from_utf8_lossy(&bytes);
                 let mut buf = buffer.lock_tolerant();
                 buf.push_str(&text);
@@ -379,7 +385,7 @@ impl Provider for OpenAIProvider {
                 let code = r.status();
                 Ok(ProviderStatus::Error(format!("HTTP {code}")))
             }
-            Err(e) => {
+            Err(_) => {
                 // ⚠ D-6. NEVER return the raw transport error to the caller.
                 //
                 // `reqwest::Error`'s Display includes the request URL, and this
@@ -392,9 +398,8 @@ impl Provider for OpenAIProvider {
                 // Since P2-23, `set_provider_key` surfaces this string to the
                 // user directly, so the conduit is now load-bearing.
                 //
-                // Logged in full (the log sink redacts), returned as a fixed
-                // string.
-                error!("OpenAI connection test failed: {e}");
+                // Both the log and the renderer receive fixed safe details.
+                error!("OpenAI connection test failed");
                 Ok(ProviderStatus::Error("Connection failed".into()))
             }
         }
@@ -425,9 +430,9 @@ fn parse_openai_sse_line(line: &str) -> Result<Vec<StreamChunk>> {
     }
     match serde_json::from_str::<serde_json::Value>(data) {
         Ok(v) => parse_openai_chunk(&v),
-        Err(e) => Err(ArcanaError::Provider(format!(
-            "SSE parse error: {e} — data: {data}"
-        ))),
+        Err(_) => Err(ArcanaError::Provider(
+            "OpenAI stream frame was invalid".to_string(),
+        )),
     }
 }
 

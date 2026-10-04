@@ -260,11 +260,15 @@ fn sse_metadata_lines_are_ignored_rather_than_parsed() {
 fn a_malformed_data_payload_errors_instead_of_being_swallowed() {
     // The opposite failure: a `data:` line that is not JSON is a real problem
     // and must surface. Returning None here would silently drop content.
-    let err = parse_sse_line(&sse("{not json"));
+    let err = parse_sse_line(&sse("{\"private-prompt-marker\": not json"));
     assert!(
         err.is_err(),
         "a malformed data payload must not be silently dropped"
     );
+    assert!(!err
+        .unwrap_err()
+        .to_string()
+        .contains("private-prompt-marker"));
 }
 
 #[test]
@@ -445,7 +449,9 @@ mod p3_25_wire_tests {
     async fn provider_error_body_is_not_forwarded_to_anthropic_consumers() {
         use super::super::anthropic::AnthropicProvider;
         use super::super::traits::Provider;
-        use super::super::usage::{test_completion_request, test_error_server};
+        use super::super::usage::{
+            test_completion_request, test_error_server, test_response_server,
+        };
 
         let body =
             r#"{"error":{"type":"rate_limit_error","message":"private quota exceeded marker"}}"#;
@@ -473,5 +479,30 @@ mod p3_25_wire_tests {
         assert!(error.contains("provider_error_response"), "{error}");
         assert!(!error.contains("private quota exceeded marker"), "{error}");
         server.await.expect("Anthropic stream fixture");
+
+        let (api_base, server) =
+            test_response_server("private-decode-marker".to_string(), 200, "OK");
+        let provider = AnthropicProvider::new_at("test-key".into(), api_base);
+        let error = provider
+            .complete(test_completion_request())
+            .await
+            .expect_err("malformed provider response")
+            .to_string();
+        assert!(error.contains("provider_response_invalid"), "{error}");
+        assert!(!error.contains("private-decode-marker"), "{error}");
+        server.await.expect("Anthropic malformed-response fixture");
+
+        let provider = AnthropicProvider::new_at(
+            "test-key".into(),
+            "http://127.0.0.1:9/private-transport-marker".into(),
+        );
+        let error = provider
+            .complete(test_completion_request())
+            .await
+            .expect_err("unavailable provider")
+            .to_string();
+        assert!(error.contains("provider_transport_failure"), "{error}");
+        assert!(error.contains("[Retryable]"), "{error}");
+        assert!(!error.contains("private-transport-marker"), "{error}");
     }
 }

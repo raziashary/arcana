@@ -6643,3 +6643,17 @@ readback.
 **Limit.** This covers HTTP non-success bodies for the three shipped adapters only. Transport failures, malformed successful responses, in-stream provider errors, timeout/cancellation behavior, and the full ToolExecutor failure matrix remain in P4-51/TG4-25; no task or gate closes here.
 
 **Where.** `arcana-core/src/provider/usage.rs`, `arcana-core/src/provider/google.rs`, `arcana-core/src/provider/openai.rs`, `arcana-core/src/provider/anthropic.rs`, their adapter tests, P4-51, TG4-25.
+
+## ADR-LOG-RESTRUCT-0260 — Keep provider transport and stream diagnostics private
+
+**Status.** Implemented and focused-tested on 2026-10-04.
+
+**Decision.** Do not put raw `reqwest::Error`, response-decoder details, or malformed SSE data into provider errors or connection-test logs. Map request/stream transport failures to a bounded provider/stage code while preserving the established `[Retryable]` classification; map malformed successful JSON to a static `[Fatal]` code. SSE parsers continue to fail visibly, but return only a fixed invalid-frame message. Connection-test logs retain the operation/provider label without interpolating the request error.
+
+**Reason.** `reqwest::Error` can retain the request URL, successful-response decode errors can carry request context, and the three SSE parsers previously included the full untrusted data frame in `ArcanaError`. Provider errors flow into model-facing tool results, worker outcomes, and logs, so content must remain bounded and source-free at the adapter boundary.
+
+**Evidence.** Local adapter tests exercise malformed successful responses and unreachable endpoints for Google, OpenAI, and Anthropic; they assert safe stable error codes, preserved retry classification, and omission of planted URL/body markers. Parser regressions for all three providers confirm malformed SSE frames remain errors while private frame content is omitted. Focused results are recorded in the P4-51/TG4-25 progress note.
+
+**Limit.** This closes identified provider-adapter diagnostic channels only. It does not prove every ToolExecutor failure class, provider timeout/cancellation, full telemetry readback, or successful CLI Fleet completion; P4-51/TG4-25 remain open.
+
+**Where.** `arcana-core/src/provider/usage.rs`, `arcana-core/src/provider/google.rs`, `arcana-core/src/provider/openai.rs`, `arcana-core/src/provider/anthropic.rs`, `arcana-core/src/provider/streaming.rs`, provider adapter tests, P4-51, TG4-25.

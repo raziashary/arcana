@@ -204,3 +204,10 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 - The shared provider error reader now caps response inspection at 16 KiB and classifies a quota/retry outcome only from a fully read bounded body. All three adapters omit raw HTTP error text; Google keeps its allowlisted status summary and OpenAI/Anthropic return static safe summaries. Incomplete or oversized bodies fail closed.
 - Local OpenAI/Anthropic loopback tests pass 2/2 across unary and stream calls; Google tests pass 19/19, including the oversized response case; the production AgentEngine no-retry/analytics regression passes 1/1. `cargo check -p arcana-core --locked`, formatting, and diff checks pass.
 - ADR-LOG-RESTRUCT-0259 records the shared boundary. Provider transport, malformed-success, in-stream frame errors, timeout/cancellation, and complete builtin failure matrix remain open; P4-51/TG4-25 and all overall counts remain unchanged.
+
+## Continuation — 2026-10-04 provider transport and frame privacy
+
+- Closed additional provider diagnostic reflection paths: Google/OpenAI/Anthropic request and stream transport failures now return bounded provider/stage codes with the existing retry classification; malformed successful JSON returns a fixed fatal code; malformed SSE frames remain errors but no longer echo provider-controlled frame data. Connection-test logs omit raw reqwest errors.
+- Added production-adapter fixtures for malformed successful JSON and unavailable endpoints for all three providers, plus planted private-content parser checks across all three SSE implementations.
+- `cargo test -p arcana-core --lib provider:: --locked -- --test-threads=1` passes 126/126. `cargo check -p arcana-core --locked`, `cargo fmt --all`, and `git diff --check` pass. ADR-LOG-RESTRUCT-0260 records the boundary.
+- P4-51/TG4-25 remain open for complete builtin failure matrix, timeout/cancellation, and full telemetry readback; P4/TG4 counts remain 32/59 and 10/33. No live provider request or Calendar run was made.

@@ -11,7 +11,10 @@ use super::traits::{Provider, StreamResult};
 use super::types::{
     CompletionRequest, CompletionResponse, MessageContent, ModelInfo, ProviderStatus, StreamChunk,
 };
-use super::usage::{classify_bounded_error_body, read_bounded_error_body, ErrorClass, Usage};
+use super::usage::{
+    classify_bounded_error_body, read_bounded_error_body, safe_decode_error, safe_transport_error,
+    ErrorClass, Usage,
+};
 use crate::errors::{ArcanaError, Result};
 use crate::state::lock::LockTolerant;
 
@@ -342,7 +345,8 @@ impl Provider for GoogleProvider {
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
-            .await?;
+            .await
+            .map_err(|_| safe_transport_error("Google", "countTokens"))?;
         if !response.status().is_success() {
             let status = response.status();
             let (class, summary) = safe_google_error_details(status, response).await;
@@ -354,7 +358,7 @@ impl Provider for GoogleProvider {
         let mut response_stream = response.bytes_stream();
         let mut bytes = Vec::new();
         while let Some(chunk) = response_stream.next().await {
-            let chunk = chunk?;
+            let chunk = chunk.map_err(|_| safe_transport_error("Google", "countTokens_body"))?;
             if bytes.len().saturating_add(chunk.len()) > MAX_COUNT_TOKENS_RESPONSE_BYTES {
                 timer.set_outcome("response_too_large");
                 return Err(ArcanaError::Provider(
@@ -365,7 +369,7 @@ impl Provider for GoogleProvider {
         }
         let data: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| {
             timer.set_outcome("invalid_response");
-            ArcanaError::Provider("Google countTokens returned invalid JSON".to_string())
+            safe_decode_error("Google", "countTokens")
         })?;
         let token_count = data
             .get("totalTokens")
@@ -399,7 +403,8 @@ impl Provider for GoogleProvider {
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
-            .await?;
+            .await
+            .map_err(|_| safe_transport_error("Google", "complete"))?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -412,7 +417,10 @@ impl Provider for GoogleProvider {
             )));
         }
 
-        let data: serde_json::Value = resp.json().await?;
+        let data: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|_| safe_decode_error("Google", "complete"))?;
         parse_completion_response(data)
     }
 
@@ -433,7 +441,8 @@ impl Provider for GoogleProvider {
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
-            .await?;
+            .await
+            .map_err(|_| safe_transport_error("Google", "stream"))?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -452,7 +461,8 @@ impl Provider for GoogleProvider {
         let buffer = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
         let chunk_stream = byte_stream
             .map(move |bytes_result| -> Result<Vec<StreamChunk>> {
-                let bytes = bytes_result.map_err(ArcanaError::Http)?;
+                let bytes =
+                    bytes_result.map_err(|_| safe_transport_error("Google", "stream_body"))?;
                 let text = String::from_utf8_lossy(&bytes);
                 let mut buf = buffer.lock_tolerant();
                 buf.push_str(&text);
@@ -519,12 +529,12 @@ impl Provider for GoogleProvider {
                 let code = r.status();
                 Ok(ProviderStatus::Error(format!("Google returned {code}")))
             }
-            Err(e) => {
+            Err(_) => {
                 // ⚠ Never interpolate the reqwest error here. Its Display
                 // includes the request URL, and that is how a key in a query
                 // string reached the renderer before (P2 pre-build audit).
                 // The URL carries no key now, but the habit is the guard.
-                error!("Google connection test failed: {e}");
+                error!("Google connection test failed");
                 Ok(ProviderStatus::Error("Connection failed".into()))
             }
         }
@@ -542,9 +552,9 @@ pub(crate) fn parse_google_sse_line(line: &str) -> Result<Vec<StreamChunk>> {
     };
     match serde_json::from_str::<serde_json::Value>(data) {
         Ok(v) => parse_google_chunk(&v),
-        Err(e) => Err(ArcanaError::Provider(format!(
-            "SSE parse error: {e} — data: {data}"
-        ))),
+        Err(_) => Err(ArcanaError::Provider(
+            "Google stream frame was invalid".to_string(),
+        )),
     }
 }
 

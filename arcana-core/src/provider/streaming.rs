@@ -156,9 +156,9 @@ pub fn parse_sse_line(line: &str) -> Result<Option<StreamChunk>> {
     }
     match serde_json::from_str::<serde_json::Value>(data) {
         Ok(v) => parse_anthropic_event(&v),
-        Err(e) => Err(ArcanaError::Provider(format!(
-            "SSE parse error: {e} — data: {data}"
-        ))),
+        Err(_) => Err(ArcanaError::Provider(
+            "Anthropic stream frame was invalid".to_string(),
+        )),
     }
 }
 
