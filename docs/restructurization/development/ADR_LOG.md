@@ -6615,3 +6615,17 @@ readback.
 **Limit.** This policy preserves existing `daily_costs` and `worker_stats_monthly` history; it does not preserve per-request token detail beyond 90 days. Cross-platform writer-contention coverage, full export coverage for all retained stores, and cleanup-failure log/UI readback remain open. No pruning is run against a live user database during implementation.
 
 **Where.** `arcana-core/src/analytics/db.rs`, `arcana-core/src/analytics/aggregator.rs`, `arcana-core/src/hooks/db.rs`, P4-59, TG4-21.
+
+## ADR-LOG-RESTRUCT-0258 — Keep Google provider errors bounded and privacy-safe
+
+**Status.** Implemented and focused-tested on 2026-10-04.
+
+**Decision.** Google generation, streaming, and countTokens failures classify from the bounded response body but return only the HTTP status, existing typed `ErrorClass`, and a validated safe summary. Error bodies above 16 KiB or with read failure produce `provider_error_details_unavailable` and fail closed as fatal.
+
+**Reason.** The real CLI quota failure showed Google response text flowing through `ArcanaError` into RecipeRunner logs, worker tick outcomes, and scheduler system-event messages. Provider response text may echo prompts or other submitted content. The adapter already had an allowlisted status/field summary for countTokens; applying the same boundary to all Google non-success responses preserves quota/retry decisions without propagating the raw body to downstream sinks.
+
+**Evidence.** `cargo test -p arcana-core --lib provider::google::google_tests --locked -- --test-threads=1` passes 19/19, including generation/stream quota classification with planted private response text and an oversized-body fail-closed test. `cargo test -p arcana-core --lib exhausted_provider_failure_is_recorded_without_retrying_or_persisting_body --locked -- --test-threads=1` passes 1/1. `cargo check -p arcana-core --locked`, `cargo fmt --all -- --check`, and `git diff --check` pass. The Google adapter tests use the injected loopback base; `complete` and `stream` now honor `api_base` like `countTokens`.
+
+**Limit.** This decision covers the Google adapter observed in the current Gemini production path. Other providers require separate source-grounded privacy review; it does not close P4-51 or TG4-24.
+
+**Where.** `arcana-core/src/provider/google.rs`, `arcana-core/src/provider/google_tests.rs`, P4-51, TG4-24.

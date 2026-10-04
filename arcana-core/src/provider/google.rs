@@ -11,12 +11,13 @@ use super::traits::{Provider, StreamResult};
 use super::types::{
     CompletionRequest, CompletionResponse, MessageContent, ModelInfo, ProviderStatus, StreamChunk,
 };
-use super::usage::Usage;
+use super::usage::{ErrorClass, Usage};
 use crate::errors::{ArcanaError, Result};
 use crate::state::lock::LockTolerant;
 
 const GOOGLE_API_BASE: &str = "https://generativelanguage.googleapis.com";
 const MAX_COUNT_TOKENS_RESPONSE_BYTES: usize = 16 * 1024;
+const MAX_PROVIDER_ERROR_BODY_BYTES: usize = 16 * 1024;
 
 /// Extract only Google's machine-readable status and validated field paths.
 /// Provider error messages can echo submitted content, so they are never
@@ -73,12 +74,32 @@ async fn read_bounded_error_body(response: reqwest::Response) -> Option<Vec<u8>>
     let mut body = Vec::new();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.ok()?;
-        if body.len().saturating_add(chunk.len()) > MAX_COUNT_TOKENS_RESPONSE_BYTES {
+        if body.len().saturating_add(chunk.len()) > MAX_PROVIDER_ERROR_BODY_BYTES {
             return None;
         }
         body.extend_from_slice(&chunk);
     }
     Some(body)
+}
+
+async fn safe_google_error_details(
+    status: reqwest::StatusCode,
+    response: reqwest::Response,
+) -> (ErrorClass, String) {
+    let body = read_bounded_error_body(response).await;
+    let class = match body.as_deref() {
+        Some(body) => {
+            ErrorClass::classify("google", status.as_u16(), &String::from_utf8_lossy(body))
+        }
+        // Without a bounded complete body, fail closed instead of guessing
+        // that a 429 is transient rather than a non-retryable quota failure.
+        None => ErrorClass::Fatal,
+    };
+    let summary = body
+        .as_deref()
+        .map(safe_google_error_summary)
+        .unwrap_or_else(|| "provider_error_details_unavailable".to_string());
+    (class, summary)
 }
 
 pub struct GoogleProvider {
@@ -345,12 +366,8 @@ impl Provider for GoogleProvider {
             .await?;
         if !response.status().is_success() {
             let status = response.status();
-            let summary = read_bounded_error_body(response)
-                .await
-                .map(|body| safe_google_error_summary(&body))
-                .unwrap_or_else(|| "provider_error_details_unavailable".to_string());
+            let (class, summary) = safe_google_error_details(status, response).await;
             timer.set_outcome("error");
-            let class = crate::provider::usage::ErrorClass::classify("google", status.as_u16(), "");
             return Err(ArcanaError::Provider(format!(
                 "Google countTokens {status} [{class:?}]: token preflight failed ({summary})"
             )));
@@ -393,7 +410,7 @@ impl Provider for GoogleProvider {
         // ⚠ The key goes in a HEADER, never the URL. See `auth_header`.
         let url = format!(
             "{}/v1beta/models/{}:generateContent",
-            GOOGLE_API_BASE, request.model
+            self.api_base, request.model
         );
 
         let resp = self
@@ -407,14 +424,12 @@ impl Provider for GoogleProvider {
 
         let status = resp.status();
         if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
+            let (class, summary) = safe_google_error_details(status, resp).await;
             // P2-67/68. Classified here, where the body is available: a 429
             // from a spend cap and a 429 from a rate limit are the same
             // status, and only the body separates them.
-            let class =
-                crate::provider::usage::ErrorClass::classify("google", status.as_u16(), &text);
             return Err(ArcanaError::Provider(format!(
-                "Google {status} [{class:?}]: {text}"
+                "Google {status} [{class:?}]: {summary}"
             )));
         }
 
@@ -429,7 +444,7 @@ impl Provider for GoogleProvider {
         // ⚠ The key goes in a HEADER, never the URL. See `auth_header`.
         let url = format!(
             "{}/v1beta/models/{}:streamGenerateContent?alt=sse",
-            GOOGLE_API_BASE, request.model
+            self.api_base, request.model
         );
 
         let resp = self
@@ -443,15 +458,13 @@ impl Provider for GoogleProvider {
 
         let status = resp.status();
         if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
+            let (class, summary) = safe_google_error_details(status, resp).await;
             // P2-67/68. The class is attached rather than left to be
             // re-derived downstream: a 429 from a spend cap and a 429 from a
             // rate limit are the same status and only the body tells them
             // apart, so the one place that has the body is the place to decide.
-            let class =
-                crate::provider::usage::ErrorClass::classify("google", status.as_u16(), &text);
             return Err(ArcanaError::Provider(format!(
-                "Google stream {status} [{class:?}]: {text}"
+                "Google stream {status} [{class:?}]: {summary}"
             )));
         }
 

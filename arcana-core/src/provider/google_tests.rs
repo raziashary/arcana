@@ -25,6 +25,120 @@ fn count_tokens_error_summary_keeps_only_safe_status_and_field_paths() {
     assert!(!summary.contains("unsafe"));
 }
 
+fn minimal_completion_request() -> CompletionRequest {
+    CompletionRequest {
+        model: "gemini-3.8-flash".to_string(),
+        messages: vec![],
+        system: None,
+        tools: vec![],
+        max_tokens: 128,
+        temperature: None,
+        top_p: None,
+        reasoning_effort: None,
+        thinking_budget_tokens: None,
+        cache: crate::provider::usage::CachePolicy::Off,
+        clear_tool_uses: None,
+    }
+}
+
+fn google_error_server(body: String) -> (String, tokio::task::JoinHandle<()>) {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind Google error fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::task::spawn_blocking(move || {
+        let (mut stream, _) = listener.accept().expect("accept Google request");
+        let mut reader = BufReader::new(stream.try_clone().expect("clone fixture stream"));
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("read request line");
+        loop {
+            line.clear();
+            reader.read_line(&mut line).expect("read request header");
+            if line == "\r\n" || line.is_empty() {
+                break;
+            }
+        }
+        let _ = write!(
+            stream,
+            "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = stream.flush();
+    });
+    (format!("http://{address}"), server)
+}
+
+#[tokio::test]
+async fn provider_error_endpoints_keep_quota_class_without_provider_text() {
+    let body = r#"{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"private request marker: quota exceeded"}}"#;
+
+    let (api_base, server) = google_error_server(body.to_string());
+    let provider = GoogleProvider::new_at("test-secret".into(), api_base);
+    let error = provider
+        .complete(minimal_completion_request())
+        .await
+        .expect_err("429 generation response must be an error")
+        .to_string();
+    assert!(error.contains("[QuotaExhausted]"), "{error}");
+    assert!(error.contains("RESOURCE_EXHAUSTED"), "{error}");
+    assert!(!error.contains("private request marker"), "{error}");
+    server.await.expect("generation fixture");
+
+    let (api_base, server) = google_error_server(body.to_string());
+    let provider = GoogleProvider::new_at("test-secret".into(), api_base);
+    let error = provider
+        .stream(minimal_completion_request())
+        .await
+        .err()
+        .expect("429 streaming response must be an error")
+        .to_string();
+    assert!(error.contains("[QuotaExhausted]"), "{error}");
+    assert!(error.contains("RESOURCE_EXHAUSTED"), "{error}");
+    assert!(!error.contains("private request marker"), "{error}");
+    server.await.expect("stream fixture");
+
+    let (api_base, server) = google_error_server(body.to_string());
+    let provider = GoogleProvider::new_at("test-secret".into(), api_base);
+    let error = provider
+        .input_token_upper_bound(&minimal_completion_request())
+        .await
+        .err()
+        .expect("429 countTokens response must be an error")
+        .to_string();
+    assert!(error.contains("[QuotaExhausted]"), "{error}");
+    assert!(error.contains("RESOURCE_EXHAUSTED"), "{error}");
+    assert!(!error.contains("private request marker"), "{error}");
+    server.await.expect("countTokens fixture");
+}
+
+#[tokio::test]
+async fn oversized_google_error_body_is_bounded_and_not_returned() {
+    let body = format!(
+        r#"{{"error":{{"status":"RESOURCE_EXHAUSTED","message":"{}"}}}}"#,
+        "private-response-marker".repeat(1024)
+    );
+    let (api_base, server) = google_error_server(body);
+    let provider = GoogleProvider::new_at("test-secret".into(), api_base);
+    let error = provider
+        .stream(minimal_completion_request())
+        .await
+        .err()
+        .expect("oversized error response must fail closed")
+        .to_string();
+
+    assert!(error.contains("provider_error_details_unavailable"));
+    assert!(error.contains("[Fatal]"));
+    assert!(
+        error.len() < 256,
+        "unexpected error length: {}",
+        error.len()
+    );
+    assert!(!error.contains("private-response-marker"));
+    server.await.expect("oversized error fixture");
+}
+
 #[tokio::test]
 async fn count_tokens_uses_the_exact_generation_body_before_generation() {
     use std::io::{BufRead, BufReader, Read, Write};
