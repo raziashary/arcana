@@ -286,3 +286,9 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 - Source tracing found two desktop-backed consumers, `SemanticStore::recall_facts` and `get_user_preferences`, that used lexical `updated_at` as an equal-confidence tie-break. Both now order by confidence, SQLite instant, then ID; additive Memory migration 5 creates the partial active-fact expression index.
 - `production_semantic_readers_order_mixed_timestamps_by_instant` inserts through the isolated production Memory database, verifies legacy noon precedes canonical 09:00 through both consumers, and confirms both production SQL plans select the new index. The focused test passes 1/1.
 - P4-57/TG4-19 remain open; this covers selected Memory readers only. Current task/gate counts remain 32/59 and 10/33. The owner Calendar task remains unrun and untouched.
+
+## Continuation — task communication timestamp readback
+
+- The production worker-message replay test now asserts canonical `created_at` and `read_at` values after reopening TasksDb. It also creates and resolves a worker request through production APIs and checks persisted `created_at`/`resolved_at` through the production reader.
+- `cargo test -p arcana-core --lib p4_23_message_replays_with_the_same_id_after_read_until_acknowledged --locked -- --test-threads=1` passes 1/1. This covers selected communication fields only; other task child tables and whole-database/cross-platform TG4-19 evidence remain open.
+- P4/TG4 counts remain 32/59 and 10/33. The owner Calendar task remains unrun and untouched.

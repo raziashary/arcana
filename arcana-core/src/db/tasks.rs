@@ -4315,6 +4315,15 @@ mod tests {
                 None,
             )
             .expect("persist second message");
+        for timestamp in [&sent.created_at, &second.created_at] {
+            assert_eq!(
+                timestamp.len(),
+                24,
+                "new message timestamp is canonical: {timestamp}"
+            );
+            assert!(timestamp.ends_with('Z'));
+            crate::db::timestamps::parse_db_timestamp(timestamp).expect("message timestamp parses");
+        }
 
         let first_delivery = db
             .list_worker_messages_for("worker-frontend", true)
@@ -4334,8 +4343,44 @@ mod tests {
         assert_eq!(replay.len(), 2);
         assert_eq!(replay[0].id, sent.id, "replay uses the stable message ID");
         assert_eq!(replay[0].status, "read");
+        let read_at = replay[0]
+            .read_at
+            .as_deref()
+            .expect("production inbox reader returns persisted read_at");
+        assert_eq!(read_at.len(), 24, "read timestamp is canonical: {read_at}");
+        assert!(read_at.ends_with('Z'));
+        crate::db::timestamps::parse_db_timestamp(read_at).expect("read timestamp parses");
         assert_eq!(replay[1].id, second.id);
         assert_eq!(replay[1].status, "read");
+
+        let task = ready_task(&reopened, "timestamped worker request");
+        let request = reopened
+            .create_worker_request(&CreateWorkerRequestInput {
+                worker_slug: "worker-frontend".into(),
+                task_id: Some(task.id),
+                request_type: "needs_info".into(),
+                payload: "waiting on endpoint shape".into(),
+            })
+            .expect("create request through production API");
+        assert_eq!(request.created_at.len(), 24);
+        assert!(request.created_at.ends_with('Z'));
+        crate::db::timestamps::parse_db_timestamp(&request.created_at)
+            .expect("request creation timestamp parses");
+        reopened
+            .update_worker_request_status(request.id, "completed", Some("resolved"))
+            .expect("resolve through production API");
+        let completed = reopened
+            .get_worker_request_by_id(request.id)
+            .expect("read resolved request")
+            .expect("request remains persisted");
+        let resolved_at = completed
+            .resolved_at
+            .as_deref()
+            .expect("production reader returns persisted resolution time");
+        assert_eq!(resolved_at.len(), 24);
+        assert!(resolved_at.ends_with('Z'));
+        crate::db::timestamps::parse_db_timestamp(resolved_at)
+            .expect("request resolution timestamp parses");
 
         reopened
             .acknowledge_worker_message(sent.id)
