@@ -123,3 +123,61 @@ fn cli_startup_prunes_both_shared_log_streams_and_keeps_today_active() {
         );
     }
 }
+
+#[test]
+fn cli_structured_writer_preserves_registered_labels_through_full_export() {
+    let profile = IsolatedProfile::new();
+    let invoke = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_arcanactl"))
+            .env("USERPROFILE", &profile.0)
+            .env("HOME", &profile.0)
+            .args(["--output-format", "json"])
+            .args(args)
+            .output()
+            .expect("run isolated CLI with the production logger")
+    };
+    let workers = invoke(&["worker", "list"]);
+    assert!(
+        workers.status.success(),
+        "{}",
+        String::from_utf8_lossy(&workers.stderr)
+    );
+    let export_path = profile.0.join("structured-export.txt");
+    let export = invoke(&[
+        "logs",
+        "export",
+        export_path.to_str().unwrap(),
+        "--component",
+        "arcana-events.",
+    ]);
+    assert!(
+        export.status.success(),
+        "{}",
+        String::from_utf8_lossy(&export.stderr)
+    );
+    let contents = std::fs::read_to_string(export_path).expect("read full exported stream");
+    let events: Vec<serde_json::Value> = contents
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let migration = events
+        .iter()
+        .find(|event| {
+            event["fields"]["operation"] == "database_schema_migration_ladder"
+                && event["fields"]["database"] == "workers"
+        })
+        .expect("the real long migration label survives the writer and CLI export reader");
+    assert_eq!(migration["fields"]["event_type"], "operation_timing");
+    assert_eq!(migration["fields"]["outcome"], "success");
+    assert!(
+        migration["fields"]["duration_ns"]
+            .as_u64()
+            .unwrap_or_default()
+            > 0
+    );
+    let initializer = events
+        .iter()
+        .find(|event| event["fields"]["operation"] == "workers_database_initialize")
+        .expect("the export consumer includes the worker DB operation");
+    assert_eq!(initializer["fields"]["outcome"], "success");
+}

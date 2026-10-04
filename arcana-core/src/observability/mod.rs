@@ -6,6 +6,7 @@ pub mod error_kinds;
 pub mod log_retention;
 pub mod logging;
 pub mod sqlite;
+mod telemetry_labels;
 pub mod timing;
 // Doc 07 Phase 3 — startup-time scan for worker-generated stray files
 // in the Arcana repo. Emits warns + a Tauri event the banner consumes.

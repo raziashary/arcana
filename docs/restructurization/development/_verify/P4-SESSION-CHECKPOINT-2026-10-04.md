@@ -404,3 +404,7 @@ CI prerequisite: run 37215943643 and baseline run 37212315656 fail the frontend 
 ## Current continuation — P4-43 closed
 
 Production startup/cron idle-call and intentional Supervisor/QC turn-cap tests pass on Windows/Linux. The shipped pending-turn caps admit 9/19 provider entries and reject turn 10/20; the contract was measured without changing it. P4-43 is checked; evidence is `P4-43-CALL-BOUNDS-CLOSEOUT-2026-10-04.md`. Current count: **P4 34/59; TG4 11/33**. Remaining core tasks: 25 (including owner-run P4-49); expanded goal remains unread/untracked.
+
+## Continuation — registered telemetry labels fixed
+
+Owner approved exact source-controlled event/operation preservation. Shared JSONL writer restores registered values in event and parent-span fields only; generic secret redaction is unchanged. Current tests: Windows observability 27/27, Linux 28/28; real CLI full-export regression 1/1 on both. Isolated desktop profile `%TEMP%/arcana-p4-label-smoke-c8b06395222847c590127c5f59cdf430` contains 1,385 events and a summary: seven named idle checks, zero provider calls, no remaining app/port 1420 listener. ADR-0278 and `P4-50-REGISTERED-LABELS-2026-10-04.md` hold evidence. UUID field preservation is a separate pending owner question. P4-50/TG4-24 remain open.

@@ -44,7 +44,9 @@ fails closed on dependency installation until locked host-controlled staging
 exists.
 
 P4-50 observability crosses `arcana-core/src/observability/` producers and the
-shared `arcana-core/src/observability/logging.rs` writer. The Tauri module
+shared `arcana-core/src/observability/logging.rs` writer. Its private
+`telemetry_labels.rs` catalogue preserves exact registered operation/event labels
+after generic redaction; unknown values and sensitive fields remain redacted. The Tauri module
 `src-tauri/src/logging.rs` is now a compatibility re-export; the CLI and desktop
 write the same daily readable and structured files consumed by
 `src-tauri/src/commands/log_commands.rs` and `src/tabs/Logs.tsx`. Provider/model

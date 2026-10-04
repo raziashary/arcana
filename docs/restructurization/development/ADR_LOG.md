@@ -6890,6 +6890,16 @@ readback.
 
 **Proof.** Local Windows recipe/skill/hook filters pass; Linux core filters pass, including the new production legacy-hook refusal. CI workflow correctness gates pass 3/3. Remote Linux/macOS desktop results remain required before closing P4-16/TG4-17.
 
+## ADR-LOG-RESTRUCT-0278 — Preserve exact registered telemetry identifiers at the writer
+
+**Status.** Owner approved and implemented on 2026-10-04; focused Windows/Linux and real desktop/CLI writer proof pass.
+
+**Decision.** Keep generic structured-value/credential redaction unchanged. At the telemetry JSONL writer only, preserve exact fixed operation and event labels from a source-controlled allowlist. Unknown strings and sensitive fields still use the existing redactor. Derive a source coverage test with the existing test-only syn parser so new literal producers cannot silently lose their labels.
+
+**Reason.** The real desktop startup stream replaced `scheduler_recoverable_work_check` and `database_schema_migration_ladder` with `[REDACTED_KEY]`, destroying operation identity. Parent capture tests bypassed the production writer, so they did not catch it. The owner explicitly approved registered-label preservation. A separate decision is pending for canonical UUID correlation fields, also matched by the same heuristic.
+
+**Proof.** Production writer tests preserve registered long labels in event and parent-span fields while redacting unknown secret-like strings, sensitive keys and foreign targets. The syn coverage test includes literal timers, fixed helper-call labels and fixed match selections. Observability suite passes 27/27 Windows and 28/28 Ubuntu WSL. The real CLI writer-to-full-export test passes on both hosts. Real isolated desktop startup persists 1,385 events, including seven identifiable idle worker work checks, 61 migration spans and 15 worker-initializer spans, with zero provider calls; clean shutdown is verified. `_verify/P4-50-REGISTERED-LABELS-2026-10-04.md` records evidence. P4-50 remains open, including the separate UUID-correlation decision.
+
 ## ADR-LOG-RESTRUCT-0280 — Measure real recovery ticks and existing provider turn caps
 
 **Decision.** Extend P4-43's production startup test with Tokio's existing paused-clock test facility, advancing beyond the actual fixed five-minute cron boundary. Drive the persisted shipped Supervisor/QC recipes through RecipeRunner and the real engine with a deliberately continuing scripted provider, checking the existing 10/20-turn run caps.

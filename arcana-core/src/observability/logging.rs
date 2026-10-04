@@ -258,13 +258,54 @@ struct RedactingJsonWriter<W: Write> {
 impl<W: Write> RedactingJsonWriter<W> {
     fn write_record(&mut self, record: &[u8]) -> std::io::Result<()> {
         let redacted = match serde_json::from_slice::<serde_json::Value>(record) {
-            Ok(value) => serde_json::to_vec(&crate::security::redaction::redact_json(&value))
+            Ok(value) => serde_json::to_vec(&redact_telemetry_record(&value))
                 .map_err(std::io::Error::other)?,
             Err(_) => crate::security::redaction::redact_text(&String::from_utf8_lossy(record))
                 .into_bytes(),
         };
         self.inner.write_all(&redacted)?;
         self.inner.write_all(b"\n")
+    }
+}
+
+fn redact_telemetry_record(value: &serde_json::Value) -> serde_json::Value {
+    let mut redacted = crate::security::redaction::redact_json(value);
+    let Some(target) = value["target"].as_str() else {
+        return redacted;
+    };
+    if target != "arcana::telemetry" && !target.starts_with("arcana::telemetry::") {
+        return redacted;
+    }
+    for field in ["fields", "span"] {
+        if let (Some(original), Some(output)) = (value.get(field), redacted.get_mut(field)) {
+            restore_registered_labels(original, output);
+        }
+    }
+    if let (Some(original), Some(output)) = (
+        value.get("spans").and_then(serde_json::Value::as_array),
+        redacted
+            .get_mut("spans")
+            .and_then(serde_json::Value::as_array_mut),
+    ) {
+        for (span, redacted_span) in original.iter().zip(output) {
+            restore_registered_labels(span, redacted_span);
+        }
+    }
+    redacted
+}
+
+fn restore_registered_labels(original: &serde_json::Value, output: &mut serde_json::Value) {
+    if let (Some(original), Some(output)) = (original.as_object(), output.as_object_mut()) {
+        for field in ["event_type", "operation"] {
+            if let Some(label) = original.get(field).and_then(serde_json::Value::as_str) {
+                if super::telemetry_labels::is_registered(field, label) {
+                    output.insert(
+                        field.to_owned(),
+                        serde_json::Value::String(label.to_owned()),
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -534,6 +575,61 @@ mod tests {
             .as_str()
             .unwrap_or_default()
             .contains("REDACTED"));
+    }
+
+    #[test]
+    fn structured_writer_preserves_registered_long_labels_without_exempting_secrets() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let file = std::fs::File::create(&path).unwrap();
+        let (writer, guard) = tracing_appender::non_blocking(RedactingJsonWriter {
+            inner: file,
+            pending: Vec::new(),
+        });
+        let subscriber = Registry::default().with(structured_telemetry_layer(writer));
+        let secret = "unknown_untrusted_operation_label_12345";
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!(target: "arcana::telemetry", "database_operation", operation = "database_schema_migration_ladder", api_key = "database_schema_migration_ladder");
+            let _entered = span.enter();
+            tracing::info!(target: "arcana::telemetry", event_type = "operation_timing", operation = "scheduler_recoverable_work_check", api_key = "scheduler_recoverable_work_check", "safe summary");
+            tracing::info!(target: "arcana::telemetry", event_type = "database_migration_backup_created", operation = "database_schema_migration_ladder", "safe summary");
+            tracing::info!(target: "arcana::telemetry", event_type = secret, operation = secret, "safe summary");
+        });
+        drop(guard);
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let records: Vec<serde_json::Value> = contents
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(records.len(), 3);
+        assert_eq!(
+            records[0]["fields"]["operation"],
+            "scheduler_recoverable_work_check"
+        );
+        assert_eq!(records[0]["fields"]["api_key"], "[REDACTED]");
+        assert_eq!(
+            records[0]["span"]["operation"],
+            "database_schema_migration_ladder"
+        );
+        assert_eq!(
+            records[0]["spans"][0]["operation"],
+            "database_schema_migration_ladder"
+        );
+        assert_eq!(records[0]["span"]["api_key"], "[REDACTED]");
+        assert_eq!(
+            records[1]["fields"]["event_type"],
+            "database_migration_backup_created"
+        );
+        assert_eq!(
+            records[1]["fields"]["operation"],
+            "database_schema_migration_ladder"
+        );
+        assert!(!contents.contains(secret));
+        let foreign = serde_json::json!({"target":"foreign", "fields":{"operation":"scheduler_recoverable_work_check"}});
+        assert_eq!(
+            redact_telemetry_record(&foreign)["fields"]["operation"],
+            "[REDACTED_KEY]"
+        );
     }
 
     #[test]
