@@ -237,3 +237,9 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 - Added result-aware `memory_database_initialize` and `memory_database_migrate` operation timings around the production Memory database opener and schema ladder. Both use the fixed logical label `database=memory`; no paths or error prose are emitted.
 - The isolated production open/migration success test and forced open-failure redaction test pass 2/2 with `cargo test -p arcana-core --lib memory_database_ --locked -- --nocapture --test-threads=1`. ADR-LOG-RESTRUCT-0263 records the contract.
 - This is one startup instrumentation slice, not complete Memory/SQLite producer coverage. TG4-24 remains open, no P4/TG4 count changes, and Calendar remains owner-run.
+
+## Continuation — 2026-10-04 P4-59 cross-platform active-writer gate
+
+- CI's existing Windows/Linux/macOS build-smoke matrix now runs one focused filter covering the production analytics and hook-log retention races against an active immediate SQLite writer transaction.
+- `cargo test -p arcana-core --lib serializes_with_an_active_database_writer --locked -- --nocapture --test-threads=1` passes 2/2 locally on Windows. Linux and macOS results are pending CI; P4-59/TG4-21 remain open until those runs pass.
+- No P4/TG4 counts changed. The owner Calendar workspace remains untouched.
