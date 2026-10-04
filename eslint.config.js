@@ -26,6 +26,7 @@ export default tseslint.config(
       // Rust build output. `target/` holds tauri-codegen asset bundles — minified
       // and sometimes binary .js — which ESLint will happily try to parse.
       'target/**',
+      '**/target/**',
       'src-tauri/**',
       'src-cli/**',
       'submodules/**',
