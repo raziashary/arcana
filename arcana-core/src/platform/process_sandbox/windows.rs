@@ -1181,13 +1181,24 @@ fn spawn_experimental_bridge(
 }
 
 fn bridge_executable() -> io::Result<PathBuf> {
-    #[cfg(test)]
-    {
+    let current_executable = std::env::current_exe()?;
+    let cargo_test_harness = current_executable
+        .parent()
+        .and_then(Path::file_name)
+        .is_some_and(|directory| directory == "deps")
+        && current_executable
+            .file_stem()
+            .and_then(OsStr::to_str)
+            .is_some_and(|name| {
+                name.starts_with("arcana_core-") || name.starts_with("arcana_lib-")
+            });
+
+    if cfg!(test) || cargo_test_harness {
         // Unit-test executables use Rust's test-harness main and cannot enter
-        // the private bridge mode. Exercise the same CLI executable shipped to
-        // users instead; the test command builds it before running this test.
-        let test_executable = std::env::current_exe()?;
-        if let Some(debug_directory) = test_executable.parent().and_then(Path::parent) {
+        // the private bridge mode. `arcana-core` is also compiled as a normal
+        // dependency of the desktop crate's test harness, so `cfg(test)` alone
+        // misses that case. Exercise the same CLI executable shipped to users.
+        if let Some(debug_directory) = current_executable.parent().and_then(Path::parent) {
             let cli_executable = debug_directory.join("arcanactl.exe");
             if cli_executable.is_file() {
                 return Ok(cli_executable);
