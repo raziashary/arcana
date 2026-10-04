@@ -2294,6 +2294,204 @@ mod tests {
     }
 
     #[test]
+    fn production_mcp_call_persists_and_reads_through_tauri_logs() {
+        use arcana_core::agent::tool_trait::{AgentIdentity, Tool, ToolContext};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+        use tracing_subscriber::{filter::filter_fn, layer::SubscriberExt, Layer, Registry};
+
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::test_support::isolate_home(home.path());
+        let log_dir = home.path().join(".arcana").join("logs");
+        std::fs::create_dir_all(&log_dir).expect("create isolated structured log directory");
+        let workspace = home.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("create isolated workspace");
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("create isolated MCP runtime");
+        let listener = runtime
+            .block_on(TcpListener::bind("127.0.0.1:0"))
+            .expect("bind local-only MCP fixture");
+        let address = listener.local_addr().expect("read local fixture address");
+        let endpoint = format!("http://{address}/mcp");
+        let server = runtime.spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    let mut buffer = [0_u8; 4096];
+                    let header_end = loop {
+                        let count = socket.read(&mut buffer).await.unwrap_or(0);
+                        if count == 0 {
+                            return;
+                        }
+                        request.extend_from_slice(&buffer[..count]);
+                        if let Some(index) =
+                            request.windows(4).position(|bytes| bytes == b"\r\n\r\n")
+                        {
+                            break index + 4;
+                        }
+                    };
+                    let headers = String::from_utf8_lossy(&request[..header_end]);
+                    let content_length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())
+                                .flatten()
+                        })
+                        .unwrap_or(0);
+                    while request.len() < header_end + content_length {
+                        let count = socket.read(&mut buffer).await.unwrap_or(0);
+                        if count == 0 {
+                            return;
+                        }
+                        request.extend_from_slice(&buffer[..count]);
+                    }
+                    let body: serde_json::Value = serde_json::from_slice(
+                        &request[header_end..header_end + content_length],
+                    )
+                    .expect("valid MCP request JSON");
+                    let method = body["method"].as_str().unwrap_or_default();
+                    if method.starts_with("notifications/") {
+                        let _ = socket
+                            .write_all(b"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                            .await;
+                        return;
+                    }
+                    let result = match method {
+                        "server/discover" => serde_json::json!({
+                            "resultType":"complete",
+                            "supportedVersions":["2026-07-28"],
+                            "capabilities":{},
+                            "ttlMs":0,
+                            "cacheScope":"private"
+                        }),
+                        "tools/call" => serde_json::json!({
+                            "content": [{"type":"text","text":"fixture response"}],
+                            "isError": false
+                        }),
+                        other => panic!("unexpected MCP request method {other}"),
+                    };
+                    let payload = serde_json::json!({
+                        "jsonrpc":"2.0",
+                        "id":body["id"],
+                        "result":result
+                    })
+                    .to_string();
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        payload.len(), payload
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+
+        arcana_core::db::app_settings::set(
+            "github_mcp_config",
+            &serde_json::json!({"enabled":true,"server_url":endpoint}).to_string(),
+        )
+        .expect("persist local connector configuration");
+        arcana_core::egress_consent::WorkspaceEgressConsentDb::open()
+            .expect("open isolated egress-consent database")
+            .grant(&workspace, "mcp:github-mcp")
+            .expect("grant this isolated workspace MCP consent");
+
+        let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let call_id = "call-mcp-success-logs-proof";
+        let log_path = log_dir.join(format!("arcana-events.{date}.jsonl"));
+        let file = std::fs::File::create(&log_path).expect("create production structured log");
+        let (writer, guard) = tracing_appender::non_blocking(file);
+        let layer = tracing_subscriber::fmt::layer()
+            .json()
+            .with_target(true)
+            .with_ansi(false)
+            .with_current_span(true)
+            .with_span_list(true)
+            .with_writer(writer)
+            .with_filter(filter_fn(|metadata| {
+                metadata.target() == "arcana::telemetry"
+                    || metadata.target().starts_with("arcana::telemetry::")
+            }));
+        let subscriber = Registry::default().with(layer);
+        let context = ToolContext {
+            session_id: "session-mcp-success-logs-proof".into(),
+            working_dir: workspace.to_string_lossy().into_owned(),
+            call_id: call_id.into(),
+            run_id: Some("run-mcp-success-logs-proof".into()),
+            task_id: Some(73),
+            permission_mode: arcana_core::agent::permission::PermissionMode::Autonomous,
+            depth: 0,
+            agent_role: AgentIdentity::worker("worker-backend").role,
+            run_token_budget: None,
+        };
+        let result = tracing::subscriber::with_default(subscriber, || {
+            runtime.block_on(async {
+                arcana_core::agent::builtin_tools::external_mcp::McpCallTool
+                    .execute(
+                        serde_json::json!({
+                            "name":"fixture_search",
+                            "arguments":{"query":"private-query-marker"}
+                        }),
+                        &context,
+                    )
+                    .await
+            })
+        });
+        assert!(
+            !result.is_error,
+            "local MCP invocation failed: {}",
+            result.output
+        );
+        drop(guard);
+        server.abort();
+        runtime.block_on(async {
+            let _ = server.await;
+        });
+
+        let payload: serde_json::Value =
+            serde_json::from_str(&result.output).expect("bounded MCP result JSON");
+        assert_eq!(payload["content"][0]["text"], "fixture response");
+        let persisted = super::read_structured_events(date, Some(20), Some(call_id.to_string()))
+            .expect("production Tauri Logs command reads correlated MCP success");
+        let events = persisted
+            .content
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("valid event JSON"))
+            .collect::<Vec<_>>();
+        assert_eq!(events.len(), 1);
+        let event = &events[0]["fields"];
+        assert_eq!(event["event_type"], "mcp_call");
+        assert_eq!(event["operation"], "mcp_tools_call");
+        assert_eq!(event["connector_id"], "github-mcp");
+        assert_eq!(event["outcome"], "success");
+        assert_eq!(event["task_id"], 73);
+        assert_eq!(event["run_id"], "run-mcp-success-logs-proof");
+        assert_eq!(event["call_id"], call_id);
+        assert!(event["output_bytes"]
+            .as_u64()
+            .is_some_and(|bytes| bytes > 0));
+        assert!(event["elapsed_ns"].as_u64().is_some());
+        assert!(!persisted.content.contains("private-query-marker"));
+        assert!(!persisted.content.contains("fixture response"));
+
+        let mut metrics = MetricsAccumulator::default();
+        let metrics =
+            refresh_metrics_from_file_for_correlation(&log_path, &mut metrics, Some(call_id))
+                .expect("production Logs metrics reader aggregates MCP success");
+        assert_eq!(metrics.total_events, 1);
+        assert_eq!(metrics.outcomes.get("success"), Some(&1));
+        assert_eq!(metrics.by_event["mcp_call"].count, 1);
+        assert!(metrics.by_event["mcp_call"].result_bytes_total > 0);
+    }
+
+    #[test]
     fn measure_metrics_refresh_tail_and_full_export_on_reproducible_jsonl() {
         use std::io::BufWriter;
         use std::time::Instant;
