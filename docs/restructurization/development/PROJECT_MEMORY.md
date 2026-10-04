@@ -925,3 +925,11 @@ and remaining blockers.
 Cross-stack closeout for this continuation: workspace `cargo check --workspace --locked`, `cargo fmt --all -- --check`, `npx tsc --noEmit`, frontend `npm test -- --run` (12 files, 52 tests), and `git diff --check` pass. No test listener remains. The full core test gate remains red for the same two Windows Clippy path-canonicalization failures; P4/TG4 counts stay 32/59 and 10/33.
 
 2026-10-04 bounded SBOX bridge output: `bridge_stream_capture_keeps_a_bounded_tail_and_total_byte_count` proves 256 KiB tail retention while preserving total observed bytes; the bridge-focused suite passes 5/5. This does not resolve Windows Cargo Clippy canonicalization or close P4/TG4; counts remain 32/59 and 10/33.
+
+## Current P4 continuation (2026-10-04)
+
+- Active source of truth: `MASTER_DEVELOPMENT_PLAN.md`, `TESTING_GATES.md`, `READINESS_MATRIX.md`, owner-authored `P4_EXPANDED_GOAL.md` (pending read until core P4 closes), and `_verify/P4-SESSION-CHECKPOINT-2026-10-04.md`.
+- Latest pushed commits on `main`: `a14cf6f` fixes Memory mixed-timestamp recency ordering; `161283e` makes AnalyticsDb retention SQL statically registrable and adds populated expression-index proof. The first commit body contains a literal `\n\n` separator; history was left intact.
+- Current documented phase count remains P4 32/59 and TG4 10/33. P4-58/TG4-20 query registry passes 8/8 on current source. P4-57/TG4-19 remains partial; Linux/macOS active-writer evidence for P4-59/TG4-21 is pending. Full `arcana-core` test baseline from 2026-10-04 is 959 passed, 2 failed (Windows Clippy path canonicalization, OS error 5), 1 ignored.
+- Latest focused changes cover Memory fallback/list/rank chronology and AnalyticsDb plus CLI retained-detail/invalid-timestamp query plans. Focused tests/checks pass on Windows. Calendar acceptance stays with the owner and the target project is untouched.
+- Do not read `P4_EXPANDED_GOAL.md` until all core P4 engineering tasks/gates close; then execute it before the final owner Calendar acceptance.
