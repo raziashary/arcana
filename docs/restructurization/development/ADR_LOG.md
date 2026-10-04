@@ -6997,3 +6997,11 @@ readback.
 **Why / when / where.** 2026-10-05 authenticated run 37224469153, job 111503366963, passes persisted-workflow portability and active-writer retention, then the corpus fails before its first Rust build because target/debug/arcanactl.exe is absent. The production bridge locator explicitly requires that executable when called from the Rust test harness. The separate CLI job's build output is not shared with this job. Linux passes the complete build-smoke job; macOS is blocked earlier by ADR-0289's test compilation error.
 
 **Proof.** Existing CI correctness gates pass 3/3 on Windows; workspace compilation/formatting passes and the exact CLI prerequisite builds locally. The added step is conditioned only on Windows and precedes all production command tests. The remote Windows corpus must still execute and may expose the separately recorded sandbox/toolchain failures. A bridge prerequisite fix does not prove P4-11 or the strict read/network contract.
+
+## ADR-LOG-RESTRUCT-0292 — Prove populated retention-schema upgrade preservation
+
+**Decision.** Add a file-backed regression built from the production baseline analytics migration, populate every existing analytics table, open through the production latest-schema constructor, and compare each old row plus daily-cost/token production-reader results. No production migration or retention behavior changes.
+
+**Why / when / where.** 2026-10-05 P4-59/TG4-21 explicitly requires migration preservation. Fresh Luna High audit found the current legacy-default and older-reader fixtures do not prove a populated production upgrade. Use an owned disposable directory; the migration framework's backups remain within it. A second populated config-schema upgrade opens through HooksDb and verifies historical hook logs through both production log readers. Cost-summary overwrite and Fleet cleanup wiring remain pending owner disposition.
+
+**Proof.** The populated analytics/config upgrade filter passes 2/2 on Windows (0.23s) and Ubuntu WSL (0.55s), comparing existing row values and reading upgraded data through production consumers. Workspace check and formatting pass. No production schema or retention behavior changes; cost-summary coverage and owned CLI maintenance remain open. Evidence: _verify/P4-59-MIGRATION-PRESERVATION-2026-10-05.md.

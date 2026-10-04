@@ -1652,6 +1652,75 @@ fn parse_optional_timestamp(
 mod append_only_retention_tests {
     use super::*;
 
+    #[tokio::test]
+    async fn populated_pre_retention_analytics_upgrade_preserves_all_existing_rows() {
+        let directory = tempfile::tempdir().expect("owned legacy profile");
+        let path = directory.path().join("analytics.db");
+        let conn = Connection::open(&path).expect("legacy analytics file");
+        migrate::run_ladder(&conn, "analytics.db", &AnalyticsDb::LADDER[..1])
+            .expect("production baseline migration");
+        conn.execute_batch(
+            "INSERT INTO token_usage (timestamp,session_id,agent_type,provider,model,prompt_tokens,completion_tokens,total_tokens,cost_usd,request_type)
+             VALUES ('2026-07-06 12:00:00','legacy-session','worker','google','gemini',2,3,5,0.01,'chat');
+             INSERT INTO daily_costs (date,total_cost_usd,total_tokens,session_count,message_count,tool_call_count,provider_breakdown,agent_type_breakdown,created_at)
+             VALUES ('2026-07-06',0.01,5,1,1,0,'{\"google\":0.01}','{\"worker\":0.01}','2026-07-07 00:00:00');
+             INSERT INTO worker_stats (worker_id,date,tasks_completed,tasks_failed,time_spent_minutes,cost_usd,last_heartbeat)
+             VALUES ('worker-backend','2026-07-06',2,1,7,0.25,'2026-07-06 12:00:00');
+             INSERT INTO api_failures (timestamp,provider,error_type,error_message,retry_count)
+             VALUES ('2026-07-06 12:00:00','google','fixture','legacy failure',2);
+             INSERT INTO system_events (timestamp,component,event_type,message,severity,metadata)
+             VALUES ('2026-07-06 12:00:00','fixture','event','legacy event','info','{}');"
+        ).expect("populate every pre-retention analytics table");
+        fn snapshot(conn: &Connection, sql: &str) -> Vec<Vec<rusqlite::types::Value>> {
+            let mut statement = conn.prepare(sql).expect("snapshot statement");
+            let columns = statement.column_count();
+            statement
+                .query_map([], |row| {
+                    (0..columns).map(|column| row.get(column)).collect()
+                })
+                .expect("snapshot query")
+                .collect::<rusqlite::Result<_>>()
+                .expect("snapshot rows")
+        }
+        let queries = [
+            "SELECT * FROM token_usage ORDER BY id",
+            "SELECT * FROM daily_costs ORDER BY date",
+            "SELECT id,worker_id,date,tasks_completed,tasks_failed,time_spent_minutes,cost_usd,avg_task_duration_minutes,success_rate,last_heartbeat FROM worker_stats ORDER BY id",
+            "SELECT * FROM api_failures ORDER BY id",
+            "SELECT * FROM system_events ORDER BY id",
+        ];
+        let before = queries
+            .iter()
+            .map(|query| snapshot(&conn, query))
+            .collect::<Vec<_>>();
+        drop(conn);
+        let db = AnalyticsDb::new_at(&path)
+            .await
+            .expect("production latest-schema opener");
+        let conn = db.conn.lock().expect("upgraded analytics connection");
+        assert_eq!(
+            migrate::user_version(&conn).unwrap(),
+            AnalyticsDb::LADDER.last().unwrap().version
+        );
+        for (query, before) in queries.iter().zip(before) {
+            assert_eq!(snapshot(&conn, query), before, "upgrade preserves {query}");
+        }
+        drop(conn);
+        let date = NaiveDate::from_ymd_opt(2026, 7, 6).unwrap();
+        assert_eq!(
+            db.get_daily_costs_range(date, date).unwrap()[0].total_tokens,
+            5
+        );
+        let usage_date = crate::db::timestamps::parse_db_timestamp("2026-07-06 12:00:00")
+            .unwrap()
+            .with_timezone(&Local)
+            .date_naive();
+        assert_eq!(
+            db.get_token_usage_by_date(usage_date).unwrap()[0].session_id,
+            "legacy-session"
+        );
+    }
+
     async fn database() -> (tempfile::TempDir, AnalyticsDb) {
         let directory = tempfile::tempdir().expect("isolated analytics database directory");
         let db = AnalyticsDb::new_at(&directory.path().join("analytics.db"))

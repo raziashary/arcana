@@ -282,6 +282,35 @@ mod tests {
     }
 
     #[test]
+    fn populated_pre_retention_config_upgrade_preserves_hook_logs_for_the_reader() {
+        let directory = tempfile::tempdir().expect("owned legacy config profile");
+        let path = directory.path().join("config.db");
+        let conn = Connection::open(&path).expect("legacy config file");
+        migrate::run_ladder(&conn, "config.db", &LADDER[..2])
+            .expect("production pre-retention config schema");
+        conn.execute(
+            "INSERT INTO hook_logs (hook_id,hook_name,hook_type,outcome,output,error,executed_at,duration_ms)
+             VALUES ('legacy-hook','legacy fixture','pre_tool_use','success','fixture output',NULL,'2026-07-06 12:00:00',27)",
+            [],
+        ).expect("populate historical hook log");
+        drop(conn);
+        let db = crate::hooks::db::HooksDb::open_at(&path)
+            .expect("production hook opener migrates config");
+        let rows = db.get_logs(None, 10).expect("production hook log reader");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].hook_id, "legacy-hook");
+        assert_eq!(rows[0].output.as_deref(), Some("fixture output"));
+        assert!(rows[0].error.is_none());
+        assert_eq!(rows[0].executed_at, "2026-07-06 12:00:00");
+        assert_eq!(rows[0].duration_ms, 27);
+        let exported = db
+            .get_logs_since("2026-07-06T00:00:00Z")
+            .expect("production retained export reader");
+        assert_eq!(exported.len(), 1);
+        assert_eq!(exported[0].id, rows[0].id);
+    }
+
+    #[test]
     fn one_open_creates_every_table_the_file_owns() {
         let path = temp("fresh");
         let _home = crate::db::test_support::with_home(path.parent().unwrap());
