@@ -22,4 +22,14 @@ P4-40 logical unit committed as `67fd7ab`; CI guard is a separate test-only unit
 
 ## ACP replay unit closed
 
-P4-23, TG4-10, TG4-11, S4-04 and S4-05 are checked after native producer/recipient, stable-ID replay, completed-effect reconciliation and ownership refusal proof. Windows/Linux tests pass; the saved Supervisor policy reaches the actual consumer and one observed task mutation survives interruption/redispatch. See `P4-23-ACP-REPLAY-CLOSEOUT-2026-10-05.md`. Existing bounds follow ADR-0095; no new per-sender rate limit. Current tally is 36/59 tasks and 13/33 gates. CI run 37220225970 at ccef776 was still in progress at the last check; frontend/CLI passed and Rust workspace tests were running.
+P4-23, TG4-10, TG4-11, S4-04 and S4-05 are checked after native producer/recipient, stable-ID replay, completed-effect reconciliation and ownership refusal proof. Windows/Linux tests pass; the saved Supervisor policy reaches the actual consumer and one observed task mutation survives interruption/redispatch. See `P4-23-ACP-REPLAY-CLOSEOUT-2026-10-05.md`. Existing bounds follow ADR-0095; no new per-sender rate limit. Current tally is 36/59 tasks and 13/33 gates. CI run 37220225970 at ccef776 later failed the checkpoint fixture setup as detailed below; frontend/CLI passed.
+
+## Remote CI fixture correction in progress
+
+Run 37220225970 finished with frontend/CLI success, but the core library had 983 passes and one fixture setup failure: config.db already existed before the checkpoint-refusal test could construct its blocker. ADR-0285 prepares the blocker before publishing HOME; no production checkpoint rule changes. A local WSL core-library run uses CI's four threads in an isolated outer Arcana profile, followed by all core integration targets with live-smoke disabled and live keys unset. P4-23 commit is `8ff0b5f`; push follows this verified prerequisite checkpoint.
+
+## Verified prerequisite checkpoint and current retry work
+
+ADR-0285 Windows checkpoint regression passes 12/12; Linux core library passes 985/985 (four threads, 86.68s), and all core integration targets pass 44/44 including the CLI/host smoke readers. Logs persist in ignored `target/ci-core-parallel-current.txt` and `target/ci-core-integration-current.txt`. The first local attempt lacked Linux npm after its temporary runtime disappeared; official Node 24.21.0 was restored to `/home/razi/arcana-p4-linux-tools`, checksum-verified, with Python3 alias and Linux-only PATH. No test package was installed. This checkpoint changes no P4 tally.
+
+P4-52 next: ADR-0286 adds test-only exhausted startup budget/reservation preservation and failure after real host commit. Initial new test used an incorrect Task field name (`claim_pid`); corrected to live `claimed_by_pid`, not a product bug. New tests remain unverified/uncommitted. Independent review spawn again hit the agent thread limit; no review is claimed. Expanded goal and owner Calendar remain untouched.

@@ -313,10 +313,10 @@ mod workspace_tests {
     #[tokio::test]
     async fn failed_checkpoint_blocks_file_and_parent_directory_creation() {
         let home = tempfile::tempdir().expect("isolated Arcana data root");
-        let _home = crate::db::test_support::with_home(home.path());
         let arcana_dir = home.path().join(".arcana");
         std::fs::create_dir_all(arcana_dir.join("config.db"))
             .expect("make config.db path unusable");
+        let _home = crate::db::test_support::with_home(home.path());
         let workspace = tempfile::tempdir().expect("workspace");
         let destination = workspace.path().join("new/nested/main.rs");
 
@@ -340,6 +340,11 @@ mod workspace_tests {
         use std::sync::Arc;
 
         let home = tempfile::tempdir().expect("isolated Arcana home");
+        // Prepare failure injection before publishing process-global HOME.
+        // Concurrent tests that persist counters must not win the path first.
+        let arcana_dir = home.path().join(".arcana");
+        std::fs::create_dir_all(arcana_dir.join("config.db"))
+            .expect("make checkpoint database path unusable");
         let _home = crate::db::test_support::with_home(home.path());
         let workspace = tempfile::tempdir().expect("isolated selected workspace");
         let worker_slug = "worker-checkpoint-test";
@@ -361,10 +366,6 @@ mod workspace_tests {
             .claim_task_with_pid(task.id, worker_slug, std::process::id())
             .expect("claim task through production claim API");
         drop(tasks);
-
-        let arcana_dir = home.path().join(".arcana");
-        std::fs::create_dir_all(arcana_dir.join("config.db"))
-            .expect("make checkpoint database path unusable");
 
         let mut executor = ToolExecutor::new(
             PermissionMode::Autonomous,
