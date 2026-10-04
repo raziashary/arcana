@@ -57,6 +57,7 @@ export interface PermissionRequest {
   toolName:    string
   input:       Record<string, unknown>
   description: string
+  allowAlways: boolean
 }
 
 interface AgentState {
@@ -130,7 +131,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   streamingText:     '',
   pendingPermission: null,
   sessionId:         null,
-  workingDir:        '.',
+  workingDir:        '',
 
   setSessionId:  (id)  => set({ sessionId: id }),
   setWorkingDir: (dir) => set({ workingDir: dir }),
@@ -263,7 +264,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     }))
 
     // Permission request
-    unlisteners.push(await listen<{ session_id: string; call_id: string; tool_name: string; input: Record<string, unknown>; description: string }>('agent:permission-request', ({ payload }) => {
+    unlisteners.push(await listen<{ session_id: string; call_id: string; tool_name: string; input: Record<string, unknown>; description: string; allow_always: boolean }>('agent:permission-request', ({ payload }) => {
       if (payload.session_id !== sessionId) return
       set({
         pendingPermission: {
@@ -271,6 +272,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           toolName:    payload.tool_name,
           input:       payload.input,
           description: payload.description,
+          allowAlways: payload.allow_always,
         },
         isStreaming: false,
       })

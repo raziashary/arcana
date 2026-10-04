@@ -22,6 +22,30 @@ interface ModelUsageData {
   color: string;
 }
 
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+export function formatDayBucketWeekday(dayBucket: string): string {
+  const match = dayBucket.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return 'Invalid Date';
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(0);
+  date.setUTCHours(0, 0, 0, 0);
+  date.setUTCFullYear(year, month - 1, day);
+
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return 'Invalid Date';
+  }
+
+  return WEEKDAYS[date.getUTCDay()];
+}
+
 const TokenUsage: React.FC<TokenUsageProps> = ({ summary, analytics, costAnalytics }) => {
   const [showCharts, setShowCharts] = useState(false);
 
@@ -47,7 +71,7 @@ const TokenUsage: React.FC<TokenUsageProps> = ({ summary, analytics, costAnalyti
   const sevenDayData: DailyTokenData[] = (() => {
     if (costAnalytics && costAnalytics.data_points.length > 0) {
       return costAnalytics.data_points.slice(-7).map(dp => ({
-        date: new Date(dp.timestamp).toLocaleDateString('en', { weekday: 'short' }),
+        date: formatDayBucketWeekday(dp.timestamp),
         tokens: dp.tokens,
       }));
     }

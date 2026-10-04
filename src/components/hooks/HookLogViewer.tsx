@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react'
 import { CheckCircle, XCircle, MinusCircle, Ban, RefreshCw, ChevronDown, ChevronUp, Download } from 'lucide-react'
 import { useHookStore, type HookExecutionLog, type HookOutcome } from '../../stores/hookStore'
+import { parseDbTimestamp } from '../../utils/dbTime'
 
 type FilterMode = 'all' | HookOutcome
 
@@ -125,7 +126,7 @@ function outcomeColor(outcome: HookOutcome): string {
 
 function formatTime(ts: string): string {
   try {
-    return new Date(ts).toLocaleTimeString()
+    return parseDbTimestamp(ts)?.toLocaleTimeString() ?? ts
   } catch {
     return ts
   }

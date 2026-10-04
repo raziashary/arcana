@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { dbAgeSeconds, parseDbTimestamp } from '../utils/dbTime'
+import {
+  dbAgeSeconds,
+  dbElapsedClock,
+  isDbTimestampToday,
+  parseDbTimestamp,
+} from '../utils/dbTime'
 
 /**
  * `P8-31` — the frontend half of a defect that lied in both directions.
@@ -45,11 +50,35 @@ describe('parseDbTimestamp', () => {
     expect(d!.toISOString()).toBe('2026-09-01T04:23:58.000Z')
   })
 
+  it('accepts the canonical RFC3339 UTC form', () => {
+    const d = parseDbTimestamp('2026-09-01T06:23:58Z')
+    expect(d!.toISOString()).toBe('2026-09-01T06:23:58.000Z')
+  })
+
   it('returns null rather than a plausible wrong Date', () => {
     // A caller can render "unknown"; it cannot detect a silently shifted one.
     for (const bad of ['', '   ', 'not a date', '2026-13-45 99:99:99', null, undefined]) {
       expect(parseDbTimestamp(bad as string)).toBeNull()
     }
+  })
+})
+
+describe('database timestamp calendar displays', () => {
+  it('keeps elapsed time correct across local midnight for SQLite UTC values', () => {
+    const beforeMidnight = new Date(2026, 8, 1, 23, 59, 59)
+    const afterMidnight = new Date(2026, 8, 2, 0, 0, 1)
+    const sqliteForm = beforeMidnight.toISOString().replace('T', ' ').slice(0, 19)
+
+    expect(dbElapsedClock(sqliteForm, afterMidnight)).toBe('00:02')
+    expect(isDbTimestampToday(sqliteForm, afterMidnight)).toBe(false)
+  })
+
+  it('includes a SQLite UTC timestamp from just after local midnight in today', () => {
+    const afterMidnight = new Date(2026, 8, 2, 0, 0, 1)
+    const justAfterMidnight = new Date(2026, 8, 2, 0, 0, 0)
+    const sqliteForm = justAfterMidnight.toISOString().replace('T', ' ').slice(0, 19)
+
+    expect(isDbTimestampToday(sqliteForm, afterMidnight)).toBe(true)
   })
 })
 

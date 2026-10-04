@@ -238,6 +238,7 @@ export const useGitStore = create<GitStore>((set, get) => ({
       const checkpoints = await invoke<CheckpointInfo[]>('list_checkpoints', {
         filePath:  filePath ?? null,
         sessionId: null,
+        taskId:    null,
       })
       set({ checkpoints })
     } catch (e) { set({ error: String(e) }) }

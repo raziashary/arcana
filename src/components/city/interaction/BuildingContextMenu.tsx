@@ -18,7 +18,7 @@ export function BuildingContextMenu({ nodeId, nodes, x, y, onClose }: BuildingCo
   const handleOpenInIde = useCallback(async () => {
     if (!node?.file_path) return
     try {
-      await invoke('open_in_ide', { filePath: node.file_path })
+      await invoke('open_in_ide', { file: node.file_path, line: 1 })
     } catch (e) {
       console.error('open_in_ide failed:', e)
     }

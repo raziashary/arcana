@@ -38,6 +38,7 @@ const MODEL_CONTEXT: Record<string, number> = {
   'o4-mini':              200_000,
   'o3':                   200_000,
   // Google
+  'gemini-3.8-flash':  1_048_576,
   'gemini-2.0-flash':   1_000_000,
   'gemini-2.5-pro':     2_000_000,
   'gemini-1.5-pro':     2_000_000,
@@ -264,8 +265,8 @@ export default function ChatTab() {
   const ensureSession = async (): Promise<string> => {
     if (sessionStore.activeSessionId) return sessionStore.activeSessionId
 
-    const provider = settingsStore.activeProvider ?? 'anthropic'
-    const model    = settingsStore.activeModel    ?? 'claude-sonnet-4-5'
+    const provider = settingsStore.activeProvider ?? 'google'
+    const model    = settingsStore.activeModel    ?? 'gemini-3.8-flash'
     // Use workspace dir as the session working dir if set
     const dir = workspaceDir || localDir
     const sessionId  = await sessionStore.createSession(dir, provider, model)

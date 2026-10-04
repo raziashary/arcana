@@ -84,6 +84,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const active = await invoke<[string, string] | null>('get_active_provider')
       if (active) {
         set({ activeProvider: active[0], activeModel: active[1] })
+      } else {
+        set({ activeProvider: 'google', activeModel: 'gemini-3.8-flash' })
       }
     } catch (e) {
       console.error('Failed to load providers:', e)

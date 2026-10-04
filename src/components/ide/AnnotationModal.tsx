@@ -79,8 +79,8 @@ export function AnnotationModal({
 
   async function ensureSession(): Promise<string> {
     if (activeSessionId) return activeSessionId
-    const provider = activeProvider ?? 'anthropic'
-    const model    = activeModel    ?? 'claude-sonnet-4-5'
+    const provider = activeProvider ?? 'google'
+    const model    = activeModel    ?? 'gemini-3.8-flash'
     const dir      = workspaceDir   ?? ''
     return createSession(dir, provider, model)
   }

@@ -43,9 +43,9 @@ export const MODEL_GROUPS: readonly ModelGroup[] = [
     // too — the id it actually ships under is `gemini-3.1-pro-preview`, and
     // no fixture test could have found that.
     //
-    // Fast model is 3.7 Flash as of 2026-09-02 (razi-ruled): newer than 3.5
-    // Flash and half the price at the current published rate.
-    models: ['gemini-3.1-pro-preview', 'gemini-3.7-flash'],
+    // Gemini 3.8 Flash is the owner's PA and fleet model. Keep it first so
+    // provider-aware defaults select the requested coding model.
+    models: ['gemini-3.8-flash', 'gemini-3.1-pro-preview', 'gemini-3.7-flash'],
   },
   {
     provider: 'anthropic',
@@ -81,7 +81,7 @@ export const ALL_KNOWN_MODELS: ReadonlySet<string> = new Set(
 //
 // It survived TG-P2-09 because that gate scans Rust and this is TypeScript.
 // TG-P2-05 now holds this file against the Rust catalogue.
-export const DEFAULT_MODEL = 'gemini-3.7-flash' 
+export const DEFAULT_MODEL = 'gemini-3.8-flash'
 
 /**
  * Which provider serves a model id.

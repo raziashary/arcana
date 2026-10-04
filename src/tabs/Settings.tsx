@@ -13,6 +13,7 @@ import { useModelConfigStore, THINKING_MODELS, REASONING_EFFORT_MODELS } from '.
 import WorkerTable from '../components/workers/WorkerTable'
 import WorkerCreateModal from '../components/workers/WorkerCreateModal'
 import { invoke } from '@tauri-apps/api/core'
+import { open } from '@tauri-apps/plugin-dialog'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 import { useRuntimeConfigStore } from '../stores/runtimeConfigStore'
 import HooksSettings from '../components/settings/HooksSettings'
@@ -36,6 +37,8 @@ export default function SettingsTab() {
 
         <SectionHeader title="Workspace" />
         <WorkspaceCard />
+        <PythonFallbackCard />
+        <WorkspaceEgressConsentCard />
 
         <SectionHeader title="Credential Storage" />
         <VaultBackendCard />
@@ -116,6 +119,88 @@ export default function SettingsTab() {
           onCreated={(_slug) => setShowCreateModal(false)}
         />
       )}
+    </div>
+  )
+}
+
+export function WorkspaceEgressConsentCard() {
+  const ws = useWorkspaceStore()
+  const settings = useSettingsStore()
+  const [grants, setGrants] = useState<Record<string, boolean>>({})
+  const [busy, setBusy] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const refresh = async () => {
+    if (!ws.workspaceDir) return
+    const entries = await Promise.all([...settings.providers.map(async provider => {
+      const granted = await invoke<boolean>('get_workspace_egress_consent', { providerId: provider.id })
+      return [provider.id, granted] as const
+    }), invoke<boolean>('get_workspace_egress_consent', { providerId: 'mcp:github-mcp' }).then(granted => ['mcp:github-mcp', granted] as const)])
+    setGrants(Object.fromEntries(entries))
+  }
+
+  useEffect(() => {
+    settings.loadProviders()
+  }, [])
+
+  useEffect(() => {
+    refresh().catch(e => setError(String(e)))
+  }, [ws.workspaceDir, settings.providers])
+
+  const change = async (providerId: string, allow: boolean) => {
+    setBusy(providerId)
+    setError(null)
+    try {
+      if (allow) {
+        await invoke('grant_workspace_egress_consent', { providerId })
+      } else {
+        await invoke('revoke_workspace_egress_consent', { providerId })
+      }
+      await refresh()
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <div className="rounded-sm p-4 space-y-3" style={{ background: 'var(--bg-card)', border: '1px solid var(--border-1)' }}>
+      <div className="font-mono text-xs" style={{ color: 'var(--text-1)' }}>Workspace egress consent</div>
+      <div className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
+        Allow Arcana-mediated requests to send workspace content to a provider or the configured GitHub MCP connector. Consent is saved per workspace and destination and can be revoked here. Shell commands use separate operating-system network controls.
+      </div>
+      {!ws.workspaceDir ? (
+        <div className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>Select a workspace to manage consent.</div>
+      ) : <>
+      {settings.providers.filter(provider => provider.has_key).map(provider => (
+        <div key={provider.id} className="flex items-center justify-between gap-3">
+          <span className="font-mono text-xs" style={{ color: 'var(--text-2)' }}>{provider.name}</span>
+          <button
+            onClick={() => change(provider.id, !grants[provider.id])}
+            disabled={busy === provider.id}
+            aria-label={`${grants[provider.id] ? 'Revoke consent for' : 'Allow egress for'} ${provider.name}`}
+            className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40"
+            style={{ background: grants[provider.id] ? 'transparent' : 'var(--bg-2)', border: '1px solid var(--border-1)', color: grants[provider.id] ? 'var(--danger)' : 'var(--accent)' }}
+          >
+            {busy === provider.id ? 'Saving…' : grants[provider.id] ? 'Revoke consent' : 'Allow egress'}
+          </button>
+        </div>
+      ))}
+      <div className="flex items-center justify-between gap-3">
+        <span className="font-mono text-xs" style={{ color: 'var(--text-2)' }}>GitHub MCP connector</span>
+        <button
+          onClick={() => change('mcp:github-mcp', !grants['mcp:github-mcp'])}
+          disabled={busy === 'mcp:github-mcp'}
+          aria-label={`${grants['mcp:github-mcp'] ? 'Revoke consent for' : 'Allow egress for'} GitHub MCP connector`}
+          className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40"
+          style={{ background: grants['mcp:github-mcp'] ? 'transparent' : 'var(--bg-2)', border: '1px solid var(--border-1)', color: grants['mcp:github-mcp'] ? 'var(--danger)' : 'var(--accent)' }}
+        >
+          {busy === 'mcp:github-mcp' ? 'Saving…' : grants['mcp:github-mcp'] ? 'Revoke consent' : 'Allow egress'}
+        </button>
+      </div>
+      </>}
+      {error && <div className="font-mono text-xs" style={{ color: 'var(--danger)' }}>{error}</div>}
     </div>
   )
 }
@@ -205,6 +290,101 @@ function WorkspaceCard() {
           {ws.error}
         </div>
       )}
+    </div>
+  )
+}
+
+export function PythonFallbackCard() {
+  const [path, setPath] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const isWindows = /Windows/i.test(navigator.userAgent)
+
+  useEffect(() => {
+    if (!isWindows) return
+    invoke<string | null>('get_python_user_fallback')
+      .then(setPath)
+      .catch(reason => setError(String(reason)))
+  }, [isWindows])
+
+  if (!isWindows) return null
+
+  const choose = async () => {
+    setError(null)
+    try {
+      const selected = await open({
+        multiple: false,
+        directory: false,
+        filters: [{ name: 'Python interpreter', extensions: ['exe'] }],
+      })
+      if (typeof selected !== 'string') return
+      setBusy(true)
+      setPath(await invoke<string>('set_python_user_fallback', { path: selected }))
+    } catch (reason) {
+      setError(String(reason))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const clear = async () => {
+    setError(null)
+    setBusy(true)
+    try {
+      await invoke('set_python_user_fallback', { path: null })
+      setPath(null)
+    } catch (reason) {
+      setError(String(reason))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div
+      className="rounded-sm p-4 space-y-3"
+      style={{ background: 'var(--bg-card)', border: '1px solid var(--border-1)' }}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <span className="font-mono text-xs" style={{ color: 'var(--text-1)' }}>
+          Python fallback (Windows)
+        </span>
+        <div className="flex gap-2">
+          <button
+            onClick={choose}
+            disabled={busy}
+            className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40 flex items-center gap-1"
+            style={{ background: 'var(--bg-2)', border: '1px solid var(--border-1)', color: 'var(--text-1)' }}
+          >
+            <FolderOpen size={11} />
+            {path ? 'Change' : 'Select Python'}
+          </button>
+          {path && (
+            <button
+              onClick={clear}
+              disabled={busy}
+              className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40"
+              style={{ background: 'transparent', border: '1px solid #FF636330', color: 'var(--danger)' }}
+              aria-label="Clear Python fallback"
+            >
+              <X size={11} />
+            </button>
+          )}
+        </div>
+      </div>
+      <div
+        className="font-mono text-xs px-2 py-1.5 rounded-sm truncate"
+        style={{ background: 'var(--bg-2)', color: 'var(--text-2)', border: '1px solid var(--border-1)' }}
+        title={path ?? undefined}
+      >
+        {path ?? 'No fallback selected'}
+      </div>
+      <div className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
+        Arcana stages its preferred signed Python first. This signed interpreter is
+        used only if staging fails and only when it is inside your user-owned
+        Local AppData Python installation.
+      </div>
+      {error && <div role="alert" className="font-mono text-xs" style={{ color: 'var(--danger)' }}>{error}</div>}
     </div>
   )
 }
@@ -759,10 +939,21 @@ function GitHubMCPCard() {
       </div>
 
       <div className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
-        Records the endpoint of a GitHub MCP server so Arcana can monitor whether it is reachable.
-        Arcana does <strong>not</strong> yet call that server: nothing consumes this configuration to
-        open a tool connection, so workers cannot currently list repos, create PRs, or review code
-        through it. The health indicator above reflects reachability only.
+        Enables Arcana to discover and call tools from this Streamable HTTP endpoint. Calls require
+        this workspace’s GitHub MCP egress consent and the active Network permission policy. Remote
+        tool metadata and results are treated as untrusted input. The stdio marker is not supported.
+      </div>
+
+      <div className="space-y-2">
+        <div className="font-mono text-xs" style={{ color: 'var(--text-3)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Streamable HTTP endpoint</div>
+        <input
+          type="url"
+          placeholder="https://api.githubcopilot.com/mcp/"
+          value={cfg.server_url ?? ''}
+          onChange={e => setCfg(c => ({ ...c, server_url: e.target.value || null }))}
+          className="w-full font-mono text-xs px-3 py-1.5 rounded-sm"
+          style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-2)', color: 'var(--text-1)' }}
+        />
       </div>
 
       <div className="space-y-2">

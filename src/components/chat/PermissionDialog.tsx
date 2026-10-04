@@ -110,18 +110,20 @@ export default function InlinePermissionCard() {
         >
           Deny
         </button>
-        <button
-          onClick={() => respond('allow_always')}
-          className="font-mono px-3 py-1 rounded-sm cursor-pointer"
-          style={{
-            background: 'var(--bg-card)',
-            border:     '1px solid var(--border-2)',
-            color:      'var(--text-2)',
-            fontSize:   '11px',
-          }}
-        >
-          Allow Always
-        </button>
+        {pendingPermission.allowAlways && (
+          <button
+            onClick={() => respond('allow_always')}
+            className="font-mono px-3 py-1 rounded-sm cursor-pointer"
+            style={{
+              background: 'var(--bg-card)',
+              border:     '1px solid var(--border-2)',
+              color:      'var(--text-2)',
+              fontSize:   '11px',
+            }}
+          >
+            Allow Always
+          </button>
+        )}
         <button
           onClick={() => respond('allow')}
           className="font-mono px-3 py-1 rounded-sm cursor-pointer"

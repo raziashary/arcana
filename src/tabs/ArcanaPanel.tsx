@@ -32,26 +32,16 @@ import { DiffAnalysisCard } from '../components/dashboard/DiffAnalysisCard'
 import { EpicsSection } from '../components/dashboard/EpicPhaseView'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import '../components/arcana/LiveMonitor.css'
-import { parseDbTimestamp } from "../utils/dbTime"
+import { dbElapsedClock, isDbTimestampToday, parseDbTimestamp } from '../utils/dbTime'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function isToday(dateStr: string | null): boolean {
-  if (!dateStr) return false
-  const d = new Date(dateStr)
-  const now = new Date()
-  return (
-    d.getFullYear() === now.getFullYear() &&
-    d.getMonth()    === now.getMonth()    &&
-    d.getDate()     === now.getDate()
-  )
+  return isDbTimestampToday(dateStr)
 }
 
 function elapsedSince(dateStr: string): string {
-  const diffMs  = Date.now() - new Date(dateStr).getTime()
-  const diffMin = Math.floor(diffMs / 60_000)
-  const diffSec = Math.floor((diffMs % 60_000) / 1_000)
-  return `${String(diffMin).padStart(2, '0')}:${String(diffSec).padStart(2, '0')}`
+  return dbElapsedClock(dateStr) ?? '—'
 }
 
 // ─── Enhanced status cell — pulls live tool/file info from agentLiveStore ───────

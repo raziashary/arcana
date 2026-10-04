@@ -2,6 +2,7 @@
 
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
+import { useToastStore } from './toastStore'
 
 export interface Session {
   id:            string
@@ -51,12 +52,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
-  createSession: async (workingDir = '', provider = 'anthropic', model = 'claude-sonnet-4-5') => {
-    const session = await invoke<Session>('create_session', {
-      workingDir,
-      provider,
-      model,
-    })
+  createSession: async (workingDir = '', provider = 'google', model = 'gemini-3.8-flash') => {
+    let session: Session
+    try {
+      session = await invoke<Session>('create_session', {
+        workingDir,
+        provider,
+        model,
+      })
+    } catch (error) {
+      useToastStore.getState().addToast({
+        title: 'Workspace unavailable',
+        message: String(error),
+        type: 'error',
+        durationMs: 8000,
+      })
+      throw error
+    }
 
     // Phase 3.0 R3 — carry the user's current PA-mode preference onto the
     // new session row so Delegate sticks across New Session clicks. If the

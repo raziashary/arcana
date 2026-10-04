@@ -138,6 +138,7 @@ export interface IdeStore {
   loadDirChildren:    (relativePath: string) => Promise<void>
   toggleDir:          (relativePath: string) => Promise<void>
   openFile:           (relativePath: string, gotoLine?: number) => Promise<void>
+  revealFile:         (relativePath: string, gotoLine?: number) => Promise<void>
   closeTab:           (relativePath: string) => void
   closeOtherTabs:     (relativePath: string) => void
   closeAllTabs:       () => void
@@ -297,6 +298,23 @@ export const useIdeStore = create<IdeStore>((set, get) => ({
         ),
       }))
     }
+  },
+
+  revealFile: async (relativePath: string, gotoLine) => {
+    const segments = relativePath.split('/').filter(Boolean)
+    if (segments.length > 1) {
+      if (!get().rootTree) await get().refreshTree()
+      const expanded = new Set(get().expandedDirs)
+      let directory = ''
+      for (const segment of segments.slice(0, -1)) {
+        directory = directory ? `${directory}/${segment}` : segment
+        expanded.add(directory)
+        await get().loadDirChildren(directory)
+      }
+      set({ expandedDirs: expanded })
+      void persist(get())
+    }
+    await get().openFile(relativePath, gotoLine)
   },
 
   closeTab: (relativePath: string) => {

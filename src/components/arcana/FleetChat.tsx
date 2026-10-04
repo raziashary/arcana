@@ -13,6 +13,7 @@ import {
   useWorkerChatStore, type WorkerMessage, type WorkerMessageKind,
 } from '../../stores/workerChatStore'
 import { useTaskStore } from '../../stores/taskStore'
+import { parseDbTimestamp } from '../../utils/dbTime'
 
 const KIND_PALETTE: Record<WorkerMessageKind, { fg: string; bg: string; label: string }> = {
   nudge:     { fg: '#7FDBCA', bg: 'rgba(127,219,202,0.08)', label: 'NUDGE' },
@@ -23,14 +24,15 @@ const KIND_PALETTE: Record<WorkerMessageKind, { fg: string; bg: string; label: s
 }
 
 function timeAgo(iso: string): string {
-  const t = new Date(iso).getTime()
-  if (Number.isNaN(t)) return iso
+  const timestamp = parseDbTimestamp(iso)
+  if (!timestamp) return iso
+  const t = timestamp.getTime()
   const dt = Date.now() - t
   if (dt < 0)            return 'just now'
   if (dt < 60_000)       return `${Math.floor(dt / 1000)}s ago`
   if (dt < 3_600_000)    return `${Math.floor(dt / 60_000)}m ago`
   if (dt < 86_400_000)   return `${Math.floor(dt / 3_600_000)}h ago`
-  return new Date(iso).toLocaleString()
+  return timestamp.toLocaleString()
 }
 
 interface Props {

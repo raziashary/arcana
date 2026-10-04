@@ -27,6 +27,7 @@ import { useWorkerChatStore } from './stores/workerChatStore'
 import { UpdateToast }      from './components/update/UpdateToast'
 import { UpdateDialog }     from './components/update/UpdateDialog'
 import { ErrorBoundary }    from './components/ErrorBoundary'
+import { registerIdeNavigationListener } from './utils/ideNavigation'
 // Doc 07 Phase 3/4 — startup banners for stray files + workspace mismatch.
 import { WorkspaceMismatchBanner, StrayFilesBanner } from './components/WorkspaceMismatchBanner'
 // Doc 05 Phase 1 — sidecar crash banner with stderr tail + copy report.
@@ -70,7 +71,17 @@ export default function App() {
     void hydrateWorkerChat()
     // Phase 5.3 — subscribe to auto-updater events
     void initUpdater()
-    return () => { cleanupUpdater() }
+    let cancelled = false
+    let unlistenIdeNavigation: (() => void) | undefined
+    void registerIdeNavigationListener().then((unlisten) => {
+      if (cancelled) unlisten()
+      else unlistenIdeNavigation = unlisten
+    }).catch((error) => console.error('ide navigation listener failed:', error))
+    return () => {
+      cancelled = true
+      unlistenIdeNavigation?.()
+      cleanupUpdater()
+    }
   }, [])
 
   return (

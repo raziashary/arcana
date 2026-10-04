@@ -1,8 +1,8 @@
 /**
  * Parse a timestamp written by SQLite into a `Date`.
  *
- * 🔴 **Why this exists (`P8-31`).** Every timestamp column in this app is
- * written by SQLite's `datetime('now')` or `CURRENT_TIMESTAMP`, which emit
+ * 🔴 **Why this exists (`P8-31`, extended by P4-57).** Legacy database rows
+ * written by SQLite's `datetime('now')` or `CURRENT_TIMESTAMP` emit
  *
  *     2026-09-01 06:23:58
  *
@@ -59,4 +59,31 @@ export function dbAgeSeconds(raw: string | null | undefined): number | null {
   const d = parseDbTimestamp(raw)
   if (!d) return null
   return Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000))
+}
+
+/** Whether a database timestamp falls on the current local calendar day. */
+export function isDbTimestampToday(
+  raw: string | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  const d = parseDbTimestamp(raw)
+  if (!d) return false
+  return (
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  )
+}
+
+/** Format the elapsed time since a database timestamp as `MM:SS`. */
+export function dbElapsedClock(
+  raw: string | null | undefined,
+  now: Date = new Date(),
+): string | null {
+  const d = parseDbTimestamp(raw)
+  if (!d) return null
+  const diffMs = now.getTime() - d.getTime()
+  const diffMin = Math.floor(diffMs / 60_000)
+  const diffSec = Math.floor((diffMs % 60_000) / 1_000)
+  return `${String(diffMin).padStart(2, '0')}:${String(diffSec).padStart(2, '0')}`
 }

@@ -14,12 +14,11 @@ export function SessionBar() {
   const [editTitle, setEditTitle] = useState("");
 
   const handleNewSession = async () => {
-    // Pass the configured workspace dir so Mode 1 engine uses the right root.
-    // Fall back to '' only if nothing has been configured yet (Rust will then
-    // use the app's cwd, which is harmless for a first-run blank state).
+    // Rust resolves an empty value from Settings and refuses to create a
+    // session if no valid workspace has been selected.
     const dir      = workspaceDir || '';
-    const provider = activeProvider ?? 'anthropic';
-    const model    = activeModel    ?? 'claude-sonnet-4-5';
+    const provider = activeProvider ?? 'google';
+    const model    = activeModel    ?? 'gemini-3.8-flash';
     const newId    = await createSession(dir, provider, model);
     switchSession(newId);
   };
