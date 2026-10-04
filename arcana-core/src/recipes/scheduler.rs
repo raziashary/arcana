@@ -2116,6 +2116,90 @@ mod tests {
     }
 
     #[test]
+    fn production_startup_tick_skips_empty_worker_without_provider_call() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("create current-thread test runtime");
+        runtime.block_on(ensure_isolated_test_analytics());
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        crate::recipes::init().expect("initialize shipped recipes and default workers");
+
+        let provider = Arc::new(QcInboxProvider::new(&[]));
+        let runner = RecipeRunner::new_with_workspace_override(
+            Arc::new(Mutex::new(crate::state::AppState {
+                active_provider: Some("google".into()),
+                active_model: Some("gemini-3.8-flash".into()),
+                ..crate::state::AppState::default()
+            })),
+            Arc::new(
+                crate::session::manager::SessionManager::new()
+                    .expect("open isolated session manager"),
+            ),
+            crate::agent::permission::new_pending_permissions(),
+            Some(home.path().to_string_lossy().into_owned()),
+        )
+        .with_provider_for_test(provider.clone());
+        let scheduler = RecipeScheduler::new(Arc::new(runner));
+
+        let (_, events) = crate::observability::timing::capture_json_events(|| {
+            runtime.block_on(async {
+                scheduler
+                    .start_worker("worker-backend")
+                    .expect("start production worker schedule");
+
+                // The startup tick is spawned onto this current-thread runtime.
+                // Yield until its work-check event appears, then stop the worker
+                // before the test can leave a live scheduler task behind.
+                for _ in 0..32 {
+                    tokio::task::yield_now().await;
+                }
+
+                scheduler
+                    .stop_worker("worker-backend")
+                    .expect("stop production worker schedule");
+            })
+        });
+
+        assert_eq!(
+            provider.request_count(),
+            0,
+            "the production startup tick must stop before provider resolution when no work exists"
+        );
+        assert!(
+            scheduler
+                .handles
+                .lock()
+                .expect("scheduler handles lock")
+                .is_empty(),
+            "the schedule handle must be removed after stop"
+        );
+
+        let check = events
+            .iter()
+            .find(|event| {
+                event["fields"]["operation"] == "scheduler_recoverable_work_check"
+                    && event["fields"]["worker"] == "worker-backend"
+            })
+            .expect("the production startup tick records its work check");
+        assert_eq!(check["fields"]["outcome"], "idle");
+        assert_eq!(check["fields"]["database"], "tasks");
+        assert!(check["fields"]["duration_ns"].as_u64().is_some());
+
+        let gate = events
+            .iter()
+            .find(|event| {
+                event["fields"]["operation"] == "scheduler_worker_dispatch_gate"
+                    && event["fields"]["worker"] == "worker-backend"
+            })
+            .expect("the startup dispatch gate records its idle outcome");
+        assert_eq!(gate["fields"]["outcome"], "idle");
+        assert_eq!(gate["fields"]["result_count"], 0);
+        assert!(gate["fields"]["duration_ns"].as_u64().unwrap_or_default() > 0);
+    }
+
+    #[test]
     fn startup_and_event_dispatch_gate_records_idle_and_completed_runs() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

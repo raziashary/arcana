@@ -1209,10 +1209,7 @@ fn bridge_executable() -> io::Result<PathBuf> {
             "Windows sandbox bridge test requires target/debug/arcanactl.exe; build the CLI before running this test",
         ));
     }
-    #[cfg(not(test))]
-    {
-        std::env::current_exe()
-    }
+    std::env::current_exe()
 }
 
 fn os_to_string(value: &OsStr) -> io::Result<String> {
