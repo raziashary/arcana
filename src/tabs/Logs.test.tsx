@@ -160,6 +160,56 @@ describe('Logs tab', () => {
     expect(parentDetails).toHaveTextContent('1.25 ms')
   })
 
+  it('renders the persisted Memory search operation in Structured Events and Traces', async () => {
+    const event = {
+      timestamp: '2026-10-04T10:12:14Z',
+      target: 'arcana::telemetry',
+      fields: {
+        event_type: 'operation_timing',
+        operation: 'memory_search_all',
+        database: 'memory',
+        call_id: 'call-memory-observability',
+        run_id: 'run-memory-observability',
+        task_id: '42',
+        outcome: 'fallback',
+        result_count: 1,
+        duration_ns: 1_250_000,
+      },
+      spans: [{ name: 'worker_tick' }],
+    }
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'list_log_files') return ['2026-10-04']
+      if (command === 'read_log_file') return { content: '', total_lines: 0, truncated: false, full_size_bytes: 0 }
+      if (command === 'read_structured_events') return {
+        content: `${JSON.stringify(event)}\n`, total_lines: 1, truncated: false, full_size_bytes: 400,
+      }
+      if (command === 'summarize_observability_events') return {
+        total_events: 1,
+        malformed_events: 0,
+        provider_calls: 0,
+        provider_attempts: 0,
+        tool_calls: 0,
+        database_statements: 0,
+        readable_writer_failures: 0,
+        structured_writer_failures: 0,
+        by_event: { operation_timing: { count: 1, failures: 0, result_count_total: 1, duration_count: 1 } },
+      }
+      throw new Error(`Unexpected command: ${command}`)
+    })
+
+    render(<LogsTab />)
+    fireEvent.click(await screen.findByText(/Structured Events/))
+    expect(await screen.findAllByText(/memory_search_all/)).not.toHaveLength(0)
+    expect(screen.getAllByText(/call-memory-observability/)).not.toHaveLength(0)
+
+    fireEvent.click(screen.getByText(/Traces/))
+    const call = await screen.findByText('call call-memory-observability')
+    const trace = call.closest('details')
+    expect(trace).toHaveTextContent('memory_search_all')
+    expect(trace).toHaveTextContent('fallback')
+    expect(trace).toHaveTextContent('1.25 ms')
+  })
+
   it('groups cancelled project-command stage timings by call and shows their outcome', async () => {
     invoke.mockImplementation(async (command: string) => {
       if (command === 'list_log_files') return ['2026-10-03']

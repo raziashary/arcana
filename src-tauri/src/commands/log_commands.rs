@@ -1965,6 +1965,106 @@ mod tests {
         assert!(!content.contains("source contents"));
     }
 
+    #[tokio::test]
+    async fn production_memory_search_event_persists_and_reads_through_tauri_logs() {
+        use arcana_core::agent::tool_trait::{AgentIdentity, Tool, ToolContext};
+        use tracing_subscriber::{filter::filter_fn, layer::SubscriberExt, Layer, Registry};
+
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::test_support::isolate_home(home.path());
+        let log_dir = home.path().join(".arcana").join("logs");
+        std::fs::create_dir_all(&log_dir).expect("create isolated production log directory");
+
+        let memory_db = arcana_core::memory::db::MemoryDb::open()
+            .expect("open migrated production Memory database");
+        memory_db
+            .conn
+            .execute(
+                "INSERT INTO memories(id, tier, scope, scope_ref, scope_key, content, created_at, updated_at)
+                 VALUES ('memory-observability', 'semantic', 'project', '/project', 'project:/project',
+                         'arcana-observability-private-memory-canary', '2026-10-04T00:00:00Z', '2026-10-04T00:00:00Z')",
+                [],
+            )
+            .expect("seed isolated production Memory row");
+        drop(memory_db);
+
+        let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let path = log_dir.join(format!("arcana-events.{date}.jsonl"));
+        let file = std::fs::File::create(&path).expect("create production structured log path");
+        let (writer, guard) = tracing_appender::non_blocking(file);
+        let layer = tracing_subscriber::fmt::layer()
+            .json()
+            .with_target(true)
+            .with_ansi(false)
+            .with_current_span(true)
+            .with_span_list(true)
+            .with_writer(writer)
+            .with_filter(filter_fn(|metadata| {
+                metadata.target() == "arcana::telemetry"
+                    || metadata.target().starts_with("arcana::telemetry::")
+            }));
+        let subscriber = Registry::default().with(layer);
+        let context = ToolContext {
+            session_id: "session-memory-observability".into(),
+            working_dir: "/project".into(),
+            call_id: "call-memory-observability".into(),
+            run_id: Some("run-memory-observability".into()),
+            task_id: Some(42),
+            permission_mode: arcana_core::agent::permission::PermissionMode::Autonomous,
+            depth: 0,
+            agent_role: AgentIdentity::supervisor().role,
+            run_token_budget: None,
+        };
+        let tool_result = tracing::subscriber::with_default(subscriber, || {
+            futures::executor::block_on(
+                arcana_core::agent::builtin_tools::search_memory::SearchMemoryTool.execute(
+                    serde_json::json!({
+                        "query": "arcana-observability-private-memory-canary"
+                    }),
+                    &context,
+                ),
+            )
+        });
+        assert!(!tool_result.is_error, "{}", tool_result.output);
+        drop(guard);
+
+        let result =
+            super::read_structured_events(date, Some(10), Some("run-memory-observability".into()))
+                .expect("production Tauri command should read the persisted correlated event");
+        assert_eq!(result.total_lines, 1);
+        let event: serde_json::Value =
+            serde_json::from_str(result.content.trim()).expect("valid persisted telemetry JSON");
+        assert_eq!(event["fields"]["event_type"], "operation_timing");
+        assert_eq!(event["fields"]["operation"], "memory_search_all");
+        assert_eq!(event["fields"]["database"], "memory");
+        assert_eq!(event["fields"]["call_id"], "call-memory-observability");
+        assert_eq!(event["fields"]["run_id"], "run-memory-observability");
+        assert_eq!(event["fields"]["task_id"], "42");
+        assert_eq!(event["fields"]["outcome"], "fallback");
+        assert_eq!(event["fields"]["result_count"], 1);
+        assert!(event["fields"]["duration_ns"].as_u64().unwrap_or_default() > 0);
+        assert!(!result
+            .content
+            .contains("arcana-observability-private-memory-canary"));
+
+        let mut metrics = MetricsAccumulator::default();
+        let metrics = refresh_metrics_from_file_for_correlation(
+            &path,
+            &mut metrics,
+            Some("run-memory-observability"),
+        )
+        .expect("production Logs metrics reader aggregates persisted Memory telemetry");
+        assert_eq!(metrics.total_events, 1);
+        assert_eq!(metrics.outcomes.get("fallback"), Some(&1));
+        let aggregate = metrics
+            .by_event
+            .get("operation_timing")
+            .expect("Memory operation metrics");
+        assert_eq!(aggregate.count, 1);
+        assert_eq!(aggregate.result_count_total, 1);
+        assert_eq!(aggregate.duration_count, 1);
+    }
+
     #[test]
     fn measure_metrics_refresh_tail_and_full_export_on_reproducible_jsonl() {
         use std::io::BufWriter;
