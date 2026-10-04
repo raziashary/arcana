@@ -434,6 +434,65 @@ mod portability_tests {
             .unwrap();
         assert_eq!(count, 0);
     }
+
+    #[tokio::test]
+    async fn legacy_persisted_shell_hook_is_refused_by_production_reader_and_executor() {
+        let directory = tempfile::tempdir().expect("isolated config database directory");
+        let db = HooksDb::open_at(&directory.path().join("config.db"))
+            .expect("open production config database");
+        let action = serde_json::to_string(&HookAction::Shell {
+            command: "echo should-not-run && exit 0".into(),
+            working_dir: None,
+            timeout_secs: Some(2),
+        })
+        .expect("serialize legacy shell action");
+
+        // Insert directly to represent a pre-validator persisted row. New
+        // writes are rejected by HooksDb::insert; this exercises the reader
+        // and runtime guard for data already present on disk.
+        db.conn
+            .execute(
+                "INSERT INTO hooks (id, name, hook_type, enabled, priority, conditions, action)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    "legacy-portability-hook",
+                    "Legacy portability hook",
+                    HookType::PreToolUse.as_str(),
+                    1,
+                    100,
+                    "{}",
+                    action
+                ],
+            )
+            .expect("seed pre-validator persisted hook");
+
+        let hook = db
+            .get("legacy-portability-hook")
+            .expect("read legacy hook through production reader")
+            .expect("legacy hook exists");
+        let context = crate::hooks::types::HookContext {
+            hook_type: HookType::PreToolUse.as_str().into(),
+            timestamp: chrono::Utc::now(),
+            session_id: None,
+            agent_mode: None,
+            tool_call: None,
+            file_path: None,
+            task_id: None,
+            worker_id: None,
+            extra: serde_json::Value::Null,
+        };
+
+        let log = crate::hooks::executor::HookExecutor::execute(&hook, &context).await;
+        assert_eq!(log.outcome, HookOutcome::Failed);
+        assert!(log
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("non-portable shell operator")));
+        assert!(
+            log.output.is_none(),
+            "a refused hook must not spawn its shell"
+        );
+    }
 }
 
 #[cfg(test)]

@@ -6881,3 +6881,11 @@ readback.
 **Proof required.** Concurrent file-backed ladder and TasksDb openers, destructive snapshot preservation and failure rollback, focused regression suites, and a real isolated desktop startup/retention smoke. No task or gate closes from implementation alone.
 
 **0276 verification.** Migration tests pass 18/18 and backup tests 6/6 on Windows and Ubuntu WSL. Windows DB regression passes 213/213; workspace check passes. First-open WAL conversion also needed a lock-only retry bounded by the existing five-second timeout. Legacy repairs reserve a writer only when no caller transaction exists. Canonical snapshot paths preserve Windows extended-length support after unique names exposed a nested-path regression; the real legacy migration test passes. Isolated desktop startup now starts all seven workers without migration failures; `_verify/P4-55-RETENTION-CLOSEOUT-2026-10-04.md` records the smoke.
+
+## ADR-LOG-RESTRUCT-0277 — Exercise persisted workflow portability in the existing host matrix
+
+**Decision.** Add the existing production recipe, skill and hook portability checks to the three-OS build-smoke job. Use Bash with errexit so a failed early Cargo command fails the step on Windows too. Add a persisted legacy-hook regression that reads through HooksDb and reaches the real HookExecutor refusal boundary.
+
+**Reason.** P4-16/TG4-17 cover saved custom content as well as shipped defaults. Existing Windows proof and Linux core proof are insufficient for the desktop skill reader on Linux/macOS. Reuse the established CI matrix and dependency setup rather than inventing a parallel verification route.
+
+**Proof.** Local Windows recipe/skill/hook filters pass; Linux core filters pass, including the new production legacy-hook refusal. CI workflow correctness gates pass 3/3. Remote Linux/macOS desktop results remain required before closing P4-16/TG4-17.
