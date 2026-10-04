@@ -2056,6 +2056,65 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn production_idle_worker_kick_skips_provider_and_records_idle_gate() {
+        ensure_isolated_test_analytics().await;
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        crate::recipes::init().expect("initialize shipped recipes and default workers");
+        let workers = WorkersDb::open().expect("open isolated worker roster");
+        let qc_worker = workers
+            .get_by_slug("qc-agent")
+            .expect("read QC worker")
+            .expect("default QC worker is seeded");
+        workers
+            .update_status(qc_worker.id, WorkerStatus::Idle)
+            .expect("make QC worker runnable");
+
+        let provider = Arc::new(QcInboxProvider::new(&[]));
+        let runner = RecipeRunner::new_with_workspace_override(
+            Arc::new(Mutex::new(crate::state::AppState {
+                active_provider: Some("google".into()),
+                active_model: Some("gemini-3.8-flash".into()),
+                ..crate::state::AppState::default()
+            })),
+            Arc::new(
+                crate::session::manager::SessionManager::new()
+                    .expect("open isolated session manager"),
+            ),
+            crate::agent::permission::new_pending_permissions(),
+            Some(home.path().to_string_lossy().into_owned()),
+        )
+        .with_provider_for_test(provider.clone());
+        let scheduler = RecipeScheduler::new(Arc::new(runner));
+
+        let (_, events) = crate::observability::timing::capture_json_events(|| {
+            scheduler.kick_worker("qc-agent");
+        });
+
+        assert_eq!(
+            provider.request_count(),
+            0,
+            "an empty production push-kick must stop before provider resolution"
+        );
+        assert!(
+            scheduler
+                .kick_handles
+                .lock()
+                .expect("scheduler kick handles lock")
+                .is_empty(),
+            "an idle work gate must not create a worker-run future"
+        );
+        let gate = events
+            .iter()
+            .find(|event| event["fields"]["operation"] == "scheduler_recoverable_work_check")
+            .expect("the production work gate records an observation");
+        assert_eq!(gate["fields"]["worker"], "qc-agent");
+        assert_eq!(gate["fields"]["outcome"], "idle");
+        assert_eq!(gate["fields"]["database"], "tasks");
+        assert!(gate["fields"]["duration_ns"].as_u64().is_some());
+    }
+
     #[test]
     fn startup_and_event_dispatch_gate_records_idle_and_completed_runs() {
         let runtime = tokio::runtime::Builder::new_current_thread()
