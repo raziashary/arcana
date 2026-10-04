@@ -261,3 +261,9 @@ Branch is `main`, upstream is `origin/main`, HEAD observed at start of this cont
 - CI's existing Windows/Linux/macOS build-smoke matrix now runs one focused filter covering the production analytics and hook-log retention races against an active immediate SQLite writer transaction.
 - `cargo test -p arcana-core --lib serializes_with_an_active_database_writer --locked -- --nocapture --test-threads=1` passes 2/2 locally on Windows. Linux and macOS results are pending CI; P4-59/TG4-21 remain open until those runs pass.
 - No P4/TG4 counts changed. The owner Calendar workspace remains untouched.
+
+## Continuation — retention policy confirmation and local suite rerun
+
+- Owner reconfirmed the selected policy: retain 90 days of raw `token_usage`, `system_events`, `api_failures`, and `hook_logs`, keeping monthly summaries where useful. This matches the implemented P4-59 contract and adds no broader deletion scope.
+- `cargo test -p arcana-core --lib retention --locked -- --test-threads=1` passes 17/17 on Windows. It covers exact cutoff, invalid-timestamp refusal, aggregate preservation, active-writer serialization, scheduled cleanup, hook retention/export, and worker-stat monthly coverage.
+- Linux/macOS active-writer CI evidence remains pending; P4-59/TG4-21 stay open. No P4 task/gate count changed and the Calendar workspace was not accessed.
