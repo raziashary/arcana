@@ -274,6 +274,42 @@ mod tests {
         }
     }
 
+    struct PausedProvider {
+        calls: AtomicUsize,
+        started: tokio::sync::mpsc::UnboundedSender<()>,
+        release: tokio::sync::Notify,
+    }
+
+    #[async_trait]
+    impl Provider for PausedProvider {
+        fn id(&self) -> &str {
+            "google"
+        }
+
+        fn name(&self) -> &str {
+            "Gemini"
+        }
+
+        fn models(&self) -> Vec<ModelInfo> {
+            Vec::new()
+        }
+
+        async fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.started.send(()).expect("test observes provider start");
+            self.release.notified().await;
+            Err(ArcanaError::Agent("provider reached".into()))
+        }
+
+        async fn stream(&self, _request: CompletionRequest) -> Result<StreamResult> {
+            Err(ArcanaError::Agent("stream not used by test".into()))
+        }
+
+        async fn test_connection(&self) -> Result<ProviderStatus> {
+            Ok(ProviderStatus::Connected)
+        }
+    }
+
     fn request() -> CompletionRequest {
         CompletionRequest {
             model: "gemini-test".into(),
@@ -499,6 +535,60 @@ mod tests {
             1,
             "revocation must stop the next request"
         );
+
+        drop(db);
+        let _ = std::fs::remove_file(&config);
+        let _ = std::fs::remove_file(config.with_extension("db-wal"));
+        let _ = std::fs::remove_file(config.with_extension("db-shm"));
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[tokio::test]
+    async fn concurrent_revocation_blocks_the_next_request_without_rewriting_in_flight_authorization(
+    ) {
+        let workspace = sandbox();
+        let config = db_path();
+        let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+        let provider = Arc::new(PausedProvider {
+            calls: AtomicUsize::new(0),
+            started: started_tx,
+            release: tokio::sync::Notify::new(),
+        });
+        let wrapped = Arc::new(ConsentProvider::wrap_at(
+            provider.clone(),
+            &workspace,
+            config.clone(),
+        ));
+        let db = WorkspaceEgressConsentDb {
+            conn: config_db::open_at(&config).expect("isolated config db"),
+        };
+        db.grant(&workspace, "provider:google")
+            .expect("grant provider egress");
+
+        let in_flight = {
+            let wrapped = Arc::clone(&wrapped);
+            tokio::spawn(async move { wrapped.complete(request()).await })
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(2), started_rx.recv())
+            .await
+            .expect("authorized call reaches provider")
+            .expect("provider start signal");
+
+        db.revoke(&workspace, "provider:google")
+            .expect("revoke while the authorized request is in flight");
+        assert!(wrapped.complete(request()).await.is_err());
+        assert_eq!(
+            provider.calls.load(Ordering::SeqCst),
+            1,
+            "the request started after revocation must not reach the provider"
+        );
+
+        provider.release.notify_one();
+        assert!(in_flight
+            .await
+            .expect("join already-authorized request")
+            .is_err());
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
 
         drop(db);
         let _ = std::fs::remove_file(&config);

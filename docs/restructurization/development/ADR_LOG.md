@@ -6713,3 +6713,17 @@ readback.
 **Limit.** This proves two episodic Memory reader pairs only. It does not close the full timestamp inventory or TG4-19; remaining database defaults, triggers, and production write/read pairs still require proof.
 
 **Where.** `arcana-core/src/memory/episodic.rs`, P4-57, TG4-19.
+
+## ADR-LOG-RESTRUCT-0265 — Verify concurrent provider-consent revocation
+
+**Status.** Implemented and focused-tested on 2026-10-04.
+
+**Decision.** Keep the existing consent contract: a provider request that passed its persisted authorization check may complete in flight, while a new request must re-read consent and be denied after revocation.
+
+**Reason.** Revocation applies before the next request; it cannot retract data already sent to a provider. A deterministic overlapping-call test makes that boundary explicit and guards against stale wrapper state authorizing later requests.
+
+**Evidence.** `concurrent_revocation_blocks_the_next_request_without_rewriting_in_flight_authorization` pauses a fake provider after the production `ConsentProvider` wrapper authorizes and dispatches a request. It revokes the SQLite grant while that request is paused, proves the next wrapper call does not reach the provider, then releases the original request. `cargo test -p arcana-core --lib concurrent_revocation_blocks_the_next_request_without_rewriting_in_flight_authorization --locked -- --nocapture --test-threads=1` passes 1/1.
+
+**Limit.** This proves the Rust provider-wrapper race only. Live desktop IPC, complete cross-consumer allow/revoke readback, and desktop smoke remain open; P4-60/TG4-16 stay open.
+
+**Where.** `arcana-core/src/egress_consent.rs`, P4-60, TG4-16.
