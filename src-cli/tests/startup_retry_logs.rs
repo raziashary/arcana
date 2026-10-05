@@ -15,6 +15,35 @@ impl Drop for IsolatedHome {
     }
 }
 
+struct SqliteWriterBlocker {
+    release: Option<std::sync::mpsc::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl SqliteWriterBlocker {
+    fn release_and_join(mut self) {
+        if let Some(release) = self.release.take() {
+            let _ = release.send(());
+        }
+        self.thread
+            .take()
+            .expect("writer blocker thread")
+            .join()
+            .expect("writer blocker completed");
+    }
+}
+
+impl Drop for SqliteWriterBlocker {
+    fn drop(&mut self) {
+        if let Some(release) = self.release.take() {
+            let _ = release.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
 // This integration target has one test and its own process: installing the real
 // process-global logger and HOME cannot interfere with another test's subscriber.
 #[tokio::test]
@@ -93,6 +122,51 @@ async fn permanent_worker_startup_event_survives_redaction_and_cli_export() {
         tasks.get_by_id(task.id).unwrap().unwrap().status,
         arcana_core::db::tasks::TaskStatus::Assigned
     );
+
+    // Hold only this fixture's config writer lock. The next actual runner
+    // resolves its configured workspace during setup and waits beyond the
+    // admission window; no provider or tool work can begin.
+    let config_path = home.0.join(".arcana/config.db");
+    drop(arcana_core::db::config_db::open_at(&config_path).unwrap());
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let locker = std::thread::spawn(move || {
+        let connection = arcana_core::db::config_db::open_at(&config_path).unwrap();
+        let transaction = connection.unchecked_transaction().unwrap();
+        transaction
+            .execute_batch("UPDATE app_settings SET value = value")
+            .unwrap();
+        ready_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+        transaction.commit().unwrap();
+    });
+    ready_rx.recv().unwrap();
+    let locker = SqliteWriterBlocker {
+        release: Some(release_tx),
+        thread: Some(locker),
+    };
+    let slow_runner = RecipeRunner::new(
+        Arc::new(Mutex::new(AppState::default())),
+        Arc::new(SessionManager::new().unwrap()),
+        arcana_core::agent::permission::new_pending_permissions(),
+    );
+    let slow_result = slow_runner.run_recipe(&recipe, "worker-backend").await;
+    locker.release_and_join();
+    assert!(
+        slow_result.is_err(),
+        "no workspace is configured in this fixture"
+    );
+    let slow_run = arcana_core::db::runs::RunsDb::open()
+        .unwrap()
+        .latest_worker_tick("worker-backend")
+        .unwrap()
+        .unwrap();
+    assert_ne!(slow_run.run_id, run.run_id);
+    assert_eq!(slow_run.phase, "failed");
+    assert_eq!(
+        tasks.get_by_id(task.id).unwrap().unwrap().status,
+        arcana_core::db::tasks::TaskStatus::Assigned
+    );
     drop(guards);
 
     let exported = home.0.join("logs-export.txt");
@@ -113,7 +187,10 @@ async fn permanent_worker_startup_event_survives_redaction_and_cli_export() {
     let retries = content
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .filter(|event| event["fields"]["event_type"] == "worker_startup_retry")
+        .filter(|event| {
+            event["fields"]["event_type"] == "worker_startup_retry"
+                && event["fields"]["run_id"] == run.run_id
+        })
         .collect::<Vec<_>>();
     assert_eq!(
         retries.len(),
@@ -149,6 +226,27 @@ async fn permanent_worker_startup_event_survives_redaction_and_cli_export() {
     assert_eq!(fields["max_attempts"], 4);
     assert_eq!(fields["outcome"], "permanent_failure");
     assert!(fields["elapsed_ms"].as_u64().is_some());
+    let slow_events = content
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|event| {
+            event["fields"]["event_type"] == "worker_startup_retry"
+                && event["fields"]["run_id"] == slow_run.run_id
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        slow_events.len(),
+        2,
+        "one overrun and one permanent failure"
+    );
+    let overrun = slow_events
+        .iter()
+        .find(|event| event["fields"]["outcome"] == "setup_overrun")
+        .unwrap();
+    assert_eq!(overrun["fields"]["setup_succeeded"], false);
+    assert_eq!(overrun["fields"]["attempt"], 1);
+    assert_eq!(overrun["fields"]["admission_window_ms"], 2000);
+    assert!(overrun["fields"]["elapsed_ms"].as_u64().unwrap() >= 2000);
     assert!(
         !content.contains("missing-selected-workspace"),
         "raw workspace error must not leak"

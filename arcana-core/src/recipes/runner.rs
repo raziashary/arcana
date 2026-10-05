@@ -74,7 +74,9 @@ const RECIPE_TRIGGER: &str =
 const STARTUP_MAX_ATTEMPTS: u32 = 4;
 const STARTUP_RETRY_BASE_MS: u64 = 200;
 const STARTUP_RETRY_MAX_DELAY: Duration = Duration::from_millis(2_200);
-const STARTUP_RETRY_MAX_ELAPSED: Duration = Duration::from_secs(2);
+// Admission window for another setup attempt, not an interrupting deadline
+// for synchronous SQLite/keychain work. Every setup overrun is reported.
+const STARTUP_RETRY_ADMISSION_WINDOW: Duration = Duration::from_secs(2);
 
 fn worker_run_budget(
     worker_slug: &str,
@@ -206,6 +208,22 @@ where
     let started = Instant::now();
     for attempt in 1..=STARTUP_MAX_ATTEMPTS {
         let result = catch_unwind(AssertUnwindSafe(|| prepare()));
+        let elapsed = started.elapsed();
+        if elapsed > STARTUP_RETRY_ADMISSION_WINDOW {
+            tracing::warn!(
+                target: "arcana::telemetry",
+                event_type = "worker_startup_retry",
+                worker = %worker_slug,
+                run_id = %run_id,
+                attempt,
+                max_attempts = STARTUP_MAX_ATTEMPTS,
+                elapsed_ms = elapsed.as_millis() as u64,
+                admission_window_ms = STARTUP_RETRY_ADMISSION_WINDOW.as_millis() as u64,
+                setup_succeeded = matches!(&result, Ok(Ok(_))),
+                outcome = "setup_overrun",
+                "Synchronous worker setup exceeded the retry admission window"
+            );
+        }
         let (value, error, retryable, error_class) = match result {
             Ok(Ok(value)) => (Some(value), None, false, "none"),
             Ok(Err(error)) => {
@@ -243,7 +261,7 @@ where
         let elapsed = started.elapsed();
         if !retryable
             || attempt == STARTUP_MAX_ATTEMPTS
-            || elapsed.saturating_add(delay) > STARTUP_RETRY_MAX_ELAPSED
+            || elapsed.saturating_add(delay) >= STARTUP_RETRY_ADMISSION_WINDOW
         {
             tracing::warn!(
                 target: "arcana::telemetry",
@@ -274,6 +292,23 @@ where
         );
         on_retry(attempt);
         tokio::time::sleep(delay).await;
+        // A scheduled delay may resume late. Recheck before admitting setup,
+        // preserving the original error and never starting a late attempt.
+        if started.elapsed() >= STARTUP_RETRY_ADMISSION_WINDOW {
+            tracing::warn!(
+                target: "arcana::telemetry",
+                event_type = "worker_startup_retry",
+                worker = %worker_slug,
+                run_id = %run_id,
+                attempt,
+                max_attempts = STARTUP_MAX_ATTEMPTS,
+                error_class,
+                outcome = "exhausted",
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "Worker retry admission expired during backoff"
+            );
+            return Err(error);
+        }
     }
     unreachable!("bounded startup attempts always return")
 }
@@ -2778,6 +2813,77 @@ mod startup_retry_tests {
             .all(|event| event["fields"]["max_attempts"] == STARTUP_MAX_ATTEMPTS));
     }
 
+    #[test]
+    fn synchronous_setup_overruns_are_reported_without_another_attempt() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("create current-thread runtime");
+        for succeeds in [true, false] {
+            let mut attempts = 0;
+            let (result, events) = crate::observability::timing::capture_json_events(|| {
+                runtime.block_on(retry_startup_with_state_and_delay(
+                    "test-worker",
+                    "overrun-run",
+                    || {
+                        attempts += 1;
+                        std::thread::sleep(
+                            STARTUP_RETRY_ADMISSION_WINDOW + Duration::from_millis(20),
+                        );
+                        if succeeds {
+                            Ok("prepared")
+                        } else {
+                            Err(transient_startup_error())
+                        }
+                    },
+                    |_| panic!("overrun must not schedule another attempt"),
+                    |_| Duration::ZERO,
+                ))
+            });
+            assert_eq!(result.is_ok(), succeeds);
+            assert_eq!(attempts, 1);
+            let overruns = events
+                .iter()
+                .filter(|event| {
+                    event["fields"]["event_type"] == "worker_startup_retry"
+                        && event["fields"]["outcome"] == "setup_overrun"
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(overruns.len(), 1);
+            assert_eq!(overruns[0]["fields"]["run_id"], "overrun-run");
+            assert_eq!(overruns[0]["fields"]["setup_succeeded"], succeeds);
+            assert!(
+                overruns[0]["fields"]["elapsed_ms"].as_u64().unwrap()
+                    >= STARTUP_RETRY_ADMISSION_WINDOW.as_millis() as u64
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn delayed_backoff_does_not_admit_setup_after_the_window() {
+        let mut attempts = 0;
+        let mut blocker = None;
+        let result = retry_startup_with_state_and_delay(
+            "test-worker",
+            "late-backoff-run",
+            || {
+                attempts += 1;
+                Err::<(), _>(transient_startup_error())
+            },
+            |_| {
+                blocker = Some(tokio::spawn(async {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    std::thread::sleep(STARTUP_RETRY_ADMISSION_WINDOW + Duration::from_millis(20));
+                }));
+            },
+            |_| Duration::from_millis(100),
+        )
+        .await;
+        blocker.unwrap().await.unwrap();
+        assert!(result.is_err());
+        assert_eq!(attempts, 1, "late wake-up must not start another setup");
+    }
+
     #[tokio::test]
     async fn permanent_setup_failure_is_not_retried() {
         let mut attempts = 0;
@@ -2816,7 +2922,7 @@ mod startup_retry_tests {
 
         assert!(result.is_err());
         assert_eq!(attempts, STARTUP_MAX_ATTEMPTS);
-        assert!(started.elapsed() <= STARTUP_RETRY_MAX_ELAPSED);
+        assert!(started.elapsed() <= STARTUP_RETRY_ADMISSION_WINDOW);
     }
 
     #[tokio::test(start_paused = true)]
