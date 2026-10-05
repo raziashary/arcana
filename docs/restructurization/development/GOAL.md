@@ -1,6 +1,6 @@
 # Arcana goal (updated 2026-10-05)
 
-Current continuation (2026-10-05): **P4 38/59 checked; TG4 16/33 passing**.
+Current continuation (2026-10-05): **P4 38/59 checked; TG4 17/33 passing**.
 P4-55/TG4-29, P4-43, P4-40, P4-23/TG4-10/11 and P4-29/TG4-15 are proven. P4-16/TG4-17 and TG4-06 are also proven. Core P4 remains active; 21 tasks
 remain, including owner-run P4-49. The expanded goal stays unread until core
 P4 closes. Claim-safety proof is in

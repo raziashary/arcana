@@ -2555,6 +2555,260 @@ mod tests {
     }
 
     #[test]
+    fn scheduled_loop_retries_transient_workers_db_read_and_runs_saved_qc_recipe() {
+        let analytics_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("create analytics setup runtime");
+        analytics_runtime.block_on(ensure_isolated_test_analytics());
+        drop(analytics_runtime);
+
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        crate::recipes::init().expect("initialize persisted recipes");
+        let tasks = TasksDb::open().expect("open isolated task database");
+        let qc_worker = {
+            let workers = WorkersDb::open().expect("open fixture worker database");
+            let worker = workers
+                .get_by_slug("qc-agent")
+                .expect("read persisted QC worker")
+                .expect("default QC worker is seeded");
+            assert_eq!(worker.recipe_id.as_deref(), Some("qc-dispatcher"));
+            workers
+                .update_status(worker.id, WorkerStatus::Idle)
+                .expect("make the persisted QC worker runnable");
+            worker
+        };
+
+        let workspace = tempfile::tempdir().expect("isolated selected workspace");
+        crate::egress_consent::WorkspaceEgressConsentDb::open()
+            .expect("open isolated egress consent database")
+            .grant(workspace.path(), "provider:google")
+            .expect("grant scripted provider egress for the fixture workspace");
+        let provider = Arc::new(QcInboxProvider::new(&[]));
+        let runner = RecipeRunner::new_with_workspace_override(
+            Arc::new(Mutex::new(crate::state::AppState {
+                active_provider: Some("google".into()),
+                active_model: Some("gemini-3.8-flash".into()),
+                ..crate::state::AppState::default()
+            })),
+            Arc::new(
+                crate::session::manager::SessionManager::new()
+                    .expect("open isolated session manager"),
+            ),
+            crate::agent::permission::new_pending_permissions(),
+            Some(workspace.path().to_string_lossy().into_owned()),
+        )
+        .with_provider_for_test(provider.clone());
+        let scheduler = RecipeScheduler::new(Arc::new(runner));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("create paused-clock scheduler runtime");
+
+        let (_, startup_events) = crate::observability::timing::capture_json_events(|| {
+            runtime.block_on(async {
+                tokio::time::pause();
+                scheduler
+                    .start_worker("qc-agent")
+                    .expect("start the production QC schedule");
+                for _ in 0..32 {
+                    tokio::task::yield_now().await;
+                }
+            })
+        });
+        assert_eq!(
+            provider.request_count(),
+            0,
+            "the startup tick must finish its no-work check before fixture work is added"
+        );
+        assert!(startup_events.iter().any(|event| {
+            event["fields"]["operation"] == "scheduler_recoverable_work_check"
+                && event["fields"]["worker"] == "qc-agent"
+                && event["fields"]["outcome"] == "idle"
+        }));
+
+        let scheduled_handle_id = scheduler
+            .handles
+            .lock()
+            .expect("read scheduled handles")
+            .get("qc-agent")
+            .expect("start_worker retains a schedule handle")
+            .id();
+        let message = tasks
+            .insert_worker_message(
+                "worker-backend",
+                "qc-agent",
+                "Consume this persisted message after the transient DB failure.",
+                "fyi",
+                None,
+            )
+            .expect("insert persisted QC inbox work after startup");
+        let script = QcInboxProvider::new(&[message.id]);
+        *provider
+            .responses
+            .lock()
+            .expect("replace provider script after startup") = script
+            .responses
+            .into_inner()
+            .expect("take scripted provider responses");
+
+        let workers_path = home.path().join(".arcana").join("workers.db");
+        struct WorkerTableFault {
+            connection: rusqlite::Connection,
+            active: bool,
+        }
+        impl WorkerTableFault {
+            fn restore(&mut self) {
+                self.connection
+                    .execute(
+                        "ALTER TABLE workers_temporarily_unavailable RENAME TO workers",
+                        [],
+                    )
+                    .expect("restore the fixture worker table");
+                self.active = false;
+            }
+        }
+        impl Drop for WorkerTableFault {
+            fn drop(&mut self) {
+                if self.active {
+                    let _ = self.connection.execute(
+                        "ALTER TABLE workers_temporarily_unavailable RENAME TO workers",
+                        [],
+                    );
+                }
+            }
+        }
+        let mut fault = WorkerTableFault {
+            connection: rusqlite::Connection::open(&workers_path)
+                .expect("open only the disposable worker database for fault injection"),
+            active: false,
+        };
+        fault
+            .connection
+            .execute(
+                "ALTER TABLE workers RENAME TO workers_temporarily_unavailable",
+                [],
+            )
+            .expect("make the fixture worker table unavailable");
+        fault.active = true;
+        assert!(
+            WorkersDb::open().is_err(),
+            "the scheduled worker-profile read must encounter a real open/read error"
+        );
+
+        let (_, failure_events) = crate::observability::timing::capture_json_events(|| {
+            runtime.block_on(async {
+                tokio::time::advance(Duration::from_secs(310)).await;
+                for _ in 0..32 {
+                    tokio::task::yield_now().await;
+                }
+            });
+        });
+        assert!(
+            failure_events.iter().any(|event| {
+                event["fields"]["message"].as_str().is_some_and(|message| {
+                    message.contains("qc-agent")
+                        && message.contains("status read failed; retaining schedule")
+                })
+            }),
+            "the actual scheduled tick must observe the injected database failure"
+        );
+        assert_eq!(provider.request_count(), 0);
+        {
+            let handles = scheduler
+                .handles
+                .lock()
+                .expect("read schedule after transient database failure");
+            let handle = handles
+                .get("qc-agent")
+                .expect("the same QC schedule remains registered");
+            assert_eq!(handle.id(), scheduled_handle_id);
+            assert!(
+                !handle.is_finished(),
+                "a transient WorkersDb read error must not end the schedule"
+            );
+        }
+
+        fault.restore();
+        drop(fault);
+        let restored_worker = WorkersDb::open()
+            .expect("reopen restored fixture worker database")
+            .get_by_slug("qc-agent")
+            .expect("read restored QC profile")
+            .expect("restore preserved the original QC row");
+        assert_eq!(restored_worker.id, qc_worker.id);
+
+        runtime.block_on(async {
+            // Cron computes its next boundary from wall-clock UTC, which is
+            // not advanced by Tokio's paused clock. The second upcoming
+            // boundary can therefore be up to ten real minutes away.
+            tokio::time::advance(Duration::from_secs(610)).await;
+            let started = std::time::Instant::now();
+            loop {
+                tokio::task::yield_now().await;
+                let acknowledged = tasks
+                    .get_worker_message(message.id)
+                    .unwrap()
+                    .unwrap()
+                    .status
+                    == "acknowledged";
+                let idle = WorkersDb::open()
+                    .unwrap()
+                    .get_by_slug("qc-agent")
+                    .unwrap()
+                    .unwrap()
+                    .status
+                    == WorkerStatus::Idle;
+                if provider.request_count() == 4 && acknowledged && idle {
+                    break;
+                }
+                assert!(
+                    started.elapsed() < Duration::from_secs(30),
+                    "the restored scheduled recipe must finish within the fixture wall deadline"
+                );
+                // Let filesystem/session blocking workers finish without advancing
+                // the paused production clock or admitting another cron tick.
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        });
+        assert_eq!(
+            provider.request_count(),
+            4,
+            "the later scheduled tick must run the persisted QC recipe through its scripted inbox, acknowledgement, queue, and final turns"
+        );
+        assert_eq!(
+            tasks
+                .get_worker_message(message.id)
+                .expect("read persisted QC message after scheduled retry")
+                .expect("fixture message remains persisted")
+                .status,
+            "acknowledged",
+            "the saved QC recipe must consume the real persisted message"
+        );
+        {
+            let handles = scheduler
+                .handles
+                .lock()
+                .expect("read schedule after recovered recipe run");
+            let handle = handles
+                .get("qc-agent")
+                .expect("recovered schedule remains registered");
+            assert_eq!(handle.id(), scheduled_handle_id);
+            assert!(!handle.is_finished());
+        }
+        runtime.block_on(scheduler.shutdown());
+        assert!(
+            scheduler
+                .handles
+                .lock()
+                .expect("verify scheduler cleanup")
+                .is_empty(),
+            "the fixture must join and remove its schedule before cleanup"
+        );
+    }
+
+    #[test]
     fn missing_worker_stops_schedule_but_present_worker_runs() {
         assert_eq!(
             disposition_for_status_read(Ok(None)),
