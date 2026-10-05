@@ -1202,6 +1202,7 @@ async fn run_resolved_command_inner(
     if let Some(timer) = &mut sandbox_timer {
         timer.succeed();
     }
+    drop(sandbox_timer);
     let stdout = child.take_stdout().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::Other,
@@ -1228,6 +1229,7 @@ async fn run_resolved_command_inner(
     if let Some(timer) = &mut process_timer {
         timer.succeed();
     }
+    drop(process_timer);
     let drain_started = std::time::Instant::now();
     let mut drain_timer =
         timing.map(|context| ProjectCommandStageTimer::start("output_drain", context));
@@ -1239,6 +1241,7 @@ async fn run_resolved_command_inner(
     if let Some(timer) = &mut drain_timer {
         timer.succeed();
     }
+    drop(drain_timer);
     let stdout_truncated = stdout_total > stdout.len();
     let stderr_truncated = stderr_total > stderr.len();
     let stdout = String::from_utf8_lossy(&stdout).into_owned();
@@ -2194,7 +2197,7 @@ fn main() {
         assert_eq!(schema["properties"]["timeout_secs"]["maximum"], 7_200);
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     #[test]
     fn production_command_timeout_stops_nested_process_writes_and_records_stage_time() {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -2208,22 +2211,42 @@ fn main() {
                 let descendant_started = workspace.join("descendant-started.txt");
                 let heartbeat = workspace.join("descendant-heartbeat.txt");
                 let late = workspace.join("descendant-late.txt");
-                std::fs::write(
-                    workspace.join("descendant.cmd"),
-                    "@echo off\r\necho started>descendant-started.txt\r\nfor /l %%i in (1,1,100000000) do @echo alive>>descendant-heartbeat.txt\r\necho late>descendant-late.txt\r\n",
-                )
-                .expect("write descendant command");
-                std::fs::write(
-                    workspace.join("parent.cmd"),
-                    "@echo off\r\ncmd.exe /d /c descendant.cmd\r\n",
-                )
-                .expect("write parent command");
-                let command = command::ResolvedCommand {
-                    program: "cmd.exe".into(),
-                    args: ["/d", "/c", "parent.cmd"]
-                        .into_iter()
-                        .map(str::to_owned)
-                        .collect(),
+                #[cfg(windows)]
+                let command = {
+                    std::fs::write(
+                        workspace.join("descendant.cmd"),
+                        "@echo off\r\necho started>descendant-started.txt\r\nfor /l %%i in (1,1,100000000) do @echo alive>>descendant-heartbeat.txt\r\necho late>descendant-late.txt\r\n",
+                    )
+                    .expect("write descendant command");
+                    std::fs::write(
+                        workspace.join("parent.cmd"),
+                        "@echo off\r\ncmd.exe /d /c descendant.cmd\r\n",
+                    )
+                    .expect("write parent command");
+                    command::ResolvedCommand {
+                        program: "cmd.exe".into(),
+                        args: ["/d", "/c", "parent.cmd"]
+                            .into_iter()
+                            .map(str::to_owned)
+                            .collect(),
+                    }
+                };
+                #[cfg(target_os = "linux")]
+                let command = {
+                    std::fs::write(
+                        workspace.join("descendant.py"),
+                        "import pathlib, time\npathlib.Path('descendant-started.txt').write_text('started')\nfor _ in range(10000):\n    with open('descendant-heartbeat.txt', 'a') as output:\n        output.write('alive\\n')\n    time.sleep(0.03)\npathlib.Path('descendant-late.txt').write_text('late')\n",
+                    )
+                    .expect("write descendant script");
+                    std::fs::write(
+                        workspace.join("parent.py"),
+                        "import subprocess, sys\nsubprocess.run([sys.executable, 'descendant.py'], check=True)\n",
+                    )
+                    .expect("write parent script");
+                    command::ResolvedCommand {
+                        program: "python3".into(),
+                        args: vec!["parent.py".into()],
+                    }
                 };
                 let context = ToolContext {
                     session_id: "timeout-stage-session".into(),
@@ -2305,6 +2328,17 @@ fn main() {
             .expect("completed sandbox preparation is timed before cancellation");
         assert_eq!(sandbox_prepare["fields"]["call_id"], "timeout-stage-call");
         assert_eq!(sandbox_prepare["fields"]["outcome"], "success");
+        let stage_position = |stage| {
+            events
+                .iter()
+                .position(|event| {
+                    event["fields"]["event_type"] == "project_command_stage"
+                        && event["fields"]["stage"] == stage
+                })
+                .expect("stage event exists")
+        };
+        assert!(stage_position("sandbox_prepare") < stage_position("process_wait"),
+            "completed preparation must be reported before process wait ends, including cancellation");
     }
 
     #[test]
@@ -2956,6 +2990,123 @@ fn main() {
             "the complete approved mixed batch should authorize QC: {}",
             qc.output
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "measurement-only P4-62 task-attributed cold/warm timing and evidence"]
+    fn p4_62_measure_linux_task_build_stages_with_evidence() {
+        const PROFILES: usize = 3;
+        const WARM_RUNS: usize = 5;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("measurement runtime");
+        let home = tempfile::tempdir().expect("owned measurement profile");
+        let _home = crate::db::test_support::with_home(home.path());
+        let db = crate::db::tasks::TasksDb::open().expect("measurement TasksDb");
+        let mut samples = Vec::new();
+        for profile in 0..PROFILES {
+            let workspace = tempfile::tempdir().expect("fresh cold workspace/cache");
+            std::fs::write(
+                workspace.path().join("pyproject.toml"),
+                "[project]\nname = \"arcana-timing-fixture\"\nversion = \"0.1.0\"\n",
+            )
+            .unwrap();
+            std::fs::write(
+                workspace.path().join("valid.py"),
+                "def valid():\n    return True\n",
+            )
+            .unwrap();
+            let task = db
+                .create(crate::db::tasks::CreateTaskInput {
+                    title: format!("P4-62 matched build profile {profile}"),
+                    description: None,
+                    priority: "p2".into(),
+                    task_type: "feature".into(),
+                    acceptance_criteria: "observed build plus correlated persistence timings"
+                        .into(),
+                    created_by: Some("p4-62-measurement".into()),
+                })
+                .unwrap();
+            db.update_status(task.id, "assigned", Some("worker-backend"))
+                .unwrap();
+            db.claim_task_with_pid(task.id, "worker-backend", std::process::id())
+                .unwrap();
+            for sample in 0..=WARM_RUNS {
+                let context = ToolContext {
+                    session_id: format!("timing-profile-{profile}"),
+                    working_dir: workspace.path().display().to_string(),
+                    call_id: format!("timing-profile-{profile}-sample-{sample}"),
+                    run_id: None,
+                    task_id: Some(task.id),
+                    permission_mode: crate::agent::permission::PermissionMode::Autonomous,
+                    depth: 0,
+                    agent_role: "worker-backend".into(),
+                    run_token_budget: None,
+                };
+                let started = std::time::Instant::now();
+                let (result, events) = crate::observability::timing::capture_json_events(|| {
+                    runtime.block_on(
+                        ProjectCommandTool
+                            .execute(json!({"intent": "build", "toolchain": "python"}), &context),
+                    )
+                });
+                assert!(!result.is_error, "build failed: {}", result.output);
+                let wall_ns = started.elapsed().as_nanos();
+                let batch = db
+                    .latest_project_build_batch_status(task.id)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(batch.0, "passed");
+                assert_eq!((batch.1, batch.2, batch.3), (1, 1, 1));
+                let mut stages = std::collections::BTreeMap::new();
+                for stage in [
+                    "runtime_prepare",
+                    "sandbox_prepare",
+                    "process_wait",
+                    "output_drain",
+                    "evidence_persistence",
+                ] {
+                    let matching = events
+                        .iter()
+                        .filter(|event| {
+                            event["fields"]["event_type"] == "project_command_stage"
+                                && event["fields"]["call_id"] == context.call_id
+                                && event["fields"]["stage"] == stage
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        matching.len(),
+                        1,
+                        "one {stage} event per selected command batch"
+                    );
+                    assert_eq!(matching[0]["fields"]["task_id"], task.id.to_string());
+                    assert_eq!(matching[0]["fields"]["outcome"], "success");
+                    stages.insert(
+                        stage,
+                        matching[0]["fields"]["duration_ns"].as_u64().unwrap(),
+                    );
+                }
+                assert!(
+                    stages
+                        .values()
+                        .map(|duration| u128::from(*duration))
+                        .sum::<u128>()
+                        <= wall_ns,
+                    "sequential stage durations must not count process time twice"
+                );
+                let row = json!({"profile": profile, "sample": sample, "cold": sample == 0,
+                    "wall_ns": wall_ns, "stages_ns": stages});
+                eprintln!("P4-62 observed sample {row}");
+                samples.push(row);
+            }
+            db.update_status(task.id, "done", None)
+                .expect("release the completed measurement task before the next profile");
+        }
+        assert_eq!(samples.len(), PROFILES * (WARM_RUNS + 1));
+        // These are measurements, not a universal latency or speedup guarantee.
+        // Sources stay identical within each profile; warm caches are retained.
     }
 
     #[cfg(windows)]
