@@ -77,6 +77,7 @@ const STARTUP_RETRY_MAX_DELAY: Duration = Duration::from_millis(2_200);
 // Admission window for another setup attempt, not an interrupting deadline
 // for synchronous SQLite/keychain work. Every setup overrun is reported.
 const STARTUP_RETRY_ADMISSION_WINDOW: Duration = Duration::from_secs(2);
+const SUPERVISOR_OUTPUT_TOKEN_LIMIT: u32 = 6_144;
 
 fn worker_run_budget(
     worker_slug: &str,
@@ -89,6 +90,10 @@ fn worker_run_budget(
     } else {
         crate::budget::TaskBudget::default_worker()
     }
+}
+
+fn worker_output_token_limit(worker_slug: &str) -> Option<u32> {
+    (worker_slug == "supervisor").then_some(SUPERVISOR_OUTPUT_TOKEN_LIMIT)
 }
 
 fn startup_retry_delay(retry_number: u32, jitter_seed: u128) -> Duration {
@@ -622,6 +627,10 @@ impl RecipeRunner {
                     worker_slug,
                     self.supervisor_budget_override.as_ref(),
                 ));
+            let engine = match worker_output_token_limit(worker_slug) {
+                Some(limit) => engine.with_output_token_limit(limit),
+                None => engine,
+            };
 
             Ok(Some((engine, working_dir, provider_id.to_owned())))
         }, |attempt| {
@@ -2732,6 +2741,8 @@ mod startup_retry_tests {
             crate::budget::TaskBudget::default_worker(),
             "a Supervisor CLI override must not widen worker run caps"
         );
+        assert_eq!(worker_output_token_limit("supervisor"), Some(6_144));
+        assert_eq!(worker_output_token_limit("worker-backend"), None);
     }
 
     #[test]

@@ -121,6 +121,10 @@ pub struct AgentEngine {
     // Ruflo Feature 4 — Budget Circuit Breaker: set via with_task_budget()
     task_id: Option<i64>,
     task_budget: Option<crate::budget::TaskBudget>,
+    /// Optional host policy ceiling for one generation request. Fleet
+    /// Supervisor runs set this lower than the model's advertised maximum so
+    /// run-token reservations do not reserve an unnecessarily large output.
+    output_token_limit: Option<u32>,
     /// Inherited only by in-process child agents; roots create a fresh ledger
     /// for each run so independent runs do not consume one another's cap.
     run_token_budget: Option<Arc<crate::budget::run_tokens::RunTokenLedger>>,
@@ -162,6 +166,7 @@ impl AgentEngine {
             session_mgr: None,
             task_id: None,
             task_budget: None,
+            output_token_limit: None,
             run_token_budget: None,
             workspace_egress_consent: false,
             procedural_recall: false,
@@ -245,6 +250,11 @@ impl AgentEngine {
     /// autonomously.
     pub fn with_budget(mut self, budget: crate::budget::TaskBudget) -> Self {
         self.task_budget = Some(budget);
+        self
+    }
+
+    pub(crate) fn with_output_token_limit(mut self, limit: u32) -> Self {
+        self.output_token_limit = Some(limit);
         self
     }
 
@@ -716,7 +726,7 @@ impl AgentEngine {
                 // misconfiguration. Clamped rather than errored: the caller
                 // asked for "up to", and every model we ship allows well over
                 // the 8,192 default.
-                max_tokens: 8192.min(caps.max_output),
+                max_tokens: self.output_token_limit.unwrap_or(8192).min(caps.max_output),
                 // P2-27. From the user's saved settings rather than four
                 // hardcoded `None`s.
                 temperature: model_config.as_ref().and_then(|c| c.temperature),
@@ -2926,6 +2936,79 @@ mod procedural_memory_tests {
             provider.requests.lock().expect("request lock").is_empty(),
             "countTokens preflight may run, but the generation stream must not be dispatched"
         );
+    }
+
+    #[tokio::test]
+    async fn output_token_limit_applies_to_budgeted_supervisor_without_changing_workers() {
+        ensure_isolated_test_analytics().await;
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+
+        async fn run_one_turn(
+            identity: super::super::tool_trait::AgentIdentity,
+            session_id: &str,
+            output_limit: Option<u32>,
+            budget: crate::budget::TaskBudget,
+        ) -> u32 {
+            let workspace = tempfile::tempdir().expect("isolated workspace");
+            let provider = scripted_provider("unused");
+            *provider.responses.lock().expect("script response lock") = VecDeque::from([vec![
+                StreamChunk::TextDelta {
+                    text: "finished".into(),
+                    block_index: 0,
+                },
+                StreamChunk::MessageDelta {
+                    stop_reason: "end_turn".into(),
+                    usage: Usage::default(),
+                },
+                StreamChunk::Done,
+            ]]);
+
+            let mut engine = AgentEngine::new(
+                provider.clone(),
+                super::super::permission::PermissionMode::Autonomous,
+                super::super::PAMode::FastDevelopment,
+                Arc::new(Mutex::new(crate::state::AppState::default())),
+                super::super::permission::new_pending_permissions(),
+                identity,
+            )
+            .with_budget(budget);
+            if let Some(limit) = output_limit {
+                engine = engine.with_output_token_limit(limit);
+            }
+
+            engine
+                .run(
+                    session_id,
+                    workspace.path().to_str().expect("workspace path"),
+                    "fixture-model",
+                    Vec::new(),
+                    "Complete this test turn.",
+                    Some("Test instructions."),
+                )
+                .await
+                .expect("scripted one-turn run completes");
+            let max_tokens = provider.requests.lock().expect("request capture lock")[0].max_tokens;
+            max_tokens
+        }
+
+        let supervisor_max_tokens = run_one_turn(
+            super::super::tool_trait::AgentIdentity::supervisor(),
+            "supervisor-output-limit-session",
+            Some(6_144),
+            crate::budget::TaskBudget::default_supervisor(),
+        )
+        .await;
+        let worker_max_tokens = run_one_turn(
+            super::super::tool_trait::AgentIdentity::worker("worker-backend"),
+            "worker-output-limit-session",
+            None,
+            crate::budget::TaskBudget::default_worker(),
+        )
+        .await;
+
+        assert_eq!(supervisor_max_tokens, 6_144);
+        assert_eq!(worker_max_tokens, 8_192);
     }
 
     fn scripted_tool_response(

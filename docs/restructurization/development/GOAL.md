@@ -20,6 +20,12 @@ checkbox closed, the fresh-profile desktop harness still has an initial
 DevTools attach failure, and successful paid CLI Fleet completion remains
 open. The user-owned `P4_EXPANDED_GOAL.md` remains unread until core P4 closes.
 
+The owner approved a 6,144-token output cap for budgeted Supervisor runs after
+the trial's 8,192-token reservation limited admission. RecipeRunner now selects
+the cap for Supervisor only; focused offline request-builder and selection
+tests pass. This changes no checklist count and does not claim a second paid
+run or successful CLI Fleet completion.
+
 2026-10-05 continuation: P4-59 retention reconciliation now passes its focused
 23-test suite on Windows and Ubuntu WSL; the current SQL registry passes 8/8.
 Analytics migrations 6–8 preserve exact open-date session accounting, seal
