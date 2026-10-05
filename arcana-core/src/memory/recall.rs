@@ -524,12 +524,13 @@ pub fn get_stats() -> MemoryStats {
         .with_database("memory");
     let (last_updated, last_updated_ok) = match super::db::MemoryDb::open() {
         Ok(db) => {
-            match db
-                .conn
-                .query_row("SELECT MAX(created_at) FROM episodic_memories", [], |r| {
-                    r.get::<_, Option<String>>(0)
-                }) {
-                Ok(Some(value)) => match value.parse() {
+            match db.conn.query_row(
+                "SELECT created_at FROM episodic_memories
+                     ORDER BY julianday(created_at) DESC, id DESC LIMIT 1",
+                [],
+                |r| r.get::<_, Option<String>>(0),
+            ) {
+                Ok(Some(value)) => match crate::db::timestamps::parse_db_timestamp(&value) {
                     Ok(parsed) => (Some(parsed), true),
                     Err(_) => (None, false),
                 },
@@ -710,6 +711,64 @@ mod observability_tests {
             .expect("aggregate stats operation event");
         assert_eq!(timing["fields"]["result_count"], 5);
         assert_eq!(timing["fields"]["outcome"], "partial");
+    }
+
+    #[test]
+    fn production_stats_reads_legacy_and_mixed_timestamps_by_instant() {
+        use super::{get_stats, EpisodicStore};
+        let home = tempfile::tempdir().expect("isolated Memory profile");
+        let _home_guard = crate::db::test_support::with_home(home.path());
+        let id = EpisodicStore::store_user_message("stats-session", "fixture", None, None)
+            .expect("production episodic writer");
+        let db = super::super::db::MemoryDb::open().expect("migrated Memory DB");
+        let stored: String = db
+            .conn
+            .query_row(
+                "SELECT created_at FROM episodic_memories WHERE id = ?1",
+                [&id],
+                |row| row.get(0),
+            )
+            .expect("read writer timestamp");
+        crate::db::timestamps::parse_db_timestamp(&stored).expect("canonical writer timestamp");
+
+        for later in ["2026-10-05 12:00:00", "2026-10-05T12:00:00.000Z"] {
+            db.conn
+                .execute(
+                    "UPDATE episodic_memories SET created_at = ?1 WHERE id = ?2",
+                    rusqlite::params![later, id],
+                )
+                .expect("legacy/canonical persisted row");
+            let stats = get_stats();
+            assert_eq!(
+                stats.last_updated,
+                Some(crate::db::timestamps::parse_db_timestamp(later).unwrap())
+            );
+        }
+        db.conn
+            .execute(
+                "UPDATE episodic_memories SET created_at = '2026-10-05 12:00:00' WHERE id = ?1",
+                [&id],
+            )
+            .expect("legacy noon row");
+        let earlier =
+            EpisodicStore::store_user_message("stats-session", "earlier fixture", None, None)
+                .expect("second production episodic write");
+        db.conn
+            .execute(
+                "UPDATE episodic_memories SET created_at = '2026-10-05T09:00:00.000Z' WHERE id = ?1",
+                [&earlier],
+            )
+            .expect("canonical earlier row");
+        let events = capture_events(|| {
+            assert_eq!(
+                get_stats().last_updated,
+                Some(crate::db::timestamps::parse_db_timestamp("2026-10-05 12:00:00").unwrap())
+            );
+        });
+        assert!(events
+            .iter()
+            .any(|event| event["fields"]["operation"] == "memory_get_stats"
+                && event["fields"]["outcome"] == "success"));
     }
 
     #[test]

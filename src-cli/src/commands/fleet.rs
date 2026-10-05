@@ -5,10 +5,14 @@
 //! runnable worker recipes, and waits on the task database for the actual
 //! Supervisor/worker/QC lifecycle to finish.
 
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::{anyhow, bail, Context, Result};
 use arcana_core::{
+    analytics::AnalyticsManager,
     db::{
         tasks::{Task, TaskStatus, TasksDb},
         workers::{WorkerStatus, WorkersDb},
@@ -74,7 +78,9 @@ async fn run_epic(args: RunArgs, ctx: OutputContext) -> Result<()> {
         provider: ctx.provider.clone(),
         model: ctx.model.clone(),
         working_dir: ctx.working_dir.clone(),
-        start_analytics_rollup: false,
+        // Fleet is a long-running host, so it owns the same immediate
+        // retention maintenance as the desktop for the lifetime of this run.
+        start_analytics_rollup: true,
         supervisor_budget_override,
         fleet_correlation_id: Some(correlation_id.clone()),
         // The CLI has no prompt responder today. Install intents are denied
@@ -83,6 +89,7 @@ async fn run_epic(args: RunArgs, ctx: OutputContext) -> Result<()> {
     })
     .await
     .context("Could not initialize Arcana's production runtime")?;
+    let _analytics_maintenance = CliAnalyticsMaintenanceGuard(runtime.analytics.clone());
 
     let provider_id = runtime
         .state
@@ -344,6 +351,14 @@ async fn run_epic(args: RunArgs, ctx: OutputContext) -> Result<()> {
             Ok(())
         }
         Err(error) => Err(error),
+    }
+}
+
+struct CliAnalyticsMaintenanceGuard(Arc<AnalyticsManager>);
+
+impl Drop for CliAnalyticsMaintenanceGuard {
+    fn drop(&mut self) {
+        self.0.stop_aggregation_job();
     }
 }
 

@@ -8,9 +8,9 @@ use chrono::{Local, NaiveDate, TimeZone, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 
 const APPEND_ONLY_INVALID_TIMESTAMPS_SQL: &str = "SELECT (SELECT COUNT(*) FROM token_usage WHERE julianday(timestamp) IS NULL) + (SELECT COUNT(*) FROM system_events WHERE julianday(timestamp) IS NULL) + (SELECT COUNT(*) FROM api_failures WHERE julianday(timestamp) IS NULL)";
-const APPEND_ONLY_TOKEN_DAILY_SUMMARY_SQL: &str = "SELECT date(timestamp, 'localtime'), SUM(cost_usd), SUM(total_tokens), COUNT(DISTINCT session_id), COUNT(*), SUM(CASE WHEN request_type = 'tool_use' THEN 1 ELSE 0 END) FROM token_usage WHERE julianday(timestamp) < julianday(?1) GROUP BY date(timestamp, 'localtime')";
-const APPEND_ONLY_PROVIDER_COSTS_SQL: &str = "SELECT date(timestamp, 'localtime'), provider, SUM(cost_usd) FROM token_usage WHERE julianday(timestamp) < julianday(?1) GROUP BY date(timestamp, 'localtime'), provider";
-const APPEND_ONLY_AGENT_COSTS_SQL: &str = "SELECT date(timestamp, 'localtime'), agent_type, SUM(cost_usd) FROM token_usage WHERE julianday(timestamp) < julianday(?1) GROUP BY date(timestamp, 'localtime'), agent_type";
+const APPEND_ONLY_TOKEN_DAILY_SUMMARY_SQL: &str = "SELECT date(timestamp, 'localtime'), SUM(cost_usd), SUM(total_tokens), COUNT(DISTINCT session_id), COUNT(*), SUM(CASE WHEN request_type = 'tool_use' THEN 1 ELSE 0 END) FROM token_usage WHERE julianday(timestamp) < julianday(?1) AND id > COALESCE((SELECT covered_through_token_id FROM daily_cost_summary_coverage WHERE date = date(token_usage.timestamp, 'localtime')), 0) GROUP BY date(timestamp, 'localtime')";
+const APPEND_ONLY_PROVIDER_COSTS_SQL: &str = "SELECT date(timestamp, 'localtime'), provider, SUM(cost_usd) FROM token_usage WHERE julianday(timestamp) < julianday(?1) AND id > COALESCE((SELECT covered_through_token_id FROM daily_cost_summary_coverage WHERE date = date(token_usage.timestamp, 'localtime')), 0) GROUP BY date(timestamp, 'localtime'), provider";
+const APPEND_ONLY_AGENT_COSTS_SQL: &str = "SELECT date(timestamp, 'localtime'), agent_type, SUM(cost_usd) FROM token_usage WHERE julianday(timestamp) < julianday(?1) AND id > COALESCE((SELECT covered_through_token_id FROM daily_cost_summary_coverage WHERE date = date(token_usage.timestamp, 'localtime')), 0) GROUP BY date(timestamp, 'localtime'), agent_type";
 const APPEND_ONLY_PRUNE_TOKEN_USAGE_SQL: &str =
     "DELETE FROM token_usage WHERE julianday(timestamp) < julianday(?1)";
 const APPEND_ONLY_PRUNE_SYSTEM_EVENTS_SQL: &str =
@@ -231,6 +231,208 @@ pub struct WorkerStatsRange {
     pub granularity: &'static str,
 }
 
+fn token_usage_records_for_date(
+    conn: &Connection,
+    date: NaiveDate,
+) -> Result<Vec<TokenUsageRecord>> {
+    let bounds = local_date_range_bounds(&date.to_string(), &date.to_string())
+        .ok_or_else(|| ArcanaError::Agent("Invalid local date for token query".into()))?;
+    let mut stmt = conn
+        .prepare(TOKEN_USAGE_BY_LOCAL_DATE_SQL)
+        .map_err(ArcanaError::Database)?;
+    let rows = stmt
+        .query_map(
+            params![&bounds[0], &bounds[1], &bounds[2], &bounds[3]],
+            |row| {
+                let timestamp = crate::db::timestamps::parse_row_timestamp(row, 1)?;
+                Ok(TokenUsageRecord {
+                    id: row.get(0)?,
+                    timestamp,
+                    session_id: row.get(2)?,
+                    agent_type: row.get(3)?,
+                    provider: row.get(4)?,
+                    model: row.get(5)?,
+                    prompt_tokens: row.get(6)?,
+                    completion_tokens: row.get(7)?,
+                    total_tokens: row.get(8)?,
+                    thinking_tokens: row.get(9)?,
+                    cost_usd: row.get(10)?,
+                    request_type: row.get(11)?,
+                })
+            },
+        )
+        .map_err(ArcanaError::Database)?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(ArcanaError::Database)
+}
+
+fn aggregate_token_usage(
+    date: NaiveDate,
+    records: &[TokenUsageRecord],
+) -> (DailyCostRecord, Option<i64>) {
+    let mut summary = DailyCostRecord {
+        date,
+        total_cost_usd: 0.0,
+        total_tokens: 0,
+        session_count: 0,
+        message_count: 0,
+        tool_call_count: 0,
+        provider_breakdown: HashMap::new(),
+        agent_type_breakdown: HashMap::new(),
+    };
+    let mut sessions = std::collections::HashSet::new();
+    let mut max_id = None;
+    for record in records {
+        summary.total_cost_usd += record.cost_usd;
+        summary.total_tokens += record.total_tokens as i64;
+        summary.message_count += 1;
+        if record.request_type == "tool_use" {
+            summary.tool_call_count += 1;
+        }
+        if sessions.insert(record.session_id.clone()) {
+            summary.session_count += 1;
+        }
+        *summary
+            .provider_breakdown
+            .entry(record.provider.clone())
+            .or_default() += record.cost_usd;
+        *summary
+            .agent_type_breakdown
+            .entry(record.agent_type.clone())
+            .or_default() += record.cost_usd;
+        if let Some(id) = record.id {
+            max_id = Some(max_id.map_or(id, |max: i64| max.max(id)));
+        }
+    }
+    (summary, max_id)
+}
+
+fn daily_cost_records_match(left: &DailyCostRecord, right: &DailyCostRecord) -> bool {
+    fn costs_match(left: &HashMap<String, f64>, right: &HashMap<String, f64>) -> bool {
+        left.len() == right.len()
+            && left.iter().all(|(key, value)| {
+                right
+                    .get(key)
+                    .is_some_and(|other| (value - other).abs() <= 1e-9)
+            })
+    }
+
+    left.date == right.date
+        && (left.total_cost_usd - right.total_cost_usd).abs() <= 1e-9
+        && left.total_tokens == right.total_tokens
+        && left.session_count == right.session_count
+        && left.message_count == right.message_count
+        && left.tool_call_count == right.tool_call_count
+        && costs_match(&left.provider_breakdown, &right.provider_breakdown)
+        && costs_match(&left.agent_type_breakdown, &right.agent_type_breakdown)
+}
+
+fn write_daily_cost_summary(
+    tx: &rusqlite::Transaction<'_>,
+    record: &DailyCostRecord,
+) -> Result<()> {
+    let provider_json =
+        serde_json::to_string(&record.provider_breakdown).unwrap_or_else(|_| "{}".to_string());
+    let agent_json =
+        serde_json::to_string(&record.agent_type_breakdown).unwrap_or_else(|_| "{}".to_string());
+    tx.execute(
+        "INSERT OR REPLACE INTO daily_costs (date, total_cost_usd, total_tokens, session_count,
+         message_count, tool_call_count, provider_breakdown, agent_type_breakdown)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            record.date.to_string(),
+            record.total_cost_usd,
+            record.total_tokens,
+            record.session_count,
+            record.message_count,
+            record.tool_call_count,
+            provider_json,
+            agent_json,
+        ],
+    )
+    .map_err(ArcanaError::Database)?;
+    Ok(())
+}
+
+fn mark_daily_cost_summary_coverage(
+    tx: &rusqlite::Transaction<'_>,
+    date: NaiveDate,
+    covered_through: i64,
+) -> Result<()> {
+    let date = date.to_string();
+    tx.execute(
+        "INSERT INTO daily_cost_summary_coverage (date, covered_through_token_id)
+         VALUES (?1, ?2)
+         ON CONFLICT(date) DO UPDATE SET covered_through_token_id = MAX(
+             daily_cost_summary_coverage.covered_through_token_id,
+             excluded.covered_through_token_id
+         )",
+        params![date, covered_through],
+    )
+    .map_err(ArcanaError::Database)?;
+    tx.execute(
+        "INSERT OR IGNORE INTO daily_cost_summary_sessions (date, session_id)
+         SELECT ?1, session_id FROM token_usage
+          WHERE date(timestamp, 'localtime') = ?1",
+        [&date],
+    )
+    .map_err(ArcanaError::Database)?;
+    Ok(())
+}
+
+fn adopt_verified_legacy_daily_cost_coverage(
+    tx: &rusqlite::Transaction<'_>,
+    date_text: &str,
+) -> Result<bool> {
+    let Ok(date) = NaiveDate::parse_from_str(date_text, "%Y-%m-%d") else {
+        return Ok(false);
+    };
+    let records = token_usage_records_for_date(tx, date)?;
+    if records.is_empty() {
+        return Ok(false);
+    }
+    let (source_summary, Some(covered_through)) = aggregate_token_usage(date, &records) else {
+        return Ok(false);
+    };
+    let stored_summary = tx
+        .query_row(
+            "SELECT total_cost_usd, total_tokens, session_count, message_count,
+                    tool_call_count, provider_breakdown, agent_type_breakdown
+               FROM daily_costs WHERE date = ?1",
+            [date_text],
+            |row| {
+                let provider_json: Option<String> = row.get(5)?;
+                let agent_json: Option<String> = row.get(6)?;
+                Ok(DailyCostRecord {
+                    date,
+                    total_cost_usd: row.get(0)?,
+                    total_tokens: row.get(1)?,
+                    session_count: row.get(2)?,
+                    message_count: row.get(3)?,
+                    tool_call_count: row.get(4)?,
+                    provider_breakdown: provider_json
+                        .as_deref()
+                        .and_then(|json| serde_json::from_str(json).ok())
+                        .unwrap_or_default(),
+                    agent_type_breakdown: agent_json
+                        .as_deref()
+                        .and_then(|json| serde_json::from_str(json).ok())
+                        .unwrap_or_default(),
+                })
+            },
+        )
+        .optional()
+        .map_err(ArcanaError::Database)?;
+    let Some(stored_summary) = stored_summary else {
+        return Ok(false);
+    };
+    if !daily_cost_records_match(&source_summary, &stored_summary) {
+        return Ok(false);
+    }
+    mark_daily_cost_summary_coverage(tx, date, covered_through)?;
+    Ok(true)
+}
+
 impl AnalyticsDb {
     /// Initialize analytics database with schema
     pub async fn new() -> Result<Self> {
@@ -410,6 +612,58 @@ impl AnalyticsDb {
                 ON token_usage(session_id, julianday(timestamp) DESC);
         "#,
         },
+        Migration {
+            version: 6,
+            name: "daily-cost-retention-coverage",
+            sql: r#"
+            -- Coverage is written only by producers that know which source
+            -- snapshot they summarized. Legacy summaries remain unmarked
+            -- because their source-row coverage cannot be reconstructed.
+            CREATE TABLE IF NOT EXISTS daily_cost_summary_coverage (
+                date TEXT PRIMARY KEY,
+                covered_through_token_id INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS daily_cost_summary_sessions (
+                date TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                PRIMARY KEY (date, session_id)
+            );
+        "#,
+        },
+        Migration {
+            version: 7,
+            name: "seal-expired-daily-cost-summaries",
+            sql: r#"
+            CREATE TABLE IF NOT EXISTS daily_cost_summary_sealed (
+                date TEXT PRIMARY KEY,
+                sealed_at TEXT NOT NULL
+            );
+            CREATE TRIGGER IF NOT EXISTS analytics_token_usage_reject_sealed_date
+            BEFORE INSERT ON token_usage
+            WHEN EXISTS (
+                SELECT 1 FROM daily_cost_summary_sealed
+                 WHERE date = date(NEW.timestamp, 'localtime')
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'token usage date is sealed');
+            END;
+        "#,
+        },
+        Migration {
+            version: 8,
+            name: "reject-token-updates-into-sealed-dates",
+            sql: r#"
+            CREATE TRIGGER IF NOT EXISTS analytics_token_usage_reject_sealed_date_update
+            BEFORE UPDATE ON token_usage
+            WHEN EXISTS (
+                SELECT 1 FROM daily_cost_summary_sealed
+                 WHERE date = date(NEW.timestamp, 'localtime')
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'token usage date is sealed');
+            END;
+        "#,
+        },
     ];
 
     async fn migrate(&self) -> Result<()> {
@@ -510,34 +764,77 @@ impl AnalyticsDb {
         let mut operation =
             crate::observability::timing::OperationTimer::start("database_daily_cost_insert")
                 .with_database("analytics");
-        let conn = self
+        let mut conn = self
             .conn
             .lock()
             .map_err(|e| ArcanaError::Agent(format!("Mutex lock failed: {}", e)))?;
-        let provider_json =
-            serde_json::to_string(&record.provider_breakdown).unwrap_or_else(|_| "{}".to_string());
-        let agent_json = serde_json::to_string(&record.agent_type_breakdown)
-            .unwrap_or_else(|_| "{}".to_string());
-
-        conn.execute(
-            "INSERT OR REPLACE INTO daily_costs (date, total_cost_usd, total_tokens, session_count, 
-             message_count, tool_call_count, provider_breakdown, agent_type_breakdown)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            params![
-                record.date.to_string(),
-                record.total_cost_usd,
-                record.total_tokens,
-                record.session_count,
-                record.message_count,
-                record.tool_call_count,
-                provider_json,
-                agent_json,
-            ],
-        ).map_err(|e| ArcanaError::Database(e))?;
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(ArcanaError::Database)?;
+        let source_records = token_usage_records_for_date(&tx, record.date)?;
+        let (source_summary, covered_through) = aggregate_token_usage(record.date, &source_records);
+        write_daily_cost_summary(&tx, record)?;
+        if daily_cost_records_match(&source_summary, record) {
+            if let Some(covered_through) = covered_through {
+                mark_daily_cost_summary_coverage(&tx, record.date, covered_through)?;
+            }
+        } else if !source_records.is_empty() {
+            // A caller-provided summary that does not equal the raw snapshot
+            // cannot establish which source rows it already includes.
+            tx.execute(
+                "DELETE FROM daily_cost_summary_coverage WHERE date = ?1",
+                [record.date.to_string()],
+            )
+            .map_err(ArcanaError::Database)?;
+        }
+        tx.commit().map_err(ArcanaError::Database)?;
 
         operation = operation.with_result_count(1);
         operation.succeed();
         Ok(())
+    }
+
+    /// Recompute and persist a complete local-day summary from one immediate
+    /// transaction snapshot, including the exact token ID boundary covered.
+    pub fn rollup_daily_cost_for_date(&self, date: NaiveDate) -> Result<usize> {
+        let mut operation =
+            OperationTimer::start("database_daily_cost_insert").with_database("analytics");
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| ArcanaError::Agent(format!("Mutex lock failed: {e}")))?;
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(ArcanaError::Database)?;
+        let is_sealed: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM daily_cost_summary_sealed WHERE date = ?1)",
+                [date.to_string()],
+                |row| row.get(0),
+            )
+            .map_err(ArcanaError::Database)?;
+        if is_sealed {
+            return Err(ArcanaError::Agent(format!(
+                "Analytics daily rollup refused sealed date {date}"
+            )));
+        }
+        let records = token_usage_records_for_date(&tx, date)?;
+        if records.is_empty() {
+            tx.commit().map_err(ArcanaError::Database)?;
+            operation = operation.with_result_count(0);
+            operation.succeed();
+            return Ok(0);
+        }
+        let count = records.len();
+        let (summary, covered_through) = aggregate_token_usage(date, &records);
+        write_daily_cost_summary(&tx, &summary)?;
+        if let Some(covered_through) = covered_through {
+            mark_daily_cost_summary_coverage(&tx, date, covered_through)?;
+        }
+        tx.commit().map_err(ArcanaError::Database)?;
+        operation = operation.with_result_count(count);
+        operation.succeed();
+        Ok(count)
     }
 
     pub fn get_daily_cost(&self, date: NaiveDate) -> Result<Option<DailyCostRecord>> {
@@ -842,6 +1139,34 @@ impl AnalyticsDb {
                 "Analytics retention refused rows with invalid timestamps".into(),
             ));
         }
+        let ambiguous_summary_dates = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT DISTINCT daily_costs.date
+                       FROM token_usage
+                       JOIN daily_costs
+                         ON daily_costs.date = date(token_usage.timestamp, 'localtime')
+                       LEFT JOIN daily_cost_summary_coverage
+                         ON daily_cost_summary_coverage.date = daily_costs.date
+                      WHERE julianday(token_usage.timestamp) < julianday(?1)
+                        AND daily_cost_summary_coverage.date IS NULL
+                      ORDER BY daily_costs.date",
+                )
+                .map_err(ArcanaError::Database)?;
+            let rows = stmt
+                .query_map([cutoff], |row| row.get::<_, String>(0))
+                .map_err(ArcanaError::Database)?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(ArcanaError::Database)?
+        };
+        for date in ambiguous_summary_dates {
+            if !adopt_verified_legacy_daily_cost_coverage(&tx, &date)? {
+                return Err(ArcanaError::Agent(
+                    "Analytics retention refused expired token rows with ambiguous daily cost coverage"
+                        .into(),
+                ));
+            }
+        }
 
         struct DailySummary {
             sessions: i64,
@@ -852,6 +1177,21 @@ impl AnalyticsDb {
             provider_costs: HashMap<String, f64>,
             agent_costs: HashMap<String, f64>,
         }
+        // This ledger makes distinct session counts additive across separate
+        // retention runs without counting a session twice.
+        tx.execute(
+            "INSERT OR IGNORE INTO daily_cost_summary_sessions (date, session_id)
+             SELECT date(timestamp, 'localtime'), session_id
+               FROM token_usage
+              WHERE julianday(timestamp) < julianday(?1)
+                AND id > COALESCE((
+                    SELECT covered_through_token_id
+                      FROM daily_cost_summary_coverage
+                     WHERE date = date(token_usage.timestamp, 'localtime')
+                ), 0)",
+            [cutoff],
+        )
+        .map_err(ArcanaError::Database)?;
         let mut daily_summaries = HashMap::<String, DailySummary>::new();
         {
             let mut stmt = tx
@@ -914,7 +1254,7 @@ impl AnalyticsDb {
                 let summary = daily_summaries.get_mut(&date).ok_or_else(|| {
                     ArcanaError::Agent("Analytics retention summary was inconsistent".into())
                 })?;
-                summary.provider_costs.insert(provider, cost);
+                *summary.provider_costs.entry(provider).or_default() += cost;
             }
         }
         {
@@ -940,10 +1280,60 @@ impl AnalyticsDb {
                 let summary = daily_summaries.get_mut(&date).ok_or_else(|| {
                     ArcanaError::Agent("Analytics retention summary was inconsistent".into())
                 })?;
-                summary.agent_costs.insert(agent, cost);
+                *summary.agent_costs.entry(agent).or_default() += cost;
             }
         }
-        for (date, summary) in daily_summaries {
+        for (date, mut summary) in daily_summaries {
+            let existing = tx
+                .query_row(
+                    "SELECT total_cost_usd, total_tokens, message_count, tool_call_count,
+                            provider_breakdown, agent_type_breakdown
+                       FROM daily_costs WHERE date = ?1",
+                    [&date],
+                    |row| {
+                        Ok((
+                            row.get::<_, f64>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, i64>(2)?,
+                            row.get::<_, i64>(3)?,
+                            row.get::<_, Option<String>>(4)?,
+                            row.get::<_, Option<String>>(5)?,
+                        ))
+                    },
+                )
+                .optional()
+                .map_err(ArcanaError::Database)?;
+            let had_existing_summary = existing.is_some();
+            if let Some((cost, tokens, messages, tools, providers, agents)) = existing {
+                summary.total_cost += cost;
+                summary.total_tokens += tokens;
+                summary.message_count += messages;
+                summary.tool_call_count += tools;
+                let providers: HashMap<String, f64> = providers
+                    .as_deref()
+                    .and_then(|json| serde_json::from_str(json).ok())
+                    .unwrap_or_default();
+                let agents: HashMap<String, f64> = agents
+                    .as_deref()
+                    .and_then(|json| serde_json::from_str(json).ok())
+                    .unwrap_or_default();
+                for (provider, value) in providers {
+                    *summary.provider_costs.entry(provider).or_default() += value;
+                }
+                for (agent, value) in agents {
+                    *summary.agent_costs.entry(agent).or_default() += value;
+                }
+            }
+            let tracked_sessions: i64 = tx
+                .query_row(
+                    "SELECT COUNT(*) FROM daily_cost_summary_sessions WHERE date = ?1",
+                    [&date],
+                    |row| row.get(0),
+                )
+                .map_err(ArcanaError::Database)?;
+            // The ledger is the exact union represented by this summary. The
+            // current batch's distinct count may overlap any earlier batch.
+            summary.sessions = tracked_sessions;
             let provider_breakdown = serde_json::to_string(&summary.provider_costs)
                 .map_err(|e| ArcanaError::Agent(format!("Analytics retention summary: {e}")))?;
             let agent_breakdown = serde_json::to_string(&summary.agent_costs)
@@ -965,6 +1355,18 @@ impl AnalyticsDb {
                 ],
             )
             .map_err(ArcanaError::Database)?;
+            if !had_existing_summary {
+                // The rows included in this retention-created summary are
+                // deleted in this same transaction. A zero boundary leaves
+                // any later expired source rows eligible, regardless of ID
+                // ordering relative to their timestamps.
+                tx.execute(
+                    "INSERT OR IGNORE INTO daily_cost_summary_coverage
+                     (date, covered_through_token_id) VALUES (?1, 0)",
+                    [&date],
+                )
+                .map_err(ArcanaError::Database)?;
+            }
         }
 
         let mut deleted = 0usize;
@@ -977,6 +1379,47 @@ impl AnalyticsDb {
         deleted += tx
             .execute(APPEND_ONLY_PRUNE_API_FAILURES_SQL, [cutoff])
             .map_err(ArcanaError::Database)?;
+
+        // Seal only dates with known summary coverage, after every raw token
+        // row for that local date has been removed in this same transaction.
+        // Unmarked ambiguous legacy summaries remain preserved and unsealed.
+        let sealable_dates: Vec<String> = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT c.date
+                       FROM daily_cost_summary_coverage c
+                       JOIN daily_costs d ON d.date = c.date
+                      WHERE c.date < date(?1, 'localtime')
+                        AND NOT EXISTS (
+                            SELECT 1 FROM token_usage t
+                             WHERE date(t.timestamp, 'localtime') = c.date
+                        )",
+                )
+                .map_err(ArcanaError::Database)?;
+            let rows = stmt
+                .query_map([cutoff], |row| row.get(0))
+                .map_err(ArcanaError::Database)?;
+            rows.collect::<std::result::Result<Vec<String>, _>>()
+                .map_err(ArcanaError::Database)?
+        };
+        for date in sealable_dates {
+            tx.execute(
+                "INSERT OR IGNORE INTO daily_cost_summary_sealed (date, sealed_at)
+                 VALUES (?1, ?2)",
+                params![date, cutoff],
+            )
+            .map_err(ArcanaError::Database)?;
+            tx.execute(
+                "DELETE FROM daily_cost_summary_sessions WHERE date = ?1",
+                [&date],
+            )
+            .map_err(ArcanaError::Database)?;
+            tx.execute(
+                "DELETE FROM daily_cost_summary_coverage WHERE date = ?1",
+                [&date],
+            )
+            .map_err(ArcanaError::Database)?;
+        }
         tx.commit().map_err(ArcanaError::Database)?;
         operation = operation.with_result_count(deleted);
         operation.succeed();
@@ -1761,6 +2204,40 @@ mod append_only_retention_tests {
         }
     }
 
+    fn insert_retention_cost_row(
+        db: &AnalyticsDb,
+        timestamp: &str,
+        provider: &str,
+        agent_type: &str,
+    ) {
+        insert_retention_cost_row_for_session(
+            db,
+            timestamp,
+            "retention-session",
+            provider,
+            agent_type,
+        );
+    }
+
+    fn insert_retention_cost_row_for_session(
+        db: &AnalyticsDb,
+        timestamp: &str,
+        session_id: &str,
+        provider: &str,
+        agent_type: &str,
+    ) {
+        db.conn
+            .lock()
+            .expect("analytics connection")
+            .execute(
+                "INSERT INTO token_usage (timestamp, session_id, agent_type, provider, model,
+                     prompt_tokens, completion_tokens, total_tokens, cost_usd, request_type)
+                 VALUES (?1, ?2, ?3, ?4, 'test-model', 2, 3, 5, 0.01, 'chat')",
+                params![timestamp, session_id, agent_type, provider],
+            )
+            .expect("insert retention cost row");
+    }
+
     #[tokio::test]
     async fn append_only_retention_readers_use_populated_timestamp_indexes() {
         let (_directory, db) = database().await;
@@ -1840,6 +2317,409 @@ mod append_only_retention_tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn advancing_retention_cutoffs_preserve_a_days_complete_cost_history() {
+        assert_advancing_retention_preserves_history(false).await;
+    }
+
+    #[tokio::test]
+    async fn advancing_retention_does_not_replace_a_preexisting_full_day_summary() {
+        assert_advancing_retention_preserves_history(true).await;
+    }
+
+    async fn assert_advancing_retention_preserves_history(preexisting_summary: bool) {
+        let (_directory, db) = database().await;
+        let first = chrono::Local::now()
+            .date_naive()
+            .and_hms_opt(12, 0, 0)
+            .expect("local noon")
+            .and_local_timezone(chrono::Local)
+            .single()
+            .expect("unambiguous local noon")
+            .with_timezone(&Utc);
+        let second = first + chrono::Duration::hours(1);
+        insert_retention_cost_row(&db, &first.to_rfc3339(), "google", "worker");
+        insert_retention_cost_row(&db, &second.to_rfc3339(), "anthropic", "planner");
+        let date = first.with_timezone(&chrono::Local).date_naive();
+        if preexisting_summary {
+            db.insert_daily_cost(&DailyCostRecord {
+                date,
+                total_cost_usd: 0.02,
+                total_tokens: 10,
+                session_count: 1,
+                message_count: 2,
+                tool_call_count: 0,
+                provider_breakdown: HashMap::from([
+                    ("google".into(), 0.01),
+                    ("anthropic".into(), 0.01),
+                ]),
+                agent_type_breakdown: HashMap::from([
+                    ("worker".into(), 0.01),
+                    ("planner".into(), 0.01),
+                ]),
+            })
+            .expect("production full-day summary writer");
+        }
+        assert_eq!(
+            db.prune_append_only_before(&(first + chrono::Duration::minutes(30)).to_rfc3339())
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.prune_append_only_before(&(second + chrono::Duration::minutes(30)).to_rfc3339())
+                .unwrap(),
+            1
+        );
+        let summaries = db
+            .get_daily_costs_range(date, date)
+            .expect("production history reader");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(
+            summaries[0].total_tokens, 10,
+            "both removed batches remain represented"
+        );
+        assert!((summaries[0].total_cost_usd - 0.02).abs() < 1e-12);
+        assert_eq!(summaries[0].message_count, 2);
+        assert_eq!(summaries[0].tool_call_count, 0);
+        assert_eq!(summaries[0].provider_breakdown["google"], 0.01);
+        assert_eq!(summaries[0].provider_breakdown["anthropic"], 0.01);
+        assert_eq!(summaries[0].agent_type_breakdown["worker"], 0.01);
+        assert_eq!(summaries[0].agent_type_breakdown["planner"], 0.01);
+        assert_eq!(
+            summaries[0].session_count, 1,
+            "same session is not counted twice across pruning batches"
+        );
+        assert_eq!(
+            db.prune_append_only_before(&(second + chrono::Duration::minutes(30)).to_rfc3339())
+                .unwrap(),
+            0
+        );
+        let after_repeat = db.get_daily_costs_range(date, date).unwrap();
+        assert_eq!(after_repeat[0].total_tokens, 10);
+    }
+
+    #[tokio::test]
+    async fn daily_summary_coverage_leaves_later_rows_for_retention_reconciliation() {
+        let (_directory, db) = database().await;
+        let first = chrono::Local::now()
+            .date_naive()
+            .and_hms_opt(12, 0, 0)
+            .expect("local noon")
+            .and_local_timezone(chrono::Local)
+            .single()
+            .expect("unambiguous local noon")
+            .with_timezone(&Utc);
+        let second = first + chrono::Duration::hours(1);
+        let date = first.with_timezone(&chrono::Local).date_naive();
+        insert_retention_cost_row(&db, &first.to_rfc3339(), "google", "worker");
+        assert_eq!(
+            db.rollup_daily_cost_for_date(date)
+                .expect("atomically roll up the first source snapshot"),
+            1
+        );
+        insert_retention_cost_row(&db, &second.to_rfc3339(), "anthropic", "planner");
+
+        assert_eq!(
+            db.prune_append_only_before(&(second + chrono::Duration::minutes(30)).to_rfc3339())
+                .expect("reconcile source rows inserted after the daily rollup"),
+            2
+        );
+        let summary = db
+            .get_daily_costs_range(date, date)
+            .expect("read reconciled daily costs")
+            .pop()
+            .expect("daily cost summary remains available");
+        assert_eq!(summary.total_tokens, 10);
+        assert_eq!(summary.message_count, 2);
+        assert_eq!(summary.session_count, 1);
+        assert_eq!(summary.provider_breakdown["google"], 0.01);
+        assert_eq!(summary.provider_breakdown["anthropic"], 0.01);
+        assert_eq!(summary.agent_type_breakdown["worker"], 0.01);
+        assert_eq!(summary.agent_type_breakdown["planner"], 0.01);
+    }
+
+    #[tokio::test]
+    async fn retention_session_count_uses_the_union_of_prior_and_batch_sessions() {
+        let (_directory, db) = database().await;
+        let first = chrono::Local::now()
+            .date_naive()
+            .and_hms_opt(12, 0, 0)
+            .expect("local noon")
+            .and_local_timezone(chrono::Local)
+            .single()
+            .expect("unambiguous local noon")
+            .with_timezone(&Utc);
+        let date = first.with_timezone(&chrono::Local).date_naive();
+        let prior_b = first + chrono::Duration::minutes(5);
+        let batch_a = first + chrono::Duration::hours(1);
+        let batch_b = first + chrono::Duration::hours(1) + chrono::Duration::minutes(5);
+        let batch_c = first + chrono::Duration::hours(1) + chrono::Duration::minutes(10);
+        insert_retention_cost_row_for_session(
+            &db,
+            &first.to_rfc3339(),
+            "session-a",
+            "google",
+            "worker",
+        );
+        insert_retention_cost_row_for_session(
+            &db,
+            &prior_b.to_rfc3339(),
+            "session-b",
+            "google",
+            "worker",
+        );
+        assert_eq!(
+            db.rollup_daily_cost_for_date(date)
+                .expect("roll up the initial two-session snapshot"),
+            2
+        );
+        for (timestamp, session) in [
+            (&batch_a, "session-a"),
+            (&batch_b, "session-b"),
+            (&batch_c, "session-c"),
+        ] {
+            insert_retention_cost_row_for_session(
+                &db,
+                &timestamp.to_rfc3339(),
+                session,
+                "anthropic",
+                "planner",
+            );
+        }
+
+        assert_eq!(
+            db.prune_append_only_before(&(batch_c + chrono::Duration::minutes(30)).to_rfc3339())
+                .expect("reconcile the later three-message batch"),
+            5
+        );
+        let summary = db
+            .get_daily_cost(date)
+            .expect("read retained daily summary")
+            .expect("daily summary remains available");
+        assert_eq!(summary.message_count, 5);
+        assert_eq!(summary.session_count, 3);
+    }
+
+    #[tokio::test]
+    async fn retention_seals_expired_dates_and_expires_session_ids() {
+        let (_directory, db) = database().await;
+        let date = Local::now().date_naive() - chrono::Duration::days(1);
+        let timestamp = local_boundary_utc(date)
+            .expect("local date boundary")
+            .checked_add_signed(chrono::Duration::hours(12))
+            .expect("local noon")
+            .to_rfc3339();
+        let cutoff = local_boundary_utc(date.succ_opt().expect("next date"))
+            .expect("next local date boundary")
+            .to_rfc3339();
+        insert_retention_cost_row_for_session(
+            &db,
+            &timestamp,
+            "expired-session",
+            "google",
+            "worker",
+        );
+        assert_eq!(
+            db.rollup_daily_cost_for_date(date)
+                .expect("roll up the date before sealing"),
+            1
+        );
+
+        assert_eq!(
+            db.prune_append_only_before(&cutoff)
+                .expect("prune and seal the fully expired date"),
+            1
+        );
+        let summary = db
+            .get_daily_cost(date)
+            .expect("read retained summary")
+            .expect("daily summary remains after sealing");
+        assert_eq!(summary.total_tokens, 5);
+        assert_eq!(summary.session_count, 1);
+        {
+            let conn = db.conn.lock().expect("analytics connection");
+            let raw_rows: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM token_usage WHERE date(timestamp, 'localtime') = ?1",
+                    [date.to_string()],
+                    |row| row.get(0),
+                )
+                .expect("count remaining source rows");
+            let session_ids: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM daily_cost_summary_sessions WHERE date = ?1",
+                    [date.to_string()],
+                    |row| row.get(0),
+                )
+                .expect("count retained session identifiers");
+            let coverage: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM daily_cost_summary_coverage WHERE date = ?1",
+                    [date.to_string()],
+                    |row| row.get(0),
+                )
+                .expect("count retained source watermarks");
+            let sealed: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM daily_cost_summary_sealed WHERE date = ?1",
+                    [date.to_string()],
+                    |row| row.get(0),
+                )
+                .expect("check persisted sealed marker");
+            assert_eq!(raw_rows, 0);
+            assert_eq!(session_ids, 0);
+            assert_eq!(coverage, 0);
+            assert_eq!(sealed, 1);
+
+            let direct_insert = conn.execute(
+                "INSERT INTO token_usage (timestamp, session_id, agent_type, provider, model,
+                     prompt_tokens, completion_tokens, total_tokens, cost_usd, request_type)
+                 VALUES (?1, 'late-session', 'worker', 'google', 'test-model', 1, 1, 2,
+                         0.01, 'chat')",
+                [&timestamp],
+            );
+            assert!(direct_insert.is_err(), "database trigger rejects late rows");
+
+            let current_timestamp = Utc::now().to_rfc3339();
+            conn.execute(
+                "INSERT INTO token_usage (timestamp, session_id, agent_type, provider, model,
+                     prompt_tokens, completion_tokens, total_tokens, cost_usd, request_type)
+                 VALUES (?1, 'movable-session', 'worker', 'google', 'test-model', 1, 1, 2,
+                         0.01, 'chat')",
+                [&current_timestamp],
+            )
+            .expect("insert a row on an unsealed date");
+            let movable_id = conn.last_insert_rowid();
+            let direct_update = conn.execute(
+                "UPDATE token_usage SET timestamp = ?1 WHERE id = ?2",
+                rusqlite::params![&timestamp, movable_id],
+            );
+            assert!(
+                direct_update.is_err(),
+                "database trigger rejects moving a row into a sealed date"
+            );
+        }
+        let rollup_error = db
+            .rollup_daily_cost_for_date(date)
+            .expect_err("rollup API refuses sealed dates");
+        assert!(rollup_error.to_string().contains("sealed date"));
+    }
+
+    #[tokio::test]
+    async fn stale_daily_summary_refuses_to_claim_uncovered_source_rows() {
+        let (_directory, db) = database().await;
+        let first = chrono::Local::now()
+            .date_naive()
+            .and_hms_opt(12, 0, 0)
+            .expect("local noon")
+            .and_local_timezone(chrono::Local)
+            .single()
+            .expect("unambiguous local noon")
+            .with_timezone(&Utc);
+        let second = first + chrono::Duration::hours(1);
+        let date = first.with_timezone(&chrono::Local).date_naive();
+        insert_retention_cost_row(&db, &first.to_rfc3339(), "google", "worker");
+        insert_retention_cost_row(&db, &second.to_rfc3339(), "anthropic", "planner");
+        db.insert_daily_cost(&DailyCostRecord {
+            date,
+            total_cost_usd: 0.01,
+            total_tokens: 5,
+            session_count: 1,
+            message_count: 1,
+            tool_call_count: 0,
+            provider_breakdown: HashMap::from([("google".into(), 0.01)]),
+            agent_type_breakdown: HashMap::from([("worker".into(), 0.01)]),
+        })
+        .expect("persist stale caller-provided summary without claiming coverage");
+
+        assert!(db
+            .prune_append_only_before(&(second + chrono::Duration::minutes(30)).to_rfc3339())
+            .is_err());
+        let remaining: i64 = db
+            .conn
+            .lock()
+            .expect("analytics connection")
+            .query_row("SELECT COUNT(*) FROM token_usage", [], |row| row.get(0))
+            .expect("read rows retained after fail-closed refusal");
+        assert_eq!(remaining, 2);
+    }
+
+    #[tokio::test]
+    async fn partial_legacy_daily_summary_refuses_to_guess_coverage() {
+        let directory = tempfile::tempdir().expect("owned legacy analytics profile");
+        let path = directory.path().join("analytics.db");
+        let conn = Connection::open(&path).expect("legacy analytics file");
+        migrate::run_ladder(&conn, "analytics.db", &AnalyticsDb::LADDER[..1])
+            .expect("production baseline migration");
+        conn.execute_batch(
+            "INSERT INTO token_usage (timestamp,session_id,agent_type,provider,model,prompt_tokens,completion_tokens,total_tokens,cost_usd,request_type)
+             VALUES ('2026-07-06T12:00:00Z','session-a','worker','google','model',2,3,5,0.01,'chat'),
+                    ('2026-07-06T13:00:00Z','session-b','planner','anthropic','model',2,3,5,0.01,'chat');
+             INSERT INTO daily_costs (date,total_cost_usd,total_tokens,session_count,message_count,tool_call_count,provider_breakdown,agent_type_breakdown)
+             VALUES ('2026-07-06',0.01,5,1,1,0,'{\"google\":0.01}','{\"worker\":0.01}');",
+        )
+        .expect("create ambiguous partial legacy summary");
+        drop(conn);
+
+        let db = AnalyticsDb::new_at(&path)
+            .await
+            .expect("production latest-schema opener preserves ambiguous summary");
+        assert!(db.prune_append_only_before("2026-07-07T00:00:00Z").is_err());
+        let (raw_count, summary_tokens): (i64, i64) = db
+            .conn
+            .lock()
+            .expect("analytics connection")
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM token_usage),
+                        (SELECT total_tokens FROM daily_costs WHERE date = '2026-07-06')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("verify fail-closed legacy preservation");
+        assert_eq!((raw_count, summary_tokens), (2, 5));
+    }
+
+    #[tokio::test]
+    async fn complete_legacy_daily_summary_is_adopted_before_pruning() {
+        let directory = tempfile::tempdir().expect("owned legacy analytics profile");
+        let path = directory.path().join("analytics.db");
+        let conn = Connection::open(&path).expect("legacy analytics file");
+        migrate::run_ladder(&conn, "analytics.db", &AnalyticsDb::LADDER[..1])
+            .expect("production baseline migration");
+        conn.execute_batch(
+            "INSERT INTO token_usage (timestamp,session_id,agent_type,provider,model,prompt_tokens,completion_tokens,total_tokens,cost_usd,request_type)
+             VALUES ('2026-07-06T12:00:00Z','session-a','worker','google','model',2,3,5,0.01,'chat'),
+                    ('2026-07-06T13:00:00Z','session-b','planner','anthropic','model',2,3,5,0.01,'chat');
+             INSERT INTO daily_costs (date,total_cost_usd,total_tokens,session_count,message_count,tool_call_count,provider_breakdown,agent_type_breakdown)
+             VALUES ('2026-07-06',0.02,10,2,2,0,'{\"google\":0.01,\"anthropic\":0.01}','{\"worker\":0.01,\"planner\":0.01}');",
+        )
+        .expect("create complete legacy summary");
+        drop(conn);
+
+        let db = AnalyticsDb::new_at(&path)
+            .await
+            .expect("production latest-schema opener");
+        assert_eq!(
+            db.prune_append_only_before("2026-07-07T00:00:00Z")
+                .expect("adopt only the legacy summary matching all live source aggregates"),
+            2
+        );
+        let summary = db
+            .get_daily_costs_range(
+                NaiveDate::from_ymd_opt(2026, 7, 6).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 7, 6).unwrap(),
+            )
+            .expect("read adopted legacy summary")
+            .pop()
+            .expect("legacy cost row remains available");
+        assert_eq!(summary.total_tokens, 10);
+        assert_eq!(summary.session_count, 2);
+        assert_eq!(summary.provider_breakdown["google"], 0.01);
+        assert_eq!(summary.provider_breakdown["anthropic"], 0.01);
+        assert_eq!(summary.agent_type_breakdown["worker"], 0.01);
+        assert_eq!(summary.agent_type_breakdown["planner"], 0.01);
     }
 
     #[tokio::test]

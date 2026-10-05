@@ -14,6 +14,7 @@
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { parseDbTimestamp } from '../utils/dbTime'
 
 // ─── Types (mirror Rust WorkerMessage struct) ────────────────────────────────
 
@@ -83,7 +84,11 @@ export const useWorkerChatStore = create<WorkerChatState>((set, get) => ({
     try {
       const recent = await invoke<WorkerMessage[]>('list_recent_worker_messages', { limit: 200 })
       // Sort oldest-first for chat-style rendering.
-      const sorted = [...recent].sort((a, b) => a.created_at.localeCompare(b.created_at))
+      const sorted = [...recent].sort((a, b) => {
+        const aTime = parseDbTimestamp(a.created_at)?.getTime() ?? 0
+        const bTime = parseDbTimestamp(b.created_at)?.getTime() ?? 0
+        return aTime - bTime || a.id - b.id
+      })
       set({ messages: sorted })
     } catch (err) {
       console.error('[workerChatStore] hydrate: list_recent_worker_messages failed:', err)

@@ -947,3 +947,20 @@ Current 2026-10-04 checkpoint: P4-55/TG4-29 closed with real isolated desktop st
 2026-10-05 resumed audit: HEAD 0926c6f is pushed; core tally 37/59, TG4 14/33. Fresh Luna High reports identify actual timestamp reader defects (Memory stats, Runs chronology/owner, Fleet Chat) and partial daily-cost overwrite during pruning; main-session regressions reproduce them. Tests remain dirty/red pending owner disposition, not phase proof. CLI Fleet cleanup currently disabled: earlier desktop+CLI lifecycle narrative corrected. Populated-file migration proof is a separate unit. Details/answers pending in the 2026-10-05 checkpoint; expanded goal stays unread.
 
 2026-10-05 verified checkpoint: populated analytics/config upgrades pass Windows/Linux 2/2 and are committed as 0df119a. Workflow portability closes on Windows/Linux/macOS. Sandbox corpus fails on Windows CI without processmodel.dll (OS error 126), and macOS correctly refuses execution pending the signed XPC runner. These are distinct from the passing TG4-17 gate. Timestamp/cost-history fixes, startup deadline, correlation UUID and live smoke owner decisions remain pending.
+
+## Paused 2026-10-05 desktop-consent checkpoint
+
+Goal paused by owner; main/origin main at 186737a. Current tally 38/59 P4, 17/33 TG4. Real native Settings grant/restart/workspace/revoke and denied structural diff scenario passed three times; provider method matrix passed Windows/Linux 6/6. Full desktop harness still fails its first fresh-profile native session (DevToolsActivePort missing); explicit-port diagnostic was deliberately stopped, not proven. Driver install is approved and completed locally in ignored target/e2e-tools. Consent changes remain uncommitted alongside separately known-red chronology/retention regressions. Resume exact steps, raw evidence, remaining decisions and process cleanup are in _verify/P4-SESSION-CHECKPOINT-2026-10-05.md, final Paused checkpoint section. Expanded goal unread; owner Calendar untouched. No test listener remains.
+
+## P4 resumed after desktop-consent checkpoint — 2026-10-05
+
+Owner resumed the active core-P4 goal. Current tally is unchanged at 38/59 P4
+and 17/33 TG4. P4-59 exact-session retention now seals dates after raw rows are
+pruned and expires per-session IDs; additive SQLite migration 8 also blocks
+updates that would move a retained row into a sealed date. Focused retention
+tests pass 23/23 on Windows and Ubuntu WSL; P4-58 registry passes 8/8. CLI
+Fleet now owns this maintenance while it runs and stops/joins the thread on
+return. P4-57 focused RunsDb and Memory timestamp regressions pass on Windows.
+Details and remaining limits are in `_verify/P4-SESSION-CHECKPOINT-2026-10-05.md`
+and the current plan/gate/matrix. macOS retention matrix and full TG4-21/TG4-19
+coverage remain open; expanded goal is unread and Calendar was untouched.

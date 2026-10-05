@@ -8,6 +8,16 @@ P4 closes. Claim-safety proof is in
 strict sandbox corpus and successful CLI Fleet completion remain open. Earlier
 dated status entries below are historical snapshots.
 
+2026-10-05 continuation: P4-59 retention reconciliation now passes its focused
+23-test suite on Windows and Ubuntu WSL; the current SQL registry passes 8/8.
+Analytics migrations 6–8 preserve exact open-date session accounting, seal
+pruned dates, and reject both direct inserts and timestamp updates into sealed
+dates. CLI Fleet now owns the same maintenance job during its run and stops it
+on return. P4-59/TG4-21 stay open pending remaining cross-platform/full-gate
+proof. Selected P4-57 timestamp-reader regressions pass on Windows; full
+TG4-19 inventory and cross-platform properties remain open. Overall counts do
+not change.
+
 Build Arcana as a personal desktop coding harness: Arcana owns deterministic,
 observable, and safe execution where rules are knowable, while models provide
 judgment and code generation where intelligence is needed. Use the in-process
@@ -1036,3 +1046,7 @@ P4-58/TG4-20 correction: the new session-token query fingerprint is registered w
 P4 remains active and incomplete at 33/59 tracked tasks with TG4 11/33. Recent verified implementation commits pushed to `main` are `a14cf6f` (Memory recency), `161283e` (retention query inventory), `6fd6926` (phase checkpoint), `d2f833b` (semantic Memory chronology), `e4fd313` (worker communication timestamp readback), `dc8fcc2` (build-evidence timestamp readback), and `2cc7bd6` (Linux fail-closed Ruff/sandbox test portability). The P4-58 query registry passes 8/8; focused Windows retention and timestamp tests pass. WSL Ubuntu has user-scoped Rust 1.99 and native build prerequisites; Linux retention passes 19/19, the selected production timestamp readers pass 9/9, and focused Landlock, structured Ruff-refusal, and timestamp-helper property tests pass. Linux/macOS broader sandbox and production-corpus evidence remains open. P4-57/TG4-19 remains partial; P4-59/TG4-21 remains open pending macOS matrix evidence and broader proof. The full core suite is still red at the 2026-10-04 baseline (959 passed, 2 Windows Clippy canonicalization failures, 1 ignored). Three isolated CLI runs with the current verified Gemini key recorded production consent and telemetry behavior but all stopped before child tasks because conservative reservation or provider quota rejected decomposition; no later provider attempt is warranted until quota availability changes. The owner Calendar acceptance remains unrun. Read the expanded P4 goal after core P4 closes.
 
 2026-10-04 P4-55/TG4-29 closed after real desktop startup/retention/export/shutdown proof and the owner-approved concurrent migration fix (ADR-0276). Core P4 is 33/59; TG4 is 11/33. Next: remaining core P4 work, including the discovered fixed-label JSONL redaction defect, cross-platform workflow proof, sandbox/copy-back, successful CLI Fleet and recovery/observability contracts. Expanded goal remains unread and owner Calendar remains unrun.
+
+## Owner pause — 2026-10-05
+
+Goal is PAUSED. Resume core P4 from the final Paused checkpoint section of _verify/P4-SESSION-CHECKPOINT-2026-10-05.md. Current tally 38/59 tasks, 17/33 TG4 gates; the latest desktop consent proof is partial and dirty, with the first fresh-profile WebDriver session still failing. No new commit/push in that slice. Pending owner decisions remain pending; no live API spend or Calendar access. Expanded goal remains unread until core engineering closure.

@@ -208,12 +208,12 @@ const LATEST_WORKER_TICK_BY_SLUG_SQL: &str =
                  FROM worker_run_state s
                  JOIN runs r ON r.id = s.run_id
                  WHERE s.worker_slug = ?1
-                 ORDER BY r.started_at DESC, r.rowid DESC LIMIT 1";
+                 ORDER BY julianday(r.started_at) DESC, r.id DESC LIMIT 1";
 
 const LATEST_WORKER_RUN_OWNER_SQL: &str = "SELECT s.run_id, r.host, r.pid, s.phase, r.outcome
      FROM worker_run_state s JOIN runs r ON r.id = s.run_id
      WHERE s.worker_slug = ?1
-     ORDER BY r.started_at DESC, r.rowid DESC LIMIT 1";
+     ORDER BY julianday(r.started_at) DESC, r.id DESC LIMIT 1";
 
 const LATEST_WORKER_TICKS_SQL: &str =
     "SELECT s.run_id, s.worker_slug, s.session_id, s.phase, s.task_id,
@@ -225,9 +225,9 @@ const LATEST_WORKER_TICKS_SQL: &str =
          SELECT s2.run_id FROM worker_run_state s2
          JOIN runs r2 ON r2.id = s2.run_id
          WHERE s2.worker_slug = s.worker_slug
-         ORDER BY r2.started_at DESC, r2.rowid DESC LIMIT 1
+         ORDER BY julianday(r2.started_at) DESC, r2.id DESC LIMIT 1
      )
-     ORDER BY r.started_at DESC, r.rowid DESC LIMIT ?1";
+     ORDER BY julianday(r.started_at) DESC, r.id DESC LIMIT ?1";
 
 const RECENT_WORKER_PROGRESS_SQL: &str =
     "SELECT event_at, operation, outcome FROM worker_run_events
@@ -284,7 +284,8 @@ const ACTIVE_WORKER_OPERATION_SQL: &str = r#"
 
 const OPEN_RUNS_SQL: &str = "SELECT id, kind, actor, started_at, ended_at, outcome, host, pid,
             parent_run_id, detail
-     FROM runs WHERE outcome IS NULL ORDER BY started_at ASC";
+     FROM runs INDEXED BY idx_runs_open_instant WHERE outcome IS NULL
+     ORDER BY julianday(started_at) ASC, id ASC";
 
 const INTERRUPT_WORKER_TICKS_SQL: &str = "SELECT s.run_id FROM worker_run_state s
                      JOIN runs r ON r.id = s.run_id
@@ -516,6 +517,17 @@ const LADDER: &[Migration] = &[
             CREATE INDEX idx_operation_journal_task_cursor
                 ON operation_journal(task_id, id DESC)
                 WHERE record_type = 'intent' AND task_id IS NOT NULL;
+        "#,
+    },
+    Migration {
+        version: 8,
+        name: "run-start-instant-order-indexes",
+        sql: r#"
+            CREATE INDEX idx_runs_started_instant
+                ON runs(julianday(started_at) DESC, id DESC);
+            CREATE INDEX idx_runs_open_instant
+                ON runs(julianday(started_at), id)
+                WHERE outcome IS NULL;
         "#,
     },
 ];
@@ -1358,7 +1370,8 @@ impl RunsDb {
             .prepare(
                 "SELECT id, kind, actor, started_at, ended_at, outcome, host, pid, \
                         parent_run_id, detail \
-                 FROM runs ORDER BY started_at DESC, rowid DESC LIMIT ?1",
+                 FROM runs
+                 ORDER BY julianday(started_at) DESC, id DESC LIMIT ?1",
             )
             .map_err(|e| ArcanaError::Agent(format!("recent runs prepare: {e}")))?;
         let rows = stmt
@@ -1669,10 +1682,175 @@ mod tests {
     }
 
     #[test]
+    fn production_run_chronology_reads_mixed_timestamp_formats_by_instant() {
+        let path = temp_db("mixed-chronology");
+        let db = RunsDb::open_at(&path).expect("isolated migrated RunsDb");
+        let later = db.begin(kind::APP, None).expect("later run writer");
+        let earlier = db.begin(kind::CLI, None).expect("earlier run writer");
+        for (id, timestamp) in [
+            (&later, "2026-10-05 12:00:00"),
+            (&earlier, "2026-10-05T09:00:00.000Z"),
+        ] {
+            db.conn
+                .execute(
+                    "UPDATE runs SET started_at = ?1 WHERE id = ?2",
+                    params![timestamp, id],
+                )
+                .expect("persist legacy/canonical fixture time");
+        }
+        let recent = db.recent(2).expect("production recent reader");
+        let open = db.open_runs().expect("production open reader");
+        assert_eq!(
+            (
+                recent.iter().map(|run| &run.id).collect::<Vec<_>>(),
+                open.iter().map(|run| &run.id).collect::<Vec<_>>()
+            ),
+            (vec![&later, &earlier], vec![&earlier, &later]),
+        );
+
+        db.conn
+            .execute(
+                "UPDATE runs SET started_at = '2026-10-05T09:00:00.000Z' WHERE id = ?1",
+                [&later],
+            )
+            .expect("persist equal-instant fixture time");
+        let tied = db.recent(2).expect("stable tied run ordering");
+        assert_eq!(
+            tied.iter().map(|run| run.id.as_str()).collect::<Vec<_>>(),
+            vec![later.as_str(), earlier.as_str()]
+        );
+    }
+
+    #[test]
+    fn production_worker_run_readers_select_latest_instant_across_legacy_rows() {
+        let path = temp_db("mixed-worker-chronology");
+        let db = RunsDb::open_at(&path).expect("isolated migrated RunsDb");
+        let later = db
+            .begin_worker_tick("worker-backend", "later-session")
+            .expect("first worker writer");
+        db.finish_worker_tick(&later, "completed", outcome::OK, None)
+            .expect("close first run atomically");
+        let earlier = db
+            .begin_worker_tick("worker-backend", "earlier-session")
+            .expect("second worker writer");
+        for (id, timestamp) in [
+            (&later, "2026-10-05 12:00:00"),
+            (&earlier, "2026-10-05T09:00:00.000Z"),
+        ] {
+            db.conn
+                .execute(
+                    "UPDATE runs SET started_at = ?1 WHERE id = ?2",
+                    params![timestamp, id],
+                )
+                .expect("persist legacy/canonical worker time");
+        }
+        let latest = db
+            .latest_worker_tick("worker-backend")
+            .expect("latest tick reader")
+            .expect("tick exists");
+        let owner = db
+            .latest_worker_run_owner("worker-backend")
+            .expect("latest owner reader")
+            .expect("owner exists");
+        let roster = db.latest_worker_ticks(10).expect("latest roster reader");
+        assert_eq!(
+            (latest.run_id, owner.run_id, roster[0].run_id.clone()),
+            (later.clone(), later.clone(), later)
+        );
+        db.finish_worker_tick(&earlier, "completed", outcome::OK, None)
+            .expect("finish fixture run");
+    }
+
+    #[test]
+    fn runs_v7_upgrade_preserves_rows_and_indexes_instant_order_readers() {
+        let path = temp_db("runs-v8-index-migration");
+        let db = RunsDb::open_at(&path).expect("open isolated RunsDb");
+        let mut expected = Vec::new();
+        for index in 0..128 {
+            let id = db
+                .begin(kind::APP, Some("migration-preservation"))
+                .expect("create pre-upgrade run");
+            let timestamp = if index % 2 == 0 {
+                format!("2026-10-05 {:02}:00:00", index % 24)
+            } else {
+                format!("2026-10-05T{:02}:00:00.000Z", index % 24)
+            };
+            db.conn
+                .execute(
+                    "UPDATE runs SET started_at = ?1 WHERE id = ?2",
+                    params![timestamp, id],
+                )
+                .expect("persist mixed-format migration fixture");
+            expected.push((id, timestamp));
+        }
+        db.conn
+            .execute_batch(
+                "DROP INDEX idx_runs_started_instant;
+                 DROP INDEX idx_runs_open_instant;
+                 PRAGMA user_version = 7;",
+            )
+            .expect("simulate a populated v7 database");
+        drop(db);
+
+        let upgraded = RunsDb::open_at(&path).expect("upgrade populated v7 RunsDb");
+        assert_eq!(upgraded.schema_version().expect("schema version"), 8);
+        let rows = upgraded
+            .conn
+            .prepare("SELECT id, started_at FROM runs ORDER BY id")
+            .expect("prepare preservation read")
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .expect("read preserved rows")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("collect preserved rows");
+        let mut expected_by_id = expected;
+        expected_by_id.sort_by(|left, right| left.0.cmp(&right.0));
+        assert_eq!(rows, expected_by_id);
+
+        let recent_plan = explain_without_parameters(
+            &upgraded.conn,
+            "SELECT id FROM runs ORDER BY julianday(started_at) DESC, id DESC LIMIT 10",
+        );
+        assert!(
+            recent_plan
+                .iter()
+                .any(|step| step.contains("idx_runs_started_instant")),
+            "recent query should use its instant-order index: {recent_plan:?}"
+        );
+        let open_plan = explain_without_parameters(
+            &upgraded.conn,
+            "SELECT id FROM runs INDEXED BY idx_runs_open_instant WHERE outcome IS NULL
+             ORDER BY julianday(started_at) ASC, id ASC",
+        );
+        assert!(
+            open_plan
+                .iter()
+                .any(|step| step.contains("idx_runs_open_instant")),
+            "open-run query should use its partial instant-order index: {open_plan:?}"
+        );
+
+        let recent = upgraded.recent(10).expect("production recent reader");
+        let open = upgraded.open_runs().expect("production open reader");
+        assert_eq!(recent.len(), 10);
+        assert_eq!(open.len(), 128);
+        assert_eq!(
+            recent[0].id,
+            expected_by_id
+                .iter()
+                .filter(|(_, raw)| { raw.ends_with("23:00:00") || raw.ends_with("23:00:00.000Z") })
+                .map(|(id, _)| id)
+                .max()
+                .expect("latest fixture row")
+                .clone()
+        );
+    }
+
+    #[test]
     fn a_run_is_recorded_and_read_back() {
         let path = temp_db("roundtrip");
         let db = RunsDb::open_at(&path).expect("open");
-        assert_eq!(db.schema_version().unwrap(), 7);
+        assert_eq!(db.schema_version().unwrap(), 8);
 
         let id = db.begin(kind::APP, None).expect("begin");
 
@@ -2233,7 +2411,7 @@ mod tests {
             .expect("write v3 schema");
         }
         let db = RunsDb::open_at(&path).expect("upgrade v3 database");
-        assert_eq!(db.schema_version().expect("schema version"), 7);
+        assert_eq!(db.schema_version().expect("schema version"), 8);
         let run_id = db.begin(kind::AGENT_TURN, None).expect("begin run");
         let cursor = db
             .record_operation_intent(&run_id, None, "op-1", "edit", "write_file", &[])
@@ -2279,7 +2457,7 @@ mod tests {
         drop(db);
 
         let db = RunsDb::open_at(&path).expect("upgrade existing v6 database");
-        assert_eq!(db.schema_version().expect("upgraded schema version"), 7);
+        assert_eq!(db.schema_version().expect("upgraded schema version"), 8);
         let plan = explain_without_parameters(
             &db.conn,
             "SELECT id FROM operation_journal

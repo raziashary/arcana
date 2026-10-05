@@ -304,10 +304,7 @@ fn restore_registered_labels(original: &serde_json::Value, output: &mut serde_js
                 && super::telemetry_labels::is_registered(field, value);
             let is_correlation_uuid = is_correlation_field(field) && is_canonical_uuid(value);
             if is_registered_label || is_correlation_uuid {
-                output.insert(
-                    field.clone(),
-                    serde_json::Value::String(value.to_owned()),
-                );
+                output.insert(field.clone(), serde_json::Value::String(value.to_owned()));
             }
         }
     }
@@ -677,8 +674,8 @@ mod tests {
                 .write_all(format!("{}\n", serde_json::to_string(value).unwrap()).as_bytes())
                 .expect("write structured record");
             writer.flush().expect("flush structured record");
-            let output = String::from_utf8(std::mem::take(&mut writer.inner))
-                .expect("redacted JSON output");
+            let output =
+                String::from_utf8(std::mem::take(&mut writer.inner)).expect("redacted JSON output");
             serde_json::from_str(output.trim()).expect("redacted JSON record")
         }
         fn assert_redacted(value: &serde_json::Value, context: &str) {
@@ -689,8 +686,18 @@ mod tests {
             );
         }
 
-        let uuid = |digit: char| format!("{digit}{digit}{digit}{digit}{digit}{digit}{digit}{digit}-{digit}{digit}{digit}{digit}-{digit}{digit}{digit}{digit}-{digit}{digit}{digit}{digit}-{digit}{digit}{digit}{digit}{digit}{digit}{digit}{digit}{digit}{digit}{digit}{digit}");
-        let values = [uuid('a'), uuid('b'), uuid('c'), uuid('d'), uuid('e'), uuid('f'), uuid('1')];
+        let uuid = |digit: char| {
+            format!("{digit}{digit}{digit}{digit}{digit}{digit}{digit}{digit}-{digit}{digit}{digit}{digit}-{digit}{digit}{digit}{digit}-{digit}{digit}{digit}{digit}-{digit}{digit}{digit}{digit}{digit}{digit}{digit}{digit}{digit}{digit}{digit}{digit}")
+        };
+        let values = [
+            uuid('a'),
+            uuid('b'),
+            uuid('c'),
+            uuid('d'),
+            uuid('e'),
+            uuid('f'),
+            uuid('1'),
+        ];
         let source = serde_json::json!({
             "target": "arcana::telemetry::test",
             "fields": {

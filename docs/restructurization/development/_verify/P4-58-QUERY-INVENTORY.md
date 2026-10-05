@@ -88,6 +88,12 @@ read.
 | Discovered production owner | Scope / consumer | Populated plan evidence or remaining work |
 |---|---|---|
 | `AnalyticsDb::prune_append_only_before` | Daily backfill and append-only analytics retention | `append_only_retention_readers_use_populated_timestamp_indexes` proves populated EXPLAIN plans for timestamp validation, daily token summary, provider breakdown, and agent breakdown queries; existing retention tests prove transactional prune/backfill results and invalid-timestamp refusal. |
+| `AnalyticsDb::rollup_daily_cost_for_date` | Daily token-cost coverage before detail retention | Not a dashboard/dispatch reader; transactional coverage and late-row reconciliation are retention lifecycle behavior under TG4-21. `retention_session_count_uses_the_union_of_prior_and_batch_sessions` and `retention_seals_expired_dates_and_expires_session_ids` verify production results and seal refusal. |
+| `analytics::src/analytics/db.rs::token_usage_records_for_date` | Token detail read for daily rollup and verified legacy coverage | Not a dashboard/dispatch reader; its consumer is TG4-21 retention reconciliation. `retention_advancing_cutoffs_preserve_existing_daily_summaries` and `retention_seals_expired_dates_and_expires_session_ids` verify source reconciliation and sealed-date behavior. |
+| `analytics::src/analytics/db.rs::adopt_verified_legacy_daily_cost_coverage` | One-time adoption of legacy daily summaries | Startup/retention lifecycle path, not a dashboard/dispatch reader; ambiguous legacy data fails closed and preserves raw rows under TG4-21. |
+| `analytics::src/analytics/db.rs::mark_daily_cost_summary_coverage` | Persist token-ID and session coverage during rollup | Retention lifecycle write, not a dashboard/dispatch reader; transactional rollup tests verify coverage is committed with the corresponding summary. |
+| `AnalyticsDb::migration/7:seal-expired-daily-cost-summaries` | Prevent token rows from being inserted after their exact dedup ledger is sealed | Startup schema/trigger lifecycle, not a dashboard/dispatch reader; `retention_seals_expired_dates_and_expires_session_ids` verifies late direct inserts are rejected after raw-row pruning. |
+| `AnalyticsDb::migration/8:reject-token-updates-into-sealed-dates` | Prevent retained token rows from being moved into a sealed local date | Startup schema/trigger lifecycle, not a dashboard/dispatch reader; `retention_seals_expired_dates_and_expires_session_ids` verifies direct SQL updates cannot reintroduce detail after session IDs have expired. |
 | `AnalyticsDb::get_api_failures_recent` | Dashboard provider failure analytics | `dashboard_live_analytics_plans_classify_scans_and_worker_index_use` |
 | `AnalyticsDb::get_daily_cost` | Dashboard daily cost point lookup | `dashboard_daily_cost_range_uses_primary_key_index_with_populated_rows` |
 | `AnalyticsDb::get_daily_costs_range` | Dashboard daily cost range | `dashboard_daily_cost_range_uses_primary_key_index_with_populated_rows` |
@@ -267,21 +273,34 @@ separate phase contracts. Other full-result/count/diagnostic exceptions have
 their contract and rationale recorded in their owner rows.
 
 The 2026-10-02 closeout below is historical and was superseded by current SQL
-changes. The 2026-10-04 registry recheck reopened P4-58/TG4-20 and found 23
-missing owner/fingerprint pairs and one stale pair. The exact fingerprint
-table below now registers all 23 pairs with populated plan/result or trigger
-proof and removes the obsolete QC pair. The complete registry suite passes
-8/8, and focused RunsDb and TasksDb plan/behavior tests pass. TG4-20 is restored
-on this current evidence; the earlier closeout remains historical.
+changes. The 2026-10-04 registry recheck found 23 missing owner/fingerprint
+pairs and one stale pair; that state was reconciled and TG4-20 restored. The
+2026-10-05 retention and timestamp-reader edits changed exact SQL identities
+again. The table below now includes the sealed-date trigger, current
+retention-maintenance fingerprints, and RunsDb chronology query fingerprints.
+The current registry suite passes 8/8. TG4-20 remains checked on this source;
+the newly registered retention lifecycle work is separately governed by
+TG4-21 and does not claim dashboard/dispatch plan coverage for maintenance SQL.
 
 ### Exact production query fingerprints
 
 | Production owner | Fingerprint | Plan/result proof or scope decision |
 | --- | --- | --- |
-| `AnalyticsDb::prune_append_only_before` | 07bf9669511bf6651ae4f76758c3db131c93adf70974bd5ac1f303a25eb79db4 | `append_only_retention_readers_use_populated_timestamp_indexes`; invalid timestamp validation plan selects all three timestamp expression indexes. |
-| `AnalyticsDb::prune_append_only_before` | 10156ca21922c3cac0e2ce4b05e7200ceb8882debc7dee19a625f67ed2526300 | `append_only_retention_readers_use_populated_timestamp_indexes`; populated daily token aggregation selects the token timestamp expression index. |
+| `AnalyticsDb::prune_append_only_before` | 36228a73032cd278cad326ad87c346dc66d922be925b9f3d88ca03b2752bf034 | Not a dashboard/dispatch reader; reconciliation inside the TG4-21 retention transaction. `retention_advancing_cutoffs_preserve_existing_daily_summaries` verifies prior summaries are merged without loss. |
+| `AnalyticsDb::prune_append_only_before` | 4e8bc12dfd6cbceec56c991ad3bcba517d3d9b7a879ba7c393fe2ee8b108ad74 | Not a dashboard/dispatch reader; source-detail backfill inside the TG4-21 retention transaction. `append_only_retention_readers_use_populated_timestamp_indexes` proves the existing timestamp-bounded aggregation plans; retention regressions verify reconciliation results. |
+| `AnalyticsDb::prune_append_only_before` | 6376fd698d8947f2d46d697254aa2a1b36696474e85e5f6f63ebf9b64a73b4ad | Not a dashboard/dispatch reader; transactional provider breakdown maintenance under TG4-21. `append_only_retention_readers_use_populated_timestamp_indexes` proves the populated timestamp expression-index plan. |
+| `AnalyticsDb::prune_append_only_before` | 75ba86b45cb07b590125867d2242cc4ca3210aeb8da02e400d027406261a4ae2 | Not a dashboard/dispatch reader; transactional agent breakdown maintenance under TG4-21. `append_only_retention_readers_use_populated_timestamp_indexes` proves the populated timestamp expression-index plan. |
 | `AnalyticsDb::prune_append_only_before` | 9b62a50d664b5a6ca754e9825aa517c9f4c29492a0ee66a8b57212a82cf58098 | `append_only_retention_readers_use_populated_timestamp_indexes`; populated provider breakdown selects the token timestamp expression index. |
-| `AnalyticsDb::prune_append_only_before` | daf5c9e5bbd6bd4e4b708783db71c5ccf7dcb918abb0b7af274b1a3b1369895e | `append_only_retention_readers_use_populated_timestamp_indexes`; populated agent breakdown selects the token timestamp expression index. |
+| `AnalyticsDb::prune_append_only_before` | c1656c552f0a488dde3648e91f98944a7d27e3ccd12b0e96afd32e3780378e4c | Not a dashboard/dispatch reader; summary-coverage lookup in the TG4-21 retention transaction. `retention_advancing_cutoffs_preserve_existing_daily_summaries` verifies summaries are reconciled before raw detail is deleted. |
+| `AnalyticsDb::prune_append_only_before` | d9ae1556860057ea67eda83df16e10056f96b9811c0c57654399f253d47efd98 | Not a dashboard/dispatch reader; session-ledger merge in the TG4-21 retention transaction. `retention_session_count_uses_the_union_of_prior_and_batch_sessions` verifies exact union accounting across overlap. |
+| `AnalyticsDb::prune_append_only_before` | e626e25442b49e8d77799aa7462016323fe284d48381e497db60b8f6d4dd5c60 | Not a dashboard/dispatch reader; date-sealing lifecycle write under TG4-21. `retention_seals_expired_dates_and_expires_session_ids` verifies IDs expire only after raw pruning and late inserts are rejected. |
+| `AnalyticsDb::prune_append_only_before` | f8eb375339da3863364ae909ea4c46814f9b3808824a48e2ca37e9f8f3d24759 | Not a dashboard/dispatch reader; exact token source reconciliation inside the TG4-21 retention transaction. `retention_advancing_cutoffs_preserve_existing_daily_summaries` verifies merged totals and detail pruning atomically. |
+| `AnalyticsDb::rollup_daily_cost_for_date` | d042c52c864eda567a4d27fefeea63b177e4dcf6fe3d35c1ce552b2a9ce2d2f1 | Not a dashboard/dispatch reader; one-date coverage/summary writer under TG4-21. `retention_session_count_uses_the_union_of_prior_and_batch_sessions` verifies exact result readback. |
+| `AnalyticsDb::migration/7:seal-expired-daily-cost-summaries` | 2ca75b818608499e9188ded3b7a3459d6d8ebfe0c4008fe678ce290e0bff12c7 | `retention_seals_expired_dates_and_expires_session_ids` verifies this trigger rejects a direct token insert into a sealed local date. |
+| `AnalyticsDb::migration/8:reject-token-updates-into-sealed-dates` | d3e0c34ce4a9909c5ffff6be92e6846e05671674b33e0e78b824e73a8158b282 | `retention_seals_expired_dates_and_expires_session_ids` verifies a retained row cannot be moved into a sealed local date by direct SQL. |
+| `analytics::src/analytics/db.rs::adopt_verified_legacy_daily_cost_coverage` | 12b24586fc9def36549bb9a1ef68ab11c94479ec47c4359a68ca67cd9320a55a | Startup/retention lifecycle, not a dashboard/dispatch reader; `retention_verified_legacy_summary_is_adopted_and_ambiguous_summary_fails_closed` checks safe adoption and refusal. |
+| `analytics::src/analytics/db.rs::mark_daily_cost_summary_coverage` | 94ee85b759ec2fe06c7c4ac309fbf9a7f26350c05abd6e0de8428ff49d5d9d74 | Retention lifecycle write, not a dashboard/dispatch reader; `retention_advancing_cutoffs_preserve_existing_daily_summaries` verifies coverage and aggregate persistence transactionally. |
+| `analytics::src/analytics/db.rs::token_usage_records_for_date` | 0f7c7290ad00bbf844d63b5f11de0e25b7b3b5ae006ad4f2ff164c8b06997865 | Not a dashboard/dispatch reader; TG4-21 source reconciliation. `retention_advancing_cutoffs_preserve_existing_daily_summaries` verifies late and preexisting full-day totals survive exact-detail pruning. |
 | `AnalyticsDb::get_api_failures_recent` | 04b7987e329191d4b20f83807b51003201a764525a912778b30c430984d7bd8a | `dashboard_live_analytics_plans_classify_scans_and_worker_index_use` |
 | `AnalyticsDb::get_daily_cost` | f7a45843b48569e32cb2f23b1b3ba5c6f0169b88f96f5799c8684591474b2fff | `dashboard_daily_cost_range_uses_primary_key_index_with_populated_rows` |
 | `AnalyticsDb::get_daily_costs_range` | d3d149f98df0f17848c7e2056c07370d8612f1350153d20f0cc3ff6658b943df | `dashboard_daily_cost_range_uses_primary_key_index_with_populated_rows` |
@@ -313,11 +332,11 @@ on this current evidence; the earlier closeout remains historical.
 | `PlansDb::plan_exists` | afea9a53b0d3062ea89d2a3edac8ee30b117a544d1a8863c795bd2fec648f130 | Bounded exclusion: source audit found no production caller |
 | `RunsDb::get` | 8b757cad133b7ba358fd98cde49234843866d7b5c55c47c3da384eb52463623c | Bounded exclusion: no production caller exists in the Rust tree; active run recovery uses dedicated indexed readers instead |
 | `RunsDb::interrupt_worker_ticks` | c1ee05da228a1b74d3063e659c21067b673bc426f6d3e88b2bfce6615c61b666 | `interrupted_worker_run_selection_uses_worker_index_and_reads_expected_runs` proves the populated worker-index plan and preserves unrelated worker runs |
-| `RunsDb::latest_worker_run_owner` | b7be41371d6f23af3e04b702e06f64f1e13055598150ab32ffd0c9b33803044b | `fleet_recovery_and_health_reads_use_expected_indexes_with_populated_runs` asserts populated plan and production result for latest owner, host, PID, phase, and outcome |
-| `RunsDb::latest_worker_tick` | 5fc00c1631e1617862e5be168777a4b37597d5eacc6755869ee8f6bc0213db56 | `latest_worker_tick_lookup_uses_worker_index_with_populated_runs` |
-| `RunsDb::latest_worker_ticks` | dbb3b269797ddf79664982414a9ecd6bac3420a292503ca7d6e22b33bc39581e | `fleet_recovery_and_health_reads_use_expected_indexes_with_populated_runs` asserts populated plan, newest-first order, worker scope, and unrelated-worker isolation |
-| `RunsDb::open_runs` | da94be6c7074425a7384630d11436c4b426e4cbc22627f8ad84a8d237cc71c2e | `fleet_recovery_and_health_reads_use_expected_indexes_with_populated_runs` proves the partial open-run index and production reconciliation behavior |
-| `RunsDb::recent` | f92bee8c443e0bf0953d5d779a77f95ef9cbce87f093d9336cb1341ceebd87ec | Bounded exclusion: no production caller exists in the Rust tree; active run recovery uses dedicated indexed readers instead |
+| `RunsDb::latest_worker_run_owner` | b507ff466946ba83be5564d252fd2e267a96ee27d52276be9e1957f659242d2d | `fleet_recovery_and_health_reads_use_expected_indexes_with_populated_runs` asserts populated plan and production result for latest owner, host, PID, phase, and outcome |
+| `RunsDb::latest_worker_tick` | d8c896bdbfe5d8994499ff5d8524b57580b9e9550bc47eb3ba5e5480bb1c350c | `latest_worker_tick_lookup_uses_worker_index_with_populated_runs` |
+| `RunsDb::latest_worker_ticks` | 1474f7c27f2c825b7abe29856967c0bb8f4f168515f0117486bf6a32f1e18c93 | `fleet_recovery_and_health_reads_use_expected_indexes_with_populated_runs` asserts populated plan, newest-first order, worker scope, and unrelated-worker isolation |
+| `RunsDb::open_runs` | 51172865cc7464431361884e6a1a237aaf3cd71d8c525c53879c55faf0c8af88 | `fleet_recovery_and_health_reads_use_expected_indexes_with_populated_runs` proves the partial open-run index and production reconciliation behavior |
+| `RunsDb::recent` | 61b39de8b7aa7cacd4005d58f789544b0917fa8fe622c17fe3a0a7dee6b84365 | Bounded exclusion: no production caller exists in the Rust tree; active run recovery uses dedicated indexed readers instead |
 | `RunsDb::recent_worker_progress` | ceb9d283851a977492fb2e0c7088879e32cec6c501cb1604267704848648838b | `fleet_recovery_and_health_reads_use_expected_indexes_with_populated_runs` |
 | `TasksDb::claim_next_ready` | a3b074be4c1e226e09e679242710b2aebc29b48c03f41f2a5aca0bf4cc32bc35 | `ready_task_claim_uses_dispatch_and_active_claim_indexes` explains the complete production UPDATE and verifies oldest-ready claim and active-claim refusal |
 | `TasksDb::count_unacknowledged_for` | ffe9ae8abdf796933eebbc02c8985009184b429c83a3681afe8aea1b633a83d3 | `worker_message_inbox_and_counts_use_recipient_or_task_indexes` |
