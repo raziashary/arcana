@@ -198,6 +198,14 @@ The retry unit is `44d3e75`; this Settings evidence slice follows it as a
 separate commit. The still-unverified WDIO config/spec and desktop run report
 remain uncommitted and must not be treated as green evidence.
 The user-created `P4_EXPANDED_GOAL.md` remains untouched/unread, owner Calendar
-workspace remains untouched, and no paid CLI Fleet run occurred in this
-continuation. Counts remain P4 38/59 and TG4 17/33. Continue against the open
+workspace remains untouched, and ~~no paid CLI Fleet run occurred in this
+continuation~~ a bounded paid CLI Fleet run did occur (corrected below). Counts remain P4 38/59 and TG4 17/33. Continue against the open
 MDP and gate items; do not revisit completed phase proof without new evidence.
+
+## Paid CLI Fleet trial correction and evidence — 2026-10-05
+
+Correction to the preceding checkpoint: ~~no paid CLI Fleet run occurred in this continuation.~~ The single owner-authorized run did occur. The earlier statement was based on checking the final run status without reconciling persisted provider-call and token-reservation events.
+
+The isolated production run used Gemini 3.8 Flash with explicit workspace consent and the authorized $1 / 120,000-token / 20-turn / 10-minute Supervisor bounds. Six provider generations succeeded and one failed attempt was recorded. The next generation was refused before dispatch: countTokens estimated 16,376 input tokens, and the fixed 8,192 output allowance made the request reserve 24,568 tokens, projecting 121,447/120,000. Analytics readback recorded 95,824 prompt tokens, 116 completion tokens, 95,940 total tokens, and $0.05950545; it also exposed one API-failure row and one failed Supervisor worker-stat row. The Supervisor made six diagnostic reads, created no child task, and left the scratch workspace unchanged. The production log exporter read 2,424 events across two files (1,718,837 bytes), and analytics export returned the token, failure and worker-stat rows. Workspace consent was revoked and its successful audit event read back. No further provider call is authorized by the consumed one-run approval.
+
+The run is partial P4-50/TG4-24 evidence only: it proves real CLI startup, bounded generation/refusal, persisted usage/failure telemetry, and log/analytics export consumers. It does not prove task assignment, coding, successful Fleet completion, recovery injection, or Logs UI readback. Counts remain 38/59 and 17/33; no checklist item is closed. Detailed sanitized evidence is in _verify/P4-50-CLI-FLEET-LIMITED-2026-10-05.md.

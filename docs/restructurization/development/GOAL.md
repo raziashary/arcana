@@ -15,7 +15,7 @@ the production JSONL logger-to-`arcanactl logs export` readback passes on both
 platforms. Explicit Settings metadata-only provider checks now emit safe
 outcome/timing events, and the shared consent wrapper's preflight/complete/
 stream methods reject mismatched and revoked grants; focused Windows tests pass.
-These are partial proofs only: counts remain 38/59 and 17/33, no P4/TG4
+A bounded paid CLI Fleet run has now occurred: six Gemini generations succeeded, one attempt failed, and the next was denied by the run-token reservation. It consumed $0.05950545, created no child tasks, and its logs and analytics exports read back. This is partial production evidence, not successful Fleet completion; see _verify/P4-50-CLI-FLEET-LIMITED-2026-10-05.md. Counts remain 38/59 and 17/33, no P4/TG4
 checkbox closed, the fresh-profile desktop harness still has an initial
 DevTools attach failure, and successful paid CLI Fleet completion remains
 open. The user-owned `P4_EXPANDED_GOAL.md` remains unread until core P4 closes.
