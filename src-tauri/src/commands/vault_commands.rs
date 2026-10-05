@@ -146,7 +146,9 @@ pub async fn set_provider_key(provider: String, api_key: String) -> Result<Vault
     // provider we cannot construct is a key we can never use.
     let candidate = arcana_core::provider::factory::build(&provider, trimmed.clone())?;
 
-    match candidate.test_connection().await {
+    match super::settings_commands::check_provider_metadata_connection(candidate.as_ref(), true)
+        .await
+    {
         Ok(arcana_core::provider::ProviderStatus::Connected) => {}
         Ok(arcana_core::provider::ProviderStatus::Error(why)) => {
             return Err(crate::errors::ArcanaError::Vault(format!(
@@ -158,12 +160,12 @@ pub async fn set_provider_key(provider: String, api_key: String) -> Result<Vault
                 "{provider} did not confirm the key ({other:?}); it has NOT been saved."
             )));
         }
-        Err(e) => {
+        Err(_) => {
             // A network failure is not a bad key, and refusing to store on a
             // transient error would leave a user offline unable to configure
             // the app at all. Stored, with the uncertainty stated.
             tracing::warn!(
-                "Could not reach {provider} to validate the key ({e}); storing it unvalidated."
+                "Could not reach the provider to validate the key; storing it unvalidated."
             );
         }
     }

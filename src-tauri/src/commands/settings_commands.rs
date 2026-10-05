@@ -2,9 +2,6 @@
 
 use crate::agent::context::ContextBuilder;
 use crate::errors::{ArcanaError, Result};
-use crate::provider::anthropic::AnthropicProvider;
-use crate::provider::google::GoogleProvider;
-use crate::provider::openai::OpenAIProvider;
 use crate::provider::traits::Provider;
 use crate::provider::types::{ModelInfo, ProviderStatus};
 use crate::state::AppState;
@@ -76,24 +73,42 @@ pub async fn test_provider_connection(provider: String) -> Result<ProviderStatus
     let key = VaultManager::get(&provider_key(&provider))?
         .ok_or_else(|| ArcanaError::Provider("No API key stored for provider".into()))?;
 
-    match provider.as_str() {
-        "anthropic" => {
-            let p = AnthropicProvider::new(key);
-            p.test_connection().await
-        }
-        "openai" => {
-            let p = OpenAIProvider::new(key);
-            p.test_connection().await
-        }
-        "google" => {
-            let p = GoogleProvider::new(key);
-            p.test_connection().await
-        }
-        _ => Err(ArcanaError::Provider(format!(
-            "Provider '{}' not yet implemented",
-            provider
-        ))),
-    }
+    let candidate = arcana_core::provider::factory::build(&provider, key)?;
+    check_provider_metadata_connection(candidate.as_ref(), false).await
+}
+
+/// Explicit Settings authentication/model-list checks send no workspace data.
+/// ADR-0303 permits these before workspace selection; generation still requires
+/// persisted workspace consent. Never reflect credentials or response text here.
+pub(super) async fn check_provider_metadata_connection(
+    provider: &dyn Provider,
+    key_validation: bool,
+) -> Result<ProviderStatus> {
+    let mut timer =
+        arcana_core::observability::timing::OperationTimer::start("settings_provider_connection");
+    let result = provider.test_connection().await;
+    let outcome = match &result {
+        Ok(ProviderStatus::Connected) => "success",
+        Ok(_) => "rejected",
+        Err(_) => "error",
+    };
+    timer.set_outcome(outcome);
+    let destination = match provider.id() {
+        "google" => "provider:google",
+        "anthropic" => "provider:anthropic",
+        "openai" => "provider:openai",
+        _ => "unsupported",
+    };
+    tracing::info!(
+        target: "arcana::telemetry",
+        event_type = "provider_connection_check",
+        destination,
+        key_validation,
+        outcome,
+        workspace_payload_sent = false,
+        "Explicit Settings metadata-only provider check completed"
+    );
+    result
 }
 
 /// Read the host-selected user-owned Python fallback used only when staging
@@ -272,5 +287,113 @@ mod provider_list_tests {
                 ("openai", "OpenAI"),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod connection_audit_tests {
+    use super::*;
+    use std::io::Write;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CapturedWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for CapturedWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct MetadataProvider {
+        outcome: u8,
+        calls: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl Provider for MetadataProvider {
+        fn id(&self) -> &str {
+            "google"
+        }
+        fn name(&self) -> &str {
+            "metadata fixture"
+        }
+        fn models(&self) -> Vec<ModelInfo> {
+            Vec::new()
+        }
+        async fn complete(
+            &self,
+            _: crate::provider::types::CompletionRequest,
+        ) -> Result<crate::provider::types::CompletionResponse> {
+            panic!("Settings must not generate workspace completions")
+        }
+        async fn stream(
+            &self,
+            _: crate::provider::types::CompletionRequest,
+        ) -> Result<crate::provider::traits::StreamResult> {
+            panic!("Settings must not stream workspace completions")
+        }
+        async fn test_connection(&self) -> Result<ProviderStatus> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            match self.outcome {
+                0 => Ok(ProviderStatus::Connected),
+                1 => Ok(ProviderStatus::Error("planted-private-response".into())),
+                _ => Err(ArcanaError::Provider("planted-private-transport".into())),
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_settings_metadata_checks_audit_safe_outcomes_for_both_entrypoints() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        for key_validation in [false, true] {
+            for (kind, expected) in [(0, "success"), (1, "rejected"), (2, "error")] {
+                let provider = MetadataProvider {
+                    outcome: kind,
+                    calls: AtomicUsize::new(0),
+                };
+                let bytes = Arc::new(Mutex::new(Vec::new()));
+                let output = bytes.clone();
+                let subscriber = tracing_subscriber::fmt()
+                    .json()
+                    .with_writer(move || CapturedWriter(output.clone()))
+                    .finish();
+                let result = tracing::subscriber::with_default(subscriber, || {
+                    runtime.block_on(check_provider_metadata_connection(
+                        &provider,
+                        key_validation,
+                    ))
+                });
+                assert_eq!(result.is_err(), kind == 2);
+                assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+                let text = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+                assert!(!text.contains("planted-private"));
+                let events = text
+                    .lines()
+                    .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                    .collect::<Vec<_>>();
+                let audit = events
+                    .iter()
+                    .find(|event| event["fields"]["event_type"] == "provider_connection_check")
+                    .unwrap();
+                assert_eq!(audit["fields"]["destination"], "provider:google");
+                assert_eq!(audit["fields"]["key_validation"], key_validation);
+                assert_eq!(audit["fields"]["workspace_payload_sent"], false);
+                assert_eq!(audit["fields"]["outcome"], expected);
+                let timing = events
+                    .iter()
+                    .find(|event| event["fields"]["operation"] == "settings_provider_connection")
+                    .unwrap();
+                assert_eq!(timing["fields"]["outcome"], expected);
+                assert!(timing["fields"]["duration_ns"].as_u64().unwrap() > 0);
+            }
+        }
     }
 }

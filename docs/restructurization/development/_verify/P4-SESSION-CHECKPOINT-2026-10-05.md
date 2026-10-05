@@ -170,3 +170,34 @@ not commit that failing harness work as a verified unit. The expanded goal
 remains unread; owner Calendar remains untouched. Next steps: rerun CLI build
 check after migration 8, review exact dirty diffs, commit verified units
 separately, and push them to established `main` under existing authorization.
+
+## Continued work after 2026-10-05 retention checkpoint
+
+The retention/timestamp phase is committed and pushed as `129418e`.
+`44d3e75 fix(p4): report worker setup retry overruns` is also pushed. Windows
+and Ubuntu both pass the overrun-admission policy test and the production
+redacting-logger-to-CLI-export integration (1/1 each); the event is persisted
+and read back with the bounded outcome and elapsed time. Formatting and diff
+checks pass. P4-52/TG4-26 remain open because this does not prove successful
+CLI Fleet completion or every startup/recovery scenario.
+
+The owner-approved Settings exception is implemented through one shared
+metadata-only connection helper used for both explicit key validation and
+Settings Test connection. It emits fixed destination, outcome, key-validation
+purpose, no-workspace-payload, and duration fields, and suppresses raw provider
+errors. `connection_audit_tests` passes 1/1; the provider consent wrapper's
+token-preflight/complete/stream matrix passes 1/1 on Windows for mismatched,
+matching and revoked workspace grants. ADR-0305, MDP P4-60, TG4-16, and the
+readiness row record this as partial evidence. No task/gate checkbox or
+overall count changed. The existing desktop scenario passed with persisted
+grant, restart, workspace switch/revoke, and structural-only diff refusal;
+however, the full fresh-profile WebDriver run still has an initial DevTools
+attachment failure, so desktop consent is not closed.
+
+The retry unit is `44d3e75`; this Settings evidence slice follows it as a
+separate commit. The still-unverified WDIO config/spec and desktop run report
+remain uncommitted and must not be treated as green evidence.
+The user-created `P4_EXPANDED_GOAL.md` remains untouched/unread, owner Calendar
+workspace remains untouched, and no paid CLI Fleet run occurred in this
+continuation. Counts remain P4 38/59 and TG4 17/33. Continue against the open
+MDP and gate items; do not revisit completed phase proof without new evidence.

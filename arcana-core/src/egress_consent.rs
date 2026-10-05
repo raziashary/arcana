@@ -248,18 +248,22 @@ mod tests {
     use crate::provider::types::{CompletionResponse, ModelInfo, ProviderStatus};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    struct CountingProvider(AtomicUsize);
+    struct CountingProvider(AtomicUsize, &'static str);
 
     #[async_trait]
     impl Provider for CountingProvider {
         fn id(&self) -> &str {
-            "google"
+            self.1
         }
         fn name(&self) -> &str {
-            "Gemini"
+            self.1
         }
         fn models(&self) -> Vec<ModelInfo> {
             Vec::new()
+        }
+        async fn input_token_upper_bound(&self, _request: &CompletionRequest) -> Result<u64> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(17)
         }
         async fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse> {
             self.0.fetch_add(1, Ordering::SeqCst);
@@ -508,7 +512,7 @@ mod tests {
     async fn provider_reader_blocks_without_grant_and_rechecks_revocation() {
         let workspace = sandbox();
         let config = db_path();
-        let provider = Arc::new(CountingProvider(AtomicUsize::new(0)));
+        let provider = Arc::new(CountingProvider(AtomicUsize::new(0), "google"));
         let wrapped = ConsentProvider::wrap_at(provider.clone(), &workspace, config.clone());
 
         assert!(wrapped.complete(request()).await.is_err());
@@ -541,6 +545,74 @@ mod tests {
         let _ = std::fs::remove_file(config.with_extension("db-wal"));
         let _ = std::fs::remove_file(config.with_extension("db-shm"));
         let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[tokio::test]
+    async fn every_provider_egress_method_rechecks_workspace_destination_and_revocation() {
+        async fn invoke_methods(provider: &ConsentProvider) -> [Result<()>; 3] {
+            [
+                provider
+                    .input_token_upper_bound(&request())
+                    .await
+                    .map(|_| ()),
+                provider.complete(request()).await.map(|_| ()),
+                provider.stream(request()).await.map(|_| ()),
+            ]
+        }
+
+        let home = tempfile::tempdir().expect("disposable consent fixture");
+        let workspace = home.path().join("workspace");
+        let sibling = home.path().join("sibling");
+        std::fs::create_dir(&workspace).unwrap();
+        std::fs::create_dir(&sibling).unwrap();
+        let config = home.path().join("config.db");
+
+        for id in ["google", "anthropic", "openai"] {
+            let provider = Arc::new(CountingProvider(AtomicUsize::new(0), id));
+            let wrapped = ConsentProvider::wrap_at(provider.clone(), &workspace, config.clone());
+            let destination = provider_destination(id).unwrap();
+            let mut db = WorkspaceEgressConsentDb::open_at(&config).unwrap();
+            db.grant(&sibling, &destination).unwrap();
+            db.grant(&workspace, "mcp:github-mcp").unwrap();
+
+            for result in invoke_methods(&wrapped).await {
+                assert!(matches!(result, Err(ArcanaError::EgressDenied { .. })));
+            }
+            assert_eq!(provider.0.load(Ordering::SeqCst), 0);
+
+            db.grant(&workspace, &destination).unwrap();
+            drop(db);
+            // The wrapper opens its own production connection per method.
+            let allowed = invoke_methods(&wrapped).await;
+            assert!(allowed[0].is_ok());
+            for result in &allowed[1..] {
+                assert!(
+                    matches!(result, Err(ArcanaError::Agent(message)) if message == "provider reached")
+                );
+            }
+            assert_eq!(provider.0.load(Ordering::SeqCst), 3);
+
+            db = WorkspaceEgressConsentDb::open_at(&config).unwrap();
+            assert!(db.revoke(&workspace, &destination).unwrap());
+            drop(db);
+            for result in invoke_methods(&wrapped).await {
+                assert!(matches!(result, Err(ArcanaError::EgressDenied { .. })));
+            }
+            assert_eq!(provider.0.load(Ordering::SeqCst), 3);
+
+            let audit = config_db::open_at(&config).unwrap();
+            for operation in [
+                "provider_token_preflight",
+                "provider_complete",
+                "provider_stream",
+            ] {
+                let outcomes: Vec<String> = audit.prepare(
+                    "SELECT outcome FROM workspace_egress_audit WHERE destination = ?1 AND operation = ?2 ORDER BY id",
+                ).unwrap().query_map(rusqlite::params![destination, operation], |row| row.get(0)).unwrap()
+                    .collect::<std::result::Result<_, _>>().unwrap();
+                assert_eq!(outcomes, ["denied", "allowed", "denied"]);
+            }
+        }
     }
 
     #[tokio::test]

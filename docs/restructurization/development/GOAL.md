@@ -8,6 +8,18 @@ P4 closes. Claim-safety proof is in
 strict sandbox corpus and successful CLI Fleet completion remain open. Earlier
 dated status entries below are historical snapshots.
 
+Latest verified phase commits are pushed to `origin/main`: `129418e` records
+timestamp-reader and retention reconciliation, followed by `44d3e75` for
+bounded worker setup retry admission. Retry tests pass on Windows and Ubuntu;
+the production JSONL logger-to-`arcanactl logs export` readback passes on both
+platforms. Explicit Settings metadata-only provider checks now emit safe
+outcome/timing events, and the shared consent wrapper's preflight/complete/
+stream methods reject mismatched and revoked grants; focused Windows tests pass.
+These are partial proofs only: counts remain 38/59 and 17/33, no P4/TG4
+checkbox closed, the fresh-profile desktop harness still has an initial
+DevTools attach failure, and successful paid CLI Fleet completion remains
+open. The user-owned `P4_EXPANDED_GOAL.md` remains unread until core P4 closes.
+
 2026-10-05 continuation: P4-59 retention reconciliation now passes its focused
 23-test suite on Windows and Ubuntu WSL; the current SQL registry passes 8/8.
 Analytics migrations 6–8 preserve exact open-date session accounting, seal
