@@ -296,17 +296,51 @@ fn redact_telemetry_record(value: &serde_json::Value) -> serde_json::Value {
 
 fn restore_registered_labels(original: &serde_json::Value, output: &mut serde_json::Value) {
     if let (Some(original), Some(output)) = (original.as_object(), output.as_object_mut()) {
-        for field in ["event_type", "operation"] {
-            if let Some(label) = original.get(field).and_then(serde_json::Value::as_str) {
-                if super::telemetry_labels::is_registered(field, label) {
-                    output.insert(
-                        field.to_owned(),
-                        serde_json::Value::String(label.to_owned()),
-                    );
-                }
+        for (field, value) in original {
+            let Some(value) = value.as_str() else {
+                continue;
+            };
+            let is_registered_label = matches!(field.as_str(), "event_type" | "operation")
+                && super::telemetry_labels::is_registered(field, value);
+            let is_correlation_uuid = is_correlation_field(field) && is_canonical_uuid(value);
+            if is_registered_label || is_correlation_uuid {
+                output.insert(
+                    field.clone(),
+                    serde_json::Value::String(value.to_owned()),
+                );
             }
         }
     }
+}
+
+/// Correlation fields that have Arcana telemetry producers and are consumed
+/// by the structured log reader. Keep this list finite: an arbitrary UUID in a
+/// payload is still subject to the normal structured-value redaction rules.
+fn is_correlation_field(field: &str) -> bool {
+    matches!(
+        field,
+        "correlation_id"
+            | "fleet_correlation_id"
+            | "trace_id"
+            | "run_id"
+            | "session_id"
+            | "call_id"
+            | "tool_call_id"
+    )
+}
+
+/// Accept only the canonical lowercase, hyphenated UUID spelling. Parsing a
+/// UUID alone would also accept alternate spellings that the producer never
+/// emits and would broaden the redaction exception unnecessarily.
+fn is_canonical_uuid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 36
+        && [8, 13, 18, 23].iter().all(|index| bytes[*index] == b'-')
+        && bytes.iter().enumerate().all(|(index, byte)| {
+            matches!(index, 8 | 13 | 18 | 23)
+                || byte.is_ascii_digit()
+                || (b'a'..=b'f').contains(byte)
+        })
 }
 
 impl<W: Write> Write for RedactingJsonWriter<W> {
@@ -629,6 +663,104 @@ mod tests {
         assert_eq!(
             redact_telemetry_record(&foreign)["fields"]["operation"],
             "[REDACTED_KEY]"
+        );
+    }
+
+    #[test]
+    fn structured_writer_preserves_only_canonical_correlation_uuids_for_arcana_telemetry() {
+        fn write_through_redactor(value: &serde_json::Value) -> serde_json::Value {
+            let mut writer = RedactingJsonWriter {
+                inner: Vec::new(),
+                pending: Vec::new(),
+            };
+            writer
+                .write_all(format!("{}\n", serde_json::to_string(value).unwrap()).as_bytes())
+                .expect("write structured record");
+            writer.flush().expect("flush structured record");
+            let output = String::from_utf8(std::mem::take(&mut writer.inner))
+                .expect("redacted JSON output");
+            serde_json::from_str(output.trim()).expect("redacted JSON record")
+        }
+        fn assert_redacted(value: &serde_json::Value, context: &str) {
+            let value = value.as_str().expect("redacted string value");
+            assert!(
+                value.contains("REDACTED") || value.contains("[CARD]"),
+                "{context} should retain the normal redaction marker, got {value:?}"
+            );
+        }
+
+        let uuid = |digit: char| format!("{digit}{digit}{digit}{digit}{digit}{digit}{digit}{digit}-{digit}{digit}{digit}{digit}-{digit}{digit}{digit}{digit}-{digit}{digit}{digit}{digit}-{digit}{digit}{digit}{digit}{digit}{digit}{digit}{digit}{digit}{digit}{digit}{digit}");
+        let values = [uuid('a'), uuid('b'), uuid('c'), uuid('d'), uuid('e'), uuid('f'), uuid('1')];
+        let source = serde_json::json!({
+            "target": "arcana::telemetry::test",
+            "fields": {
+                "correlation_id": values[0],
+                "fleet_correlation_id": values[1],
+                "trace_id": values[2],
+                "run_id": values[3],
+                "session_id": values[4],
+                "call_id": values[5],
+                "tool_call_id": values[6],
+                "unknown_parent_run_id": uuid('2'),
+                "api_key": "sk-abcdefghijklmnopqrstuvwxyz012345"
+            },
+            "span": {"name": "worker_run", "run_id": uuid('3')},
+            "spans": [{"name": "worker_run", "session_id": uuid('4')}]
+        });
+
+        let output = write_through_redactor(&source);
+        for (field, expected) in [
+            "correlation_id",
+            "fleet_correlation_id",
+            "trace_id",
+            "run_id",
+            "session_id",
+            "call_id",
+            "tool_call_id",
+        ]
+        .into_iter()
+        .zip(values.iter())
+        {
+            assert_eq!(
+                output["fields"][field].as_str(),
+                Some(expected.as_str()),
+                "field {field}"
+            );
+        }
+        assert_eq!(output["span"]["run_id"], uuid('3'));
+        assert_eq!(output["spans"][0]["session_id"], uuid('4'));
+        assert_redacted(
+            &output["fields"]["unknown_parent_run_id"],
+            "unknown correlation field",
+        );
+        assert_eq!(output["fields"]["api_key"], "[REDACTED]");
+
+        let malformed = serde_json::json!({
+            "target": "arcana::telemetry",
+            "fields": {"run_id": uuid('a').to_uppercase()}
+        });
+        assert_redacted(
+            &write_through_redactor(&malformed)["fields"]["run_id"],
+            "noncanonical UUID text",
+        );
+
+        let sensitive = serde_json::json!({
+            "target": "arcana::telemetry",
+            "fields": {"run_id": "sk-abcdefghijklmnopqrstuvwxyz012345"}
+        });
+        assert_eq!(
+            write_through_redactor(&sensitive)["fields"]["run_id"],
+            "[REDACTED_KEY]",
+            "sensitive values must stay redacted even in correlation fields"
+        );
+
+        let foreign = serde_json::json!({
+            "target": "foreign::telemetry",
+            "fields": {"run_id": uuid('a')}
+        });
+        assert_redacted(
+            &write_through_redactor(&foreign)["fields"]["run_id"],
+            "foreign telemetry target UUID",
         );
     }
 

@@ -36,6 +36,21 @@ async fn permanent_worker_startup_event_survives_redaction_and_cli_export() {
         std::env::remove_var(key);
     }
     let guards = arcana_core::observability::logging::init();
+    let correlations = (0..7)
+        .map(|_| uuid::Uuid::new_v4().to_string())
+        .collect::<Vec<_>>();
+    tracing::info!(
+        target: "arcana::telemetry",
+        event_type = "operation_timing",
+        correlation_id = %correlations[0],
+        fleet_correlation_id = %correlations[1],
+        trace_id = %correlations[2],
+        run_id = %correlations[3],
+        session_id = %correlations[4],
+        call_id = %correlations[5],
+        tool_call_id = %correlations[6],
+        "canonical correlation UUID export fixture"
+    );
     let tasks = TasksDb::open().expect("open isolated task store");
     let task = tasks
         .create(CreateTaskInput {
@@ -105,6 +120,29 @@ async fn permanent_worker_startup_event_survives_redaction_and_cli_export() {
         1,
         "permanent failure must emit once and never retry"
     );
+    let correlation_event = content
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|event| event["fields"]["message"] == "canonical correlation UUID export fixture")
+        .expect("CLI export reader must return the persisted correlation event");
+    for (field, expected) in [
+        "correlation_id",
+        "fleet_correlation_id",
+        "trace_id",
+        "run_id",
+        "session_id",
+        "call_id",
+        "tool_call_id",
+    ]
+    .into_iter()
+    .zip(correlations.iter())
+    {
+        assert_eq!(
+            correlation_event["fields"][field].as_str(),
+            Some(expected.as_str()),
+            "field {field}"
+        );
+    }
     let fields = &retries[0]["fields"];
     assert_eq!(fields["worker"], "worker-backend");
     assert_eq!(fields["attempt"], 1);
